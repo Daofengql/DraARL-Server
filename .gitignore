@@ -10,6 +10,7 @@ udphub.arm64
 nrllink
 nrllink_test
 nrllink_*
+old/
 
 # Test binary, built with `go test -c`
 *.test

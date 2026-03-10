@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -124,12 +123,12 @@ func (c *Configuration) GetRedisAddr() string {
 
 // Load 加载配置文件
 func Load(configPath string) (*Configuration, error) {
-	var err error
+	var loadErr error
 	once.Do(func() {
 		if configPath == "" {
 			dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 			if err != nil {
-				log.Printf("get config filepath err #%v ", err)
+				loadErr = fmt.Errorf("get config filepath err: %w", err)
 				return
 			}
 			configPath = filepath.Join(dir, "udphub.yaml")
@@ -137,21 +136,26 @@ func Load(configPath string) (*Configuration, error) {
 
 		yamlFile, err := os.ReadFile(configPath)
 		if err != nil {
-			log.Printf("udphub.yaml open err #%v ", err)
+			loadErr = fmt.Errorf("udphub.yaml open err: %w", err)
 			return
 		}
 
 		Config = &Configuration{}
 		err = yaml.Unmarshal(yamlFile, Config)
 		if err != nil {
-			log.Fatalf("Unmarshal: %v \n %s", err, yamlFile)
+			loadErr = fmt.Errorf("Unmarshal: %w", err)
+			return
 		}
 
 		// 设置默认值
 		Config.SetDefaults()
 	})
 
-	return Config, err
+	if Config == nil {
+		return nil, loadErr
+	}
+
+	return Config, nil
 }
 
 // SetDefaults 设置默认配置值

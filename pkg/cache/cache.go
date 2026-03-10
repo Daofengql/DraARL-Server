@@ -60,7 +60,7 @@ func NewThreeLevelCache(config CacheConfig) (*ThreeLevelCache, error) {
 			Password:     config.RedisPass,
 			DB:           config.RedisDB,
 			PoolSize:     config.PoolSize,
-			MinIdleConns: config.MinIdleConn,
+			MinIdleConns: config.MinIdleCon,
 		})
 
 		// 测试连接

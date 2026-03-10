@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	"nrllink/internal/models"
 )
@@ -21,7 +22,7 @@ func NewUserRepository() *UserRepository {
 // AddUser 添加用户
 func (r *UserRepository) AddUser(user *models.User) error {
 	query := `INSERT INTO users (name, callsign, phone, password, roles, status, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+		VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, user.Name, user.CallSign, user.Phone, user.Password,
 		serializeRoles(user.Roles), user.Status)
@@ -96,7 +97,7 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*models.User, int, error)
 
 // UpdateUser 更新用户
 func (r *UserRepository) UpdateUser(user *models.User) error {
-	query := `UPDATE users SET name = ?, avatar = ?, introduction = ?, update_time = datetime('now')
+	query := `UPDATE users SET name = ?, avatar = ?, introduction = ?, update_time = NOW()
 		WHERE id = ?`
 
 	_, err := r.db.Exec(query, user.Name, user.Avatar, user.Introduction, user.ID)
@@ -105,21 +106,21 @@ func (r *UserRepository) UpdateUser(user *models.User) error {
 
 // UpdateUserPassword 更新用户密码
 func (r *UserRepository) UpdateUserPassword(id int, password string) error {
-	query := `UPDATE users SET password = ?, update_time = datetime('now') WHERE id = ?`
+	query := `UPDATE users SET password = ?, update_time = NOW() WHERE id = ?`
 	_, err := r.db.Exec(query, password, id)
 	return err
 }
 
 // UpdateUserAvatar 更新用户头像
 func (r *UserRepository) UpdateUserAvatar(user *models.User) error {
-	query := `UPDATE users SET avatar = ?, update_time = datetime('now') WHERE id = ?`
+	query := `UPDATE users SET avatar = ?, update_time = NOW() WHERE id = ?`
 	_, err := r.db.Exec(query, user.Avatar, user.ID)
 	return err
 }
 
 // UpdateUserOpenID 更新用户OpenID
 func (r *UserRepository) UpdateUserOpenID(id int, openid string) error {
-	query := `UPDATE users SET openid = ?, update_time = datetime('now') WHERE id = ?`
+	query := `UPDATE users SET openid = ?, update_time = NOW() WHERE id = ?`
 	_, err := r.db.Exec(query, openid, id)
 	return err
 }
@@ -140,7 +141,7 @@ func (r *UserRepository) VerifyPassword(phone, password string) (*models.User, e
 	}
 
 	// 更新登录时间
-	r.db.Exec(`UPDATE users SET last_login_time = datetime('now'), login_err_times = 0 WHERE id = ?`, user.ID)
+	r.db.Exec(`UPDATE users SET last_login_time = NOW(), login_err_times = 0 WHERE id = ?`, user.ID)
 
 	return user, nil
 }
@@ -148,7 +149,7 @@ func (r *UserRepository) VerifyPassword(phone, password string) (*models.User, e
 // AddOperatorLog 添加操作日志
 func (r *UserRepository) AddOperatorLog(content, eventType string, operator *models.User) error {
 	query := `INSERT INTO operator_log (timestamp, content, event_type, operator, operator_id)
-		VALUES (datetime('now'), ?, ?, ?, ?)`
+		VALUES (NOW(), ?, ?, ?, ?)`
 
 	_, err := r.db.Exec(query, content, eventType, operator.CallSign, operator.ID)
 	return err
@@ -258,4 +259,72 @@ func splitAndTrim(s, sep string) []string {
 	}
 	parts = append(parts, current)
 	return parts
+}
+
+// ==================== 包级别函数（供 handler 使用） ====================
+
+// GetUserByUsername 通过用户名获取用户（使用 name 字段）
+func GetUserByUsername(username string) (*models.User, error) {
+	query := `SELECT * FROM users WHERE name = ? LIMIT 1`
+	return scanUserDirect(Get().QueryRow(query, username))
+}
+
+// CreateUser 创建用户
+func CreateUser(user *models.User) error {
+	query := `INSERT INTO users (name, password, nickname, status, roles, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	now := time.Now().Format("2006-01-02 15:04:05")
+	// 使用 roles 字段存储角色信息
+	roles := "user"
+	if len(user.Roles) > 0 {
+		roles = serializeRoles(user.Roles)
+	}
+	result, err := Get().Exec(query, user.Name, user.Password, user.NickName, user.Status, roles, now, now)
+	if err != nil {
+		return err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	user.ID = int(id)
+	return nil
+}
+
+// UpdateLastLogin 更新最后登录时间
+func UpdateLastLogin(userID int, ip string) error {
+	query := `UPDATE users SET last_login_time = ?, last_login_ip = ?, login_err_times = 0 WHERE id = ?`
+	_, err := Get().Exec(query, time.Now().Format("2006-01-02 15:04:05"), ip, userID)
+	return err
+}
+
+// UpdateLoginError 更新登录错误次数
+func UpdateLoginError(userID int) error {
+	query := `UPDATE users SET login_err_times = login_err_times + 1 WHERE id = ?`
+	_, err := Get().Exec(query, userID)
+	return err
+}
+
+// scanUserDirect 直接扫描用户行（不使用仓库）
+func scanUserDirect(row *sql.Row) (*models.User, error) {
+	user := &models.User{}
+	var rolesStr sql.NullString
+
+	err := row.Scan(&user.ID, &user.Name, &user.CallSign, new(string), &user.Phone, &user.Password,
+		&user.Birthday, &user.Sex, &user.Avatar, &user.Address, &rolesStr, &user.Introduction,
+		&user.AlarmMsg, &user.Status, &user.UpdateTime, &user.LastLoginTime, &user.LoginErrTimes,
+		&user.CreateTime, &user.OpenID, &user.NickName, new(string), &user.LastLoginIP,
+		new(int), new(string))
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("user not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// 解析角色
+	user.Roles = deserializeRoles(rolesStr.String)
+
+	return user, nil
 }

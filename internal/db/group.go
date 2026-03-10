@@ -21,7 +21,7 @@ func NewGroupRepository() *GroupRepository {
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 	query := `INSERT INTO public_groups (name, type, callsign, password, allow_callsign_ssid,
 		ower_id, ower_callsign, status, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, group.Name, group.Type, group.CallSign, group.Password,
 		group.AllowCallSignSSID, group.OwerID, group.OwerCallSign, group.Status)
@@ -69,7 +69,7 @@ func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
 // UpdatePublicGroup 更新公共群组
 func (r *GroupRepository) UpdatePublicGroup(group *models.Group) error {
 	query := `UPDATE public_groups SET name = ?, type = ?, password = ?, allow_callsign_ssid = ?,
-		update_time = datetime('now') WHERE id = ?`
+		update_time = NOW() WHERE id = ?`
 
 	_, err := r.db.Exec(query, group.Name, group.Type, group.Password,
 		group.AllowCallSignSSID, group.ID)

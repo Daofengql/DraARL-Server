@@ -84,25 +84,65 @@ func Begin() (*sql.Tx, error) {
 
 // UpdateDatabase 执行数据库更新脚本
 func UpdateDatabase() error {
-	statements := []string{
-		// MySQL 兼容的更新语句
-		`ALTER TABLE devices ADD COLUMN IF NOT EXISTS priority INT DEFAULT 100`,
-		`ALTER TABLE users ADD COLUMN IF NOT EXISTS mdcid VARCHAR(255) DEFAULT ''`,
-		`ALTER TABLE devices ADD COLUMN IF NOT EXISTS dmrid INT DEFAULT 0`,
-		`ALTER TABLE users ADD COLUMN IF NOT EXISTS dmrid INT DEFAULT 0`,
-		`DELETE FROM users WHERE id NOT IN ( SELECT MIN(id) FROM users GROUP BY phone )`,
-	}
-
-	for _, stmt := range statements {
-		log.Printf("Executing SQL: %s", stmt)
-		_, err := db.Exec(stmt)
-		if err != nil {
-			log.Printf("Error executing statement: %s\nError: %v", stmt, err)
-		} else {
-			log.Printf("Successfully executed: %s", stmt)
+	// MySQL兼容的更新 - 使用存储过程检查列是否存在
+	for _, stmt := range []struct {
+		table string
+		column string
+		dataType string
+		defaultVal string
+	}{
+		{"devices", "priority", "INT", "100"},
+		{"users", "mdcid", "VARCHAR(255)", "''"},
+		{"devices", "dmrid", "INT", "0"},
+		{"users", "dmrid", "INT", "0"},
+	} {
+		if err := addColumnIfNotExists(stmt.table, stmt.column, stmt.dataType, stmt.defaultVal); err != nil {
+			log.Printf("Warning: could not add column %s.%s: %v", stmt.table, stmt.column, err)
 		}
 	}
 
+	// 删除重复用户记录（MySQL兼容的方式）
+	duplicateSQL := `
+		DELETE u FROM users u
+		INNER JOIN users u2
+		WHERE u.id > u2.id AND u.phone = u2.phone
+	`
+	log.Printf("Executing SQL: %s", duplicateSQL)
+	if _, err := db.Exec(duplicateSQL); err != nil {
+		log.Printf("Error executing duplicate cleanup: %v", err)
+	} else {
+		log.Println("Successfully cleaned up duplicate users")
+	}
+
+	return nil
+}
+
+// addColumnIfNotExists 添加列（如果不存在）- MySQL兼容方式
+func addColumnIfNotExists(table, column, dataType, defaultVal string) error {
+	// 检查列是否存在
+	var count int
+	checkSQL := `
+		SELECT COUNT(*)
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		AND TABLE_NAME = ?
+		AND COLUMN_NAME = ?
+	`
+	err := db.QueryRow(checkSQL, table, column).Scan(&count)
+	if err != nil {
+		return err
+	}
+
+	// 如果列不存在，添加它
+	if count == 0 {
+		alterSQL := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s DEFAULT %s", table, column, dataType, defaultVal)
+		log.Printf("Executing SQL: %s", alterSQL)
+		_, err := db.Exec(alterSQL)
+		if err != nil {
+			return err
+		}
+		log.Printf("Successfully added column %s.%s", table, column)
+	}
 	return nil
 }
 

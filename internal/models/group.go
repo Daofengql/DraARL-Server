@@ -17,7 +17,7 @@ type Group struct {
 	AllowCallSignSSID string           `json:"allow_callsign_ssid"`
 	OwerID      int                    `json:"ower_id"`
 	OwerCallSign string                `json:"ower_callsign"`
-	DevList     string                 `json:"devlist"`
+	DevList     []int                  `json:"devlist"`
 	MasterServer int                   `json:"master_server"`
 	SlaveServer  int                   `json:"slave_server"`
 	Status       int                   `json:"status"`
@@ -26,19 +26,21 @@ type Group struct {
 	Note         string                `json:"note"`
 
 	// Runtime fields (not stored in DB)
-	DevMap    map[int]*Device          `json:"dev_map,omitempty"`
-	connPool  *currentConnPool         `json:"-"`
+	DevMap         map[int]*Device     `json:"dev_map,omitempty"`
+	OnlineDevNumber int                `json:"online_dev_number"`
+	TotalDevNumber  int                `json:"total_dev_number"`
+	ConnPool        interface{}         `json:"-"` // Will be set to *udphub.CurrentConnPool
 }
 
-// currentConnPool 当前连接池
-type currentConnPool struct {
+// CurrentConnPool 当前连接池
+type CurrentConnPool struct {
 	UDPAddr       *net.UDPAddr
-	lastVoiceTime time.Time
-	lastCtlTime   time.Time
-	lastPriority  int
+	LastVoiceTime time.Time
+	LastCtlTime   time.Time
+	LastPriority  int
 
-	devConnMap  map[string]*Device
-	devConnList []*Device
+	DevConnMap  map[string]*Device
+	DevConnList []*Device
 }
 
 // GroupMap 群组映射（线程安全）
@@ -92,4 +94,14 @@ func (gm *GroupMap) Len() int {
 	gm.RLock()
 	defer gm.RUnlock()
 	return len(gm.m)
+}
+
+// GetConnPool 获取连接池（需要类型断言）
+func (g *Group) GetConnPool() interface{} {
+	return g.ConnPool
+}
+
+// SetConnPool 设置连接池
+func (g *Group) SetConnPool(pool interface{}) {
+	g.ConnPool = pool
 }

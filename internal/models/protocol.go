@@ -1,6 +1,10 @@
 package models
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"net"
 	"time"
 )
@@ -136,4 +140,68 @@ type Relay struct {
 	UpdateTime    string `json:"update_time"`
 	Status        int    `json:"status"`
 	Note          string `json:"note"`
+}
+
+// Decode 解码 NRL2 报文
+func (n *NRL2Packet) Decode(data []byte) error {
+	if len(data) < 48 {
+		return errors.New("packet too short")
+	}
+
+	n.Version = string(data[0:4])
+	if n.Version != "NRL2" {
+		return errors.New("not NRL packet")
+	}
+
+	n.Length = binary.BigEndian.Uint16(data[4:6])
+	n.DMRID = bytesToUint24(data[6:9])
+	n.Password = string(data[9:20])
+	n.Type = data[20]
+	n.Status = data[21]
+	n.Count = binary.BigEndian.Uint16(data[22:24])
+	n.CallSign = string(bytes.TrimRight(data[24:30], string([]byte{13, 0})))
+
+	if !IsValidCallSign(n.CallSign) {
+		return errors.New("callsign error")
+	}
+
+	n.SSID = data[30]
+	n.DevModel = data[31]
+
+	if n.Type == TypeServerVoice || n.DevModel == DevModelServer || n.DevModel == DevModelFullNet {
+		n.OriginalCallsign = string(bytes.TrimRight(data[32:38], string([]byte{13, 0})))
+		n.OriginalSSID = data[38]
+		n.OriginalIP = data[39:43]
+	}
+
+	n.DATA = data[48:]
+
+	return nil
+}
+
+// String 返回报文的字符串表示
+func (n *NRL2Packet) String() string {
+	return fmt.Sprintf("ver:%v len:%v DMRID:%v CallSign:%v-%v type:%v len:%v Count:%v %02X",
+		n.Version, n.Length, n.DMRID, n.CallSign, n.SSID, n.Type, len(n.DATA), n.Count, n.DATA)
+}
+
+// bytesToUint24 将 3 字节转换为 uint32
+func bytesToUint24(b []byte) uint32 {
+	if len(b) < 3 {
+		return 0
+	}
+	return uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])
+}
+
+// IsValidCallSign 验证呼号格式
+func IsValidCallSign(s string) bool {
+	if len(s) < 3 || len(s) > 6 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
 }

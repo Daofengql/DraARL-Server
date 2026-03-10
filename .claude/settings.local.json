@@ -11,7 +11,13 @@
       "Bash(npm install)",
       "Bash(npm install:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run build:*)",
+      "Bash(/d/Projects/nrllink/www/src/main.ts:*)",
+      "Bash(sqlite3:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)"
     ]
   }
 }

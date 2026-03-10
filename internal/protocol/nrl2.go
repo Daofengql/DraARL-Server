@@ -1,14 +1,10 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	"nrllink/internal/models"
 )
@@ -20,7 +16,6 @@ func NewNRL2Packet(remoteAddr *net.UDPAddr, data []byte) (*models.NRL2Packet, er
 	packet := &models.NRL2Packet{
 		UDPAddr:    remoteAddr,
 		UDPAddrStr: remoteAddr.String(),
-		TimeStamp:  time.Now(),
 	}
 
 	err := packet.Decode(data)
@@ -29,70 +24,6 @@ func NewNRL2Packet(remoteAddr *net.UDPAddr, data []byte) (*models.NRL2Packet, er
 	}
 
 	return packet, nil
-}
-
-// Decode 解码NRL2数据包
-func (p *models.NRL2Packet) Decode(data []byte) error {
-	if len(data) < 48 {
-		return errors.New("packet too short")
-	}
-
-	p.Version = string(data[0:4])
-	if p.Version != "NRL2" {
-		return errors.New("not NRL packet")
-	}
-
-	p.Length = binary.BigEndian.Uint16(data[4:6])
-	p.DMRID = bytesToUint24(data[6:9])
-	p.Password = string(data[9:20])
-	p.Type = data[20]
-	p.Status = data[21]
-	p.Count = binary.BigEndian.Uint16(data[22:24])
-	p.CallSign = string(bytes.TrimRight(data[24:30], string([]byte{13, 0})))
-
-	if !IsCallSign(p.CallSign) {
-		return errors.New("callsign error")
-	}
-
-	p.SSID = data[30]
-	p.DevModel = data[31]
-
-	if p.Type == models.TypeServerVoice || p.DevModel == models.DevModelServer || p.DevModel == models.DevModelFullNet {
-		p.OriginalCallsign = string(bytes.TrimRight(data[32:38], string([]byte{13, 0})))
-		p.OriginalSSID = data[38]
-		p.OriginalIP = data[39:43]
-	}
-
-	p.DATA = data[48:]
-
-	return nil
-}
-
-// String 返回数据包的字符串表示
-func (p *models.NRL2Packet) String() string {
-	return fmt.Sprintf("ver:%v len:%v DMRID:%v CallSign:%v-%v type:%v len:%v Count:%v %02X",
-		p.Version, p.Length, p.DMRID, p.CallSign, p.SSID, p.Type, len(p.DATA), p.Count, p.DATA)
-}
-
-// bytesToUint24 将3字节转换为uint32
-func bytesToUint24(b []byte) uint32 {
-	if len(b) < 3 {
-		return 0
-	}
-	return uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])
-}
-
-// IsCallSign 验证呼号格式
-func IsCallSign(callsign string) bool {
-	if len(callsign) < 3 || len(callsign) > 6 {
-		return false
-	}
-	for _, c := range callsign {
-		if !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
-			return false
-		}
-	}
-	return true
 }
 
 // Encode 编码NRL2数据包

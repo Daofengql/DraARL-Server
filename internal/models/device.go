@@ -41,11 +41,12 @@ type Device struct {
 	LastCtlBeginTime   time.Time       `json:"last_ctl_begin_time"`
 	LastVoiceDuration  int             `json:"last_voice_duration"`
 	LastCtlDuration    int             `json:"last_ctl_duration"`
-	udpSocket          *net.UDPConn    `json:"-"`
+	UDPSocket          *net.UDPConn    `json:"-"`
 	CallSignSSID       string          `json:"callsign_ssid"`
-	pcmG711Chan        chan [][]byte   `json:"-"`
-	pcmBuffer          []int           `json:"-"`
+	PcmG711Chan        chan [][]byte   `json:"-"`        // Exported for use in udphub package
+	PcmBuffer          []int           `json:"-"`        // Exported for use in udphub package
 	LastATcommand      *ATCommand      `json:"last_at_command,omitempty"`
+	Speaking           *bool           `json:"-"`        // Exported for use in udphub package (meeting mode)
 }
 
 // GetCallSignSSID returns the combined callsign and SSID

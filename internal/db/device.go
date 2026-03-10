@@ -27,7 +27,7 @@ func NewDeviceRepository() *DeviceRepository {
 // AddDevice 添加设备
 func (r *DeviceRepository) AddDevice(device *models.Device) error {
 	query := `INSERT INTO devices (name, dmrid, callsign, ssid, password, dev_model, group_id, status, priority, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, device.Name, device.DMRID, device.CallSign, device.SSID,
 		device.Password, device.DevModel, device.GroupID, device.Status, device.Priority)
@@ -69,7 +69,7 @@ func (r *DeviceRepository) GetDevice(callsign string, ssid byte) (*models.Device
 
 // UpdateDevice 更新设备
 func (r *DeviceRepository) UpdateDevice(device *models.Device) error {
-	query := `UPDATE devices SET name = ?, group_id = ?, status = ?, priority = ?, note = ?, update_time = datetime('now')
+	query := `UPDATE devices SET name = ?, group_id = ?, status = ?, priority = ?, note = ?, update_time = NOW()
 		WHERE callsign = ? AND ssid = ?`
 
 	_, err := r.db.Exec(query, device.Name, device.GroupID, device.Status, device.Priority,
@@ -124,7 +124,7 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*models.Device, int, 
 
 // ChangeDeviceGroup 更改设备群组
 func (r *DeviceRepository) ChangeDeviceGroup(callsign string, ssid byte, groupID int) error {
-	query := `UPDATE devices SET group_id = ?, update_time = datetime('now') WHERE callsign = ? AND ssid = ?`
+	query := `UPDATE devices SET group_id = ?, update_time = NOW() WHERE callsign = ? AND ssid = ?`
 	_, err := r.db.Exec(query, groupID, callsign, ssid)
 	return err
 }

@@ -3,6 +3,7 @@ package jwt
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -25,14 +26,16 @@ func SetSecret(secret string) {
 
 // GenerateToken 生成JWT令牌
 func GenerateToken(username string, roles []string) (string, error) {
-	nowTime := 1689656983
-	expireTime := nowTime + 24*365*3600
+	now := time.Now()
+	// 默认过期时间：30天
+	expireTime := now.Add(30 * 24 * time.Hour)
 
 	claims := Claims{
 		username,
 		roles,
 		jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireTime),
+			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "nrllink",
 		},
 	}

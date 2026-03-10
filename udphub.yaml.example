@@ -1,0 +1,74 @@
+# NRL Link 配置文件模板
+# 复制此文件为 udphub.yaml 并根据实际情况修改配置
+
+# 系统配置
+System:
+    Port: "60050"              # UDP服务端口
+    LogPath: ""                # 日志文件路径，空则不输出文件
+    IPfile: ./udphub.ipdb       # IP数据库文件路径
+    CallLogPath: ""            # 通话日志路径
+
+# MySQL数据库配置
+Database:
+    Host: "127.0.0.1"
+    Port: 3306
+    User: "nrllink"
+    Password: "your_password_here"
+    DBName: "nrllink"
+    Charset: "utf8mb4"
+    Collate: "utf8mb4_unicode_ci"
+
+    # 连接池配置
+    MaxOpenConns: 25           # 最大打开连接数
+    MaxIdleConns: 5            # 最大空闲连接数
+    MaxLifetime: 300           # 连接最大存活时间(秒)
+
+# Redis 配置 (可选，用于三级缓存)
+Redis:
+    Enabled: false             # 是否启用Redis
+    Host: "127.0.0.1"
+    Port: 6379
+    Password: ""               # Redis密码
+    DB: 0                      # 数据库编号
+    PoolSize: 100              # 连接池大小
+    MinIdleConn: 10            # 最小空闲连接数
+
+    # 缓存配置
+    Cache:
+        LocalTTL: 60           # 本地缓存TTL(秒)
+        RedisTTL: 3600         # Redis缓存TTL(秒)
+        MaxSize: 10000         # 本地缓存最大条目数
+
+# Web服务配置
+Web:
+    Path: ./www                # 静态文件目录
+    Port: "9000"               # Web服务端口
+    ICP: ""                    # ICP备案号
+    SSLCrt: ""                 # SSL证书路径
+    SSLKey: ""                 # SSL密钥路径
+
+# 系统信息
+SystemInfo:
+    Name: NRL无线电网络互联系统
+    NameShorthand: 火链
+    LogoURL: ""
+    Language: zh-CN
+
+# OpenAI 配置 (可选)
+OpenAI:
+    BaseURL: ""                # API地址
+    APIKEY: ""                 # API密钥
+    Engine: ""                 # 模型名称
+
+# APRS 配置 (可选)
+APRS:
+    APRSServerHost: "asia.aprs2.net"
+    APRSServerPort: "14580"
+    SelfAddress: ""            # 服务器地址
+    SelfPort: "60050"
+    CallSign: ""               # 呼号
+    SSID: "10"
+    Passcode: 0                # APRS密码(0表示自动计算)
+    Latitude: 0
+    Longitude: 0
+    Altitude: "0"

@@ -1,0 +1,66 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+udphub
+udphub.arm
+udphub.arm64
+nrllink
+nrllink_test
+nrllink_*
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Configuration files (may contain sensitive data)
+udphub.yaml
+*.yaml
+*.yml
+!udphub.yaml.example
+!*.example.yaml
+!*.example.yml
+
+# Database files
+*.sqlite3
+*.db
+
+# Log files
+*.log
+logs/
+
+# Upload and temporary files
+uploads/
+tmp/
+temp/
+
+# Build output
+bin/
+build/
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IP database
+*.ipdb

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(ls:*)",
+      "Bash(go get:*)",
+      "Bash(/d/Projects/nrllink/udphub.yaml:*)",
+      "Bash(/d/Projects/nrllink/udphub.yaml.example:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

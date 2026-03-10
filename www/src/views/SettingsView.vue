@@ -1,11 +1,4 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-
-const settings = ref({
-  systemName: 'NRL 火链',
-  systemPort: '60050',
-  webPort: '9000',
-})
 </script>
 
 <template>

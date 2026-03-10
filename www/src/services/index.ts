@@ -1,0 +1,10 @@
+// 导出所有服务
+export { apiClient } from './api'
+export { authService } from './auth'
+export { deviceService } from './device'
+export { groupService } from './group'
+export { userService } from './user'
+export { relayService } from './relay'
+export { serverService } from './server'
+export { logService } from './log'
+export { platformService } from './platform'

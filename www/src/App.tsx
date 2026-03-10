@@ -1,0 +1,59 @@
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { MainLayout } from './components/layout'
+import { ProtectedRoute, ToastContainer } from './components/common'
+import { LoginPage, RegisterPage } from './pages/auth'
+import { DashboardPage } from './pages/dashboard'
+import { DevicesPage } from './pages/devices'
+import { GroupsPage } from './pages/groups'
+import { UsersPage } from './pages/users'
+import { RelaysPage } from './pages/relays'
+import { ServersPage } from './pages/servers'
+import { LogsPage } from './pages/logs'
+import { authService } from './services'
+
+function App() {
+  // 检查是否已登录
+  const isAuthenticated = authService.isAuthenticated()
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* 公开路由 */}
+        <Route
+          path="/login"
+          element={!isAuthenticated ? <LoginPage /> : <Navigate to="/" replace />}
+        />
+        <Route
+          path="/register"
+          element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/" replace />}
+        />
+
+        {/* 受保护路由 */}
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <MainLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<DashboardPage />} />
+          <Route path="devices" element={<DevicesPage />} />
+          <Route path="groups" element={<GroupsPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="relays" element={<RelaysPage />} />
+          <Route path="servers" element={<ServersPage />} />
+          <Route path="logs" element={<LogsPage />} />
+        </Route>
+
+        {/* 404 */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+
+      {/* 全局 Toast 通知 */}
+      <ToastContainer />
+    </BrowserRouter>
+  )
+}
+
+export default App

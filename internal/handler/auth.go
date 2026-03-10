@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -46,6 +47,7 @@ func hasRole(user *models.User, role string) bool {
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("登录请求参数错误: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
@@ -53,9 +55,20 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	log.Printf("登录请求: username=%s", req.Username)
+
 	// 查询用户
 	user, err := db.GetUserByUsername(req.Username)
-	if err != nil || user == nil {
+	if err != nil {
+		log.Printf("查询用户失败: %v", err)
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户名或密码错误",
+		})
+		return
+	}
+	if user == nil {
+		log.Printf("用户不存在: %s", req.Username)
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
@@ -63,8 +76,11 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	log.Printf("找到用户: id=%d, name=%s", user.ID, user.Name)
+
 	// 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		log.Printf("密码验证失败: %v", err)
 		// 增加登录错误次数
 		db.UpdateLoginError(user.ID)
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -73,6 +89,8 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
+
+	log.Printf("密码验证成功")
 
 	// 检查用户状态
 	if user.Status != 1 {
@@ -95,6 +113,8 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
+
+	log.Printf("用户 %s 登录成功", user.Name)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

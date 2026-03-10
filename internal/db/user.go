@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"nrllink/internal/models"
 )
 
@@ -160,12 +161,13 @@ func (r *UserRepository) AddOperatorLog(content, eventType string, operator *mod
 // scanUser 扫描用户行
 func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 	user := &models.User{}
-	var rolesStr sql.NullString
+	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
+	var sex, alarmMsg sql.NullBool
 
-	err := row.Scan(&user.ID, &user.Name, &user.CallSign, new(string), &user.Phone, &user.Password,
-		&user.Birthday, &user.Sex, &user.Avatar, &user.Address, &rolesStr, &user.Introduction,
-		&user.AlarmMsg, &user.Status, &user.UpdateTime, &user.LastLoginTime, &user.LoginErrTimes,
-		&user.CreateTime, &user.OpenID, &user.NickName, new(string), &user.LastLoginIP,
+	err := row.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
+		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
+		&alarmMsg, &user.Status, &updateTime, &lastLoginTime, &user.LoginErrTimes,
+		&user.CreateTime, &openid, &user.NickName, &pid, &lastLoginIP,
 		new(int), new(string))
 
 	if err == sql.ErrNoRows {
@@ -175,6 +177,44 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 		return nil, err
 	}
 
+	// 处理可能为 NULL 的字段
+	if callSign.Valid {
+		user.CallSign = callSign.String
+	}
+	if phone.Valid {
+		user.Phone = phone.String
+	}
+	if birthday.Valid {
+		user.Birthday = birthday.String
+	}
+	if avatar.Valid {
+		user.Avatar = avatar.String
+	}
+	if address.Valid {
+		user.Address = address.String
+	}
+	if introduction.Valid {
+		user.Introduction = introduction.String
+	}
+	if updateTime.Valid {
+		user.UpdateTime = updateTime.String
+	}
+	if lastLoginTime.Valid {
+		user.LastLoginTime = lastLoginTime.String
+	}
+	if sex.Valid {
+		user.Sex = sex.Bool
+	}
+	if alarmMsg.Valid {
+		user.AlarmMsg = alarmMsg.Bool
+	}
+	if openid.Valid {
+		user.OpenID = openid.String
+	}
+	if lastLoginIP.Valid {
+		user.LastLoginIP = lastLoginIP.String
+	}
+
 	user.Roles = deserializeRoles(rolesStr.String)
 	return user, nil
 }
@@ -182,16 +222,55 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 // scanUserFromRows 从结果集扫描用户
 func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*models.User, error) {
 	user := &models.User{}
-	var rolesStr sql.NullString
+	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
+	var sex, alarmMsg sql.NullBool
 
-	err := rows.Scan(&user.ID, &user.Name, &user.CallSign, new(string), &user.Phone, &user.Password,
-		&user.Birthday, &user.Sex, &user.Avatar, &user.Address, &rolesStr, &user.Introduction,
-		&user.AlarmMsg, &user.Status, &user.UpdateTime, &user.LastLoginTime, &user.LoginErrTimes,
-		&user.CreateTime, &user.OpenID, &user.NickName, new(string), &user.LastLoginIP,
+	err := rows.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
+		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
+		&alarmMsg, &user.Status, &updateTime, &lastLoginTime, &user.LoginErrTimes,
+		&user.CreateTime, &openid, &user.NickName, &pid, &lastLoginIP,
 		new(int), new(string))
 
 	if err != nil {
 		return nil, err
+	}
+
+	// 处理可能为 NULL 的字段
+	if callSign.Valid {
+		user.CallSign = callSign.String
+	}
+	if phone.Valid {
+		user.Phone = phone.String
+	}
+	if birthday.Valid {
+		user.Birthday = birthday.String
+	}
+	if avatar.Valid {
+		user.Avatar = avatar.String
+	}
+	if address.Valid {
+		user.Address = address.String
+	}
+	if introduction.Valid {
+		user.Introduction = introduction.String
+	}
+	if updateTime.Valid {
+		user.UpdateTime = updateTime.String
+	}
+	if lastLoginTime.Valid {
+		user.LastLoginTime = lastLoginTime.String
+	}
+	if sex.Valid {
+		user.Sex = sex.Bool
+	}
+	if alarmMsg.Valid {
+		user.AlarmMsg = alarmMsg.Bool
+	}
+	if openid.Valid {
+		user.OpenID = openid.String
+	}
+	if lastLoginIP.Valid {
+		user.LastLoginIP = lastLoginIP.String
 	}
 
 	user.Roles = deserializeRoles(rolesStr.String)
@@ -310,12 +389,13 @@ func UpdateLoginError(userID int) error {
 // scanUserDirect 直接扫描用户行（不使用仓库）
 func scanUserDirect(row *sql.Row) (*models.User, error) {
 	user := &models.User{}
-	var rolesStr sql.NullString
+	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
+	var sex, alarmMsg sql.NullBool
 
-	err := row.Scan(&user.ID, &user.Name, &user.CallSign, new(string), &user.Phone, &user.Password,
-		&user.Birthday, &user.Sex, &user.Avatar, &user.Address, &rolesStr, &user.Introduction,
-		&user.AlarmMsg, &user.Status, &user.UpdateTime, &user.LastLoginTime, &user.LoginErrTimes,
-		&user.CreateTime, &user.OpenID, &user.NickName, new(string), &user.LastLoginIP,
+	err := row.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
+		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
+		&alarmMsg, &user.Status, &updateTime, &lastLoginTime, &user.LoginErrTimes,
+		&user.CreateTime, &openid, &user.NickName, &pid, &lastLoginIP,
 		new(int), new(string))
 
 	if err == sql.ErrNoRows {
@@ -323,6 +403,44 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// 处理可能为 NULL 的字符串字段
+	if callSign.Valid {
+		user.CallSign = callSign.String
+	}
+	if phone.Valid {
+		user.Phone = phone.String
+	}
+	if birthday.Valid {
+		user.Birthday = birthday.String
+	}
+	if avatar.Valid {
+		user.Avatar = avatar.String
+	}
+	if address.Valid {
+		user.Address = address.String
+	}
+	if introduction.Valid {
+		user.Introduction = introduction.String
+	}
+	if updateTime.Valid {
+		user.UpdateTime = updateTime.String
+	}
+	if lastLoginTime.Valid {
+		user.LastLoginTime = lastLoginTime.String
+	}
+	if sex.Valid {
+		user.Sex = sex.Bool
+	}
+	if alarmMsg.Valid {
+		user.AlarmMsg = alarmMsg.Bool
+	}
+	if openid.Valid {
+		user.OpenID = openid.String
+	}
+	if lastLoginIP.Valid {
+		user.LastLoginIP = lastLoginIP.String
 	}
 
 	// 解析角色
@@ -348,10 +466,16 @@ func InitAdminUser() (string, string, error) {
 		return "", "", fmt.Errorf("生成密码失败: %w", err)
 	}
 
+	// ���希密码
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", fmt.Errorf("密码哈希失败: %w", err)
+	}
+
 	// 创建默认管理员
 	admin := &models.User{
 		Name:     "admin",
-		Password: password, // 实际应该哈希存储，这里简化处理
+		Password: string(hashedPassword),
 		NickName: "系统管理员",
 		Status:   1,
 		Roles:    []string{"admin"},

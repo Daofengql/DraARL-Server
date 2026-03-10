@@ -1,0 +1,173 @@
+import { apiClient } from './api'
+import type {
+  Device,
+  DeviceQTH,
+  ListResponse,
+} from '../types'
+
+interface BackendResponse<T> {
+  code: number
+  message: string
+  data?: T
+}
+
+// 后端设备响应格式
+interface BackendDevice {
+  id: number
+  name: string
+  callsign: string
+  ssid: number
+  dev_model: number
+  group_id: number
+  is_online: boolean
+  status: number
+  priority?: number
+  qth?: string
+  online_time?: string
+  create_time?: string
+  update_time?: string
+}
+
+// 标准化设备数据
+const normalizeDevice = (d: BackendDevice): Device => ({
+  id: d.id,
+  name: d.name,
+  callsign: d.callsign,
+  ssid: d.ssid,
+  dev_model: d.dev_model,
+  model: d.dev_model, // 前端兼容
+  group_id: d.group_id,
+  is_online: d.is_online,
+  online: d.is_online, // 前端兼容
+  status: d.status,
+  priority: d.priority,
+  qth: d.qth,
+  online_time: d.online_time,
+  last_heartbeat: d.online_time,
+  create_time: d.create_time,
+  created_at: d.create_time, // 前端兼容
+  update_time: d.update_time,
+  updated_at: d.update_time, // 前端兼容
+})
+
+export const deviceService = {
+  // 获取设备列表
+  async getList(params?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+    group_id?: number
+  }): Promise<ListResponse<Device>> {
+    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[]; total: number }>>('/api/devices', { params })
+    const items = (res.data?.items || []).map(normalizeDevice)
+    return { items, total: res.data?.total || 0, page: params?.page || 1, page_size: params?.page_size || 10 }
+  },
+
+  // 获取设备列表（兼容旧接口）
+  async list(): Promise<Device[]> {
+    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[] }>>('/api/devices')
+    return (res.data?.items || []).map(normalizeDevice)
+  },
+
+  // 获取单个设备
+  async get(id: number): Promise<Device> {
+    const res = await apiClient.get<BackendResponse<BackendDevice>>(`/api/devices/${id}`)
+    return normalizeDevice(res.data!)
+  },
+
+  // 获取单个设备（兼容旧接口）
+  async getById(id: number): Promise<Device> {
+    const res = await apiClient.get<BackendResponse<BackendDevice>>('/api/device/get', { params: { id } })
+    return normalizeDevice(res.data!)
+  },
+
+  // 创建设备
+  async create(data: Partial<Device>): Promise<Device> {
+    const backendData: Partial<BackendDevice> = {
+      id: data.id,
+      name: data.name,
+      callsign: data.callsign,
+      ssid: data.ssid,
+      dev_model: data.model ?? data.dev_model,
+      group_id: data.group_id,
+      is_online: data.online ?? data.is_online,
+      status: data.status,
+      priority: data.priority,
+      qth: data.qth,
+      online_time: data.last_heartbeat ?? data.online_time,
+      create_time: data.created_at ?? data.create_time,
+      update_time: data.updated_at ?? data.update_time,
+    }
+    const res = await apiClient.post<BackendResponse<BackendDevice>>('/api/devices', backendData)
+    return normalizeDevice(res.data!)
+  },
+
+  // 更新设备
+  async update(id: number, data: Partial<Device>): Promise<Device> {
+    const backendData: Partial<BackendDevice> = {
+      id: data.id,
+      name: data.name,
+      callsign: data.callsign,
+      ssid: data.ssid,
+      dev_model: data.model ?? data.dev_model,
+      group_id: data.group_id,
+      is_online: data.online ?? data.is_online,
+      status: data.status,
+      priority: data.priority,
+      qth: data.qth,
+      online_time: data.last_heartbeat ?? data.online_time,
+      create_time: data.created_at ?? data.create_time,
+      update_time: data.updated_at ?? data.update_time,
+    }
+    const res = await apiClient.put<BackendResponse<BackendDevice>>(`/api/devices/${id}`, backendData)
+    return normalizeDevice(res.data!)
+  },
+
+  // 删除设备
+  async delete(id: number): Promise<void> {
+    await apiClient.delete<BackendResponse<unknown>>(`/api/devices/${id}`)
+  },
+
+  // 获取设备位置列表
+  async getQTHs(): Promise<DeviceQTH[]> {
+    const res = await apiClient.get<BackendResponse<{ items: DeviceQTH[] }>>('/api/device/qths')
+    return res.data?.items || []
+  },
+
+  // 获取设备位置（兼容旧接口）
+  async getQTH(id: number): Promise<string> {
+    const res = await apiClient.get<BackendResponse<string>>('/api/device/qth', { params: { id } })
+    return res.data || ''
+  },
+
+  // 修改设备群组
+  async changeGroup(data: { device_id: number; group_id: number }): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/changegroupnrl', data)
+  },
+
+  // 执行AT命令
+  async executeAT(data: { device_id: number; command: string }): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/at', data)
+  },
+
+  // 查询设备参数
+  async query(data: { device_id: number; param: string }): Promise<any> {
+    const res = await apiClient.post<BackendResponse<any>>('/api/device/query', data)
+    return res.data
+  },
+
+  // 修改设备参数
+  async change(data: { device_id: number; params: Record<string, any> }): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/change', data)
+  },
+
+  // 修改1W模块参数
+  async change1W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/change1w', data)
+  },
+
+  // 修改2W模块参数
+  async change2W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/change2w', data)
+  },
+}

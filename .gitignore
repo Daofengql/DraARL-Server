@@ -65,3 +65,6 @@ dist/
 
 # IP database
 *.ipdb
+
+
+.claude/

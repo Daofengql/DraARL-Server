@@ -4,7 +4,6 @@
 *.dll
 *.so
 *.dylib
-udphub
 udphub.arm
 udphub.arm64
 nrllink

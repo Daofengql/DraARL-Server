@@ -87,6 +87,29 @@ type Configuration struct {
 		Longitude      float64 `yaml:"Longitude" json:"longitude"`
 		Altitude       string  `yaml:"Altitude" json:"altitude"`
 	} `yaml:"APRS" json:"aprs"`
+
+	// Keycloak SSO 配置
+	Keycloak struct {
+		Enabled         bool   `yaml:"Enabled" json:"enabled"`
+		BaseURL         string `yaml:"BaseURL" json:"base_url"`             // http://localhost:8080
+		Realm          string `yaml:"Realm" json:"realm"`                   // nrllink
+		ClientID       string `yaml:"ClientID" json:"client_id"`            // nrllink-frontend
+		ClientSecret   string `yaml:"ClientSecret" json:"client_secret"`    // 客户端密钥
+		RedirectURI    string `yaml:"RedirectURI" json:"redirect_uri"`     // http://localhost:9000/callback
+		AdminUsername  string `yaml:"AdminUsername" json:"admin_username"`  // admin
+		AdminPassword  string `yaml:"AdminPassword" json:"admin_password"`  // admin
+	} `yaml:"Keycloak" json:"keycloak"`
+
+	// MinIO 对象存储配置
+	MinIO struct {
+		Enabled        bool   `yaml:"Enabled" json:"enabled"`
+		Endpoint       string `yaml:"Endpoint" json:"endpoint"`             // localhost:9000
+		AccessKey      string `yaml:"AccessKey" json:"access_key"`         // minioadmin
+		SecretKey      string `yaml:"SecretKey" json:"secret_key"`         // minioadmin
+		UseSSL         bool   `yaml:"UseSSL" json:"use_ssl"`               // 是否使用HTTPS
+		Bucket         string `yaml:"Bucket" json:"bucket"`                 // 默认存储桶
+		BasePath       string `yaml:"BasePath" json:"base_path"`           // URL基础路径
+	} `yaml:"MinIO" json:"minio"`
 }
 
 // GetDSN 获取MySQL连接字符串

@@ -72,3 +72,24 @@ APRS:
     Latitude: 0
     Longitude: 0
     Altitude: "0"
+
+# Keycloak SSO 单点登录配置 (可选)
+Keycloak:
+    Enabled: false                    # 是否启用SSO登录
+    BaseURL: "http://localhost:8080"   # Keycloak服务器地址
+    Realm: "nrllink"                  # Realm名称
+    ClientID: "nrllink-frontend"      # 客户端ID
+    ClientSecret: ""                  # 客户端密钥(如需要)
+    RedirectURI: "http://localhost:9000/callback"  # OAuth回调地址
+    AdminUsername: "admin"            # 管理员用户名(用于同步用户)
+    AdminPassword: "admin"            # 管理员密码(用于同步用户)
+
+# MinIO 对象存储配置 (可选)
+MinIO:
+    Enabled: false                    # 是否启用对象存储
+    Endpoint: "localhost:9000"        # MinIO服务地址
+    AccessKey: "minioadmin"           # Access Key
+    SecretKey: "minioadmin"           # Secret Key
+    UseSSL: false                     # 是否使用HTTPS
+    Bucket: "nrllink"                 # 默认存储桶
+    BasePath: "/minio"                # URL访问基础路径

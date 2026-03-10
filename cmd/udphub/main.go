@@ -1,0 +1,241 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	stdlog "log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"nrllink/internal/aprs"
+	"nrllink/internal/config"
+	"nrllink/internal/db"
+	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
+	"nrllink/internal/server"
+	"nrllink/internal/udphub"
+	"nrllink/pkg/geoip"
+)
+
+var (
+	version   = "1.0.0"
+	buildTime = "unknown"
+)
+
+func main() {
+	// 解析命令行参数
+	configPath := flag.String("c", "", "配置文件路径")
+	showVersion := flag.Bool("v", false, "显示版本信息")
+	printConfig := flag.String("p", "", "打印配置信息")
+	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("nrllink version %s (build time: %s)\n", version, buildTime)
+		os.Exit(0)
+	}
+
+	// 如果只是重置密码，不需要启动服务
+	if *resetAdminPass != "" {
+		resetAdminPassword(*resetAdminPass, *configPath)
+		os.Exit(0)
+	}
+
+	// 加载配置
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		stdlog.Fatalf("加载配置文件失败: %v", err)
+	}
+
+	// 打印配置信息
+	if *printConfig != "" {
+		switch *printConfig {
+		case "json":
+			fmt.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s@%s:%d/%s\n",
+				cfg.System.Port, cfg.Web.Port, cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
+		default:
+			fmt.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s@%s:%d/%s\n",
+				cfg.System.Port, cfg.Web.Port, cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
+		}
+		os.Exit(0)
+	}
+
+	// 初始化 MySQL 数据库（原生 SQL - 保持兼容）
+	dsn := cfg.GetDSN()
+	err = db.Init(dsn, cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns, cfg.Database.MaxLifetime)
+	if err != nil {
+		stdlog.Fatalf("初始化数据库失败: %v", err)
+	}
+	defer db.Close()
+
+	// 初始化 GORM 数据库
+	gormCfg := &gormdb.Config{
+		DSN:          dsn,
+		MaxOpenConns: cfg.Database.MaxOpenConns,
+		MaxIdleConns: cfg.Database.MaxIdleConns,
+		MaxLifetime:  cfg.Database.MaxLifetime,
+		LogLevel:     "info", // 可通过配置文件控制
+	}
+	if err := gormdb.Init(gormCfg); err != nil {
+		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
+	}
+	defer gormdb.Close()
+
+	// 初始化数据库表结构
+	if err := db.InitSchema(); err != nil {
+		stdlog.Fatalf("初始化数据库表结构失败: %v", err)
+	}
+
+	// 执行数据库更新
+	if err := db.UpdateDatabase(); err != nil {
+		stdlog.Printf("数据库更新警告: %v", err)
+	}
+
+	// 初始化管理员用户（首次启动时）
+	adminUser, adminPass, err := db.InitAdminUser()
+	if err != nil {
+		stdlog.Printf("初始化管理员用户失败: %v", err)
+	} else if adminUser != "" {
+		stdlog.Println("===========================================")
+		stdlog.Println("首次启动，已创建默认管理员用户：")
+		stdlog.Printf("  用户名: %s", adminUser)
+		stdlog.Printf("  密码: %s", adminPass)
+		stdlog.Println("  请登录后立即修改密码！")
+		stdlog.Println("===========================================")
+	}
+
+	// 启动操作日志处理器
+	oplog.Start()
+	oplog.AddLog("系统启动", "system", 0, "", "", "")
+
+	// 初始化 IP 地理位置数据库
+	if cfg.System.IPFile != "" {
+		if err := geoip.Init(cfg.System.IPFile); err != nil {
+			stdlog.Printf("IP 地理位置数据库初始化失败: %v", err)
+		} else {
+			stdlog.Println("IP 地理位置数据库初始化成功")
+		}
+	}
+
+	// 获取 UDP 端口号
+	udpPort := 8000
+	if cfg.System.Port != "" {
+		fmt.Sscanf(cfg.System.Port, "%d", &udpPort)
+	}
+
+	// 启动 UDP 服务器（核心语音转发服务）
+	go func() {
+		stdlog.Println("正在启动 UDP 服务器...")
+		if err := udphub.StartUDPServer(udpPort); err != nil {
+			stdlog.Printf("UDP 服务器启动失败: %v", err)
+		}
+	}()
+
+	// 启动 APRS 服务
+	if cfg.APRS.CallSign != "" {
+		stdlog.Println("正在启动 APRS 服务...")
+		aprs.StartAPRSService(cfg)
+	} else {
+		stdlog.Println("APRS 未配置，跳过启动")
+	}
+
+	// 启动 HTTP 服务器（Web API 和前端服务）
+	go func() {
+		stdlog.Println("正在启动 HTTP 服务器...")
+		srv := server.New(cfg)
+		if err := srv.Start(); err != nil {
+			stdlog.Printf("HTTP 服务器错误: %v", err)
+		}
+	}()
+
+	stdlog.Printf("nrllink v%s 启动成功", version)
+	stdlog.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s:%d/%s, APRS=%s",
+		cfg.System.Port, cfg.Web.Port, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName, cfg.APRS.CallSign)
+
+	// 等待信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	stdlog.Println("正在关闭服务...")
+
+	// 停止 APRS 服务
+	aprs.StopAPRSService()
+
+	// 刷新日志缓冲区
+	oplog.Flush()
+
+	stdlog.Println("nrllink 已关闭")
+}
+
+// resetAdminPassword 重置管理员密码
+func resetAdminPassword(newPassword, configPath string) {
+	// 加载配置以获取数据库连接信息
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		stdlog.Fatalf("加载配置文件失败: %v", err)
+	}
+
+	// 初始化数据库
+	dsn := cfg.GetDSN()
+	err = db.Init(dsn, cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns, cfg.Database.MaxLifetime)
+	if err != nil {
+		stdlog.Fatalf("初始化数据库失败: %v", err)
+	}
+	defer db.Close()
+
+	// 使用 GORM 重置密码
+	gormCfg := &gormdb.Config{
+		DSN:          dsn,
+		MaxOpenConns: cfg.Database.MaxOpenConns,
+		MaxIdleConns: cfg.Database.MaxIdleConns,
+		MaxLifetime:  cfg.Database.MaxLifetime,
+		LogLevel:     "silent",
+	}
+	if err := gormdb.Init(gormCfg); err != nil {
+		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
+	}
+	defer gormdb.Close()
+
+	// 获取用户仓库
+	userRepo := gormdb.NewUserRepository()
+
+	// 查找管理员用户
+	users, _, err := userRepo.ListUsers(100, 1)
+	if err != nil {
+		stdlog.Fatalf("查询用户失败: %v", err)
+	}
+
+	var adminUser *gormdb.User
+	for i := range users {
+		// 检查是否是管理员（roles 包含 "admin"）
+		if users[i].Roles == `["admin"]` || users[i].Roles == `[admin]` || users[i].Roles == "admin" {
+			adminUser = users[i]
+			break
+		}
+	}
+
+	if adminUser == nil {
+		stdlog.Fatal("未找到管理员用户")
+	}
+
+	// 更新密码（使用 bcrypt）
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		stdlog.Fatalf("密码加密失败: %v", err)
+	}
+
+	adminUser.Password = string(hashedPassword)
+	if err := userRepo.UpdateUserPassword(adminUser.ID, adminUser.Password); err != nil {
+		stdlog.Fatalf("更新密码失败: %v", err)
+	}
+
+	fmt.Println("========================================")
+	fmt.Printf("管理员密码已重置成功！\n")
+	fmt.Printf("用户名: %s\n", adminUser.Name)
+	fmt.Printf("新密码: %s\n", newPassword)
+	fmt.Println("========================================")
+}

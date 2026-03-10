@@ -5,34 +5,33 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"nrllink/internal/db"
-	"nrllink/internal/models"
+	gormdb "nrllink/internal/gormdb"
 )
 
 // GroupInfo 群组信息响应
 type GroupInfo struct {
-	ID                 int    `json:"id"`
-	Name               string `json:"name"`
-	Type               int    `json:"type"`
-	CallSign           string `json:"callsign"`
-	Password           string `json:"password,omitempty"`
-	AllowCallSignSSID  string `json:"allow_callsign_ssid"`
-	OwerID             int    `json:"ower_id"`
-	OwerCallSign       string `json:"ower_callsign"`
-	DevList            string `json:"devlist"`
-	MasterServer       int    `json:"master_server"`
-	SlaveServer        int    `json:"slave_server"`
-	Status             int    `json:"status"`
-	CreateTime         string `json:"create_time,omitempty"`
-	UpdateTime         string `json:"update_time,omitempty"`
-	Note               string `json:"note"`
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	Type              int    `json:"type"`
+	CallSign          string `json:"callsign"`
+	Password          string `json:"password,omitempty"`
+	AllowCallSignSSID string `json:"allow_callsign_ssid"`
+	OwerID            int    `json:"ower_id"`
+	OwerCallSign      string `json:"ower_callsign"`
+	DevList           string `json:"devlist"`
+	MasterServer      int    `json:"master_server"`
+	SlaveServer       int    `json:"slave_server"`
+	Status            int    `json:"status"`
+	CreateTime        string `json:"create_time,omitempty"`
+	UpdateTime        string `json:"update_time,omitempty"`
+	Note              string `json:"note"`
 }
 
 // GetGroups 获取群组列表
 func GetGroups(c *gin.Context) {
-	repo := db.NewGroupRepository()
+	repo := gormdb.NewGroupRepository()
 
-	groupsRaw, err := repo.ListPublicGroups()
+	groupsRaw, err := repo.ListGroups()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -43,17 +42,6 @@ func GetGroups(c *gin.Context) {
 
 	groups := make([]*GroupInfo, 0, len(groupsRaw))
 	for _, g := range groupsRaw {
-		// 将 []int 转换为逗号分隔的字符串
-		devListStr := ""
-		if len(g.DevList) > 0 {
-			for i, id := range g.DevList {
-				if i > 0 {
-					devListStr += ","
-				}
-				devListStr += strconv.Itoa(id)
-			}
-		}
-
 		group := &GroupInfo{
 			ID:                g.ID,
 			Name:              g.Name,
@@ -62,12 +50,12 @@ func GetGroups(c *gin.Context) {
 			AllowCallSignSSID: g.AllowCallSignSSID,
 			OwerID:            g.OwerID,
 			OwerCallSign:      g.OwerCallSign,
-			DevList:           devListStr,
+			DevList:           g.DevList,
 			MasterServer:      g.MasterServer,
 			SlaveServer:       g.SlaveServer,
 			Status:            g.Status,
-			CreateTime:        g.CreateTime,
-			UpdateTime:        g.UpdateTime,
+			CreateTime:        g.CreateTime.Format("2006-01-02 15:04:05"),
+			UpdateTime:        g.UpdateTime.Format("2006-01-02 15:04:05"),
 			Note:              g.Note,
 		}
 		groups = append(groups, group)
@@ -94,9 +82,9 @@ func GetGroup(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewGroupRepository()
-	group, err := repo.GetPublicGroup(id)
-	if err != nil {
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(id)
+	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
@@ -115,24 +103,12 @@ func GetGroup(c *gin.Context) {
 			AllowCallSignSSID: group.AllowCallSignSSID,
 			OwerID:            group.OwerID,
 			OwerCallSign:      group.OwerCallSign,
-			DevList:           func() string {
-				if len(group.DevList) > 0 {
-					s := ""
-					for i, id := range group.DevList {
-						if i > 0 {
-							s += ","
-						}
-						s += strconv.Itoa(id)
-					}
-					return s
-				}
-				return ""
-			}(),
+			DevList:           group.DevList,
 			MasterServer:      group.MasterServer,
 			SlaveServer:       group.SlaveServer,
 			Status:            group.Status,
-			CreateTime:        group.CreateTime,
-			UpdateTime:        group.UpdateTime,
+			CreateTime:        group.CreateTime.Format("2006-01-02 15:04:05"),
+			UpdateTime:        group.UpdateTime.Format("2006-01-02 15:04:05"),
 			Note:              group.Note,
 		},
 	})
@@ -160,8 +136,8 @@ func CreateGroup(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewGroupRepository()
-	group := &models.Group{
+	repo := gormdb.NewGroupRepository()
+	group := &gormdb.Group{
 		Name:              req.Name,
 		Type:              req.Type,
 		CallSign:          req.CallSign,
@@ -169,10 +145,10 @@ func CreateGroup(c *gin.Context) {
 		AllowCallSignSSID: req.AllowCallSignSSID,
 		OwerCallSign:      req.OwerCallSign,
 		Status:            1,
-		DevMap:            make(map[int]*models.Device),
+		DevList:           "",
 	}
 
-	if err := repo.AddPublicGroup(group); err != nil {
+	if err := repo.CreateGroup(group); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建群组失败",
@@ -220,11 +196,11 @@ func UpdateGroup(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewGroupRepository()
+	repo := gormdb.NewGroupRepository()
 
 	// 先获取现有群组
-	group, err := repo.GetPublicGroup(id)
-	if err != nil {
+	group, err := repo.GetGroupByID(id)
+	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
@@ -252,7 +228,7 @@ func UpdateGroup(c *gin.Context) {
 		group.Note = req.Note
 	}
 
-	if err := repo.UpdatePublicGroup(group); err != nil {
+	if err := repo.UpdateGroup(group); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新群组失败",
@@ -278,8 +254,8 @@ func DeleteGroup(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewGroupRepository()
-	if err := repo.DeletePublicGroup(id); err != nil {
+	repo := gormdb.NewGroupRepository()
+	if err := repo.DeleteGroup(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除群组失败",
@@ -305,8 +281,8 @@ func GetGroupDevices(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewDeviceRepository()
-	devicesRaw, total, err := repo.ListDevices(1000, 1) // 获取所有设备
+	repo := gormdb.NewDeviceRepository()
+	devicesRaw, err := repo.ListDevicesByGroupID(groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -315,32 +291,29 @@ func GetGroupDevices(c *gin.Context) {
 		return
 	}
 
-	// 过滤出属于该群组的设备
-	devices := make([]*DeviceInfo, 0)
+	// 转换为响应格式
+	devices := make([]gin.H, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
-		if d.GroupID == groupID {
-			dev := &DeviceInfo{
-				ID:         d.ID,
-				Name:       d.Name,
-				CallSign:   d.CallSign,
-				SSID:       d.SSID,
-				DevModel:   d.DevModel,
-				GroupID:    d.GroupID,
-				Status:     d.Status,
-				Priority:   d.Priority,
-				IsOnline:   d.ISOnline,
-				CreateTime: d.CreateTime.Format("2006-01-02 15:04:05"),
-				UpdateTime: d.UpdateTime.Format("2006-01-02 15:04:05"),
-			}
-			devices = append(devices, dev)
-		}
+		devices = append(devices, gin.H{
+			"id":         d.ID,
+			"name":       d.Name,
+			"callsign":   d.CallSign,
+			"ssid":       d.SSID,
+			"dev_model":  d.DevModel,
+			"group_id":   d.GroupID,
+			"status":     d.Status,
+			"priority":   d.Priority,
+			"is_online":  d.ISOnline,
+			"create_time": d.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time": d.UpdateTime.Format("2006-01-02 15:04:05"),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"total": total,
+			"total": int64(len(devices)),
 			"items": devices,
 		},
 	})
@@ -348,7 +321,7 @@ func GetGroupDevices(c *gin.Context) {
 
 // GetRelays 获取中继台列表
 func GetRelays(c *gin.Context) {
-	repo := db.NewRelayRepository()
+	repo := gormdb.NewRelayRepository()
 	relays, err := repo.ListRelays()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -369,7 +342,7 @@ func GetRelays(c *gin.Context) {
 
 // GetServers 获取服务器列表
 func GetServers(c *gin.Context) {
-	repo := db.NewServerRepository()
+	repo := gormdb.NewServerRepository()
 	servers, err := repo.ListServers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

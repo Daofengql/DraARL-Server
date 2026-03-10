@@ -19,6 +19,7 @@ import {
   Dns,
   Description,
 } from '@mui/icons-material'
+import { authService } from '../../services'
 
 const DRAWER_WIDTH = 240
 
@@ -26,19 +27,24 @@ interface SidebarProps extends DrawerProps {
   onClose?: () => void
 }
 
+// 定义所有菜单项，包含角色信息
 const menuItems = [
-  { path: '/', label: '仪表盘', icon: <Dashboard /> },
-  { path: '/devices', label: '设备管理', icon: <Devices /> },
-  { path: '/groups', label: '群组管理', icon: <Group /> },
-  { path: '/users', label: '用户管理', icon: <People /> },
-  { path: '/relays', label: '中继台', icon: <Radio /> },
-  { path: '/servers', label: '服务器', icon: <Dns /> },
-  { path: '/logs', label: '操作日志', icon: <Description /> },
+  { path: '/', label: '仪表盘', icon: <Dashboard />, adminOnly: false },
+  { path: '/devices', label: '设备管理', icon: <Devices />, adminOnly: false },
+  { path: '/groups', label: '群组管理', icon: <Group />, adminOnly: false },
+  { path: '/users', label: '用户管理', icon: <People />, adminOnly: true },
+  { path: '/relays', label: '中继台', icon: <Radio />, adminOnly: true },
+  { path: '/servers', label: '服务器', icon: <Dns />, adminOnly: true },
+  { path: '/logs', label: '操作日志', icon: <Description />, adminOnly: true },
 ]
 
 export function Sidebar({ onClose, open, variant = 'permanent', ...props }: SidebarProps) {
   const navigate = useNavigate()
   const location = useLocation()
+  const isAdmin = authService.isAdmin()
+
+  // 过滤菜单项：只显示用户有权限访问的菜单
+  const visibleMenuItems = menuItems.filter(item => !item.adminOnly || isAdmin)
 
   const handleNavigate = (path: string) => {
     navigate(path)
@@ -55,7 +61,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', ...props }: Side
         </Typography>
       </Box>
       <List sx={{ flex: 1, py: 1 }}>
-        {menuItems.map((item) => (
+        {visibleMenuItems.map((item) => (
           <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
               selected={location.pathname === item.path || location.pathname.startsWith(item.path + '/')}

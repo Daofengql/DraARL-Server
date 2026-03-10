@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"nrllink/internal/models"
 )
@@ -16,6 +17,7 @@ func NewNRL2Packet(remoteAddr *net.UDPAddr, data []byte) (*models.NRL2Packet, er
 	packet := &models.NRL2Packet{
 		UDPAddr:    remoteAddr,
 		UDPAddrStr: remoteAddr.String(),
+		TimeStamp:  time.Now(), // 设置接收时间戳
 	}
 
 	err := packet.Decode(data)

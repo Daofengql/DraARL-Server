@@ -72,4 +72,23 @@ export const authService = {
   isAuthenticated(): boolean {
     return !!this.getToken()
   },
+
+  // 检查是否是管理员
+  isAdmin(): boolean {
+    const user = this.getStoredUser()
+    if (!user) return false
+
+    // 检查 isAdmin 字段
+    if (user.isAdmin === true) return true
+
+    // 检查 roles 数组是否包含 admin
+    if (user.roles && Array.isArray(user.roles)) {
+      return user.roles.includes('admin')
+    }
+
+    // 检查 role 字段
+    if (user.role === 'admin') return true
+
+    return false
+  },
 }

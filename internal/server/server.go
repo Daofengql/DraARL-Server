@@ -78,14 +78,20 @@ func (s *Server) setupRoutes() {
 		protected := api.Group("")
 		protected.Use(middleware.AuthMiddleware())
 		{
-			// 用户相关
+			// 用户管理（需要管理员权限）
+			admin := protected.Group("")
+			admin.Use(middleware.RequireAdmin())
+			{
+				admin.GET("/users", handler.GetUsers)
+				admin.POST("/users", handler.CreateUser)
+				admin.PUT("/users/:id", handler.UpdateUser)
+				admin.DELETE("/users/:id", handler.DeleteUser)
+				admin.PUT("/users/:id/password", handler.UpdateUserPassword)
+				admin.GET("/users/:id", handler.GetUserDetail)
+			}
+
+			// 当前用户信息（所有认证用户可访问）
 			protected.GET("/me", handler.GetCurrentUser)
-			protected.GET("/users", handler.GetUsers)
-			protected.POST("/users", handler.CreateUser)
-			protected.PUT("/users/:id", handler.UpdateUser)
-			protected.DELETE("/users/:id", handler.DeleteUser)
-			protected.PUT("/users/:id/password", handler.UpdateUserPassword)
-			protected.GET("/users/:id", handler.GetUserDetail)
 
 			// 设备相关
 			protected.GET("/devices", handler.GetDevices)
@@ -117,21 +123,21 @@ func (s *Server) setupRoutes() {
 			protected.DELETE("/groups/:id", handler.DeleteGroup)
 			protected.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
 
-			// 中继台和服务器
-			protected.GET("/relays", handler.GetRelays)
-			protected.GET("/relay/list", handler.GetRelays) // 兼容旧接口
-			protected.POST("/relay/create", handler.CreateRelay)
-			protected.POST("/relay/update", handler.UpdateRelay)
-			protected.POST("/relay/delete", handler.DeleteRelay)
-			protected.GET("/servers", handler.GetServers)
-			protected.GET("/server/list", handler.GetServers) // 兼容旧接口
-			protected.POST("/server/create", handler.CreateServer)
-			protected.POST("/server/update", handler.UpdateServer)
-			protected.POST("/server/delete", handler.DeleteServer)
+			// 中继台和服务器（需要管理员权限）
+			admin.GET("/relays", handler.GetRelays)
+			admin.GET("/relay/list", handler.GetRelays) // 兼容旧接口
+			admin.POST("/relay/create", handler.CreateRelay)
+			admin.POST("/relay/update", handler.UpdateRelay)
+			admin.POST("/relay/delete", handler.DeleteRelay)
+			admin.GET("/servers", handler.GetServers)
+			admin.GET("/server/list", handler.GetServers) // 兼容旧接口
+			admin.POST("/server/create", handler.CreateServer)
+			admin.POST("/server/update", handler.UpdateServer)
+			admin.POST("/server/delete", handler.DeleteServer)
 
-			// 操作日志
-			protected.GET("/operatorlog/list", handler.GetOperatorLogs)
-			protected.GET("/operatorlog/stats", handler.GetOperatorLogStats)
+			// 操作日志（需要管理员权限）
+			admin.GET("/operatorlog/list", handler.GetOperatorLogs)
+			admin.GET("/operatorlog/stats", handler.GetOperatorLogStats)
 		}
 	}
 

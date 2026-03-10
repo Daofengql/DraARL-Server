@@ -2,9 +2,11 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"nrllink/internal/models"
 )
@@ -44,18 +46,118 @@ func (r *DeviceRepository) AddDevice(device *models.Device) error {
 	return nil
 }
 
+// scanDevice 扫描设备行数据的通用函数
+func scanDevice(row *sql.Row) (*models.Device, error) {
+	device := &models.Device{}
+	var gird, note, chanNameStr sql.NullString
+	var devType sql.NullInt32
+	var isCerted sql.NullBool
+	var createTime, updateTime, onlineTime sql.NullTime
+
+	err := row.Scan(
+		&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
+		&device.Password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
+		&isCerted, &chanNameStr, &onlineTime, &createTime, &updateTime, &note, &device.Priority,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// 处理可能为 NULL 的字段
+	if gird.Valid {
+		device.Gird = gird.String
+	}
+	if devType.Valid {
+		device.DevType = int(devType.Int32)
+	}
+	if isCerted.Valid {
+		device.IsCerted = isCerted.Bool
+	}
+	if note.Valid {
+		device.Note = note.String
+	}
+	if chanNameStr.Valid && chanNameStr.String != "" {
+		json.Unmarshal([]byte(chanNameStr.String), &device.ChanName)
+	}
+	if createTime.Valid {
+		device.CreateTime = createTime.Time
+	} else {
+		device.CreateTime = time.Time{}
+	}
+	if updateTime.Valid {
+		device.UpdateTime = updateTime.Time
+	} else {
+		device.UpdateTime = time.Time{}
+	}
+	if onlineTime.Valid {
+		device.OnlineTime = onlineTime.Time
+	} else {
+		device.OnlineTime = time.Time{}
+	}
+
+	device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
+	return device, nil
+}
+
+// scanDeviceFromRows 从 Rows 扫描设备
+func scanDeviceFromRows(rows *sql.Rows) (*models.Device, error) {
+	device := &models.Device{}
+	var gird, note, chanNameStr sql.NullString
+	var devType sql.NullInt32
+	var isCerted sql.NullBool
+	var createTime, updateTime, onlineTime sql.NullTime
+
+	err := rows.Scan(
+		&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
+		&device.Password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
+		&isCerted, &chanNameStr, &onlineTime, &createTime, &updateTime, &note, &device.Priority,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// 处理可能为 NULL 的字段
+	if gird.Valid {
+		device.Gird = gird.String
+	}
+	if devType.Valid {
+		device.DevType = int(devType.Int32)
+	}
+	if isCerted.Valid {
+		device.IsCerted = isCerted.Bool
+	}
+	if note.Valid {
+		device.Note = note.String
+	}
+	if chanNameStr.Valid && chanNameStr.String != "" {
+		json.Unmarshal([]byte(chanNameStr.String), &device.ChanName)
+	}
+	if createTime.Valid {
+		device.CreateTime = createTime.Time
+	} else {
+		device.CreateTime = time.Time{}
+	}
+	if updateTime.Valid {
+		device.UpdateTime = updateTime.Time
+	} else {
+		device.UpdateTime = time.Time{}
+	}
+	if onlineTime.Valid {
+		device.OnlineTime = onlineTime.Time
+	} else {
+		device.OnlineTime = time.Time{}
+	}
+
+	device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
+	return device, nil
+}
+
 // GetDevice 获取设备
 func (r *DeviceRepository) GetDevice(callsign string, ssid byte) (*models.Device, error) {
 	query := `SELECT * FROM devices WHERE callsign = ? AND ssid = ?`
 	row := r.db.QueryRow(query, callsign, ssid)
 
-	device := &models.Device{}
-	var create_time, update_time, online_time sql.NullString
-
-	err := row.Scan(&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-		&device.Password, new(string), &device.DevModel, &device.GroupID, &device.Status,
-		new(bool), &device.ChanName, &online_time, &create_time, &update_time, &device.Note, &device.Priority)
-
+	device, err := scanDevice(row)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("device not found")
 	}
@@ -63,7 +165,6 @@ func (r *DeviceRepository) GetDevice(callsign string, ssid byte) (*models.Device
 		return nil, err
 	}
 
-	device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
 	return device, nil
 }
 
@@ -105,17 +206,11 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*models.Device, int, 
 
 	devices := make([]*models.Device, 0)
 	for rows.Next() {
-		device := &models.Device{}
-		var create_time, update_time, online_time sql.NullString
-
-		err := rows.Scan(&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-			&device.Password, new(string), &device.DevModel, &device.GroupID, &device.Status,
-			new(bool), &device.ChanName, &online_time, &create_time, &update_time, &device.Note, &device.Priority)
+		device, err := scanDeviceFromRows(rows)
 		if err != nil {
 			log.Printf("Error scanning device: %v", err)
 			continue
 		}
-		device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
 		devices = append(devices, device)
 	}
 
@@ -134,13 +229,7 @@ func (r *DeviceRepository) GetDeviceByDMRID(dmrid uint32) (*models.Device, error
 	query := `SELECT * FROM devices WHERE dmrid = ?`
 	row := r.db.QueryRow(query, dmrid)
 
-	device := &models.Device{}
-	var create_time, update_time, online_time sql.NullString
-
-	err := row.Scan(&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-		&device.Password, new(string), &device.DevModel, &device.GroupID, &device.Status,
-		new(bool), &device.ChanName, &online_time, &create_time, &update_time, &device.Note, &device.Priority)
-
+	device, err := scanDevice(row)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("device not found")
 	}
@@ -148,7 +237,6 @@ func (r *DeviceRepository) GetDeviceByDMRID(dmrid uint32) (*models.Device, error
 		return nil, err
 	}
 
-	device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
 	return device, nil
 }
 

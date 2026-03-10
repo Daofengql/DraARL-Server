@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { MainLayout } from './components/layout'
-import { ProtectedRoute, ToastContainer } from './components/common'
+import { ProtectedRoute, AdminRoute, ToastContainer } from './components/common'
 import { LoginPage, RegisterPage } from './pages/auth'
 import { DashboardPage } from './pages/dashboard'
 import { DevicesPage } from './pages/devices'
@@ -37,13 +37,44 @@ function App() {
             </ProtectedRoute>
           }
         >
+          {/* 普通用户可访问的路由 */}
           <Route index element={<DashboardPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="groups" element={<GroupsPage />} />
-          <Route path="users" element={<UsersPage />} />
-          <Route path="relays" element={<RelaysPage />} />
-          <Route path="servers" element={<ServersPage />} />
-          <Route path="logs" element={<LogsPage />} />
+
+          {/* 需要管理员权限的路由 */}
+          <Route
+            path="users"
+            element={
+              <AdminRoute>
+                <UsersPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="relays"
+            element={
+              <AdminRoute>
+                <RelaysPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="servers"
+            element={
+              <AdminRoute>
+                <ServersPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="logs"
+            element={
+              <AdminRoute>
+                <LogsPage />
+              </AdminRoute>
+            }
+          />
         </Route>
 
         {/* 404 */}

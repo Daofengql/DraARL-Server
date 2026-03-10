@@ -1,39 +1,33 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"nrllink/internal/db"
-	"nrllink/internal/log"
-	"nrllink/internal/models"
+	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 )
 
 // CreateRelay 创建中继台
 func CreateRelay(c *gin.Context) {
 	username, _ := c.Get("username")
 
-	var relay models.Relay
-	if err := c.ShouldBindJSON(&relay); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "新增中继台失败,json格式错误",
-			},
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取用户信息失败",
 		})
 		return
 	}
 
-	// 获取用户完整信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "获取用户信息失败",
-			},
+	var relay gormdb.Relay
+	if err := c.ShouldBindJSON(&relay); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
 		})
 		return
 	}
@@ -41,26 +35,21 @@ func CreateRelay(c *gin.Context) {
 	// 设置所有者呼号为当前用户
 	relay.OwerCallSign = user.CallSign
 
-	repo := db.NewRelayRepository()
-	if err := repo.AddRelay(&relay); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "新增中继台失败",
-			},
+	repo := gormdb.NewRelayRepository()
+	if err := repo.CreateRelay(&relay); err != nil {
+		log.Printf("创建中继台失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "创建中继台失败",
 		})
 		return
 	}
 
-	log.AddLog(relay.String(), "新增中继台成功", user.ID, user.Name, user.CallSign, c.ClientIP())
+	oplog.AddLog(relay.String(), "新增中继台成功", user.ID, user.Name, user.CallSign, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
-		"data": gin.H{
-			"isok":    0,
-			"message": "新增中继台成功",
-		},
+		"code":    200,
+		"message": "新增中继台成功",
 	})
 }
 
@@ -69,25 +58,21 @@ func UpdateRelay(c *gin.Context) {
 	username, _ := c.Get("username")
 	roles, _ := c.Get("roles")
 
-	var relay models.Relay
+	var relay gormdb.Relay
 	if err := c.ShouldBindJSON(&relay); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"message": "修改中继台失败",
-			},
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
 		})
 		return
 	}
 
-	// 获取用户完整信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"message": "获取用户信息失败",
-			},
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取用户信息失败",
 		})
 		return
 	}
@@ -104,25 +89,21 @@ func UpdateRelay(c *gin.Context) {
 	}
 
 	// 获取原有中继台信息
-	repo := db.NewRelayRepository()
-	oldRelay, err := repo.GetRelay(relay.ID)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"message": "中继台不存在",
-			},
+	repo := gormdb.NewRelayRepository()
+	oldRelay, err := repo.GetRelayByID(relay.ID)
+	if err != nil || oldRelay == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "中继台不存在",
 		})
 		return
 	}
 
 	// 检查是否是所有者
 	if !isAdmin && user.CallSign != oldRelay.OwerCallSign {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"message": "当前用户没有权限设置此参数",
-			},
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "当前用户没有权限设置此参数",
 		})
 		return
 	}
@@ -131,22 +112,19 @@ func UpdateRelay(c *gin.Context) {
 	relay.OwerCallSign = oldRelay.OwerCallSign
 
 	if err := repo.UpdateRelay(&relay); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"message": "修改中继台失败",
-			},
+		log.Printf("更新中继台失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "修改中继台失败",
 		})
 		return
 	}
 
-	log.AddLog(relay.String(), "修改中继台成功", user.ID, user.Name, user.CallSign, c.ClientIP())
+	oplog.AddLog(relay.String(), "修改中继台成功", user.ID, user.Name, user.CallSign, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
-		"data": gin.H{
-			"message": "修改中继台成功",
-		},
+		"code":    200,
+		"message": "修改中继台成功",
 	})
 }
 
@@ -167,12 +145,9 @@ func DeleteRelay(c *gin.Context) {
 	}
 
 	if !isAdmin {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "当前用户没有权限设置此参数",
-			},
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "当前用户没有权限设置此参数",
 		})
 		return
 	}
@@ -181,42 +156,33 @@ func DeleteRelay(c *gin.Context) {
 		ID int `json:"id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "中继台删除失败",
-			},
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
 		})
 		return
 	}
 
-	// 获取用户完整信息
-	user, err := db.GetUserByUsername(username.(string))
+	userRepo := gormdb.NewUserRepository()
+	user, _ := userRepo.GetUserByName(username.(string))
 
-	repo := db.NewRelayRepository()
-	relay, _ := repo.GetRelay(req.ID)
+	repo := gormdb.NewRelayRepository()
+	relay, _ := repo.GetRelayByID(req.ID)
 
 	if err := repo.DeleteRelay(req.ID); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "中继台删除失败",
-			},
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "删除中继台失败",
 		})
 		return
 	}
 
-	if relay != nil && err == nil {
-		log.AddLog(relay.String(), "中继台删除成功", user.ID, user.Name, user.CallSign, c.ClientIP())
+	if relay != nil {
+		oplog.AddLog(relay.String(), "中继台删除成功", user.ID, user.Name, user.CallSign, c.ClientIP())
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
-		"data": gin.H{
-			"isok":    0,
-			"message": "中继台删除成功",
-		},
+		"code":    200,
+		"message": "中继台删除成功",
 	})
 }

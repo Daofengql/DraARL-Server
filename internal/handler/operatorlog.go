@@ -5,34 +5,47 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"nrllink/internal/log"
+	gormdb "nrllink/internal/gormdb"
 )
 
 // GetOperatorLogs 获取操作日志列表
 func GetOperatorLogs(c *gin.Context) {
 	// 获取查询参数
-	limitStr := c.DefaultQuery("limit", "20")
-	pageStr := c.DefaultQuery("page", "1")
-	operation := c.Query("operation")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	eventType := c.Query("operation")
 
-	limit, _ := strconv.Atoi(limitStr)
-	page, _ := strconv.Atoi(pageStr)
+	if limit <= 0 {
+		limit = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
 
-	// 查询日志
-	logs, total, err := log.QueryLogs(0, page, limit, operation)
+	repo := gormdb.NewOperatorLogRepository()
+
+	var logs []*gormdb.OperatorLog
+	var total int64
+	var err error
+
+	// 根据是��指定事件类型选择不同的查询方法
+	if eventType != "" {
+		logs, total, err = repo.ListLogsByEventType(eventType, limit, page)
+	} else {
+		logs, total, err = repo.ListLogs(limit, page)
+	}
+
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"isok":    1,
-				"message": "查询操作日志失败",
-			},
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询操作日志失败",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
+		"code":    200,
+		"message": "成功",
 		"data": gin.H{
 			"total": total,
 			"items": logs,
@@ -42,19 +55,19 @@ func GetOperatorLogs(c *gin.Context) {
 
 // GetOperatorLogStats 获取操作日志统计信息
 func GetOperatorLogStats(c *gin.Context) {
-	stats, err := log.GetStats()
+	repo := gormdb.NewOperatorLogRepository()
+	stats, err := repo.GetLogStats()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 20000,
-			"data": gin.H{
-				"message": "获取统计信息失败",
-			},
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取统计信息失败",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 20000,
-		"data": stats,
+		"code":    200,
+		"message": "成功",
+		"data":    stats,
 	})
 }

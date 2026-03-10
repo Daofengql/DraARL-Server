@@ -13,9 +13,12 @@ type Device struct {
 	CallSign       string    `json:"callsign"`
 	SSID           byte      `json:"ssid"`
 	Password       string    `json:"password"`
+	Gird           string    `json:"gird"`           // 数据库字段
+	DevType        int       `json:"dev_type"`        // 数据库字段
 	DevModel       byte      `json:"dev_model"`
 	GroupID        int       `json:"group_id"`
 	Status         byte      `json:"status"`
+	IsCerted       bool      `json:"is_certed"`      // 数据库字段
 	Priority       int       `json:"priority"`
 	ChanName       []string  `json:"chan_name"`
 	OnlineTime     time.Time `json:"online_time"`
@@ -47,6 +50,12 @@ type Device struct {
 	PcmBuffer          []int           `json:"-"`        // Exported for use in udphub package
 	LastATcommand      *ATCommand      `json:"last_at_command,omitempty"`
 	Speaking           *bool           `json:"-"`        // Exported for use in udphub package (meeting mode)
+
+	// Connection state tracking
+	LastDisconnectTime  time.Time `json:"last_disconnect_time"`  // Last time device went offline
+	ReconnectCount      int       `json:"reconnect_count"`        // Number of reconnections
+	PreviousUDPAddr     string    `json:"previous_udp_addr"`      // Previous connection address
+	IsReconnecting      bool      `json:"is_reconnecting"`        // Currently in reconnection grace period
 }
 
 // GetCallSignSSID returns the combined callsign and SSID

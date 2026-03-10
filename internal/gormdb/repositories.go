@@ -1,0 +1,343 @@
+package gormdb
+
+import (
+	"errors"
+	"gorm.io/gorm"
+)
+
+// GroupRepository 群组仓库
+type GroupRepository struct {
+	db *gorm.DB
+}
+
+// NewGroupRepository 创建群组仓库
+func NewGroupRepository() *GroupRepository {
+	return &GroupRepository{db: Get()}
+}
+
+// ListGroups 获取群组列表
+func (r *GroupRepository) ListGroups() ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Order("id DESC").Find(&groups).Error
+	return groups, err
+}
+
+// ListGroupsPaginated 分页获取群组列表
+func (r *GroupRepository) ListGroupsPaginated(limit, page int) ([]*Group, int64, error) {
+	var groups []*Group
+	var total int64
+
+	offset := (page - 1) * limit
+
+	// 获取总数
+	if err := r.db.Model(&Group{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := r.db.Order("id DESC").Limit(limit).Offset(offset).Find(&groups).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return groups, total, nil
+}
+
+// GetGroupByID 通过ID获取群组
+func (r *GroupRepository) GetGroupByID(id int) (*Group, error) {
+	var group Group
+	err := r.db.First(&group, id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &group, nil
+}
+
+// CreateGroup 创建群组
+func (r *GroupRepository) CreateGroup(group *Group) error {
+	return r.db.Create(group).Error
+}
+
+// UpdateGroup 更新群组
+func (r *GroupRepository) UpdateGroup(group *Group) error {
+	return r.db.Save(group).Error
+}
+
+// UpdateGroupFields 更新群组指定字段
+func (r *GroupRepository) UpdateGroupFields(id int, fields map[string]interface{}) error {
+	return r.db.Model(&Group{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// DeleteGroup 删除群组
+func (r *GroupRepository) DeleteGroup(id int) error {
+	return r.db.Delete(&Group{}, id).Error
+}
+
+// GroupCount 获取群组总数
+func (r *GroupRepository) GroupCount() (int64, error) {
+	var count int64
+	err := r.db.Model(&Group{}).Count(&count).Error
+	return count, err
+}
+
+// SearchGroups 搜索群组
+func (r *GroupRepository) SearchGroups(keyword string) ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("name LIKE ? OR callsign LIKE ?", "%"+keyword+"%", "%"+keyword+"%").Find(&groups).Error
+	return groups, err
+}
+
+// RelayRepository 中继台仓库
+type RelayRepository struct {
+	db *gorm.DB
+}
+
+// NewRelayRepository 创建中继台仓库
+func NewRelayRepository() *RelayRepository {
+	return &RelayRepository{db: Get()}
+}
+
+// ListRelays 获取中继台列表
+func (r *RelayRepository) ListRelays() ([]*Relay, error) {
+	var relays []*Relay
+	err := r.db.Order("id DESC").Find(&relays).Error
+	return relays, err
+}
+
+// ListRelaysPaginated 分页获取中继台列表
+func (r *RelayRepository) ListRelaysPaginated(limit, page int) ([]*Relay, int64, error) {
+	var relays []*Relay
+	var total int64
+
+	offset := (page - 1) * limit
+
+	// 获取总数
+	if err := r.db.Model(&Relay{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := r.db.Order("id DESC").Limit(limit).Offset(offset).Find(&relays).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return relays, total, nil
+}
+
+// GetRelayByID 通过ID获取中继台
+func (r *RelayRepository) GetRelayByID(id int) (*Relay, error) {
+	var relay Relay
+	err := r.db.First(&relay, id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &relay, nil
+}
+
+// CreateRelay 创建中继台
+func (r *RelayRepository) CreateRelay(relay *Relay) error {
+	return r.db.Create(relay).Error
+}
+
+// UpdateRelay 更新中继台
+func (r *RelayRepository) UpdateRelay(relay *Relay) error {
+	return r.db.Save(relay).Error
+}
+
+// DeleteRelay 删除中继台
+func (r *RelayRepository) DeleteRelay(id int) error {
+	return r.db.Delete(&Relay{}, id).Error
+}
+
+// ServerRepository 服务器仓库
+type ServerRepository struct {
+	db *gorm.DB
+}
+
+// NewServerRepository 创建服务器仓库
+func NewServerRepository() *ServerRepository {
+	return &ServerRepository{db: Get()}
+}
+
+// ListServers 获取服务器列表
+func (r *ServerRepository) ListServers() ([]*Server, error) {
+	var servers []*Server
+	err := r.db.Order("id DESC").Find(&servers).Error
+	return servers, err
+}
+
+// ListServersPaginated 分页获取服务器列表
+func (r *ServerRepository) ListServersPaginated(limit, page int) ([]*Server, int64, error) {
+	var servers []*Server
+	var total int64
+
+	offset := (page - 1) * limit
+
+	// 获取总数
+	if err := r.db.Model(&Server{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := r.db.Order("id DESC").Limit(limit).Offset(offset).Find(&servers).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return servers, total, nil
+}
+
+// GetServerByID 通过ID获取服务器
+func (r *ServerRepository) GetServerByID(id int) (*Server, error) {
+	var server Server
+	err := r.db.First(&server, id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &server, nil
+}
+
+// CreateServer 创建服务器
+func (r *ServerRepository) CreateServer(server *Server) error {
+	return r.db.Create(server).Error
+}
+
+// UpdateServer 更新服务器
+func (r *ServerRepository) UpdateServer(server *Server) error {
+	return r.db.Save(server).Error
+}
+
+// UpdateServerFields 更新服务器指定字段
+func (r *ServerRepository) UpdateServerFields(id int, fields map[string]interface{}) error {
+	return r.db.Model(&Server{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// DeleteServer 删除服务器
+func (r *ServerRepository) DeleteServer(id int) error {
+	return r.db.Delete(&Server{}, id).Error
+}
+
+// ServerCount 获取服务器总数
+func (r *ServerRepository) ServerCount() (int64, error) {
+	var count int64
+	err := r.db.Model(&Server{}).Count(&count).Error
+	return count, err
+}
+
+// OperatorLogRepository 操作日志仓库
+type OperatorLogRepository struct {
+	db *gorm.DB
+}
+
+// NewOperatorLogRepository 创建操作日志仓库
+func NewOperatorLogRepository() *OperatorLogRepository {
+	return &OperatorLogRepository{db: Get()}
+}
+
+// ListLogs 获取操作日志列表
+func (r *OperatorLogRepository) ListLogs(limit, page int) ([]*OperatorLog, int64, error) {
+	var logs []*OperatorLog
+	var total int64
+
+	offset := (page - 1) * limit
+
+	// 获取总数
+	if err := r.db.Model(&OperatorLog{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := r.db.Order("id DESC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}
+
+// ListLogsByEventType 按事件类型获取操作日志
+func (r *OperatorLogRepository) ListLogsByEventType(eventType string, limit, page int) ([]*OperatorLog, int64, error) {
+	var logs []*OperatorLog
+	var total int64
+
+	offset := (page - 1) * limit
+	query := r.db.Model(&OperatorLog{})
+	if eventType != "" {
+		query = query.Where("event_type = ?", eventType)
+	}
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}
+
+// ListLogsByOperator 按操作人获取操作日志
+func (r *OperatorLogRepository) ListLogsByOperator(operatorID int, limit, page int) ([]*OperatorLog, int64, error) {
+	var logs []*OperatorLog
+	var total int64
+
+	offset := (page - 1) * limit
+	query := r.db.Model(&OperatorLog{}).Where("operator_id = ?", operatorID)
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}
+
+// CreateLog 创建操作日志
+func (r *OperatorLogRepository) CreateLog(log *OperatorLog) error {
+	return r.db.Create(log).Error
+}
+
+// GetLogStats 获取操作日志统计信息
+func (r *OperatorLogRepository) GetLogStats() (map[string]int64, error) {
+	stats := make(map[string]int64)
+
+	// 按事件类型统计
+	var results []struct {
+		EventType string
+		Count     int64
+	}
+
+	err := r.db.Model(&OperatorLog{}).
+		Select("event_type, count(*) as count").
+		Group("event_type").
+		Scan(&results).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, r := range results {
+		stats[r.EventType] = r.Count
+	}
+
+	// 总数
+	var total int64
+	r.db.Model(&OperatorLog{}).Count(&total)
+	stats["total"] = total
+
+	return stats, nil
+}

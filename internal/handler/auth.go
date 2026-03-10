@@ -7,8 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
-	"nrllink/internal/db"
-	"nrllink/internal/models"
+	gormdb "nrllink/internal/gormdb"
 	"nrllink/pkg/jwt"
 )
 
@@ -34,13 +33,13 @@ type UserResponse struct {
 }
 
 // hasRole 检查用户是否有指定角色
-func hasRole(user *models.User, role string) bool {
-	for _, r := range user.Roles {
-		if r == role {
-			return true
-		}
+func hasRoleGORM(user *gormdb.User, role string) bool {
+	// 解析 roles 字符串来判断角色
+	if user.Roles == "" {
+		return role == "user"
 	}
-	return false
+	// 简单检查：如果 roles 包含 admin 字符串
+	return user.Roles == "[\""+role+"\"]" || user.Roles == "["+role+"]" || user.Roles == "\""+role+"\""
 }
 
 // Login 用户登录
@@ -57,17 +56,10 @@ func Login(c *gin.Context) {
 
 	log.Printf("登录请求: username=%s", req.Username)
 
-	// 查询用户
-	user, err := db.GetUserByUsername(req.Username)
-	if err != nil {
-		log.Printf("查询用户失败: %v", err)
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户名或密码错误",
-		})
-		return
-	}
-	if user == nil {
+	// 使用 GORM 查询用户
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(req.Username)
+	if err != nil || user == nil {
 		log.Printf("用户不存在: %s", req.Username)
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
@@ -76,21 +68,17 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	log.Printf("找到用户: id=%d, name=%s", user.ID, user.Name)
-
-	// 验证密码
+	// 验证密码（支持 bcrypt 和���文向后兼容)
+	// 验证密码（仅支持 bcrypt）
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		log.Printf("密码验证失败: %v", err)
-		// 增加登录错误次数
-		db.UpdateLoginError(user.ID)
+		repo.IncrementLoginError(user.ID)
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
 		})
 		return
 	}
-
-	log.Printf("密码验证成功")
 
 	// 检查用户状态
 	if user.Status != 1 {
@@ -102,10 +90,11 @@ func Login(c *gin.Context) {
 	}
 
 	// 更新最后登录时间
-	db.UpdateLastLogin(user.ID, c.ClientIP())
+	repo.UpdateLastLogin(user.ID, c.ClientIP())
 
-	// 生成 JWT token - 使用用户已有的角色
-	token, err := jwt.GenerateToken(user.Name, user.Roles)
+	// 生成 JWT token
+	roles := user.GetRoles()
+	token, err := jwt.GenerateToken(user.Name, roles)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -125,7 +114,7 @@ func Login(c *gin.Context) {
 				"id":       user.ID,
 				"username": user.Name,
 				"nickname": user.NickName,
-				"isAdmin":  hasRole(user, "admin"),
+				"isAdmin":  hasRoleGORM(user, "admin"),
 			},
 		},
 	})
@@ -134,7 +123,6 @@ func Login(c *gin.Context) {
 // Logout 用户登出
 func Logout(c *gin.Context) {
 	// JWT 是无状态的，客户端删除 token 即可
-	// 后端可以实现 token 黑名单（Redis）
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "登出成功",
@@ -152,9 +140,11 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	repo := gormdb.NewUserRepository()
+
 	// 检查用户名是否已存在
-	existing, err := db.GetUserByUsername(req.Username)
-	if err == nil && existing != nil {
+	existing, _ := repo.GetUserByName(req.Username)
+	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
 			"code":    409,
 			"message": "用户名已存在",
@@ -178,15 +168,16 @@ func Register(c *gin.Context) {
 		nickname = req.Username
 	}
 
-	user := &models.User{
+	user := &gormdb.User{
 		Name:     req.Username,
 		Password: string(hashedPassword),
 		NickName: nickname,
 		Status:   1,
-		Roles:    []string{"user"},
+		Roles:    "[\"user\"]",
 	}
 
-	if err := db.CreateUser(user); err != nil {
+	if err := repo.CreateUser(user); err != nil {
+		log.Printf("创建用户失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建用户失败",
@@ -209,7 +200,8 @@ func Register(c *gin.Context) {
 func GetCurrentUser(c *gin.Context) {
 	username, _ := c.Get("username")
 
-	user, err := db.GetUserByUsername(username.(string))
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -225,24 +217,87 @@ func GetCurrentUser(c *gin.Context) {
 			"id":       user.ID,
 			"username": user.Name,
 			"nickname": user.NickName,
-			"isAdmin":  hasRole(user, "admin"),
+			"isAdmin":  hasRoleGORM(user, "admin"),
 			"status":   user.Status,
 		},
 	})
 }
 
-// GetUsers 获取用户列表
+// GetUsers 获取用户列表（管理员）
 func GetUsers(c *gin.Context) {
-	_, _ = strconv.Atoi(c.DefaultQuery("limit", "20"))
-	_, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	keyword := c.Query("keyword")
 
-	// TODO: 实现用户列表查询
+	if limit <= 0 {
+		limit = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+
+	// 检查用户是否为管理员
+	username, _ := c.Get("username")
+	repo := gormdb.NewUserRepository()
+	currentUser, err := repo.GetUserByName(username.(string))
+	if err != nil || currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	if !hasRoleGORM(currentUser, "admin") {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "权限不足",
+		})
+		return
+	}
+
+	var users []*gormdb.User
+	var total int64
+
+	// 根据是否有关键字选择不同的查询方法
+	if keyword != "" {
+		users, total, err = repo.SearchUsers(keyword, limit, page)
+	} else {
+		users, total, err = repo.ListUsers(limit, page)
+	}
+
+	if err != nil {
+		log.Printf("获取用户列表失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取用户列表失败",
+		})
+		return
+	}
+
+	// 转换为响应格式
+	items := make([]gin.H, 0, len(users))
+	for _, u := range users {
+		items = append(items, gin.H{
+			"id":       u.ID,
+			"name":     u.Name,
+			"nickname": u.NickName,
+			"callsign": u.CallSign,
+			"phone":    u.Phone,
+			"status":   u.Status,
+			"isAdmin":  hasRoleGORM(u, "admin"),
+			"roles":    u.Roles,
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"total": 0,
-			"items": []interface{}{},
+			"total":     total,
+			"items":     items,
+			"page":      page,
+			"page_size": limit,
 		},
 	})
 }
@@ -258,9 +313,11 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
+	repo := gormdb.NewUserRepository()
+
 	// 检查用户名是否已存在
-	existing, err := db.GetUserByUsername(req.Username)
-	if err == nil && existing != nil {
+	existing, _ := repo.GetUserByName(req.Username)
+	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
 			"code":    409,
 			"message": "用户名已存在",
@@ -283,15 +340,15 @@ func CreateUser(c *gin.Context) {
 		nickname = req.Username
 	}
 
-	user := &models.User{
+	user := &gormdb.User{
 		Name:     req.Username,
 		Password: string(hashedPassword),
 		NickName: nickname,
 		Status:   1,
-		Roles:    []string{"user"},
+		Roles:    "[\"user\"]",
 	}
 
-	if err := db.CreateUser(user); err != nil {
+	if err := repo.CreateUser(user); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建用户失败",
@@ -319,7 +376,7 @@ type UpdateUserRequest struct {
 // UpdateUser 更新用户
 func UpdateUser(c *gin.Context) {
 	idStr := c.Param("id")
-	_, err := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
@@ -337,12 +394,46 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
-	// TODO: 实现更新用户的数据库操作
+	repo := gormdb.NewUserRepository()
+
+	// 获取用户
+	user, err := repo.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 更新字段
+	if req.Name != "" {
+		user.Name = req.Name
+	}
+	if req.NickName != "" {
+		user.NickName = req.NickName
+	}
+	if req.Status > 0 {
+		user.Status = req.Status
+	}
+	if req.Roles != "" {
+		user.Roles = req.Roles
+	}
+
+	if err := repo.UpdateUser(user); err != nil {
+		log.Printf("更新用户失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "更新用户失败",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
 		"data": gin.H{
-			"id": idStr,
+			"id": id,
 		},
 	})
 }
@@ -359,7 +450,27 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	// TODO: 实现删除用户的数据库操作
+	repo := gormdb.NewUserRepository()
+
+	// 检查用户是否存在
+	user, err := repo.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	if err := repo.DeleteUser(id); err != nil {
+		log.Printf("删除用户失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "删除用户失败",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "删除成功",
@@ -388,18 +499,24 @@ func GetPlatformInfo(c *gin.Context) {
 
 // TotalStats 统计信息
 type TotalStats struct {
-	DevNumber        int `json:"dev_number"`
-	OnlineDevNumber  int `json:"online_dev_number"`
-	UserNumber       int `json:"user_number"`
+	DevNumber       int64 `json:"dev_number"`
+	OnlineDevNumber int64 `json:"online_dev_number"`
+	UserNumber      int64 `json:"user_number"`
 }
 
 // GetTotalStats 获取统计信息
 func GetTotalStats(c *gin.Context) {
-	// TODO: 实现真实的统计数据
+	userRepo := gormdb.NewUserRepository()
+	deviceRepo := gormdb.NewDeviceRepository()
+
+	// 获取真实统计数据
+	userCount, _ := userRepo.UserCount()
+	devCount, _ := deviceRepo.DeviceCount()
+
 	stats := TotalStats{
-		DevNumber:       0,
-		OnlineDevNumber: 0,
-		UserNumber:      0,
+		DevNumber:       devCount,
+		OnlineDevNumber: 0, // 需要运行时状态
+		UserNumber:      userCount,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -438,10 +555,12 @@ func UpdateUserPassword(c *gin.Context) {
 		return
 	}
 
+	repo := gormdb.NewUserRepository()
+
 	// 获取当前用户信息
 	username, _ := c.Get("username")
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
+	currentUser, err := repo.GetUserByName(username.(string))
+	if err != nil || currentUser == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
@@ -449,13 +568,37 @@ func UpdateUserPassword(c *gin.Context) {
 		return
 	}
 
-	// 验证旧密码
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "原密码错误",
+	// 获取目标用户（检查权限）
+	targetUser, err := repo.GetUserByID(id)
+	if err != nil || targetUser == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "目标用户不存在",
 		})
 		return
+	}
+
+	// 检查权限：只有管理员或用户本人可以修改密码
+	isAdmin := hasRoleGORM(currentUser, "admin")
+	isSelf := currentUser.ID == id
+
+	if !isAdmin && !isSelf {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "权限不足",
+		})
+		return
+	}
+
+	// 如果是修改自己的密码，需要验证旧密码
+	if isSelf && !isAdmin {
+		if err := bcrypt.CompareHashAndPassword([]byte(currentUser.Password), []byte(req.OldPassword)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "原密码错误",
+			})
+			return
+		}
 	}
 
 	// 加密新密码
@@ -468,9 +611,15 @@ func UpdateUserPassword(c *gin.Context) {
 		return
 	}
 
-	// TODO: 实现更新密码的数据库操作
-	_ = hashedPassword // 暂时忽略未使用警告
-	// db.UpdateUserPassword(id, string(hashedPassword))
+	// 更新密码
+	if err := repo.UpdateUserPassword(id, string(hashedPassword)); err != nil {
+		log.Printf("更新密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "密码修改失败",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -493,14 +642,33 @@ func GetUserDetail(c *gin.Context) {
 		return
 	}
 
-	// TODO: 实现通过ID获取用户详情
-	// 目前使用 GetUserByUsername 需要用户名
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id": id,
+			"id":         user.ID,
+			"name":       user.Name,
+			"nickname":   user.NickName,
+			"callsign":   user.CallSign,
+			"phone":      user.Phone,
+			"status":     user.Status,
+			"isAdmin":    hasRoleGORM(user, "admin"),
+			"roles":      user.Roles,
+			"avatar":     user.Avatar,
+			"introduction": user.Introduction,
+			"address":    user.Address,
+			"sex":        user.Sex,
+			"birthday":   user.Birthday,
 		},
 	})
 }

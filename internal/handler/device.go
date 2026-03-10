@@ -6,15 +6,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"nrllink/internal/db"
-	"nrllink/internal/models"
+	gormdb "nrllink/internal/gormdb"
 )
 
 // DeviceListRequest 设备列表请求
 type DeviceListRequest struct {
 	Limit    int    `json:"limit"`
 	Page     int    `json:"page"`
-	Callsign string `json:"callsign"`
+	CallSign string `json:"callsign"`
 	GroupID  string `json:"group_id"`
 	IsOnline bool   `json:"isonline"`
 	Sort     string `json:"sort"`
@@ -22,20 +21,20 @@ type DeviceListRequest struct {
 
 // DeviceInfo 设备信息响应
 type DeviceInfo struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	CallSign    string `json:"callsign"`
-	SSID        byte   `json:"ssid"`
-	DevModel    byte   `json:"dev_model"`
-	GroupID     int    `json:"group_id"`
-	Status      byte   `json:"status"`
-	Priority    int    `json:"priority"`
-	IsOnline    bool   `json:"is_online"`
-	QTH         string `json:"qth"`
-	Note        string `json:"note"`
-	OnlineTime  string `json:"online_time,omitempty"`
-	CreateTime  string `json:"create_time,omitempty"`
-	UpdateTime  string `json:"update_time,omitempty"`
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	CallSign   string `json:"callsign"`
+	SSID       uint8  `json:"ssid"`
+	DevModel   int    `json:"dev_model"`
+	GroupID    int    `json:"group_id"`
+	Status     int8   `json:"status"`
+	Priority   int    `json:"priority"`
+	IsOnline   bool   `json:"is_online"`
+	QTH        string `json:"qth"`
+	Note       string `json:"note"`
+	OnlineTime string `json:"online_time,omitempty"`
+	CreateTime string `json:"create_time,omitempty"`
+	UpdateTime string `json:"update_time,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -47,33 +46,65 @@ func GetDevices(c *gin.Context) {
 	groupID := c.Query("group_id")
 	_ = c.Query("isonline") == "true" // TODO: 实现在线状态过滤
 
-	repo := db.NewDeviceRepository()
+	if limit <= 0 {
+		limit = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
 
-	var devices []*DeviceInfo
-	var total int
+	repo := gormdb.NewDeviceRepository()
+
+	var devices []*gormdb.Device
+	var total int64
 	var err error
 
-	// TODO: 实现更复杂的查询条件
-	devicesRaw, total, err := repo.ListDevices(limit, page)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "查询设备列表失败",
-		})
-		return
+	// 根据查询条件选择不同的查询方法
+	if callsign != "" {
+		// 按呼号搜索
+		devicesRaw, _ := repo.ListDevicesByCallSign(callsign)
+		total = int64(len(devicesRaw))
+		// 手动分页
+		start := (page - 1) * limit
+		end := start + limit
+		if start >= len(devicesRaw) {
+			devices = []*gormdb.Device{}
+		} else if end > len(devicesRaw) {
+			devices = devicesRaw[start:]
+		} else {
+			devices = devicesRaw[start:end]
+		}
+	} else if groupID != "" {
+		// 按群组过滤
+		gid, _ := strconv.Atoi(groupID)
+		devicesRaw, _ := repo.ListDevicesByGroupID(gid)
+		total = int64(len(devicesRaw))
+		// 手动分页
+		start := (page - 1) * limit
+		end := start + limit
+		if start >= len(devicesRaw) {
+			devices = []*gormdb.Device{}
+		} else if end > len(devicesRaw) {
+			devices = devicesRaw[start:]
+		} else {
+			devices = devicesRaw[start:end]
+		}
+	} else {
+		// 获取所有设备
+		devices, total, err = repo.ListDevices(limit, page)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "查询设备列表失败",
+			})
+			return
+		}
 	}
 
 	// 转换为响应格式
-	for _, d := range devicesRaw {
-		// 过滤条件
-		if callsign != "" && d.CallSign != callsign {
-			continue
-		}
-		if groupID != "" && strconv.Itoa(d.GroupID) != groupID {
-			continue
-		}
-
-		dev := &DeviceInfo{
+	items := make([]*DeviceInfo, 0, len(devices))
+	for _, d := range devices {
+		items = append(items, &DeviceInfo{
 			ID:         d.ID,
 			Name:       d.Name,
 			CallSign:   d.CallSign,
@@ -83,18 +114,20 @@ func GetDevices(c *gin.Context) {
 			Status:     d.Status,
 			Priority:   d.Priority,
 			IsOnline:   d.ISOnline,
+			Note:       d.Note,
 			CreateTime: d.CreateTime.Format("2006-01-02 15:04:05"),
 			UpdateTime: d.UpdateTime.Format("2006-01-02 15:04:05"),
-		}
-		devices = append(devices, dev)
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"total": total,
-			"items": devices,
+			"total":     total,
+			"items":     items,
+			"page":      page,
+			"page_size": limit,
 		},
 	})
 }
@@ -103,26 +136,36 @@ func GetDevices(c *gin.Context) {
 func GetDevice(c *gin.Context) {
 	callsign := c.Query("callsign")
 	ssidStr := c.Query("ssid")
-	ssid := byte(0)
+	ssid := uint8(0)
 
 	if ssidStr != "" {
 		s, err := strconv.ParseUint(ssidStr, 10, 8)
 		if err == nil {
-			ssid = byte(s)
+			ssid = uint8(s)
 		}
 	}
 
-	if callsign == "" {
+	idStr := c.Query("id")
+
+	repo := gormdb.NewDeviceRepository()
+	var device *gormdb.Device
+	var err error
+
+	// 优先使用ID查询
+	if idStr != "" {
+		id, _ := strconv.Atoi(idStr)
+		device, err = repo.GetDeviceByID(id)
+	} else if callsign != "" {
+		device, err = repo.GetDeviceByCallSignSSID(callsign, ssid)
+	} else {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "缺少呼号参数",
+			"message": "缺少设备标识",
 		})
 		return
 	}
 
-	repo := db.NewDeviceRepository()
-	device, err := repo.GetDevice(callsign, ssid)
-	if err != nil {
+	if err != nil || device == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
@@ -143,6 +186,7 @@ func GetDevice(c *gin.Context) {
 			"status":     device.Status,
 			"priority":   device.Priority,
 			"is_online":  device.ISOnline,
+			"note":       device.Note,
 			"create_time": device.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time": device.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
@@ -153,11 +197,12 @@ func GetDevice(c *gin.Context) {
 type CreateDeviceRequest struct {
 	Name     string `json:"name" binding:"required"`
 	CallSign string `json:"callsign" binding:"required"`
-	SSID     byte   `json:"ssid"`
-	DevModel byte   `json:"dev_model"`
+	SSID     uint8  `json:"ssid"`
+	DevModel int    `json:"dev_model"`
 	GroupID  int    `json:"group_id"`
 	Password string `json:"password"`
 	Note     string `json:"note"`
+	Priority int    `json:"priority"`
 }
 
 // CreateDevice 创建设备
@@ -171,11 +216,11 @@ func CreateDevice(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository()
 
 	// 检查设备是否已存在
-	_, err := repo.GetDevice(req.CallSign, req.SSID)
-	if err == nil {
+	existing, _ := repo.GetDeviceByCallSignSSID(req.CallSign, req.SSID)
+	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
 			"code":    409,
 			"message": "设备已存在",
@@ -183,7 +228,7 @@ func CreateDevice(c *gin.Context) {
 		return
 	}
 
-	device := &models.Device{
+	device := &gormdb.Device{
 		Name:       req.Name,
 		CallSign:   req.CallSign,
 		SSID:       req.SSID,
@@ -191,13 +236,17 @@ func CreateDevice(c *gin.Context) {
 		GroupID:    req.GroupID,
 		Password:   req.Password,
 		Status:     1,
-		Priority:   100,
+		Priority:   req.Priority,
 		Note:       req.Note,
 		CreateTime: time.Now(),
 		UpdateTime: time.Now(),
 	}
 
-	if err := repo.AddDevice(device); err != nil {
+	if device.Priority == 0 {
+		device.Priority = 100
+	}
+
+	if err := repo.CreateDevice(device); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建设备失败",
@@ -218,11 +267,11 @@ func CreateDevice(c *gin.Context) {
 type UpdateDeviceRequest struct {
 	Name      string `json:"name"`
 	GroupID   int    `json:"group_id"`
-	Status    byte   `json:"status"`
+	Status    int8   `json:"status"`
 	Priority  int    `json:"priority"`
 	Note      string `json:"note"`
 	Password  string `json:"password"`
-	DevModel  byte   `json:"dev_model"`
+	DevModel  int    `json:"dev_model"`
 }
 
 // UpdateDevice 更新设备
@@ -246,8 +295,56 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 
-	// TODO: 实现通过ID更新设备的逻辑
-	// 当前数据库层使用 callsign+ssid 作为主键
+	repo := gormdb.NewDeviceRepository()
+
+	// 检查设备是否存在
+	device, err := repo.GetDeviceByID(id)
+	if err != nil || device == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "设备不存在",
+		})
+		return
+	}
+
+	// 更新字段
+	updates := make(map[string]interface{})
+	if req.Name != "" {
+		updates["name"] = req.Name
+		device.Name = req.Name
+	}
+	if req.GroupID > 0 {
+		updates["group_id"] = req.GroupID
+		device.GroupID = req.GroupID
+	}
+	if req.Status > 0 {
+		updates["status"] = req.Status
+		device.Status = req.Status
+	}
+	if req.Priority > 0 {
+		updates["priority"] = req.Priority
+		device.Priority = req.Priority
+	}
+	if req.Note != "" {
+		updates["note"] = req.Note
+		device.Note = req.Note
+	}
+	if req.Password != "" {
+		updates["password"] = req.Password
+		device.Password = req.Password
+	}
+	if req.DevModel > 0 {
+		updates["dev_model"] = req.DevModel
+		device.DevModel = req.DevModel
+	}
+
+	if err := repo.UpdateDeviceFields(id, updates); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "更新设备失败",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -260,32 +357,47 @@ func UpdateDevice(c *gin.Context) {
 
 // DeleteDevice 删除设备
 func DeleteDevice(c *gin.Context) {
-	callsign := c.Query("callsign")
-	ssidStr := c.Query("ssid")
-	ssid := byte(0)
-
-	if ssidStr != "" {
-		s, err := strconv.ParseUint(ssidStr, 10, 8)
-		if err == nil {
-			ssid = byte(s)
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err == nil {
+		// 通过ID删除
+		repo := gormdb.NewDeviceRepository()
+		if err := repo.DeleteDeviceByID(id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "删除设备失败",
+			})
+			return
 		}
-	}
+	} else {
+		// 通过呼号和SSID删除（兼容旧接口）
+		callsign := c.Query("callsign")
+		ssidStr := c.Query("ssid")
+		ssid := uint8(0)
 
-	if callsign == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "缺少呼号参数",
-		})
-		return
-	}
+		if ssidStr != "" {
+			s, err := strconv.ParseUint(ssidStr, 10, 8)
+			if err == nil {
+				ssid = uint8(s)
+			}
+		}
 
-	repo := db.NewDeviceRepository()
-	if err := repo.DeleteDevice(callsign, ssid); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "删除设备失败",
-		})
-		return
+		if callsign == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "缺少设备标识",
+			})
+			return
+		}
+
+		repo := gormdb.NewDeviceRepository()
+		if err := repo.DeleteDevice(callsign, ssid); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "删除设备失败",
+			})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -297,7 +409,7 @@ func DeleteDevice(c *gin.Context) {
 // ChangeDeviceGroupRequest 修改设备群组请求
 type ChangeDeviceGroupRequest struct {
 	CallSign string `json:"callsign" binding:"required"`
-	SSID     byte   `json:"ssid"`
+	SSID     uint8  `json:"ssid"`
 	GroupID  int    `json:"group_id" binding:"required"`
 }
 
@@ -312,7 +424,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 		return
 	}
 
-	repo := db.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository()
 	if err := repo.ChangeDeviceGroup(req.CallSign, req.SSID, req.GroupID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -329,8 +441,27 @@ func ChangeDeviceGroup(c *gin.Context) {
 
 // GetDeviceQTHs 获取设备位置列表
 func GetDeviceQTHs(c *gin.Context) {
-	// TODO: 从数据库获取设备的 QTH 位置信息
-	devices := []DeviceInfo{}
+	repo := gormdb.NewDeviceRepository()
+	devicesRaw, _, err := repo.ListDevices(1000, 1)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询设备列表失败",
+		})
+		return
+	}
+
+	// 转换为响应格式
+	devices := make([]gin.H, 0, len(devicesRaw))
+	for _, d := range devicesRaw {
+		devices = append(devices, gin.H{
+			"id":       d.ID,
+			"name":     d.Name,
+			"callsign": d.CallSign,
+			"ssid":     d.SSID,
+			"qth":      "", // TODO: 需要添加 QTH 字段到设备表
+		})
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

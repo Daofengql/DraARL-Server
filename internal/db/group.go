@@ -159,6 +159,57 @@ func (r *RelayRepository) ListRelays() ([]models.Relay, error) {
 	return relays, nil
 }
 
+// AddRelay 添加中继台
+func (r *RelayRepository) AddRelay(relay *models.Relay) error {
+	query := `INSERT INTO relay (name, up_freq, down_freq, send_ctss, recive_ctss, ower_callsign, status, note, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+
+	_, err := r.db.Exec(query, relay.Name, relay.UpFreq, relay.DownFreq, relay.SendCTSS, relay.ReceiveCTSS, relay.OwerCallSign, relay.Status, relay.Note)
+	if err != nil {
+		log.Println("add relay failed, ", err)
+		return err
+	}
+
+	return nil
+}
+
+// UpdateRelay 更新中继台
+func (r *RelayRepository) UpdateRelay(relay *models.Relay) error {
+	_, err := r.db.Exec(`UPDATE relay SET name=?, up_freq=?, down_freq=?, send_ctss=?, recive_ctss=?, status=?, note=?, update_time=NOW() WHERE id=?`,
+		relay.Name, relay.UpFreq, relay.DownFreq, relay.SendCTSS, relay.ReceiveCTSS, relay.Status, relay.Note, relay.ID)
+	if err != nil {
+		log.Println("update relay failed, ", err)
+		return err
+	}
+
+	return nil
+}
+
+// DeleteRelay 删除中继台
+func (r *RelayRepository) DeleteRelay(id int) error {
+	_, err := r.db.Exec(`DELETE FROM relay WHERE id=?`, id)
+	if err != nil {
+		log.Println("delete relay failed, ", err)
+		return err
+	}
+
+	return nil
+}
+
+// GetRelay 获取单个中继台
+func (r *RelayRepository) GetRelay(id int) (*models.Relay, error) {
+	query := `SELECT id, name, up_freq, down_freq, send_ctss, recive_ctss, ower_callsign, status, note, create_time, update_time FROM relay WHERE id=?`
+	row := r.db.QueryRow(query, id)
+
+	relay := &models.Relay{}
+	err := row.Scan(&relay.ID, &relay.Name, &relay.UpFreq, &relay.DownFreq, &relay.SendCTSS, &relay.ReceiveCTSS, &relay.OwerCallSign, &relay.Status, &relay.Note, &relay.CreateTime, &relay.UpdateTime)
+	if err != nil {
+		return nil, err
+	}
+
+	return relay, nil
+}
+
 // ServerRepository 服务器数据访问层
 type ServerRepository struct {
 	db *sql.DB
@@ -198,4 +249,69 @@ func (r *ServerRepository) ListServers() ([]*models.Server, error) {
 	}
 
 	return servers, nil
+}
+
+// AddServer 添加服务器
+func (r *ServerRepository) AddServer(server *models.Server) error {
+	query := `INSERT INTO servers (name, join_key, cpu_type, mem_size, input_rate, output_rate, netcard,
+		ip_type, ip_addr, udp_port, dns_name, server_type, ower_id, ower_callsign, status, note, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+
+	_, err := r.db.Exec(query, server.Name, server.JoinKey, server.CpuType, server.MemSize,
+		server.InputRate, server.OutputRate, server.NetCard, server.IPType, server.IPAddr,
+		server.UDPPort, server.DNSName, server.ServerType, server.OwerID, server.OwerCallSign,
+		server.Status, server.Note)
+	if err != nil {
+		log.Println("add server failed, ", err)
+		return err
+	}
+
+	return nil
+}
+
+// UpdateServer 更新服务器
+func (r *ServerRepository) UpdateServer(server *models.Server) error {
+	_, err := r.db.Exec(`UPDATE servers SET name=?, cpu_type=?, mem_size=?, input_rate=?, output_rate=?, netcard=?,
+		ip_type=?, ip_addr=?, udp_port=?, dns_name=?, server_type=?, ower_id=?, ower_callsign=?, status=?, note=?, join_key=?, update_time=NOW()
+		WHERE id=?`,
+		server.Name, server.CpuType, server.MemSize, server.InputRate, server.OutputRate,
+		server.NetCard, server.IPType, server.IPAddr, server.UDPPort, server.DNSName,
+		server.ServerType, server.OwerID, server.OwerCallSign, server.Status, server.Note,
+		server.JoinKey, server.ID)
+	if err != nil {
+		log.Println("update server failed, ", err)
+		return err
+	}
+
+	return nil
+}
+
+// DeleteServer 删除服务器
+func (r *ServerRepository) DeleteServer(id int) error {
+	_, err := r.db.Exec(`DELETE FROM servers WHERE id=?`, id)
+	if err != nil {
+		log.Println("delete server failed, ", err)
+		return err
+	}
+
+	return nil
+}
+
+// GetServer 获取单个服务器
+func (r *ServerRepository) GetServer(id int) (*models.Server, error) {
+	query := `SELECT id, name, join_key, cpu_type, mem_size, input_rate, output_rate, netcard,
+		ip_type, ip_addr, udp_port, dns_name, server_type, ower_id, ower_callsign, status, note,
+		create_time, update_time FROM servers WHERE id=?`
+	row := r.db.QueryRow(query, id)
+
+	server := &models.Server{}
+	err := row.Scan(&server.ID, &server.Name, &server.JoinKey, &server.CpuType, &server.MemSize,
+		&server.InputRate, &server.OutputRate, &server.NetCard, &server.IPType, &server.IPAddr,
+		&server.UDPPort, &server.DNSName, &server.ServerType, &server.OwerID, &server.OwerCallSign,
+		&server.Status, &server.Note, &server.CreateTime, &server.UpdateTime)
+	if err != nil {
+		return nil, err
+	}
+
+	return server, nil
 }

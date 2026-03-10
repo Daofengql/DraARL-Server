@@ -1,13 +1,20 @@
 package aprs
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nrllink/internal/config"
 	"nrllink/internal/udphub"
+	"nrllink/pkg/tcp"
 )
 
 var (
@@ -18,41 +25,54 @@ var (
 // APRS APRS 客户端
 type APRS struct {
 	Status    string
-	tcpClient *TCPClient
+	tcpClient *tcp.Client
 	errorChan chan error
+	mu        sync.RWMutex
 }
 
-// TCPClient TCP 客户端接口
-type TCPClient struct {
-	host string
-	port string
+// APRSTVResponse APRS.TV API 响应
+type APRSTVResponse struct {
+	Code string `json:"code"`
+	Msg  string `json:"msg"`
+	Data []struct {
+		Scall  string   `json:"scall"`
+		Call   string   `json:"call"`
+		Ssid   string   `json:"ssid"`
+		Tm     string   `json:"tm"`
+		Lat    string   `json:"lat"`
+		Lon    string   `json:"lon"`
+		Alt    float64  `json:"alt"`
+		Stable string   `json:"stable"`
+		Symbol string   `json:"symbol"`
+		Rotate int      `json:"rotate"`
+		Fmt    string   `json:"fmt"`
+		Speed  float64  `json:"speed"`
+		Course float64  `json:"course"`
+		Power  *float64 `json:"power"`
+		Gain   *float64 `json:"gain"`
+		Msg    string   `json:"msg"`
+		Path   string   `json:"path"`
+		State  string   `json:"state"`
+		Dev    *string  `json:"dev"`
+	} `json:"data"`
 }
 
-// NewTCPClient 创建 TCP 客户端
-func NewTCPClient(host, port string, handler func([]byte)) *TCPClient {
-	return &TCPClient{
-		host: host,
-		port: port,
-	}
+// NRLStatsResponse NRL 统计响应
+type NRLStatsResponse struct {
+	Code string `json:"code"`
+	Msg  string `json:"msg"`
+	Data []struct {
+		Type  string `json:"type"`
+		Total int    `json:"total"`
+	} `json:"data"`
 }
 
-// Connect 连接到服务器
-func (c *TCPClient) Connect() error {
-	log.Printf("TCP client connecting to %s:%s", c.host, c.port)
-	// TODO: 实现实际的 TCP 连接
-	return nil
-}
-
-// Close 关闭连接
-func (c *TCPClient) Close() error {
-	return nil
-}
-
-// Send 发送数据
-func (c *TCPClient) Send(data string) error {
-	log.Printf("TCP send: %s", data)
-	// TODO: 实现实际的 TCP 发送
-	return nil
+// ApiServer API 服务器信息
+type ApiServer struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	Port string `json:"port"`
+	Ower string `json:"ower"`
 }
 
 // NewAPRS 创建 APRS 客户端
@@ -71,8 +91,15 @@ func (a *APRS) Start(cfg *config.Configuration) {
 	a.errorChan = make(chan error, 1)
 
 	for {
-		a.tcpClient = NewTCPClient(cfg.APRS.APRSServerHost, cfg.APRS.APRSServerPort, a.handleTCPMessage)
-		a.tcpClient.Connect()
+		a.mu.Lock()
+		a.tcpClient = tcp.NewClient(cfg.APRS.APRSServerHost, cfg.APRS.APRSServerPort, a.handleTCPMessage)
+		a.mu.Unlock()
+
+		if err := a.tcpClient.Connect(); err != nil {
+			log.Printf("APRS TCP 连接失败: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
 
 		a.Login(cfg)
 
@@ -83,7 +110,11 @@ func (a *APRS) Start(cfg *config.Configuration) {
 
 		err := <-a.errorChan
 
-		a.tcpClient.Close()
+		a.mu.Lock()
+		if a.tcpClient != nil {
+			a.tcpClient.Close()
+		}
+		a.mu.Unlock()
 
 		time.Sleep(5 * time.Second)
 		log.Printf("APRS 发送错误，重新初始化 TCP 连接: %v", err)
@@ -92,6 +123,8 @@ func (a *APRS) Start(cfg *config.Configuration) {
 
 // Stop 停止 APRS 服务
 func (a *APRS) Stop() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.tcpClient != nil {
 		a.tcpClient.Close()
 	}
@@ -146,12 +179,20 @@ func (a *APRS) Login(cfg *config.Configuration) {
 
 // sendAPRSPosition 发送 APRS 位置信息
 func (a *APRS) sendAPRSPosition(cfg *config.Configuration) error {
+	a.mu.RLock()
+	client := a.tcpClient
+	a.mu.RUnlock()
+
+	if client == nil || !client.IsConnected() {
+		return fmt.Errorf("TCP client not connected")
+	}
+
 	// 构造 APRS 数据包
 	aprsPacket := a.formatAPRSPacket(cfg.APRS.CallSign, cfg.APRS.SSID, cfg.APRS.SelfAddress, cfg.APRS.SelfPort,
 		cfg.APRS.Longitude, cfg.APRS.Latitude, cfg.APRS.Altitude)
 
 	// 发送数据
-	err := a.tcpClient.Send(aprsPacket)
+	err := client.Send(aprsPacket)
 	if err != nil {
 		log.Printf("APRS: 发送 APRS 位置失败: %v", err)
 		a.Status = "发送失败"
@@ -165,7 +206,7 @@ func (a *APRS) sendAPRSPosition(cfg *config.Configuration) error {
 	aprsPacket2 := a.formatAPRSPacketTwo("NRLLink", cfg.APRS.CallSign, cfg.APRS.SSID,
 		stats.OnlineDevNumber, udphub.GetDeviceCount())
 
-	err = a.tcpClient.Send(aprsPacket2)
+	err = client.Send(aprsPacket2)
 	if err != nil {
 		log.Printf("APRS: 发送附加信息失败: %v", err)
 		a.Status = "发送失败"
@@ -261,6 +302,9 @@ func StartAPRSService(cfg *config.Configuration) {
 
 	APRSClient = NewAPRS()
 	go APRSClient.Start(cfg)
+
+	// 启动 APRS.TV 平台发现
+	go startAPRSTVService(cfg)
 }
 
 // StopAPRSService 停止 APRS 服务
@@ -276,4 +320,168 @@ func GetAPRSStatus() string {
 		return APRSClient.Status
 	}
 	return "未启动"
+}
+
+// startAPRSTVService 启动 APRS.TV 平台发现服务
+func startAPRSTVService(cfg *config.Configuration) {
+	if cfg.APRS.CallSign == "" {
+		return
+	}
+
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		getNRLFromAPRSTV(cfg)
+	}
+}
+
+// getNRLFromAPRSTV 从 APRS.TV 获取 NRL 服务器列表
+func getNRLFromAPRSTV(cfg *config.Configuration) {
+	apiURL := "https://aprs.tv/api/findnrl"
+
+	// 构造查询参数
+	params := url.Values{}
+	params.Add("dest", "NRLSRV")
+	params.Add("duration", "60")
+
+	// 拼接完整 URL
+	uri, err := url.Parse(apiURL)
+	if err != nil {
+		log.Println("Error parsing URL:", err)
+		return
+	}
+	uri.RawQuery = params.Encode()
+
+	// 发起 POST 请求（无 body）
+	resp, err := http.Post(uri.String(), "", nil)
+	if err != nil {
+		log.Println("APRS.TV request failed:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Println("Error reading response body:", err)
+		return
+	}
+
+	// 解析 JSON 响应
+	var apiResponse APRSTVResponse
+	err = json.Unmarshal(body, &apiResponse)
+	if err != nil {
+		log.Println("Error unmarshaling JSON response:", err)
+		return
+	}
+
+	// 处理响应数据
+	for _, item := range apiResponse.Data {
+		host, port, err := decodeMsgFromAPRS(item.Msg)
+		if err != nil {
+			continue
+		}
+
+		online, total, name, err := decodeStateFromAPRS(item.State)
+		if err != nil {
+			continue
+		}
+
+		// 过滤自身
+		if host == cfg.APRS.SelfAddress {
+			continue
+		}
+
+		log.Printf("APRS.TV: 发现服务器 %s at %s:%s (在线:%d, 总数:%d)",
+			name, host, port, online, total)
+	}
+}
+
+// decodeMsgFromAPRS 从 APRS 消息解码地址
+func decodeMsgFromAPRS(str string) (host, port string, err error) {
+	s1 := strings.Split(strings.TrimSpace(str)[1:], ",")
+
+	parsedURL, err := url.Parse(s1[0])
+	if err != nil {
+		return "", "", err
+	}
+
+	host = parsedURL.Hostname()
+	port = parsedURL.Port()
+
+	return
+}
+
+// decodeStateFromAPRS 从 APRS 状态解码统计信息
+func decodeStateFromAPRS(str string) (online, total int, name string, err error) {
+	s1 := strings.Split(str, ",")
+
+	if len(s1) != 3 {
+		return 0, 0, "", fmt.Errorf("Error parsing state")
+	}
+
+	s2 := strings.Split(s1[0], ":")
+	s3 := strings.Split(s1[1], ":")
+	online, _ = strconv.Atoi(s2[1])
+	total, _ = strconv.Atoi(s3[1])
+	name = s1[2]
+
+	return
+}
+
+// getNRLStatsFromAPRSTV 从 APRS.TV 获取 NRL 统计信息
+func getNRLStatsFromAPRSTV() map[string]int {
+	apiURL := "https://aprs.tv/api/findnrltotal"
+
+	// 构造查询参数
+	params := url.Values{}
+	params.Add("duration", "60")
+
+	// 拼接完整 URL
+	uri, err := url.Parse(apiURL)
+	if err != nil {
+		log.Println("Error parsing URL:", err)
+		return nil
+	}
+	uri.RawQuery = params.Encode()
+
+	// 发起 POST 请求
+	resp, err := http.Post(uri.String(), "", nil)
+	if err != nil {
+		log.Println("APRS.TV stats request failed:", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Println("Error reading response body:", err)
+		return nil
+	}
+
+	// 解析 JSON 响应
+	var apiResponse NRLStatsResponse
+	err = json.Unmarshal(body, &apiResponse)
+	if err != nil {
+		log.Println("Error unmarshaling JSON response:", err)
+		return nil
+	}
+
+	stats := make(map[string]int)
+	for _, item := range apiResponse.Data {
+		switch item.Type {
+		case "NRLSRV":
+			stats["servers"] = item.Total
+		case "NRLBOX":
+			stats["boxes"] = item.Total
+		case "NRLAPP":
+			stats["apps"] = item.Total
+		case "NRLMP":
+			stats["mps"] = item.Total
+		}
+	}
+
+	return stats
 }

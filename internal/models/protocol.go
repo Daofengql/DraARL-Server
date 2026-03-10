@@ -116,15 +116,32 @@ type QTH struct {
 
 // Server 服务器信息
 type Server struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	Host        string    `json:"host"`
-	Port        int       `json:"port"`
-	Online      int       `json:"online"`
-	Total       int       `json:"total"`
+	ID          int        `json:"id"`
+	Name        string     `json:"name"`
+	ServerType  int        `json:"server_type"`
+	JoinKey     string     `json:"join_key"`
+	CpuType     int        `json:"cpu_type"`
+	MemSize     int        `json:"mem_size"`
+	InputRate   int        `json:"input_rate"`
+	OutputRate  int        `json:"output_rate"`
+	Providers   string     `json:"providers"`
+	NetCard     string     `json:"netcard"`
+	IPType      int        `json:"ip_type"`
+	IPAddr      string     `json:"ip_addr"`
+	UDPPort     string     `json:"udp_port"`
+	DNSName     string     `json:"dns_name"`
+	Status      int        `json:"status"`
+	OwerID      int        `json:"ower_id"`
+	OwerCallSign string    `json:"ower_callsign"`
+	CreateTime  string     `json:"create_time"`
+	UpdateTime  string     `json:"update_time"`
+	Note        string     `json:"note"`
+	// 运行时字段
+	Host        string     `json:"host"`
+	Port        int        `json:"port"`
+	Online      int        `json:"online"`
+	Total       int        `json:"total"`
 	UDPAddr     *net.UDPAddr `json:"-"`
-	CreateTime  string    `json:"create_time"`
-	UpdateTime  string    `json:"update_time"`
 }
 
 // Relay 中继台信息
@@ -140,6 +157,16 @@ type Relay struct {
 	UpdateTime    string `json:"update_time"`
 	Status        int    `json:"status"`
 	Note          string `json:"note"`
+}
+
+// String 返回中继台的字符串表示
+func (r *Relay) String() string {
+	return fmt.Sprintf("中继台[%s] 上行:%s 下行:%s 所有者:%s", r.Name, r.UpFreq, r.DownFreq, r.OwerCallSign)
+}
+
+// String 返回服务器的字符串表示
+func (s *Server) String() string {
+	return fmt.Sprintf("服务器[%s] 类型:%d 地址:%s:%s", s.Name, s.ServerType, s.IPAddr, s.UDPPort)
 }
 
 // Decode 解码 NRL2 报文

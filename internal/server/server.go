@@ -14,6 +14,7 @@ import (
 	"nrllink/internal/config"
 	"nrllink/internal/handler"
 	"nrllink/internal/middleware"
+	ws "nrllink/pkg/websocket"
 )
 
 type Server struct {
@@ -96,6 +97,14 @@ func (s *Server) setupRoutes() {
 			protected.DELETE("/devices/:id", handler.DeleteDevice)
 			protected.POST("/device/changegroupnrl", handler.ChangeDeviceGroup)
 
+			// 设备 AT 命令和参数
+			protected.POST("/device/at", handler.DeviceAT)
+			protected.POST("/device/query", handler.QueryDeviceParm)
+			protected.POST("/device/change", handler.ChangeDeviceParm)
+			protected.POST("/device/change1w", handler.Change1W)
+			protected.POST("/device/change2w", handler.Change2W)
+			protected.GET("/device/qth", handler.GetDevice) // 兼容旧接口
+
 			// 群组相关
 			protected.GET("/groups", handler.GetGroups)
 			protected.GET("/group/list", handler.GetGroups) // 兼容旧接口
@@ -111,10 +120,25 @@ func (s *Server) setupRoutes() {
 			// 中继台和服务器
 			protected.GET("/relays", handler.GetRelays)
 			protected.GET("/relay/list", handler.GetRelays) // 兼容旧接口
+			protected.POST("/relay/create", handler.CreateRelay)
+			protected.POST("/relay/update", handler.UpdateRelay)
+			protected.POST("/relay/delete", handler.DeleteRelay)
 			protected.GET("/servers", handler.GetServers)
 			protected.GET("/server/list", handler.GetServers) // 兼容旧接口
+			protected.POST("/server/create", handler.CreateServer)
+			protected.POST("/server/update", handler.UpdateServer)
+			protected.POST("/server/delete", handler.DeleteServer)
+
+			// 操作日志
+			protected.GET("/operatorlog/list", handler.GetOperatorLogs)
+			protected.GET("/operatorlog/stats", handler.GetOperatorLogStats)
 		}
 	}
+
+	// WebSocket 路由（无需认证）
+	s.engine.GET("/ws", func(c *gin.Context) {
+		ws.HandleWebSocket(c.Writer, c.Request)
+	})
 }
 
 func (s *Server) Start() error {

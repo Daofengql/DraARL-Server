@@ -1,9 +1,11 @@
 package db
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"log"
+	"math/big"
 	"time"
 
 	"nrllink/internal/models"
@@ -327,4 +329,67 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 	user.Roles = deserializeRoles(rolesStr.String)
 
 	return user, nil
+}
+
+// ==================== 初始化管理员 ====================
+
+// InitAdminUser 初始化管理员用户（如果不存在）
+func InitAdminUser() (string, string, error) {
+	// 检查是否已有管理员
+	var count int
+	err := Get().QueryRow("SELECT COUNT(*) FROM users WHERE JSON_SEARCH(roles, 'one', 'admin') IS NOT NULL OR roles LIKE '%admin%'").Scan(&count)
+	if err == nil && count > 0 {
+		return "", "", nil // 已有管理员，无需创建
+	}
+
+	// 生成随机密码
+	password, err := generateRandomPassword(12)
+	if err != nil {
+		return "", "", fmt.Errorf("生成密码失败: %w", err)
+	}
+
+	// 创建默认管理���
+	admin := &models.User{
+		Name:     "admin",
+		Password: password, // 实际应该哈希存储，这里简化处理
+		NickName: "系统管理员",
+		Status:   1,
+		Roles:    []string{"admin"},
+	}
+
+	// 使用 SQL 直接插入（绕过仓库层的角色序列化）
+	query := `INSERT INTO users (name, password, nickname, status, roles, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, NOW(), NOW())`
+	_, err = Get().Exec(query, admin.Name, admin.Password, admin.NickName, admin.Status, serializeRoles(admin.Roles))
+	if err != nil {
+		return "", "", fmt.Errorf("创建管理员失败: %w", err)
+	}
+
+	return admin.Name, password, nil
+}
+
+// generateRandomPassword 生成随机密码
+func generateRandomPassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	result := make([]byte, length)
+
+	for i := range result {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", err
+		}
+		result[i] = charset[num.Int64()]
+	}
+
+	return string(result), nil
+}
+
+// HasAdminUser 检查是否存在管理员用户
+func HasAdminUser() bool {
+	var count int
+	err := Get().QueryRow("SELECT COUNT(*) FROM users WHERE roles LIKE '%admin%'").Scan(&count)
+	if err != nil {
+		return false
+	}
+	return count > 0
 }

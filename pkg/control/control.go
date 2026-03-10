@@ -21,7 +21,7 @@ type Control struct {
 	RealyStatus       byte   `json:"realy_status"`        // 0x0A  Relay继电器掉电状态 0=断开  1=吸合
 	AllowRealyControl byte   `json:"allow_relay_control"` // 0x0B  是否允许继电器控制
 	VoiceBitrate      byte   `json:"voice_bitrate"`       // 0x0C  H=原码率  M=码率/2
-	DMRID             string `json:"dmrid"`               // 0x10-0x19  本机设备序列号，不可���改
+	DMRID             string `json:"dmrid"`               // 0x10-0x19  本机设备序列号，不可修改
 	Password          string `json:"password"`            // 0x1A-0x1E  本机设备密码，不可修改
 	InitSign          byte   `json:"init_sign"`           // 0x1F  初始化标记
 	LocalIPaddr       string `json:"local_ipaddr"`        // 0x20-0x23  192.168.1.190

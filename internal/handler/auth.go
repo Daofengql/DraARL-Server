@@ -24,7 +24,7 @@ type RegisterRequest struct {
 	NickName string `json:"nickname"`
 }
 
-// UserResponse 用户响应（用于中间件传递���
+// UserResponse 用户响应（用于中间件传递）
 type UserResponse struct {
 	ID       int      `json:"id"`
 	Name     string   `json:"name"`

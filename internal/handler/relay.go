@@ -121,7 +121,7 @@ func UpdateRelay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 20000,
 			"data": gin.H{
-				"message": "当前���户没有权限设置此参数",
+				"message": "当前用户没有权限设置此参数",
 			},
 		})
 		return

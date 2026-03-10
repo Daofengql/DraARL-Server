@@ -348,7 +348,7 @@ func InitAdminUser() (string, string, error) {
 		return "", "", fmt.Errorf("生成密码失败: %w", err)
 	}
 
-	// 创建默认管理���
+	// 创建默认管理员
 	admin := &models.User{
 		Name:     "admin",
 		Password: password, // 实际应该哈希存储，这里简化处理

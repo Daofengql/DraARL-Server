@@ -16,7 +16,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
-				"message": "未提供认证令���",
+				"message": "未提供认证令牌",
 			})
 			c.Abort()
 			return

@@ -23,15 +23,31 @@ import {
   MenuItem,
   Alert,
   Chip,
+  Tooltip,
 } from '@mui/material'
-import { Add, Edit, Delete, Search, Person } from '@mui/icons-material'
+import {
+  Add,
+  Edit,
+  Delete,
+  Search,
+  Person,
+  Block,
+  CheckCircle,
+} from '@mui/icons-material'
 import { userService } from '../../services'
+import { authService } from '../../services'
 import type { User } from '../../types'
 
 const USER_ROLES = [
   { value: 'admin', label: '管理员' },
   { value: 'user', label: '普通用户' },
 ]
+
+// 获取当前登录用户ID
+const getCurrentUserId = (): number => {
+  const user = authService.getStoredUser()
+  return user?.id || 0
+}
 
 export function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
@@ -118,12 +134,37 @@ export function UsersPage() {
   }
 
   const handleDelete = async (id: number) => {
+    // 不允许删除ID为1的主管理员
+    if (id === 1) {
+      setError('主管理员不能被删除')
+      return
+    }
     if (!confirm('确定要删除这个用户吗？')) return
     try {
       await userService.delete(id)
       loadUsers()
     } catch (err: any) {
       setError(err.response?.data?.message || '删除失败')
+    }
+  }
+
+  const handleToggleStatus = async (user: User) => {
+    // 不允许禁用ID为1的主管理员
+    if (user.id === 1) {
+      setError('主管理员不能被禁用')
+      return
+    }
+
+    const newStatus = user.status === 1 ? 0 : 1
+    const action = newStatus === 1 ? '启用' : '禁用'
+
+    if (!confirm(`确定要${action}用户 ${user.username} 吗？`)) return
+
+    try {
+      await userService.updateStatus(user.id, newStatus)
+      loadUsers()
+    } catch (err: any) {
+      setError(err.response?.data?.message || `${action}失败`)
     }
   }
 
@@ -138,6 +179,8 @@ export function UsersPage() {
     page * rowsPerPage,
     page * rowsPerPage + rowsPerPage
   )
+
+  const currentUserId = getCurrentUserId()
 
   return (
     <Box>
@@ -203,6 +246,9 @@ export function UsersPage() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Person color="primary" fontSize="small" />
                       {user.username}
+                      {user.id === currentUserId && (
+                        <Chip label="当前用户" size="small" variant="outlined" sx={{ ml: 1 }} />
+                      )}
                     </Box>
                   </TableCell>
                   <TableCell>{user.callsign || '-'}</TableCell>
@@ -215,7 +261,7 @@ export function UsersPage() {
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label={user.status === 1 ? '正常' : '禁用'}
+                      label={user.status === 1 ? '正常' : '已禁用'}
                       size="small"
                       color={user.status === 1 ? 'success' : 'error'}
                     />
@@ -226,12 +272,33 @@ export function UsersPage() {
                       : '-'}
                   </TableCell>
                   <TableCell>
-                    <IconButton size="small" onClick={() => handleOpenDialog(user)}>
-                      <Edit fontSize="small" />
-                    </IconButton>
-                    <IconButton size="small" color="error" onClick={() => handleDelete(user.id)}>
-                      <Delete fontSize="small" />
-                    </IconButton>
+                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                      <Tooltip title="编辑">
+                        <IconButton size="small" onClick={() => handleOpenDialog(user)}>
+                          <Edit fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title={user.status === 1 ? '禁用用户' : '启用用户'}>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleToggleStatus(user)}
+                          color={user.status === 1 ? 'warning' : 'success'}
+                          disabled={user.id === 1}
+                        >
+                          {user.status === 1 ? <Block fontSize="small" /> : <CheckCircle fontSize="small" />}
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="删除">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => handleDelete(user.id)}
+                          disabled={user.id === 1}
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))

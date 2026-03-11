@@ -35,7 +35,19 @@ export const authService = {
 
   // 获取当前用户信息
   async getMe(): Promise<User> {
-    return apiClient.get<User>('/api/me')
+    const res = await apiClient.get<BackendResponse<User>>('/api/me')
+    return res.data!
+  },
+
+  // 更新个人资料
+  async updateProfile(data: Partial<User>): Promise<User> {
+    const res = await apiClient.put<BackendResponse<User>>('/api/me', data)
+    return res.data!
+  },
+
+  // 修改自己的密码
+  async changeOwnPassword(data: { old_password: string; new_password: string }): Promise<void> {
+    await apiClient.put('/api/me/password', data)
   },
 
   // 保存认证信息

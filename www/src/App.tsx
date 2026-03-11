@@ -9,6 +9,7 @@ import { UsersPage } from './pages/users'
 import { RelaysPage } from './pages/relays'
 import { ServersPage } from './pages/servers'
 import { LogsPage } from './pages/logs'
+import { ProfilePage } from './pages/profile'
 import { authService } from './services'
 
 function App() {
@@ -41,6 +42,7 @@ function App() {
           <Route index element={<DashboardPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="groups" element={<GroupsPage />} />
+          <Route path="profile" element={<ProfilePage />} />
 
           {/* 需要管理员权限的路由 */}
           <Route

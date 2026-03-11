@@ -25,6 +25,11 @@ var (
 	buildTime = "unknown"
 )
 
+// 命令行参数
+var (
+	autoMigrate = flag.Bool("auto-migrate", false, "强制执行数据库自动迁移")
+)
+
 func main() {
 	// 解析命令行参数
 	configPath := flag.String("c", "", "配置文件路径")
@@ -83,16 +88,6 @@ func main() {
 		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
 	}
 	defer gormdb.Close()
-
-	// 初始化数据库表结构
-	if err := db.InitSchema(); err != nil {
-		stdlog.Fatalf("初始化数据库表结构失败: %v", err)
-	}
-
-	// 执行数据库更新
-	if err := db.UpdateDatabase(); err != nil {
-		stdlog.Printf("数据库更新警告: %v", err)
-	}
 
 	// 初始化管理员用户（首次启动时）
 	adminUser, adminPass, err := db.InitAdminUser()

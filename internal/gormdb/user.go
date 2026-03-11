@@ -107,11 +107,7 @@ func (r *UserRepository) CreateUser(user *User) error {
 
 // UpdateUser 更新用户基本信息
 func (r *UserRepository) UpdateUser(user *User) error {
-	return r.db.Model(user).Updates(map[string]interface{}{
-		"name":         user.Name,
-		"avatar":       user.Avatar,
-		"introduction": user.Introduction,
-	}).Error
+	return r.db.Model(user).Updates(user).Error
 }
 
 // UpdateUserPassword 更新用户密码

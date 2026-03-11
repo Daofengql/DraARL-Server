@@ -16,7 +16,6 @@ import {
   Menu as MenuIcon,
   AccountCircle,
   Logout,
-  Settings,
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 import { authService } from '../../services'
@@ -131,10 +130,6 @@ export function Header({ onMenuClick }: HeaderProps) {
             <MenuItem onClick={() => { navigate('/profile'); handleMenuClose() }}>
               <ListItemIcon><AccountCircle fontSize="small" /></ListItemIcon>
               <ListItemText>个人中心</ListItemText>
-            </MenuItem>
-            <MenuItem onClick={() => { navigate('/settings'); handleMenuClose() }}>
-              <ListItemIcon><Settings fontSize="small" /></ListItemIcon>
-              <ListItemText>系统设置</ListItemText>
             </MenuItem>
             <Divider sx={{ borderColor: 'grey.200' }} />
             <MenuItem onClick={handleLogout}>

@@ -78,7 +78,12 @@ func (s *Server) setupRoutes() {
 		protected := api.Group("")
 		protected.Use(middleware.AuthMiddleware())
 		{
-			// 用户管理（需要管理员权限）
+			// 当前用户信息（所有认证用户可访问）
+			protected.GET("/me", handler.GetCurrentUser)
+			protected.PUT("/me", handler.UpdateProfile)
+			protected.PUT("/me/password", handler.ChangeOwnPassword)
+
+			// 用户管理（部分需要管理员权限）
 			admin := protected.Group("")
 			admin.Use(middleware.RequireAdmin())
 			{
@@ -86,12 +91,12 @@ func (s *Server) setupRoutes() {
 				admin.POST("/users", handler.CreateUser)
 				admin.PUT("/users/:id", handler.UpdateUser)
 				admin.DELETE("/users/:id", handler.DeleteUser)
-				admin.PUT("/users/:id/password", handler.UpdateUserPassword)
+				admin.PUT("/users/:id/status", handler.UpdateUserStatus)
 				admin.GET("/users/:id", handler.GetUserDetail)
 			}
 
-			// 当前用户信息（所有认证用户可访问）
-			protected.GET("/me", handler.GetCurrentUser)
+			// 修改用户密码（用户本人或管理员可访问）
+			protected.PUT("/users/:id/password", handler.UpdateUserPassword)
 
 			// 设备相关
 			protected.GET("/devices", handler.GetDevices)

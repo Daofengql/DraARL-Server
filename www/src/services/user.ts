@@ -49,4 +49,9 @@ export const userService = {
   async changePassword(id: number, data: { old_password: string; new_password: string }): Promise<void> {
     await apiClient.put<BackendResponse<unknown>>(`/api/users/${id}/password`, data)
   },
+
+  // 更新用户状态（禁用/启用）
+  async updateStatus(id: number, status: number): Promise<void> {
+    await apiClient.put<BackendResponse<unknown>>(`/api/users/${id}/status`, { status })
+  },
 }

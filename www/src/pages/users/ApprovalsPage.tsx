@@ -597,80 +597,90 @@ export function ApprovalsPage() {
                 <Typography variant="h6" gutterBottom>
                   操作证书
                 </Typography>
+                {/* 只显示最新的过审操作证（status=1） */}
                 {selectedUser.certs && selectedUser.certs.length > 0 ? (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {selectedUser.certs.map((cert, index) => (
-                      <Card key={cert.id || index}>
-                        <CardContent sx={{ pt: 2 }}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                            <Typography variant="body2" fontWeight={500}>
-                              操作证 #{index + 1}
-                            </Typography>
-                            <ApprovalStatusBadge status={cert.status || 0} />
-                          </Box>
-                          <Typography variant="body2" color="text.secondary" gutterBottom>
-                            文件名: {cert.file_name}
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary" gutterBottom>
-                            文件大小: {(cert.file_size / 1024).toFixed(2)} KB
-                          </Typography>
-                          <Typography variant="body2" color="text.secondary" gutterBottom>
-                            上传时间: {cert.upload_time}
-                          </Typography>
-                          {cert.review_note && (
-                            <Alert severity={cert.status === 2 ? 'error' : 'info'} sx={{ mt: 2, py: 1 }}>
-                              <Typography variant="body2">
-                                <strong>审核备注:</strong> {cert.review_note}
+                  (() => {
+                    // 找到最新的过审操作证（status=1）
+                    const approvedCert = selectedUser.certs
+                      .filter((cert) => cert.status === 1)
+                      .sort((a, b) => b.id - a.id)[0]
+
+                    if (approvedCert) {
+                      return (
+                        <Card>
+                          <CardContent sx={{ pt: 2 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                              <Typography variant="body2" fontWeight={500}>
+                                过审操作证
                               </Typography>
-                            </Alert>
-                          )}
-                          <Divider sx={{ my: 2 }} />
-                          {cert.file_url ? (
-                            <Box
-                              component="img"
-                              src={cert.file_url}
-                              alt="操作证"
-                              onClick={() => {
-                                setPreviewImageUrl(cert.file_url!)
-                                setImageScale(1)
-                                setImagePreviewOpen(true)
-                              }}
-                              sx={{
-                                width: '100%',
-                                maxHeight: 300,
-                                objectFit: 'contain',
-                                borderRadius: 1,
-                                cursor: 'pointer',
-                                transition: 'transform 0.2s',
-                                '&:hover': {
-                                  transform: 'scale(1.02)',
-                                  boxShadow: 3,
-                                },
-                              }}
-                            />
-                          ) : (
-                            <Box
-                              sx={{
-                                width: '100%',
-                                height: 150,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                bgcolor: 'grey.100',
-                                borderRadius: 1,
-                                color: 'text.secondary',
-                              }}
-                            >
-                              无法预览
+                              <ApprovalStatusBadge status={1} />
                             </Box>
-                          )}
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'center' }}>
-                            点击图片可放大查看
-                          </Typography>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </Box>
+                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                              文件名: {approvedCert.file_name}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                              文件大小: {(approvedCert.file_size / 1024).toFixed(2)} KB
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                              上传时间: {approvedCert.upload_time}
+                            </Typography>
+                            {approvedCert.review_note && (
+                              <Alert severity="info" sx={{ mt: 2, py: 1 }}>
+                                <Typography variant="body2">
+                                  <strong>审核备注:</strong> {approvedCert.review_note}
+                                </Typography>
+                              </Alert>
+                            )}
+                            <Divider sx={{ my: 2 }} />
+                            {approvedCert.file_url ? (
+                              <Box
+                                component="img"
+                                src={approvedCert.file_url}
+                                alt="操作证"
+                                onClick={() => {
+                                  setPreviewImageUrl(approvedCert.file_url!)
+                                  setImageScale(1)
+                                  setImagePreviewOpen(true)
+                                }}
+                                sx={{
+                                  width: '100%',
+                                  maxHeight: 300,
+                                  objectFit: 'contain',
+                                  borderRadius: 1,
+                                  cursor: 'pointer',
+                                  transition: 'transform 0.2s',
+                                  '&:hover': {
+                                    transform: 'scale(1.02)',
+                                    boxShadow: 3,
+                                  },
+                                }}
+                              />
+                            ) : (
+                              <Box
+                                sx={{
+                                  width: '100%',
+                                  height: 150,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  bgcolor: 'grey.100',
+                                  borderRadius: 1,
+                                  color: 'text.secondary',
+                                }}
+                              >
+                                无法预览
+                              </Box>
+                            )}
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'center' }}>
+                              点击图片可放大查看
+                            </Typography>
+                          </CardContent>
+                        </Card>
+                      )
+                    }
+                    // 没有过审操作证，显示提示
+                    return <Alert severity="info">该用户暂无过审的操作证</Alert>
+                  })()
                 ) : (
                   <Alert severity="warning">该用户未上传操作证</Alert>
                 )}

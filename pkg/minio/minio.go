@@ -1,6 +1,7 @@
 package minio
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,8 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"image"
+	"image/jpeg"
+	"image/png"
+	_ "image/gif"
+
 	"nrllink/internal/config"
 
+	"github.com/disintegration/imaging"
+	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -74,6 +82,8 @@ func UploadFile(ctx context.Context, bucket, objectName string, reader io.Reader
 }
 
 // UploadMultipartFile 上传multipart文件
+// 生成格式: uploads/{fileType}/{year}/{month}/{uuid}{ext}
+// 例如: uploads/avatar/2026/03/a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg
 func UploadMultipartFile(fileHeader *multipart.FileHeader, userID int, fileType string) (string, int64, error) {
 	if Client == nil {
 		return "", 0, fmt.Errorf("MinIO客户端未初始化")
@@ -92,10 +102,12 @@ func UploadMultipartFile(fileHeader *multipart.FileHeader, userID int, fileType 
 	}
 	defer file.Close()
 
-	// 生成文件路径: uploads/{fileType}/{year}/{month}/{userID}_{timestamp}{ext}
+	// 生成文件路径: uploads/{fileType}/{year}/{month}/{uuid}{ext}
+	// 使用UUID作为文件名，更专业且避免冲突
 	ext := filepath.Ext(fileHeader.Filename)
-	timestamp := time.Now().Format("20060102150405")
-	objectName := fmt.Sprintf("uploads/%s/%d/%s_%s%s", fileType, userID, timestamp, generateRandomString(8), ext)
+	now := time.Now()
+	fileUUID := uuid.New().String()
+	objectName := fmt.Sprintf("uploads/%s/%d/%02d/%s%s", fileType, now.Year(), int(now.Month()), fileUUID, ext)
 
 	// 获取内容类型
 	contentType := fileHeader.Header.Get("Content-Type")
@@ -181,12 +193,67 @@ func IsEnabled() bool {
 	return cfg.MinIO.Enabled && Client != nil
 }
 
-// generateRandomString 生成随机字符串
-func generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+// GenerateThumbnail 生成图片缩略图
+// 返回缩略图的 objectName 和 thumbnailData
+func GenerateThumbnail(originalObject string, width, height int, ext string) (string, []byte, error) {
+	// 生成缩略图路径: 在原路径前加 thumb/
+	// 例如: uploads/avatar/2026/03/uuid.jpg -> thumb/uploads/avatar/2026/03/uuid.jpg
+	thumbObjectName := "thumb/" + originalObject
+
+	cfg := config.Get()
+	bucket := cfg.MinIO.Bucket
+	if bucket == "" {
+		bucket = "nrllink"
 	}
-	return string(b)
+
+	ctx := context.Background()
+
+	// 从MinIO下载原图片
+	reader, err := Client.GetObject(ctx, bucket, originalObject, minio.GetObjectOptions{})
+	if err != nil {
+		return "", nil, fmt.Errorf("下载原图片失败: %w", err)
+	}
+	defer reader.Close()
+
+	// 解码图片
+	img, _, err := image.Decode(reader)
+	if err != nil {
+		return "", nil, fmt.Errorf("解码图片失败: %w", err)
+	}
+
+	// 生成缩略图
+	thumbnail := imaging.Resize(img, width, height, imaging.Lanczos)
+
+	// 编码为字节
+	var buf bytes.Buffer
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg":
+		err = jpeg.Encode(&buf, thumbnail, &jpeg.Options{Quality: 85})
+	case ".png":
+		err = png.Encode(&buf, thumbnail)
+	default:
+		err = jpeg.Encode(&buf, thumbnail, &jpeg.Options{Quality: 85})
+	}
+
+	if err != nil {
+		return "", nil, fmt.Errorf("编码缩略图失败: %w", err)
+	}
+
+	return thumbObjectName, buf.Bytes(), nil
 }
+
+// UploadThumbnail 上传缩略图
+func UploadThumbnail(objectName string, data []byte, contentType string) error {
+	cfg := config.Get()
+	bucket := cfg.MinIO.Bucket
+	if bucket == "" {
+		bucket = "nrllink"
+	}
+
+	ctx := context.Background()
+	reader := bytes.NewReader(data)
+	size := int64(len(data))
+
+	return UploadFile(ctx, bucket, objectName, reader, size, contentType)
+}
+

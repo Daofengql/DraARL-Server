@@ -10,6 +10,7 @@ export interface User {
   approval_status?: number  // 0=待审核, 1=已通过, 2=已拒绝
   review_note?: string
   avatar?: string
+  avatar_thumb?: string  // 头像缩略图
   address?: string
   phone?: string
   introduction?: string

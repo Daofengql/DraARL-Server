@@ -120,6 +120,11 @@ func (r *UserRepository) UpdateUserAvatar(id int, avatar string) error {
 	return r.db.Model(&User{}).Where("id = ?", id).Update("avatar", avatar).Error
 }
 
+// UpdateUserAvatarThumb 更新用户头像缩略图
+func (r *UserRepository) UpdateUserAvatarThumb(id int, avatarThumb string) error {
+	return r.db.Model(&User{}).Where("id = ?", id).Update("avatar_thumb", avatarThumb).Error
+}
+
 // UpdateUserRoles 更新用户角色
 func (r *UserRepository) UpdateUserRoles(id int, roles string) error {
 	return r.db.Model(&User{}).Where("id = ?", id).Update("roles", roles).Error

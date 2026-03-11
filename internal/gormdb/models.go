@@ -18,6 +18,7 @@ type User struct {
 	Birthday        string     `gorm:"type:varchar(32);column:birthday" json:"birthday"`
 	Sex             int        `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
 	Avatar          string     `gorm:"type:varchar(512);column:avatar" json:"avatar"`
+	AvatarThumb     string     `gorm:"type:varchar(512);column:avatar_thumb" json:"avatar_thumb"` // 头像缩略图
 	Address         string     `gorm:"type:varchar(512);column:address" json:"address"`
 	Roles           string     `gorm:"type:text;column:roles" json:"roles"` // JSON array string
 	Introduction    string     `gorm:"type:text;column:introduction" json:"introduction"`

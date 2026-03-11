@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -14,11 +15,12 @@ import (
 
 // UploadResponse 文件上传响应
 type UploadResponse struct {
-	FileName  string `json:"file_name"`
-	FileSize  int64  `json:"file_size"`
-	FileType  string `json:"file_type"`
-	MinioPath string `json:"minio_path"`
-	FileURL   string `json:"file_url"`
+	FileName     string `json:"file_name"`
+	FileSize     int64  `json:"file_size"`
+	FileType     string `json:"file_type"`
+	MinioPath    string `json:"minio_path"`
+	FileURL      string `json:"file_url"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"` // 缩略图URL
 }
 
 // UploadFile 通用文件上传接口
@@ -44,7 +46,7 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	// 获取文件类型参数（avatar, cert等）
+	// 检查文件类型（avatar, cert等）
 	fileType := c.PostForm("file_type")
 	if fileType == "" {
 		fileType = "other"
@@ -80,6 +82,31 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
+	// 如果是头像上传，生成240x240缩略图
+	var thumbnailURL string
+	if fileType == "avatar" {
+		ext := filepath.Ext(fileHeader.Filename)
+		thumbObjectName, thumbData, err := minio.GenerateThumbnail(objectName, 240, 240, ext)
+		if err != nil {
+			log.Printf("生成缩略图失败: %v", err)
+			// 缩略图生成失败不影响主文件上传，继续处理
+		} else {
+			// 上传缩略图
+			contentType := fileHeader.Header.Get("Content-Type")
+			if contentType == "" {
+				contentType = "image/jpeg"
+			}
+			if err := minio.UploadThumbnail(thumbObjectName, thumbData, contentType); err != nil {
+				log.Printf("上传缩略图失败: %v", err)
+			} else {
+				// 更新用户头像缩略图字段
+				userRepo.UpdateUserAvatar(user.ID, objectName)
+				userRepo.UpdateUserAvatarThumb(user.ID, thumbObjectName)
+				thumbnailURL = minio.GetFileURL(thumbObjectName)
+			}
+		}
+	}
+
 	// 生成访问URL
 	fileURL := minio.GetFileURL(objectName)
 
@@ -87,11 +114,12 @@ func UploadFile(c *gin.Context) {
 		"code":    200,
 		"message": "上传成功",
 		"data": UploadResponse{
-			FileName:  fileHeader.Filename,
-			FileSize:  fileSize,
-			FileType:  fileType,
-			MinioPath: objectName,
-			FileURL:   fileURL,
+			FileName:    fileHeader.Filename,
+			FileSize:    fileSize,
+			FileType:    fileType,
+			MinioPath:   objectName,
+			FileURL:     fileURL,
+			ThumbnailURL: thumbnailURL,
 		},
 	})
 }

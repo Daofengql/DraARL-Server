@@ -87,8 +87,8 @@ export function Header({ onMenuClick }: HeaderProps) {
               '&:hover': { bgcolor: 'action.hover' },
             }}
           >
-            {user?.avatar ? (
-              <Avatar src={user.avatar} alt={displayName} sx={{ width: 32, height: 32 }}>
+            {user?.avatar_thumb || user?.avatar ? (
+              <Avatar src={user.avatar_thumb || user.avatar} alt={displayName} sx={{ width: 32, height: 32 }}>
                 {displayName?.charAt(0).toUpperCase() || '?'}
               </Avatar>
             ) : (

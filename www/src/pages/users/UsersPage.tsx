@@ -24,6 +24,14 @@ import {
   Alert,
   Chip,
   Tooltip,
+  Card,
+  CardContent,
+  List,
+  ListItem,
+  ListItemText,
+  Divider,
+  Avatar,
+  Popover,
 } from '@mui/material'
 import {
   Add,
@@ -33,6 +41,12 @@ import {
   Person,
   Block,
   CheckCircle,
+  Email,
+  Phone,
+  Cake,
+  LocationOn,
+  Badge,
+  CalendarToday,
 } from '@mui/icons-material'
 import { userService } from '../../services'
 import { authService } from '../../services'
@@ -58,6 +72,8 @@ export function UsersPage() {
   const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [detailAnchorEl, setDetailAnchorEl] = useState<HTMLElement | null>(null)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [formData, setFormData] = useState({
     username: '',
     callsign: '',
@@ -168,6 +184,32 @@ export function UsersPage() {
     }
   }
 
+  const handleOpenUserDetail = (event: React.MouseEvent<HTMLElement>, user: User) => {
+    setSelectedUser(user)
+    setDetailAnchorEl(event.currentTarget)
+  }
+
+  const handleCloseUserDetail = () => {
+    setDetailAnchorEl(null)
+    setSelectedUser(null)
+  }
+
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return '-'
+    return new Date(dateStr).toLocaleDateString('zh-CN')
+  }
+
+  const getSexLabel = (sex: number) => {
+    switch (sex) {
+      case 1:
+        return '男'
+      case 2:
+        return '女'
+      default:
+        return '未设置'
+    }
+  }
+
   const filteredUsers = users.filter(
     (u) =>
       !searchKeyword ||
@@ -243,9 +285,25 @@ export function UsersPage() {
                 <TableRow key={user.id} hover>
                   <TableCell>{user.id}</TableCell>
                   <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        cursor: 'pointer',
+                        '&:hover': {
+                          '& .username-text': {
+                            color: 'primary.main',
+                            textDecoration: 'underline',
+                          },
+                        },
+                      }}
+                      onClick={(e) => handleOpenUserDetail(e, user)}
+                    >
                       <Person color="primary" fontSize="small" />
-                      {user.username}
+                      <Typography className="username-text" variant="body2">
+                        {user.username}
+                      </Typography>
                       {user.id === currentUserId && (
                         <Chip label="当前用户" size="small" variant="outlined" sx={{ ml: 1 }} />
                       )}
@@ -367,6 +425,141 @@ export function UsersPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 用户详情弹窗 */}
+      <Popover
+        open={Boolean(detailAnchorEl)}
+        anchorEl={detailAnchorEl}
+        onClose={handleCloseUserDetail}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'left',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'left',
+        }}
+        slotProps={{
+          paper: {
+            sx: { width: 400, maxHeight: 600, overflow: 'auto' },
+          },
+        }}
+      >
+        {selectedUser && (
+          <Card>
+            <CardContent>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                <Avatar
+                  src={selectedUser.avatar_thumb || selectedUser.avatar}
+                  sx={{ width: 64, height: 64 }}
+                >
+                  {selectedUser.username?.charAt(0).toUpperCase()}
+                </Avatar>
+                <Box>
+                  <Typography variant="h6">{selectedUser.username}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    ID: {selectedUser.id}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5 }}>
+                    <Chip
+                      label={selectedUser.role === 'admin' ? '管理员' : '普通用户'}
+                      size="small"
+                      color={selectedUser.role === 'admin' ? 'secondary' : 'default'}
+                    />
+                    <Chip
+                      label={selectedUser.status === 1 ? '正常' : '已禁用'}
+                      size="small"
+                      color={selectedUser.status === 1 ? 'success' : 'error'}
+                    />
+                  </Box>
+                </Box>
+              </Box>
+
+              <Divider sx={{ mb: 2 }} />
+
+              <List disablePadding dense>
+                {selectedUser.callsign && (
+                  <ListItem divider>
+                    <Badge sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="呼号"
+                      secondary={selectedUser.callsign}
+                    />
+                  </ListItem>
+                )}
+                {selectedUser.phone && (
+                  <ListItem divider>
+                    <Phone sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="手机号"
+                      secondary={selectedUser.phone}
+                    />
+                  </ListItem>
+                )}
+                {selectedUser.address && (
+                  <ListItem divider>
+                    <LocationOn sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="地址"
+                      secondary={selectedUser.address}
+                    />
+                  </ListItem>
+                )}
+                {selectedUser.birthday && (
+                  <ListItem divider>
+                    <Cake sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="生日"
+                      secondary={selectedUser.birthday}
+                    />
+                  </ListItem>
+                )}
+                {selectedUser.sex !== undefined && selectedUser.sex !== 0 && (
+                  <ListItem divider>
+                    <Person sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="性别"
+                      secondary={getSexLabel(selectedUser.sex)}
+                    />
+                  </ListItem>
+                )}
+                <ListItem divider>
+                  <CalendarToday sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                  <ListItemText
+                    primary="注册时间"
+                    secondary={formatDate(selectedUser.created_at)}
+                  />
+                </ListItem>
+                {selectedUser.last_login_time && (
+                  <ListItem divider>
+                    <CheckCircle sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="最后登录"
+                      secondary={new Date(selectedUser.last_login_time).toLocaleString('zh-CN')}
+                    />
+                  </ListItem>
+                )}
+                {selectedUser.dmrid > 0 && (
+                  <ListItem divider>
+                    <Badge sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
+                    <ListItemText
+                      primary="DMR ID"
+                      secondary={selectedUser.dmrid}
+                    />
+                  </ListItem>
+                )}
+                {selectedUser.introduction && (
+                  <ListItem>
+                    <Typography variant="body2" color="text.secondary">
+                      简介: {selectedUser.introduction}
+                    </Typography>
+                  </ListItem>
+                )}
+              </List>
+            </CardContent>
+          </Card>
+        )}
+      </Popover>
     </Box>
   )
 }

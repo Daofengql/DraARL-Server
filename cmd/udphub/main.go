@@ -89,6 +89,11 @@ func main() {
 	}
 	defer gormdb.Close()
 
+	// 自动迁移表结构（创建新表或更新表结构）
+	if err := gormdb.AutoMigrate(); err != nil {
+		stdlog.Printf("数据库表迁移失败: %v", err)
+	}
+
 	// 初始化管理员用户（首次启动时）
 	adminUser, adminPass, err := db.InitAdminUser()
 	if err != nil {

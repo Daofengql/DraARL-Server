@@ -168,6 +168,24 @@ func (r *UserRepository) AdminUserCount() (int64, error) {
 	return count, err
 }
 
+// ListByApprovalStatus 根据审核状态获取用户列表
+func (r *UserRepository) ListByApprovalStatus(status int, limit, offset int) ([]*User, error) {
+	var users []*User
+	err := r.db.Where("approval_status = ?", status).
+		Order("id DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&users).Error
+	return users, err
+}
+
+// CountByApprovalStatus 统计指定审核状态的用户数量
+func (r *UserRepository) CountByApprovalStatus(status int) (int64, error) {
+	var count int64
+	err := r.db.Model(&User{}).Where("approval_status = ?", status).Count(&count).Error
+	return count, err
+}
+
 // HasAdminUser 检查是否存在管理员用户
 func (r *UserRepository) HasAdminUser() bool {
 	var count int64
@@ -190,6 +208,41 @@ func (r *UserRepository) SearchUsers(keyword string, limit, page int) ([]*User, 
 
 	// 获取分页数据
 	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return users, total, nil
+}
+
+// UpdateUserApproval 更新用户审核状态
+func (r *UserRepository) UpdateUserApproval(id int, status int, reviewerID int, note string) error {
+	updates := map[string]interface{}{
+		"approval_status": status,
+		"reviewer_id":     reviewerID,
+		"review_note":     note,
+		"review_time":     gorm.Expr("NOW()"),
+	}
+	return r.db.Model(&User{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// GetPendingUsers 获取待审核用户列表
+func (r *UserRepository) GetPendingUsers(limit, page int) ([]*User, int64, error) {
+	var users []*User
+	var total int64
+
+	offset := (page - 1) * limit
+
+	// 获取总数
+	if err := r.db.Model(&User{}).Where("approval_status = ?", 0).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := r.db.Where("approval_status = ?", 0).
+		Order("create_time DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 

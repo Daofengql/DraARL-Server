@@ -5,7 +5,7 @@ import { LoginPage, RegisterPage } from './pages/auth'
 import { DashboardPage } from './pages/dashboard'
 import { DevicesPage } from './pages/devices'
 import { GroupsPage } from './pages/groups'
-import { UsersPage } from './pages/users'
+import { UsersPage, ApprovalsPage } from './pages/users'
 import { RelaysPage } from './pages/relays'
 import { ServersPage } from './pages/servers'
 import { LogsPage } from './pages/logs'
@@ -50,6 +50,14 @@ function App() {
             element={
               <AdminRoute>
                 <UsersPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="approvals"
+            element={
+              <AdminRoute>
+                <ApprovalsPage />
               </AdminRoute>
             }
           />

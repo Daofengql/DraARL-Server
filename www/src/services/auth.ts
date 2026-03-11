@@ -3,6 +3,8 @@ import type {
   User,
   LoginRequest,
   RegisterRequest,
+  OperatorCertificate,
+  FileUploadResponse,
 } from '../types'
 
 interface LoginResponse {
@@ -48,6 +50,39 @@ export const authService = {
   // 修改自己的密码
   async changeOwnPassword(data: { old_password: string; new_password: string }): Promise<void> {
     await apiClient.put('/api/me/password', data)
+  },
+
+  // 上传文件（通用，用于头像等）
+  async uploadFile(file: File, fileType: string): Promise<FileUploadResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('file_type', fileType)
+    const res = await apiClient.post<BackendResponse<FileUploadResponse>>('/api/upload/file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return res.data!
+  },
+
+  // 上传操作证
+  async uploadOperatorCertificate(file: File): Promise<OperatorCertificate> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await apiClient.post<BackendResponse<OperatorCertificate>>('/api/upload/operator-certificate', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return res.data!
+  },
+
+  // 获取操作证信息
+  async getOperatorCertificate(): Promise<OperatorCertificate | null> {
+    const res = await apiClient.get<BackendResponse<OperatorCertificate | null>>('/api/operator-certificate')
+    return res.data || null
+  },
+
+  // 获取操作证临时访问URL
+  async getOperatorCertificateUrl(id: number): Promise<{ url: string; expires_in: number }> {
+    const res = await apiClient.get<BackendResponse<{ url: string; expires_in: number }>>(`/api/operator-certificate/${id}/url`)
+    return res.data!
   },
 
   // 保存认证信息
@@ -102,5 +137,15 @@ export const authService = {
     if (user.role === 'admin') return true
 
     return false
+  },
+
+  // 检查用户是否已审核通过
+  isApproved(): boolean {
+    const user = this.getStoredUser()
+    if (!user) return false
+    // 管理员总是可以通过
+    if (this.isAdmin()) return true
+    // 检查审核状态：1=已通过
+    return user.approval_status === 1
   },
 }

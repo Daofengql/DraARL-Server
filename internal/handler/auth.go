@@ -21,6 +21,8 @@ type LoginRequest struct {
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+	CallSign string `json:"callsign" binding:"required"`
+	Phone    string `json:"phone" binding:"required"`
 	NickName string `json:"nickname"`
 }
 
@@ -118,6 +120,7 @@ func Login(c *gin.Context) {
 				"role":            getRoleName(roles),
 				"roles":           roles,
 				"status":          user.Status,
+				"approval_status":  user.ApprovalStatus,
 				"avatar":          user.Avatar,
 				"phone":           user.Phone,
 				"address":         user.Address,
@@ -128,7 +131,12 @@ func Login(c *gin.Context) {
 				"dmrid":           user.DMRID,
 				"mdcid":           user.MDCID,
 				"alarm_msg":       user.AlarmMsg,
-				"last_login_time": user.LastLoginTime.Format("2006-01-02 15:04:05"),
+				"last_login_time": func() string {
+					if user.LastLoginTime != nil {
+						return user.LastLoginTime.Format("2006-01-02 15:04:05")
+					}
+					return ""
+				}(),
 				"last_login_ip":   user.LastLoginIP,
 				"login_err_times": user.LoginErrTimes,
 				"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
@@ -180,6 +188,30 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	// 检查呼号是否已存在
+	if req.CallSign != "" {
+		existingCallSign, _ := repo.GetUserByCallSign(req.CallSign)
+		if existingCallSign != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
+	}
+
+	// 检查手机号是否已存在
+	if req.Phone != "" {
+		existingPhone, _ := repo.GetUserByPhone(req.Phone)
+		if existingPhone != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "手机号已被注册",
+			})
+			return
+		}
+	}
+
 	// 加密密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -197,11 +229,14 @@ func Register(c *gin.Context) {
 	}
 
 	user := &gormdb.User{
-		Name:     req.Username,
-		Password: string(hashedPassword),
-		NickName: nickname,
-		Status:   1,
-		Roles:    "[\"user\"]",
+		Name:           req.Username,
+		Password:       string(hashedPassword),
+		NickName:       nickname,
+		CallSign:       req.CallSign,
+		Phone:          req.Phone,
+		Status:         1,
+		ApprovalStatus: 0, // 待审核状态
+		Roles:          "[\"user\"]",
 	}
 
 	if err := repo.CreateUser(user); err != nil {
@@ -215,11 +250,12 @@ func Register(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
-		"message": "注册成功",
+		"message": "注册成功，请等待管理员审核",
 		"data": gin.H{
-			"id":       user.ID,
-			"username": user.Name,
-			"nickname": user.NickName,
+			"id":              user.ID,
+			"username":        user.Name,
+			"nickname":        user.NickName,
+			"approval_status":  user.ApprovalStatus,
 		},
 	})
 }
@@ -256,10 +292,17 @@ func GetCurrentUser(c *gin.Context) {
 			"roles":          user.Roles,
 			"isAdmin":        hasRoleGORM(user, "admin"),
 			"status":         user.Status,
+			"approval_status": user.ApprovalStatus,
+			"review_note":    user.ReviewNote,
 			"dmrid":          user.DMRID,
 			"mdcid":          user.MDCID,
 			"alarm_msg":      user.AlarmMsg,
-			"last_login_time": user.LastLoginTime.Format("2006-01-02 15:04:05"),
+			"last_login_time": func() string {
+				if user.LastLoginTime != nil {
+					return user.LastLoginTime.Format("2006-01-02 15:04:05")
+				}
+				return ""
+			}(),
 			"last_login_ip":  user.LastLoginIP,
 			"login_err_times": user.LoginErrTimes,
 			"created_at":     user.CreateTime.Format("2006-01-02 15:04:05"),
@@ -637,9 +680,10 @@ func GetPlatformInfo(c *gin.Context) {
 
 // TotalStats 统计信息
 type TotalStats struct {
-	DevNumber       int64 `json:"dev_number"`
-	OnlineDevNumber int64 `json:"online_dev_number"`
-	UserNumber      int64 `json:"user_number"`
+	TotalDevices  int64 `json:"total_devices"`
+	OnlineDevices int64 `json:"online_devices"`
+	TotalUsers    int64 `json:"total_users"`
+	TotalGroups   int64 `json:"total_groups"`
 }
 
 // GetTotalStats 获取统计信息
@@ -652,17 +696,16 @@ func GetTotalStats(c *gin.Context) {
 	devCount, _ := deviceRepo.DeviceCount()
 
 	stats := TotalStats{
-		DevNumber:       devCount,
-		OnlineDevNumber: 0, // 需要运行时状态
-		UserNumber:      userCount,
+		TotalDevices:  devCount,
+		OnlineDevices: 0, // 需要运行时状态
+		TotalUsers:    userCount,
+		TotalGroups:   0,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
-		"data": gin.H{
-			"items": []interface{}{stats},
-		},
+		"data":    stats,
 	})
 }
 
@@ -917,7 +960,12 @@ func UpdateProfile(c *gin.Context) {
 			"roles":           user.Roles,
 			"status":          user.Status,
 			"isAdmin":         hasRoleGORM(user, "admin"),
-			"last_login_time": user.LastLoginTime.Format("2006-01-02 15:04:05"),
+			"last_login_time": func() string {
+				if user.LastLoginTime != nil {
+					return user.LastLoginTime.Format("2006-01-02 15:04:05")
+				}
+				return ""
+			}(),
 			"last_login_ip":   user.LastLoginIP,
 			"login_err_times": user.LoginErrTimes,
 			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),

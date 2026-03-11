@@ -106,10 +106,11 @@ export function DashboardPage() {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [viewType, setViewType] = useState<'system' | 'my'>('system')
-  const [platformInfo, setPlatformInfo] = useState({ name: 'NRLLink', version: '1.0.0' })
   const user = authService.getStoredUser()
   const isAdmin = user?.isAdmin || user?.role === 'admin'
+  // 普通用户默认看"我的数据"，管理员默认看"系统数据"
+  const [viewType, setViewType] = useState<'system' | 'my'>(() => isAdmin ? 'system' : 'my')
+  const [platformInfo, setPlatformInfo] = useState({ name: 'NRLLink', version: '1.0.0' })
 
   const fetchSystemStats = async () => {
     try {
@@ -229,7 +230,9 @@ export function DashboardPage() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+          gridTemplateColumns: isMyView
+            ? { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' }
+            : { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           gap: 2,
         }}
       >
@@ -240,7 +243,7 @@ export function DashboardPage() {
           color="primary"
         />
         <StatCard
-          title={isMyView ? '在线设备' : '在线设备'}
+          title="在线设备"
           value={stats.online_devices}
           icon={<CheckCircle />}
           color="success"
@@ -251,12 +254,14 @@ export function DashboardPage() {
           icon={<Group />}
           color="info"
         />
-        <StatCard
-          title="用户数量"
-          value={stats.total_users}
-          icon={<People />}
-          color="warning"
-        />
+        {!isMyView && (
+          <StatCard
+            title="用户数量"
+            value={stats.total_users}
+            icon={<People />}
+            color="warning"
+          />
+        )}
       </Box>
 
       {/* 详细信息面板 */}

@@ -7,6 +7,8 @@ export interface User {
   role: string
   roles?: string[]
   status?: number
+  approval_status?: number  // 0=待审核, 1=已通过, 2=已拒绝
+  review_note?: string
   avatar?: string
   address?: string
   phone?: string
@@ -38,7 +40,9 @@ export interface LoginResponse {
 export interface RegisterRequest {
   username: string
   password: string
-  callsign?: string
+  callsign: string
+  phone: string
+  nickname?: string
 }
 
 // 设备相���类型
@@ -177,4 +181,46 @@ export interface MenuItem {
   path?: string
   children?: MenuItem[]
   roles?: string[]
+}
+
+// 操作证相关类型
+export interface OperatorCertificate {
+  id: number
+  file_name: string
+  file_size: number
+  file_type: string
+  upload_time: string
+  file_url?: string
+  status?: number  // 0=待审核, 1=已通过, 2=���拒绝
+  review_note?: string
+}
+
+export interface FileUploadResponse {
+  file_name: string
+  file_size: number
+  file_type: string
+  minio_path: string
+  file_url: string
+}
+
+// 用户审批相关类型
+export interface PendingApproval {
+  id: number
+  username: string
+  nickname?: string
+  callsign?: string
+  phone?: string
+  address?: string
+  approval_status: number
+  created_at: string
+  has_cert: boolean
+  cert?: OperatorCertificate
+  review_time?: string
+  reviewer_id?: number
+  review_note?: string
+}
+
+export interface ApprovalRequest {
+  status: number  // 1=通过, 2=拒绝
+  note: string
 }

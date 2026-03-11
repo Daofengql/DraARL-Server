@@ -3,34 +3,40 @@ package gormdb
 import (
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // User 用户模型
 type User struct {
-	ID            int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name          string    `gorm:"type:varchar(255);column:name" json:"name"`
-	CallSign      string    `gorm:"type:varchar(32);uniqueIndex;column:callsign" json:"callsign"`
-	Gird          string    `gorm:"type:varchar(255);column:gird" json:"gird"`
-	Phone         string    `gorm:"type:varchar(32);uniqueIndex;column:phone" json:"phone"`
-	Password      string    `gorm:"type:varchar(255);column:password" json:"-"`
-	Birthday      string    `gorm:"type:varchar(32);column:birthday" json:"birthday"`
-	Sex           int       `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
-	Avatar        string    `gorm:"type:varchar(512);column:avatar" json:"avatar"`
-	Address       string    `gorm:"type:varchar(512);column:address" json:"address"`
-	Roles         string    `gorm:"type:text;column:roles" json:"roles"` // JSON array string
-	Introduction  string    `gorm:"type:text;column:introduction" json:"introduction"`
-	AlarmMsg      bool      `gorm:"type:tinyint(1);default:0;column:alarm_msg" json:"alarm_msg"`
-	Status        int       `gorm:"type:tinyint;default:1;column:status" json:"status"`
-	UpdateTime    time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	LastLoginTime time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
-	LoginErrTimes int       `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
-	CreateTime    time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	OpenID        string    `gorm:"type:varchar(255);uniqueIndex;column:openid" json:"openid"`
-	NickName      string    `gorm:"type:varchar(255);column:nickname" json:"nickname"`
-	PID           string    `gorm:"type:varchar(255);column:pid" json:"pid"`
-	LastLoginIP   string    `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
-	DMRID         int       `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
-	MDCID         string    `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
+	ID              int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name            string     `gorm:"type:varchar(255);column:name" json:"name"`
+	CallSign        string     `gorm:"type:varchar(32);uniqueIndex;column:callsign" json:"callsign"`
+	Gird            string     `gorm:"type:varchar(255);column:gird" json:"gird"`
+	Phone           string     `gorm:"type:varchar(32);uniqueIndex;column:phone" json:"phone"`
+	Password        string     `gorm:"type:varchar(255);column:password" json:"-"`
+	Birthday        string     `gorm:"type:varchar(32);column:birthday" json:"birthday"`
+	Sex             int        `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
+	Avatar          string     `gorm:"type:varchar(512);column:avatar" json:"avatar"`
+	Address         string     `gorm:"type:varchar(512);column:address" json:"address"`
+	Roles           string     `gorm:"type:text;column:roles" json:"roles"` // JSON array string
+	Introduction    string     `gorm:"type:text;column:introduction" json:"introduction"`
+	AlarmMsg        bool       `gorm:"type:tinyint(1);default:0;column:alarm_msg" json:"alarm_msg"`
+	Status          int        `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	ApprovalStatus  int        `gorm:"type:tinyint;default:0;column:approval_status" json:"approval_status"` // 0=待审核, 1=已通过, 2=已拒绝
+	ReviewerID      *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`                    // 审核人ID
+	ReviewNote      string     `gorm:"type:text;column:review_note" json:"review_note"`                // 审核备注
+	ReviewTime      *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"`            // 审核时间
+	UpdateTime      time.Time  `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	LastLoginTime   *time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
+	LoginErrTimes   int        `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
+	CreateTime      time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	OpenID          string     `gorm:"type:varchar(255);uniqueIndex;column:openid" json:"openid"`
+	NickName        string     `gorm:"type:varchar(255);column:nickname" json:"nickname"`
+	PID             string     `gorm:"type:varchar(255);column:pid" json:"pid"`
+	LastLoginIP     string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
+	DMRID           int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
+	MDCID           string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
 
 	// 关联
 	Groups []*Group `gorm:"many2many:user_groups;" json:"groups,omitempty"`
@@ -39,6 +45,13 @@ type User struct {
 // TableName 指定表名
 func (User) TableName() string {
 	return "users"
+}
+
+// BeforeCreate GORM hook: 新用户注册时，将最后登录时间设置为当前时间
+func (u *User) BeforeCreate(tx *gorm.DB) error {
+	now := time.Now()
+	u.LastLoginTime = &now
+	return nil
 }
 
 // HasRole 检查用户是否有指定角色
@@ -223,6 +236,28 @@ func (Role) TableName() string {
 	return "roles"
 }
 
+// OperatorCert 操作证模型
+type OperatorCert struct {
+	ID          int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      int        `gorm:"type:int;index;column:user_id" json:"user_id"`
+	FileName    string     `gorm:"type:varchar(255);column:file_name" json:"file_name"`
+	MinioBucket string     `gorm:"type:varchar(255);column:minio_bucket" json:"minio_bucket"`
+	MinioPath   string     `gorm:"type:varchar(512);column:minio_path" json:"minio_path"`
+	FileSize    int64      `gorm:"type:bigint;column:file_size" json:"file_size"`
+	FileType    string     `gorm:"type:varchar(100);column:file_type" json:"file_type"`
+	UploadTime  time.Time  `gorm:"autoCreateTime;column:upload_time" json:"upload_time"`
+	Status      int        `gorm:"type:tinyint;default:0;column:status" json:"status"`        // 0=待审核, 1=已通过, 2=已拒绝/已替换
+	OldCertID   *int       `gorm:"type:int;column:old_cert_id" json:"old_cert_id"`       // 被替换的旧证书ID
+	ReviewNote  string     `gorm:"type:text;column:review_note" json:"review_note"`    // 审核备注
+	ReviewTime  *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"` // 审核时间
+	ReviewerID  *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`    // 审核人ID
+}
+
+// TableName 指定表名
+func (OperatorCert) TableName() string {
+	return "operator_certs"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -233,5 +268,6 @@ func AutoMigrate() error {
 		&Relay{},
 		&OperatorLog{},
 		&Role{},
+		&OperatorCert{},
 	)
 }

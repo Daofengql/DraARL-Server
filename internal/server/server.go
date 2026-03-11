@@ -15,6 +15,7 @@ import (
 	"nrllink/internal/handler"
 	"nrllink/internal/middleware"
 	ws "nrllink/pkg/websocket"
+	"nrllink/pkg/minio"
 )
 
 type Server struct {
@@ -25,6 +26,11 @@ type Server struct {
 
 func New(cfg *config.Configuration) *Server {
 	engine := gin.Default()
+
+	// 初始化MinIO
+	if err := minio.InitMinIO(); err != nil {
+		log.Printf("MinIO 初始化失败: %v", err)
+	}
 
 	// CORS 中间件
 	engine.Use(func(c *gin.Context) {
@@ -83,6 +89,14 @@ func (s *Server) setupRoutes() {
 			protected.PUT("/me", handler.UpdateProfile)
 			protected.PUT("/me/password", handler.ChangeOwnPassword)
 
+			// 文件上传（所有认证用户可访问，用于头像上传）
+			protected.POST("/upload/file", handler.UploadFile)
+
+			// 操作证相关（所有认证用户可访问）
+			protected.POST("/upload/operator-certificate", handler.UploadOperatorCertificate)
+			protected.GET("/operator-certificate", handler.GetOperatorCertificate)
+			protected.GET("/operator-certificate/:id/url", handler.GetOperatorCertificateURL)
+
 			// 用户管理（部分需要管理员权限）
 			admin := protected.Group("")
 			admin.Use(middleware.RequireAdmin())
@@ -93,40 +107,51 @@ func (s *Server) setupRoutes() {
 				admin.DELETE("/users/:id", handler.DeleteUser)
 				admin.PUT("/users/:id/status", handler.UpdateUserStatus)
 				admin.GET("/users/:id", handler.GetUserDetail)
+
+				// 用户审批相关
+				admin.GET("/approvals/pending", handler.GetPendingApprovals)
+				admin.PUT("/approvals/:id/approve", handler.ApproveUser)
+
+				// 操作证审批相关
+				admin.PUT("/operator-certificates/:id/approve", handler.ApproveOperatorCertificate)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）
 			protected.PUT("/users/:id/password", handler.UpdateUserPassword)
 
-			// 设备相关
-			protected.GET("/devices", handler.GetDevices)
-			protected.GET("/devices/list", handler.GetDevices) // 兼容旧接口
-			protected.GET("/device/get", handler.GetDevice)
-			protected.GET("/device/qths", handler.GetDeviceQTHs)
-			protected.POST("/devices", handler.CreateDevice)
-			protected.PUT("/devices/:id", handler.UpdateDevice)
-			protected.DELETE("/devices/:id", handler.DeleteDevice)
-			protected.POST("/device/changegroupnrl", handler.ChangeDeviceGroup)
+			// 设备相关（需要审核通过）
+			approved := protected.Group("")
+			approved.Use(middleware.RequireApproved())
+			{
+				approved.GET("/devices", handler.GetDevices)
+				approved.GET("/devices/list", handler.GetDevices) // 兼容旧接口
+				approved.GET("/device/get", handler.GetDevice)
+				approved.GET("/device/qths", handler.GetDeviceQTHs)
+				approved.POST("/devices", handler.CreateDevice)
+				approved.PUT("/devices/:id", handler.UpdateDevice)
+				approved.DELETE("/devices/:id", handler.DeleteDevice)
+				approved.POST("/device/changegroupnrl", handler.ChangeDeviceGroup)
 
-			// 设备 AT 命令和参数
-			protected.POST("/device/at", handler.DeviceAT)
-			protected.POST("/device/query", handler.QueryDeviceParm)
-			protected.POST("/device/change", handler.ChangeDeviceParm)
-			protected.POST("/device/change1w", handler.Change1W)
-			protected.POST("/device/change2w", handler.Change2W)
-			protected.GET("/device/qth", handler.GetDevice) // 兼容旧接口
+				// 设备 AT 命令和参数
+				approved.POST("/device/at", handler.DeviceAT)
+				approved.POST("/device/query", handler.QueryDeviceParm)
+				approved.POST("/device/change", handler.ChangeDeviceParm)
+				approved.POST("/device/change1w", handler.Change1W)
+				approved.POST("/device/change2w", handler.Change2W)
+				approved.GET("/device/qth", handler.GetDevice) // 兼容旧接口
 
-			// 群组相关
-			protected.GET("/groups", handler.GetGroups)
-			protected.GET("/group/list", handler.GetGroups) // 兼容旧接口
-			protected.GET("/groups/:id", handler.GetGroup)
-			protected.GET("/groups/:id/devices", handler.GetGroupDevices)
-			protected.POST("/groups", handler.CreateGroup)
-			protected.POST("/group/create", handler.CreateGroup) // 兼容旧接口
-			protected.PUT("/groups/:id", handler.UpdateGroup)
-			protected.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
-			protected.DELETE("/groups/:id", handler.DeleteGroup)
-			protected.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
+				// 群组相关
+				approved.GET("/groups", handler.GetGroups)
+				approved.GET("/group/list", handler.GetGroups) // 兼容旧接口
+				approved.GET("/groups/:id", handler.GetGroup)
+				approved.GET("/groups/:id/devices", handler.GetGroupDevices)
+				approved.POST("/groups", handler.CreateGroup)
+				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
+				approved.PUT("/groups/:id", handler.UpdateGroup)
+				approved.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
+				approved.DELETE("/groups/:id", handler.DeleteGroup)
+				approved.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
+			}
 
 			// 中继台和服务器（需要管理员权限）
 			admin.GET("/relays", handler.GetRelays)

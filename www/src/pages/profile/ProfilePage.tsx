@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Box,
   Paper,
@@ -26,6 +26,7 @@ import {
   RadioGroup,
   FormLabel,
   Radio,
+  IconButton,
 } from '@mui/material'
 import {
   Person,
@@ -42,9 +43,13 @@ import {
   Wifi,
   Notifications,
   AccessTime,
+  CheckCircle,
+  Pending,
+  Cancel,
+  CameraAlt,
 } from '@mui/icons-material'
 import { authService } from '../../services'
-import type { User } from '../../types'
+import type { User, OperatorCertificate } from '../../types'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -60,11 +65,35 @@ function TabPanel({ children, value, index }: TabPanelProps) {
   )
 }
 
+// 审核状态组件
+const ApprovalStatusChip = ({ status, reviewNote }: { status?: number; reviewNote?: string }) => {
+  if (status === 1) {
+    return <Chip icon={<CheckCircle />} label="已审核通过" size="small" color="success" />
+  }
+  if (status === 2) {
+    return (
+      <Box>
+        <Chip icon={<Cancel />} label="审核未通过" size="small" color="error" />
+        {reviewNote && <Typography variant="caption" sx={{ ml: 1, color: 'error.main' }}>{reviewNote}</Typography>}
+      </Box>
+    )
+  }
+  return <Chip icon={<Pending />} label="待审核" size="small" color="warning" />
+}
+
 export function ProfilePage() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [tabValue, setTabValue] = useState(0)
+
+  // 操作证相关状态
+  const [certificate, setCertificate] = useState<OperatorCertificate | null>(null)
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [uploadingCert, setUploadingCert] = useState(false)
 
   // 编辑资料对话框
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -81,6 +110,10 @@ export function ProfilePage() {
     alarm_msg: false,
     sex: 0,
   })
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
+
+  // 头像上传
+  const avatarInputRef = useRef<HTMLInputElement>(null)
 
   // 修改密码对话框
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
@@ -90,14 +123,9 @@ export function ProfilePage() {
     confirm_password: '',
   })
 
-  // 证书相关状态
-  const [certificateImage, setCertificateImage] = useState<string | null>(null)
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
-  const [uploadPreview, setUploadPreview] = useState<string | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
-
   useEffect(() => {
     loadUserInfo()
+    loadCertificate()
   }, [])
 
   const loadUserInfo = async () => {
@@ -110,6 +138,15 @@ export function ProfilePage() {
       showMessage('error', '加载用户信息失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadCertificate = async () => {
+    try {
+      const cert = await authService.getOperatorCertificate()
+      setCertificate(cert)
+    } catch (err) {
+      console.error('Failed to load certificate:', err)
     }
   }
 
@@ -141,9 +178,37 @@ export function ProfilePage() {
     setEditDialogOpen(false)
   }
 
+  // 头像上传处理 - 直接保存到用户资料
+  const handleAvatarUpload = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      showMessage('error', '请选择图片文件')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showMessage('error', '图片大小不能超过10MB')
+      return
+    }
+
+    setUploadingAvatar(true)
+    try {
+      const res = await authService.uploadFile(file, 'avatar')
+      // 直接更新用户资料，不需要通过编辑对话框
+      const updateData: Partial<User> = {
+        avatar: res.file_url,
+      }
+      const updatedUser = await authService.updateProfile(updateData)
+      setUser(updatedUser)
+      authService.saveAuth(authService.getToken()!, updatedUser)
+      showMessage('success', '头像更新成功')
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '上传失败')
+    } finally {
+      setUploadingAvatar(false)
+    }
+  }
+
   const handleSaveProfile = async () => {
     try {
-      // 转换 dmrid 为数字
       const updateData: Partial<User> = {
         nickname: editForm.nickname,
         callsign: editForm.callsign,
@@ -156,15 +221,10 @@ export function ProfilePage() {
         mdcid: editForm.mdcid,
         alarm_msg: editForm.alarm_msg,
       }
-      // 性别字段处理
-      // - 0 = 保密
-      // - 1 = 男
-      // - 2 = 女
       updateData.sex = editForm.sex
 
       const updatedUser = await authService.updateProfile(updateData)
       setUser(updatedUser)
-      // 更新本地存储
       authService.saveAuth(authService.getToken()!, updatedUser)
       setEditDialogOpen(false)
       showMessage('success', '资料更新成功')
@@ -199,36 +259,43 @@ export function ProfilePage() {
 
   // 证书相关处理函数
   const handleOpenUploadDialog = () => {
-    setUploadPreview(certificateImage)
+    setUploadPreview(certificate?.file_url || null)
     setUploadDialogOpen(true)
   }
 
   const handleCloseUploadDialog = () => {
     setUploadDialogOpen(false)
     setUploadPreview(null)
+    setSelectedFile(null)
   }
 
   const handleFileSelect = (file: File | null) => {
     if (!file) return
 
     // 检查文件类型
-    if (!file.type.startsWith('image/')) {
-      showMessage('error', '请选择图片文件')
+    if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+      showMessage('error', '请选择图片或PDF文件')
       return
     }
 
-    // 检查文件大小 (5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      showMessage('error', '图片大小不能超过5MB')
+    // 检查文件大小 (10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      showMessage('error', '文件大小不能超过10MB')
       return
     }
 
-    // 创建预览
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      setUploadPreview(reader.result as string)
+    setSelectedFile(file)
+
+    // 如果是图片，创建预览
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setUploadPreview(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    } else {
+      setUploadPreview(null)
     }
-    reader.readAsDataURL(file)
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -252,11 +319,25 @@ export function ProfilePage() {
     handleFileSelect(file)
   }
 
-  const handleUploadCertificate = () => {
-    // TODO: 调用上传接口
-    setCertificateImage(uploadPreview)
-    setUploadDialogOpen(false)
-    showMessage('success', '证书上传成功')
+  const handleUploadCertificate = async () => {
+    if (!selectedFile) {
+      showMessage('error', '请选择文件')
+      return
+    }
+
+    setUploadingCert(true)
+    try {
+      const cert = await authService.uploadOperatorCertificate(selectedFile)
+      setCertificate(cert)
+      setUploadDialogOpen(false)
+      setUploadPreview(null)
+      setSelectedFile(null)
+      showMessage('success', '操作证上传成功，请等待管理员审核')
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '上传失败')
+    } finally {
+      setUploadingCert(false)
+    }
   }
 
   const displayName = user?.nickname || user?.username || ''
@@ -302,13 +383,40 @@ export function ProfilePage() {
             <Card sx={{ mb: 3 }}>
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
-                  <Avatar
-                    src={user?.avatar}
-                    alt={displayName}
-                    sx={{ width: 100, height: 100, bgcolor: 'primary.main', fontSize: '2.5rem' }}
-                  >
-                    {displayName.charAt(0).toUpperCase()}
-                  </Avatar>
+                  <Box sx={{ position: 'relative' }}>
+                    <Avatar
+                      src={user?.avatar}
+                      alt={displayName}
+                      sx={{ width: 100, height: 100, bgcolor: 'primary.main', fontSize: '2.5rem' }}
+                    >
+                      {displayName.charAt(0).toUpperCase()}
+                    </Avatar>
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) handleAvatarUpload(file)
+                      }}
+                    />
+                    <IconButton
+                      sx={{
+                        position: 'absolute',
+                        bottom: -4,
+                        right: -4,
+                        bgcolor: 'background.paper',
+                        border: '1px solid',
+                        borderColor: 'divider',
+                      }}
+                      size="small"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={uploadingAvatar}
+                    >
+                      <CameraAlt fontSize="small" />
+                    </IconButton>
+                  </Box>
                   <Box sx={{ flex: 1, minWidth: 200 }}>
                     <Typography variant="h5" fontWeight={600}>
                       {displayName}
@@ -316,7 +424,7 @@ export function ProfilePage() {
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                       @{user?.username}
                     </Typography>
-                    <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                    <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                       <Chip
                         label={user?.role === 'admin' ? '管理员' : '普通用户'}
                         size="small"
@@ -327,6 +435,7 @@ export function ProfilePage() {
                         size="small"
                         color={user?.status === 1 ? 'success' : 'error'}
                       />
+                      <ApprovalStatusChip status={user?.approval_status} reviewNote={user?.review_note} />
                     </Box>
                   </Box>
                   <Button
@@ -431,10 +540,8 @@ export function ProfilePage() {
                       <ListItemText sx={{ ml: 2 }}>{user?.introduction || '-'}</ListItemText>
                     </ListItem>
                     <ListItem>
-                      <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 100, color: 'text.secondary' }}>
-                        注册时间
-                      </Box>
-                      <ListItemText sx={{ ml: 2 }}>
+                      <Box sx={{ minWidth: 120, color: 'text.secondary' }}>注册时间</Box>
+                      <ListItemText>
                         {user?.created_at ? new Date(user.created_at).toLocaleString('zh-CN') : '-'}
                       </ListItemText>
                     </ListItem>
@@ -442,63 +549,100 @@ export function ProfilePage() {
                 </CardContent>
               </Card>
 
-              {/* 右侧：证书卡片 */}
+              {/* 右侧：操作证卡片 */}
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    操作证书
-                  </Typography>
-                  <Divider sx={{ mb: 2 }} />
-                  <Box
-                    sx={{
-                      width: '100%',
-                      height: 200,
-                      bgcolor: 'grey.100',
-                      borderRadius: 1,
-                      overflow: 'hidden',
-                      position: 'relative',
-                    }}
-                  >
-                    {certificateImage ? (
-                      <Box
-                        component="img"
-                        src={certificateImage}
-                        alt="证书"
-                        sx={{
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'contain',
-                        }}
-                      />
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="h6">
+                      操作证书
+                    </Typography>
+                    {/* 操作证独立状态显示 */}
+                    {certificate ? (
+                      certificate.status === 1 ? (
+                        <Chip icon={<CheckCircle />} label="已审核通过" size="small" color="success" />
+                      ) : certificate.status === 2 ? (
+                        <Chip icon={<Cancel />} label="审核未通过" size="small" color="error" />
+                      ) : (
+                        <Chip icon={<Pending />} label="待审核" size="small" color="warning" />
+                      )
                     ) : (
-                      <Box
-                        sx={{
-                          width: '100%',
-                          height: '100%',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: 'text.secondary',
-                        }}
-                      >
-                        <CloudUpload sx={{ fontSize: 48, mb: 1, opacity: 0.5 }} />
-                        <Typography variant="body2">
-                          暂无证书
-                        </Typography>
-                      </Box>
+                      <Chip label="未上传" size="small" />
                     )}
                   </Box>
+                  <Divider sx={{ mb: 2 }} />
+                  {certificate?.status === 2 && certificate?.review_note && (
+                    <Alert severity="error" sx={{ mb: 2 }}>
+                      <Typography variant="body2">拒绝原因: {certificate.review_note}</Typography>
+                    </Alert>
+                  )}
+                  {certificate?.status === 0 && (
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                      <Typography variant="body2">操作证待审核，请耐心等待管理员审核</Typography>
+                    </Alert>
+                  )}
+                  <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                    <Box
+                      sx={{
+                        width: 400,
+                        height: 400,
+                        bgcolor: 'grey.100',
+                        borderRadius: 1,
+                        overflow: 'hidden',
+                        position: 'relative',
+                      }}
+                    >
+                      {uploadPreview ? (
+                        <Box
+                          component="img"
+                          src={uploadPreview}
+                          alt="预览"
+                          sx={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'contain',
+                          }}
+                        />
+                      ) : certificate?.file_url ? (
+                        <Box
+                          component="img"
+                          src={certificate.file_url}
+                          alt="操作证"
+                          sx={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'contain',
+                          }}
+                        />
+                      ) : (
+                        <Box
+                          sx={{
+                            width: '100%',
+                            height: '100%',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'text.secondary',
+                          }}
+                        >
+                          <CloudUpload sx={{ fontSize: 48, mb: 1, opacity: 0.5 }} />
+                          <Typography variant="body2">
+                            {certificate ? '已上传操作证' : '暂无操作证'}
+                          </Typography>
+                        </Box>
+                      )}
+                    </Box>
+                  </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, mb: 2 }}>
-                    证书用于设备认证和通信加密
+                    请上传您的业余电台操作证，用于身份验证
                   </Typography>
                   <Button
-                    variant={certificateImage ? 'outlined' : 'contained'}
+                    variant={certificate ? 'outlined' : 'contained'}
                     fullWidth
                     startIcon={<Upload />}
                     onClick={handleOpenUploadDialog}
                   >
-                    {certificateImage ? '更新证书' : '上传证书'}
+                    {certificate?.status === 0 ? '审核中...（可重新上传）' : certificate?.status === 2 ? '重新上传' : certificate ? '更新操作证' : '上传操作证'}
                   </Button>
                 </CardContent>
               </Card>
@@ -551,6 +695,12 @@ export function ProfilePage() {
                         size="small"
                         color={user?.status === 1 ? 'success' : 'error'}
                       />
+                    </ListItemText>
+                  </ListItem>
+                  <ListItem divider>
+                    <Box sx={{ minWidth: 120, color: 'text.secondary' }}>审核状态</Box>
+                    <ListItemText>
+                      <ApprovalStatusChip status={user?.approval_status} reviewNote={user?.review_note} />
                     </ListItemText>
                   </ListItem>
                   <ListItem divider>
@@ -677,13 +827,6 @@ export function ProfilePage() {
               label="开启消息提醒"
             />
             <TextField
-              label="头像URL"
-              fullWidth
-              value={editForm.avatar}
-              onChange={(e) => setEditForm({ ...editForm, avatar: e.target.value })}
-              placeholder="https://"
-            />
-            <TextField
               label="个人简介"
               fullWidth
               multiline
@@ -738,9 +881,9 @@ export function ProfilePage() {
         </DialogActions>
       </Dialog>
 
-      {/* 上传证书对话框 */}
+      {/* 上传操作证对话框 */}
       <Dialog open={uploadDialogOpen} onClose={handleCloseUploadDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>上传证书</DialogTitle>
+        <DialogTitle>上传操作证</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 1 }}>
             <Box
@@ -770,21 +913,31 @@ export function ProfilePage() {
                     objectFit: 'contain',
                   }}
                 />
+              ) : selectedFile?.type === 'application/pdf' ? (
+                <Box>
+                  <CloudUpload sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+                  <Typography variant="body1" gutterBottom>
+                    {selectedFile.name}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    PDF文件已选择
+                  </Typography>
+                </Box>
               ) : (
                 <Box>
                   <CloudUpload sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
                   <Typography variant="body1" gutterBottom>
-                    拖拽图片到此处或点击上传
+                    拖拽文件到此处或点击上传
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    支持 JPG、PNG 格式，最大 5MB
+                    支持 JPG、PNG、PDF 格式，最大 10MB
                   </Typography>
                 </Box>
               )}
               <input
                 id="certificate-input"
                 type="file"
-                accept="image/*"
+                accept="image/*,.pdf"
                 onChange={handleInputChange}
                 style={{ display: 'none' }}
               />
@@ -797,9 +950,9 @@ export function ProfilePage() {
             onClick={handleUploadCertificate}
             variant="contained"
             startIcon={<Upload />}
-            disabled={!uploadPreview}
+            disabled={!selectedFile || uploadingCert}
           >
-            上传
+            {uploadingCert ? '上传中...' : '上传'}
           </Button>
         </DialogActions>
       </Dialog>

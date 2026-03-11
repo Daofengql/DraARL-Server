@@ -1,6 +1,7 @@
 // 导出所有服务
 export { apiClient } from './api'
 export { authService } from './auth'
+export { approvalService } from './approval'
 export { deviceService } from './device'
 export { groupService } from './group'
 export { userService } from './user'

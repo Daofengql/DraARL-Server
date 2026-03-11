@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   AppBar,
   Box,
@@ -26,8 +26,38 @@ interface HeaderProps {
 
 export function Header({ onMenuClick }: HeaderProps) {
   const navigate = useNavigate()
-  const user = authService.getStoredUser()
+  const [user, setUser] = useState(authService.getStoredUser())
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
+
+  // 监听 localStorage 变化，当用户信息更新时同步
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'user' && e.newValue) {
+        try {
+          const updatedUser = JSON.parse(e.newValue)
+          setUser(updatedUser)
+        } catch {
+          // 忽略解析错误
+        }
+      }
+    }
+
+    // 同时也监听同一页面的自定义事件���用于同一页面内的更新）
+    const handleUserUpdate = () => {
+      const updatedUser = authService.getStoredUser()
+      if (updatedUser) {
+        setUser(updatedUser)
+      }
+    }
+
+    window.addEventListener('storage', handleStorageChange)
+    window.addEventListener('user-updated', handleUserUpdate)
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+      window.removeEventListener('user-updated', handleUserUpdate)
+    }
+  }, [])
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget)

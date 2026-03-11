@@ -242,6 +242,107 @@ func GenerateThumbnail(originalObject string, width, height int, ext string) (st
 	return thumbObjectName, buf.Bytes(), nil
 }
 
+// ProcessAvatar 处理头像图片：裁切为正方形、限制尺寸、重新编码
+// 1. 限制最大尺寸为 2000x2000
+// 2. 非正方形图片进行中心裁切为正方形
+// 3. 重新编码为 JPEG 格式
+// 返回处理后的图片数据
+func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	// 打开文件
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, "", fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer file.Close()
+
+	// 解码图片
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil, "", fmt.Errorf("解码图片失败: %w", err)
+	}
+
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+
+	// 检查尺寸是否超过限制
+	const maxSize = 2000
+	if width > maxSize || height > maxSize {
+		// 如果超过限制，按比例缩小到最大尺寸内
+		scale := float64(maxSize) / float64(max(width, height))
+		newWidth := int(float64(width) * scale)
+		newHeight := int(float64(height) * scale)
+		img = imaging.Resize(img, newWidth, newHeight, imaging.Lanczos)
+		bounds = img.Bounds()
+		width = bounds.Dx()
+		height = bounds.Dy()
+	}
+
+	// 如果不是正方形，进行中心裁切
+	var cropped image.Image
+	if width != height {
+		// 取较小的边作为正方形边长
+		size := width
+		if height < size {
+			size = height
+		}
+
+		// 计算裁��区域（中心裁切）
+		x := (width - size) / 2
+		y := (height - size) / 2
+		cropped = imaging.Crop(img, image.Rect(x, y, x+size, y+size))
+	} else {
+		cropped = img
+	}
+
+	// 重新编码为 JPEG 格式，质量 85
+	var buf bytes.Buffer
+	err = jpeg.Encode(&buf, cropped, &jpeg.Options{Quality: 85})
+	if err != nil {
+		return nil, "", fmt.Errorf("编码图片失败: %w", err)
+	}
+
+	// 获取文件扩展名
+	ext := filepath.Ext(fileHeader.Filename)
+	if ext == "" {
+		ext = ".jpg"
+	}
+
+	return buf.Bytes(), ext, nil
+}
+
+// UploadAvatar 上传处理后的头像图片
+func UploadAvatar(userID int, imageData []byte, ext string) (string, int64, error) {
+	if Client == nil {
+		return "", 0, fmt.Errorf("MinIO客户端未初始化")
+	}
+
+	cfg := config.Get()
+	bucket := cfg.MinIO.Bucket
+	if bucket == "" {
+		bucket = "nrllink"
+	}
+
+	// 生成文件路径
+	now := time.Now()
+	fileUUID := uuid.New().String()
+	objectName := fmt.Sprintf("uploads/avatar/%d/%02d/%s%s", now.Year(), int(now.Month()), fileUUID, ".jpg")
+
+	// 上传文件
+	ctx := context.Background()
+	reader := bytes.NewReader(imageData)
+	size := int64(len(imageData))
+
+	_, err := Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: "image/jpeg",
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("上传文件失败: %w", err)
+	}
+
+	return objectName, size, nil
+}
+
 // UploadThumbnail 上传缩略图
 func UploadThumbnail(objectName string, data []byte, contentType string) error {
 	cfg := config.Get()

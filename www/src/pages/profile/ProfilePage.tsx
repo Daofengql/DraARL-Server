@@ -49,6 +49,7 @@ import {
   CameraAlt,
 } from '@mui/icons-material'
 import { authService } from '../../services'
+import { AvatarCropDialog } from '../../components/AvatarCropDialog'
 import type { User, CertificateResponse, OperatorCertificate } from '../../types'
 
 interface TabPanelProps {
@@ -114,6 +115,8 @@ export function ProfilePage() {
 
   // 头像上传
   const avatarInputRef = useRef<HTMLInputElement>(null)
+  const [cropDialogOpen, setCropDialogOpen] = useState(false)
+  const [selectedAvatarImage, setSelectedAvatarImage] = useState<string | null>(null)
 
   // 修改密码对话框
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
@@ -178,8 +181,8 @@ export function ProfilePage() {
     setEditDialogOpen(false)
   }
 
-  // 头像上传处理 - 直接保存到用户资料
-  const handleAvatarUpload = async (file: File) => {
+  // 头像上传处理 - 先打开裁切对话框
+  const handleAvatarSelect = (file: File) => {
     if (!file.type.startsWith('image/')) {
       showMessage('error', '请选择图片文件')
       return
@@ -189,10 +192,25 @@ export function ProfilePage() {
       return
     }
 
+    // 创建预览并打开裁切对话框
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setSelectedAvatarImage(reader.result as string)
+      setCropDialogOpen(true)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // 裁切确认后上传
+  const handleCroppedAvatarUpload = async (croppedBlob: Blob) => {
+    setCropDialogOpen(false)
     setUploadingAvatar(true)
+
     try {
+      // 将 Blob 转换为 File
+      const file = new File([croppedBlob], 'avatar.jpg', { type: 'image/jpeg' })
+
       const res = await authService.uploadFile(file, 'avatar')
-      // 直接更新用户资料，不需要通过编辑对话框
       const updateData: Partial<User> = {
         avatar: res.file_url,
       }
@@ -204,7 +222,13 @@ export function ProfilePage() {
       showMessage('error', err.response?.data?.message || '上传失败')
     } finally {
       setUploadingAvatar(false)
+      setSelectedAvatarImage(null)
     }
+  }
+
+  const handleCloseCropDialog = () => {
+    setCropDialogOpen(false)
+    setSelectedAvatarImage(null)
   }
 
   const handleSaveProfile = async () => {
@@ -388,7 +412,7 @@ export function ProfilePage() {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
                   <Box sx={{ position: 'relative' }}>
                     <Avatar
-                      src={user?.avatar}
+                      src={user?.avatar_thumb || user?.avatar}
                       alt={displayName}
                       sx={{ width: 100, height: 100, bgcolor: 'primary.main', fontSize: '2.5rem' }}
                     >
@@ -401,7 +425,7 @@ export function ProfilePage() {
                       style={{ display: 'none' }}
                       onChange={(e) => {
                         const file = e.target.files?.[0]
-                        if (file) handleAvatarUpload(file)
+                        if (file) handleAvatarSelect(file)
                       }}
                     />
                     <IconButton
@@ -991,6 +1015,14 @@ export function ProfilePage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 头像裁切对话框 */}
+      <AvatarCropDialog
+        open={cropDialogOpen}
+        imageSrc={selectedAvatarImage || ''}
+        onClose={handleCloseCropDialog}
+        onConfirm={handleCroppedAvatarUpload}
+      />
     </Box>
   )
 }

@@ -4,11 +4,13 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/pkg/jwt"
+	"nrllink/pkg/minio"
 )
 
 // LoginRequest 登录请求
@@ -107,41 +109,53 @@ func Login(c *gin.Context) {
 
 	log.Printf("用户 %s 登录成功", user.Name)
 
+	// 构建用户数据
+	userData := gin.H{
+		"id":              user.ID,
+		"username":        user.Name,
+		"nickname":        user.NickName,
+		"callsign":        user.CallSign,
+		"role":            getRoleName(roles),
+		"roles":           roles,
+		"status":          user.Status,
+		"approval_status":  user.ApprovalStatus,
+		"avatar":          user.Avatar,
+		"avatar_thumb":    user.AvatarThumb,
+		"phone":           user.Phone,
+		"address":         user.Address,
+		"introduction":    user.Introduction,
+		"sex":             user.Sex,
+		"birthday":        user.Birthday,
+		"isAdmin":         hasRoleGORM(user, "admin"),
+		"dmrid":           user.DMRID,
+		"mdcid":           user.MDCID,
+		"alarm_msg":       user.AlarmMsg,
+		"last_login_time": func() string {
+			if user.LastLoginTime != nil {
+				return user.LastLoginTime.Format("2006-01-02 15:04:05")
+			}
+			return ""
+		}(),
+		"last_login_ip":   user.LastLoginIP,
+		"login_err_times": user.LoginErrTimes,
+		"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
+		"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+	}
+
+	// 处理头像URL
+	if avatarVal, ok := userData["avatar"].(string); ok && avatarVal != "" && !strings.HasPrefix(avatarVal, "http") {
+		userData["avatar"] = minio.GetFileURL(avatarVal)
+	}
+	if avatarThumbVal, ok := userData["avatar_thumb"].(string); ok && avatarThumbVal != "" && !strings.HasPrefix(avatarThumbVal, "http") {
+		userData["avatar_thumb"] = minio.GetFileURL(avatarThumbVal)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "登录成功",
 		"data": gin.H{
 			"token": token,
-			"user": gin.H{
-				"id":              user.ID,
-				"username":        user.Name,
-				"nickname":        user.NickName,
-				"callsign":        user.CallSign,
-				"role":            getRoleName(roles),
-				"roles":           roles,
-				"status":          user.Status,
-				"approval_status":  user.ApprovalStatus,
-				"avatar":          user.Avatar,
-				"phone":           user.Phone,
-				"address":         user.Address,
-				"introduction":    user.Introduction,
-				"sex":             user.Sex,
-				"birthday":        user.Birthday,
-				"isAdmin":         hasRoleGORM(user, "admin"),
-				"dmrid":           user.DMRID,
-				"mdcid":           user.MDCID,
-				"alarm_msg":       user.AlarmMsg,
-				"last_login_time": func() string {
-					if user.LastLoginTime != nil {
-						return user.LastLoginTime.Format("2006-01-02 15:04:05")
-					}
-					return ""
-				}(),
-				"last_login_ip":   user.LastLoginIP,
-				"login_err_times": user.LoginErrTimes,
-				"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
-				"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
-			},
+			"user":  userData,
 		},
 	})
 }
@@ -274,6 +288,16 @@ func GetCurrentUser(c *gin.Context) {
 		return
 	}
 
+	// 处理头像URL
+	avatarURL := user.Avatar
+	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
+		avatarURL = minio.GetFileURL(avatarURL)
+	}
+	avatarThumbURL := user.AvatarThumb
+	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
+		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
@@ -285,7 +309,8 @@ func GetCurrentUser(c *gin.Context) {
 			"phone":          user.Phone,
 			"address":        user.Address,
 			"introduction":   user.Introduction,
-			"avatar":         user.Avatar,
+			"avatar":         avatarURL,
+			"avatar_thumb":   avatarThumbURL,
 			"sex":            user.Sex,
 			"birthday":       user.Birthday,
 			"role":           getRoleNameFromUser(user),
@@ -378,20 +403,31 @@ func GetUsers(c *gin.Context) {
 	// 转换为响应格式
 	items := make([]gin.H, 0, len(users))
 	for _, u := range users {
+		// 处理头像URL：如果数据库中存的是完整URL则直接使用，否则拼接
+		avatarURL := u.Avatar
+		if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
+			avatarURL = minio.GetFileURL(avatarURL)
+		}
+		avatarThumbURL := u.AvatarThumb
+		if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
+			avatarThumbURL = minio.GetFileURL(avatarThumbURL)
+		}
+
 		items = append(items, gin.H{
-			"id":         u.ID,
-			"username":   u.Name,
-			"nickname":   u.NickName,
-			"callsign":   u.CallSign,
-			"phone":      u.Phone,
-			"address":    u.Address,
-			"status":     u.Status,
-			"role":       getRoleNameFromUser(u),
-			"isAdmin":    hasRoleGORM(u, "admin"),
-			"roles":      u.Roles,
-			"avatar":     u.Avatar,
-			"created_at": u.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at": u.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":           u.ID,
+			"username":     u.Name,
+			"nickname":     u.NickName,
+			"callsign":     u.CallSign,
+			"phone":        u.Phone,
+			"address":      u.Address,
+			"status":       u.Status,
+			"role":         getRoleNameFromUser(u),
+			"isAdmin":      hasRoleGORM(u, "admin"),
+			"roles":        u.Roles,
+			"avatar":       avatarURL,
+			"avatar_thumb": avatarThumbURL,
+			"created_at":   u.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at":   u.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -473,9 +509,14 @@ func CreateUser(c *gin.Context) {
 // UpdateUserRequest 更新用户请求
 type UpdateUserRequest struct {
 	Name     string `json:"name"`
+	Username string `json:"username"` // 前端使用 username
 	NickName string `json:"nickname"`
+	CallSign string `json:"callsign"` // 前端使用 callsign
+	Phone    string `json:"phone"`
+	Address  string `json:"address"`
 	Status   int    `json:"status"`
 	Roles    string `json:"roles"`
+	Role     string `json:"role"` // 前端使用 role
 }
 
 // UpdateUser 更新用户
@@ -515,14 +556,34 @@ func UpdateUser(c *gin.Context) {
 	if req.Name != "" {
 		user.Name = req.Name
 	}
+	if req.Username != "" {
+		user.Name = req.Username
+	}
 	if req.NickName != "" {
 		user.NickName = req.NickName
+	}
+	if req.CallSign != "" {
+		user.CallSign = req.CallSign
+	}
+	if req.Phone != "" {
+		user.Phone = req.Phone
+	}
+	if req.Address != "" {
+		user.Address = req.Address
 	}
 	if req.Status > 0 {
 		user.Status = req.Status
 	}
 	if req.Roles != "" {
 		user.Roles = req.Roles
+	}
+	if req.Role != "" {
+		// 前端发送 role (单数)，转换为 roles JSON 数组格式
+		if req.Role == "admin" {
+			user.Roles = `["admin"]`
+		} else {
+			user.Roles = `["user"]`
+		}
 	}
 
 	if err := repo.UpdateUser(user); err != nil {
@@ -833,6 +894,16 @@ func GetUserDetail(c *gin.Context) {
 		return
 	}
 
+	// 处理头像URL
+	avatarURL := user.Avatar
+	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
+		avatarURL = minio.GetFileURL(avatarURL)
+	}
+	avatarThumbURL := user.AvatarThumb
+	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
+		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
@@ -845,7 +916,8 @@ func GetUserDetail(c *gin.Context) {
 			"status":     user.Status,
 			"isAdmin":    hasRoleGORM(user, "admin"),
 			"roles":      user.Roles,
-			"avatar":     user.Avatar,
+			"avatar":     avatarURL,
+			"avatar_thumb": avatarThumbURL,
 			"introduction": user.Introduction,
 			"address":    user.Address,
 			"sex":        user.Sex,
@@ -939,6 +1011,16 @@ func UpdateProfile(c *gin.Context) {
 		return
 	}
 
+	// 处理头像URL
+	avatarURL := user.Avatar
+	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
+		avatarURL = minio.GetFileURL(avatarURL)
+	}
+	avatarThumbURL := user.AvatarThumb
+	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
+		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -950,7 +1032,8 @@ func UpdateProfile(c *gin.Context) {
 			"phone":           user.Phone,
 			"address":         user.Address,
 			"introduction":    user.Introduction,
-			"avatar":          user.Avatar,
+			"avatar":          avatarURL,
+			"avatar_thumb":    avatarThumbURL,
 			"sex":             user.Sex,
 			"birthday":        user.Birthday,
 			"dmrid":           user.DMRID,

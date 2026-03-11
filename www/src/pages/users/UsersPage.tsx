@@ -41,7 +41,6 @@ import {
   Person,
   Block,
   CheckCircle,
-  Email,
   Phone,
   Cake,
   LocationOn,
@@ -539,7 +538,7 @@ export function UsersPage() {
                     />
                   </ListItem>
                 )}
-                {selectedUser.dmrid > 0 && (
+                {selectedUser.dmrid && selectedUser.dmrid > 0 && (
                   <ListItem divider>
                     <Badge sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
                     <ListItemText

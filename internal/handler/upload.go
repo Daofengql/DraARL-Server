@@ -3,7 +3,6 @@ package handler
 import (
 	"log"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -71,39 +70,61 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	// 上传到MinIO
-	objectName, fileSize, err := minio.UploadMultipartFile(fileHeader, user.ID, fileType)
-	if err != nil {
-		log.Printf("上传文件失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "上传文件失败",
-		})
-		return
-	}
-
-	// 如果是头像上传，生成240x240缩略图
+	var objectName string
+	var finalFileSize int64
 	var thumbnailURL string
+
+	// 处理头像上传：验证格式、尺寸、裁切、重新编码
 	if fileType == "avatar" {
-		ext := filepath.Ext(fileHeader.Filename)
-		thumbObjectName, thumbData, err := minio.GenerateThumbnail(objectName, 240, 240, ext)
+		// 处理头像图片：裁切为正方形、限制2000x2000、重新编码
+		avatarData, ext, err := minio.ProcessAvatar(fileHeader)
+		if err != nil {
+			log.Printf("处理头像图片失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "处理头像图片失败",
+			})
+			return
+		}
+
+		// 上传处理后的头像
+		objectName, finalFileSize, err = minio.UploadAvatar(user.ID, avatarData, ext)
+		if err != nil {
+			log.Printf("上传头像失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "上传头像失败",
+			})
+			return
+		}
+
+		// 更新用户头像字段
+		userRepo.UpdateUserAvatar(user.ID, objectName)
+
+		// 生成240x240缩略图
+		thumbObjectName, thumbData, err := minio.GenerateThumbnail(objectName, 240, 240, ".jpg")
 		if err != nil {
 			log.Printf("生成缩略图失败: %v", err)
-			// 缩略图生成失败不影响主文件上传，继续处理
+			// 缩略图生成失败不影响，继续处理
 		} else {
-			// 上传缩略图
-			contentType := fileHeader.Header.Get("Content-Type")
-			if contentType == "" {
-				contentType = "image/jpeg"
-			}
+			contentType := "image/jpeg"
 			if err := minio.UploadThumbnail(thumbObjectName, thumbData, contentType); err != nil {
 				log.Printf("上传缩略图失败: %v", err)
 			} else {
-				// 更新用户头像缩略图字段
-				userRepo.UpdateUserAvatar(user.ID, objectName)
 				userRepo.UpdateUserAvatarThumb(user.ID, thumbObjectName)
 				thumbnailURL = minio.GetFileURL(thumbObjectName)
 			}
+		}
+	} else {
+		// 其他文件类型：直接上传
+		objectName, finalFileSize, err = minio.UploadMultipartFile(fileHeader, user.ID, fileType)
+		if err != nil {
+			log.Printf("上传文件失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "上传文件失败",
+			})
+			return
 		}
 	}
 
@@ -114,11 +135,11 @@ func UploadFile(c *gin.Context) {
 		"code":    200,
 		"message": "上传成功",
 		"data": UploadResponse{
-			FileName:    fileHeader.Filename,
-			FileSize:    fileSize,
-			FileType:    fileType,
-			MinioPath:   objectName,
-			FileURL:     fileURL,
+			FileName:     fileHeader.Filename,
+			FileSize:     finalFileSize,
+			FileType:     fileType,
+			MinioPath:    objectName,
+			FileURL:      fileURL,
 			ThumbnailURL: thumbnailURL,
 		},
 	})

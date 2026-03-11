@@ -90,6 +90,8 @@ export const authService = {
   saveAuth(token: string, user: User) {
     localStorage.setItem('token', token)
     localStorage.setItem('user', JSON.stringify(user))
+    // 触发自定义事件，通知其他组件用户信息已更新
+    window.dispatchEvent(new CustomEvent('user-updated'))
   },
 
   // 清除认证信息

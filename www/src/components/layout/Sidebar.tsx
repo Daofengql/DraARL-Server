@@ -22,6 +22,7 @@ import {
   TaskAlt,
   ExpandLess,
   ExpandMore,
+  Verified,
 } from '@mui/icons-material'
 import { useState } from 'react'
 import { authService } from '../../services'
@@ -53,6 +54,7 @@ const menuItems: MenuItem[] = [
     children: [
       { path: '/users', label: '用户列表', icon: <People />, adminOnly: true },
       { path: '/approvals', label: '用户审批', icon: <TaskAlt />, adminOnly: true },
+      { path: '/certificate-approvals', label: '操作证审批', icon: <Verified />, adminOnly: true },
     ],
   },
   { path: '/relays', label: '中继台', icon: <Radio />, adminOnly: true },

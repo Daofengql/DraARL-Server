@@ -3,8 +3,9 @@ import type {
   User,
   LoginRequest,
   RegisterRequest,
-  OperatorCertificate,
   FileUploadResponse,
+  CertificateResponse,
+  OperatorCertificateUpload,
 } from '../types'
 
 interface LoginResponse {
@@ -64,19 +65,19 @@ export const authService = {
   },
 
   // 上传操作证
-  async uploadOperatorCertificate(file: File): Promise<OperatorCertificate> {
+  async uploadOperatorCertificate(file: File): Promise<OperatorCertificateUpload> {
     const formData = new FormData()
     formData.append('file', file)
-    const res = await apiClient.post<BackendResponse<OperatorCertificate>>('/api/upload/operator-certificate', formData, {
+    const res = await apiClient.post<BackendResponse<OperatorCertificateUpload>>('/api/upload/operator-certificate', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     return res.data!
   },
 
-  // 获取操作证信息
-  async getOperatorCertificate(): Promise<OperatorCertificate | null> {
-    const res = await apiClient.get<BackendResponse<OperatorCertificate | null>>('/api/operator-certificate')
-    return res.data || null
+  // 获取操作证信息（返回 active_cert 和 pending_cert）
+  async getOperatorCertificate(): Promise<CertificateResponse> {
+    const res = await apiClient.get<BackendResponse<CertificateResponse>>('/api/operator-certificate')
+    return res.data || { active_cert: null, pending_cert: null }
   },
 
   // 获取操作证临时访问URL

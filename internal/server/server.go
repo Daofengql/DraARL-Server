@@ -113,6 +113,7 @@ func (s *Server) setupRoutes() {
 				admin.PUT("/approvals/:id/approve", handler.ApproveUser)
 
 				// 操作证审批相关
+				admin.GET("/certificate-approvals", handler.GetCertificateApprovals)
 				admin.PUT("/operator-certificates/:id/approve", handler.ApproveOperatorCertificate)
 			}
 

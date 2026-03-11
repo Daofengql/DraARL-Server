@@ -89,34 +89,56 @@ export function ApprovalsPage() {
 
   // 详情对话框
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
-  const [certImageUrl, setCertImageUrl] = useState<string | null>(null)
-  const [loadingCert, setLoadingCert] = useState(false)
-
   // 图片预览对话框
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null)
   const [imageScale, setImageScale] = useState(1)
 
   useEffect(() => {
-    loadPendingApprovals()
-  }, [page, rowsPerPage, tabValue])
+    // 初始化时一次性加载所有状态的数据
+    loadAllTabData()
+  }, [page, rowsPerPage])
+
+  // 当切换标签时，重新加载对应标签的数据（使用当前页码）
+  useEffect(() => {
+    loadTabData(tabValue)
+  }, [tabValue])
+
+  const loadAllTabData = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      // 并行加载所有三个状态的数据
+      const [pendingData, approvedData, rejectedData] = await Promise.all([
+        approvalService.getPendingApprovals(page + 1, rowsPerPage, 0),
+        approvalService.getPendingApprovals(page + 1, rowsPerPage, 1),
+        approvalService.getPendingApprovals(page + 1, rowsPerPage, 2),
+      ])
+      setPendingUsers(pendingData.items || [])
+      setApprovedUsers(approvedData.items || [])
+      setRejectedUsers(rejectedData.items || [])
+    } catch (err: any) {
+      console.error('Failed to load approvals:', err)
+      setError(err.response?.data?.message || '加载数据失败')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const showMessage = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text })
     setTimeout(() => setMessage(null), 3000)
   }
 
-  const loadPendingApprovals = async () => {
+  const loadTabData = async (status: number) => {
     setLoading(true)
     setError('')
     try {
-      // 根据当前标签页传递status参数：0=待审核, 1=已通过, 2=已拒绝
-      const status = tabValue === 0 ? 0 : tabValue === 1 ? 1 : 2
       const data = await approvalService.getPendingApprovals(page + 1, rowsPerPage, status)
 
-      if (tabValue === 0) {
+      if (status === 0) {
         setPendingUsers(data.items || [])
-      } else if (tabValue === 1) {
+      } else if (status === 1) {
         setApprovedUsers(data.items || [])
       } else {
         setRejectedUsers(data.items || [])
@@ -127,6 +149,10 @@ export function ApprovalsPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const loadPendingApprovals = async () => {
+    await loadTabData(tabValue)
   }
 
   const handleOpenApproveDialog = (user: PendingApproval) => {
@@ -192,29 +218,14 @@ export function ApprovalsPage() {
     }
   }
 
-  const handleOpenDetail = async (user: PendingApproval) => {
+  const handleOpenDetail = (user: PendingApproval) => {
     setSelectedUser(user)
     setDetailDialogOpen(true)
-    setCertImageUrl(null)
-
-    // 加载操作证图片
-    if (user.cert && user.has_cert) {
-      setLoadingCert(true)
-      try {
-        // 这里应该调用获取临时URL的API
-        setCertImageUrl(user.cert.file_url || null)
-      } catch (err) {
-        console.error('Failed to load cert image:', err)
-      } finally {
-        setLoadingCert(false)
-      }
-    }
   }
 
   const handleCloseDetail = () => {
     setDetailDialogOpen(false)
     setSelectedUser(null)
-    setCertImageUrl(null)
   }
 
   const currentTabUsers = tabValue === 0 ? pendingUsers : tabValue === 1 ? approvedUsers : rejectedUsers
@@ -480,7 +491,7 @@ export function ApprovalsPage() {
                       <TableCell>{user.callsign || '-'}</TableCell>
                       <TableCell>
                         <Typography variant="body2" color="error">
-                          {user.review_note || '未填写'}
+                          {user.cert?.review_note || user.review_note || '未填写'}
                         </Typography>
                       </TableCell>
                       <TableCell>
@@ -586,69 +597,83 @@ export function ApprovalsPage() {
                 <Typography variant="h6" gutterBottom>
                   操作证书
                 </Typography>
-                <Card>
-                  <CardContent>
-                    {selectedUser.cert ? (
-                      <Box>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          文件名: {selectedUser.cert.file_name}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          文件大小: {(selectedUser.cert.file_size / 1024).toFixed(2)} KB
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" gutterBottom>
-                          上传时间: {selectedUser.cert.upload_time}
-                        </Typography>
-                        <Divider sx={{ my: 2 }} />
-                        {certImageUrl ? (
-                          <Box
-                            component="img"
-                            src={certImageUrl}
-                            alt="操作证"
-                            onClick={() => {
-                              setPreviewImageUrl(certImageUrl)
-                              setImageScale(1)
-                              setImagePreviewOpen(true)
-                            }}
-                            sx={{
-                              width: '100%',
-                              maxHeight: 400,
-                              objectFit: 'contain',
-                              borderRadius: 1,
-                              cursor: 'pointer',
-                              transition: 'transform 0.2s',
-                              '&:hover': {
-                                transform: 'scale(1.02)',
-                                boxShadow: 3,
-                              },
-                            }}
-                          />
-                        ) : (
-                          <Box
-                            sx={{
-                              width: '100%',
-                              height: 200,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              bgcolor: 'grey.100',
-                              borderRadius: 1,
-                            }}
-                          >
-                            {loadingCert ? '加载中...' : '无法预览'}
+                {selectedUser.certs && selectedUser.certs.length > 0 ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {selectedUser.certs.map((cert, index) => (
+                      <Card key={cert.id || index}>
+                        <CardContent sx={{ pt: 2 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                            <Typography variant="body2" fontWeight={500}>
+                              操作证 #{index + 1}
+                            </Typography>
+                            <ApprovalStatusBadge status={cert.status || 0} />
                           </Box>
-                        )}
-                        {certImageUrl && (
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            文件名: {cert.file_name}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            文件大小: {(cert.file_size / 1024).toFixed(2)} KB
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary" gutterBottom>
+                            上传时间: {cert.upload_time}
+                          </Typography>
+                          {cert.review_note && (
+                            <Alert severity={cert.status === 2 ? 'error' : 'info'} sx={{ mt: 2, py: 1 }}>
+                              <Typography variant="body2">
+                                <strong>审核备注:</strong> {cert.review_note}
+                              </Typography>
+                            </Alert>
+                          )}
+                          <Divider sx={{ my: 2 }} />
+                          {cert.file_url ? (
+                            <Box
+                              component="img"
+                              src={cert.file_url}
+                              alt="操作证"
+                              onClick={() => {
+                                setPreviewImageUrl(cert.file_url!)
+                                setImageScale(1)
+                                setImagePreviewOpen(true)
+                              }}
+                              sx={{
+                                width: '100%',
+                                maxHeight: 300,
+                                objectFit: 'contain',
+                                borderRadius: 1,
+                                cursor: 'pointer',
+                                transition: 'transform 0.2s',
+                                '&:hover': {
+                                  transform: 'scale(1.02)',
+                                  boxShadow: 3,
+                                },
+                              }}
+                            />
+                          ) : (
+                            <Box
+                              sx={{
+                                width: '100%',
+                                height: 150,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                bgcolor: 'grey.100',
+                                borderRadius: 1,
+                                color: 'text.secondary',
+                              }}
+                            >
+                              无法预览
+                            </Box>
+                          )}
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'center' }}>
                             点击图片可放大查看
                           </Typography>
-                        )}
-                      </Box>
-                    ) : (
-                      <Alert severity="warning">该用户未上传操作证</Alert>
-                    )}
-                  </CardContent>
-                </Card>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </Box>
+                ) : (
+                  <Alert severity="warning">该用户未上传操作证</Alert>
+                )}
               </Box>
             </Box>
           )}

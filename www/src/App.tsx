@@ -6,6 +6,7 @@ import { DashboardPage } from './pages/dashboard'
 import { DevicesPage } from './pages/devices'
 import { GroupsPage } from './pages/groups'
 import { UsersPage, ApprovalsPage } from './pages/users'
+import { CertificateApprovalsPage } from './pages/certificates'
 import { RelaysPage } from './pages/relays'
 import { ServersPage } from './pages/servers'
 import { LogsPage } from './pages/logs'
@@ -58,6 +59,14 @@ function App() {
             element={
               <AdminRoute>
                 <ApprovalsPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="certificate-approvals"
+            element={
+              <AdminRoute>
+                <CertificateApprovalsPage />
               </AdminRoute>
             }
           />

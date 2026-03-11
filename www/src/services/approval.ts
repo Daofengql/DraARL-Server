@@ -1,5 +1,5 @@
 import { apiClient } from './api'
-import type { PendingApproval, ApprovalRequest, ListResponse } from '../types'
+import type { PendingApproval, ApprovalRequest, ListResponse, CertificateApproval } from '../types'
 
 interface BackendResponse<T> {
   code: number
@@ -16,6 +16,19 @@ export const approvalService = {
     }
     const res = await apiClient.get<BackendResponse<ListResponse<PendingApproval>>>(
       '/api/approvals/pending',
+      { params }
+    )
+    return res.data!
+  },
+
+  // 获取操作证审批列表（按上传记录列出）
+  async getCertificateApprovals(page: number = 1, limit: number = 20, status: number = 0): Promise<ListResponse<CertificateApproval>> {
+    const params: Record<string, string | number> = { page, limit }
+    if (status >= 0) {
+      params.status = status
+    }
+    const res = await apiClient.get<BackendResponse<ListResponse<CertificateApproval>>>(
+      '/api/certificate-approvals',
       { params }
     )
     return res.data!

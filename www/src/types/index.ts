@@ -195,6 +195,20 @@ export interface OperatorCertificate {
   review_note?: string
 }
 
+// 新增：证书响应类型，包含 active_cert 和 pending_cert
+export interface CertificateResponse {
+  active_cert: OperatorCertificate | null
+  pending_cert: OperatorCertificate | null
+}
+
+// 操作证上传响应
+export interface OperatorCertificateUpload {
+  id: number
+  file_name: string
+  file_size: number
+  upload_time: string
+}
+
 export interface FileUploadResponse {
   file_name: string
   file_size: number
@@ -215,6 +229,7 @@ export interface PendingApproval {
   created_at: string
   has_cert: boolean
   cert?: OperatorCertificate
+  certs?: OperatorCertificate[]  // 新增：所有操作证列表
   review_time?: string
   reviewer_id?: number
   review_note?: string
@@ -223,4 +238,24 @@ export interface PendingApproval {
 export interface ApprovalRequest {
   status: number  // 1=通过, 2=拒绝
   note: string
+}
+
+// 操作证审批相关类型
+export interface CertificateApproval {
+  id: number
+  user_id: number
+  username: string
+  nickname?: string
+  callsign?: string
+  file_name: string
+  file_size: number
+  file_type: string
+  upload_time: string
+  file_url?: string
+  status: number  // 0=待审核, 1=已通过, 2=已拒绝
+  review_note?: string
+  review_time?: string
+  reviewer_id?: number
+  is_update: boolean  // true=更新(非首次), false=首次
+  is_replaced?: boolean // true=被新证替换(但之前是通过), false=未替换或真正被拒绝
 }

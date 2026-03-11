@@ -49,7 +49,7 @@ import {
   CameraAlt,
 } from '@mui/icons-material'
 import { authService } from '../../services'
-import type { User, OperatorCertificate } from '../../types'
+import type { User, CertificateResponse, OperatorCertificate } from '../../types'
 
 interface TabPanelProps {
   children?: React.ReactNode
@@ -88,7 +88,7 @@ export function ProfilePage() {
   const [tabValue, setTabValue] = useState(0)
 
   // 操作证相关状态
-  const [certificate, setCertificate] = useState<OperatorCertificate | null>(null)
+  const [certificate, setCertificate] = useState<CertificateResponse>({ active_cert: null, pending_cert: null })
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
   const [uploadPreview, setUploadPreview] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -259,7 +259,9 @@ export function ProfilePage() {
 
   // 证书相关处理函数
   const handleOpenUploadDialog = () => {
-    setUploadPreview(certificate?.file_url || null)
+    // 优先显示待审核/被拒绝的证书，否则显示已通过的证书
+    const certToShow = certificate.pending_cert || (certificate.active_cert ? certificate.active_cert : null)
+    setUploadPreview(certToShow?.file_url || null)
     setUploadDialogOpen(true)
   }
 
@@ -327,8 +329,9 @@ export function ProfilePage() {
 
     setUploadingCert(true)
     try {
-      const cert = await authService.uploadOperatorCertificate(selectedFile)
-      setCertificate(cert)
+      await authService.uploadOperatorCertificate(selectedFile)
+      // 上传成功后重新加载证书数据
+      await loadCertificate()
       setUploadDialogOpen(false)
       setUploadPreview(null)
       setSelectedFile(null)
@@ -557,27 +560,39 @@ export function ProfilePage() {
                       操作证书
                     </Typography>
                     {/* 操作证独立状态显示 */}
-                    {certificate ? (
-                      certificate.status === 1 ? (
-                        <Chip icon={<CheckCircle />} label="已审核通过" size="small" color="success" />
-                      ) : certificate.status === 2 ? (
-                        <Chip icon={<Cancel />} label="审核未通过" size="small" color="error" />
-                      ) : (
-                        <Chip icon={<Pending />} label="待审核" size="small" color="warning" />
-                      )
+                    {/* 如果有 pending_cert，显示其状态；否则显示 active_cert 的状态 */}
+                    {(certificate.pending_cert || certificate.active_cert) ? (
+                      (() => {
+                        const certToShow = certificate.pending_cert || certificate.active_cert!
+                        if (certToShow!.status === 1) {
+                          return <Chip icon={<CheckCircle />} label="已审核通过" size="small" color="success" />
+                        }
+                        if (certToShow!.status === 2) {
+                          return <Chip icon={<Cancel />} label="审核未通过" size="small" color="error" />
+                        }
+                        return <Chip icon={<Pending />} label="待审核" size="small" color="warning" />
+                      })()
                     ) : (
                       <Chip label="未上传" size="small" />
                     )}
                   </Box>
                   <Divider sx={{ mb: 2 }} />
-                  {certificate?.status === 2 && certificate?.review_note && (
+                  {/* 显示拒绝原因（只有 pending_cert 被拒绝时才显示） */}
+                  {certificate.pending_cert?.status === 2 && certificate.pending_cert?.review_note && (
                     <Alert severity="error" sx={{ mb: 2 }}>
-                      <Typography variant="body2">拒绝原因: {certificate.review_note}</Typography>
+                      <Typography variant="body2">拒绝原因: {certificate.pending_cert.review_note}</Typography>
                     </Alert>
                   )}
-                  {certificate?.status === 0 && (
+                  {/* 显示待审核提示 */}
+                  {certificate.pending_cert?.status === 0 && (
                     <Alert severity="info" sx={{ mb: 2 }}>
                       <Typography variant="body2">操作证待审核，请耐心等待管理员审核</Typography>
+                    </Alert>
+                  )}
+                  {/* 被拒绝时提示可以查看已通过的旧版本 */}
+                  {certificate.pending_cert?.status === 2 && certificate.active_cert && (
+                    <Alert severity="success" sx={{ mb: 2 }}>
+                      <Typography variant="body2">下方显示的是之前已通过的操作证</Typography>
                     </Alert>
                   )}
                   <Box sx={{ display: 'flex', justifyContent: 'center' }}>
@@ -602,47 +617,67 @@ export function ProfilePage() {
                             objectFit: 'contain',
                           }}
                         />
-                      ) : certificate?.file_url ? (
-                        <Box
-                          component="img"
-                          src={certificate.file_url}
-                          alt="操作证"
-                          sx={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'contain',
-                          }}
-                        />
-                      ) : (
-                        <Box
-                          sx={{
-                            width: '100%',
-                            height: '100%',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'text.secondary',
-                          }}
-                        >
-                          <CloudUpload sx={{ fontSize: 48, mb: 1, opacity: 0.5 }} />
-                          <Typography variant="body2">
-                            {certificate ? '已上传操作证' : '暂无操作证'}
-                          </Typography>
-                        </Box>
-                      )}
+                      ) : (() => {
+                        // 决定显示哪个操作证：
+                        // - 如果有 active_cert（已通过），优先显示
+                        // - 如果有 pending_cert 且状态为待审核，显示 pending_cert
+                        // - 如果 pending_cert 被拒绝且有 active_cert，显示 active_cert（旧版本）
+                        // - 否则显示 pending_cert
+                        let certToShow: OperatorCertificate | null = null
+                        if (certificate.active_cert) {
+                          certToShow = certificate.active_cert
+                        } else if (certificate.pending_cert) {
+                          certToShow = certificate.pending_cert
+                        }
+
+                        return certToShow?.file_url ? (
+                          <Box
+                            component="img"
+                            src={certToShow.file_url}
+                            alt="操作证"
+                            sx={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'contain',
+                            }}
+                          />
+                        ) : (
+                          <Box
+                            sx={{
+                              width: '100%',
+                              height: '100%',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: 'text.secondary',
+                            }}
+                          >
+                            <CloudUpload sx={{ fontSize: 48, mb: 1, opacity: 0.5 }} />
+                            <Typography variant="body2">
+                              暂无操作证
+                            </Typography>
+                          </Box>
+                        )
+                      })()}
                     </Box>
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, mb: 2 }}>
                     请上传您的业余电台操作证，用于身份验证
                   </Typography>
                   <Button
-                    variant={certificate ? 'outlined' : 'contained'}
+                    variant={(certificate.pending_cert || certificate.active_cert) ? 'outlined' : 'contained'}
                     fullWidth
                     startIcon={<Upload />}
                     onClick={handleOpenUploadDialog}
                   >
-                    {certificate?.status === 0 ? '审核中...（可重新上传）' : certificate?.status === 2 ? '重新上传' : certificate ? '更新操作证' : '上传操作证'}
+                    {certificate.pending_cert?.status === 0
+                      ? '审核中...（可重新上传）'
+                      : certificate.pending_cert?.status === 2
+                        ? '重新上传'
+                        : certificate.active_cert
+                          ? '更新操作证'
+                          : '上传操作证'}
                   </Button>
                 </CardContent>
               </Card>

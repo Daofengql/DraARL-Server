@@ -42,7 +42,7 @@ type User struct {
 	Phone         string       `json:"phone"`
 	Password      string       `json:"-"`
 	Birthday      string       `json:"birthday"`
-	Sex           bool         `json:"sex"`
+	Sex           int          `json:"sex"`
 	Avatar        string       `json:"avatar"`
 	Address       string       `json:"address"`
 	Roles         []string     `json:"roles"`
@@ -65,6 +65,14 @@ type User struct {
 	TalkTimes   int           `json:"talk_times"`
 	DMRID       uint32        `json:"dmrid"`
 	MDCID       string        `json:"mdcid"`
+}
+
+// GetRoles 实现 UserWithRoles 接口，返回用户角色列表
+func (u *User) GetRoles() []string {
+	if u.Roles == nil {
+		return []string{"user"}
+	}
+	return u.Roles
 }
 
 // DeviceInfo 简化的设备信息

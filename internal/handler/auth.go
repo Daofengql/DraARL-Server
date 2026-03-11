@@ -111,13 +111,41 @@ func Login(c *gin.Context) {
 		"data": gin.H{
 			"token": token,
 			"user": gin.H{
-				"id":       user.ID,
-				"username": user.Name,
-				"nickname": user.NickName,
-				"isAdmin":  hasRoleGORM(user, "admin"),
+				"id":              user.ID,
+				"username":        user.Name,
+				"nickname":        user.NickName,
+				"callsign":        user.CallSign,
+				"role":            getRoleName(roles),
+				"roles":           roles,
+				"status":          user.Status,
+				"avatar":          user.Avatar,
+				"phone":           user.Phone,
+				"address":         user.Address,
+				"introduction":    user.Introduction,
+				"sex":             user.Sex,
+				"birthday":        user.Birthday,
+				"isAdmin":         hasRoleGORM(user, "admin"),
+				"dmrid":           user.DMRID,
+				"mdcid":           user.MDCID,
+				"alarm_msg":       user.AlarmMsg,
+				"last_login_time": user.LastLoginTime.Format("2006-01-02 15:04:05"),
+				"last_login_ip":   user.LastLoginIP,
+				"login_err_times": user.LoginErrTimes,
+				"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
+				"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
 			},
 		},
 	})
+}
+
+// getRoleName 从角色列表中获取主要角色名称
+func getRoleName(roles []string) string {
+	for _, role := range roles {
+		if role == "admin" {
+			return "admin"
+		}
+	}
+	return "user"
 }
 
 // Logout 用户登出
@@ -214,13 +242,42 @@ func GetCurrentUser(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":       user.ID,
-			"username": user.Name,
-			"nickname": user.NickName,
-			"isAdmin":  hasRoleGORM(user, "admin"),
-			"status":   user.Status,
+			"id":             user.ID,
+			"username":       user.Name,
+			"nickname":       user.NickName,
+			"callsign":       user.CallSign,
+			"phone":          user.Phone,
+			"address":        user.Address,
+			"introduction":   user.Introduction,
+			"avatar":         user.Avatar,
+			"sex":            user.Sex,
+			"birthday":       user.Birthday,
+			"role":           getRoleNameFromUser(user),
+			"roles":          user.Roles,
+			"isAdmin":        hasRoleGORM(user, "admin"),
+			"status":         user.Status,
+			"dmrid":          user.DMRID,
+			"mdcid":          user.MDCID,
+			"alarm_msg":      user.AlarmMsg,
+			"last_login_time": user.LastLoginTime.Format("2006-01-02 15:04:05"),
+			"last_login_ip":  user.LastLoginIP,
+			"login_err_times": user.LoginErrTimes,
+			"created_at":     user.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at":     user.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
+}
+
+// getRoleNameFromUser 从用户获取角色名称
+func getRoleNameFromUser(user *gormdb.User) string {
+	if user.Roles == "" {
+		return "user"
+	}
+	// 检查是否包含 admin
+	if hasRoleGORM(user, "admin") {
+		return "admin"
+	}
+	return "user"
 }
 
 // GetUsers 获取用户列表（管理员）
@@ -279,14 +336,19 @@ func GetUsers(c *gin.Context) {
 	items := make([]gin.H, 0, len(users))
 	for _, u := range users {
 		items = append(items, gin.H{
-			"id":       u.ID,
-			"name":     u.Name,
-			"nickname": u.NickName,
-			"callsign": u.CallSign,
-			"phone":    u.Phone,
-			"status":   u.Status,
-			"isAdmin":  hasRoleGORM(u, "admin"),
-			"roles":    u.Roles,
+			"id":         u.ID,
+			"username":   u.Name,
+			"nickname":   u.NickName,
+			"callsign":   u.CallSign,
+			"phone":      u.Phone,
+			"address":    u.Address,
+			"status":     u.Status,
+			"role":       getRoleNameFromUser(u),
+			"isAdmin":    hasRoleGORM(u, "admin"),
+			"roles":      u.Roles,
+			"avatar":     u.Avatar,
+			"created_at": u.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at": u.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -450,6 +512,15 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
+	// 不允许删除ID为1的主管理员
+	if id == 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "主管理员不能被删除",
+		})
+		return
+	}
+
 	repo := gormdb.NewUserRepository()
 
 	// 检查用户是否存在
@@ -476,6 +547,73 @@ func DeleteUser(c *gin.Context) {
 		"message": "删除成功",
 		"data": gin.H{
 			"id": id,
+		},
+	})
+}
+
+// UpdateUserStatusRequest 更新用户状态请求
+type UpdateUserStatusRequest struct {
+	Status int `json:"status" binding:"required"`
+}
+
+// UpdateUserStatus 更新用户状态（禁用/启用）
+func UpdateUserStatus(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的用户ID",
+		})
+		return
+	}
+
+	// 不允许修改ID为1的主管理员状态
+	if id == 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "主管理员不能被禁用",
+		})
+		return
+	}
+
+	var req UpdateUserStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	repo := gormdb.NewUserRepository()
+
+	// 检查用户是否存在
+	user, err := repo.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 更新用户状态
+	if err := repo.UpdateUserStatus(id, req.Status); err != nil {
+		log.Printf("更新用户状态失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "更新用户状态失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "更新成功",
+		"data": gin.H{
+			"id":     id,
+			"status": req.Status,
 		},
 	})
 }
@@ -670,5 +808,183 @@ func GetUserDetail(c *gin.Context) {
 			"sex":        user.Sex,
 			"birthday":   user.Birthday,
 		},
+	})
+}
+
+// UpdateProfileRequest 更新个人资料请求
+type UpdateProfileRequest struct {
+	NickName     string `json:"nickname"`
+	CallSign     string `json:"callsign"`
+	Phone        string `json:"phone"`
+	Address      string `json:"address"`
+	Introduction string `json:"introduction"`
+	Avatar       string `json:"avatar"`
+	Sex          *int   `json:"sex"`       // 使用指针，允许不更新
+	Birthday     string `json:"birthday"`
+	DMRID        *int   `json:"dmrid"`      // 允许更新 DMRID
+	MDCID        string `json:"mdcid"`      // 允许更新 MDCID
+	AlarmMsg     *bool  `json:"alarm_msg"`  // 允许更新报警消息设置
+}
+
+// UpdateProfile 更新当前用户个人资料
+func UpdateProfile(c *gin.Context) {
+	var req UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	username, _ := c.Get("username")
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 更新字段
+	if req.NickName != "" {
+		user.NickName = req.NickName
+	}
+	if req.CallSign != "" {
+		user.CallSign = req.CallSign
+	}
+	if req.Phone != "" {
+		user.Phone = req.Phone
+	}
+	if req.Address != "" {
+		user.Address = req.Address
+	}
+	if req.Introduction != "" {
+		user.Introduction = req.Introduction
+	}
+	if req.Avatar != "" {
+		user.Avatar = req.Avatar
+	}
+	// 性别字段处理：
+	// - 0 = 保密
+	// - 1 = 男
+	// - 2 = 女
+	if req.Sex != nil {
+		user.Sex = *req.Sex
+	}
+	if req.Birthday != "" {
+		user.Birthday = req.Birthday
+	}
+	if req.DMRID != nil {
+		user.DMRID = *req.DMRID
+	}
+	if req.MDCID != "" {
+		user.MDCID = req.MDCID
+	}
+	if req.AlarmMsg != nil {
+		user.AlarmMsg = *req.AlarmMsg
+	}
+
+	if err := repo.UpdateUser(user); err != nil {
+		log.Printf("更新个人资料失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "更新个人资料失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "更新成功",
+		"data": gin.H{
+			"id":              user.ID,
+			"username":        user.Name,
+			"nickname":        user.NickName,
+			"callsign":        user.CallSign,
+			"phone":           user.Phone,
+			"address":         user.Address,
+			"introduction":    user.Introduction,
+			"avatar":          user.Avatar,
+			"sex":             user.Sex,
+			"birthday":        user.Birthday,
+			"dmrid":           user.DMRID,
+			"mdcid":           user.MDCID,
+			"alarm_msg":       user.AlarmMsg,
+			"role":            getRoleNameFromUser(user),
+			"roles":           user.Roles,
+			"status":          user.Status,
+			"isAdmin":         hasRoleGORM(user, "admin"),
+			"last_login_time": user.LastLoginTime.Format("2006-01-02 15:04:05"),
+			"last_login_ip":   user.LastLoginIP,
+			"login_err_times": user.LoginErrTimes,
+			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+		},
+	})
+}
+
+// ChangeOwnPasswordRequest 修改自己的密码请求
+type ChangeOwnPasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+// ChangeOwnPassword 修改自己的密码
+func ChangeOwnPassword(c *gin.Context) {
+	var req ChangeOwnPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	username, _ := c.Get("username")
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 验证旧密码
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "原密码错误",
+		})
+		return
+	}
+
+	// 加密新密码
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "密码加密失败",
+		})
+		return
+	}
+
+	// 更新密码
+	if err := repo.UpdateUserPassword(user.ID, string(hashedPassword)); err != nil {
+		log.Printf("更新密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "密码修改失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "密码修改成功",
 	})
 }

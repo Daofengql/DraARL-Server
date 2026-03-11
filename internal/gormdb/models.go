@@ -1,35 +1,36 @@
 package gormdb
 
 import (
+	"strings"
 	"time"
 )
 
 // User 用户模型
 type User struct {
 	ID            int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name          string    `gorm:"type:varchar(255)" json:"name"`
-	CallSign      string    `gorm:"type:varchar(32);uniqueIndex" json:"callsign"`
-	Gird          string    `gorm:"type:varchar(255)" json:"gird"`
-	Phone         string    `gorm:"type:varchar(32);uniqueIndex" json:"phone"`
-	Password      string    `gorm:"type:varchar(255)" json:"-"`
-	Birthday      string    `gorm:"type:varchar(32)" json:"birthday"`
-	Sex           bool      `gorm:"type:tinyint(1)" json:"sex"`
-	Avatar        string    `gorm:"type:varchar(512)" json:"avatar"`
-	Address       string    `gorm:"type:varchar(512)" json:"address"`
-	Roles         string    `gorm:"type:text" json:"roles"` // JSON array string
-	Introduction  string    `gorm:"type:text" json:"introduction"`
-	AlarmMsg      bool      `gorm:"type:tinyint(1);default:0" json:"alarm_msg"`
-	Status        int       `gorm:"type:tinyint;default:1" json:"status"`
-	UpdateTime    time.Time `gorm:"autoUpdateTime" json:"update_time"`
-	LastLoginTime time.Time `gorm:"type:datetime" json:"last_login_time"`
-	LoginErrTimes int       `gorm:"type:int;default:0" json:"login_err_times"`
-	CreateTime    time.Time `gorm:"autoCreateTime" json:"create_time"`
-	OpenID        string    `gorm:"type:varchar(255);uniqueIndex" json:"openid"`
-	NickName      string    `gorm:"type:varchar(255)" json:"nickname"`
+	Name          string    `gorm:"type:varchar(255);column:name" json:"name"`
+	CallSign      string    `gorm:"type:varchar(32);uniqueIndex;column:callsign" json:"callsign"`
+	Gird          string    `gorm:"type:varchar(255);column:gird" json:"gird"`
+	Phone         string    `gorm:"type:varchar(32);uniqueIndex;column:phone" json:"phone"`
+	Password      string    `gorm:"type:varchar(255);column:password" json:"-"`
+	Birthday      string    `gorm:"type:varchar(32);column:birthday" json:"birthday"`
+	Sex           int       `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
+	Avatar        string    `gorm:"type:varchar(512);column:avatar" json:"avatar"`
+	Address       string    `gorm:"type:varchar(512);column:address" json:"address"`
+	Roles         string    `gorm:"type:text;column:roles" json:"roles"` // JSON array string
+	Introduction  string    `gorm:"type:text;column:introduction" json:"introduction"`
+	AlarmMsg      bool      `gorm:"type:tinyint(1);default:0;column:alarm_msg" json:"alarm_msg"`
+	Status        int       `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	UpdateTime    time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	LastLoginTime time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
+	LoginErrTimes int       `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
+	CreateTime    time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	OpenID        string    `gorm:"type:varchar(255);uniqueIndex;column:openid" json:"openid"`
+	NickName      string    `gorm:"type:varchar(255);column:nickname" json:"nickname"`
 	PID           string    `gorm:"type:varchar(255);column:pid" json:"pid"`
-	LastLoginIP   string    `gorm:"type:varchar(64)" json:"last_login_ip"`
-	DMRID         int       `gorm:"type:int;default:0" json:"dmrid"`
-	MDCID         string    `gorm:"type:varchar(255);default:''" json:"mdcid"`
+	LastLoginIP   string    `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
+	DMRID         int       `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
+	MDCID         string    `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
 
 	// 关联
 	Groups []*Group `gorm:"many2many:user_groups;" json:"groups,omitempty"`
@@ -52,14 +53,29 @@ func (u *User) HasRole(role string) bool {
 
 // GetRoles 实现 UserWithRoles 接口
 func (u *User) GetRoles() []string {
-	// TODO: 解析 roles JSON 字符串
 	if u.Roles == "" {
 		return []string{"user"}
 	}
-	if u.Roles == "[\"admin\"]" || u.Roles == "[admin]" {
-		return []string{"admin"}
+	// 尝试解析 JSON 数组格式
+	rolesStr := u.Roles
+	// 移除最外层的方括号和引号
+	rolesStr = strings.Trim(rolesStr, "[]\"'")
+	// 按逗号或空格分割
+	parts := strings.FieldsFunc(rolesStr, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '"'
+	})
+	// 清理空字符串
+	result := []string{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
 	}
-	return []string{"user"}
+	if len(result) == 0 {
+		return []string{"user"}
+	}
+	return result
 }
 
 // Device 设备模型
@@ -83,9 +99,6 @@ type Device struct {
 	Note       string    `gorm:"type:text;column:note" json:"note"`
 	Priority   int       `gorm:"type:int;default:100;column:priority" json:"priority"`
 	ISOnline   bool      `gorm:"-" json:"is_online"` // 运行时字段
-
-	// 关联
-	Group *Group `gorm:"foreignKey:GroupID" json:"group,omitempty"`
 }
 
 // TableName 指定表名

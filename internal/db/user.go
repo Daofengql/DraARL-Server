@@ -162,7 +162,8 @@ func (r *UserRepository) AddOperatorLog(content, eventType string, operator *mod
 func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 	user := &models.User{}
 	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
-	var sex, alarmMsg sql.NullBool
+	var sex sql.NullInt64
+	var alarmMsg sql.NullBool
 
 	err := row.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
 		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
@@ -203,7 +204,7 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 		user.LastLoginTime = lastLoginTime.String
 	}
 	if sex.Valid {
-		user.Sex = sex.Bool
+		user.Sex = int(sex.Int64)
 	}
 	if alarmMsg.Valid {
 		user.AlarmMsg = alarmMsg.Bool
@@ -223,7 +224,8 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*models.User, error) {
 	user := &models.User{}
 	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
-	var sex, alarmMsg sql.NullBool
+	var sex sql.NullInt64
+	var alarmMsg sql.NullBool
 
 	err := rows.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
 		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
@@ -261,7 +263,7 @@ func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*models.User, error) 
 		user.LastLoginTime = lastLoginTime.String
 	}
 	if sex.Valid {
-		user.Sex = sex.Bool
+		user.Sex = int(sex.Int64)
 	}
 	if alarmMsg.Valid {
 		user.AlarmMsg = alarmMsg.Bool
@@ -390,7 +392,8 @@ func UpdateLoginError(userID int) error {
 func scanUserDirect(row *sql.Row) (*models.User, error) {
 	user := &models.User{}
 	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
-	var sex, alarmMsg sql.NullBool
+	var sex sql.NullInt64
+	var alarmMsg sql.NullBool
 
 	err := row.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
 		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
@@ -431,7 +434,7 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 		user.LastLoginTime = lastLoginTime.String
 	}
 	if sex.Valid {
-		user.Sex = sex.Bool
+		user.Sex = int(sex.Int64)
 	}
 	if alarmMsg.Valid {
 		user.AlarmMsg = alarmMsg.Bool

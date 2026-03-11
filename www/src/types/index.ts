@@ -9,9 +9,20 @@ export interface User {
   status?: number
   avatar?: string
   address?: string
+  phone?: string
+  introduction?: string
+  sex?: number
+  birthday?: string
   isAdmin?: boolean
   created_at?: string
   updated_at?: string
+  // 新增字段
+  dmrid?: number
+  mdcid?: string
+  alarm_msg?: boolean
+  last_login_time?: string
+  last_login_ip?: string
+  login_err_times?: number
 }
 
 export interface LoginRequest {

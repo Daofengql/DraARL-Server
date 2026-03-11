@@ -30,10 +30,6 @@ var Client *minio.Client
 // InitMinIO 初始化MinIO客户端
 func InitMinIO() error {
 	cfg := config.Get()
-	if !cfg.MinIO.Enabled {
-		log.Println("MinIO 未启用")
-		return nil
-	}
 
 	var err error
 	Client, err = minio.New(cfg.MinIO.Endpoint, &minio.Options{
@@ -189,8 +185,7 @@ func PresignedURL(ctx context.Context, objectName string, expiry time.Duration) 
 
 // IsEnabled 检查MinIO是否启用
 func IsEnabled() bool {
-	cfg := config.Get()
-	return cfg.MinIO.Enabled && Client != nil
+	return Client != nil
 }
 
 // GenerateThumbnail 生成图片缩略图

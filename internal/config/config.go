@@ -57,58 +57,28 @@ type Configuration struct {
 	Web struct {
 		Path   string `yaml:"Path" json:"path"`
 		Port   string `yaml:"Port" json:"port"`
-		ICP    string `yaml:"ICP" json:"icp"`
 		SSLCrt string `yaml:"SSLCrt" json:"ssl_crt"`
 		SSLKey string `yaml:"SSLKey" json:"ssl_key"`
 	} `yaml:"Web" json:"web"`
 
-	SystemInfo struct {
-		PlatformName  string `yaml:"Name" json:"name"`
-		NameShorthand string `yaml:"NameShorthand" json:"nameshorthand"`
-		LogoURL       string `yaml:"LogoURL" json:"logo_url"`
-		Language      string `yaml:"Language" json:"language"`
-	} `yaml:"SystemInfo" json:"systeminfo"`
-
-	OpenAI struct {
-		BaseURL string `yaml:"BaseURL" json:"base_url"`
-		APIKEY  string `yaml:"APIKEY" json:"api_key"`
-		Engine  string `yaml:"Engine" json:"engine"`
-	} `yaml:"OpenAI" json:"openai"`
-
-	APRS struct {
-		APRSServerHost string  `yaml:"APRSServerHost" json:"aprs_server_host"`
-		APRSServerPort string  `yaml:"APRSServerPort" json:"aprs_server_port"`
-		SelfAddress    string  `yaml:"SelfAddress" json:"self_address"`
-		SelfPort       string  `yaml:"SelfPort" json:"self_port"`
-		CallSign       string  `yaml:"CallSign" json:"callsign"`
-		SSID           string  `yaml:"SSID" json:"ssid"`
-		Passcode       int     `yaml:"Passcode" json:"passcode"`
-		Latitude       float64 `yaml:"Latitude" json:"latitude"`
-		Longitude      float64 `yaml:"Longitude" json:"longitude"`
-		Altitude       string  `yaml:"Altitude" json:"altitude"`
-	} `yaml:"APRS" json:"aprs"`
-
 	// Keycloak SSO 配置
 	Keycloak struct {
-		Enabled         bool   `yaml:"Enabled" json:"enabled"`
-		BaseURL         string `yaml:"BaseURL" json:"base_url"`             // http://localhost:8080
-		Realm          string `yaml:"Realm" json:"realm"`                   // nrllink
-		ClientID       string `yaml:"ClientID" json:"client_id"`            // nrllink-frontend
-		ClientSecret   string `yaml:"ClientSecret" json:"client_secret"`    // 客户端密钥
-		RedirectURI    string `yaml:"RedirectURI" json:"redirect_uri"`     // http://localhost:9000/callback
-		AdminUsername  string `yaml:"AdminUsername" json:"admin_username"`  // admin
-		AdminPassword  string `yaml:"AdminPassword" json:"admin_password"`  // admin
+		Enabled       bool   `yaml:"Enabled" json:"enabled"`
+		BaseURL       string `yaml:"BaseURL" json:"base_url"`           // http://localhost:8080
+		Realm        string `yaml:"Realm" json:"realm"`                 // nrllink
+		ClientID     string `yaml:"ClientID" json:"client_id"`          // nrllink-frontend
+		ClientSecret string `yaml:"ClientSecret" json:"client_secret"`  // 客户端密钥
+		RedirectURI  string `yaml:"RedirectURI" json:"redirect_uri"`   // http://localhost:9000/callback
 	} `yaml:"Keycloak" json:"keycloak"`
 
 	// MinIO 对象存储配置
 	MinIO struct {
-		Enabled        bool   `yaml:"Enabled" json:"enabled"`
-		Endpoint       string `yaml:"Endpoint" json:"endpoint"`             // localhost:9000
-		AccessKey      string `yaml:"AccessKey" json:"access_key"`         // minioadmin
-		SecretKey      string `yaml:"SecretKey" json:"secret_key"`         // minioadmin
-		UseSSL         bool   `yaml:"UseSSL" json:"use_ssl"`               // 是否使用HTTPS
-		Bucket         string `yaml:"Bucket" json:"bucket"`                 // 默认存储桶
-		BasePath       string `yaml:"BasePath" json:"base_path"`           // URL基础路径
+		Endpoint string `yaml:"Endpoint" json:"endpoint"`             // localhost:9000
+		AccessKey string `yaml:"AccessKey" json:"access_key"`         // minioadmin
+		SecretKey string `yaml:"SecretKey" json:"secret_key"`         // minioadmin
+		UseSSL    bool   `yaml:"UseSSL" json:"use_ssl"`               // 是否使用HTTPS
+		Bucket    string `yaml:"Bucket" json:"bucket"`                // 默认存储桶
+		BasePath  string `yaml:"BasePath" json:"base_path"`           // URL基础路径
 	} `yaml:"MinIO" json:"minio"`
 }
 

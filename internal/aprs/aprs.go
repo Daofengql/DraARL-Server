@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/config"
+	"nrllink/internal/gormdb"
 	"nrllink/internal/udphub"
 	"nrllink/pkg/tcp"
 )
@@ -20,7 +20,55 @@ import (
 var (
 	// APRSClient APRS 客户端
 	APRSClient *APRS
+
+	// APRSLogBuffer APRS 日志缓冲
+	APRSLogBuffer []APRSLogEntry
+	APRSLogMutex sync.RWMutex
+	APRSLogChan  chan string
 )
+
+// APRSLogEntry APRS 日志条目
+type APRSLogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Message   string `json:"message"`
+}
+
+// init 初始化日志通道
+func init() {
+	APRSLogChan = make(chan string, 100)
+	// 启动日志收集器
+	go collectLogs()
+}
+
+// collectLogs 收集日志到缓冲区
+func collectLogs() {
+	const maxLogs = 500 // 最多保留500条日志
+	for {
+		msg := <-APRSLogChan
+		if msg == "" {
+			continue
+		}
+
+		APRSLogMutex.Lock()
+		entry := APRSLogEntry{
+			Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+			Message:   msg,
+		}
+		APRSLogBuffer = append(APRSLogBuffer, entry)
+		// 限制日志数量
+		if len(APRSLogBuffer) > maxLogs {
+			APRSLogBuffer = APRSLogBuffer[len(APRSLogBuffer)-maxLogs:]
+		}
+		APRSLogMutex.Unlock()
+	}
+}
+
+// aprsLog APRS 专用日志函数
+func aprsLog(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
+	log.Println("[APRS]", msg)
+	APRSLogChan <- msg
+}
 
 // APRS APRS 客户端
 type APRS struct {
@@ -75,16 +123,55 @@ type ApiServer struct {
 	Ower string `json:"ower"`
 }
 
+// APRSConfig APRS 配置（从数据库加载）
+type APRSConfig struct {
+	APRSServerHost string
+	APRSServerPort string
+	SelfAddress    string
+	SelfPort       string
+	CallSign       string
+	SSID           string
+	Passcode       int
+	Latitude       float64
+	Longitude      float64
+	Altitude       string
+}
+
+var currentAPRSConfig APRSConfig
+
+// LoadAPRSConfig 从数据库加载 APRS 配置
+func LoadAPRSConfig() error {
+	repo := gormdb.GetSiteConfigRepo()
+	config, err := repo.GetAPRSConfig()
+	if err != nil {
+		return err
+	}
+
+	currentAPRSConfig = APRSConfig{
+		APRSServerHost: config.APRSServerHost,
+		APRSServerPort: config.APRSServerPort,
+		SelfAddress:    config.SelfAddress,
+		SelfPort:       config.SelfPort,
+		CallSign:       config.CallSign,
+		SSID:           config.SSID,
+		Passcode:       config.Passcode,
+		Latitude:       config.Latitude,
+		Longitude:      config.Longitude,
+		Altitude:       config.Altitude,
+	}
+	return nil
+}
+
 // NewAPRS 创建 APRS 客户端
 func NewAPRS() *APRS {
 	return &APRS{}
 }
 
 // Start 启动 APRS 服务
-func (a *APRS) Start(cfg *config.Configuration) {
-	if cfg.APRS.APRSServerHost == "" || cfg.APRS.APRSServerPort == "" ||
-		cfg.APRS.Longitude == 0 || cfg.APRS.CallSign == "" {
-		log.Println("APRS: 启动失败，请检查 APRS 配置")
+func (a *APRS) Start() {
+	if currentAPRSConfig.APRSServerHost == "" || currentAPRSConfig.APRSServerPort == "" ||
+		currentAPRSConfig.Longitude == 0 || currentAPRSConfig.CallSign == "" {
+		aprsLog("启动失败，请检查 APRS 配置")
 		return
 	}
 
@@ -92,21 +179,21 @@ func (a *APRS) Start(cfg *config.Configuration) {
 
 	for {
 		a.mu.Lock()
-		a.tcpClient = tcp.NewClient(cfg.APRS.APRSServerHost, cfg.APRS.APRSServerPort, a.handleTCPMessage)
+		a.tcpClient = tcp.NewClient(currentAPRSConfig.APRSServerHost, currentAPRSConfig.APRSServerPort, a.handleTCPMessage)
 		a.mu.Unlock()
 
 		if err := a.tcpClient.Connect(); err != nil {
-			log.Printf("APRS TCP 连接失败: %v", err)
+			aprsLog("TCP 连接失败: %v", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		a.Login(cfg)
+		a.Login()
 
 		time.Sleep(5 * time.Second)
 
 		// 启动定时发送
-		a.startLocationWatch(cfg)
+		a.startLocationWatch()
 
 		err := <-a.errorChan
 
@@ -117,7 +204,7 @@ func (a *APRS) Start(cfg *config.Configuration) {
 		a.mu.Unlock()
 
 		time.Sleep(5 * time.Second)
-		log.Printf("APRS 发送错误，重新初始化 TCP 连接: %v", err)
+		aprsLog("发送错误，重新初始化 TCP 连接: %v", err)
 	}
 }
 
@@ -130,25 +217,25 @@ func (a *APRS) Stop() {
 	}
 }
 
-// startLocationWatch 启动位置定时发送
-func (a *APRS) startLocationWatch(cfg *config.Configuration) {
-	a.sendAPRSPosition(cfg)
+// startLocationWatch 启动位置定时��送
+func (a *APRS) startLocationWatch() {
+	a.sendAPRSPosition()
 
 	time.Sleep(time.Minute)
 
-	a.sendAPRSPosition(cfg)
+	a.sendAPRSPosition()
 
 	time.Sleep(5 * time.Minute)
 
-	a.sendAPRSPosition(cfg)
+	a.sendAPRSPosition()
 
 	// 启动定时发送（每 10 分钟一次）
 	ticker := time.NewTicker(10 * time.Minute)
 	go func() {
 		for range ticker.C {
-			if err := a.sendAPRSPosition(cfg); err != nil {
+			if err := a.sendAPRSPosition(); err != nil {
 				a.errorChan <- fmt.Errorf("发送 APRS 位置失败: %w", err)
-				log.Printf("发送 APRS 位置失败: %v", err)
+				aprsLog("定时发送 APRS 位置失败: %v", err)
 				return
 			}
 		}
@@ -156,29 +243,29 @@ func (a *APRS) startLocationWatch(cfg *config.Configuration) {
 }
 
 // Login 登录 APRS 服务器
-func (a *APRS) Login(cfg *config.Configuration) {
-	passcode := cfg.APRS.Passcode
+func (a *APRS) Login() {
+	passcode := currentAPRSConfig.Passcode
 
-	if cfg.APRS.Passcode == 0 {
-		passcode = GenerateAPRSPasscode(cfg.APRS.CallSign)
+	if currentAPRSConfig.Passcode == 0 {
+		passcode = GenerateAPRSPasscode(currentAPRSConfig.CallSign)
 	}
 
 	for {
-		err := a.tcpClient.Send(fmt.Sprintf("user %s pass %d vers NRL 1.0\n", cfg.APRS.CallSign, passcode))
+		err := a.tcpClient.Send(fmt.Sprintf("user %s pass %d vers NRL 1.0\n", currentAPRSConfig.CallSign, passcode))
 
 		if err != nil {
-			log.Printf("APRS: 认证失败: %v", err)
+			aprsLog("认证失败: %v", err)
 			time.Sleep(10 * time.Second)
 			continue
 		} else {
-			log.Println("APRS: 认证成功")
+			aprsLog("认证成功")
 			return
 		}
 	}
 }
 
 // sendAPRSPosition 发送 APRS 位置信息
-func (a *APRS) sendAPRSPosition(cfg *config.Configuration) error {
+func (a *APRS) sendAPRSPosition() error {
 	a.mu.RLock()
 	client := a.tcpClient
 	a.mu.RUnlock()
@@ -188,13 +275,13 @@ func (a *APRS) sendAPRSPosition(cfg *config.Configuration) error {
 	}
 
 	// 构造 APRS 数据包
-	aprsPacket := a.formatAPRSPacket(cfg.APRS.CallSign, cfg.APRS.SSID, cfg.APRS.SelfAddress, cfg.APRS.SelfPort,
-		cfg.APRS.Longitude, cfg.APRS.Latitude, cfg.APRS.Altitude)
+	aprsPacket := a.formatAPRSPacket(currentAPRSConfig.CallSign, currentAPRSConfig.SSID, currentAPRSConfig.SelfAddress, currentAPRSConfig.SelfPort,
+		currentAPRSConfig.Longitude, currentAPRSConfig.Latitude, currentAPRSConfig.Altitude)
 
 	// 发送数据
 	err := client.Send(aprsPacket)
 	if err != nil {
-		log.Printf("APRS: 发送 APRS 位置失败: %v", err)
+		aprsLog("发送 APRS 位置失败: %v", err)
 		a.Status = "发送失败"
 		return err
 	} else {
@@ -203,12 +290,12 @@ func (a *APRS) sendAPRSPosition(cfg *config.Configuration) error {
 
 	// 发送附加信息
 	stats := udphub.GetTotalStats()
-	aprsPacket2 := a.formatAPRSPacketTwo("NRLLink", cfg.APRS.CallSign, cfg.APRS.SSID,
+	aprsPacket2 := a.formatAPRSPacketTwo("NRLLink", currentAPRSConfig.CallSign, currentAPRSConfig.SSID,
 		stats.OnlineDevNumber, udphub.GetDeviceCount())
 
 	err = client.Send(aprsPacket2)
 	if err != nil {
-		log.Printf("APRS: 发送附加信息失败: %v", err)
+		aprsLog("发送附加信息失败: %v", err)
 		a.Status = "发送失败"
 		return err
 	} else {
@@ -294,17 +381,23 @@ func GenerateAPRSPasscode(callsign string) int {
 }
 
 // StartAPRSService 启动 APRS 服务
-func StartAPRSService(cfg *config.Configuration) {
-	if cfg.APRS.CallSign == "" {
-		log.Println("APRS not configured, skipping")
+func StartAPRSService() {
+	// 从数据库加载 APRS 配置
+	if err := LoadAPRSConfig(); err != nil {
+		aprsLog("加载配置失败: %v", err)
+		return
+	}
+
+	if currentAPRSConfig.CallSign == "" {
+		aprsLog("未配置呼号，跳过启动")
 		return
 	}
 
 	APRSClient = NewAPRS()
-	go APRSClient.Start(cfg)
+	go APRSClient.Start()
 
 	// 启动 APRS.TV 平台发现
-	go startAPRSTVService(cfg)
+	go startAPRSTVService()
 }
 
 // StopAPRSService 停止 APRS 服务
@@ -312,6 +405,28 @@ func StopAPRSService() {
 	if APRSClient != nil {
 		APRSClient.Stop()
 	}
+}
+
+// RestartAPRSService 重启 APRS 服务
+func RestartAPRSService() {
+	// 停���现有服务
+	StopAPRSService()
+
+	// 重新加载配置
+	if err := LoadAPRSConfig(); err != nil {
+		aprsLog("加载配置失败: %v", err)
+		return
+	}
+
+	if currentAPRSConfig.CallSign == "" {
+		aprsLog("未配置呼号，跳过启动")
+		return
+	}
+
+	// 启动新服务
+	APRSClient = NewAPRS()
+	go APRSClient.Start()
+	aprsLog("服务已重启")
 }
 
 // GetAPRSStatus 获取 APRS 状态
@@ -323,8 +438,8 @@ func GetAPRSStatus() string {
 }
 
 // startAPRSTVService 启动 APRS.TV 平台发现服务
-func startAPRSTVService(cfg *config.Configuration) {
-	if cfg.APRS.CallSign == "" {
+func startAPRSTVService() {
+	if currentAPRSConfig.CallSign == "" {
 		return
 	}
 
@@ -332,12 +447,12 @@ func startAPRSTVService(cfg *config.Configuration) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		getNRLFromAPRSTV(cfg)
+		getNRLFromAPRSTV()
 	}
 }
 
 // getNRLFromAPRSTV 从 APRS.TV 获取 NRL 服务器列表
-func getNRLFromAPRSTV(cfg *config.Configuration) {
+func getNRLFromAPRSTV() {
 	apiURL := "https://aprs.tv/api/findnrl"
 
 	// 构造查询参数
@@ -388,12 +503,12 @@ func getNRLFromAPRSTV(cfg *config.Configuration) {
 			continue
 		}
 
-		// 过滤自身
-		if host == cfg.APRS.SelfAddress {
+		// ���滤自身
+		if host == currentAPRSConfig.SelfAddress {
 			continue
 		}
 
-		log.Printf("APRS.TV: 发现服务器 %s at %s:%s (在线:%d, 总数:%d)",
+		aprsLog("APRS.TV: 发现服务器 %s at %s:%s (在线:%d, 总数:%d)",
 			name, host, port, online, total)
 	}
 }
@@ -484,4 +599,15 @@ func getNRLStatsFromAPRSTV() map[string]int {
 	}
 
 	return stats
+}
+
+// GetAPRSLogs 获取 APRS 日志
+func GetAPRSLogs() []APRSLogEntry {
+	APRSLogMutex.RLock()
+	defer APRSLogMutex.RUnlock()
+
+	// 返回副本避免并发问题
+	result := make([]APRSLogEntry, len(APRSLogBuffer))
+	copy(result, APRSLogBuffer)
+	return result
 }

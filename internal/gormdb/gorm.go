@@ -67,6 +67,8 @@ func Init(cfg *Config) error {
 		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
 		sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
+		// ��置连接最大空闲时间，MySQL wait_timeout 默认 8 小时，设置 10 分钟确保连接有效
+		sqlDB.SetConnMaxIdleTime(10 * time.Minute)
 
 		// 验证连接
 		if err = sqlDB.Ping(); err != nil {

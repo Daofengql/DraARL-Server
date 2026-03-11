@@ -259,6 +259,22 @@ func (OperatorCert) TableName() string {
 	return "operator_certs"
 }
 
+// SiteConfig 站点配置模型
+type SiteConfig struct {
+	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Key         string    `gorm:"type:varchar(100);uniqueIndex;not null;column:config_key" json:"key"`
+	Value       string    `gorm:"type:text;column:config_value" json:"value"`
+	Category    string    `gorm:"type:varchar(50);index;column:category" json:"category"` // icp, system, aprs
+	Description string    `gorm:"type:varchar(255);column:description" json:"description"`
+	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+}
+
+// TableName 指定表名
+func (SiteConfig) TableName() string {
+	return "site_configs"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -270,5 +286,6 @@ func AutoMigrate() error {
 		&OperatorLog{},
 		&Role{},
 		&OperatorCert{},
+		&SiteConfig{},
 	)
 }

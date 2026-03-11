@@ -10,6 +10,7 @@ nrllink
 nrllink_test
 nrllink_*
 old/
+.claude/
 
 # Test binary, built with `go test -c`
 *.test

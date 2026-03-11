@@ -11,6 +11,7 @@ import { RelaysPage } from './pages/relays'
 import { ServersPage } from './pages/servers'
 import { LogsPage } from './pages/logs'
 import { ProfilePage } from './pages/profile'
+import { SiteConfigPage } from './pages/settings'
 import { authService } from './services'
 
 function App() {
@@ -91,6 +92,14 @@ function App() {
             element={
               <AdminRoute>
                 <LogsPage />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <AdminRoute>
+                <SiteConfigPage />
               </AdminRoute>
             }
           />

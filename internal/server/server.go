@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"nrllink/internal/config"
+	"nrllink/internal/gormdb"
 	"nrllink/internal/handler"
 	"nrllink/internal/middleware"
 	ws "nrllink/pkg/websocket"
@@ -31,6 +32,9 @@ func New(cfg *config.Configuration) *Server {
 	if err := minio.InitMinIO(); err != nil {
 		log.Printf("MinIO 初始化失败: %v", err)
 	}
+
+	// 初始化站点配置（如果数据库为空则从YAML迁移）
+	initSiteConfigs(cfg)
 
 	// CORS 中间件
 	engine.Use(func(c *gin.Context) {
@@ -79,6 +83,9 @@ func (s *Server) setupRoutes() {
 		// 平台信息（无需认证）
 		api.GET("/platform/info", handler.GetPlatformInfo)
 		api.GET("/platform/totalstats", handler.GetTotalStats)
+
+		// 站点配置（公开配置，无需认证）
+		api.GET("/config/public", handler.NewSiteConfigHandler().GetPublicConfigs)
 
 		// 需要认证的路由
 		protected := api.Group("")
@@ -169,6 +176,22 @@ func (s *Server) setupRoutes() {
 			// 操作日志（需要管理员权限）
 			admin.GET("/operatorlog/list", handler.GetOperatorLogs)
 			admin.GET("/operatorlog/stats", handler.GetOperatorLogStats)
+
+			// 站点配置管理（读取需要登录，修改需要管理员权限）
+			configHandler := handler.NewSiteConfigHandler()
+			// 读取路由（已登录用户可访问）
+			protected.GET("/config/category/:category", configHandler.GetConfigsByCategory)
+			// 修改路由（需要管理员权限）
+			admin.PUT("/config", configHandler.UpdateConfig)
+			admin.PUT("/config/icp", configHandler.UpdateICPConfig)
+			admin.PUT("/config/system", configHandler.UpdateSystemInfoConfig)
+			admin.PUT("/config/aprs", configHandler.UpdateAPRSConfig)
+			admin.PUT("/config/openai", configHandler.UpdateOpenAIConfig)
+			admin.GET("/config/all", configHandler.GetAllConfigs)
+			admin.GET("/config/system", configHandler.GetSystemInfoConfig)
+			admin.GET("/config/aprs", configHandler.GetAPRSConfig)
+			admin.GET("/config/openai", configHandler.GetOpenAIConfig)
+			admin.GET("/config/aprs/logs", configHandler.GetAPRSLogs)
 		}
 	}
 
@@ -176,6 +199,53 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/ws", func(c *gin.Context) {
 		ws.HandleWebSocket(c.Writer, c.Request)
 	})
+}
+
+// initSiteConfigs 初始化站点配置（如果数据库为空则创建默认值）
+func initSiteConfigs(cfg *config.Configuration) {
+	repo := gormdb.GetSiteConfigRepo()
+
+	// 检查是否已有配置
+	configs, err := repo.GetAll()
+	if err != nil {
+		log.Printf("检查站点配置失败: %v", err)
+		return
+	}
+
+	// 如果已有配置，跳过初始化
+	if len(configs) > 0 {
+		log.Println("站点配置已存在，跳过初始化")
+		return
+	}
+
+	log.Println("站点配置为空���初始化默认值")
+
+	// 初始化默认配置（空值或最小默认值）
+	if err := repo.InitDefaultConfigs(
+		"",                      // ICP - 空
+		"NRL Link",              // 系统名称
+		"NRL",                   // 系统简称
+		"",                      // Logo URL
+		"zh",                    // 语言
+		"china.aprs2.net",       // APRS 服务器
+		"14580",                 // APRS 端口
+		"",                      // 本机地址
+		"60050",                 // 本机端口
+		"",                      // 呼号
+		"10",                    // SSID
+		"000000",                // 海拔
+		0,                       // Passcode
+		0,                       // 纬度
+		0,                       // 经度
+		"",                      // OpenAI BaseURL
+		"",                      // OpenAI APIKey
+		"",                      // OpenAI Engine
+	); err != nil {
+		log.Printf("初始化站点配置失败: %v", err)
+		return
+	}
+
+	log.Println("站点配置初始化完成")
 }
 
 func (s *Server) Start() error {

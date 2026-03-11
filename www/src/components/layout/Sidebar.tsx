@@ -23,6 +23,7 @@ import {
   ExpandLess,
   ExpandMore,
   Verified,
+  Settings,
 } from '@mui/icons-material'
 import { useState } from 'react'
 import { authService } from '../../services'
@@ -60,6 +61,7 @@ const menuItems: MenuItem[] = [
   { path: '/relays', label: '中继台', icon: <Radio />, adminOnly: true },
   { path: '/servers', label: '服务器', icon: <Dns />, adminOnly: true },
   { path: '/logs', label: '操作日志', icon: <Description />, adminOnly: true },
+  { path: '/settings', label: '站点配置', icon: <Settings />, adminOnly: true },
 ]
 
 export function Sidebar({ onClose, open, variant = 'permanent', ...props }: SidebarProps) {

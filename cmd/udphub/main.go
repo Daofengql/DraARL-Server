@@ -134,13 +134,9 @@ func main() {
 		}
 	}()
 
-	// 启动 APRS 服务
-	if cfg.APRS.CallSign != "" {
-		stdlog.Println("正在启动 APRS 服务...")
-		aprs.StartAPRSService(cfg)
-	} else {
-		stdlog.Println("APRS 未配置，跳过启动")
-	}
+	// 启动 APRS 服务（配置从数据库加载）
+	stdlog.Println("正在启动 APRS 服务...")
+	aprs.StartAPRSService()
 
 	// 启动 HTTP 服务器（Web API 和前端服务）
 	go func() {
@@ -152,8 +148,8 @@ func main() {
 	}()
 
 	stdlog.Printf("nrllink v%s 启动成功", version)
-	stdlog.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s:%d/%s, APRS=%s",
-		cfg.System.Port, cfg.Web.Port, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName, cfg.APRS.CallSign)
+	stdlog.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s:%d/%s",
+		cfg.System.Port, cfg.Web.Port, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
 
 	// 等待信号
 	quit := make(chan os.Signal, 1)

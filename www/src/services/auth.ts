@@ -65,9 +65,12 @@ export const authService = {
   },
 
   // 上传操作证
-  async uploadOperatorCertificate(file: File): Promise<OperatorCertificateUpload> {
+  async uploadOperatorCertificate(file: File, callsign?: string): Promise<OperatorCertificateUpload> {
     const formData = new FormData()
     formData.append('file', file)
+    if (callsign) {
+      formData.append('callsign', callsign)
+    }
     const res = await apiClient.post<BackendResponse<OperatorCertificateUpload>>('/api/upload/operator-certificate', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })

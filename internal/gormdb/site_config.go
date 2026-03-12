@@ -44,10 +44,10 @@ type ICPConfig struct {
 
 // SystemInfoConfig 系统信息配置
 type SystemInfoConfig struct {
-	Name          string `json:"name"`
-	NameShorthand string `json:"nameshorthand"`
+	Name          string  `json:"name"`
+	NameShorthand string  `json:"nameshorthand"`
 	LogoURL       string `json:"logo_url"`
-	Language      string `json:"language"`
+	Language      string  `json:"language"`
 }
 
 // APRSConfig APRS配置
@@ -112,16 +112,33 @@ func (r *SiteConfigRepository) GetValue(key string) (string, error) {
 
 // Set 设置配置（如果不存在则创建，存在则更新）
 func (r *SiteConfigRepository) Set(key, value, category, description string) error {
-	config := SiteConfig{
-		Key:      key,
-		Value:    value,
-		Category: category,
-	}
-	if description != "" {
-		config.Description = description
+	// 使用 map 来确保零值（空字符串）也能被更新
+	// 注意：必须使用数据库列名，而不是结构体字段名
+	updateData := map[string]interface{}{
+		"config_key":  key,
+		"config_value": value,
+		"category":     category,
+		"description":  description,
 	}
 
-	return r.db.Where("config_key = ?", key).Assign(config).FirstOrCreate(&config).Error
+	// 先尝试更新
+	result := r.db.Model(&SiteConfig{}).Where("config_key = ?", key).Updates(updateData)
+	if result.Error != nil {
+		return result.Error
+	}
+
+	// 如果没有行被更新，说明记录不存在，创建新记录
+	if result.RowsAffected == 0 {
+		config := SiteConfig{
+			Key:         key,
+			Value:       value,
+			Category:    category,
+			Description: description,
+		}
+		return r.db.Create(&config).Error
+	}
+
+	return nil
 }
 
 // SetBatch 批量设置配置

@@ -30,6 +30,7 @@ var (
 	qthMapNew = make(map[string]models.QTH)           // callsign-ssid -> QTH
 
 	// User list (for private groups)
+	// TODO: 使用 username 作为 key 而不是 callsign，以支持多设备共享同一用户账户
 	userList sync.Map // callsign -> *UserInfo
 
 	// Statistics
@@ -43,6 +44,7 @@ var (
 )
 
 // UserInfo 用户信息（用于私有群组）
+// TODO: 将 CallSign 字段改为 Username，以支持多设备共享同一用户账户
 type UserInfo struct {
 	ID      int
 	CallSign string
@@ -492,11 +494,13 @@ func GetDeviceByCallsignSSID(callsignSSID string) (*models.Device, bool) {
 }
 
 // AddUser 添加用户到用户列表
+// TODO: 将 callsign 认证改为 username，以支持多设备共享同一用户账户
 func AddUser(userInfo *UserInfo) {
 	userList.Store(userInfo.CallSign, userInfo)
 }
 
 // GetUser 获取用户信息
+// TODO: 将 callsign 认证改为 username，以支持多设备共享同一用户账户
 func GetUser(callsign string) (*UserInfo, bool) {
 	if u, ok := userList.Load(callsign); ok {
 		return u.(*UserInfo), true

@@ -91,6 +91,7 @@ func UpdateDatabase() error {
 		dataType string
 		defaultVal string
 	}{
+		{"devices", "username", "VARCHAR(255)", "''"},
 		{"devices", "priority", "INT", "100"},
 		{"users", "mdcid", "VARCHAR(255)", "''"},
 		{"devices", "dmrid", "INT", "0"},
@@ -271,14 +272,6 @@ func getMySQLSchemas() []string {
 			UNIQUE KEY idx_callsign (callsign),
 			INDEX idx_phone (phone),
 			INDEX idx_openid (openid)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-		`CREATE TABLE IF NOT EXISTS roles (
-			id INT AUTO_INCREMENT UNIQUE,
-			name_key VARCHAR(255),
-			name VARCHAR(255),
-			description TEXT,
-			routess TEXT,
-			PRIMARY KEY (id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 		`CREATE TABLE IF NOT EXISTS operator_log (
 			id INT AUTO_INCREMENT UNIQUE,

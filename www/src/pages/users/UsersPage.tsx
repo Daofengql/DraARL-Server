@@ -62,6 +62,11 @@ const getCurrentUserId = (): number => {
   return user?.id || 0
 }
 
+// 检查是否是主管理员（ID=1）
+const isSuperAdmin = (): boolean => {
+  return getCurrentUserId() === 1
+}
+
 export function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [page, setPage] = useState(0)
@@ -126,10 +131,13 @@ export function UsersPage() {
   const handleSave = async () => {
     try {
       if (editingUser) {
-        const updateData = {
+        const updateData: any = {
           username: formData.username,
           callsign: formData.callsign,
-          role: formData.role,
+        }
+        // 只有主管理员可以修改角色
+        if (isSuperAdmin()) {
+          updateData.role = formData.role
         }
         if (formData.password) {
           await userService.changePassword(editingUser.id, {
@@ -139,7 +147,14 @@ export function UsersPage() {
         }
         await userService.update(editingUser.id, updateData)
       } else {
-        await userService.create(formData)
+        // 创建新用户时，默认角色为 user
+        const createData = {
+          username: formData.username,
+          callsign: formData.callsign,
+          password: formData.password,
+          role: 'user', // 默认创建普通用户
+        }
+        await userService.create(createData)
       }
       handleCloseDialog()
       loadUsers()
@@ -393,20 +408,23 @@ export function UsersPage() {
               value={formData.callsign}
               onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
             />
-            <FormControl fullWidth>
-              <InputLabel>角色</InputLabel>
-              <Select
-                value={formData.role}
-                label="角色"
-                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-              >
-                {USER_ROLES.map((role) => (
-                  <MenuItem key={role.value} value={role.value}>
-                    {role.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            {/* 只有主管理员可以设置用户角色 */}
+            {isSuperAdmin() && (
+              <FormControl fullWidth>
+                <InputLabel>角色</InputLabel>
+                <Select
+                  value={formData.role}
+                  label="角色"
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                >
+                  {USER_ROLES.map((role) => (
+                    <MenuItem key={role.value} value={role.value}>
+                      {role.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
             <TextField
               label={editingUser ? '新密码（留空则不修改）' : '密码'}
               type="password"

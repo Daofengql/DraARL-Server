@@ -12,6 +12,7 @@ type Device struct {
 	DMRID          uint32    `json:"dmrid"`
 	CallSign       string    `json:"callsign"`
 	SSID           byte      `json:"ssid"`
+	Username       string    `json:"username"`      // 所属用户名
 	Password       string    `json:"password"`
 	Gird           string    `json:"gird"`           // 数据库字段
 	DevType        int       `json:"dev_type"`        // 数据库字段

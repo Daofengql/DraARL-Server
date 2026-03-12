@@ -218,6 +218,8 @@ export function SiteConfigPage() {
       // 保存ICP备案号
       await apiClient.put('/api/config/icp', { icp: systemInfo.icp })
       showMessage('success', '系统信息保存成功')
+      // 通知Header刷新
+      window.dispatchEvent(new CustomEvent('config-updated'))
     } catch (err) {
       showMessage('error', '保存系统信息失败')
     } finally {
@@ -300,6 +302,8 @@ export function SiteConfigPage() {
         // 重新加载配置以获取最新的 logo URL
         await loadConfigs()
         showMessage('success', 'Logo上传成功')
+        // 通知Header刷新
+        window.dispatchEvent(new CustomEvent('config-updated'))
       }
     } catch (err) {
       console.error('Failed to upload logo:', err)
@@ -313,8 +317,17 @@ export function SiteConfigPage() {
     }
   }
 
-  const handleLogoDelete = () => {
-    setSystemInfo({ ...systemInfo, logo_url: '' })
+  const handleLogoDelete = async () => {
+    try {
+      await apiClient.delete('/api/config/logo')
+      await loadConfigs()
+      showMessage('success', 'Logo删除成功')
+      // 通知Header刷新
+      window.dispatchEvent(new CustomEvent('config-updated'))
+    } catch (err) {
+      console.error('Failed to delete logo:', err)
+      showMessage('error', 'Logo删除失败')
+    }
   }
 
   // 加载APRS日志当切换到APRS标签页时

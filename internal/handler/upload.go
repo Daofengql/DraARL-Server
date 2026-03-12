@@ -170,6 +170,9 @@ func UploadOperatorCertificate(c *gin.Context) {
 		return
 	}
 
+	// 获取呼号参数
+	callsign := c.PostForm("callsign")
+
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -178,6 +181,17 @@ func UploadOperatorCertificate(c *gin.Context) {
 			"message": "获取文件失败",
 		})
 		return
+	}
+
+	// 如果提供了 callsign，更新用户的呼号并重置审核状态为待审核
+	if callsign != "" {
+		if err := userRepo.UpdateUserCallSign(user.ID, callsign); err != nil {
+			log.Printf("更新用户呼号失败: %v", err)
+		}
+		// 重置审核状态为待审核（0）
+		if err := userRepo.UpdateUserApproval(user.ID, 0, 0, "上传操作证，重新审核"); err != nil {
+			log.Printf("重置审核状态失败: %v", err)
+		}
 	}
 
 	// 检查文件大小（10MB）
@@ -362,38 +376,8 @@ func GetOperatorCertificate(c *gin.Context) {
 	})
 }
 
-// UploadLogo 上传站点配置 logo
+// UploadLogo 上传站点配置 logo（权限由 RequireAdmin 中间件检查）
 func UploadLogo(c *gin.Context) {
-	// 获取当前用户（必须是超级管理员）
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
-		return
-	}
-
-	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
-	user, err := userRepo.GetUserByName(username.(string))
-	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
-			"message": "用户不存在",
-		})
-		return
-	}
-
-	// 检查是否是超级管理员
-	if !isSuperAdmin(user) {
-		c.JSON(http.StatusForbidden, gin.H{
-			"code":    403,
-			"message": "仅超级管理员可访问",
-		})
-		return
-	}
-
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {

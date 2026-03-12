@@ -456,11 +456,14 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 
 // InitAdminUser 初始化管理员用户（如果不存在）
 func InitAdminUser() (string, string, error) {
-	// 检查是否已有管理员
+	// 检查名为 "admin" 的用户是否已存在
 	var count int
-	err := Get().QueryRow("SELECT COUNT(*) FROM users WHERE JSON_SEARCH(roles, 'one', 'admin') IS NOT NULL OR roles LIKE '%admin%'").Scan(&count)
-	if err == nil && count > 0 {
-		return "", "", nil // 已有管理员，无需创建
+	err := Get().QueryRow("SELECT COUNT(*) FROM users WHERE name = 'admin'").Scan(&count)
+	if err != nil {
+		return "", "", fmt.Errorf("检查管理员用户失败: %w", err)
+	}
+	if count > 0 {
+		return "", "", nil // 已存在 admin 用户，无需创建
 	}
 
 	// 生成随机密码

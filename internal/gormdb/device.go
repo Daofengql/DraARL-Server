@@ -49,6 +49,13 @@ func (r *DeviceRepository) ListDevicesByCallSign(callsign string) ([]*Device, er
 	return devices, err
 }
 
+// ListDevicesByUsername 按用户名搜索设备
+func (r *DeviceRepository) ListDevicesByUsername(username string) ([]*Device, error) {
+	var devices []*Device
+	err := r.db.Where("username = ?", username).Find(&devices).Error
+	return devices, err
+}
+
 // GetDeviceByID 通过ID获取设备
 func (r *DeviceRepository) GetDeviceByID(id int) (*Device, error) {
 	var device Device

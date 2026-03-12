@@ -24,13 +24,9 @@ func NewSiteConfigHandler() *SiteConfigHandler {
 	}
 }
 
-// isSuperAdmin 检查是否是超级管理员 (ID=1)
-func isSuperAdmin(user *gormdb.User) bool {
-	return user.ID == 1
-}
-
-// GetAllConfigs 获取所有配置（仅超级管理员）
+// GetAllConfigs 获取所有配置（管理员）
 func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
+	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, Response{
@@ -40,14 +36,7 @@ func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 		return
 	}
 
-	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
+	_ = user
 
 	configs, err := h.repo.GetAll()
 	if err != nil {
@@ -127,6 +116,7 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 
 // UpdateConfig 更新单个配置（管理员）
 func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
+	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, Response{
@@ -137,13 +127,6 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
 
 	var req struct {
 		Key      string `json:"key" binding:"required"`
@@ -185,6 +168,7 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 
 // UpdateICPConfig 更新ICP配置（管理员）
 func (h *SiteConfigHandler) UpdateICPConfig(c *gin.Context) {
+	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, Response{
@@ -195,13 +179,6 @@ func (h *SiteConfigHandler) UpdateICPConfig(c *gin.Context) {
 	}
 
 	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
 
 	var req struct {
 		ICP string `json:"icp"`
@@ -251,13 +228,6 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 	}
 
 	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
 
 	var req gormdb.SystemInfoConfig
 
@@ -304,14 +274,7 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 		return
 	}
 
-	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
+ userModel := user.(*gormdb.User)
 
 	var req gormdb.APRSConfig
 
@@ -369,13 +332,6 @@ func (h *SiteConfigHandler) UpdateOpenAIConfig(c *gin.Context) {
 	}
 
 	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
 
 	var req gormdb.OpenAIConfig
 
@@ -422,14 +378,7 @@ func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 		return
 	}
 
-	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
+	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
 	config, err := h.repo.GetAPRSConfig()
 	if err != nil {
@@ -458,14 +407,7 @@ func (h *SiteConfigHandler) GetOpenAIConfig(c *gin.Context) {
 		return
 	}
 
-	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
+	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
 	config, err := h.repo.GetOpenAIConfig()
 	if err != nil {
@@ -494,14 +436,7 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 		return
 	}
 
-	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
+	_ = user // 路由已通过 RequireAdmin 中���件验证权限
 
 	config, err := h.repo.GetSystemInfoConfig()
 	if err != nil {
@@ -530,14 +465,7 @@ func (h *SiteConfigHandler) GetAPRSLogs(c *gin.Context) {
 		return
 	}
 
-	userModel := user.(*gormdb.User)
-	if !isSuperAdmin(userModel) {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "仅超级管理员可访问",
-		})
-		return
-	}
+	_ = user // ���由已通过 RequireAdmin 中间件验证权限
 
 	logs := aprs.GetAPRSLogs()
 
@@ -562,5 +490,44 @@ func (h *SiteConfigHandler) GetAPRSLogs(c *gin.Context) {
 		Code:    200,
 		Message: "获取成功",
 		Data:    filteredLogs,
+	})
+}
+
+// DeleteLogo 删除站点Logo（管理员）
+func (h *SiteConfigHandler) DeleteLogo(c *gin.Context) {
+	// 路由已通过 RequireAdmin 中间件验证权限
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "未授权",
+		})
+		return
+	}
+
+	userModel := user.(*gormdb.User)
+
+	// 清空 Logo URL 配置（将值设置为空字符串）
+	if err := h.repo.Set("system.logo_url", "", "system", "站点Logo URL"); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "删除Logo配置失败",
+		})
+		return
+	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		"删除站点Logo",
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "删除成功",
 	})
 }

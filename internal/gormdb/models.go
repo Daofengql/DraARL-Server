@@ -1,7 +1,6 @@
 package gormdb
 
 import (
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -20,7 +19,7 @@ type User struct {
 	Avatar          string     `gorm:"type:varchar(512);column:avatar" json:"avatar"`
 	AvatarThumb     string     `gorm:"type:varchar(512);column:avatar_thumb" json:"avatar_thumb"` // 头像缩略图
 	Address         string     `gorm:"type:varchar(512);column:address" json:"address"`
-	Roles           string     `gorm:"type:text;column:roles" json:"roles"` // JSON array string
+	Roles           string     `gorm:"type:varchar(32);column:roles;default:user" json:"roles"` // 单角色：user 或 admin
 	Introduction    string     `gorm:"type:text;column:introduction" json:"introduction"`
 	AlarmMsg        bool       `gorm:"type:tinyint(1);default:0;column:alarm_msg" json:"alarm_msg"`
 	Status          int        `gorm:"type:tinyint;default:1;column:status" json:"status"`
@@ -55,41 +54,20 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// HasRole 检查用户是否有指定角色
+// HasRole 检查用户是否有指定角色（单角色系统）
 func (u *User) HasRole(role string) bool {
-	// TODO: 解析 roles JSON 字符串并检查
 	if u.Roles == "" {
 		return role == "user"
 	}
-	// 简单检查：如果 roles 包含 admin 字符串
-	return u.Roles == "[\""+role+"\"]" || u.Roles == "["+role+"]"
+	return u.Roles == role
 }
 
-// GetRoles 实现 UserWithRoles 接口
+// GetRoles 返回用户的角色列表（单角色系统，返回单元素数组）
 func (u *User) GetRoles() []string {
 	if u.Roles == "" {
 		return []string{"user"}
 	}
-	// 尝试解析 JSON 数组格式
-	rolesStr := u.Roles
-	// 移除最外层的方括号和引号
-	rolesStr = strings.Trim(rolesStr, "[]\"'")
-	// 按逗号或空格分割
-	parts := strings.FieldsFunc(rolesStr, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '"'
-	})
-	// 清理空字符串
-	result := []string{}
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
-		}
-	}
-	if len(result) == 0 {
-		return []string{"user"}
-	}
-	return result
+	return []string{u.Roles}
 }
 
 // Device 设备模型
@@ -99,6 +77,7 @@ type Device struct {
 	DMRID      int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
 	CallSign   string    `gorm:"type:varchar(32);index:idx_callsign_ssid,priority:1;column:callsign" json:"callsign"`
 	SSID       uint8     `gorm:"type:tinyint unsigned;index:idx_callsign_ssid,priority:2;column:ssid" json:"ssid"`
+	Username   string    `gorm:"type:varchar(255);index;column:username" json:"username"` // 所属用户名
 	Password   string    `gorm:"type:varchar(255);column:password" json:"password"`
 	Gird       string    `gorm:"type:varchar(255);column:gird" json:"gird"`
 	DevType    int       `gorm:"type:int;column:dev_type" json:"dev_type"`
@@ -223,24 +202,11 @@ func (OperatorLog) TableName() string {
 	return "operator_log"
 }
 
-// Role 角色模型
-type Role struct {
-	ID          int    `gorm:"primaryKey;autoIncrement" json:"id"`
-	NameKey     string `gorm:"type:varchar(255)" json:"name_key"`
-	Name        string `gorm:"type:varchar(255)" json:"name"`
-	Description string `gorm:"type:text" json:"description"`
-	Routes      string `gorm:"type:text" json:"routes"`
-}
-
-// TableName 指定表名
-func (Role) TableName() string {
-	return "roles"
-}
-
 // OperatorCert 操作证模型
 type OperatorCert struct {
 	ID          int        `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserID      int        `gorm:"type:int;index;column:user_id" json:"user_id"`
+	CallSign    string     `gorm:"type:varchar(32);column:callsign" json:"callsign"` // 操作证上的呼号
 	FileName    string     `gorm:"type:varchar(255);column:file_name" json:"file_name"`
 	MinioBucket string     `gorm:"type:varchar(255);column:minio_bucket" json:"minio_bucket"`
 	MinioPath   string     `gorm:"type:varchar(512);column:minio_path" json:"minio_path"`
@@ -284,7 +250,6 @@ func AutoMigrate() error {
 		&Server{},
 		&Relay{},
 		&OperatorLog{},
-		&Role{},
 		&OperatorCert{},
 		&SiteConfig{},
 	)

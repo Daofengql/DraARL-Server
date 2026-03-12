@@ -55,6 +55,11 @@ func GetDevices(c *gin.Context) {
 
 	repo := gormdb.NewDeviceRepository()
 
+	// 获取当前用户信息
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+
 	var devices []*gormdb.Device
 	var total int64
 	var err error
@@ -63,6 +68,16 @@ func GetDevices(c *gin.Context) {
 	if callsign != "" {
 		// 按呼号搜索
 		devicesRaw, _ := repo.ListDevicesByCallSign(callsign)
+		// 非管理员只能看到自己的设备
+		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
+			filtered := make([]*gormdb.Device, 0)
+			for _, d := range devicesRaw {
+				if d.Username == currentUser.Name {
+					filtered = append(filtered, d)
+				}
+			}
+			devicesRaw = filtered
+		}
 		total = int64(len(devicesRaw))
 		// 手动分页
 		start := (page - 1) * limit
@@ -78,6 +93,16 @@ func GetDevices(c *gin.Context) {
 		// 按群组过滤
 		gid, _ := strconv.Atoi(groupID)
 		devicesRaw, _ := repo.ListDevicesByGroupID(gid)
+		// 非管理员只能看到自己的设备
+		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
+			filtered := make([]*gormdb.Device, 0)
+			for _, d := range devicesRaw {
+				if d.Username == currentUser.Name {
+					filtered = append(filtered, d)
+				}
+			}
+			devicesRaw = filtered
+		}
 		total = int64(len(devicesRaw))
 		// 手动分页
 		start := (page - 1) * limit
@@ -90,9 +115,24 @@ func GetDevices(c *gin.Context) {
 			devices = devicesRaw[start:end]
 		}
 	} else {
-		// 获取所有设备
-		devices, total, err = repo.ListDevices(limit, page)
-		if err != nil {
+		// 普通用户只获取自己的设备，管理员获取所有设备
+		if currentUser != nil && hasRoleGORM(currentUser, "admin") {
+			devices, total, err = repo.ListDevices(limit, page)
+		} else {
+			userDevices, _ := repo.ListDevicesByUsername(currentUser.Name)
+			total = int64(len(userDevices))
+			// 手动分页
+			start := (page - 1) * limit
+			end := start + limit
+			if start >= len(userDevices) {
+				devices = []*gormdb.Device{}
+			} else if end > len(userDevices) {
+				devices = userDevices[start:]
+			} else {
+				devices = userDevices[start:end]
+			}
+		}
+		if err != nil && (currentUser == nil || hasRoleGORM(currentUser, "admin")) {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "查询设备列表失败",
@@ -216,6 +256,18 @@ func CreateDevice(c *gin.Context) {
 		return
 	}
 
+	// 获取当前用户
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, err := userRepo.GetUserByName(username.(string))
+	if err != nil || currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
 	repo := gormdb.NewDeviceRepository()
 
 	// 检查设备是否已存在
@@ -232,6 +284,7 @@ func CreateDevice(c *gin.Context) {
 		Name:       req.Name,
 		CallSign:   req.CallSign,
 		SSID:       req.SSID,
+		Username:   currentUser.Name, // 绑定当前用户
 		DevModel:   req.DevModel,
 		GroupID:    req.GroupID,
 		Password:   req.Password,
@@ -307,6 +360,19 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 
+	// 检查权限：只有设备所有者或管理员可以修改
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+
+	if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.Username != currentUser.Name {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "无权修改此设备",
+		})
+		return
+	}
+
 	// 更新字段
 	updates := make(map[string]interface{})
 	if req.Name != "" {
@@ -362,6 +428,29 @@ func DeleteDevice(c *gin.Context) {
 	if err == nil {
 		// 通过ID删除
 		repo := gormdb.NewDeviceRepository()
+		// 检查设备是否存在
+		device, err := repo.GetDeviceByID(id)
+		if err != nil || device == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "设备不存在",
+			})
+			return
+		}
+
+		// 检查权限：只有设备所有者或管理员可以删除
+		username, _ := c.Get("username")
+		userRepo := gormdb.NewUserRepository()
+		currentUser, _ := userRepo.GetUserByName(username.(string))
+
+		if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.Username != currentUser.Name {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    403,
+				"message": "无权删除此设备",
+			})
+			return
+		}
+
 		if err := repo.DeleteDeviceByID(id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,

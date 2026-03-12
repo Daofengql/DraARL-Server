@@ -164,19 +164,15 @@ func RequireApproved() gin.HandlerFunc {
 	}
 }
 
-// hasRole 检查用户是否有指定角色
+// hasRole 检查用户是否有指定角色（使用 User.HasRole() 方法）
 func hasRole(user interface{}, role string) bool {
 	type UserWithRoles interface {
-		GetRoles() []string
+		HasRole(string) bool
 	}
 
-	// 检查是否有 GetRoles 方法
+	// 检查是否有 HasRole 方法
 	if u, ok := user.(UserWithRoles); ok {
-		for _, r := range u.GetRoles() {
-			if r == role {
-				return true
-			}
-		}
+		return u.HasRole(role)
 	}
 	return false
 }

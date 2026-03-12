@@ -95,6 +95,7 @@ export function ProfilePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [uploadingCert, setUploadingCert] = useState(false)
+  const [certCallsign, setCertCallsign] = useState('') // 操作证上传时的呼号输入
 
   // 编辑资料对话框
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -286,6 +287,8 @@ export function ProfilePage() {
     // 优先显示待审核/被拒绝的证书，否则显示已通过的证书
     const certToShow = certificate.pending_cert || (certificate.active_cert ? certificate.active_cert : null)
     setUploadPreview(certToShow?.file_url || null)
+    // 初始化呼号输入为当前用户的呼号
+    setCertCallsign(user?.callsign || '')
     setUploadDialogOpen(true)
   }
 
@@ -293,6 +296,7 @@ export function ProfilePage() {
     setUploadDialogOpen(false)
     setUploadPreview(null)
     setSelectedFile(null)
+    setCertCallsign('')
   }
 
   const handleFileSelect = (file: File | null) => {
@@ -353,12 +357,13 @@ export function ProfilePage() {
 
     setUploadingCert(true)
     try {
-      await authService.uploadOperatorCertificate(selectedFile)
-      // 上传成功后重新加载证书数据
-      await loadCertificate()
+      await authService.uploadOperatorCertificate(selectedFile, certCallsign)
+      // 上传成功后重新加载证书和用户���息
+      await Promise.all([loadCertificate(), loadUserInfo()])
       setUploadDialogOpen(false)
       setUploadPreview(null)
       setSelectedFile(null)
+      setCertCallsign('')
       showMessage('success', '操作证上传成功，请等待管理员审核')
     } catch (err: any) {
       showMessage('error', err.response?.data?.message || '上传失败')
@@ -686,9 +691,14 @@ export function ProfilePage() {
                       })()}
                     </Box>
                   </Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, mb: 2 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, mb: 1 }}>
                     请上传您的业余电台操作证，用于身份验证
                   </Typography>
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    <Typography variant="caption">
+                      上传操作证时可设置呼号，设置后会重置审核状态需要等待管理员重新审核
+                    </Typography>
+                  </Alert>
                   <Button
                     variant={(certificate.pending_cert || certificate.active_cert) ? 'outlined' : 'contained'}
                     fullWidth
@@ -812,12 +822,6 @@ export function ProfilePage() {
               fullWidth
               value={editForm.nickname}
               onChange={(e) => setEditForm({ ...editForm, nickname: e.target.value })}
-            />
-            <TextField
-              label="呼号"
-              fullWidth
-              value={editForm.callsign}
-              onChange={(e) => setEditForm({ ...editForm, callsign: e.target.value })}
             />
             <TextField
               label="手机号码"
@@ -945,6 +949,19 @@ export function ProfilePage() {
         <DialogTitle>上传操作证</DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              上传操作证时可以设置您的呼号。设置呼号后会重置审核状态，需要等待管理员重新审核。
+            </Typography>
+            {/* 呼号输入 */}
+            <TextField
+              label="呼号"
+              fullWidth
+              value={certCallsign}
+              onChange={(e) => setCertCallsign(e.target.value.toUpperCase())}
+              placeholder="例如: BG0ABC"
+              sx={{ mb: 2 }}
+              helperText="可选，留空则不修改呼号"
+            />
             <Box
               onDrop={handleDrop}
               onDragOver={handleDragOver}

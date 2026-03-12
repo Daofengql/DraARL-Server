@@ -11,6 +11,13 @@ import (
 	"nrllink/internal/models"
 )
 
+// 设备表列顺序（重要！修改表结构时需要同步更新）
+// 0: id, 1: name, 2: dmrid, 3: callsign, 4: ssid, 5: username, 6: password,
+// 7: gird, 8: dev_type, 9: dev_model, 10: group_id, 11: status, 12: is_certed,
+// 13: chan_name, 14: online_time, 15: create_time, 16: update_time, 17: note, 18: priority
+//
+// 注意：所有查询必须明确指定列名（不要用 SELECT *），确保列顺序与上述定义一致
+
 var (
 	deviceMap     = make(map[string]*models.Device)
 	deviceMapMutex sync.RWMutex
@@ -28,11 +35,11 @@ func NewDeviceRepository() *DeviceRepository {
 
 // AddDevice 添加设备
 func (r *DeviceRepository) AddDevice(device *models.Device) error {
-	query := `INSERT INTO devices (name, dmrid, callsign, ssid, password, dev_model, group_id, status, priority, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+	query := `INSERT INTO devices (name, dmrid, callsign, ssid, username, password, dev_model, group_id, status, priority, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, device.Name, device.DMRID, device.CallSign, device.SSID,
-		device.Password, device.DevModel, device.GroupID, device.Status, device.Priority)
+		device.Username, device.Password, device.DevModel, device.GroupID, device.Status, device.Priority)
 	if err != nil {
 		return err
 	}
@@ -49,14 +56,14 @@ func (r *DeviceRepository) AddDevice(device *models.Device) error {
 // scanDevice 扫描设备行数据的通用函数
 func scanDevice(row *sql.Row) (*models.Device, error) {
 	device := &models.Device{}
-	var gird, note, chanNameStr sql.NullString
+	var gird, note, chanNameStr, username, password sql.NullString
 	var devType sql.NullInt32
 	var isCerted sql.NullBool
 	var createTime, updateTime, onlineTime sql.NullTime
 
 	err := row.Scan(
 		&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-		&device.Password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
+		&username, &password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
 		&isCerted, &chanNameStr, &onlineTime, &createTime, &updateTime, &note, &device.Priority,
 	)
 	if err != nil {
@@ -66,6 +73,12 @@ func scanDevice(row *sql.Row) (*models.Device, error) {
 	// 处理可能为 NULL 的字段
 	if gird.Valid {
 		device.Gird = gird.String
+	}
+	if username.Valid {
+		device.Username = username.String
+	}
+	if password.Valid {
+		device.Password = password.String
 	}
 	if devType.Valid {
 		device.DevType = int(devType.Int32)
@@ -102,14 +115,14 @@ func scanDevice(row *sql.Row) (*models.Device, error) {
 // scanDeviceFromRows 从 Rows 扫描设备
 func scanDeviceFromRows(rows *sql.Rows) (*models.Device, error) {
 	device := &models.Device{}
-	var gird, note, chanNameStr sql.NullString
+	var gird, note, chanNameStr, username, password sql.NullString
 	var devType sql.NullInt32
 	var isCerted sql.NullBool
 	var createTime, updateTime, onlineTime sql.NullTime
 
 	err := rows.Scan(
 		&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-		&device.Password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
+		&username, &password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
 		&isCerted, &chanNameStr, &onlineTime, &createTime, &updateTime, &note, &device.Priority,
 	)
 	if err != nil {
@@ -119,6 +132,12 @@ func scanDeviceFromRows(rows *sql.Rows) (*models.Device, error) {
 	// 处理可能为 NULL 的字段
 	if gird.Valid {
 		device.Gird = gird.String
+	}
+	if username.Valid {
+		device.Username = username.String
+	}
+	if password.Valid {
+		device.Password = password.String
 	}
 	if devType.Valid {
 		device.DevType = int(devType.Int32)
@@ -154,7 +173,10 @@ func scanDeviceFromRows(rows *sql.Rows) (*models.Device, error) {
 
 // GetDevice 获取设备
 func (r *DeviceRepository) GetDevice(callsign string, ssid byte) (*models.Device, error) {
-	query := `SELECT * FROM devices WHERE callsign = ? AND ssid = ?`
+	// 明确指定列名，确保顺序与 scanDevice 函数一致
+	query := `SELECT id, name, dmrid, callsign, ssid, username, password, gird, dev_type, dev_model,
+	              group_id, status, is_certed, chan_name, online_time, create_time, update_time, note, priority
+	              FROM devices WHERE callsign = ? AND ssid = ?`
 	row := r.db.QueryRow(query, callsign, ssid)
 
 	device, err := scanDevice(row)
@@ -196,8 +218,10 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*models.Device, int, 
 		return nil, 0, err
 	}
 
-	// 获取分页数据
-	query := `SELECT * FROM devices ORDER BY id LIMIT ? OFFSET ?`
+	// 获取分页数据，明确指定列名
+	query := `SELECT id, name, dmrid, callsign, ssid, username, password, gird, dev_type, dev_model,
+	              group_id, status, is_certed, chan_name, online_time, create_time, update_time, note, priority
+	              FROM devices ORDER BY id LIMIT ? OFFSET ?`
 	rows, err := r.db.Query(query, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -226,7 +250,10 @@ func (r *DeviceRepository) ChangeDeviceGroup(callsign string, ssid byte, groupID
 
 // GetDeviceByDMRID 通过DMRID获取设备
 func (r *DeviceRepository) GetDeviceByDMRID(dmrid uint32) (*models.Device, error) {
-	query := `SELECT * FROM devices WHERE dmrid = ?`
+	// 明确指定列名，确保顺序与 scanDevice 函数一致
+	query := `SELECT id, name, dmrid, callsign, ssid, username, password, gird, dev_type, dev_model,
+	              group_id, status, is_certed, chan_name, online_time, create_time, update_time, note, priority
+	              FROM devices WHERE dmrid = ?`
 	row := r.db.QueryRow(query, dmrid)
 
 	device, err := scanDevice(row)

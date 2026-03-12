@@ -96,11 +96,8 @@ func (s *Server) setupRoutes() {
 			protected.PUT("/me", handler.UpdateProfile)
 			protected.PUT("/me/password", handler.ChangeOwnPassword)
 
-			// 文件上传（所有认证用户可访问，用于头像上传）
+			// 文件上传（所有认证用户可访问，用于头像���传）
 			protected.POST("/upload/file", handler.UploadFile)
-
-			// Logo上传（管理员专用）
-			protected.POST("/upload/logo", handler.UploadLogo)
 
 			// 操作证相关（所有认证用户可访问）
 			protected.POST("/upload/operator-certificate", handler.UploadOperatorCertificate)
@@ -124,6 +121,10 @@ func (s *Server) setupRoutes() {
 				// 操作证审批相关
 				admin.GET("/certificate-approvals", handler.GetCertificateApprovals)
 				admin.PUT("/operator-certificates/:id/approve", handler.ApproveOperatorCertificate)
+
+				// Logo管理（管理员专用）
+				admin.POST("/upload/logo", handler.UploadLogo)
+				admin.DELETE("/config/logo", handler.NewSiteConfigHandler().DeleteLogo)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）

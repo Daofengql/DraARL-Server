@@ -38,14 +38,12 @@ type UserResponse struct {
 	Roles    []string `json:"roles"`
 }
 
-// hasRole 检查用户是否有指定角色
+// hasRoleGORM 检查用户是否有指定角色（单角色系统）
 func hasRoleGORM(user *gormdb.User, role string) bool {
-	// 解析 roles 字符串来判断角色
 	if user.Roles == "" {
 		return role == "user"
 	}
-	// 简单检查：如果 roles 包含 admin 字符串
-	return user.Roles == "[\""+role+"\"]" || user.Roles == "["+role+"]" || user.Roles == "\""+role+"\""
+	return user.Roles == role
 }
 
 // Login 用户登录
@@ -281,7 +279,7 @@ func Register(c *gin.Context) {
 		Phone:          req.Phone,
 		Status:         1,
 		ApprovalStatus: 0, // 待审核状态
-		Roles:          "[\"user\"]",
+		Roles:          "user",
 	}
 
 	if err := repo.CreateUser(user); err != nil {
@@ -517,7 +515,7 @@ func CreateUser(c *gin.Context) {
 		Password: string(hashedPassword),
 		NickName: nickname,
 		Status:   1,
-		Roles:    "[\"user\"]",
+		Roles:    "user", // 默认创建普通用户
 	}
 
 	if err := repo.CreateUser(user); err != nil {
@@ -585,14 +583,56 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// 获取当前操作用户
+	currentUser, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+	currentUserModel := currentUser.(*gormdb.User)
+
 	repo := gormdb.NewUserRepository()
 
-	// 获取用户
+	// 获取目标用户
 	user, err := repo.GetUserByID(id)
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 只有主管理员（ID=1）可以修改 ID=1 的用户信息
+	if id == 1 && currentUserModel.ID != 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "只有主管理员可以修改主管理员信息",
+		})
+		return
+	}
+
+	// 检查是否在修改角色
+	newRole := ""
+	if req.Roles != "" {
+		newRole = req.Roles
+	}
+	if req.Role != "" {
+		if req.Role == "admin" {
+			newRole = "admin"
+		} else {
+			newRole = "user"
+		}
+	}
+
+	// 如果在修改角色，只有主管理员（ID=1）可以操作
+	if newRole != "" && currentUserModel.ID != 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "只有主管理员可以修改用户角色",
 		})
 		return
 	}
@@ -623,12 +663,7 @@ func UpdateUser(c *gin.Context) {
 		user.Roles = req.Roles
 	}
 	if req.Role != "" {
-		// 前端发送 role (单数)，转换为 roles JSON 数组格式
-		if req.Role == "admin" {
-			user.Roles = `["admin"]`
-		} else {
-			user.Roles = `["user"]`
-		}
+		user.Roles = newRole
 	}
 
 	if err := repo.UpdateUser(user); err != nil {
@@ -679,19 +714,39 @@ func DeleteUser(c *gin.Context) {
 	if id == 1 {
 		c.JSON(http.StatusForbidden, gin.H{
 			"code":    403,
-			"message": "主管理员不能被删除",
+			"message": "主管��员不能被删除",
 		})
 		return
 	}
 
+	// 获取当前操作用户
+	currentUser, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+	currentUserModel := currentUser.(*gormdb.User)
+
 	repo := gormdb.NewUserRepository()
 
-	// 检查用户是否存在
-	user, err := repo.GetUserByID(id)
-	if err != nil || user == nil {
+	// 检查目标用户是否存在
+	targetUser, err := repo.GetUserByID(id)
+	if err != nil || targetUser == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 不能删除管理员用户（只有主管理员可以删除其他管理员）
+	if targetUser.Roles == "admin" && currentUserModel.ID != 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "不能删除管理员用户",
 		})
 		return
 	}
@@ -709,7 +764,7 @@ func DeleteUser(c *gin.Context) {
 	if username, exists := c.Get("username"); exists {
 		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
 			oplog.AddLog(
-				fmt.Sprintf("删除用户成功: %s (%s)", user.Name, user.CallSign),
+				fmt.Sprintf("删除用户成功: %s (%s)", targetUser.Name, targetUser.CallSign),
 				"user_delete",
 				currentUser.ID,
 				currentUser.Name,
@@ -1050,7 +1105,6 @@ func GetUserDetail(c *gin.Context) {
 // UpdateProfileRequest 更新个人资料请求
 type UpdateProfileRequest struct {
 	NickName     string `json:"nickname"`
-	CallSign     string `json:"callsign"`
 	Phone        string `json:"phone"`
 	Address      string `json:"address"`
 	Introduction string `json:"introduction"`
@@ -1087,9 +1141,6 @@ func UpdateProfile(c *gin.Context) {
 	// 更新字段
 	if req.NickName != "" {
 		user.NickName = req.NickName
-	}
-	if req.CallSign != "" {
-		user.CallSign = req.CallSign
 	}
 	if req.Phone != "" {
 		user.Phone = req.Phone

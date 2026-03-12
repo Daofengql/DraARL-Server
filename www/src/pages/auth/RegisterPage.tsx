@@ -265,7 +265,7 @@ export function RegisterPage() {
             <Box sx={{ textAlign: 'center', mb: 4 }}>
               <Radio sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
               <Typography variant="h4" component="h1" gutterBottom>
-                NRLLink
+                DraARL
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 创建新账号

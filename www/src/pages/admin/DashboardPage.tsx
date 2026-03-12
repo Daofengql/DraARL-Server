@@ -22,6 +22,12 @@ import {
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
 import { deviceService } from '../../services/device'
+import { apiClient } from '../../services'
+
+const DEFAULT_SITE_NAME = 'DraARL 麟云业余无线电链路平台'
+const SYSTEM_NAME = 'DraARL 麟链'
+const SYSTEM_VERSION = 'v1.0.0'
+const PROTOCOL_VERSION = 'DraARLv1'
 
 interface StatCardProps {
   title: string
@@ -103,13 +109,15 @@ export function AdminDashboardPage() {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [platformInfo, setPlatformInfo] = useState({ name: 'NRLLink', version: '1.0.0' })
+  const [platformInfo, setPlatformInfo] = useState({ name: '', version: SYSTEM_VERSION })
+  const [systemConfig, setSystemConfig] = useState<any>(null)
 
   const fetchSystemStats = async () => {
     try {
-      const [statsData, infoData] = await Promise.all([
+      const [statsData, infoData, publicConfig] = await Promise.all([
         platformService.getTotalStats(),
         platformService.getInfo(),
+        apiClient.get<any>('/api/config/public'),
       ])
       setStats({
         total_devices: statsData.total_devices || 0,
@@ -118,6 +126,9 @@ export function AdminDashboardPage() {
         total_users: statsData.total_users || 0,
       })
       setPlatformInfo(infoData)
+      if (publicConfig.code === 200 && publicConfig.data) {
+        setSystemConfig(publicConfig.data)
+      }
     } catch (err) {
       setError('获取统计数据失败')
     } finally {
@@ -128,6 +139,9 @@ export function AdminDashboardPage() {
   useEffect(() => {
     fetchSystemStats()
   }, [])
+
+  // 站点名称：欢迎卡片使用配置的站点名称或默认值
+  const siteName = systemConfig?.systemInfo?.name || DEFAULT_SITE_NAME
 
   if (loading) {
     return <DashboardSkeleton />
@@ -153,7 +167,7 @@ export function AdminDashboardPage() {
                   后台管理系统
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', mt: 0.5 }}>
-                  {platformInfo.name} 业余无线电互联平台 - 系统数据
+                  {siteName} - 系统数据
                 </Typography>
               </Box>
             </Stack>
@@ -270,7 +284,7 @@ export function AdminDashboardPage() {
                 系统名称
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {platformInfo.name || 'NRLLink'}
+                {SYSTEM_NAME}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -278,7 +292,7 @@ export function AdminDashboardPage() {
                 系统版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {platformInfo.version || '1.0.0'}
+                {SYSTEM_VERSION}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -286,7 +300,7 @@ export function AdminDashboardPage() {
                 协议版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                NRL2
+                {PROTOCOL_VERSION}
               </Typography>
             </Box>
           </Stack>

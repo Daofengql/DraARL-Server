@@ -466,7 +466,7 @@ export function SiteConfigPage() {
                     fullWidth
                     value={systemInfo.name}
                     onChange={(e) => setSystemInfo({ ...systemInfo, name: e.target.value })}
-                    placeholder="例如：NRL-福建开发组"
+                    placeholder="例如：DraARL-福建"
                   />
 
                   <TextField
@@ -474,7 +474,7 @@ export function SiteConfigPage() {
                     fullWidth
                     value={systemInfo.nameshorthand}
                     onChange={(e) => setSystemInfo({ ...systemInfo, nameshorthand: e.target.value })}
-                    placeholder="例如：NRL-Fujian"
+                    placeholder="例如：DraARL-Fujian"
                   />
 
                   {/* Logo上传组件 */}

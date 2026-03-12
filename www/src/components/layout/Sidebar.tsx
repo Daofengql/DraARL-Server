@@ -73,7 +73,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
-          NRLLink
+          DraARL
         </Typography>
       </Box>
       <List sx={{ flex: 1, py: 1 }}>

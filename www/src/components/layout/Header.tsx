@@ -28,7 +28,7 @@ interface PublicConfig {
   }
 }
 
-const DEFAULT_TITLE = 'NRLLink 管理平台'
+const DEFAULT_TITLE = 'DraARL 麟云业余无线电链路平台'
 
 export function Header({ onMenuClick }: HeaderProps) {
   const navigate = useNavigate()

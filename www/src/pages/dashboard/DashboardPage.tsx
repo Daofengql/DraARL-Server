@@ -9,6 +9,7 @@ import {
   Stack,
   Skeleton,
   Alert,
+  Chip,
 } from '@mui/material'
 import {
   Devices,
@@ -20,6 +21,10 @@ import {
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
 import { deviceService } from '../../services/device'
+import { apiClient } from '../../services'
+
+const DEFAULT_PLATFORM_VERSION = 'v1.0.0'
+const DEFAULT_PROTOCOL_VERSION = 'DraARLv1'
 
 interface StatCardProps {
   title: string
@@ -100,7 +105,7 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const user = authService.getStoredUser()
-  const [platformInfo, setPlatformInfo] = useState({ name: 'NRLLink', version: '1.0.0' })
+  const [systemConfig, setSystemConfig] = useState<any>(null)
 
   const fetchMyStats = async () => {
     try {
@@ -111,17 +116,21 @@ export function DashboardPage() {
         : []
 
       // 获取所有群组和用户统计
-      const [statsData, infoData] = await Promise.all([
+      const [statsData, publicConfig] = await Promise.all([
         platformService.getTotalStats(),
-        platformService.getInfo(),
+        apiClient.get<any>('/api/config/public'),
       ])
+
+      // 处理公开配置
+      if (publicConfig.code === 200 && publicConfig.data) {
+        setSystemConfig(publicConfig.data)
+      }
 
       setStats({
         my_devices: myDevices.length,
         online_devices: myDevices.filter(d => d.is_online || d.online).length,
         total_groups: statsData.total_groups || 0,
       })
-      setPlatformInfo(infoData)
     } catch (err) {
       setError('获取统计数据失败')
     } finally {
@@ -135,6 +144,24 @@ export function DashboardPage() {
 
   const displayName = user?.nickname || user?.username || '用户'
 
+  // 站点名称：欢迎卡片使用配置的站点名称或默认值
+  const DEFAULT_SITE_NAME = 'DraARL 麟云业余无线电链路平台'
+  const siteName = systemConfig?.systemInfo?.name || DEFAULT_SITE_NAME
+
+  // 系统信息卡片固定显示
+  const SYSTEM_NAME = 'DraARL 麟链'
+
+  // 用户状态判断和卡片颜色
+  const getUserStatus = () => {
+    if (!user) return { label: '未登录', color: 'default' as const, cardColor: '#9e9e9e' }
+    if (user.role === 'admin') return { label: '管理员', color: 'secondary' as const, cardColor: '#9c27b0' }
+    if (user.approval_status === 0) return { label: '待审核', color: 'warning' as const, cardColor: '#ff9800' }
+    if (user.approval_status === 2) return { label: '已拒绝', color: 'error' as const, cardColor: '#f44336' }
+    return { label: '普通用户', color: 'primary' as const, cardColor: '#1976d2' }
+  }
+
+  const userStatus = getUserStatus()
+
   if (loading) {
     return <DashboardSkeleton />
   }
@@ -144,7 +171,7 @@ export function DashboardPage() {
       {/* 欢迎信息卡片 */}
       <Card
         sx={{
-          background: (theme) => `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.primary.dark} 100%)`,
+          background: `linear-gradient(135deg, ${userStatus.cardColor} 0%, ${userStatus.cardColor}dd 100%)`,
           color: 'white',
           border: 'none',
           boxShadow: 3,
@@ -153,12 +180,28 @@ export function DashboardPage() {
         <CardContent>
           <Stack direction="row" alignItems="center" spacing={2}>
             <DashboardIcon sx={{ fontSize: 40 }} />
-            <Box>
-              <Typography variant="h5" fontWeight={600}>
-                欢迎回来，{displayName}！
-              </Typography>
+            <Box sx={{ flexGrow: 1 }}>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="h5" fontWeight={600}>
+                  欢迎回来，{displayName}！
+                </Typography>
+                <Chip
+                  label={userStatus.label}
+                  size="small"
+                  color={userStatus.color}
+                  sx={{
+                    bgcolor: userStatus.color === 'secondary' ? 'rgba(255,255,255,0.2)' :
+                           userStatus.color === 'primary' ? 'rgba(33, 150, 243, 0.3)' :
+                           userStatus.color === 'warning' ? 'rgba(255, 152, 0, 0.3)' :
+                           userStatus.color === 'error' ? 'rgba(244, 67, 54, 0.3)' :
+                           'rgba(255,255,255,0.2)',
+                    color: 'white',
+                    fontWeight: 500,
+                  }}
+                />
+              </Stack>
               <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', mt: 0.5 }}>
-                {platformInfo.name} 业余无线电互联平台
+                {siteName}
               </Typography>
             </Box>
           </Stack>
@@ -266,7 +309,7 @@ export function DashboardPage() {
                 系统名称
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {platformInfo.name || 'NRLLink'}
+                {SYSTEM_NAME}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -274,7 +317,7 @@ export function DashboardPage() {
                 系统版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {platformInfo.version || '1.0.0'}
+                {DEFAULT_PLATFORM_VERSION}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -282,7 +325,7 @@ export function DashboardPage() {
                 协议版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                NRL2
+                {DEFAULT_PROTOCOL_VERSION}
               </Typography>
             </Box>
           </Stack>

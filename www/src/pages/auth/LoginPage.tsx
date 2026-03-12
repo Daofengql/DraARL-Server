@@ -53,10 +53,10 @@ export function LoginPage() {
             <Box sx={{ textAlign: 'center', mb: 4 }}>
               <Radio sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
               <Typography variant="h4" component="h1" gutterBottom>
-                NRLLink
+                DraARL
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                业余无线电网络互联平台
+                麟云业余无线电链路平台
               </Typography>
             </Box>
 

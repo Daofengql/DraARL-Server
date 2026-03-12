@@ -14,14 +14,30 @@ import {
   InputAdornment,
   IconButton,
   Chip,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TablePagination,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material'
 import {
   Save,
   Public,
   Refresh,
   Terminal,
+  CloudUpload,
+  Delete,
+  Search,
 } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
+import { logService } from '../../services'
+import type { OperatorLog } from '../../types'
 
 interface APRSLogEntry {
   timestamp: string
@@ -72,10 +88,29 @@ interface OpenAIConfig {
   engine: string
 }
 
+// 操作日志
+const EVENT_TYPES = [
+  { value: '', label: '全部' },
+  { value: 'login', label: '登录' },
+  { value: 'logout', label: '登出' },
+  { value: 'create', label: '创建' },
+  { value: 'update', label: '更新' },
+  { value: 'delete', label: '删除' },
+]
+
+const EVENT_TYPE_COLORS: Record<string, any> = {
+  login: 'info',
+  logout: 'default',
+  create: 'success',
+  update: 'warning',
+  delete: 'error',
+}
+
 export function SiteConfigPage() {
   const [tabValue, setTabValue] = useState(0)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [loading, setLoading] = useState(false)
+  const [uploadingLogo, setUploadingLogo] = useState(false)
 
   // 系统信息配置
   const [systemInfo, setSystemInfo] = useState<SystemInfoConfig>({
@@ -100,7 +135,7 @@ export function SiteConfigPage() {
     altitude: '',
   })
 
-  // OpenAI配��
+  // OpenAI配置
   const [openai, setOpenAI] = useState<OpenAIConfig>({
     base_url: '',
     api_key: '',
@@ -109,9 +144,18 @@ export function SiteConfigPage() {
 
   // APRS日志
   const [aprsLogs, setAPRSLogs] = useState<APRSLogEntry[]>([])
-  const [logsLoading, setLogsLoading] = useState(false)
+  const [aprsLogsLoading, setAprsLogsLoading] = useState(false)
   const [configCardHeight, setConfigCardHeight] = useState<number | null>(null)
   const configCardRef = useRef<HTMLDivElement>(null)
+
+  // 操作日志状态
+  const [opLogs, setOpLogs] = useState<OperatorLog[]>([])
+  const [opTotal, setOpTotal] = useState(0)
+  const [logPage, setLogPage] = useState(0)
+  const [logRowsPerPage, setLogRowsPerPage] = useState(10)
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [eventType, setEventType] = useState('')
+  const [opLogsLoading, setOpLogsLoading] = useState(false)
 
   useEffect(() => {
     loadConfigs()
@@ -206,7 +250,7 @@ export function SiteConfigPage() {
   }
 
   const loadAPRSLogs = async () => {
-    setLogsLoading(true)
+    setAprsLogsLoading(true)
     try {
       const res = await apiClient.get<any>('/api/config/aprs/logs')
       if (res.code === 200 && res.data) {
@@ -215,11 +259,65 @@ export function SiteConfigPage() {
     } catch (err) {
       console.error('Failed to load APRS logs:', err)
     } finally {
-      setLogsLoading(false)
+      setAprsLogsLoading(false)
     }
   }
 
-  // 加载APRS���志当切换到APRS标签页时
+  // Logo上传处理
+  const logoInputRef = useRef<HTMLInputElement>(null)
+
+  const handleLogoUploadClick = () => {
+    logoInputRef.current?.click()
+  }
+
+  const handleLogoFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // 验证文件大小 (限制5MB)
+    const maxSize = 5 * 1024 * 1024
+    if (file.size > maxSize) {
+      showMessage('error', 'Logo文件大小不能超过5MB')
+      return
+    }
+
+    // 验证文件类型
+    if (!file.type.startsWith('image/')) {
+      showMessage('error', '请选择图片文件')
+      return
+    }
+
+    setUploadingLogo(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const res = await apiClient.post<any>('/api/upload/logo', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+
+      if (res.code === 200 && res.data?.file_url) {
+        // 重新加载配置以获取最新的 logo URL
+        await loadConfigs()
+        showMessage('success', 'Logo上传成功')
+      }
+    } catch (err) {
+      console.error('Failed to upload logo:', err)
+      showMessage('error', 'Logo上传失败')
+    } finally {
+      setUploadingLogo(false)
+      // 重置input
+      if (logoInputRef.current) {
+        logoInputRef.current.value = ''
+      }
+    }
+  }
+
+  const handleLogoDelete = () => {
+    setSystemInfo({ ...systemInfo, logo_url: '' })
+  }
+
+  // 加载APRS日志当切换到APRS标签页时
   useEffect(() => {
     if (tabValue === 1) {
       loadAPRSLogs()
@@ -228,6 +326,32 @@ export function SiteConfigPage() {
       return () => clearInterval(interval)
     }
   }, [tabValue])
+
+  // 加载操作日志当切换到操作日志标签页时
+  useEffect(() => {
+    if (tabValue === 3) {
+      loadOpLogs()
+    }
+  }, [tabValue, logPage, logRowsPerPage, eventType])
+
+  // 加载操作日志
+  const loadOpLogs = async () => {
+    setOpLogsLoading(true)
+    try {
+      const data = await logService.getList({
+        page: logPage + 1,
+        page_size: logRowsPerPage,
+        event_type: eventType || undefined,
+      })
+      const items = data.items || data
+      setOpLogs(Array.isArray(items) ? items : [])
+      setOpTotal(data.total || (Array.isArray(items) ? items.length : 0))
+    } catch (err) {
+      console.error('Failed to load logs:', err)
+    } finally {
+      setOpLogsLoading(false)
+    }
+  }
 
   // 同步两个卡片的高度
   useEffect(() => {
@@ -274,6 +398,7 @@ export function SiteConfigPage() {
           <Tab label="系统信息" />
           <Tab label="APRS" />
           <Tab label="OpenAI" />
+          <Tab label="操作日志" />
         </Tabs>
 
         {/* 系统信息标签页 */}
@@ -305,13 +430,77 @@ export function SiteConfigPage() {
                     placeholder="例如：NRL-Fujian"
                   />
 
-                  <TextField
-                    label="Logo URL"
-                    fullWidth
-                    value={systemInfo.logo_url}
-                    onChange={(e) => setSystemInfo({ ...systemInfo, logo_url: e.target.value })}
-                    placeholder="站点Logo图片地址"
-                  />
+                  {/* Logo上传组件 */}
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1, color: 'text.secondary' }}>
+                      站点Logo
+                    </Typography>
+                    <Box
+                      sx={{
+                        border: '1px dashed',
+                        borderColor: 'divider',
+                        borderRadius: 2,
+                        p: 2,
+                        textAlign: 'center',
+                        bgcolor: 'background.paper',
+                        cursor: 'pointer',
+                        '&:hover': { bgcolor: 'action.hover' },
+                      }}
+                      onClick={handleLogoUploadClick}
+                    >
+                      <input
+                        ref={logoInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoFileChange}
+                        style={{ display: 'none' }}
+                      />
+                      {systemInfo.logo_url ? (
+                        <Box sx={{ position: 'relative', display: 'inline-block' }}>
+                          <Box
+                            component="img"
+                            src={systemInfo.logo_url}
+                            alt="Logo预览"
+                            sx={{
+                              maxWidth: '100%',
+                              maxHeight: 150,
+                              objectFit: 'contain',
+                            }}
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = ''
+                              setSystemInfo({ ...systemInfo, logo_url: '' })
+                            }}
+                          />
+                          <IconButton
+                            size="small"
+                            sx={{
+                              position: 'absolute',
+                              top: -8,
+                              right: -8,
+                              bgcolor: 'background.paper',
+                              '&:hover': { bgcolor: 'error.light' },
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleLogoDelete()
+                            }}
+                          >
+                            <Delete fontSize="small" color="error" />
+                          </IconButton>
+                        </Box>
+                      ) : (
+                        <Box sx={{ py: 3 }}>
+                          <CloudUpload sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+                          <Typography variant="body2" color="text.secondary">
+                            点击上传Logo图片
+                          </Typography>
+                          <Typography variant="caption" color="text.disabled">
+                            支持PNG、JPG、GIF格式，最大5MB
+                          </Typography>
+                        </Box>
+                      )}
+                    </Box>
+                  </Box>
 
                   <TextField
                     label="语言"
@@ -495,7 +684,7 @@ export function SiteConfigPage() {
                       <IconButton
                         size="small"
                         onClick={loadAPRSLogs}
-                        disabled={logsLoading}
+                        disabled={aprsLogsLoading}
                       >
                         <Refresh />
                       </IconButton>
@@ -618,7 +807,119 @@ export function SiteConfigPage() {
             </Card>
           </Box>
         </TabPanel>
+
+        {/* 操作日志标签页 */}
+        <TabPanel value={tabValue} index={3}>
+          <Box sx={{ px: 2 }}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  操作日志
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  查看系统操作日志记录
+                </Typography>
+
+                <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+                  <TextField
+                    placeholder="搜索日志内容"
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && loadOpLogs()}
+                    size="small"
+                    sx={{ flexGrow: 1, minWidth: 200 }}
+                  />
+                  <FormControl size="small" sx={{ minWidth: 120 }}>
+                    <InputLabel>事件类型</InputLabel>
+                    <Select
+                      value={eventType}
+                      label="事件类型"
+                      onChange={(e) => {
+                        setEventType(e.target.value)
+                        setLogPage(0)
+                      }}
+                    >
+                      {EVENT_TYPES.map((type) => (
+                        <MenuItem key={type.value} value={type.value}>
+                          {type.label}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <Button variant="outlined" startIcon={<Search />} onClick={loadOpLogs}>
+                    搜索
+                  </Button>
+                </Box>
+
+                <TableContainer component={Paper} variant="outlined">
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>ID</TableCell>
+                        <TableCell>时间</TableCell>
+                        <TableCell>操作者</TableCell>
+                        <TableCell>事件类型</TableCell>
+                        <TableCell>内容</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {opLogsLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={5} align="center">
+                            加载中...
+                          </TableCell>
+                        </TableRow>
+                      ) : opLogs.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} align="center">
+                            暂无数据
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        opLogs.map((log) => (
+                          <TableRow key={log.id} hover>
+                            <TableCell>{log.id}</TableCell>
+                            <TableCell>{formatTimestamp(log.timestamp)}</TableCell>
+                            <TableCell>{log.operator || '-'}</TableCell>
+                            <TableCell>
+                              {log.event_type && (
+                                <Chip
+                                  label={log.event_type}
+                                  size="small"
+                                  color={EVENT_TYPE_COLORS[log.event_type] || 'default'}
+                                  variant="outlined"
+                                />
+                              )}
+                            </TableCell>
+                            <TableCell>{log.content}</TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                  <TablePagination
+                    component="div"
+                    count={opTotal}
+                    page={logPage}
+                    onPageChange={(_, newPage) => setLogPage(newPage)}
+                    rowsPerPage={logRowsPerPage}
+                    onRowsPerPageChange={(e) => {
+                      setLogRowsPerPage(parseInt(e.target.value, 10))
+                      setLogPage(0)
+                    }}
+                    labelRowsPerPage="每页行数"
+                    labelDisplayedRows={({ from, to, count }) => `${from}-${to} 共 ${count}`}
+                  />
+                </TableContainer>
+              </CardContent>
+            </Card>
+          </Box>
+        </TabPanel>
       </Paper>
     </Box>
   )
+
+  function formatTimestamp(timestamp: string) {
+    return new Date(timestamp).toLocaleString('zh-CN')
+  }
 }

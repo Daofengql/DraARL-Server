@@ -362,46 +362,113 @@ func GetOperatorCertificate(c *gin.Context) {
 	})
 }
 
-// GetOperatorCertificateURL 获取操作证临时访问URL（带签名）
-func GetOperatorCertificateURL(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
+// UploadLogo 上传站点配置 logo
+func UploadLogo(c *gin.Context) {
+	// 获取当前用户（必须是超级管理员）
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	// 获取用户信息
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 检查是否是超级管理员
+	if !isSuperAdmin(user) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "仅超级管理员可访问",
+		})
+		return
+	}
+
+	// 获取上传的文件
+	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "无效的操作证ID",
+			"message": "获取文件失败",
 		})
 		return
 	}
 
-	// 获取操作证
-	certRepo := gormdb.NewOperatorCertRepository()
-	cert, err := certRepo.GetByID(id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
-			"message": "操作证不存在",
+	// 检查文件大小（10MB）
+	if fileHeader.Size > 10*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "文件大小不能超过10MB",
 		})
 		return
 	}
 
-	// 生成临时访问URL（1小时有效）
-	url, err := minio.PresignedURL(c.Request.Context(), cert.MinioPath, time.Hour)
+	// 检查文件类型（只允许图片）
+	allowedTypes := map[string]bool{
+		"image/jpeg": true,
+		"image/jpg":  true,
+		"image/png":  true,
+		"image/gif":  true,
+	}
+	contentType := fileHeader.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "非法的文件类型，只支持图片文件",
+		})
+		return
+	}
+
+	// 处理 logo 图片：限制宽度为500px，保持原始比例
+	logoData, ext, err := minio.ProcessLogo(fileHeader)
 	if err != nil {
-		log.Printf("生成访问URL失败: %v", err)
+		log.Printf("处理logo图片失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
-			"message": "生成访问URL失败",
+			"message": "处理图片失败",
 		})
 		return
+	}
+
+	// 上传处理后的 logo
+	objectName, finalFileSize, err := minio.UploadLogo(logoData, ext)
+	if err != nil {
+		log.Printf("上传logo失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "上传logo失败",
+		})
+		return
+	}
+
+	// 生成访问URL
+	fileURL := minio.GetFileURL(objectName)
+
+	// 更新站点配置中的 logo URL
+	siteConfigRepo := gormdb.GetSiteConfigRepo()
+	if err := siteConfigRepo.Set("system.logo_url", fileURL, "system", "站点Logo URL"); err != nil {
+		log.Printf("更新Logo配置失败: %v", err)
+		// 配置更新失败不影响文件上传
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "成功",
+		"message": "上传成功",
 		"data": gin.H{
-			"url":      url,
-			"expires_in": int(time.Hour.Seconds()),
+			"file_name": fileHeader.Filename,
+			"file_size": finalFileSize,
+			"file_type": "logo",
+			"file_url":  fileURL,
 		},
 	})
 }

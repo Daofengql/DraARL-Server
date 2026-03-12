@@ -99,10 +99,12 @@ func (s *Server) setupRoutes() {
 			// 文件上传（所有认证用户可访问，用于头像上传）
 			protected.POST("/upload/file", handler.UploadFile)
 
+			// Logo上传（管理员专用）
+			protected.POST("/upload/logo", handler.UploadLogo)
+
 			// 操作证相关（所有认证用户可访问）
 			protected.POST("/upload/operator-certificate", handler.UploadOperatorCertificate)
 			protected.GET("/operator-certificate", handler.GetOperatorCertificate)
-			protected.GET("/operator-certificate/:id/url", handler.GetOperatorCertificateURL)
 
 			// 用户管理（部分需要管理员权限）
 			admin := protected.Group("")

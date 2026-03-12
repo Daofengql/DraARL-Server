@@ -8,14 +8,16 @@ import {
   LinearProgress,
   Stack,
   Skeleton,
-  Alert,
 } from '@mui/material'
 import {
   Devices,
   CheckCircle,
   Group,
+  People,
   Radio,
   Dashboard as DashboardIcon,
+  Person,
+  Public,
 } from '@mui/icons-material'
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
@@ -25,7 +27,7 @@ interface StatCardProps {
   title: string
   value: number | string
   icon: React.ReactNode
-  color: 'primary' | 'success' | 'info'
+  color: 'primary' | 'success' | 'info' | 'warning'
 }
 
 function StatCard({ title, value, icon, color }: StatCardProps) {
@@ -33,6 +35,7 @@ function StatCard({ title, value, icon, color }: StatCardProps) {
     primary: { bg: 'primary.50', color: 'primary.main' },
     success: { bg: 'success.50', color: 'success.main' },
     info: { bg: 'info.50', color: 'info.main' },
+    warning: { bg: 'warning.50', color: 'warning.main' },
   }
 
   const config = colorConfig[color]
@@ -74,11 +77,11 @@ function DashboardSkeleton() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           gap: 2,
         }}
       >
-        {[1, 2, 3].map((i) => (
+        {[1, 2, 3, 4].map((i) => (
           <Card key={i}>
             <CardContent>
               <Skeleton variant="text" width={80} sx={{ mb: 2 }} />
@@ -91,35 +94,28 @@ function DashboardSkeleton() {
   )
 }
 
-export function DashboardPage() {
+export function AdminDashboardPage() {
   const [stats, setStats] = useState({
-    my_devices: 0,
+    total_devices: 0,
     online_devices: 0,
     total_groups: 0,
+    total_users: 0,
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const user = authService.getStoredUser()
   const [platformInfo, setPlatformInfo] = useState({ name: 'NRLLink', version: '1.0.0' })
 
-  const fetchMyStats = async () => {
+  const fetchSystemStats = async () => {
     try {
-      // 获取与用户呼号匹配的设备
-      const allDevices = await deviceService.list()
-      const myDevices = user?.callsign
-        ? allDevices.filter(d => d.callsign === user.callsign)
-        : []
-
-      // 获取所有群组和用户统计
       const [statsData, infoData] = await Promise.all([
         platformService.getTotalStats(),
         platformService.getInfo(),
       ])
-
       setStats({
-        my_devices: myDevices.length,
-        online_devices: myDevices.filter(d => d.is_online || d.online).length,
+        total_devices: statsData.total_devices || 0,
+        online_devices: statsData.online_devices || 0,
         total_groups: statsData.total_groups || 0,
+        total_users: statsData.total_users || 0,
       })
       setPlatformInfo(infoData)
     } catch (err) {
@@ -130,10 +126,8 @@ export function DashboardPage() {
   }
 
   useEffect(() => {
-    fetchMyStats()
+    fetchSystemStats()
   }, [])
-
-  const displayName = user?.nickname || user?.username || '用户'
 
   if (loading) {
     return <DashboardSkeleton />
@@ -144,44 +138,48 @@ export function DashboardPage() {
       {/* 欢迎信息卡片 */}
       <Card
         sx={{
-          background: (theme) => `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.primary.dark} 100%)`,
+          background: (theme) => `linear-gradient(135deg, #1565C0 0%, #0D47A1 100%)`,
           color: 'white',
           border: 'none',
           boxShadow: 3,
         }}
       >
         <CardContent>
-          <Stack direction="row" alignItems="center" spacing={2}>
-            <DashboardIcon sx={{ fontSize: 40 }} />
-            <Box>
-              <Typography variant="h5" fontWeight={600}>
-                欢迎回来，{displayName}！
-              </Typography>
-              <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', mt: 0.5 }}>
-                {platformInfo.name} 业余无线电互联平台
-              </Typography>
-            </Box>
+          <Stack direction="row" alignItems="center" spacing={2} justifyContent="space-between">
+            <Stack direction="row" alignItems="center" spacing={2}>
+              <DashboardIcon sx={{ fontSize: 40 }} />
+              <Box>
+                <Typography variant="h5" fontWeight={600}>
+                  后台管理系统
+                </Typography>
+                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', mt: 0.5 }}>
+                  {platformInfo.name} 业余无线电互联平台 - 系统数据
+                </Typography>
+              </Box>
+            </Stack>
           </Stack>
         </CardContent>
       </Card>
 
       {error && (
-        <Alert severity="error" onClose={() => setError(null)}>
-          {error}
-        </Alert>
+        <Box>
+          <Typography variant="body1" color="error">
+            {error}
+          </Typography>
+        </Box>
       )}
 
       {/* 统计卡片 */}
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           gap: 2,
         }}
       >
         <StatCard
-          title="我的设备"
-          value={stats.my_devices}
+          title="总设备数"
+          value={stats.total_devices}
           icon={<Devices />}
           color="primary"
         />
@@ -197,16 +195,22 @@ export function DashboardPage() {
           icon={<Group />}
           color="info"
         />
+        <StatCard
+          title="用户数量"
+          value={stats.total_users}
+          icon={<People />}
+          color="warning"
+        />
       </Box>
 
       {/* 详细信息面板 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
-        {/* 设备状态 */}
+        {/* 系统状态 */}
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
             <Radio color="primary" />
             <Typography variant="h6" fontWeight={600}>
-              我的设备状态
+              系统状态
             </Typography>
           </Stack>
           <Stack spacing={2}>
@@ -216,23 +220,23 @@ export function DashboardPage() {
                   设备在线率
                 </Typography>
                 <Typography variant="body2" fontWeight={500}>
-                  {stats.my_devices > 0
-                    ? `${Math.round((stats.online_devices / stats.my_devices) * 100)}%`
+                  {stats.total_devices > 0
+                    ? `${Math.round((stats.online_devices / stats.total_devices) * 100)}%`
                     : '0%'}
                 </Typography>
               </Stack>
               <LinearProgress
                 variant="determinate"
-                value={stats.my_devices > 0 ? (stats.online_devices / stats.my_devices) * 100 : 0}
+                value={stats.total_devices > 0 ? (stats.online_devices / stats.total_devices) * 100 : 0}
                 sx={{
                   height: 8,
                   borderRadius: 4,
                   bgcolor: 'grey.200',
                   '& .MuiLinearProgress-bar': {
                     bgcolor:
-                      stats.my_devices > 0 && stats.online_devices / stats.my_devices > 0.8
+                      stats.total_devices > 0 && stats.online_devices / stats.total_devices > 0.8
                         ? 'success.main'
-                        : stats.online_devices / stats.my_devices > 0.5
+                        : stats.online_devices / stats.total_devices > 0.5
                           ? 'warning.main'
                           : 'error.main',
                   },
@@ -245,7 +249,7 @@ export function DashboardPage() {
                   当前在线
                 </Typography>
                 <Typography variant="body1" fontWeight={500} color="success.main">
-                  {stats.online_devices} / {stats.my_devices}
+                  {stats.online_devices} / {stats.total_devices}
                 </Typography>
               </Stack>
             </Box>

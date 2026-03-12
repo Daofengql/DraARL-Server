@@ -5,17 +5,11 @@ import {
   Toolbar,
   IconButton,
   Typography,
-  Menu,
-  MenuItem,
   Avatar,
-  Divider,
-  ListItemIcon,
-  ListItemText,
+  Tooltip,
 } from '@mui/material'
 import {
   Menu as MenuIcon,
-  AccountCircle,
-  Logout,
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 import { authService } from '../../services'
@@ -27,55 +21,19 @@ interface HeaderProps {
 export function Header({ onMenuClick }: HeaderProps) {
   const navigate = useNavigate()
   const [user, setUser] = useState(authService.getStoredUser())
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
 
-  // 监听 localStorage 变化，当用户信息更新时同步
+  // 监听用户信息变化
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'user' && e.newValue) {
-        try {
-          const updatedUser = JSON.parse(e.newValue)
-          setUser(updatedUser)
-        } catch {
-          // 忽略解析错误
-        }
-      }
-    }
-
-    // 同时也监听同一页面的自定义事件���用于同一页面内的更新）
     const handleUserUpdate = () => {
-      const updatedUser = authService.getStoredUser()
-      if (updatedUser) {
-        setUser(updatedUser)
-      }
+      setUser(authService.getStoredUser())
     }
-
-    window.addEventListener('storage', handleStorageChange)
     window.addEventListener('user-updated', handleUserUpdate)
-
     return () => {
-      window.removeEventListener('storage', handleStorageChange)
       window.removeEventListener('user-updated', handleUserUpdate)
     }
   }, [])
 
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget)
-  }
-
-  const handleMenuClose = () => {
-    setAnchorEl(null)
-  }
-
-  const handleLogout = async () => {
-    await authService.logout()
-    authService.clearAuth()
-    navigate('/login')
-    handleMenuClose()
-  }
-
-  // 显示名称：优先使用 nickname，其次 username
-  const displayName = user?.nickname || user?.username
+  const displayName = user?.nickname || user?.username || ''
 
   return (
     <AppBar
@@ -103,70 +61,17 @@ export function Header({ onMenuClick }: HeaderProps) {
           NRLLink 管理平台
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <Box
-            onClick={handleMenuOpen}
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              cursor: 'pointer',
-              px: 1,
-              py: 0.5,
-              borderRadius: 2,
-              '&:hover': { bgcolor: 'action.hover' },
-            }}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Avatar
+            src={user?.avatar_thumb || user?.avatar}
+            alt={displayName}
+            sx={{ width: 36, height: 36 }}
           >
-            {user?.avatar_thumb || user?.avatar ? (
-              <Avatar src={user.avatar_thumb || user.avatar} alt={displayName} sx={{ width: 32, height: 32 }}>
-                {displayName?.charAt(0).toUpperCase() || '?'}
-              </Avatar>
-            ) : (
-              <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main', fontWeight: 600 }}>
-                {displayName?.charAt(0).toUpperCase() || '?'}
-              </Avatar>
-            )}
-            <Typography variant="body2" sx={{ display: { xs: 'none', sm: 'block' }, fontWeight: 500 }}>
-              {displayName || '加载中...'}
-            </Typography>
-          </Box>
-
-          <Menu
-            id="menu-appbar"
-            anchorEl={anchorEl}
-            anchorOrigin={{
-              vertical: 'bottom',
-              horizontal: 'right',
-            }}
-            keepMounted
-            transformOrigin={{
-              vertical: 'top',
-              horizontal: 'right',
-            }}
-            open={Boolean(anchorEl)}
-            onClose={handleMenuClose}
-            slotProps={{
-              paper: {
-                sx: {
-                  mt: 1.5,
-                  minWidth: 180,
-                  border: '1px solid',
-                  borderColor: 'grey.200',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                },
-              },
-            }}
-          >
-            <MenuItem onClick={() => { navigate('/profile'); handleMenuClose() }}>
-              <ListItemIcon><AccountCircle fontSize="small" /></ListItemIcon>
-              <ListItemText>个人中心</ListItemText>
-            </MenuItem>
-            <Divider sx={{ borderColor: 'grey.200' }} />
-            <MenuItem onClick={handleLogout}>
-              <ListItemIcon><Logout fontSize="small" /></ListItemIcon>
-              <ListItemText>退出登录</ListItemText>
-            </MenuItem>
-          </Menu>
+            {displayName?.charAt(0).toUpperCase() || '?'}
+          </Avatar>
+          <Typography variant="body2" sx={{ fontWeight: 500, display: { xs: 'none', sm: 'block' } }}>
+            {displayName}
+          </Typography>
         </Box>
       </Toolbar>
     </AppBar>

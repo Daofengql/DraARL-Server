@@ -13,8 +13,10 @@ import (
 
 	"image"
 	"image/jpeg"
+	_ "image/jpeg" // 注册 JPEG 解码器
 	"image/png"
-	_ "image/gif"
+	_ "image/png" // 注册 PNG 解码器
+	_ "image/gif" // 注册 GIF 解码器
 
 	"nrllink/internal/config"
 
@@ -351,5 +353,131 @@ func UploadThumbnail(objectName string, data []byte, contentType string) error {
 	size := int64(len(data))
 
 	return UploadFile(ctx, bucket, objectName, reader, size, contentType)
+}
+
+// ProcessLogo 处理 Logo 图片：限制宽度为 500px，保持原始比例
+// 1. 限制最大尺寸为 500x500
+// 2. 保持原始宽高比，按比例缩放
+// 3. 重新编码为 PNG 格式（保留透明通道）
+// 返回处理后的图片数据
+func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	// 打开文件
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, "", fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer file.Close()
+
+	// 读取全部内容到内存
+	buf := make([]byte, fileHeader.Size)
+	_, err = io.ReadFull(file, buf)
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return nil, "", fmt.Errorf("读取文件失败: %w", err)
+	}
+
+	// 尝试多种方式解码图片
+	var img image.Image
+	var format string
+	var decodeErr error
+
+	// 1. 首先尝试标准库的 image.Decode
+	reader := bytes.NewReader(buf)
+	img, format, decodeErr = image.Decode(reader)
+	if decodeErr != nil {
+		// 2. 如果失败，尝试使用 imaging.Decode（支持更多格式）
+		reader = bytes.NewReader(buf)
+		img, decodeErr = imaging.Decode(reader, imaging.AutoOrientation(true))
+		if decodeErr != nil {
+			// 3. 如果仍然失败，尝试 PNG 和 JPEG 专用解码器
+			reader = bytes.NewReader(buf)
+			if img, decodeErr = png.Decode(reader); decodeErr == nil {
+				format = "png"
+			} else {
+				reader = bytes.NewReader(buf)
+				if img, decodeErr = jpeg.Decode(reader); decodeErr == nil {
+					format = "jpeg"
+				} else {
+					return nil, "", fmt.Errorf("解码图片失败（尝试了所有解码器）: %w", decodeErr)
+				}
+			}
+		}
+	}
+
+	// 如果没有检测到格式，使用原文件扩展名
+	if format == "" {
+		ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+		switch ext {
+		case ".jpg", ".jpeg":
+			format = "jpeg"
+		case ".png":
+			format = "png"
+		case ".gif":
+			format = "gif"
+		default:
+			format = "png" // 默认使用 PNG
+		}
+	}
+
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+
+	// 检查尺寸是否超过限制（宽度限制500，高度也限制500）
+	const maxLogoWidth = 500
+	const maxLogoHeight = 500
+
+	if width > maxLogoWidth || height > maxLogoHeight {
+		// 按比例缩放到限制范围内
+		scaleX := float64(maxLogoWidth) / float64(width)
+		scaleY := float64(maxLogoHeight) / float64(height)
+		scale := scaleX
+		if scaleY < scaleX {
+			scale = scaleY
+		}
+		newWidth := int(float64(width) * scale)
+		newHeight := int(float64(height) * scale)
+		img = imaging.Resize(img, newWidth, newHeight, imaging.Lanczos)
+	}
+
+	// 重新编码为 PNG 格式（保留透明通道）
+	var outputBuf bytes.Buffer
+	err = png.Encode(&outputBuf, img)
+	if err != nil {
+		return nil, "", fmt.Errorf("编码图片失败: %w", err)
+	}
+
+	return outputBuf.Bytes(), ".png", nil
+}
+
+// UploadLogo 上传处理后的 Logo 图片
+func UploadLogo(imageData []byte, ext string) (string, int64, error) {
+	if Client == nil {
+		return "", 0, fmt.Errorf("MinIO客户端未初始化")
+	}
+
+	cfg := config.Get()
+	bucket := cfg.MinIO.Bucket
+	if bucket == "" {
+		bucket = "nrllink"
+	}
+
+	// 生成文件路径
+	now := time.Now()
+	fileUUID := uuid.New().String()
+	objectName := fmt.Sprintf("uploads/logo/%d/%02d/%s.png", now.Year(), int(now.Month()), fileUUID)
+
+	// 上传文件
+	ctx := context.Background()
+	reader := bytes.NewReader(imageData)
+	size := int64(len(imageData))
+
+	_, err := Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: "image/png",
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("上传文件失败: %w", err)
+	}
+
+	return objectName, size, nil
 }
 

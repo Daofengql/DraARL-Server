@@ -9,14 +9,18 @@ import { UsersPage, ApprovalsPage } from './pages/users'
 import { CertificateApprovalsPage } from './pages/certificates'
 import { RelaysPage } from './pages/relays'
 import { ServersPage } from './pages/servers'
-import { LogsPage } from './pages/logs'
 import { ProfilePage } from './pages/profile'
 import { SiteConfigPage } from './pages/settings'
+import { AdminLayout } from './components/layout/AdminLayout'
+import { AdminDashboardPage } from './pages/admin/DashboardPage'
+import { AdminDevicePage } from './pages/admin/DevicePage'
+import { AdminGroupPage } from './pages/admin/GroupPage'
 import { authService } from './services'
 
 function App() {
   // 检查是否已登录
   const isAuthenticated = authService.isAuthenticated()
+  const isAdmin = authService.isAdmin()
 
   return (
     <BrowserRouter>
@@ -31,7 +35,7 @@ function App() {
           element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/" replace />}
         />
 
-        {/* 受保护路由 */}
+        {/* 普通用户路由（管理员和用户一样可见） */}
         <Route
           path="/"
           element={
@@ -40,69 +44,33 @@ function App() {
             </ProtectedRoute>
           }
         >
-          {/* 普通用户可访问的路由 */}
           <Route index element={<DashboardPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="groups" element={<GroupsPage />} />
           <Route path="profile" element={<ProfilePage />} />
+        </Route>
 
-          {/* 需要管理员权限的路由 */}
-          <Route
-            path="users"
-            element={
+        {/* 管理员专用路由 /admin */}
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
               <AdminRoute>
-                <UsersPage />
+                <AdminLayout />
               </AdminRoute>
-            }
-          />
-          <Route
-            path="approvals"
-            element={
-              <AdminRoute>
-                <ApprovalsPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="certificate-approvals"
-            element={
-              <AdminRoute>
-                <CertificateApprovalsPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="relays"
-            element={
-              <AdminRoute>
-                <RelaysPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="servers"
-            element={
-              <AdminRoute>
-                <ServersPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="logs"
-            element={
-              <AdminRoute>
-                <LogsPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="settings"
-            element={
-              <AdminRoute>
-                <SiteConfigPage />
-              </AdminRoute>
-            }
-          />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="dashboard" element={<AdminDashboardPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="devices" element={<AdminDevicePage />} />
+          <Route path="groups" element={<AdminGroupPage />} />
+          <Route path="approvals" element={<ApprovalsPage />} />
+          <Route path="certificate-approvals" element={<CertificateApprovalsPage />} />
+          <Route path="relays" element={<RelaysPage />} />
+          <Route path="servers" element={<ServersPage />} />
+          <Route path="settings" element={<SiteConfigPage />} />
         </Route>
 
         {/* 404 */}

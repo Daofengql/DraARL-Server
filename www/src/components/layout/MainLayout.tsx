@@ -41,7 +41,6 @@ export function MainLayout({ children }: MainLayoutProps) {
           flexGrow: 1,
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
           mt: { xs: 8, sm: 0 }, // 移动端保留顶部边距，桌面端不需要
-          ml: { sm: `${DRAWER_WIDTH}px` }, // 桌面端右边距
         }}
       >
         <Box sx={{ p: 3, mt: { sm: 8 } }}>

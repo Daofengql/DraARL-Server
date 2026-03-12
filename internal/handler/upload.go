@@ -378,6 +378,18 @@ func GetOperatorCertificate(c *gin.Context) {
 
 // UploadLogo 上传站点配置 logo（权限由 RequireAdmin 中间件检查）
 func UploadLogo(c *gin.Context) {
+	// 获取当前用户
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	userModel := user.(*gormdb.User)
+
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
@@ -444,6 +456,16 @@ func UploadLogo(c *gin.Context) {
 		log.Printf("更新Logo配置失败: %v", err)
 		// 配置更新失败不影响文件上传
 	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("上传站点Logo: %s (文件: %s)", fileURL, fileHeader.Filename),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Box, AppBar, Toolbar, Typography, IconButton, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer } from '@mui/material'
-import { Menu, Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, Logout, Devices, Group } from '@mui/icons-material'
+import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography } from '@mui/material'
+import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group } from '@mui/icons-material'
 import { useState } from 'react'
 import { authService } from '../../services'
 
@@ -161,7 +161,7 @@ export function AdminLayout() {
           sx={{ borderRadius: 2, color: 'error.main' }}
         >
           <ListItemIcon sx={{ minWidth: 40, color: 'error.main' }}>
-            <Logout />
+            <ExitToApp />
           </ListItemIcon>
           <ListItemText primary="退出登录" />
         </ListItemButton>
@@ -170,68 +170,47 @@ export function AdminLayout() {
   )
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh' }}>
-      {/* 顶部导航栏 */}
-      <AppBar
-        position="fixed"
+    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'grey.50' }}>
+      {/* 移动端抽屉 */}
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={handleDrawerToggle}
+        ModalProps={{ keepMounted: true }}
         sx={{
-          width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
-          ml: { sm: `${DRAWER_WIDTH}px` },
-          bgcolor: '#1565C0',
+          display: { xs: 'block', sm: 'none' },
+          width: DRAWER_WIDTH,
+          flexShrink: 0,
+          '& .MuiDrawer-paper': {
+            width: DRAWER_WIDTH,
+            boxSizing: 'border-box',
+          },
         }}
       >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            aria-label="open drawer"
-            edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { sm: 'none' } }}
-          >
-            <Menu />
-          </IconButton>
-          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
-            后台管理系统
-          </Typography>
-        </Toolbar>
-      </AppBar>
-
-      {/* 侧边栏 */}
-      <Box
-        component="nav"
-        sx={{ width: { sm: DRAWER_WIDTH }, flexShrink: { sm: 0 } }}
+        {drawer}
+      </Drawer>
+      {/* 桌面端抽屉 */}
+      <Drawer
+        variant="permanent"
+        sx={{
+          width: DRAWER_WIDTH,
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+          display: { xs: 'none', sm: 'block' },
+          '& .MuiDrawer-paper': {
+            width: DRAWER_WIDTH,
+            boxSizing: 'border-box',
+            top: 0,
+            height: '100vh',
+            zIndex: (theme) => theme.zIndex.drawer - 1,
+            borderRight: '1px solid',
+            borderColor: 'grey.200',
+          },
+        }}
+        open
       >
-        {/* 移动端抽屉 */}
-        <Drawer
-          variant="temporary"
-          open={mobileOpen}
-          onClose={handleDrawerToggle}
-          ModalProps={{ keepMounted: true }}
-          sx={{
-            display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: DRAWER_WIDTH,
-            },
-          }}
-        >
-          {drawer}
-        </Drawer>
-        {/* 桌面端抽屉 */}
-        <Drawer
-          variant="permanent"
-          sx={{
-            display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: DRAWER_WIDTH,
-            },
-          }}
-          open
-        >
-          {drawer}
-        </Drawer>
-      </Box>
+        {drawer}
+      </Drawer>
 
       {/* 主内容区域 */}
       <Box
@@ -240,8 +219,6 @@ export function AdminLayout() {
           flexGrow: 1,
           p: 3,
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
-          mt: 8,
-          bgcolor: 'grey.50',
           minHeight: '100vh',
         }}
       >

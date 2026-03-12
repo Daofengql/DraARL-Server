@@ -628,6 +628,24 @@ func UpdateUser(c *gin.Context) {
 		}
 	}
 
+	// 主管理员（ID=1）不能修改自己的角色，以防止系统失去管理员
+	if id == 1 && currentUserModel.ID == 1 && newRole != "" && newRole != user.Roles {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "主管理员不能修改自己的角色",
+		})
+		return
+	}
+
+	// 主管理员（ID=1）不能修改自己的状态，以防止被禁用
+	if id == 1 && currentUserModel.ID == 1 && req.Status > 0 && req.Status != user.Status {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "主管理员不能修改自己的状态",
+		})
+		return
+	}
+
 	// 如果在修改角色，只有主管理员（ID=1）可以操作
 	if newRole != "" && currentUserModel.ID != 1 {
 		c.JSON(http.StatusForbidden, gin.H{

@@ -11,9 +11,14 @@ import (
 // GetOperatorLogs 获取操作日志列表
 func GetOperatorLogs(c *gin.Context) {
 	// 获取查询参数
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	limitStr := c.Query("page_size")
+	if limitStr == "" {
+		limitStr = c.DefaultQuery("limit", "20")
+	}
+	limit, _ := strconv.Atoi(limitStr)
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	eventType := c.Query("operation")
+	eventType := c.Query("event_type")
 
 	if limit <= 0 {
 		limit = 20

@@ -40,7 +40,8 @@ const menuItems: MenuItem[] = [
   { path: '/profile', label: '个人中心', icon: <Person /> },
 ]
 
-export function Sidebar({ onClose, open, variant = 'permanent', ...props }: SidebarProps) {
+// 1. 在参数中单独解构出 sx，防止它留在 ...props 中覆盖内部样式
+export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: SidebarProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = authService.isAdmin()
@@ -137,14 +138,18 @@ export function Sidebar({ onClose, open, variant = 'permanent', ...props }: Side
         open={open}
         onClose={onClose}
         ModalProps={{ keepMounted: true }}
-        sx={{
-          width: DRAWER_WIDTH,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
-            boxSizing: 'border-box',
+        // 2. 移动端抽屉：使用 MUI 的数组语法合并内部 sx 和外部传入的 sx
+        sx={[
+          {
             width: DRAWER_WIDTH,
+            flexShrink: 0,
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: DRAWER_WIDTH,
+            },
           },
-        }}
+          ...(Array.isArray(sx) ? sx : [sx ?? {}])
+        ]}
         {...props}
       >
         {drawerContent}
@@ -155,20 +160,24 @@ export function Sidebar({ onClose, open, variant = 'permanent', ...props }: Side
   return (
     <Drawer
       variant="permanent"
-      sx={{
-        width: DRAWER_WIDTH,
-        flexShrink: 0,
-        whiteSpace: 'nowrap',
-        '& .MuiDrawer-paper': {
+      // 3. 桌面端抽屉：同样使用数组语法合并，确保 width 和传入的 display 规则共存
+      sx={[
+        {
           width: DRAWER_WIDTH,
-          boxSizing: 'border-box',
-          top: 0,
-          height: '100vh',
-          zIndex: (theme) => theme.zIndex.drawer - 1,
-          borderRight: '1px solid',
-          borderColor: 'grey.200',
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+          '& .MuiDrawer-paper': {
+            width: DRAWER_WIDTH,
+            boxSizing: 'border-box',
+            top: 0,
+            height: '100vh',
+            zIndex: (theme) => theme.zIndex.drawer - 1,
+            borderRight: '1px solid',
+            borderColor: 'grey.200',
+          },
         },
-      }}
+        ...(Array.isArray(sx) ? sx : [sx ?? {}])
+      ]}
       {...props}
     >
       {drawerContent}

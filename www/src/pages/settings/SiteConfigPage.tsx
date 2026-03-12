@@ -34,6 +34,7 @@ import {
   CloudUpload,
   Delete,
   Search,
+  Info,
 } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
 import { logService } from '../../services'
@@ -88,22 +89,55 @@ interface OpenAIConfig {
   engine: string
 }
 
-// 操作日志
+// 操作日志事件类型
 const EVENT_TYPES = [
   { value: '', label: '全部' },
   { value: 'login', label: '登录' },
   { value: 'logout', label: '登出' },
-  { value: 'create', label: '创建' },
-  { value: 'update', label: '更新' },
-  { value: 'delete', label: '删除' },
+  { value: 'user_create', label: '创建用户' },
+  { value: 'user_update', label: '更新用户' },
+  { value: 'user_delete', label: '删除用户' },
+  { value: 'user_status', label: '用户状态变更' },
+  { value: 'user_approval', label: '用户审批' },
+  { value: 'password_reset', label: '重置密码' },
+  { value: 'password_change', label: '修改密码' },
+  { value: 'profile_update', label: '更新个人资料' },
+  { value: 'config_update', label: '配置更新' },
 ]
 
+// 事件类型颜色映射
 const EVENT_TYPE_COLORS: Record<string, any> = {
   login: 'info',
   logout: 'default',
-  create: 'success',
-  update: 'warning',
-  delete: 'error',
+  user_create: 'success',
+  user_update: 'warning',
+  user_delete: 'error',
+  user_status: 'secondary',
+  user_approval: 'primary',
+  password_reset: 'error',
+  password_change: 'warning',
+  profile_update: 'info',
+  config_update: 'secondary',
+}
+
+// 事件类型显示标签映射（用于表格中显示更友好的标签）
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  login: '登录',
+  logout: '登出',
+  user_create: '创建用户',
+  user_update: '更新用户',
+  user_delete: '删除用户',
+  user_status: '状态变更',
+  user_approval: '用户审批',
+  password_reset: '重置密码',
+  password_change: '修改密码',
+  profile_update: '更新资料',
+  config_update: '配置更新',
+}
+
+// 获取事件类型的显示标签
+function getEventTypeLabel(eventType: string): string {
+  return EVENT_TYPE_LABELS[eventType] || eventType
 }
 
 export function SiteConfigPage() {
@@ -581,90 +615,118 @@ export function SiteConfigPage() {
                     </Typography>
 
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <TextField
-                        label="APRS服务器地址"
-                        fullWidth
-                        value={aprs.aprs_server_host}
-                        onChange={(e) => setAPRS({ ...aprs, aprs_server_host: e.target.value })}
-                        placeholder="china.aprs2.net"
-                      />
+                      {/* APRS服务器地址:端口 */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          label="APRS服务器"
+                          fullWidth
+                          value={aprs.aprs_server_host}
+                          onChange={(e) => setAPRS({ ...aprs, aprs_server_host: e.target.value })}
+                          placeholder="china.aprs2.net"
+                        />
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>:</Typography>
+                        <TextField
+                          label="端口"
+                          sx={{ width: '100px' }}
+                          value={aprs.aprs_server_port}
+                          onChange={(e) => setAPRS({ ...aprs, aprs_server_port: e.target.value })}
+                          placeholder="14580"
+                        />
+                      </Box>
 
-                      <TextField
-                        label="APRS服务器端口"
-                        fullWidth
-                        value={aprs.aprs_server_port}
-                        onChange={(e) => setAPRS({ ...aprs, aprs_server_port: e.target.value })}
-                        placeholder="14580"
-                      />
+                      {/* 本机地址:端口 */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          label="本机地址"
+                          fullWidth
+                          value={aprs.self_address}
+                          onChange={(e) => setAPRS({ ...aprs, self_address: e.target.value })}
+                          placeholder="yourdomain.com"
+                        />
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>:</Typography>
+                        <TextField
+                          label="端口"
+                          sx={{ width: '100px' }}
+                          value={aprs.self_port}
+                          onChange={(e) => setAPRS({ ...aprs, self_port: e.target.value })}
+                          placeholder="60050"
+                        />
+                      </Box>
 
-                      <TextField
-                        label="本机地址"
-                        fullWidth
-                        value={aprs.self_address}
-                        onChange={(e) => setAPRS({ ...aprs, self_address: e.target.value })}
-                        placeholder="yourdomain.com"
-                      />
-
-                      <TextField
-                        label="本机端口"
-                        fullWidth
-                        value={aprs.self_port}
-                        onChange={(e) => setAPRS({ ...aprs, self_port: e.target.value })}
-                        placeholder="60050"
-                      />
-
-                      <TextField
-                        label="呼号"
-                        fullWidth
-                        value={aprs.callsign}
-                        onChange={(e) => setAPRS({ ...aprs, callsign: e.target.value })}
-                        placeholder="BH0AAA"
-                      />
-
-                      <TextField
-                        label="SSID"
-                        fullWidth
-                        value={aprs.ssid}
-                        onChange={(e) => setAPRS({ ...aprs, ssid: e.target.value })}
-                        placeholder="10"
-                      />
+                      {/* 呼号-SSID */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          label="呼号"
+                          fullWidth
+                          value={aprs.callsign}
+                          onChange={(e) => setAPRS({ ...aprs, callsign: e.target.value })}
+                          placeholder="BH0AAA"
+                        />
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>-</Typography>
+                        <TextField
+                          label="SSID"
+                          sx={{ width: '100px' }}
+                          value={aprs.ssid}
+                          onChange={(e) => setAPRS({ ...aprs, ssid: e.target.value })}
+                          placeholder="10"
+                        />
+                      </Box>
 
                       <TextField
                         label="Passcode"
-                        fullWidth
                         type="number"
+                        fullWidth
                         value={aprs.passcode || ''}
                         onChange={(e) => setAPRS({ ...aprs, passcode: parseInt(e.target.value) || 0 })}
                         placeholder="-1"
+                        slotProps={{
+                          input: {
+                            endAdornment: (
+                              <InputAdornment position="end">
+                                <IconButton
+                                  edge="end"
+                                  size="small"
+                                  onClick={() => window.open('https://apps.magicbug.co.uk/passcode/', '_blank')}
+                                  title="前往获取Passcode"
+                                >
+                                  <Info color="primary" fontSize="small" />
+                                </IconButton>
+                              </InputAdornment>
+                            ),
+                          },
+                        }}
                       />
 
-                      <TextField
-                        label="纬度"
-                        fullWidth
-                        type="number"
-                        inputProps={{ step: 0.000001 }}
-                        value={aprs.latitude || ''}
-                        onChange={(e) => setAPRS({ ...aprs, latitude: parseFloat(e.target.value) || 0 })}
-                        placeholder="0.000000"
-                      />
-
-                      <TextField
-                        label="经度"
-                        fullWidth
-                        type="number"
-                        inputProps={{ step: 0.000001 }}
-                        value={aprs.longitude || ''}
-                        onChange={(e) => setAPRS({ ...aprs, longitude: parseFloat(e.target.value) || 0 })}
-                        placeholder="0.000000"
-                      />
-
-                      <TextField
-                        label="海拔高度"
-                        fullWidth
-                        value={aprs.altitude}
-                        onChange={(e) => setAPRS({ ...aprs, altitude: e.target.value })}
-                        placeholder="000000"
-                      />
+                      {/* 纬度,经度,海拔 */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TextField
+                          label="纬度"
+                          fullWidth
+                          type="number"
+                          inputProps={{ step: 0.000001 }}
+                          value={aprs.latitude || ''}
+                          onChange={(e) => setAPRS({ ...aprs, latitude: parseFloat(e.target.value) || 0 })}
+                          placeholder="0.000000"
+                        />
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
+                        <TextField
+                          label="经度"
+                          fullWidth
+                          type="number"
+                          inputProps={{ step: 0.000001 }}
+                          value={aprs.longitude || ''}
+                          onChange={(e) => setAPRS({ ...aprs, longitude: parseFloat(e.target.value) || 0 })}
+                          placeholder="0.000000"
+                        />
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
+                        <TextField
+                          label="海拔(m)"
+                          fullWidth
+                          value={aprs.altitude}
+                          onChange={(e) => setAPRS({ ...aprs, altitude: e.target.value })}
+                          placeholder="000000"
+                        />
+                      </Box>
                     </Box>
 
                     <Divider sx={{ my: 3 }} />
@@ -897,7 +959,7 @@ export function SiteConfigPage() {
                             <TableCell>
                               {log.event_type && (
                                 <Chip
-                                  label={log.event_type}
+                                  label={getEventTypeLabel(log.event_type)}
                                   size="small"
                                   color={EVENT_TYPE_COLORS[log.event_type] || 'default'}
                                   variant="outlined"

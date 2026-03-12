@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 	"nrllink/pkg/jwt"
 	"nrllink/pkg/minio"
 )
@@ -76,7 +78,9 @@ func Login(c *gin.Context) {
 	// 验证密码（仅支持 bcrypt）
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		log.Printf("密码验证失败: %v", err)
-		repo.IncrementLoginError(user.ID)
+		if err := repo.IncrementLoginError(user.ID); err != nil {
+			log.Printf("增加登录错误次数失败: %v", err)
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
@@ -94,7 +98,9 @@ func Login(c *gin.Context) {
 	}
 
 	// 更新最后登录时间
-	repo.UpdateLastLogin(user.ID, c.ClientIP())
+	if err := repo.UpdateLastLogin(user.ID, c.ClientIP()); err != nil {
+		log.Printf("更新��后登录时间失败: %v", err)
+	}
 
 	// 生成 JWT token
 	roles := user.GetRoles()
@@ -108,6 +114,16 @@ func Login(c *gin.Context) {
 	}
 
 	log.Printf("用户 %s 登录成功", user.Name)
+
+	// 记录登录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("用户 %s (%s) 登录成功，IP: %s", user.Name, user.CallSign, c.ClientIP()),
+		"login",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
 
 	// 构建用户数据
 	userData := gin.H{
@@ -172,6 +188,21 @@ func getRoleName(roles []string) string {
 
 // Logout 用户登出
 func Logout(c *gin.Context) {
+	// 获取当前用户信息用于审计日志
+	if username, exists := c.Get("username"); exists {
+		repo := gormdb.NewUserRepository()
+		if user, err := repo.GetUserByName(username.(string)); err == nil && user != nil {
+			oplog.AddLog(
+				fmt.Sprintf("用户 %s (%s) 登出，IP: %s", user.Name, user.CallSign, c.ClientIP()),
+				"logout",
+				user.ID,
+				user.Name,
+				user.CallSign,
+				c.ClientIP(),
+			)
+		}
+	}
+
 	// JWT 是无状态的，客户端删除 token 即可
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -497,6 +528,20 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 
+	// 获取当前操作用户信息
+	if username, exists := c.Get("username"); exists {
+		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
+			oplog.AddLog(
+				fmt.Sprintf("创建用户成功: %s (%s)", user.Name, user.CallSign),
+				"user_create",
+				currentUser.ID,
+				currentUser.Name,
+				currentUser.CallSign,
+				c.ClientIP(),
+			)
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "创建成功",
@@ -595,6 +640,20 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// 获取当前操作用户信息
+	if username, exists := c.Get("username"); exists {
+		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
+			oplog.AddLog(
+				fmt.Sprintf("更新用户信息: %s (%s)", user.Name, user.CallSign),
+				"user_update",
+				currentUser.ID,
+				currentUser.Name,
+				currentUser.CallSign,
+				c.ClientIP(),
+			)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -646,6 +705,20 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
+	// 获取当前操作用户信息
+	if username, exists := c.Get("username"); exists {
+		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
+			oplog.AddLog(
+				fmt.Sprintf("删除用户成功: %s (%s)", user.Name, user.CallSign),
+				"user_delete",
+				currentUser.ID,
+				currentUser.Name,
+				currentUser.CallSign,
+				c.ClientIP(),
+			)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "删除成功",
@@ -657,7 +730,7 @@ func DeleteUser(c *gin.Context) {
 
 // UpdateUserStatusRequest 更新用户状态请求
 type UpdateUserStatusRequest struct {
-	Status int `json:"status" binding:"required"`
+	Status int `json:"status"`
 }
 
 // UpdateUserStatus 更新用户状态（禁用/启用）
@@ -690,6 +763,15 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
+	// 验证 status 值的有效性（0: 禁用, 1: 启用）
+	if req.Status != 0 && req.Status != 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "状态值必须为 0（禁用）或 1（启用）",
+		})
+		return
+	}
+
 	repo := gormdb.NewUserRepository()
 
 	// 检查用户是否存在
@@ -702,7 +784,7 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
-	// 更新用户状态
+	// ���新用户状态
 	if err := repo.UpdateUserStatus(id, req.Status); err != nil {
 		log.Printf("更新用户状态失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -710,6 +792,24 @@ func UpdateUserStatus(c *gin.Context) {
 			"message": "更新用户状态失败",
 		})
 		return
+	}
+
+	// 获取当前操作用户信息
+	if username, exists := c.Get("username"); exists {
+		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
+			statusText := "禁用"
+			if req.Status == 1 {
+				statusText = "启用"
+			}
+			oplog.AddLog(
+				fmt.Sprintf("%s用户: %s (%s)", statusText, user.Name, user.CallSign),
+				"user_status",
+				currentUser.ID,
+				currentUser.Name,
+				currentUser.CallSign,
+				c.ClientIP(),
+			)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -863,6 +963,27 @@ func UpdateUserPassword(c *gin.Context) {
 		return
 	}
 
+	// 记录审计日志
+	if isAdmin {
+		oplog.AddLog(
+			fmt.Sprintf("管理员重置用户密码: %s (%s)", targetUser.Name, targetUser.CallSign),
+			"password_reset",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
+	} else {
+		oplog.AddLog(
+			fmt.Sprintf("用户修改自己的密码: %s (%s)", currentUser.Name, currentUser.CallSign),
+			"password_change",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "密码修改成功",
@@ -1011,6 +1132,16 @@ func UpdateProfile(c *gin.Context) {
 		return
 	}
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("用户更新个人资料: %s (%s)", user.Name, user.CallSign),
+		"profile_update",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
+
 	// 处理头像URL
 	avatarURL := user.Avatar
 	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
@@ -1113,6 +1244,16 @@ func ChangeOwnPassword(c *gin.Context) {
 		})
 		return
 	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("用户修改自己的密码: %s (%s)", user.Name, user.CallSign),
+		"password_change",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

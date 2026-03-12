@@ -20,11 +20,12 @@ func NewGroupRepository() *GroupRepository {
 // AddPublicGroup 添加公共群组
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 	query := `INSERT INTO public_groups (name, type, callsign, password, allow_callsign_ssid,
-		ower_id, ower_callsign, status, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+		ower_id, devlist, master_server, slave_server, status, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, group.Name, group.Type, group.CallSign, group.Password,
-		group.AllowCallSignSSID, group.OwerID, group.OwerCallSign, group.Status)
+		group.AllowCallSignSSID, group.OwerID, group.DevList, group.MasterServer,
+		group.SlaveServer, group.Status)
 	if err != nil {
 		return err
 	}
@@ -40,13 +41,17 @@ func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 
 // GetPublicGroup 获取公共群组
 func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
-	query := `SELECT * FROM public_groups WHERE id = ?`
+	query := `SELECT id, name, type, callsign, password, allow_dmrid, allow_callsign_ssid,
+		ower_id, devlist, master_server, slave_server, status,
+		create_time, update_time, note FROM public_groups WHERE id = ?`
 	return r.scanGroup(r.db.QueryRow(query, id))
 }
 
 // ListPublicGroups 列出所有公共群组
 func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
-	query := `SELECT * FROM public_groups ORDER BY id`
+	query := `SELECT id, name, type, callsign, password, allow_dmrid, allow_callsign_ssid,
+		ower_id, devlist, master_server, slave_server, status,
+		create_time, update_time, note FROM public_groups ORDER BY id`
 	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -87,10 +92,12 @@ func (r *GroupRepository) DeletePublicGroup(id int) error {
 func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	group := &models.Group{}
 
-	err := row.Scan(&group.ID, &group.Name, &group.Type, &group.CallSign, &group.Password,
-		new(string), &group.AllowCallSignSSID, &group.OwerID, &group.DevList,
-		&group.MasterServer, &group.SlaveServer, &group.Status,
-		&group.CreateTime, &group.UpdateTime, &group.Note)
+	var nullCallSign, nullPassword, nullAllowDMRID, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
+
+	err := row.Scan(&group.ID, &group.Name, &group.Type, &nullCallSign, &nullPassword,
+		&nullAllowDMRID, &nullAllowCallSignSSID, &group.OwerID,
+		&nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
+		&group.CreateTime, &group.UpdateTime, &nullNote)
 
 	if err == sql.ErrNoRows {
 		return nil, sql.ErrNoRows
@@ -98,6 +105,25 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 处理可能为 NULL 的字符串字段
+	if nullCallSign.Valid {
+		group.CallSign = nullCallSign.String
+	}
+	if nullPassword.Valid {
+		group.Password = nullPassword.String
+	}
+	if nullAllowDMRID.Valid {
+		group.AllowDMRID = nullAllowDMRID.String
+	}
+	if nullAllowCallSignSSID.Valid {
+		group.AllowCallSignSSID = nullAllowCallSignSSID.String
+	}
+	if nullNote.Valid {
+		group.Note = nullNote.String
+	}
+	// DevList 在数据库中是 TEXT 类型 JSON，保持为空切片
+	group.DevList = []int{}
 
 	// 初始化运行时字段
 	group.DevMap = make(map[int]*models.Device)
@@ -109,14 +135,35 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 func (r *GroupRepository) scanGroupFromRows(rows *sql.Rows) (*models.Group, error) {
 	group := &models.Group{}
 
-	err := rows.Scan(&group.ID, &group.Name, &group.Type, &group.CallSign, &group.Password,
-		new(string), &group.AllowCallSignSSID, &group.OwerID, &group.DevList,
-		&group.MasterServer, &group.SlaveServer, &group.Status,
-		&group.CreateTime, &group.UpdateTime, &group.Note)
+	var nullCallSign, nullPassword, nullAllowDMRID, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
+
+	err := rows.Scan(&group.ID, &group.Name, &group.Type, &nullCallSign, &nullPassword,
+		&nullAllowDMRID, &nullAllowCallSignSSID, &group.OwerID,
+		&nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
+		&group.CreateTime, &group.UpdateTime, &nullNote)
 
 	if err != nil {
 		return nil, err
 	}
+
+	// 处理可能为 NULL 的字符串字段
+	if nullCallSign.Valid {
+		group.CallSign = nullCallSign.String
+	}
+	if nullPassword.Valid {
+		group.Password = nullPassword.String
+	}
+	if nullAllowDMRID.Valid {
+		group.AllowDMRID = nullAllowDMRID.String
+	}
+	if nullAllowCallSignSSID.Valid {
+		group.AllowCallSignSSID = nullAllowCallSignSSID.String
+	}
+	if nullNote.Valid {
+		group.Note = nullNote.String
+	}
+	// DevList 在数据库中是 TEXT 类型 JSON，保持为空切片
+	group.DevList = []int{}
 
 	// 初始化运行时字段
 	group.DevMap = make(map[int]*models.Device)

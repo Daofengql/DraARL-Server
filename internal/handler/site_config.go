@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"nrllink/internal/aprs"
 	"nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 )
 
 // SiteConfigHandler 站点配置处理器
@@ -165,6 +167,16 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新站点配置: %s = %s (分类: %s)", req.Key, req.Value, req.Category),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "更新成功",
@@ -211,6 +223,16 @@ func (h *SiteConfigHandler) UpdateICPConfig(c *gin.Context) {
 		return
 	}
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新ICP配置: %s", req.ICP),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "更新成功",
@@ -254,6 +276,16 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 		})
 		return
 	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新系统信息配置: 平台名称=%s, 语言=%s", req.Name, req.Language),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
@@ -309,6 +341,16 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 		aprs.RestartAPRSService()
 	}()
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新APRS配置: 服务器=%s:%s", req.APRSServerHost, req.APRSServerPort),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "更新成功，APRS服务正在重启",
@@ -352,6 +394,16 @@ func (h *SiteConfigHandler) UpdateOpenAIConfig(c *gin.Context) {
 		})
 		return
 	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新OpenAI配置: BaseURL=%s, Engine=%s", req.BaseURL, req.Engine),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, Response{
 		Code:    200,

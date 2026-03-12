@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/internal/config"
+	oplog "nrllink/internal/log"
 	"nrllink/pkg/minio"
 )
 
@@ -744,6 +746,16 @@ func ApproveUser(c *gin.Context) {
 	}
 
 	log.Printf("管理员 %s 审批用户 %s: %s", currentUser.Name, targetUser.Name, statusText)
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("审批用户: %s (%s) - %s (备注: %s)", targetUser.Name, targetUser.CallSign, statusText, req.Note),
+		"user_approval",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

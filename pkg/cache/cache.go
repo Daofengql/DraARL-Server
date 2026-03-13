@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	redispkg "nrllink/pkg/redis"
 )
 
 // Cache 三级缓存接口
@@ -23,52 +25,28 @@ type Cache interface {
 // L2: Redis缓存
 // L3: 数据库
 type ThreeLevelCache struct {
-	local  *localCache
-	redis  *redis.Client
+	local *localCache
+	redis *redis.Client
 	config CacheConfig
 }
 
 // CacheConfig 缓存配置
 type CacheConfig struct {
 	// 本地缓存配置
-	LocalTTL  time.Duration
-	MaxSize    int
+	LocalTTL time.Duration
+	MaxSize  int
 
 	// Redis缓存配置
-	RedisTTL   time.Duration
-	RedisAddr  string
-	RedisPass  string
-	RedisDB    int
-	PoolSize   int
-	MinIdleCon int
-
-	// 是否启用Redis
-	RedisEnabled bool
+	RedisTTL time.Duration
 }
 
 // NewThreeLevelCache 创建三级缓存
+// Redis 是必需的，会自动使用全局 Redis 客户端
 func NewThreeLevelCache(config CacheConfig) (*ThreeLevelCache, error) {
 	cache := &ThreeLevelCache{
 		config: config,
 		local:  newLocalCache(config.MaxSize),
-	}
-
-	// 初始化Redis客户端
-	if config.RedisEnabled {
-		cache.redis = redis.NewClient(&redis.Options{
-			Addr:         config.RedisAddr,
-			Password:     config.RedisPass,
-			DB:           config.RedisDB,
-			PoolSize:     config.PoolSize,
-			MinIdleConns: config.MinIdleCon,
-		})
-
-		// 测试连接
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := cache.redis.Ping(ctx).Err(); err != nil {
-			return nil, fmt.Errorf("redis连接失败: %w", err)
-		}
+		redis:  redispkg.GetClient(),
 	}
 
 	return cache, nil
@@ -82,15 +60,13 @@ func (c *ThreeLevelCache) Get(ctx context.Context, key string, dest interface{})
 	}
 
 	// L2: Redis缓存
-	if c.redis != nil {
-		val, err := c.redis.Get(ctx, key).Bytes()
-		if err == nil && len(val) > 0 {
-			// 反序列化
-			if err := json.Unmarshal(val, dest); err == nil {
-				// 回写本地缓存
-				c.local.Set(key, dest, c.config.LocalTTL)
-				return nil
-			}
+	val, err := c.redis.Get(ctx, key).Bytes()
+	if err == nil && len(val) > 0 {
+		// 反序列化
+		if err := json.Unmarshal(val, dest); err == nil {
+			// 回写本地缓存
+			c.local.Set(key, val, c.config.LocalTTL)
+			return nil
 		}
 	}
 
@@ -114,15 +90,11 @@ func (c *ThreeLevelCache) Set(ctx context.Context, key string, value interface{}
 	c.local.Set(key, data, localTTL)
 
 	// 写入Redis (L2)
-	if c.redis != nil {
-		redisTTL := ttl
-		if redisTTL == 0 {
-			redisTTL = c.config.RedisTTL
-		}
-		return c.redis.Set(ctx, key, data, redisTTL).Err()
+	redisTTL := ttl
+	if redisTTL == 0 {
+		redisTTL = c.config.RedisTTL
 	}
-
-	return nil
+	return c.redis.Set(ctx, key, data, redisTTL).Err()
 }
 
 // Delete 删除缓存 (同时删除L1和L2)
@@ -131,29 +103,14 @@ func (c *ThreeLevelCache) Delete(ctx context.Context, keys ...string) error {
 		c.local.Delete(key)
 	}
 
-	if c.redis != nil {
-		return c.redis.Del(ctx, keys...).Err()
-	}
-
-	return nil
+	return c.redis.Del(ctx, keys...).Err()
 }
 
 // Clear 清空所有缓存
 func (c *ThreeLevelCache) Clear(ctx context.Context) error {
 	c.local.Clear()
-	if c.redis != nil {
-		// 注意：这会清除整个Redis DB，慎用
-		return c.redis.FlushDB(ctx).Err()
-	}
-	return nil
-}
-
-// Close 关闭缓存连接
-func (c *ThreeLevelCache) Close() error {
-	if c.redis != nil {
-		return c.redis.Close()
-	}
-	return nil
+	// 注意：这会清除整个Redis DB，慎用
+	return c.redis.FlushDB(ctx).Err()
 }
 
 // GetRedis 获取Redis客户端 (用于特殊操作)
@@ -163,9 +120,9 @@ func (c *ThreeLevelCache) GetRedis() *redis.Client {
 
 // localCache 本地内存缓存
 type localCache struct {
-	mu    sync.RWMutex
-	items map[string]*cacheItem
-	lru   *lruList
+	mu      sync.RWMutex
+	items   map[string]*cacheItem
+	lru     *lruList
 	maxSize int
 }
 

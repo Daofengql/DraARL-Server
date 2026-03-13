@@ -38,7 +38,6 @@ type Configuration struct {
 	} `yaml:"Database" json:"database"`
 
 	Redis struct {
-		Enabled     bool   `yaml:"Enabled" json:"enabled"`
 		Host        string `yaml:"Host" json:"host"`
 		Port        int    `yaml:"Port" json:"port"`
 		Password    string `yaml:"Password" json:"password"`
@@ -46,7 +45,7 @@ type Configuration struct {
 		PoolSize    int    `yaml:"PoolSize" json:"pool_size"`
 		MinIdleConn int    `yaml:"MinIdleConn" json:"min_idle_conn"`
 
-		// 三级缓存配置
+		// 缓存配置
 		Cache struct {
 			LocalTTL int `yaml:"LocalTTL" json:"local_ttl"`   // 本地缓存TTL(秒)
 			RedisTTL int `yaml:"RedisTTL" json:"redis_ttl"`   // Redis缓存TTL(秒)

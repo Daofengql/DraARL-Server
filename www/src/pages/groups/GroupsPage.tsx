@@ -357,7 +357,7 @@ export function GroupsPage() {
         </Typography>
       </TableCell>
       <TableCell align="right" width={120}>
-        {group.type === GROUP_TYPE_PRIVATE && group.is_joined && (
+        {group.type === GROUP_TYPE_PRIVATE && group.is_joined && !group.is_owner && (
           <IconButton
             size="small"
             color="error"

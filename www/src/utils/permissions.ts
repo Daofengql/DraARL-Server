@@ -57,9 +57,20 @@ export const canViewDevices = (group: Group): boolean => {
 /**
  * 检查是否可以离开群组
  */
-export const canLeaveGroup = (group: Group): boolean => {
+export const canLeaveGroup = (
+  group: Group,
+  currentUserId: number | undefined
+): boolean => {
   // 只有私有群组且已加入的可以离开
-  return group.type === 2 && group.is_joined === true
+  // 但群组创建者不能离开自己的群组
+  if (group.type !== 2 || group.is_joined !== true) {
+    return false
+  }
+  // 如果是群组创建者，不允许离开
+  if (currentUserId && group.ower_id === currentUserId) {
+    return false
+  }
+  return true
 }
 
 /**

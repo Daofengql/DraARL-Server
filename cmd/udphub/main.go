@@ -18,6 +18,7 @@ import (
 	"nrllink/internal/server"
 	"nrllink/internal/udphub"
 	"nrllink/pkg/geoip"
+	"nrllink/pkg/redis"
 )
 
 var (
@@ -110,6 +111,13 @@ func main() {
 	// 启动操作日志处理器
 	oplog.Start()
 	oplog.AddLog("系统启动", "system", 0, "", "", "")
+
+	// 初始化 Redis（必需服务）
+	if err := redis.Init(cfg); err != nil {
+		stdlog.Fatalf("初始化 Redis 失败: %v", err)
+	}
+	defer redis.Close()
+	stdlog.Println("Redis 初始化成功")
 
 	// 初始化 IP 地理位置数据库
 	if cfg.System.IPFile != "" {

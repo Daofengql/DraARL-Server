@@ -23,9 +23,8 @@ Database:
     MaxIdleConns: 5            # 最大空闲连接数
     MaxLifetime: 300           # 连接最大存活时间(秒)
 
-# Redis 配置 (可选，用于三级缓存)
+# Redis 配置 (必需，用于三级缓存)
 Redis:
-    Enabled: false             # 是否启用Redis
     Host: "127.0.0.1"
     Port: 6379
     Password: ""               # Redis密码
@@ -43,35 +42,8 @@ Redis:
 Web:
     Path: ./www                # 静态文件目录
     Port: "9000"               # Web服务端口
-    ICP: ""                    # ICP备案号
     SSLCrt: ""                 # SSL证书路径
     SSLKey: ""                 # SSL密钥路径
-
-# 系统信息
-SystemInfo:
-    Name: NRL无线电网络互联系统
-    NameShorthand: 火链
-    LogoURL: ""
-    Language: zh-CN
-
-# OpenAI 配置 (可选)
-OpenAI:
-    BaseURL: ""                # API地址
-    APIKEY: ""                 # API密钥
-    Engine: ""                 # 模型名称
-
-# APRS 配置 (可选)
-APRS:
-    APRSServerHost: "asia.aprs2.net"
-    APRSServerPort: "14580"
-    SelfAddress: ""            # 服务器地址
-    SelfPort: "60050"
-    CallSign: ""               # 呼号
-    SSID: "10"
-    Passcode: 0                # APRS密码(0表示自动计算)
-    Latitude: 0
-    Longitude: 0
-    Altitude: "0"
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:
@@ -86,7 +58,6 @@ Keycloak:
 
 # MinIO 对象存储配置 (可选)
 MinIO:
-    Enabled: false                    # 是否启用对象存储
     Endpoint: "localhost:9000"        # MinIO服务地址
     AccessKey: "minioadmin"           # Access Key
     SecretKey: "minioadmin"           # Secret Key

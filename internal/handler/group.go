@@ -1180,6 +1180,15 @@ func LeaveGroup(c *gin.Context) {
 		return
 	}
 
+	// 检查是否是群组创建者，创建者不能离开自己的群组
+	if group.OwerID == currentUser.ID {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "群组创建者不能退出自己的群组",
+		})
+		return
+	}
+
 	// 删除GroupMember记录
 	memberRepo := gormdb.NewGroupMemberRepository()
 	err = memberRepo.DeleteMember(id, currentUser.ID)

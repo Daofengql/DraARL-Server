@@ -64,10 +64,12 @@ export const authService = {
     return res.data!
   },
 
-  // 上传操作证
-  async uploadOperatorCertificate(file: File, callsign?: string): Promise<OperatorCertificateUpload> {
+  // 上传操作证（file 可选，用于纯呼号更新场景）
+  async uploadOperatorCertificate(file?: File, callsign?: string): Promise<OperatorCertificateUpload> {
     const formData = new FormData()
-    formData.append('file', file)
+    if (file) {
+      formData.append('file', file)
+    }
     if (callsign) {
       formData.append('callsign', callsign)
     }

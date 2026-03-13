@@ -147,7 +147,7 @@ func UploadFile(c *gin.Context) {
 	})
 }
 
-// UploadOperatorCertificate 上传操作证
+// UploadOperatorCertificate 上传操作证或更新呼号
 func UploadOperatorCertificate(c *gin.Context) {
 	// 获取当前用户
 	username, exists := c.Get("username")
@@ -159,7 +159,6 @@ func UploadOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	// 获取用户信息
 	userRepo := gormdb.NewUserRepository()
 	user, err := userRepo.GetUserByName(username.(string))
 	if err != nil || user == nil {
@@ -170,80 +169,97 @@ func UploadOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	// 获取呼号参数
 	callsign := c.PostForm("callsign")
-
-	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
-	if err != nil {
+
+	// 修复逻辑1：如果既没有传文件，也没有改呼号，才驳回
+	if err != nil && (callsign == "" || callsign == user.CallSign) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "获取文件失败",
+			"message": "请上传操作证图片或输入新呼号",
 		})
 		return
 	}
 
-	// 如果提供了 callsign，更新用户的呼号并重置审核状态为待审核
-	if callsign != "" {
+	certRepo := gormdb.NewOperatorCertRepository()
+	activeCert, _ := certRepo.GetActiveByUserID(user.ID)
+	pendingCert, _ := certRepo.GetPendingByUserID(user.ID)
+
+	var objectName, fileName, contentType string
+	var fileSize int64
+	var oldPendingMinioPath string // 记录旧的待审核文件路径以便后续清理
+
+	if pendingCert != nil {
+		oldPendingMinioPath = pendingCert.MinioPath
+	}
+
+	// 修复逻辑2：处理文件上传 or 尝试复用旧证书数据
+	if err == nil {
+		// 有新文件上传，执行常规校验和上传
+		if fileHeader.Size > 10*1024*1024 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "文件大小不能超过10MB",
+			})
+			return
+		}
+
+		allowedTypes := map[string]bool{
+			"image/jpeg": true, "image/jpg": true, "image/png": true, "image/gif": true, "application/pdf": true,
+		}
+		contentType = fileHeader.Header.Get("Content-Type")
+		if !allowedTypes[contentType] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "非法的文件类型，只支持图片和PDF",
+			})
+			return
+		}
+
+		objectName, fileSize, err = minio.UploadMultipartFile(fileHeader, user.ID, "operator_cert")
+		if err != nil {
+			log.Printf("上传操作证失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "上传文件失败",
+			})
+			return
+		}
+		fileName = fileHeader.Filename
+
+	} else {
+		// 没有新文件，尝试复用旧图片
+		if pendingCert != nil {
+			// 如果当前已经有待审核的操作证，复用它的图片
+			objectName = pendingCert.MinioPath
+			fileName = pendingCert.FileName
+			fileSize = pendingCert.FileSize
+			contentType = pendingCert.FileType
+			oldPendingMinioPath = "" // 标记为空，防止后面误删复用的图片
+		} else if activeCert != nil {
+			// 如果没有待审核的，复用已通过的图片
+			objectName = activeCert.MinioPath
+			fileName = activeCert.FileName
+			fileSize = activeCert.FileSize
+			contentType = activeCert.FileType
+		} else {
+			// 首次认证必须传图片
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "首次设置呼号必须上传操作证图片",
+			})
+			return
+		}
+	}
+
+	// 修复逻辑3：仅更新用户表的呼号字段，绝对不重置 UserApproval 状态
+	if callsign != "" && callsign != user.CallSign {
 		if err := userRepo.UpdateUserCallSign(user.ID, callsign); err != nil {
 			log.Printf("更新用户呼号失败: %v", err)
 		}
-		// 重置审核状态为待审核（0）
-		if err := userRepo.UpdateUserApproval(user.ID, 0, 0, "上传操作证，重新审核"); err != nil {
-			log.Printf("重置审核状态失败: %v", err)
-		}
 	}
 
-	// 检查文件大小（10MB）
-	if fileHeader.Size > 10*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "文件大小不能超过10MB",
-		})
-		return
-	}
-
-	// 检查文件类型（只允许图片）
-	allowedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/gif":  true,
-		"application/pdf": true,
-	}
-	contentType := fileHeader.Header.Get("Content-Type")
-	// 严格校验 Content-Type，只要不在白名单中立即拦截
-	// 移除了对空字符串的宽容处理，封堵空 Header 绕过漏洞
-	if !allowedTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "非法的��件类型，只支持图片和PDF文件",
-		})
-		return
-	}
-
-	// 检查用户是否已有待审核的操作证
-	certRepo := gormdb.NewOperatorCertRepository()
-	pendingCert, err := certRepo.GetPendingByUserID(user.ID)
-
-	var oldMinioPath string
-	if pendingCert != nil {
-		// 用户已有待审核的操作证，记录旧文件路径用于删除
-		oldMinioPath = pendingCert.MinioPath
-	}
-
-	// 上传到MinIO
-	objectName, fileSize, err := minio.UploadMultipartFile(fileHeader, user.ID, "operator_cert")
-	if err != nil {
-		log.Printf("上传操作证失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "上传文件失败",
-		})
-		return
-	}
-
-	// 获取bucket名称
+	// 写入或更新操作证待审核记录
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
@@ -252,31 +268,28 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	var cert *gormdb.OperatorCert
 	if pendingCert != nil {
-		// 替换待审核记录
-		cert, err = certRepo.UpdatePendingCert(pendingCert.ID, fileHeader.Filename, bucket, objectName, fileSize, contentType)
+		cert, err = certRepo.UpdatePendingCert(pendingCert.ID, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
-			log.Printf("更新操作证记录失败: %v", err)
-			// 删除刚上传的文件
-			minio.DeleteFile(c.Request.Context(), objectName)
+			// 发生错误时，如果本次传了新文件，清理掉
+			if fileHeader != nil {
+				minio.DeleteFile(c.Request.Context(), objectName)
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "更新操作证记录失败",
 			})
 			return
 		}
-		// 删除旧文件
-		if oldMinioPath != "" {
-			if err := minio.DeleteFile(c.Request.Context(), oldMinioPath); err != nil {
-				log.Printf("删除旧操作证文件失败: %v", err)
-			}
+		// 如果上传了新文件，清理掉被替换的旧待审核文件
+		if oldPendingMinioPath != "" {
+			minio.DeleteFile(c.Request.Context(), oldPendingMinioPath)
 		}
 	} else {
-		// 创建新的待审核操作证记录
-		cert, err = certRepo.CreatePendingCert(user.ID, fileHeader.Filename, bucket, objectName, fileSize, contentType)
+		cert, err = certRepo.CreatePendingCert(user.ID, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
-			log.Printf("保存操作证记录失败: %v", err)
-			// 删除刚上传的文件
-			minio.DeleteFile(c.Request.Context(), objectName)
+			if fileHeader != nil {
+				minio.DeleteFile(c.Request.Context(), objectName)
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "保存操作证记录失败",
@@ -287,17 +300,17 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "操作证上传成功，请等待管理员审核",
+		"message": "操作证信息已提交，请等待管理员审核",
 		"data": gin.H{
-			"id":         cert.ID,
-			"file_name":  cert.FileName,
-			"file_size":  cert.FileSize,
+			"id":          cert.ID,
+			"file_name":   cert.FileName,
+			"file_size":   cert.FileSize,
 			"upload_time": cert.UploadTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
 
-// GetOperatorCertificate 获取用��的操作证信息
+// GetOperatorCertificate 获取用户的操作证信息
 func GetOperatorCertificate(c *gin.Context) {
 	// 获取当前用户
 	username, exists := c.Get("username")
@@ -331,7 +344,7 @@ func GetOperatorCertificate(c *gin.Context) {
 	if pendingCert == nil {
 		// 获取最新的操作证（可能是被拒绝的）
 		latestCert, _ := certRepo.GetLatestByUserID(user.ID)
-		// 只有当最新操作证不是已通过状态时才返回（避免重复��回 activeCert）
+		// 只有当最新操作证不是已通过状态时才返回（避免重复返回 activeCert）
 		if latestCert != nil && latestCert.Status != 1 {
 			pendingCert = latestCert
 		}
@@ -504,7 +517,7 @@ func GetPendingApprovals(c *gin.Context) {
 	if !hasRoleGORM(currentUser, "admin") {
 		c.JSON(http.StatusForbidden, gin.H{
 			"code":    403,
-			"message": "需要管理��权限",
+			"message": "需要管理员权限",
 		})
 		return
 	}

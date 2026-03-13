@@ -350,21 +350,28 @@ export function ProfilePage() {
   }
 
   const handleUploadCertificate = async () => {
-    if (!selectedFile) {
-      showMessage('error', '请选择文件')
+    // 判断呼号是否发生实质性修改
+    const isCallsignChanged = certCallsign && certCallsign !== user?.callsign
+
+    // 如果没选新文件，且呼号也没变，则拦截
+    if (!selectedFile && !isCallsignChanged) {
+      showMessage('error', '请选择新文件或修改呼号')
       return
     }
 
     setUploadingCert(true)
     try {
-      await authService.uploadOperatorCertificate(selectedFile, certCallsign)
-      // 上传成功后重新加载证书和用户���息
+      // 传递 selectedFile (可能为 undefined) 和 certCallsign 给 service
+      await authService.uploadOperatorCertificate(selectedFile || undefined, certCallsign)
+
+      // 上传成功后重新加载证书和用户信息
       await Promise.all([loadCertificate(), loadUserInfo()])
       setUploadDialogOpen(false)
       setUploadPreview(null)
       setSelectedFile(null)
+      // 清空输入框，防止下次打开残留
       setCertCallsign('')
-      showMessage('success', '操作证上传成功，请等待管理员审核')
+      showMessage('success', '提交成功，请等待管理员审核')
     } catch (err: any) {
       showMessage('error', err.response?.data?.message || '上传失败')
     } finally {
@@ -1026,9 +1033,9 @@ export function ProfilePage() {
             onClick={handleUploadCertificate}
             variant="contained"
             startIcon={<Upload />}
-            disabled={!selectedFile || uploadingCert}
+            disabled={(!selectedFile && !(certCallsign && certCallsign !== user?.callsign)) || uploadingCert}
           >
-            {uploadingCert ? '上传中...' : '上传'}
+            {uploadingCert ? '提交中...' : '提交'}
           </Button>
         </DialogActions>
       </Dialog>

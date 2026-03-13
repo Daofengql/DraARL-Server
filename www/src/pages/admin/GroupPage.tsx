@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   Box,
   Card,
@@ -322,8 +322,8 @@ export function AdminGroupPage() {
                   const devices = groupDevices[group.id] || []
                   const devCount = group.devlist ? group.devlist.split(',').filter(Boolean).length : 0
                   return (
-                    <>
-                      <TableRow key={group.id} hover>
+                    <React.Fragment key={group.id}>
+                      <TableRow hover>
                         <TableCell>{group.id}</TableCell>
                         <TableCell>{group.name}</TableCell>
                         <TableCell>{group.callsign || '-'}</TableCell>
@@ -422,7 +422,7 @@ export function AdminGroupPage() {
                           </TableCell>
                         </TableRow>
                       )}
-                    </>
+                    </React.Fragment>
                   )
                 })
               )}

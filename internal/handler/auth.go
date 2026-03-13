@@ -924,16 +924,18 @@ type TotalStats struct {
 func GetTotalStats(c *gin.Context) {
 	userRepo := gormdb.NewUserRepository()
 	deviceRepo := gormdb.NewDeviceRepository()
+	groupRepo := gormdb.NewGroupRepository()
 
 	// 获取真实统计数据
 	userCount, _ := userRepo.UserCount()
 	devCount, _ := deviceRepo.DeviceCount()
+	groupCount, _ := groupRepo.GroupCount()
 
 	stats := TotalStats{
 		TotalDevices:  devCount,
 		OnlineDevices: 0, // 需要运行时状态
 		TotalUsers:    userCount,
-		TotalGroups:   0,
+		TotalGroups:   groupCount,
 	}
 
 	c.JSON(http.StatusOK, gin.H{

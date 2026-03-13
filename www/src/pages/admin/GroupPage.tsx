@@ -326,7 +326,7 @@ export function AdminGroupPage() {
               >
                 <Person color="primary" fontSize="small" />
                 <Typography className="owner-text" variant="body2">
-                  {getUserInfo(group.ower_id)?.callsign || getUserInfo(group.ower_id)?.username || group.ower_callsign || '-'}
+                  {getUserInfo(group.ower_id)?.username || getUserInfo(group.ower_id)?.callsign || group.ower_callsign || '-'}
                 </Typography>
               </Stack>
             ) : (

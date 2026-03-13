@@ -287,6 +287,16 @@ export function SiteConfigPage() {
   }
 
   const handleSaveAPRS = async () => {
+    // 校验经纬度范围
+    if (aprs.longitude < -180 || aprs.longitude > 180) {
+      showMessage('error', '经度必须在 -180 到 180 之间')
+      return
+    }
+    if (aprs.latitude < -90 || aprs.latitude > 90) {
+      showMessage('error', '纬度必须在 -90 到 90 之间')
+      return
+    }
+
     setLoading(true)
     try {
       await apiClient.put('/api/config/aprs', aprs)
@@ -735,26 +745,30 @@ export function SiteConfigPage() {
                         }}
                       />
 
-                      {/* 纬度,经度,海拔 */}
+                      {/* 经度,纬度,海拔 */}
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <TextField
-                          label="纬度"
-                          fullWidth
-                          type="number"
-                          inputProps={{ step: 0.000001 }}
-                          value={aprs.latitude || ''}
-                          onChange={(e) => setAPRS({ ...aprs, latitude: parseFloat(e.target.value) || 0 })}
-                          placeholder="0.000000"
-                        />
-                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
                         <TextField
                           label="经度"
                           fullWidth
                           type="number"
-                          inputProps={{ step: 0.000001 }}
+                          inputProps={{ step: 0.000001, min: -180, max: 180 }}
                           value={aprs.longitude || ''}
                           onChange={(e) => setAPRS({ ...aprs, longitude: parseFloat(e.target.value) || 0 })}
                           placeholder="0.000000"
+                          helperText="-180 到 180"
+                          error={aprs.longitude < -180 || aprs.longitude > 180}
+                        />
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
+                        <TextField
+                          label="纬度"
+                          fullWidth
+                          type="number"
+                          inputProps={{ step: 0.000001, min: -90, max: 90 }}
+                          value={aprs.latitude || ''}
+                          onChange={(e) => setAPRS({ ...aprs, latitude: parseFloat(e.target.value) || 0 })}
+                          placeholder="0.000000"
+                          helperText="-90 到 90"
+                          error={aprs.latitude < -90 || aprs.latitude > 90}
                         />
                         <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
                         <TextField

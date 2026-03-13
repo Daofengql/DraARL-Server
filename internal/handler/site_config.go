@@ -263,7 +263,7 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 	})
 }
 
-// UpdateAPRSConfig 更新APRS配置（管理员）
+// UpdateAPRSConfig 更新APRS��置（管理员）
 func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
@@ -274,7 +274,7 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 		return
 	}
 
- userModel := user.(*gormdb.User)
+	userModel := user.(*gormdb.User)
 
 	var req gormdb.APRSConfig
 
@@ -282,6 +282,22 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, Response{
 			Code:    400,
 			Message: "请求参数错误",
+		})
+		return
+	}
+
+	// 校验经纬度范围
+	if req.Longitude < -180 || req.Longitude > 180 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "经度必须在 -180 到 180 之间",
+		})
+		return
+	}
+	if req.Latitude < -90 || req.Latitude > 90 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "纬度必须在 -90 到 90 之间",
 		})
 		return
 	}

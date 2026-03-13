@@ -275,8 +275,11 @@ func (a *APRS) sendAPRSPosition() error {
 	}
 
 	// 构造 APRS 数据包
+	aprsLog("原始坐标: 纬度=%.6f, 经度=%.6f", currentAPRSConfig.Latitude, currentAPRSConfig.Longitude)
 	aprsPacket := a.formatAPRSPacket(currentAPRSConfig.CallSign, currentAPRSConfig.SSID, currentAPRSConfig.SelfAddress, currentAPRSConfig.SelfPort,
 		currentAPRSConfig.Latitude, currentAPRSConfig.Longitude, currentAPRSConfig.Altitude)
+
+	aprsLog("发送位置数据包: %s", strings.TrimSpace(aprsPacket))
 
 	// 发送数据
 	err := client.Send(aprsPacket)
@@ -292,6 +295,8 @@ func (a *APRS) sendAPRSPosition() error {
 	stats := udphub.GetTotalStats()
 	aprsPacket2 := a.formatAPRSPacketTwo("DraARL", currentAPRSConfig.CallSign, currentAPRSConfig.SSID,
 		stats.OnlineDevNumber, udphub.GetDeviceCount())
+
+	aprsLog("发送统计信息包: %s", strings.TrimSpace(aprsPacket2))
 
 	err = client.Send(aprsPacket2)
 	if err != nil {
@@ -310,14 +315,26 @@ func (a *APRS) formatAPRSPacket(callSign, ssid, address, port string, lat, lon f
 	latStr := a.decToAPRS(lat, true)
 	lonStr := a.decToAPRS(lon, false)
 
-	return fmt.Sprintf("%s-%s>DraARLSRV,TCPIP*:!%s/%sI @udp://%s:%s,DraARL互联服务器\n",
-		callSign, ssid, latStr, lonStr, address, port)
+	// 正确处理呼号和SSID，避免空SSID时出现多余连字符
+	fullCallSign := callSign
+	if ssid != "" && ssid != "0" {
+		fullCallSign = fmt.Sprintf("%s-%s", callSign, ssid)
+	}
+
+	return fmt.Sprintf("%s>DARLSV,TCPIP*:!%s/%sI @udp://%s:%s,DraARL互联服务器\r\n",
+		fullCallSign, latStr, lonStr, address, port)
 }
 
 // formatAPRSPacketTwo 格式化 APRS 附加信息数据包
 func (a *APRS) formatAPRSPacketTwo(name, callSign, ssid string, onlineNumber, total int) string {
-	return fmt.Sprintf("%s-%s>DraARLSRV,TCPIP*:>在线:%d,高峰:%d,%s\n",
-		callSign, ssid, onlineNumber, total, name)
+	// 正确处理呼号和SSID，避免空SSID时出现多余连字符
+	fullCallSign := callSign
+	if ssid != "" && ssid != "0" {
+		fullCallSign = fmt.Sprintf("%s-%s", callSign, ssid)
+	}
+
+	return fmt.Sprintf("%s>DARLSV,TCPIP*:>在线:%d,高峰:%d,%s\r\n",
+		fullCallSign, onlineNumber, total, name)
 }
 
 // handleTCPMessage 处理 TCP 消息
@@ -351,7 +368,11 @@ func (a *APRS) decToAPRS(dec float64, isLat bool) string {
 	deg := int(dec)
 	min := (dec - float64(deg)) * 60
 
-	return fmt.Sprintf("%02d%05.2f%s", deg, min, dir)
+	// 纬度使用2位整数，经度使用3位整数（AX.25协议标准）
+	if isLat {
+		return fmt.Sprintf("%02d%05.2f%s", deg, min, dir)
+	}
+	return fmt.Sprintf("%03d%05.2f%s", deg, min, dir)
 }
 
 // abs 返回浮点数的绝对值
@@ -457,7 +478,7 @@ func getNRLFromAPRSTV() {
 
 	// 构造查询参数
 	params := url.Values{}
-	params.Add("dest", "DraARLSRV")
+	params.Add("dest", "DARLSV")
 	params.Add("duration", "60")
 
 	// 拼接完整 URL
@@ -587,7 +608,7 @@ func getNRLStatsFromAPRSTV() map[string]int {
 	stats := make(map[string]int)
 	for _, item := range apiResponse.Data {
 		switch item.Type {
-		case "DraARLSRV":
+		case "DARLSV":
 			stats["servers"] = item.Total
 		case "DraARLBOX":
 			stats["boxes"] = item.Total

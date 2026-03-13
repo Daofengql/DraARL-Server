@@ -14,7 +14,7 @@ export const platformService = {
   // 获取平台信息
   async getInfo(): Promise<PlatformInfo> {
     const res = await apiClient.get<BackendResponse<PlatformInfo>>('/api/platform/info')
-    return res.data || { name: 'NRLLink', version: '1.0.0' }
+    return res.data || { name: 'DraARL', version: '1.0.0' }
   },
 
   // 获取统计信息

@@ -1,0 +1,1 @@
+export { CommRecordsPage } from './CommRecordsPage'

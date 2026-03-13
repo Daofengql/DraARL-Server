@@ -25,6 +25,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Switch,
+  FormControlLabel,
 } from '@mui/material'
 import {
   Save,
@@ -35,6 +37,7 @@ import {
   Delete,
   Search,
   Info,
+  PhoneInTalk,
 } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
 import { logService } from '../../services'
@@ -87,6 +90,14 @@ interface OpenAIConfig {
   base_url: string
   api_key: string
   engine: string
+}
+
+// 通信设置配置
+interface CommSettingsConfig {
+  enabled: boolean
+  retention_days: number
+  min_duration_ms: number
+  max_duration_seconds: number
 }
 
 // 操作日志事件类型
@@ -176,6 +187,14 @@ export function SiteConfigPage() {
     engine: '',
   })
 
+  // 通信设置配置
+  const [commSettings, setCommSettings] = useState<CommSettingsConfig>({
+    enabled: false,
+    retention_days: 30,
+    min_duration_ms: 1000,
+    max_duration_seconds: 0,
+  })
+
   // APRS日志
   const [aprsLogs, setAPRSLogs] = useState<APRSLogEntry[]>([])
   const [aprsLogsLoading, setAprsLogsLoading] = useState(false)
@@ -198,11 +217,12 @@ export function SiteConfigPage() {
   const loadConfigs = async () => {
     try {
       // 并行获取所有配置
-      const [icpRes, systemRes, aprsRes, openaiRes] = await Promise.all([
+      const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes] = await Promise.all([
         apiClient.get<any>('/api/config/category/icp'),
         apiClient.get<any>('/api/config/category/system'),
         apiClient.get<any>('/api/config/aprs'),
         apiClient.get<any>('/api/config/openai'),
+        apiClient.get<any>('/api/config/comm-settings'),
       ])
 
       // 解析系统信息配置（包含ICP）
@@ -227,6 +247,11 @@ export function SiteConfigPage() {
       // 解析OpenAI配置
       if (openaiRes.code === 200 && openaiRes.data) {
         setOpenAI(openaiRes.data)
+      }
+
+      // 解析通信设置配置
+      if (commSettingsRes.code === 200 && commSettingsRes.data) {
+        setCommSettings(commSettingsRes.data)
       }
     } catch (err) {
       console.error('Failed to load configs:', err)
@@ -280,6 +305,18 @@ export function SiteConfigPage() {
       showMessage('success', 'OpenAI配置保存成功')
     } catch (err) {
       showMessage('error', '保存OpenAI配置失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSaveCommSettings = async () => {
+    setLoading(true)
+    try {
+      await apiClient.put('/api/config/comm-settings', commSettings)
+      showMessage('success', '通信设置保存成功')
+    } catch (err) {
+      showMessage('error', '保存通信设置失败')
     } finally {
       setLoading(false)
     }
@@ -376,7 +413,7 @@ export function SiteConfigPage() {
 
   // 加载操作日志当切换到操作日志标签页时
   useEffect(() => {
-    if (tabValue === 3) {
+    if (tabValue === 4) {
       loadOpLogs()
     }
   }, [tabValue, logPage, logRowsPerPage, eventType])
@@ -445,6 +482,7 @@ export function SiteConfigPage() {
           <Tab label="系统信息" />
           <Tab label="APRS" />
           <Tab label="OpenAI" />
+          <Tab label="通信设置" />
           <Tab label="操作日志" />
         </Tabs>
 
@@ -883,8 +921,97 @@ export function SiteConfigPage() {
           </Box>
         </TabPanel>
 
-        {/* 操作日志标签页 */}
+        {/* 通信设置标签页 */}
         <TabPanel value={tabValue} index={3}>
+          <Box sx={{ px: 2, maxWidth: 600 }}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  通信设置
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  配置音频记录保存策略
+                </Typography>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {/* 启用音频记录 */}
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <PhoneInTalk color="primary" fontSize="small" />
+                      音频记录
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                      开启后将自动记录每次通信的音频数据到MinIO
+                    </Typography>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={commSettings.enabled}
+                          onChange={(e) => setCommSettings({ ...commSettings, enabled: e.target.checked })}
+                          color="primary"
+                        />
+                      }
+                      label={commSettings.enabled ? '已启用' : '已禁用'}
+                    />
+                  </Box>
+
+                  <Divider />
+
+                  <Divider />
+
+                  <TextField
+                    label="数据保留天数"
+                    type="number"
+                    fullWidth
+                    value={commSettings.retention_days}
+                    onChange={(e) => setCommSettings({ ...commSettings, retention_days: parseInt(e.target.value) || 0 })}
+                    helperText="超过此天数的记录将被自动删除"
+                    inputProps={{ min: 1, max: 365 }}
+                    disabled={!commSettings.enabled}
+                  />
+
+                  <TextField
+                    label="记录阈值（毫秒）"
+                    type="number"
+                    fullWidth
+                    value={commSettings.min_duration_ms}
+                    onChange={(e) => setCommSettings({ ...commSettings, min_duration_ms: parseInt(e.target.value) || 0 })}
+                    helperText="少于此时长的音频不会上传到MinIO"
+                    inputProps={{ min: 0, step: 100 }}
+                    disabled={!commSettings.enabled}
+                  />
+
+                  <TextField
+                    label="最大通信时长（秒）"
+                    type="number"
+                    fullWidth
+                    value={commSettings.max_duration_seconds}
+                    onChange={(e) => setCommSettings({ ...commSettings, max_duration_seconds: parseInt(e.target.value) || 0 })}
+                    helperText="0表示不限制，通信超过此时长将自动断开"
+                    inputProps={{ min: 0 }}
+                    disabled={!commSettings.enabled}
+                  />
+                </Box>
+
+                <Divider sx={{ my: 3 }} />
+
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<Save />}
+                    onClick={handleSaveCommSettings}
+                    disabled={loading}
+                  >
+                    保存
+                  </Button>
+                </Box>
+              </CardContent>
+            </Card>
+          </Box>
+        </TabPanel>
+
+        {/* 操作日志标签页 */}
+        <TabPanel value={tabValue} index={4}>
           <Box sx={{ px: 2 }}>
             <Card>
               <CardContent>

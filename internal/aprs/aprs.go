@@ -251,7 +251,7 @@ func (a *APRS) Login() {
 	}
 
 	for {
-		err := a.tcpClient.Send(fmt.Sprintf("user %s pass %d vers NRL 1.0\n", currentAPRSConfig.CallSign, passcode))
+		err := a.tcpClient.Send(fmt.Sprintf("user %s pass %d vers DraARL 1.0\n", currentAPRSConfig.CallSign, passcode))
 
 		if err != nil {
 			aprsLog("认证失败: %v", err)
@@ -290,7 +290,7 @@ func (a *APRS) sendAPRSPosition() error {
 
 	// 发送附加信息
 	stats := udphub.GetTotalStats()
-	aprsPacket2 := a.formatAPRSPacketTwo("NRLLink", currentAPRSConfig.CallSign, currentAPRSConfig.SSID,
+	aprsPacket2 := a.formatAPRSPacketTwo("DraARL", currentAPRSConfig.CallSign, currentAPRSConfig.SSID,
 		stats.OnlineDevNumber, udphub.GetDeviceCount())
 
 	err = client.Send(aprsPacket2)
@@ -310,13 +310,13 @@ func (a *APRS) formatAPRSPacket(callSign, ssid, address, port string, lat, lon f
 	latStr := a.decToAPRS(lat, true)
 	lonStr := a.decToAPRS(lon, false)
 
-	return fmt.Sprintf("%s-%s>NRLSRV,TCPIP*:!%s/%sI @udp://%s:%s,NRL互联服务器\n",
+	return fmt.Sprintf("%s-%s>DraARLSRV,TCPIP*:!%s/%sI @udp://%s:%s,DraARL互联服务器\n",
 		callSign, ssid, latStr, lonStr, address, port)
 }
 
 // formatAPRSPacketTwo 格式化 APRS 附加信息数据包
 func (a *APRS) formatAPRSPacketTwo(name, callSign, ssid string, onlineNumber, total int) string {
-	return fmt.Sprintf("%s-%s>NRLSRV,TCPIP*:>在线:%d,高峰:%d,%s\n",
+	return fmt.Sprintf("%s-%s>DraARLSRV,TCPIP*:>在线:%d,高峰:%d,%s\n",
 		callSign, ssid, onlineNumber, total, name)
 }
 
@@ -457,7 +457,7 @@ func getNRLFromAPRSTV() {
 
 	// 构造查询参数
 	params := url.Values{}
-	params.Add("dest", "NRLSRV")
+	params.Add("dest", "DraARLSRV")
 	params.Add("duration", "60")
 
 	// 拼接完整 URL
@@ -587,13 +587,13 @@ func getNRLStatsFromAPRSTV() map[string]int {
 	stats := make(map[string]int)
 	for _, item := range apiResponse.Data {
 		switch item.Type {
-		case "NRLSRV":
+		case "DraARLSRV":
 			stats["servers"] = item.Total
-		case "NRLBOX":
+		case "DraARLBOX":
 			stats["boxes"] = item.Total
-		case "NRLAPP":
+		case "DraARLAPP":
 			stats["apps"] = item.Total
-		case "NRLMP":
+		case "DraARLMP":
 			stats["mps"] = item.Total
 		}
 	}

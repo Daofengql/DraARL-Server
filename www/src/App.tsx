@@ -11,6 +11,7 @@ import { RelaysPage } from './pages/relays'
 import { ServersPage } from './pages/servers'
 import { ProfilePage } from './pages/profile'
 import { SiteConfigPage } from './pages/settings'
+import { CommRecordsPage } from './pages/comm-records'
 import { AdminLayout } from './components/layout/AdminLayout'
 import { AdminDashboardPage } from './pages/admin/DashboardPage'
 import { AdminDevicePage } from './pages/admin/DevicePage'
@@ -48,6 +49,7 @@ function App() {
           <Route path="devices" element={<DevicesPage />} />
           <Route path="groups" element={<GroupsPage />} />
           <Route path="profile" element={<ProfilePage />} />
+          <Route path="comm-records" element={<CommRecordsPage />} />
         </Route>
 
         {/* 管理员专用路由 /admin */}
@@ -70,6 +72,7 @@ function App() {
           <Route path="certificate-approvals" element={<CertificateApprovalsPage />} />
           <Route path="relays" element={<RelaysPage />} />
           <Route path="servers" element={<ServersPage />} />
+          <Route path="comm-records" element={<CommRecordsPage />} />
           <Route path="settings" element={<SiteConfigPage />} />
         </Route>
 

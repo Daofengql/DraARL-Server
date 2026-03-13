@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography } from '@mui/material'
-import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group } from '@mui/icons-material'
+import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic } from '@mui/icons-material'
 import { useState } from 'react'
 import { authService } from '../../services'
 
@@ -30,6 +30,7 @@ const adminMenuItems: MenuItem[] = [
   { path: '/admin/groups', label: '群组管理', icon: <Group /> },
   { path: '/admin/relays', label: '中继台', icon: <Radio /> },
   { path: '/admin/servers', label: '服务器', icon: <Dns /> },
+  { path: '/admin/comm-records', label: '通信记录', icon: <Mic /> },
   { path: '/admin/settings', label: '站点配置', icon: <Settings /> },
 ]
 

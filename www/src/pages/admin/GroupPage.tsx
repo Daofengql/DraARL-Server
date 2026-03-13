@@ -292,7 +292,7 @@ export function AdminGroupPage() {
         <TableContainer>
           <Table>
             <TableHead>
-              <TableRow>
+              <TableRow key="header">
                 <TableCell>ID</TableCell>
                 <TableCell>群组名称</TableCell>
                 <TableCell>呼号</TableCell>
@@ -306,13 +306,13 @@ export function AdminGroupPage() {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow>
+                <TableRow key="loading">
                   <TableCell colSpan={9} align="center">
                     <Typography color="text.secondary">加载中...</Typography>
                   </TableCell>
                 </TableRow>
               ) : groups.length === 0 ? (
-                <TableRow>
+                <TableRow key="empty">
                   <TableCell colSpan={9} align="center">
                     <Typography color="text.secondary">暂无群组</Typography>
                   </TableCell>
@@ -378,7 +378,7 @@ export function AdminGroupPage() {
 
                       {/* 设备详情展开行 */}
                       {devices.length > 0 && (
-                        <TableRow>
+                        <TableRow key={`${group.id}-details`}>
                           <TableCell colSpan={9} sx={{ pb: 0, pt: 0 }}>
                             <Accordion
                               variant="outlined"

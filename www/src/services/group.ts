@@ -13,42 +13,42 @@ interface BackendResponse<T> {
 
 // 后端群组响应格式
 interface BackendGroup {
-  ID: number
-  Name: string
-  Type: number
-  CallSign: string
-  Password: string
-  AllowCallSignSSID: string
-  OwerID: number
-  OwerCallSign: string
-  DevList: string
-  MasterServer: number
-  SlaveServer: number
-  Status: number
-  CreateTime: string
-  UpdateTime: string
-  Note: string
+  id: number
+  name: string
+  type: number
+  callsign: string
+  password?: string
+  allow_callsign_ssid: string
+  ower_id: number
+  ower_callsign: string
+  devlist: string
+  master_server: number
+  slave_server: number
+  status: number
+  create_time: string
+  update_time: string
+  note: string
 }
 
 // 标准化群组数据
 const normalizeGroup = (g: BackendGroup): Group => ({
-  id: g.ID,
-  name: g.Name,
-  type: g.Type,
-  callsign: g.CallSign,
-  password: g.Password,
-  allow_callsign_ssid: g.AllowCallSignSSID,
-  ower_id: g.OwerID,
-  ower_callsign: g.OwerCallSign,
-  devlist: g.DevList,
-  master_server: g.MasterServer,
-  slave_server: g.SlaveServer,
-  status: g.Status,
-  note: g.Note,
-  create_time: g.CreateTime,
-  created_at: g.CreateTime, // 前端兼容
-  update_time: g.UpdateTime,
-  updated_at: g.UpdateTime, // 前端兼容
+  id: g.id,
+  name: g.name,
+  type: g.type,
+  callsign: g.callsign,
+  password: g.password ?? '',
+  allow_callsign_ssid: g.allow_callsign_ssid,
+  ower_id: g.ower_id,
+  ower_callsign: g.ower_callsign,
+  devlist: g.devlist,
+  master_server: g.master_server,
+  slave_server: g.slave_server,
+  status: g.status,
+  note: g.note,
+  create_time: g.create_time,
+  created_at: g.create_time, // 前端兼容
+  update_time: g.update_time,
+  updated_at: g.update_time, // 前端兼容
 })
 
 export const groupService = {
@@ -84,21 +84,21 @@ export const groupService = {
   // 创建群组
   async create(data: Partial<Group>): Promise<Group> {
     const backendData: Partial<BackendGroup> = {
-      ID: data.id,
-      Name: data.name,
-      Type: data.type,
-      CallSign: data.callsign,
-      Password: data.password,
-      AllowCallSignSSID: data.allow_callsign_ssid,
-      OwerID: data.ower_id,
-      OwerCallSign: data.ower_callsign,
-      DevList: data.devlist,
-      MasterServer: data.master_server,
-      SlaveServer: data.slave_server,
-      Status: data.status,
-      CreateTime: data.created_at ?? data.create_time,
-      UpdateTime: data.updated_at ?? data.update_time,
-      Note: data.note,
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      callsign: data.callsign,
+      password: data.password,
+      allow_callsign_ssid: data.allow_callsign_ssid,
+      ower_id: data.ower_id,
+      ower_callsign: data.ower_callsign,
+      devlist: data.devlist,
+      master_server: data.master_server,
+      slave_server: data.slave_server,
+      status: data.status,
+      note: data.note,
+      create_time: data.created_at ?? data.create_time ?? new Date().toISOString(),
+      update_time: data.updated_at ?? data.update_time ?? new Date().toISOString(),
     }
     const res = await apiClient.post<BackendResponse<BackendGroup>>('/api/groups', backendData)
     return normalizeGroup(res.data!)
@@ -107,21 +107,21 @@ export const groupService = {
   // 更新群组
   async update(id: number, data: Partial<Group>): Promise<Group> {
     const backendData: Partial<BackendGroup> = {
-      ID: data.id,
-      Name: data.name,
-      Type: data.type,
-      CallSign: data.callsign,
-      Password: data.password,
-      AllowCallSignSSID: data.allow_callsign_ssid,
-      OwerID: data.ower_id,
-      OwerCallSign: data.ower_callsign,
-      DevList: data.devlist,
-      MasterServer: data.master_server,
-      SlaveServer: data.slave_server,
-      Status: data.status,
-      CreateTime: data.created_at ?? data.create_time,
-      UpdateTime: data.updated_at ?? data.update_time,
-      Note: data.note,
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      callsign: data.callsign,
+      password: data.password,
+      allow_callsign_ssid: data.allow_callsign_ssid,
+      ower_id: data.ower_id,
+      ower_callsign: data.ower_callsign,
+      devlist: data.devlist,
+      master_server: data.master_server,
+      slave_server: data.slave_server,
+      status: data.status,
+      note: data.note,
+      create_time: data.created_at ?? data.create_time,
+      update_time: data.updated_at ?? data.update_time,
     }
     const res = await apiClient.put<BackendResponse<BackendGroup>>(`/api/groups/${id}`, backendData)
     return normalizeGroup(res.data!)

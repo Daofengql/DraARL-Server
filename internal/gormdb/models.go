@@ -101,21 +101,21 @@ func (Device) TableName() string {
 // Group 群组模型
 type Group struct {
 	ID                int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name              string    `gorm:"type:varchar(255)" json:"name"`
-	Type              int       `gorm:"type:int" json:"type"`
-	CallSign          string    `gorm:"type:varchar(255)" json:"callsign"`
-	Password          string    `gorm:"type:varchar(255)" json:"password"`
-	AllowDMRID        string    `gorm:"type:text" json:"allow_dmrid"`
-	AllowCallSignSSID string    `gorm:"type:text" json:"allow_callsign_ssid"`
-	OwerID            int       `gorm:"type:int" json:"ower_id"`
-	OwerCallSign      string    `gorm:"type:varchar(255)" json:"ower_callsign"`
-	DevList           string    `gorm:"type:text" json:"devlist"`
-	MasterServer      int       `gorm:"type:int" json:"master_server"`
-	SlaveServer       int       `gorm:"type:int" json:"slave_server"`
-	Status            int       `gorm:"type:int;default:1" json:"status"`
-	CreateTime        time.Time `gorm:"autoCreateTime" json:"create_time"`
-	UpdateTime        time.Time `gorm:"autoUpdateTime" json:"update_time"`
-	Note              string    `gorm:"type:text" json:"note"`
+	Name              string    `gorm:"type:varchar(255);column:name" json:"name"`
+	Type              int       `gorm:"type:int;column:type" json:"type"`
+	CallSign          string    `gorm:"type:varchar(255);column:call_sign" json:"callsign"`
+	Password          string    `gorm:"type:varchar(255);column:password" json:"password"`
+	AllowDMRID        string    `gorm:"type:text;column:allow_dmr_id" json:"allow_dmrid"`
+	AllowCallSignSSID string    `gorm:"type:text;column:allow_callsign_ssid" json:"allow_callsign_ssid"`
+	OwerID            int       `gorm:"type:int;column:ower_id" json:"ower_id"`
+	OwerCallSign      string    `gorm:"type:varchar(255);column:ower_callsign" json:"ower_callsign"`
+	DevList           string    `gorm:"type:text;column:dev_list" json:"devlist"`
+	MasterServer      int       `gorm:"type:int;column:master_server" json:"master_server"`
+	SlaveServer       int       `gorm:"type:int;column:slave_server" json:"slave_server"`
+	Status            int       `gorm:"type:int;default:1;column:status" json:"status"`
+	CreateTime        time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime        time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Note              string    `gorm:"type:text;column:note" json:"note"`
 
 	// 关联
 	Devices []*Device `gorm:"-" json:"devices,omitempty"`

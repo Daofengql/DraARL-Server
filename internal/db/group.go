@@ -20,7 +20,7 @@ func NewGroupRepository() *GroupRepository {
 // AddPublicGroup 添加公共群组
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 	query := `INSERT INTO public_groups (name, type, call_sign, password, allow_callsign_ssid,
-		ower_id, devlist, master_server, slave_server, status, create_time, update_time)
+		ower_id, dev_list, master_server, slave_server, status, create_time, update_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, group.Name, group.Type, group.CallSign, group.Password,

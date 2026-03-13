@@ -12,7 +12,6 @@ import {
   TextField,
   Button,
   IconButton,
-  Chip,
   Typography,
   Dialog,
   DialogTitle,
@@ -23,17 +22,21 @@ import {
   Select,
   MenuItem,
   Alert,
+  Stack,
+  Tooltip,
 } from '@mui/material'
 import {
   Add,
   Edit,
   Delete,
   Search,
-  Radio,
-  RadioButtonUnchecked,
+  Circle,
+  LockOpen,
+  Lock,
 } from '@mui/icons-material'
 import { deviceService, groupService } from '../../services'
 import type { Device, Group } from '../../types'
+import { SwitchGroupDialog } from './SwitchGroupDialog'
 
 const DEVICE_MODELS = [
   { value: 0, label: '微信小程序' },
@@ -50,6 +53,9 @@ const DEVICE_MODELS = [
   { value: 11, label: 'MMDVM' },
 ]
 
+const GROUP_TYPE_PUBLIC = 1
+const GROUP_TYPE_PRIVATE = 2
+
 export function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([])
   const [groups, setGroups] = useState<Group[]>([])
@@ -59,6 +65,8 @@ export function DevicesPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
+  const [switchingDevice, setSwitchingDevice] = useState<Device | null>(null)
   const [editingDevice, setEditingDevice] = useState<Device | null>(null)
   const [formData, setFormData] = useState({
     name: '',
@@ -66,12 +74,14 @@ export function DevicesPage() {
     ssid: 0,
     model: 1,
     group_id: 0,
+    disable_send: false,
+    disable_recv: false,
   })
 
   useEffect(() => {
     loadDevices()
     loadGroups()
-  }, [page, rowsPerPage])
+  }, [])
 
   const loadDevices = async () => {
     setLoading(true)
@@ -94,20 +104,77 @@ export function DevicesPage() {
     }
   }
 
-  const handleSearch = async () => {
-    setLoading(true)
+  // 对设备禁发/禁收状态进行直观的圆���渲染（绿灯正常，红灯禁用）
+  const renderStatusDots = (device: Device) => (
+    <Stack direction="row" spacing={1} alignItems="center">
+      {/* 发送控制 */}
+      <Tooltip title={device.disable_send ? '点击启用发送' : '点击禁用发送'}>
+        <Button
+          size="small"
+          variant={device.disable_send ? 'outlined' : 'contained'}
+          color={device.disable_send ? 'error' : 'success'}
+          onClick={() => handleToggleSend(device)}
+          sx={{ minWidth: 56, fontSize: '0.75rem' }}
+        >
+          发送
+        </Button>
+      </Tooltip>
+
+      {/* 接收控制 */}
+      <Tooltip title={device.disable_recv ? '点击启用接收' : '点击禁用接收'}>
+        <Button
+          size="small"
+          variant={device.disable_recv ? 'outlined' : 'contained'}
+          color={device.disable_recv ? 'error' : 'success'}
+          onClick={() => handleToggleRecv(device)}
+          sx={{ minWidth: 56, fontSize: '0.75rem' }}
+        >
+          接收
+        </Button>
+      </Tooltip>
+    </Stack>
+  )
+
+  // 快捷切换禁发状态
+  const handleToggleSend = async (device: Device) => {
     try {
-      const data = await deviceService.list()
-      const filtered = data.filter(
-        (d) =>
-          d.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-          d.callsign.toLowerCase().includes(searchKeyword.toLowerCase())
-      )
-      setDevices(filtered)
-    } catch (err) {
-      console.error('Search failed:', err)
-    } finally {
-      setLoading(false)
+      await deviceService.update(device.id, {
+        ...device,
+        disable_send: !device.disable_send,
+      })
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '操作失败')
+    }
+  }
+
+  // 快捷切换禁收状态
+  const handleToggleRecv = async (device: Device) => {
+    try {
+      await deviceService.update(device.id, {
+        ...device,
+        disable_recv: !device.disable_recv,
+      })
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '操作失败')
+    }
+  }
+
+  const handleOpenSwitchDialog = (device: Device) => {
+    setSwitchingDevice(device)
+    setSwitchDialogOpen(true)
+  }
+
+  const handleSwitchGroup = async (groupId: number, password?: string) => {
+    if (!switchingDevice) return
+    try {
+      await deviceService.switchGroup(switchingDevice.id, groupId, password)
+      setSwitchDialogOpen(false)
+      setSwitchingDevice(null)
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '切换群组失败')
     }
   }
 
@@ -116,10 +183,12 @@ export function DevicesPage() {
       setEditingDevice(device)
       setFormData({
         name: device.name,
-        callsign: device.callsign,
-        ssid: device.ssid,
+        callsign: '',
+        ssid: 0,
         model: device.model,
-        group_id: device.group_id,
+        group_id: 0,
+        disable_send: false,
+        disable_recv: false,
       })
     } else {
       setEditingDevice(null)
@@ -129,6 +198,8 @@ export function DevicesPage() {
         ssid: 0,
         model: 1,
         group_id: 0,
+        disable_send: false,
+        disable_recv: false,
       })
     }
     setDialogOpen(true)
@@ -141,9 +212,13 @@ export function DevicesPage() {
   }
 
   const handleSave = async () => {
+    if (!formData.name.trim()) {
+      setError('请输入设备名称')
+      return
+    }
     try {
       if (editingDevice) {
-        await deviceService.update(editingDevice.id, formData)
+        await deviceService.update(editingDevice.id, { name: formData.name, model: formData.model })
       } else {
         await deviceService.create(formData)
       }
@@ -176,20 +251,21 @@ export function DevicesPage() {
     page * rowsPerPage + rowsPerPage
   )
 
+  // 获取群组信息
+  const getGroupInfo = (groupId: number) => {
+    return groups.find((g) => g.id === groupId)
+  }
+
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">设备管理</Typography>
+        <Typography variant="h5" fontWeight={600}>设备管理</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
           添加设备
         </Button>
       </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
-          {error}
-        </Alert>
-      )}
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
 
       <Paper sx={{ mb: 2 }}>
         <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
@@ -197,76 +273,89 @@ export function DevicesPage() {
             placeholder="搜索设备名称或呼号"
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
             size="small"
             sx={{ flexGrow: 1 }}
           />
-          <Button variant="outlined" startIcon={<Search />} onClick={handleSearch}>
+          <Button variant="outlined" startIcon={<Search />}>
             搜索
           </Button>
         </Box>
       </Paper>
 
-      <TableContainer component={Paper}>
+      <TableContainer component={Paper} variant="outlined">
         <Table>
-          <TableHead>
+          <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
-              <TableCell>状态</TableCell>
+              <TableCell width={80}>在线状态</TableCell>
               <TableCell>名称</TableCell>
-              <TableCell>呼号</TableCell>
-              <TableCell>SSID</TableCell>
-              <TableCell>型号</TableCell>
-              <TableCell>群组</TableCell>
-              <TableCell>操作</TableCell>
+              <TableCell>呼号及SSID</TableCell>
+              <TableCell>所在群组</TableCell>
+              <TableCell width={130}>收发控制</TableCell>
+              <TableCell align="right">操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  加载中...
-                </TableCell>
-              </TableRow>
+              <TableRow><TableCell colSpan={6} align="center">加载中...</TableCell></TableRow>
             ) : paginatedDevices.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  暂无数据
-                </TableCell>
-              </TableRow>
+              <TableRow><TableCell colSpan={6} align="center">暂无设备数据</TableCell></TableRow>
             ) : (
-              paginatedDevices.map((device) => (
-                <TableRow key={device.id} hover>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {device.online ? (
-                        <Radio color="success" fontSize="small" />
+              paginatedDevices.map((device) => {
+                const group = getGroupInfo(device.group_id)
+                return (
+                  <TableRow key={device.id} hover>
+                    {/* 在线状态使用绿圆点或灰圆圈 */}
+                    <TableCell>
+                      {device.online || device.is_online ?
+                        <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :
+                        <Circle sx={{ fontSize: 16, color: 'text.disabled' }} />
+                      }
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 500 }}>{device.name}</TableCell>
+                    <TableCell>{device.callsign}-{device.ssid}</TableCell>
+                    <TableCell>
+                      {group ? (
+                        <Stack direction="row" alignItems="center" spacing={1}>
+                          <Typography variant="body2">{group.name}</Typography>
+                          {group.type === GROUP_TYPE_PRIVATE && (
+                            <Tooltip title="私有群组">
+                              <Lock fontSize="small" color="secondary" sx={{ fontSize: 16 }}/>
+                            </Tooltip>
+                          )}
+                        </Stack>
                       ) : (
-                        <RadioButtonUnchecked color="disabled" fontSize="small" />
+                        <Typography variant="body2" color="text.disabled">无群组或群组已解散</Typography>
                       )}
-                      <Chip
-                        label={device.online ? '在线' : '离线'}
+                    </TableCell>
+
+                    {/* 按需求渲染状态圆点: 左绿发, 右绿收，可点击切换 */}
+                    <TableCell>
+                      {renderStatusDots(device)}
+                    </TableCell>
+
+                    <TableCell align="right">
+                      <Button
                         size="small"
-                        color={device.online ? 'success' : 'default'}
-                      />
-                    </Box>
-                  </TableCell>
-                  <TableCell>{device.name}</TableCell>
-                  <TableCell>{device.callsign}</TableCell>
-                  <TableCell>{device.ssid}</TableCell>
-                  <TableCell>
-                    {DEVICE_MODELS.find((m) => m.value === device.model)?.label || '未知'}
-                  </TableCell>
-                  <TableCell>{groups.find((g) => g.id === device.group_id)?.name || '-'}</TableCell>
-                  <TableCell>
-                    <IconButton size="small" onClick={() => handleOpenDialog(device)}>
-                      <Edit fontSize="small" />
-                    </IconButton>
-                    <IconButton size="small" color="error" onClick={() => handleDelete(device.id)}>
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))
+                        variant="outlined"
+                        sx={{ mr: 1 }}
+                        onClick={() => handleOpenSwitchDialog(device)}
+                      >
+                        切换群组
+                      </Button>
+                      <Tooltip title="编辑设备">
+                        <IconButton size="small" onClick={() => handleOpenDialog(device)}>
+                          <Edit fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="删除设备">
+                        <IconButton size="small" color="error" onClick={() => handleDelete(device.id)}>
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>
@@ -285,6 +374,7 @@ export function DevicesPage() {
         />
       </TableContainer>
 
+      {/* 编辑设备对话框 */}
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>{editingDevice ? '编辑设备' : '添加设备'}</DialogTitle>
         <DialogContent>
@@ -294,19 +384,7 @@ export function DevicesPage() {
               fullWidth
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            />
-            <TextField
-              label="呼号"
-              fullWidth
-              value={formData.callsign}
-              onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
-            />
-            <TextField
-              label="SSID"
-              type="number"
-              fullWidth
-              value={formData.ssid}
-              onChange={(e) => setFormData({ ...formData, ssid: parseInt(e.target.value) || 0 })}
+              autoFocus
             />
             <FormControl fullWidth>
               <InputLabel>设备型号</InputLabel>
@@ -322,21 +400,6 @@ export function DevicesPage() {
                 ))}
               </Select>
             </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>所属群组</InputLabel>
-              <Select
-                value={formData.group_id}
-                label="所属群组"
-                onChange={(e) => setFormData({ ...formData, group_id: e.target.value as number })}
-              >
-                <MenuItem value={0}>无群组</MenuItem>
-                {groups.map((group) => (
-                  <MenuItem key={group.id} value={group.id}>
-                    {group.name}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
           </Box>
         </DialogContent>
         <DialogActions>
@@ -346,6 +409,20 @@ export function DevicesPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 切换群组对话框 */}
+      {switchingDevice && (
+        <SwitchGroupDialog
+          open={switchDialogOpen}
+          onClose={() => {
+            setSwitchDialogOpen(false)
+            setSwitchingDevice(null)
+          }}
+          device={switchingDevice}
+          groups={groups}
+          onSwitch={handleSwitchGroup}
+        />
+      )}
     </Box>
   )
 }

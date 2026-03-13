@@ -1,95 +1,98 @@
 import { useState, useEffect } from 'react'
 import {
   Box,
-  Card,
-  CardContent,
-  Typography,
+  Paper,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Paper,
-  Chip,
+  TablePagination,
+  TextField,
+  Button,
   IconButton,
+  Typography,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  Button,
-  TextField,
-  Stack,
-  Alert,
-  Tooltip,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
-  TablePagination,
-  InputAdornment,
+  Alert,
+  Stack,
+  Tooltip,
 } from '@mui/material'
 import {
   Add,
   Edit,
   Delete,
   Search,
-  CheckCircle,
-  Cancel,
-  Refresh,
+  Circle,
+  Lock,
+  Person,
 } from '@mui/icons-material'
-import { deviceService } from '../../services/device'
+import { deviceService, groupService, userService } from '../../services'
+import type { Device, Group, User } from '../../types'
+import { SwitchGroupDialog } from '../devices/SwitchGroupDialog'
+import { UserDetailPopover } from '../../components/UserDetailPopover'
 
-interface Device {
-  id: number
-  name: string
-  callsign: string
-  ssid: number
-  dev_model: number
-  group_id: number
-  is_online: boolean
-  status: number
-  priority?: number
-  qth?: string
-  online_time?: string
-  create_time?: string
-  update_time?: string
-}
+const DEVICE_MODELS = [
+  { value: 0, label: '微信小程序' },
+  { value: 1, label: 'Android' },
+  { value: 2, label: 'iOS' },
+  { value: 3, label: 'Windows' },
+  { value: 4, label: '浏览器' },
+  { value: 5, label: '服务器' },
+  { value: 6, label: 'BM网关' },
+  { value: 7, label: 'DMR网关' },
+  { value: 8, label: 'YSF网关' },
+  { value: 9, label: 'P25网关' },
+  { value: 10, label: 'NXDN网关' },
+  { value: 11, label: 'MMDVM' },
+]
 
-interface Group {
-  id: number
-  name: string
-  description?: string
-}
+const GROUP_TYPE_PRIVATE = 2
 
 export function AdminDevicePage() {
   const [devices, setDevices] = useState<Device[]>([])
   const [groups, setGroups] = useState<Group[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [users, setUsers] = useState<User[]>([])
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
-  const [total, setTotal] = useState(0)
   const [searchKeyword, setSearchKeyword] = useState('')
-
-  // 对话框状态
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
+  const [switchingDevice, setSwitchingDevice] = useState<Device | null>(null)
   const [editingDevice, setEditingDevice] = useState<Device | null>(null)
   const [deletingDevice, setDeletingDevice] = useState<Device | null>(null)
 
-  // 表单状态
+  // 用户详情弹窗状态
+  const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+
   const [formData, setFormData] = useState({
     name: '',
     callsign: '',
     ssid: 0,
-    dev_model: 1,
+    model: 1,
     group_id: 0,
-    priority: 0,
-    qth: '',
+    disable_send: false,
+    disable_recv: false,
   })
 
-  const fetchDevices = async () => {
+  useEffect(() => {
+    loadDevices()
+    loadGroups()
+    loadUsers()
+  }, [])
+
+  const loadDevices = async () => {
     setLoading(true)
     try {
       const result = await deviceService.getList({
@@ -98,74 +101,175 @@ export function AdminDevicePage() {
         keyword: searchKeyword || undefined,
       })
       setDevices(result.items)
-      setTotal(result.total)
     } catch (err) {
+      console.error('Failed to load devices:', err)
       setError('获取设备列表失败')
     } finally {
       setLoading(false)
     }
   }
 
-  const fetchGroups = async () => {
+  const loadGroups = async () => {
     try {
-      // 这里需要添加获取群组列表的服务
-      // const result = await groupService.list()
-      // setGroups(result)
-      // 临时数据
-      setGroups([
-        { id: 1, name: '默认群组', description: '系统默认群组' },
-      ])
+      const data = await groupService.list()
+      setGroups(data)
     } catch (err) {
-      console.error('获取群组列表失败', err)
+      console.error('Failed to load groups:', err)
     }
   }
 
-  useEffect(() => {
-    fetchDevices()
-    fetchGroups()
-  }, [page, rowsPerPage])
-
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (page === 0) {
-        fetchDevices()
-      } else {
-        setPage(0)
-      }
-    }, 500)
-    return () => clearTimeout(timeoutId)
-  }, [searchKeyword])
-
-  const handleSearch = (value: string) => {
-    setSearchKeyword(value)
+  const loadUsers = async () => {
+    try {
+      const data = await userService.getList()
+      setUsers(data.items || data)
+    } catch (err) {
+      console.error('Failed to load users:', err)
+    }
   }
 
-  const handleOpenAdd = () => {
+  // 获取用户信息
+  const getUserInfo = (userId?: number) => {
+    if (!userId) return null
+    return users.find((u) => u.id === userId)
+  }
+
+  // 打开用户详情
+  const handleOpenUserDetail = (event: React.MouseEvent<HTMLElement>, user: User) => {
+    setSelectedUser(user)
+    setUserDetailAnchorEl(event.currentTarget)
+  }
+
+  // 关闭用户详情
+  const handleCloseUserDetail = () => {
+    setUserDetailAnchorEl(null)
+    setSelectedUser(null)
+  }
+
+  // 对设备禁发/禁收状态进行直观的渲染（绿灯正常，红灯禁用）
+  const renderStatusDots = (device: Device) => (
+    <Stack direction="row" spacing={1} alignItems="center">
+      {/* 发送控制 */}
+      <Tooltip title={device.disable_send ? '点击启用发送' : '点击禁用发送'}>
+        <Button
+          size="small"
+          variant={device.disable_send ? 'outlined' : 'contained'}
+          color={device.disable_send ? 'error' : 'success'}
+          onClick={() => handleToggleSend(device)}
+          sx={{ minWidth: 56, fontSize: '0.75rem' }}
+        >
+          发送
+        </Button>
+      </Tooltip>
+
+      {/* 接收控制 */}
+      <Tooltip title={device.disable_recv ? '点击启用接收' : '点击禁用接收'}>
+        <Button
+          size="small"
+          variant={device.disable_recv ? 'outlined' : 'contained'}
+          color={device.disable_recv ? 'error' : 'success'}
+          onClick={() => handleToggleRecv(device)}
+          sx={{ minWidth: 56, fontSize: '0.75rem' }}
+        >
+          接收
+        </Button>
+      </Tooltip>
+    </Stack>
+  )
+
+  // 快捷切换禁发状态
+  const handleToggleSend = async (device: Device) => {
+    try {
+      await deviceService.update(device.id, {
+        ...device,
+        disable_send: !(device.disable_send ?? false),
+      })
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '操作失败')
+    }
+  }
+
+  // 快捷切换禁收状态
+  const handleToggleRecv = async (device: Device) => {
+    try {
+      await deviceService.update(device.id, {
+        ...device,
+        disable_recv: !(device.disable_recv ?? false),
+      })
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '操作失败')
+    }
+  }
+
+  const handleOpenSwitchDialog = (device: Device) => {
+    setSwitchingDevice(device)
+    setSwitchDialogOpen(true)
+  }
+
+  const handleSwitchGroup = async (groupId: number, password?: string) => {
+    if (!switchingDevice) return
+    try {
+      await deviceService.switchGroup(switchingDevice.id, groupId, password)
+      setSwitchDialogOpen(false)
+      setSwitchingDevice(null)
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '切换群组失败')
+    }
+  }
+
+  const handleOpenDialog = (device?: Device) => {
+    if (device) {
+      setEditingDevice(device)
+      setDeletingDevice(null)
+      setFormData({
+        name: device.name,
+        callsign: device.callsign,
+        ssid: device.ssid,
+        model: device.model ?? device.dev_model ?? 1,
+        group_id: device.group_id,
+        disable_send: device.disable_send ?? false,
+        disable_recv: device.disable_recv ?? false,
+      })
+    } else {
+      setEditingDevice(null)
+      setDeletingDevice(null)
+      setFormData({
+        name: '',
+        callsign: '',
+        ssid: 0,
+        model: 1,
+        group_id: 0,
+        disable_send: false,
+        disable_recv: false,
+      })
+    }
+    setDialogOpen(true)
+    setError('')
+  }
+
+  const handleCloseDialog = () => {
+    setDialogOpen(false)
     setEditingDevice(null)
-    setFormData({
-      name: '',
-      callsign: '',
-      ssid: 0,
-      dev_model: 1,
-      group_id: 0,
-      priority: 0,
-      qth: '',
-    })
-    setDialogOpen(true)
   }
 
-  const handleOpenEdit = (device: Device) => {
-    setEditingDevice(device)
-    setFormData({
-      name: device.name,
-      callsign: device.callsign,
-      ssid: device.ssid,
-      dev_model: device.dev_model,
-      group_id: device.group_id,
-      priority: device.priority || 0,
-      qth: device.qth || '',
-    })
-    setDialogOpen(true)
+  const handleSave = async () => {
+    if (!formData.name.trim()) {
+      setError('请输入设备名称')
+      return
+    }
+    try {
+      if (editingDevice) {
+        await deviceService.update(editingDevice.id, formData)
+      } else {
+        await deviceService.create(formData)
+      }
+      handleCloseDialog()
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '操作失败')
+    }
   }
 
   const handleOpenDelete = (device: Device) => {
@@ -173,194 +277,172 @@ export function AdminDevicePage() {
     setDeleteDialogOpen(true)
   }
 
-  const handleSave = async () => {
-    try {
-      if (editingDevice) {
-        await deviceService.update(editingDevice.id, formData)
-      } else {
-        await deviceService.create(formData)
-      }
-      setDialogOpen(false)
-      fetchDevices()
-    } catch (err) {
-      setError(editingDevice ? '更新设备失败' : '创建设备失败')
-    }
-  }
-
   const handleDelete = async () => {
     if (!deletingDevice) return
     try {
       await deviceService.delete(deletingDevice.id)
       setDeleteDialogOpen(false)
-      fetchDevices()
-    } catch (err) {
-      setError('删除设备失败')
+      setDeletingDevice(null)
+      loadDevices()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '删除失败')
     }
   }
 
-  const getStatusLabel = (status: number) => {
-    switch (status) {
-      case 1:
-        return <Chip label="正常" color="success" size="small" />
-      case 0:
-        return <Chip label="禁用" color="default" size="small" />
-      case -1:
-        return <Chip label="故障" color="error" size="small" />
-      default:
-        return <Chip label="未知" color="default" size="small" />
-    }
+  const filteredDevices = devices.filter(
+    (d) =>
+      !searchKeyword ||
+      d.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+      d.callsign.toLowerCase().includes(searchKeyword.toLowerCase())
+  )
+
+  // 获取群组信息
+  const getGroupInfo = (groupId: number) => {
+    return groups.find((g) => g.id === groupId)
   }
 
-  const getModelLabel = (model: number) => {
-    switch (model) {
-      case 1:
-        return 'APRS'
-      case 2:
-        return 'NRL1'
-      case 3:
-        return 'NRL2'
-      default:
-        return `型号${model}`
-    }
+  const handleSearch = () => {
+    setPage(0)
+    loadDevices()
   }
 
   return (
-    <Stack spacing={3}>
-      {/* 页面标题 */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="h5" fontWeight={600}>
-          设备管理
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button
-            startIcon={<Refresh />}
-            onClick={fetchDevices}
-            variant="outlined"
-          >
-            刷新
-          </Button>
-          <Button
-            startIcon={<Add />}
-            onClick={handleOpenAdd}
-            variant="contained"
-          >
-            添加设备
-          </Button>
-        </Box>
+    <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h4">设备管理</Typography>
+        <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
+          添加设备
+        </Button>
       </Box>
 
-      {error && (
-        <Alert severity="error" onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      )}
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
 
-      {/* 搜索栏 */}
-      <Card>
-        <CardContent>
+      <Paper sx={{ mb: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
           <TextField
-            fullWidth
-            placeholder="搜索设备名称、呼号..."
+            placeholder="搜索设备名称或呼号"
             value={searchKeyword}
-            onChange={(e) => handleSearch(e.target.value)}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <Search color="action" />
-                </InputAdornment>
-              ),
-            }}
+            onChange={(e) => setSearchKeyword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            size="small"
+            sx={{ flexGrow: 1 }}
           />
-        </CardContent>
-      </Card>
+          <Button variant="outlined" startIcon={<Search />} onClick={handleSearch}>
+            搜索
+          </Button>
+        </Box>
+      </Paper>
 
-      {/* 设备列表 */}
-      <Card>
-        <TableContainer>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>ID</TableCell>
-                <TableCell>设备名称</TableCell>
-                <TableCell>呼号</TableCell>
-                <TableCell>SSID</TableCell>
-                <TableCell>型号</TableCell>
-                <TableCell>群组</TableCell>
-                <TableCell>状态</TableCell>
-                <TableCell>在线</TableCell>
-                <TableCell>优先级</TableCell>
-                <TableCell align="right">操作</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={10} align="center">
-                    <Typography color="text.secondary">加载中...</Typography>
-                  </TableCell>
-                </TableRow>
-              ) : devices.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={10} align="center">
-                    <Typography color="text.secondary">暂无设备</Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                devices.map((device) => (
+      <TableContainer component={Paper} variant="outlined">
+        <Table>
+          <TableHead sx={{ bgcolor: 'grey.50' }}>
+            <TableRow>
+              <TableCell width={80}>在线</TableCell>
+              <TableCell>名称</TableCell>
+              <TableCell>呼号SSID</TableCell>
+              <TableCell>所有者</TableCell>
+              <TableCell>所在群组</TableCell>
+              <TableCell width={130}>收发控制</TableCell>
+              <TableCell align="right">操作</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {loading ? (
+              <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
+            ) : filteredDevices.length === 0 ? (
+              <TableRow><TableCell colSpan={7} align="center">暂无设备数据</TableCell></TableRow>
+            ) : (
+              filteredDevices.map((device) => {
+                const group = getGroupInfo(device.group_id)
+                const owner = getUserInfo(device.owner_id)
+                return (
                   <TableRow key={device.id} hover>
-                    <TableCell>{device.id}</TableCell>
-                    <TableCell>{device.name}</TableCell>
-                    <TableCell>{device.callsign}</TableCell>
-                    <TableCell>{device.ssid}</TableCell>
-                    <TableCell>{getModelLabel(device.dev_model)}</TableCell>
-                    <TableCell>{device.group_id}</TableCell>
-                    <TableCell>{getStatusLabel(device.status)}</TableCell>
+                    {/* 在线状态使用绿圆点或灰圆圈 */}
                     <TableCell>
-                      {device.is_online ? (
-                        <Chip
-                          label="在线"
-                          color="success"
-                          size="small"
-                          icon={<CheckCircle />}
-                        />
+                      {device.online || device.is_online ?
+                        <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :
+                        <Circle sx={{ fontSize: 16, color: 'text.disabled' }} />
+                      }
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 500 }}>{device.name}</TableCell>
+                    <TableCell>{device.callsign}-{device.ssid}</TableCell>
+                    <TableCell>
+                      {owner ? (
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1,
+                            cursor: 'pointer',
+                            '&:hover': {
+                            '& .owner-text': {
+                                color: 'primary.main',
+                                textDecoration: 'underline',
+                              },
+                            },
+                          }}
+                          onClick={(e) => handleOpenUserDetail(e, owner)}
+                        >
+                          <Person color="primary" fontSize="small" />
+                          <Typography className="owner-text" variant="body2">
+                            {owner.callsign || owner.username}
+                          </Typography>
+                        </Box>
                       ) : (
-                        <Chip
-                          label="离线"
-                          color="default"
-                          size="small"
-                          icon={<Cancel />}
-                        />
+                        <Typography variant="body2" color="text.disabled">
+                          {device.owner_name || device.owner_callsign || '-'}
+                        </Typography>
                       )}
                     </TableCell>
-                    <TableCell>{device.priority ?? '-'}</TableCell>
+                    <TableCell>
+                      {group ? (
+                        <Stack direction="row" alignItems="center" spacing={1}>
+                          <Typography variant="body2">{group.name}</Typography>
+                          {group.type === GROUP_TYPE_PRIVATE && (
+                            <Tooltip title="私有群组">
+                              <Lock fontSize="small" color="secondary" sx={{ fontSize: 16 }}/>
+                            </Tooltip>
+                          )}
+                        </Stack>
+                      ) : (
+                        <Typography variant="body2" color="text.disabled">无群组或群组已解散</Typography>
+                      )}
+                    </TableCell>
+
+                    {/* 按需求渲染状态按钮: 左绿发, 右绿收，可点击切换 */}
+                    <TableCell>
+                      {renderStatusDots(device)}
+                    </TableCell>
+
                     <TableCell align="right">
-                      <Tooltip title="编辑">
-                        <IconButton
-                          size="small"
-                          onClick={() => handleOpenEdit(device)}
-                        >
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        sx={{ mr: 1 }}
+                        onClick={() => handleOpenSwitchDialog(device)}
+                      >
+                        切换群组
+                      </Button>
+                      <Tooltip title="编辑设备">
+                        <IconButton size="small" onClick={() => handleOpenDialog(device)}>
                           <Edit fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="删除">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => handleOpenDelete(device)}
-                        >
+                      <Tooltip title="删除设备">
+                        <IconButton size="small" color="error" onClick={() => handleOpenDelete(device)}>
                           <Delete fontSize="small" />
                         </IconButton>
                       </Tooltip>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
         <TablePagination
           component="div"
-          count={total}
+          count={-1} // 后台分页，前端不确定总数
           page={page}
           onPageChange={(_, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
@@ -369,22 +451,21 @@ export function AdminDevicePage() {
             setPage(0)
           }}
           labelRowsPerPage="每页行数"
-          labelDisplayedRows={({ from, to, count }) =>
-            `${from}-${to} 共 ${count !== -1 ? count : `超过 ${to}`} 条`
-          }
+          labelDisplayedRows={({ from, to, count }) => `${from}-${to} ${count !== -1 ? `共 ${count}` : ''}`}
         />
-      </Card>
+      </TableContainer>
 
-      {/* 添加/编辑对话框 */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+      {/* 编辑设备对话框 */}
+      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>{editingDevice ? '编辑设备' : '添加设备'}</DialogTitle>
         <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <TextField
               label="设备名称"
               fullWidth
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              autoFocus
             />
             <TextField
               label="呼号"
@@ -402,13 +483,15 @@ export function AdminDevicePage() {
             <FormControl fullWidth>
               <InputLabel>设备型号</InputLabel>
               <Select
-                value={formData.dev_model}
+                value={formData.model}
                 label="设备型号"
-                onChange={(e) => setFormData({ ...formData, dev_model: e.target.value as number })}
+                onChange={(e) => setFormData({ ...formData, model: e.target.value as number })}
               >
-                <MenuItem value={1}>APRS</MenuItem>
-                <MenuItem value={2}>NRL1</MenuItem>
-                <MenuItem value={3}>NRL2</MenuItem>
+                {DEVICE_MODELS.map((model) => (
+                  <MenuItem key={model.value} value={model.value}>
+                    {model.label}
+                  </MenuItem>
+                ))}
               </Select>
             </FormControl>
             <FormControl fullWidth>
@@ -426,24 +509,10 @@ export function AdminDevicePage() {
                 ))}
               </Select>
             </FormControl>
-            <TextField
-              label="优先级"
-              type="number"
-              fullWidth
-              value={formData.priority}
-              onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 0 })}
-            />
-            <TextField
-              label="位置 (QTH)"
-              fullWidth
-              value={formData.qth}
-              onChange={(e) => setFormData({ ...formData, qth: e.target.value })}
-              placeholder="例: PM00abcd"
-            />
-          </Stack>
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>取消</Button>
+          <Button onClick={handleCloseDialog}>取消</Button>
           <Button onClick={handleSave} variant="contained">
             保存
           </Button>
@@ -465,6 +534,28 @@ export function AdminDevicePage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Stack>
+
+      {/* 切换群组对话框 */}
+      {switchingDevice && (
+        <SwitchGroupDialog
+          open={switchDialogOpen}
+          onClose={() => {
+            setSwitchDialogOpen(false)
+            setSwitchingDevice(null)
+          }}
+          device={switchingDevice}
+          groups={groups}
+          onSwitch={handleSwitchGroup}
+        />
+      )}
+
+      {/* 用户详情弹窗 */}
+      <UserDetailPopover
+        open={Boolean(userDetailAnchorEl)}
+        anchorEl={userDetailAnchorEl}
+        onClose={handleCloseUserDetail}
+        user={selectedUser}
+      />
+    </Box>
   )
 }

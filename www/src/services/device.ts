@@ -170,4 +170,18 @@ export const deviceService = {
   async change2W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
     await apiClient.post<BackendResponse<unknown>>('/api/device/change2w', data)
   },
+
+  // 切换设备群组
+  async switchGroup(
+    deviceId: number,
+    groupId: number,
+    password?: string
+  ): Promise<Device> {
+    const res = await apiClient.post<BackendResponse<BackendDevice>>('/api/device/changegroup', {
+      device_id: deviceId,
+      group_id: groupId,
+      password: password || ''
+    })
+    return normalizeDevice(res.data!)
+  },
 }

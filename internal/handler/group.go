@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
@@ -27,38 +28,98 @@ type GroupInfo struct {
 	Note              string `json:"note"`
 }
 
-// GetGroups 获取群组列表
+// GetGroups 获取群组列表（区分公开/私有）
 func GetGroups(c *gin.Context) {
-	repo := gormdb.NewGroupRepository()
+	// 获取查询参数
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	keyword := c.Query("keyword")
 
-	groupsRaw, err := repo.ListGroups()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "查询群组列表失败",
-		})
-		return
+	// 获取当前用户
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+
+	var groups []*gormdb.Group
+	var total int64
+	var err error
+
+	if keyword != "" {
+		// 关键词搜索
+		groups, err = gormdb.NewGroupRepository().SearchGroups(keyword)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "查询群组列表失败",
+			})
+			return
+		}
+	} else {
+		// 获取所有可见群组
+		// 公开群组所有人可见，私有群组只对已验证用户可见
+		if currentUser != nil {
+			// 获取用户已验证的群组ID列表
+			memberRepo := gormdb.NewGroupMemberRepository()
+			members, err := memberRepo.ListGroupsByUser(currentUser.ID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取用户群组失败",
+				})
+				return
+			}
+
+			// 获取所有公开群组
+			publicGroups, err := gormdb.NewGroupRepository().ListPublicGroups()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取公开群组失败",
+				})
+				return
+			}
+
+			// 获取用户已验证的私有群组
+			groupIDs := make([]int, 0, len(members))
+			for _, m := range members {
+				groupIDs = append(groupIDs, m.GroupID)
+			}
+			var privateGroups []*gormdb.Group
+			if len(groupIDs) > 0 {
+				privateGroups, err = gormdb.NewGroupRepository().GetGroupsByIDs(groupIDs)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "获取私有群组失败",
+					})
+					return
+				}
+			}
+
+			// 合并公开群组和私有群组
+			groups = append(publicGroups, privateGroups...)
+		} else {
+			// 管理员查看所有群组
+			groups, err = gormdb.NewGroupRepository().ListGroups()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "查询群组列表失败",
+				})
+				return
+			}
+		}
 	}
 
-	groups := make([]*GroupInfo, 0, len(groupsRaw))
-	for _, g := range groupsRaw {
-		group := &GroupInfo{
-			ID:                g.ID,
-			Name:              g.Name,
-			Type:              g.Type,
-			CallSign:          g.CallSign,
-			AllowCallSignSSID: g.AllowCallSignSSID,
-			OwerID:            g.OwerID,
-			OwerCallSign:      g.OwerCallSign,
-			DevList:           g.DevList,
-			MasterServer:      g.MasterServer,
-			SlaveServer:       g.SlaveServer,
-			Status:            g.Status,
-			CreateTime:        g.CreateTime.Format("2006-01-02 15:04:05"),
-			UpdateTime:        g.UpdateTime.Format("2006-01-02 15:04:05"),
-			Note:              g.Note,
-		}
-		groups = append(groups, group)
+	// 计算总数和分页
+	total = int64(len(groups))
+	offset := (page - 1) * pageSize
+	if int64(offset) >= total {
+		groups = []*gormdb.Group{}
+	} else if offset+pageSize > int(total) {
+		groups = groups[offset:]
+	} else {
+		groups = groups[offset : offset+pageSize]
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -66,6 +127,9 @@ func GetGroups(c *gin.Context) {
 		"message": "成功",
 		"data": gin.H{
 			"items": groups,
+			"total":   total,
+			"page":    page,
+			"page_size": pageSize,
 		},
 	})
 }
@@ -291,22 +355,71 @@ func GetGroupDevices(c *gin.Context) {
 		return
 	}
 
+	// 获取群组成员记录，用于获取群组级别的禁发/禁收设置
+	memberRepo := gormdb.NewGroupMemberRepository()
+	groupMembers, _ := memberRepo.ListMembersByGroup(groupID)
+
+	// 构建设备ID到群组成员状态的映射
+	type memberStatus struct {
+		disableSend bool
+		disableRecv bool
+	}
+	deviceMemberStatus := make(map[int]memberStatus)
+	for _, m := range groupMembers {
+		if m.DeviceID != nil {
+			deviceMemberStatus[*m.DeviceID] = memberStatus{
+				disableSend: m.DisableSend,
+				disableRecv: m.DisableRecv,
+			}
+		}
+	}
+
 	// 转换为响应格式
 	devices := make([]gin.H, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
-		devices = append(devices, gin.H{
-			"id":         d.ID,
-			"name":       d.Name,
-			"callsign":   d.CallSign,
-			"ssid":       d.SSID,
-			"dev_model":  d.DevModel,
-			"group_id":   d.GroupID,
-			"status":     d.Status,
-			"priority":   d.Priority,
-			"is_online":  d.ISOnline,
-			"create_time": d.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time": d.UpdateTime.Format("2006-01-02 15:04:05"),
-		})
+		// 获取设备级别的禁发/禁收状态
+		deviceDisableSend := d.DisableSend
+		deviceDisableRecv := d.DisableRecv
+
+		// 如果有群组成员级别的设置，需要进行合并（设备级别优先）
+		if memberStatus, ok := deviceMemberStatus[d.ID]; ok {
+			// 最终状态 = 设备级 OR 群组成员级（任一禁用则禁用）
+			finalDisableSend := deviceDisableSend || memberStatus.disableSend
+			finalDisableRecv := deviceDisableRecv || memberStatus.disableRecv
+
+			devices = append(devices, gin.H{
+				"id":           d.ID,
+				"name":         d.Name,
+				"callsign":     d.CallSign,
+				"ssid":         d.SSID,
+				"dev_model":    d.DevModel,
+				"group_id":     d.GroupID,
+				"status":       d.Status,
+				"priority":     d.Priority,
+				"is_online":    d.ISOnline,
+				"disable_send": finalDisableSend, // 合并后的禁发状态
+				"disable_recv": finalDisableRecv, // 合并后的禁收状态
+				"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
+				"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
+			})
+		} else {
+			// 没有群组成员记录，只使用设备级别的设置
+			devices = append(devices, gin.H{
+				"id":           d.ID,
+				"name":         d.Name,
+				"callsign":     d.CallSign,
+				"ssid":         d.SSID,
+				"dev_model":    d.DevModel,
+				"group_id":     d.GroupID,
+				"status":       d.Status,
+				"priority":     d.Priority,
+				"is_online":    d.ISOnline,
+				"disable_send": deviceDisableSend,
+				"disable_recv": deviceDisableRecv,
+				"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
+				"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
+			})
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -358,5 +471,584 @@ func GetServers(c *gin.Context) {
 		"data": gin.H{
 			"items": servers,
 		},
+	})
+}
+
+// SearchGroupsRequest 搜索群组请求
+type SearchGroupsRequest struct {
+	Keyword string `json:"keyword"`
+	Page    int    `json:"page"`
+	PageSize int    `json:"page_size"`
+}
+
+// SearchGroups 搜索群组
+func SearchGroups(c *gin.Context) {
+	var req SearchGroupsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	repo := gormdb.NewGroupRepository()
+	groups, err := repo.SearchGroups(req.Keyword)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "搜索群组失败",
+		})
+		return
+	}
+
+	// 获取当前用户，用于判断是否已加入私有群组
+	username, _ := c.Get("username")
+	var currentUser *gormdb.User
+	if username != nil {
+		userRepo := gormdb.NewUserRepository()
+		currentUser, _ = userRepo.GetUserByName(username.(string))
+	}
+
+	memberRepo := gormdb.NewGroupMemberRepository()
+
+	// 重新组装响应数据，添加用户状态
+	resultItems := make([]gin.H, 0, len(groups))
+	for _, g := range groups {
+		isVerified := false
+		requirePassword := false
+
+		if g.Type == 2 {
+			// 私有群组需要密码
+			requirePassword = true
+			if currentUser != nil {
+				// 检查用户是否已经验证过
+				isVerified = memberRepo.IsVerifiedMember(g.ID, currentUser.ID)
+			}
+		}
+
+		resultItems = append(resultItems, gin.H{
+			"id":               g.ID,
+			"name":             g.Name,
+			"type":             g.Type,
+			"callsign":         g.CallSign,
+			"allow_callsign_ssid": g.AllowCallSignSSID,
+			"ower_id":          g.OwerID,
+			"ower_callsign":    g.OwerCallSign,
+			"master_server":    g.MasterServer,
+			"slave_server":     g.SlaveServer,
+			"status":           g.Status,
+			"note":             g.Note,
+			"require_password": requirePassword, // 告知前端是否需要密码
+			"is_verified":      isVerified,      // 告知前端用户是否已加入
+			"create_time":       g.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":       g.UpdateTime.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data": gin.H{
+			"items": resultItems,
+			"total":  len(groups),
+		},
+	})
+}
+
+// JoinGroupRequest 加入群组请求
+type JoinGroupRequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
+// JoinGroup 加入群组（验��密码）
+func JoinGroup(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的群组ID",
+		})
+		return
+	}
+
+	var req JoinGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	// 检查群组是否存在
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(id)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "群组不存在",
+		})
+		return
+	}
+
+	// 检查群组类型（Type=2 才需要密码）
+	if group.Type != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "该群组不需要密码验证",
+		})
+		return
+	}
+
+	// 验证密码是否正确
+	if group.Password != req.Password {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    401,
+			"message": "密码错误",
+		})
+		return
+	}
+
+	// 检查群组是否被禁用
+	if group.Status != 1 {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "群组已禁用",
+		})
+		return
+	}
+
+	// 获取当前用户
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	memberRepo := gormdb.NewGroupMemberRepository()
+
+	// 检查用户是否已加入
+	member, err := memberRepo.GetMemberByGroupAndUser(id, currentUser.ID)
+	var isJoined bool
+	if err == nil {
+		isJoined = member != nil
+	} else {
+		// 兼容旧数据
+		isJoined = memberRepo.IsVerifiedMember(group.ID, currentUser.ID)
+	}
+
+	var groupMember gormdb.GroupMember
+	if isJoined {
+		// 已加入，更新最后验证时间
+		err = memberRepo.UpdateMemberVerification(id, currentUser.ID, true)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "更新验证时间失败",
+			})
+			return
+		}
+	} else {
+		// 未加入，创建成员记录
+		groupMember = gormdb.GroupMember{
+			GroupID:    id,
+			UserID:     currentUser.ID,
+			IsVerified: true,
+			JoinTime:   time.Now(),
+			LastVerify:  time.Now(),
+		}
+		err = memberRepo.CreateMember(&groupMember)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "加入群组失败",
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "加入成功",
+		"data": gin.H{
+			"group_id":   id,
+			"is_verified": true,
+			"join_time": time.Now().Format("2006-01-02 15:04:05"),
+		},
+	})
+}
+
+// GetGroupMembers 获取群组成员列表
+func GetGroupMembers(c *gin.Context) {
+	groupIDStr := c.Param("id")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的群组ID",
+		})
+		return
+	}
+
+	// 检查权限：只有群组创建者可查看
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "群组不存在",
+		})
+		return
+	}
+
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 检查是否是群组创建者
+	if group.OwerID != currentUser.ID {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "需要群组创建者权限",
+		})
+		return
+	}
+
+	// 查询成员列表
+	memberRepo := gormdb.NewGroupMemberRepository()
+	members, err := memberRepo.ListVerifiedMembersByGroup(groupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询成员列表失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data": gin.H{
+			"items": members,
+			"total":  len(members),
+		},
+	})
+}
+
+// UpdateDeviceStatusRequest 设置设备禁发/禁收请求
+type UpdateDeviceStatusRequest struct {
+	DisableSend bool `json:"disable_send"`
+	DisableRecv bool `json:"disable_recv"`
+}
+
+// UpdateDeviceStatus 设置设备禁发/禁收
+func UpdateDeviceStatus(c *gin.Context) {
+	groupIDStr := c.Param("id")
+	deviceIDStr := c.Param("deviceId")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的群组ID",
+		})
+		return
+	}
+	deviceID, err := strconv.Atoi(deviceIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的设备ID",
+		})
+		return
+	}
+
+	var req UpdateDeviceStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	// 检查权限：只有群组创建者可操作
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "群组不存在",
+		})
+		return
+	}
+
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 检查权限：群组创建者或管理员可操作
+	isAdmin := hasRoleGORM(currentUser, "admin")
+	if group.OwerID != currentUser.ID && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "需要群组创建者或管理员权限",
+		})
+		return
+	}
+
+	// 更新GroupMember表的设备状态
+	memberRepo := gormdb.NewGroupMemberRepository()
+	err = memberRepo.UpdateMemberDeviceStatusByDevice(groupID, deviceID, req.DisableSend, req.DisableRecv)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "更新设备状态失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "更新成功",
+	})
+}
+
+// KickDevice 踢出设备
+func KickDevice(c *gin.Context) {
+	groupIDStr := c.Param("id")
+	deviceIDStr := c.Param("deviceId")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的群组ID",
+		})
+		return
+	}
+	deviceID, err := strconv.Atoi(deviceIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的设备ID",
+		})
+		return
+	}
+
+	// 检查权限：只有群组创建者可操作
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "群组不存在",
+		})
+		return
+	}
+
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 检查是否是群组创建者
+	if group.OwerID != currentUser.ID {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "需要群组创建者权限",
+		})
+		return
+	}
+
+	// 检查设备是否属于该群组
+	deviceRepo := gormdb.NewDeviceRepository()
+	device, err := deviceRepo.GetDeviceByID(deviceID)
+	if err != nil || device == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "设备不存在",
+		})
+		return
+	}
+
+	if device.GroupID != groupID {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "设备不属于该群组",
+		})
+		return
+	}
+
+	// 删除GroupMember记录
+	memberRepo := gormdb.NewGroupMemberRepository()
+	err = memberRepo.DeleteMember(groupID, currentUser.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "踢出设备失败",
+		})
+		return
+	}
+
+	// 将设备移到默认群组（id=1）
+	err = deviceRepo.UpdateDeviceFields(deviceID, map[string]interface{}{
+		"group_id": 1,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "移动设备失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "踢出成功",
+	})
+}
+
+// LeaveGroup 离开群组
+func LeaveGroup(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的群组ID",
+		})
+		return
+	}
+
+	// 检查群组是否存在
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(id)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "群组不存在",
+		})
+		return
+	}
+
+	// 检查是否是私有群组
+	if group.Type != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "该群组不支持离开",
+		})
+		return
+	}
+
+	// 获取当前用户
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 删除GroupMember记录
+	memberRepo := gormdb.NewGroupMemberRepository()
+	err = memberRepo.DeleteMember(id, currentUser.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "离开群组失败",
+		})
+		return
+	}
+
+	// 将用户在该群组中的所有设备移到默认群组
+	deviceRepo := gormdb.NewDeviceRepository()
+	devices, _ := deviceRepo.ListDevicesByGroupID(id)
+	for _, device := range devices {
+		if device.Username == currentUser.Name {
+			err = deviceRepo.UpdateDeviceFields(device.ID, map[string]interface{}{
+				"group_id": 1,
+			})
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "移动设备失败",
+				})
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "离开成功",
 	})
 }

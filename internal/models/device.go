@@ -27,6 +27,10 @@ type Device struct {
 	UpdateTime     time.Time `json:"update_time"`
 	Note           string    `json:"note"`
 
+	// 设备级别的收发控制（优先级高于群组设置）
+	DisableSend    bool      `json:"disable_send"`   // 设备级禁发
+	DisableRecv    bool      `json:"disable_recv"`   // 设备级禁收
+
 	// Runtime fields (not stored in DB)
 	ISOnline         bool              `json:"is_online"`
 	UDPAddr          *net.UDPAddr      `json:"-"`

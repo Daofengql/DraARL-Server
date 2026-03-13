@@ -92,6 +92,8 @@ type Device struct {
 	Note       string    `gorm:"type:text;column:note" json:"note"`
 	Priority   int       `gorm:"type:int;default:100;column:priority" json:"priority"`
 	ISOnline   bool      `gorm:"-" json:"is_online"` // 运行时字段
+	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"` // 设备级禁发
+	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"` // 设备级禁收
 }
 
 // TableName 指定表名
@@ -241,6 +243,26 @@ func (SiteConfig) TableName() string {
 	return "site_configs"
 }
 
+// GroupMember 群组成员关系（用户与群组的验证关系）
+type GroupMember struct {
+	ID           int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID      int        `gorm:"index:idx_group_user;column:group_id" json:"group_id"`
+	UserID       int        `gorm:"index:idx_group_user;column:user_id" json:"user_id"`
+	IsVerified   bool       `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
+	JoinTime     time.Time  `gorm:"autoCreateTime;column:join_time" json:"join_time"`
+	LastVerify   time.Time  `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
+	DeviceID     *int       `gorm:"index;column:device_id" json:"device_id,omitempty"`
+	DisableSend  bool       `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`
+	DisableRecv  bool       `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`
+	CreateTime   time.Time  `gorm:"autoCreateTime;column:create_time" json:"created_at"`
+	UpdateTime   time.Time  `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (GroupMember) TableName() string {
+	return "group_members"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -252,5 +274,6 @@ func AutoMigrate() error {
 		&OperatorLog{},
 		&OperatorCert{},
 		&SiteConfig{},
+		&GroupMember{},
 	)
 }

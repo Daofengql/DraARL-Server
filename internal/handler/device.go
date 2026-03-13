@@ -21,20 +21,22 @@ type DeviceListRequest struct {
 
 // DeviceInfo 设备信息响应
 type DeviceInfo struct {
-	ID         int    `json:"id"`
-	Name       string `json:"name"`
-	CallSign   string `json:"callsign"`
-	SSID       uint8  `json:"ssid"`
-	DevModel   int    `json:"dev_model"`
-	GroupID    int    `json:"group_id"`
-	Status     int8   `json:"status"`
-	Priority   int    `json:"priority"`
-	IsOnline   bool   `json:"is_online"`
-	QTH        string `json:"qth"`
-	Note       string `json:"note"`
-	OnlineTime string `json:"online_time,omitempty"`
-	CreateTime string `json:"create_time,omitempty"`
-	UpdateTime string `json:"update_time,omitempty"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	CallSign    string `json:"callsign"`
+	SSID        uint8  `json:"ssid"`
+	DevModel    int    `json:"dev_model"`
+	GroupID     int    `json:"group_id"`
+	Status      int8   `json:"status"`
+	Priority    int    `json:"priority"`
+	IsOnline    bool   `json:"is_online"`
+	DisableSend bool   `json:"disable_send"`
+	DisableRecv bool   `json:"disable_recv"`
+	QTH         string `json:"qth"`
+	Note        string `json:"note"`
+	OnlineTime  string `json:"online_time,omitempty"`
+	CreateTime  string `json:"create_time,omitempty"`
+	UpdateTime  string `json:"update_time,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -154,6 +156,8 @@ func GetDevices(c *gin.Context) {
 			Status:     d.Status,
 			Priority:   d.Priority,
 			IsOnline:   d.ISOnline,
+			DisableSend: d.DisableSend, // 补充设备级禁发状态
+			DisableRecv: d.DisableRecv, // 补充设备级禁收状态
 			Note:       d.Note,
 			CreateTime: d.CreateTime.Format("2006-01-02 15:04:05"),
 			UpdateTime: d.UpdateTime.Format("2006-01-02 15:04:05"),
@@ -318,13 +322,15 @@ func CreateDevice(c *gin.Context) {
 
 // UpdateDeviceRequest 更新设备请求
 type UpdateDeviceRequest struct {
-	Name      string `json:"name"`
-	GroupID   int    `json:"group_id"`
-	Status    int8   `json:"status"`
-	Priority  int    `json:"priority"`
-	Note      string `json:"note"`
-	Password  string `json:"password"`
-	DevModel  int    `json:"dev_model"`
+	Name        string `json:"name"`
+	GroupID     int    `json:"group_id"`
+	Status      int8   `json:"status"`
+	Priority    int    `json:"priority"`
+	Note        string `json:"note"`
+	Password    string `json:"password"`
+	DevModel    int    `json:"dev_model"`
+	DisableSend bool   `json:"disable_send"` // 设备级禁发
+	DisableRecv bool   `json:"disable_recv"` // 设备级禁收
 }
 
 // UpdateDevice 更新设备
@@ -403,6 +409,9 @@ func UpdateDevice(c *gin.Context) {
 		updates["dev_model"] = req.DevModel
 		device.DevModel = req.DevModel
 	}
+	// 设备级别的收发控制（设备所有者和管理员可设置）
+	updates["disable_send"] = req.DisableSend
+	updates["disable_recv"] = req.DisableRecv
 
 	if err := repo.UpdateDeviceFields(id, updates); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -495,11 +504,11 @@ func DeleteDevice(c *gin.Context) {
 	})
 }
 
-// ChangeDeviceGroupRequest 修改设备群组请求
+// ChangeDeviceGroupRequest 切换设备群组请求
 type ChangeDeviceGroupRequest struct {
-	CallSign string `json:"callsign" binding:"required"`
-	SSID     uint8  `json:"ssid"`
-	GroupID  int    `json:"group_id" binding:"required"`
+	DeviceID   int    `json:"device_id" binding:"required"`
+	GroupID   int    `json:"group_id" binding:"required"`
+	Password  string `json:"password"` // 私有群组且未验证时需要
 }
 
 // ChangeDeviceGroup 修改设备群组
@@ -513,8 +522,105 @@ func ChangeDeviceGroup(c *gin.Context) {
 		return
 	}
 
+	// 获取当前用户
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
 	repo := gormdb.NewDeviceRepository()
-	if err := repo.ChangeDeviceGroup(req.CallSign, req.SSID, req.GroupID); err != nil {
+	device, err := repo.GetDeviceByID(req.DeviceID)
+	if err != nil || device == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "设备不存在",
+		})
+		return
+	}
+
+	// 检查群组是否存在
+	groupRepo := gormdb.NewGroupRepository()
+	group, err := groupRepo.GetGroupByID(req.GroupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "群组不存在",
+		})
+		return
+	}
+
+	// 检查权限：公开群组所有人可见，私有群组需要已验证
+	if group.Type == 1 {
+		// 公开群组，直接允许切换
+	} else {
+		// 私有群组，需要已验证
+		userRepo := gormdb.NewUserRepository()
+		currentUser, _ := userRepo.GetUserByName(username.(string))
+		if currentUser == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "用户不存在",
+			})
+			return
+		}
+
+		// 检查用户是否已验证
+		memberRepo := gormdb.NewGroupMemberRepository()
+		isVerified := memberRepo.IsVerifiedMember(req.GroupID, currentUser.ID)
+		if !isVerified {
+			// 未验证用户，需要提供密码
+			if req.Password == "" {
+				c.JSON(http.StatusForbidden, gin.H{
+					"code":    403,
+					"message": "需要先验证密码才能加入该群组",
+				})
+				return
+			}
+
+			// 验证密码
+			if req.Password != group.Password {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "密码错误",
+				})
+				return
+			}
+
+			// 密码验证成功，创建 GroupMember 记录
+			if err := memberRepo.CreateMember(&gormdb.GroupMember{
+				GroupID:    req.GroupID,
+				UserID:     currentUser.ID,
+				IsVerified: true,
+				JoinTime:   time.Now(),
+				LastVerify: time.Now(),
+				DeviceID:   &req.DeviceID,
+			}); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "创建成员记录失败",
+				})
+				return
+			}
+		} else {
+			// 已验证用户，更新 GroupMember 记录的设备ID
+			if err := memberRepo.UpdateMemberDevice(req.GroupID, currentUser.ID, &req.DeviceID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "更新成员设备失败",
+				})
+				return
+			}
+		}
+	}
+
+	// 更新设备的群组
+	if err := repo.UpdateDeviceFields(req.DeviceID, map[string]interface{}{
+		"group_id": req.GroupID,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "修改设备群组失败",

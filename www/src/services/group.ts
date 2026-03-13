@@ -2,6 +2,7 @@ import { apiClient } from './api'
 import type {
   Group,
   Device,
+  GroupMember,
   ListResponse,
 } from '../types'
 
@@ -130,5 +131,60 @@ export const groupService = {
   // 删除群组
   async delete(id: number): Promise<void> {
     await apiClient.delete<BackendResponse<unknown>>(`/api/groups/${id}`)
+  },
+
+  // 搜索群组（支持私有群组）
+  async search(params: {
+    keyword: string
+    page?: number
+    page_size?: number
+  }): Promise<ListResponse<Group>> {
+    const res = await apiClient.post<BackendResponse<{ items: BackendGroup[]; total: number }>>('/api/groups/search', params)
+    const items = (res.data?.items || []).map(normalizeGroup)
+    return { items, total: res.data?.total || items.length, page: params.page || 1, page_size: params.page_size || 10 }
+  },
+
+  // 加入群组（验证密码）
+  async join(id: number, password: string): Promise<{
+    group_id: number
+    is_verified: boolean
+    join_time: string
+  }> {
+    const res = await apiClient.post<BackendResponse<{
+      group_id: number
+      is_verified: boolean
+      join_time: string
+    }>>(`/api/groups/${id}/join`, { password })
+    return res.data!
+  },
+
+  // 获取群组成员列表
+  async getMembers(id: number): Promise<ListResponse<GroupMember>> {
+    const res = await apiClient.get<BackendResponse<{ items: GroupMember[]; total: number }>>(`/api/groups/${id}/members`)
+    return {
+      items: res.data?.items || [],
+      total: res.data?.total || 0,
+      page: 1,
+      page_size: 10
+    }
+  },
+
+  // 设置设备禁发/禁收
+  async updateDevice(
+    groupId: number,
+    deviceId: number,
+    data: { disable_send?: boolean; disable_recv?: boolean }
+  ): Promise<void> {
+    await apiClient.put<BackendResponse<unknown>>(`/api/groups/${groupId}/devices/${deviceId}`, data)
+  },
+
+  // 踢出设备
+  async kickDevice(groupId: number, deviceId: number): Promise<void> {
+    await apiClient.delete<BackendResponse<unknown>>(`/api/groups/${groupId}/devices/${deviceId}`)
+  },
+
+  // 离开群组
+  async leave(id: number): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>(`/api/groups/${id}/leave`, {})
   },
 }

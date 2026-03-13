@@ -89,6 +89,52 @@ func (r *GroupRepository) SearchGroups(keyword string) ([]*Group, error) {
 	return groups, err
 }
 
+// ListPublicGroups 获取公开群组列表（Type=1）
+func (r *GroupRepository) ListPublicGroups() ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("type = ?", 1).Order("id DESC").Find(&groups).Error
+	return groups, err
+}
+
+// ListPublicGroupsPaginated 分页获取公开群组列表
+func (r *GroupRepository) ListPublicGroupsPaginated(limit, page int, keyword string) ([]*Group, int64, error) {
+	var groups []*Group
+	var total int64
+
+	offset := (page - 1) * limit
+	query := r.db.Model(&Group{}).Where("type = ?", 1)
+
+	if keyword != "" {
+		query = query.Where("name LIKE ? OR callsign LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+	}
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&groups).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return groups, total, nil
+}
+
+// ListGroupsByType 按类型获取群组列表
+func (r *GroupRepository) ListGroupsByType(groupType int) ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("type = ?", groupType).Order("id DESC").Find(&groups).Error
+	return groups, err
+}
+
+// GetGroupsByIDs 批量获取群组
+func (r *GroupRepository) GetGroupsByIDs(ids []int) ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("id IN ?", ids).Find(&groups).Error
+	return groups, err
+}
+
 // RelayRepository 中继台仓库
 type RelayRepository struct {
 	db *gorm.DB

@@ -62,6 +62,12 @@ export interface Device {
   qth?: string
   online_time?: string
   last_heartbeat?: string // 前端兼容字段
+  disable_send?: boolean  // 禁用发送
+  disable_recv?: boolean  // 禁用接收
+  group_name?: string     // 所属群组名称（前端扩展）
+  owner_id?: number       // 设备所有者ID
+  owner_name?: string     // 设备所有者名称
+  owner_callsign?: string // 设备所有者呼号
   create_time?: string
   created_at?: string // 前端兼容字段
   update_time?: string
@@ -81,24 +87,48 @@ export interface DeviceQTH {
 export interface Group {
   id: number
   name: string
-  type: number
+  type: number  // 1=公开, 2=私有
   callsign?: string
   password?: string
   allow_callsign_ssid?: string
   ower_id?: number
   ower_callsign?: string
+  ower_name?: string     // 群组创建者名称
   devlist?: string
   master_server?: number
   slave_server?: number
-  status?: number
+  status?: number  // 0=禁用, 1=启用
   note?: string
   devices?: Device[]
+
+  // 新增字段
+  is_joined?: boolean       // 当前用户是否已加入（私有群组）
+  is_owner?: boolean        // 当前用户是否是创建者
+  online_count?: number     // 在线设备数
+  total_count?: number      // 总设备数
+  require_password?: boolean // 是否需要密码（私有群组且未验证）
+
   master_server_str?: string
   slave_servers?: string[]
   create_time?: string
   created_at?: string // 前端兼容字段
   update_time?: string
   updated_at?: string // 前端兼容字段
+}
+
+// 群组成员类型
+export interface GroupMember {
+  id: number
+  group_id: number
+  user_id: number
+  username?: string
+  callsign?: string
+  is_verified: boolean
+  join_time: string
+  last_verify: string
+  device_count?: number    // 该成员在群组中的设备数
+  disable_send: boolean
+  disable_recv: boolean
 }
 
 // 中继台相关类型

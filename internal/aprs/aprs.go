@@ -135,6 +135,7 @@ type APRSConfig struct {
 	Latitude       float64
 	Longitude      float64
 	Altitude       string
+	SiteName       string
 }
 
 var currentAPRSConfig APRSConfig
@@ -145,6 +146,13 @@ func LoadAPRSConfig() error {
 	config, err := repo.GetAPRSConfig()
 	if err != nil {
 		return err
+	}
+
+	// 获取站点名称
+	sysConfig, err := repo.GetSystemInfoConfig()
+	siteName := "DraARL互联服务器"
+	if err == nil && sysConfig.Name != "" {
+		siteName = sysConfig.Name
 	}
 
 	currentAPRSConfig = APRSConfig{
@@ -158,6 +166,7 @@ func LoadAPRSConfig() error {
 		Latitude:       config.Latitude,
 		Longitude:      config.Longitude,
 		Altitude:       config.Altitude,
+		SiteName:       siteName,
 	}
 	return nil
 }
@@ -277,7 +286,7 @@ func (a *APRS) sendAPRSPosition() error {
 	// 构造 APRS 数据包
 	aprsLog("原始坐标: 纬度=%.6f, 经度=%.6f", currentAPRSConfig.Latitude, currentAPRSConfig.Longitude)
 	aprsPacket := a.formatAPRSPacket(currentAPRSConfig.CallSign, currentAPRSConfig.SSID, currentAPRSConfig.SelfAddress, currentAPRSConfig.SelfPort,
-		currentAPRSConfig.Latitude, currentAPRSConfig.Longitude, currentAPRSConfig.Altitude)
+		currentAPRSConfig.Latitude, currentAPRSConfig.Longitude, currentAPRSConfig.Altitude, currentAPRSConfig.SiteName)
 
 	aprsLog("发送位置数据包: %s", strings.TrimSpace(aprsPacket))
 
@@ -311,7 +320,7 @@ func (a *APRS) sendAPRSPosition() error {
 }
 
 // formatAPRSPacket 格式化 APRS 位置数据包
-func (a *APRS) formatAPRSPacket(callSign, ssid, address, port string, lat, lon float64, altitude string) string {
+func (a *APRS) formatAPRSPacket(callSign, ssid, address, port string, lat, lon float64, altitude, siteName string) string {
 	latStr := a.decToAPRS(lat, true)
 	lonStr := a.decToAPRS(lon, false)
 
@@ -321,8 +330,8 @@ func (a *APRS) formatAPRSPacket(callSign, ssid, address, port string, lat, lon f
 		fullCallSign = fmt.Sprintf("%s-%s", callSign, ssid)
 	}
 
-	return fmt.Sprintf("%s>DARLSV,TCPIP*:!%s/%sI @udp://%s:%s,DraARL互联服务器\r\n",
-		fullCallSign, latStr, lonStr, address, port)
+	return fmt.Sprintf("%s>DARLSV,TCPIP*:!%s/%sI @udp://%s:%s,%s\r\n",
+		fullCallSign, latStr, lonStr, address, port, siteName)
 }
 
 // formatAPRSPacketTwo 格式化 APRS 附加信息数据包

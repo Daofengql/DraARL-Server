@@ -96,8 +96,18 @@ func GetGroups(c *gin.Context) {
 				}
 			}
 
-			// 合并公开群组和私有群组
+			// 合并公开群组和私��群组，并去重
 			groups = append(publicGroups, privateGroups...)
+			// 使用 map 去重
+			seen := make(map[int]bool)
+			uniqueGroups := make([]*gormdb.Group, 0, len(groups))
+			for _, g := range groups {
+				if !seen[g.ID] {
+					seen[g.ID] = true
+					uniqueGroups = append(uniqueGroups, g)
+				}
+			}
+			groups = uniqueGroups
 		} else {
 			// 管理员查看所有群组
 			groups, err = gormdb.NewGroupRepository().ListGroups()
@@ -250,8 +260,10 @@ type CreateGroupRequest struct {
 	CallSign          string `json:"callsign"`
 	Password          string `json:"password"`
 	AllowCallSignSSID string `json:"allow_callsign_ssid"`
+	AllowDMRID        string `json:"allow_dmrid"`
 	OwerCallSign      string `json:"ower_callsign"`
 	Note              string `json:"note"`
+	Status            int    `json:"status"`
 }
 
 // CreateGroup 创建群组
@@ -265,6 +277,29 @@ func CreateGroup(c *gin.Context) {
 		return
 	}
 
+	// 1. 获取当前登录用户 (从上下文中提取)
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 拥有者呼号直接使用用户名（username）
+	owerCallSign := currentUser.Name
+
 	repo := gormdb.NewGroupRepository()
 	group := &gormdb.Group{
 		Name:              req.Name,
@@ -272,11 +307,16 @@ func CreateGroup(c *gin.Context) {
 		CallSign:          req.CallSign,
 		Password:          req.Password,
 		AllowCallSignSSID: req.AllowCallSignSSID,
-		OwerCallSign:      req.OwerCallSign,
+		AllowDMRID:        req.AllowDMRID,
+		// 2. 修复：强制绑定拥有者 ID 和 拥有者呼号
+		OwerID:            currentUser.ID,
+		OwerCallSign:      owerCallSign,
+		Note:              req.Note,
 		Status:            1,
 		DevList:           "",
 	}
 
+	// 3. 写入群组表
 	if err := repo.CreateGroup(group); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -284,6 +324,18 @@ func CreateGroup(c *gin.Context) {
 		})
 		return
 	}
+
+	// 4. 修复：自动将创建者加入到该群组的已验证成员中
+	// 这样创建者无需搜索和输入密码，就能在"我的群组"列表中看到并管理自己创建的群组
+	memberRepo := gormdb.NewGroupMemberRepository()
+	groupMember := &gormdb.GroupMember{
+		GroupID:    group.ID,
+		UserID:     currentUser.ID,
+		IsVerified: true,
+		JoinTime:   time.Now(),
+		LastVerify: time.Now(),
+	}
+	_ = memberRepo.CreateMember(groupMember)
 
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
@@ -302,6 +354,7 @@ type UpdateGroupRequest struct {
 	Password          string `json:"password"`
 	AllowCallSignSSID string `json:"allow_callsign_ssid"`
 	Note              string `json:"note"`
+	Status            *int   `json:"status"`
 }
 
 // UpdateGroup 更新群组
@@ -355,6 +408,9 @@ func UpdateGroup(c *gin.Context) {
 	}
 	if req.Note != "" {
 		group.Note = req.Note
+	}
+	if req.Status != nil {
+		group.Status = *req.Status
 	}
 
 	if err := repo.UpdateGroup(group); err != nil {

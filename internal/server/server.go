@@ -129,6 +129,8 @@ func (s *Server) setupRoutes() {
 
 			// 修改用户密码（用户本人或管理员可访问）
 			protected.PUT("/users/:id/password", handler.UpdateUserPassword)
+			// 获取用户公开信息（任何登录用户可访问）
+			protected.GET("/users/:id/public", handler.GetUserPublicInfo)
 
 			// 设备相关（需要审核通过）
 			approved := protected.Group("")

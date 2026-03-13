@@ -15,11 +15,8 @@ import type { PopoverProps } from '@mui/material'
 import {
   Badge,
   Phone,
-  Cake,
   LocationOn,
-  Person,
   CalendarToday,
-  CheckCircle,
 } from '@mui/icons-material'
 import type { User } from '../types'
 
@@ -31,20 +28,11 @@ interface UserDetailPopoverProps {
 }
 
 export function UserDetailPopover({ open, anchorEl, onClose, user }: UserDetailPopoverProps) {
+  console.log('UserDetailPopover props:', { open, hasAnchorEl: !!anchorEl, user })
+
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-'
     return new Date(dateStr).toLocaleDateString('zh-CN')
-  }
-
-  const getSexLabel = (sex: number) => {
-    switch (sex) {
-      case 1:
-        return '男'
-      case 2:
-        return '女'
-      default:
-        return '未设置'
-    }
   }
 
   if (!user) return null
@@ -64,7 +52,7 @@ export function UserDetailPopover({ open, anchorEl, onClose, user }: UserDetailP
       }}
       slotProps={{
         paper: {
-          sx: { width: 400, maxHeight: 600, overflow: 'auto' },
+          sx: { width: 350, maxHeight: 500, overflow: 'auto' },
         },
       }}
     >
@@ -83,11 +71,6 @@ export function UserDetailPopover({ open, anchorEl, onClose, user }: UserDetailP
                 ID: {user.id}
               </Typography>
               <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5 }}>
-                <Chip
-                  label={user.role === 'admin' ? '管理员' : '普通用户'}
-                  size="small"
-                  color={user.role === 'admin' ? 'secondary' : 'default'}
-                />
                 <Chip
                   label={user.status === 1 ? '正常' : '已禁用'}
                   size="small"
@@ -127,56 +110,13 @@ export function UserDetailPopover({ open, anchorEl, onClose, user }: UserDetailP
                 />
               </ListItem>
             )}
-            {user.birthday && (
-              <ListItem divider>
-                <Cake sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
-                <ListItemText
-                  primary="生日"
-                  secondary={user.birthday}
-                />
-              </ListItem>
-            )}
-            {user.sex !== undefined && user.sex !== 0 && (
-              <ListItem divider>
-                <Person sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
-                <ListItemText
-                  primary="性别"
-                  secondary={getSexLabel(user.sex)}
-                />
-              </ListItem>
-            )}
-            <ListItem divider>
+            <ListItem>
               <CalendarToday sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
               <ListItemText
                 primary="注册时间"
                 secondary={formatDate(user.created_at)}
               />
             </ListItem>
-            {user.last_login_time && (
-              <ListItem divider>
-                <CheckCircle sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
-                <ListItemText
-                  primary="最后登录"
-                  secondary={new Date(user.last_login_time).toLocaleString('zh-CN')}
-                />
-              </ListItem>
-            )}
-            {user.dmrid && user.dmrid > 0 && (
-              <ListItem divider>
-                <Badge sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
-                <ListItemText
-                  primary="DMR ID"
-                  secondary={user.dmrid}
-                />
-              </ListItem>
-            )}
-            {user.introduction && (
-              <ListItem>
-                <Typography variant="body2" color="text.secondary">
-                  简介: {user.introduction}
-                </Typography>
-              </ListItem>
-            )}
           </List>
         </CardContent>
       </Card>

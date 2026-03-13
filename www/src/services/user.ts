@@ -11,7 +11,7 @@ interface BackendResponse<T> {
 }
 
 export const userService = {
-  // 获取用户列表
+  // 获取用户列表（管理员专用）
   async getList(params?: {
     page?: number
     page_size?: number
@@ -22,21 +22,29 @@ export const userService = {
     return res.data || { items: [], total: 0, page: 1, page_size: 10 }
   },
 
+  // 获取用户公开信息（任何登录用户可访问）
+  async getPublicInfo(id: number): Promise<User> {
+    const res = await apiClient.get<{ code: number; message: string; data?: User }>(`/api/users/${id}/public`)
+    console.log('getPublicInfo raw response:', res)
+    console.log('getPublicInfo data:', res.data)
+    return res.data!
+  },
+
   // 获取用户详情
   async get(id: number): Promise<User> {
-    const res = await apiClient.get<BackendResponse<User>>(`/api/users/${id}`)
+    const res = await apiClient.get<{ code: number; message: string; data?: User }>(`/api/users/${id}`)
     return res.data!
   },
 
   // 创建用户
   async create(data: Partial<User>): Promise<User> {
-    const res = await apiClient.post<BackendResponse<User>>('/api/users', data)
+    const res = await apiClient.post<{ code: number; message: string; data?: User }>('/api/users', data)
     return res.data!
   },
 
   // 更新用户
   async update(id: number, data: Partial<User>): Promise<User> {
-    const res = await apiClient.put<BackendResponse<User>>(`/api/users/${id}`, data)
+    const res = await apiClient.put<{ code: number; message: string; data?: User }>(`/api/users/${id}`, data)
     return res.data!
   },
 

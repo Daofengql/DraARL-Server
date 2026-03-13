@@ -1120,6 +1120,66 @@ func GetUserDetail(c *gin.Context) {
 	})
 }
 
+// GetUserPublicInfo 获取用户公开信息（任何登录用户可访问）
+func GetUserPublicInfo(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的用户ID",
+		})
+		return
+	}
+
+	// 检查用户是否已登录
+	_, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 处理头像URL
+	avatarURL := user.Avatar
+	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
+		avatarURL = minio.GetFileURL(avatarURL)
+	}
+	avatarThumbURL := user.AvatarThumb
+	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
+		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
+	}
+
+	// 只返回公开信息
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data": gin.H{
+			"id":           user.ID,
+			"username":     user.Name,
+			"avatar":       avatarURL,
+			"avatar_thumb": avatarThumbURL,
+			"callsign":     user.CallSign,
+			"phone":        user.Phone,
+			"address":      user.Address,
+			"created_at":   user.CreateTime,
+			"status":       user.Status,
+		},
+	})
+}
+
 // UpdateProfileRequest 更新个人资料请求
 type UpdateProfileRequest struct {
 	NickName     string `json:"nickname"`

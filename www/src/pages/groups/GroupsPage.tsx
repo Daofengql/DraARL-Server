@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+// import { useNavigate } from 'react-router-dom' // 移除了冗余的路由跳转
 import {
   Box,
   Paper,
@@ -25,6 +25,9 @@ import {
   Stack,
   InputAdornment,
   Tooltip,
+  FormControlLabel,
+  Switch,
+  Chip,
 } from '@mui/material'
 import {
   Add,
@@ -34,27 +37,39 @@ import {
   CheckCircle,
   People,
   Logout,
-  ArrowForwardIos,
+  Settings,
+  Person,
+  Edit,
+  Delete,
 } from '@mui/icons-material'
-import { groupService } from '../../services'
-import type { Group } from '../../types'
+import { groupService, userService } from '../../services'
+import type { Group, User } from '../../types'
+import { UserDetailPopover } from '../../components/UserDetailPopover'
 
 const GROUP_TYPE_PUBLIC = 1
 const GROUP_TYPE_PRIVATE = 2
 
 export function GroupsPage() {
-  const navigate = useNavigate()
+  // const navigate = useNavigate() // 移除了冗余的路由跳转
   const [groups, setGroups] = useState<Group[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 对话框状态控制
+  // 对话框状态��制
   const [dialogOpen, setDialogOpen] = useState(false)
   const [searchDialogOpen, setSearchDialogOpen] = useState(false)
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+
+  // 用户详情弹窗状态
+  const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+  const [loadingUser, setLoadingUser] = useState(false)
 
   // 选中的群组与表单状态
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null) // 新增：当前正在编辑的群组
   const [joiningGroup, setJoiningGroup] = useState<Group | null>(null)
+  const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
   const [searchResults, setSearchResults] = useState<Group[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchKeywordInput, setSearchKeywordInput] = useState('')
@@ -64,6 +79,7 @@ export function GroupsPage() {
     type: 1,
     callsign: '',
     password: '',
+    status: 1,
   })
 
   useEffect(() => {
@@ -81,6 +97,32 @@ export function GroupsPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // 打开用户详��（通过 API 获取公开信息）
+  const handleOpenUserDetail = async (event: React.MouseEvent<HTMLElement>, userId: number) => {
+    event.stopPropagation()
+    // 先保存 currentTarget，因为异步操作后 event 对象会被重用
+    const target = event.currentTarget
+    setLoadingUser(true)
+    try {
+      const user = await userService.getPublicInfo(userId)
+      console.log('User info loaded:', user)
+      setSelectedUser(user)
+      setUserDetailAnchorEl(target)
+      console.log('AnchorEl set:', target)
+    } catch (err) {
+      console.error('Failed to load user info:', err)
+      setError('获取用户信息失败')
+    } finally {
+      setLoadingUser(false)
+    }
+  }
+
+  // 关闭用户详情
+  const handleCloseUserDetail = () => {
+    setUserDetailAnchorEl(null)
+    setSelectedUser(null)
   }
 
   const handleSearchGroups = async () => {
@@ -132,26 +174,75 @@ export function GroupsPage() {
     }
   }
 
+  // 打开新建弹窗
+  const handleOpenAdd = () => {
+    setEditingGroup(null)
+    setFormData({ name: '', type: 1, callsign: '', password: '', status: 1 })
+    setDialogOpen(true)
+  }
+
+  // 打开编辑弹窗
+  const handleOpenEdit = (group: Group) => {
+    setEditingGroup(group)
+    setFormData({
+      name: group.name,
+      type: group.type,
+      callsign: group.callsign || '',
+      password: '', // 编辑时不强制回显密码
+      status: group.status ?? 1,
+    })
+    setDialogOpen(true)
+  }
+
   const handleSave = async () => {
     if (!formData.name) {
       setError('请输入群组名称')
       return
     }
-    if (formData.type === GROUP_TYPE_PRIVATE && !formData.password) {
+    // 如果是私有群组，且是新建模式（或强制要求修改密码），则校验密码
+    if (formData.type === GROUP_TYPE_PRIVATE && !formData.password && !editingGroup) {
       setError('私有群组必须设置密码')
       return
     }
     try {
-      await groupService.create(formData)
+      if (editingGroup) {
+        await groupService.update(editingGroup.id, formData)
+      } else {
+        await groupService.create(formData)
+      }
       setDialogOpen(false)
       loadGroups()
     } catch (err: any) {
-      setError(err.response?.data?.message || '创建失败')
+      setError(err.response?.data?.message || '保存失败')
     }
   }
 
-  const handleEnterGroup = (id: number) => {
-    navigate(`/groups/${id}`)
+  const handleOpenDelete = (group: Group) => {
+    setDeletingGroup(group)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDelete = async () => {
+    if (!deletingGroup) return
+    try {
+      await groupService.delete(deletingGroup.id)
+      setDeleteDialogOpen(false)
+      setDeletingGroup(null)
+      loadGroups()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '删除失败')
+    }
+  }
+
+  const getStatusLabel = (status?: number) => {
+    switch (status) {
+      case 1:
+        return <Chip label="启用" size="small" color="success" />
+      case 0:
+        return <Chip label="禁用" size="small" color="default" />
+      default:
+        return <Chip label="未知" size="small" color="default" />
+    }
   }
 
   const publicGroups = groups.filter(g => g.type === GROUP_TYPE_PUBLIC)
@@ -159,21 +250,41 @@ export function GroupsPage() {
 
   // 渲染群组表格行
   const renderGroupRow = (group: Group) => (
-    <TableRow key={group.id} hover>
+    <TableRow key={group.id} hover sx={{ opacity: group.status === 0 ? 0.5 : 1 }}>
+      <TableCell width={60}>{group.id}</TableCell>
       <TableCell>
         <Stack direction="row" alignItems="center" spacing={1}>
           {group.type === GROUP_TYPE_PRIVATE ? <Lock color="secondary" fontSize="small" /> : <LockOpen color="primary" fontSize="small" />}
           <Typography fontWeight={500}>{group.name}</Typography>
-          {group.type === GROUP_TYPE_PRIVATE && group.is_joined && (
-            <CheckCircle color="success" sx={{ fontSize: 16 }} />
+          {group.status === 0 && (
+            <Chip label="已禁用" size="small" color="error" sx={{ fontSize: '0.7rem', height: 20 }} />
           )}
         </Stack>
       </TableCell>
+      <TableCell>{group.callsign || '-'}</TableCell>
       <TableCell>
-        {group.type === GROUP_TYPE_PRIVATE
-          ? (group.ower_callsign || '-')
-          : (group.callsign || '-')
-        }
+        {group.ower_id ? (
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              cursor: 'pointer',
+              '&:hover .owner-text': {
+                color: 'primary.main',
+                textDecoration: 'underline',
+              },
+            }}
+            onClick={(e) => handleOpenUserDetail(e, group.ower_id!)}
+          >
+            <Person color="primary" fontSize="small" />
+            <Typography className="owner-text" variant="body2">
+              {group.ower_callsign || '-'}
+            </Typography>
+          </Box>
+        ) : (
+          <Typography variant="body2" color="text.disabled">-</Typography>
+        )}
       </TableCell>
       <TableCell>
         <Stack direction="row" alignItems="center" spacing={0.5}>
@@ -181,25 +292,45 @@ export function GroupsPage() {
           <span>{group.online_count || 0}/{group.total_count || 0}</span>
         </Stack>
       </TableCell>
-      <TableCell align="right">
+      <TableCell>{getStatusLabel(group.status)}</TableCell>
+      <TableCell>
+        <Typography
+          sx={{
+            maxWidth: 150,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {group.note || '-'}
+        </Typography>
+      </TableCell>
+      <TableCell align="right" width={120}>
         {group.type === GROUP_TYPE_PRIVATE && group.is_joined && (
           <IconButton
             size="small"
             color="error"
             onClick={() => handleLeaveGroup(group)}
-            sx={{ mr: 1 }}
+            sx={{ mr: 0.5 }}
+            title="退出群组"
           >
             <Logout fontSize="small" />
           </IconButton>
         )}
-        <Button
-          size="small"
-          variant="contained"
-          endIcon={<ArrowForwardIos sx={{ fontSize: '12px !important' }} />}
-          onClick={() => handleEnterGroup(group.id)}
-        >
-          进入
-        </Button>
+        {group.is_owner !== false && (
+          <>
+            <Tooltip title="编辑">
+              <IconButton size="small" onClick={() => handleOpenEdit(group)}>
+                <Edit fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="删除">
+              <IconButton size="small" color="error" onClick={() => handleOpenDelete(group)}>
+                <Delete fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </>
+        )}
       </TableCell>
     </TableRow>
   )
@@ -214,9 +345,9 @@ export function GroupsPage() {
             startIcon={<Search />}
             onClick={() => setSearchDialogOpen(true)}
           >
-            搜索/加入群组
+            搜索群组
           </Button>
-          <Button variant="contained" startIcon={<Add />} onClick={() => setDialogOpen(true)}>
+          <Button variant="contained" startIcon={<Add />} onClick={handleOpenAdd}>
             新建群组
           </Button>
         </Stack>
@@ -224,8 +355,8 @@ export function GroupsPage() {
 
       {error && <Alert severity="error" sx={{ mb: 2, flexShrink: 0 }} onClose={() => setError('')}>{error}</Alert>}
 
-      {/* 公开群组表格 - 占 2/3 */}
-      <Paper variant="outlined" sx={{ flex: 2, display: 'flex', flexDirection: 'column', mb: 1, overflow: 'hidden' }}>
+      {/* 公开群组表格 */}
+      <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', mb: 1, overflow: 'hidden' }}>
         <Box sx={{ bgcolor: 'primary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <LockOpen color="primary" fontSize="small" />
@@ -237,17 +368,21 @@ export function GroupsPage() {
           <Table stickyHeader>
             <TableHead>
               <TableRow>
+                <TableCell width={60}>ID</TableCell>
                 <TableCell>群组名称</TableCell>
                 <TableCell>呼号</TableCell>
-                <TableCell>设备数</TableCell>
-                <TableCell align="right">操作</TableCell>
+                <TableCell width={100}>拥有者</TableCell>
+                <TableCell width={120}>设备数量</TableCell>
+                <TableCell width={100}>状态</TableCell>
+                <TableCell>备注</TableCell>
+                <TableCell align="right" width={120}>操作</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={4} align="center">加载中...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
               ) : publicGroups.length === 0 ? (
-                <TableRow><TableCell colSpan={4} align="center">暂无公开群组</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} align="center">暂无公开群组</TableCell></TableRow>
               ) : (
                 publicGroups.map(renderGroupRow)
               )}
@@ -256,7 +391,7 @@ export function GroupsPage() {
         </TableContainer>
       </Paper>
 
-      {/* 私有群组表格 - 占 1/3 */}
+      {/* 私有群组表格 */}
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Box sx={{ bgcolor: 'secondary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
@@ -269,17 +404,21 @@ export function GroupsPage() {
           <Table stickyHeader>
             <TableHead>
               <TableRow>
+                <TableCell width={60}>ID</TableCell>
                 <TableCell>群组名称</TableCell>
-                <TableCell>创建者</TableCell>
-                <TableCell>设备数</TableCell>
-                <TableCell align="right">操作</TableCell>
+                <TableCell>呼号</TableCell>
+                <TableCell width={100}>拥有者</TableCell>
+                <TableCell width={120}>设备数量</TableCell>
+                <TableCell width={100}>状态</TableCell>
+                <TableCell>备注</TableCell>
+                <TableCell align="right" width={120}>操作</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={4} align="center">加载中...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
               ) : privateGroups.length === 0 ? (
-                <TableRow><TableCell colSpan={4} align="center">暂未加入任何私有群组</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} align="center">暂未加入任何私有群组</TableCell></TableRow>
               ) : (
                 privateGroups.map(renderGroupRow)
               )}
@@ -325,7 +464,7 @@ export function GroupsPage() {
                       </Stack>
                       {group.type === GROUP_TYPE_PRIVATE && !group.is_joined ? (
                         <Button size="small" variant="outlined" onClick={() => { setJoiningGroup(group); setPasswordDialogOpen(true); }}>
-                          加入群组
+                          验证加入
                         </Button>
                       ) : group.is_joined ? (
                         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ color: 'success.main' }}>
@@ -333,7 +472,10 @@ export function GroupsPage() {
                           <span>已加入</span>
                         </Stack>
                       ) : (
-                        <Button size="small" variant="contained" onClick={() => handleEnterGroup(group.id)}>进入</Button>
+                        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ color: 'primary.main' }}>
+                          <LockOpen fontSize="small" />
+                          <span>公开</span>
+                        </Stack>
                       )}
                     </Stack>
                   </Paper>
@@ -368,9 +510,9 @@ export function GroupsPage() {
         </DialogActions>
       </Dialog>
 
-      {/* 新建群组对话框 */}
+      {/* 新建/编辑群组对话框 */}
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>新建群组</DialogTitle>
+        <DialogTitle>{editingGroup ? '群组设置' : '新建群组'}</DialogTitle>
         <DialogContent>
           <Stack spacing={3} sx={{ mt: 1 }}>
             <TextField label="群组名称" fullWidth required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} />
@@ -382,16 +524,61 @@ export function GroupsPage() {
               </Select>
             </FormControl>
             <TextField label="呼号标识（可选）" fullWidth value={formData.callsign} onChange={(e) => setFormData({ ...formData, callsign: e.target.value })} />
+            {/* 只在私有群组时显示密码框 */}
             {formData.type === GROUP_TYPE_PRIVATE && (
-              <TextField label="加入密码" fullWidth type="password" required value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} />
+              <TextField
+                label={editingGroup ? "重置密码（留空则不修改）" : "加入密码"}
+                fullWidth
+                type="password"
+                required={!editingGroup}
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              />
+            )}
+            {/* 编辑模式时显示状态切换 */}
+            {editingGroup && (
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={formData.status === 1}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.checked ? 1 : 0 })}
+                    color="primary"
+                  />
+                }
+                label={formData.status === 1 ? "群组已启用" : "群组已禁用"}
+              />
             )}
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>取消</Button>
-          <Button onClick={handleSave} variant="contained">确认创建</Button>
+          <Button onClick={handleSave} variant="contained">确认保存</Button>
         </DialogActions>
       </Dialog>
+
+      {/* 删除确认对话框 */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
+        <DialogTitle>确认删除</DialogTitle>
+        <DialogContent>
+          <Typography>
+            确定要删除群组 <strong>{deletingGroup?.name}</strong> 吗？此操作不可撤销。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>取消</Button>
+          <Button onClick={handleDelete} color="error" variant="contained">
+            删除
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 用户详情弹窗 */}
+      <UserDetailPopover
+        open={Boolean(userDetailAnchorEl)}
+        anchorEl={userDetailAnchorEl}
+        onClose={handleCloseUserDetail}
+        user={selectedUser}
+      />
     </Box>
   )
 }

@@ -36,6 +36,7 @@ import {
   LockOpen,
   Lock,
   PersonOff,
+  Person,
   Circle,
 } from '@mui/icons-material'
 import { groupService } from '../../services/group'
@@ -48,6 +49,7 @@ const GROUP_TYPE_PRIVATE = 2
 
 export function AdminGroupPage() {
   const [groups, setGroups] = useState<Group[]>([])
+  const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(0)
@@ -107,18 +109,36 @@ export function AdminGroupPage() {
     }
   }
 
-  // 获取用户信息（用于显示群组创建者详情）
+  // 获取用户信息（用于显示��组创建者详情）
   const getUserInfo = (userId?: number) => {
     if (!userId) return null
-    // 这里可以通过userId获取用户信息
-    // 暂时返回null，实际应该从users state中查找
-    return null
+    return users.find((u) => u.id === userId)
   }
 
   // 打开用户详情
-  const handleOpenUserDetail = (event: React.MouseEvent<HTMLElement>, user: User) => {
-    setSelectedUser(user)
-    setUserDetailAnchorEl(event.currentTarget)
+  const handleOpenUserDetail = async (event: React.MouseEvent<HTMLElement>, userIdOrUser: number | User) => {
+    // 如果传入的是 User 对象，直接使用
+    if (typeof userIdOrUser === 'object') {
+      setSelectedUser(userIdOrUser)
+      setUserDetailAnchorEl(event.currentTarget)
+      return
+    }
+
+    // 如果传入的是 userId，先在本地列表中查找，找不到则调用 API
+    const localUser = getUserInfo(userIdOrUser)
+    if (localUser) {
+      setSelectedUser(localUser)
+      setUserDetailAnchorEl(event.currentTarget)
+    } else {
+      // 调用公开接口获取用户信息
+      try {
+        const user = await userService.getPublicInfo(userIdOrUser)
+        setSelectedUser(user)
+        setUserDetailAnchorEl(event.currentTarget)
+      } catch (err) {
+        console.error('Failed to load user info:', err)
+      }
+    }
   }
 
   // 关闭用户详情
@@ -129,7 +149,17 @@ export function AdminGroupPage() {
 
   useEffect(() => {
     fetchGroups()
+    loadUsers()
   }, [page, rowsPerPage])
+
+  const loadUsers = async () => {
+    try {
+      const data = await userService.getList()
+      setUsers(data.items || data)
+    } catch (err) {
+      console.error('Failed to load users:', err)
+    }
+  }
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -167,7 +197,7 @@ export function AdminGroupPage() {
       name: group.name,
       type: group.type,
       callsign: group.callsign || '',
-      password: group.password || '',
+      password: '', // 编辑时不强制回显密码
       allow_callsign_ssid: group.allow_callsign_ssid || '',
       note: group.note || '',
       status: group.status ?? 1,
@@ -276,9 +306,32 @@ export function AdminGroupPage() {
               <Typography fontWeight={500}>{group.name}</Typography>
             </Stack>
           </TableCell>
-          <TableCell>{group.callsign || '-'}</TableCell>
           <TableCell>
-            {group.ower_name || group.ower_callsign || '-'}
+            {group.callsign || '-'}
+          </TableCell>
+          <TableCell>
+            {group.ower_id ? (
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{
+                  cursor: 'pointer',
+                  '&:hover .owner-text': {
+                    color: 'primary.main',
+                    textDecoration: 'underline',
+                  },
+                }}
+                onClick={(e) => handleOpenUserDetail(e, group.ower_id!)}
+              >
+                <Person color="primary" fontSize="small" />
+                <Typography className="owner-text" variant="body2">
+                  {getUserInfo(group.ower_id)?.callsign || getUserInfo(group.ower_id)?.username || group.ower_callsign || '-'}
+                </Typography>
+              </Stack>
+            ) : (
+              group.ower_name || group.ower_callsign || '-'
+            )}
           </TableCell>
           <TableCell>
             <Stack direction="row" alignItems="center" spacing={1}>
@@ -580,13 +633,18 @@ export function AdminGroupPage() {
               value={formData.callsign}
               onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
             />
-            <TextField
-              label="密码"
-              fullWidth
-              type="password"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-            />
+
+            {/* 修改点：只有私有群组才显示密码输入框 */}
+            {formData.type === GROUP_TYPE_PRIVATE && (
+              <TextField
+                label={editingGroup ? "新密码 (留空则不修改)" : "密码"}
+                fullWidth
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              />
+            )}
+
             <TextField
               label="允许呼号SSID"
               fullWidth

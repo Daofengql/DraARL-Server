@@ -134,9 +134,29 @@ export function AdminDevicePage() {
   }
 
   // 打开用户详情
-  const handleOpenUserDetail = (event: React.MouseEvent<HTMLElement>, user: User) => {
-    setSelectedUser(user)
-    setUserDetailAnchorEl(event.currentTarget)
+  const handleOpenUserDetail = async (event: React.MouseEvent<HTMLElement>, userIdOrUser: number | User) => {
+    // 如果传入的是 User 对象，直接使用
+    if (typeof userIdOrUser === 'object') {
+      setSelectedUser(userIdOrUser)
+      setUserDetailAnchorEl(event.currentTarget)
+      return
+    }
+
+    // 如果传入的是 userId，先在本地列表中查找，找不到则调用 API
+    const localUser = getUserInfo(userIdOrUser)
+    if (localUser) {
+      setSelectedUser(localUser)
+      setUserDetailAnchorEl(event.currentTarget)
+    } else {
+      // 调用公开接口获取用户信息
+      try {
+        const user = await userService.getPublicInfo(userIdOrUser)
+        setSelectedUser(user)
+        setUserDetailAnchorEl(event.currentTarget)
+      } catch (err) {
+        console.error('Failed to load user info:', err)
+      }
+    }
   }
 
   // 关闭用户详情

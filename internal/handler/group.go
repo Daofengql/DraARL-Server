@@ -122,13 +122,78 @@ func GetGroups(c *gin.Context) {
 		groups = groups[offset : offset+pageSize]
 	}
 
+	// 获取所有设备，用于统计各个群组的在线/总设备数
+	deviceRepo := gormdb.NewDeviceRepository()
+	allDevices, _, _ := deviceRepo.ListDevices(10000, 1)
+
+	type groupStats struct {
+		online int
+		total  int
+	}
+	groupDeviceStats := make(map[int]groupStats)
+	for _, d := range allDevices {
+		stat := groupDeviceStats[d.GroupID]
+		stat.total++
+		if d.ISOnline {
+			stat.online++
+		}
+		groupDeviceStats[d.GroupID] = stat
+	}
+
+	// 获取当前用户已加入的群组ID列表（用于判断is_joined）
+	memberRepo := gormdb.NewGroupMemberRepository()
+	var joinedGroupIDs map[int]bool
+	if currentUser != nil {
+		members, _ := memberRepo.ListGroupsByUser(currentUser.ID)
+		joinedGroupIDs = make(map[int]bool, len(members))
+		for _, m := range members {
+			joinedGroupIDs[m.GroupID] = true
+		}
+	}
+
+	// 转换为前端期望的带有扩展状态的结构
+	resultItems := make([]gin.H, 0, len(groups))
+	for _, g := range groups {
+		isJoined := false
+
+		// 判断用户是否已加入该群组
+		if g.Type == 1 {
+			// 公开群组默认视为已加入
+			isJoined = true
+		} else if g.Type == 2 && currentUser != nil {
+			// 私有群组检查是否在已加入列表中
+			isJoined = joinedGroupIDs[g.ID]
+		}
+
+		stat := groupDeviceStats[g.ID]
+
+		resultItems = append(resultItems, gin.H{
+			"id":                  g.ID,
+			"name":                g.Name,
+			"type":                g.Type,
+			"callsign":            g.CallSign,
+			"allow_callsign_ssid": g.AllowCallSignSSID,
+			"ower_id":             g.OwerID,
+			"ower_callsign":       g.OwerCallSign,
+			"master_server":       g.MasterServer,
+			"slave_server":        g.SlaveServer,
+			"status":              g.Status,
+			"note":                g.Note,
+			"is_joined":           isJoined,   // 提供给前端用于渲染已加入标识
+			"online_count":        stat.online, // 实时在线设备数
+			"total_count":         stat.total,  // 总设备数
+			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
+		})
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"items": groups,
-			"total":   total,
-			"page":    page,
+			"items":     resultItems, // 返回组装后的数据
+			"total":     total,
+			"page":      page,
 			"page_size": pageSize,
 		},
 	})
@@ -515,7 +580,7 @@ func SearchGroups(c *gin.Context) {
 	// 重新组装响应数据，添加用户状态
 	resultItems := make([]gin.H, 0, len(groups))
 	for _, g := range groups {
-		isVerified := false
+		isJoined := false // 统一使用 is_joined 字段名
 		requirePassword := false
 
 		if g.Type == 2 {
@@ -523,7 +588,7 @@ func SearchGroups(c *gin.Context) {
 			requirePassword = true
 			if currentUser != nil {
 				// 检查用户是否已经验证过
-				isVerified = memberRepo.IsVerifiedMember(g.ID, currentUser.ID)
+				isJoined = memberRepo.IsVerifiedMember(g.ID, currentUser.ID)
 			}
 		}
 
@@ -540,9 +605,9 @@ func SearchGroups(c *gin.Context) {
 			"status":           g.Status,
 			"note":             g.Note,
 			"require_password": requirePassword, // 告知前端是否需要密码
-			"is_verified":      isVerified,      // 告知前端用户是否已加入
-			"create_time":       g.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":       g.UpdateTime.Format("2006-01-02 15:04:05"),
+			"is_joined":        isJoined,        // 统一使用 is_joined 字段名
+			"create_time":      g.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":      g.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 

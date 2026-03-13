@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography } from '@mui/material'
-import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic } from '@mui/icons-material'
+import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography, Collapse, Divider } from '@mui/material'
+import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess } from '@mui/icons-material'
 import { useState } from 'react'
 import { authService } from '../../services'
 
@@ -38,6 +38,8 @@ export function AdminLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
+  // 用户管理菜单的展开/折叠状态
+  const [userMenuExpanded, setUserMenuExpanded] = useState(true)
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen)
@@ -57,13 +59,28 @@ export function AdminLayout() {
     navigate('/')
   }
 
+  // 切换用户管理菜单展开/折叠
+  const toggleUserMenu = () => {
+    setUserMenuExpanded(!userMenuExpanded)
+  }
+
   const isActive = (path: string) => {
     return location.pathname === path || location.pathname.startsWith(path + '/')
   }
 
+  // 判断是否有子菜单处于活动状态
   const isParentActive = (item: MenuItem) => {
     if (!item.children) return false
     return item.children.some(child => location.pathname === child.path || location.pathname.startsWith(child.path + '/'))
+  }
+
+  // 判断菜单项是否应该高亮：有子菜单的父菜单，只有在直接访问父路径时才高亮
+  const shouldHighlight = (item: MenuItem) => {
+    if (item.children) {
+      // 有子菜单时，只有直接访问父路径才高亮父菜单
+      return location.pathname === item.path
+    }
+    return isActive(item.path)
   }
 
   const drawer = (
@@ -77,75 +94,87 @@ export function AdminLayout() {
         </Typography>
       </Box>
       <List sx={{ flex: 1, py: 1 }}>
-        {adminMenuItems.map((item) => (
-          <Box key={item.path}>
-            {/* 父菜单 */}
-            <ListItem disablePadding sx={{ mb: 0.5 }}>
-              <ListItemButton
-                selected={isActive(item.path)}
-                onClick={() => handleNavigate(item.path)}
-                sx={{
-                  mx: 1,
-                  borderRadius: 2,
-                  '&.Mui-selected': {
-                    bgcolor: '#E3F2FD',
-                    '&:hover': { bgcolor: '#BBDEFB' },
-                    '& .MuiListItemIcon-root': { color: '#1565C0' },
-                  },
-                  '&:hover': { bgcolor: 'action.hover' },
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: 40 }}>
-                  {item.icon}
-                </ListItemIcon>
-                <ListItemText
-                  primary={item.label}
-                  sx={{
-                    '& .MuiTypography-root': { fontWeight: 500 },
-                  }}
-                />
-              </ListItemButton>
-            </ListItem>
+        {adminMenuItems.map((item) => {
+          const isUserMenu = item.path === '/admin/users'
+          const showChildren = isUserMenu ? userMenuExpanded : (isActive(item.path) || isParentActive(item))
 
-            {/* 子菜单 - 只在父菜单相关时显示 */}
-            {(isActive(item.path) || isParentActive(item)) && item.children && (
-              <Box sx={{ pl: 2, mb: 0.5 }}>
-                {item.children.map((child, index) => (
-                  <ListItem
-                    key={`${item.path}-${index}`}
-                    disablePadding
-                  >
-                    <ListItemButton
-                      selected={location.pathname === child.path || location.pathname.startsWith(child.path + '/')}
-                      onClick={() => handleNavigate(child.path)}
-                      sx={{
-                        mx: 1,
-                        borderRadius: 2,
-                        bgcolor: '#F5F5F5',
-                        '&.Mui-selected': {
-                          bgcolor: '#E3F2FD',
-                          '&:hover': { bgcolor: '#BBDEFB' },
-                          '& .MuiListItemIcon-root': { color: '#1565C0' },
-                        },
-                        '&:hover': { bgcolor: 'grey.200' },
-                      }}
-                    >
-                      <ListItemIcon sx={{ minWidth: 40 }}>
-                        {child.icon}
-                      </ListItemIcon>
-                      <ListItemText
-                        primary={child.label}
-                        sx={{
-                          '& .MuiTypography-root': { fontWeight: 500 },
-                        }}
-                      />
-                    </ListItemButton>
-                  </ListItem>
-                ))}
-              </Box>
-            )}
-          </Box>
-        ))}
+          return (
+            <Box key={item.path}>
+              {/* 父菜单 */}
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  selected={shouldHighlight(item)}
+                  onClick={() => isUserMenu ? toggleUserMenu() : handleNavigate(item.path)}
+                  sx={{
+                    mx: 1,
+                    borderRadius: 2,
+                    '&.Mui-selected': {
+                      bgcolor: '#E3F2FD',
+                      '&:hover': { bgcolor: '#BBDEFB' },
+                      '& .MuiListItemIcon-root': { color: '#1565C0' },
+                    },
+                    '&:hover': { bgcolor: 'action.hover' },
+                  }}
+                >
+                  <ListItemIcon sx={{ minWidth: 40 }}>
+                    {item.icon}
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={item.label}
+                    sx={{
+                      '& .MuiTypography-root': { fontWeight: 500 },
+                    }}
+                  />
+                  {item.children && (
+                    userMenuExpanded ? <ExpandLess sx={{ ml: 1 }} /> : <ExpandMore sx={{ ml: 1 }} />
+                  )}
+                </ListItemButton>
+              </ListItem>
+
+              {/* 子菜单 - 使用折叠动画 */}
+              {item.children && (
+                <Collapse in={showChildren} timeout="auto" unmountOnExit>
+                  {/* 分隔线 */}
+                  <Divider sx={{ mb: 1, borderColor: 'grey.300' }} />
+                  <Box sx={{ pl: 2, mb: 1 }}>
+                    {item.children.map((child, index) => (
+                      <ListItem
+                        key={`${item.path}-${index}`}
+                        disablePadding
+                        sx={{ mb: 0.25 }}
+                      >
+                        <ListItemButton
+                          selected={location.pathname === child.path}
+                          onClick={() => handleNavigate(child.path)}
+                          sx={{
+                            mx: 1,
+                            borderRadius: 2,
+                            '&.Mui-selected': {
+                              bgcolor: '#E3F2FD',
+                              '&:hover': { bgcolor: '#BBDEFB' },
+                              '& .MuiListItemIcon-root': { color: '#1565C0' },
+                            },
+                            '&:hover': { bgcolor: 'action.hover' },
+                          }}
+                        >
+                          <ListItemIcon sx={{ minWidth: 40 }}>
+                            {child.icon}
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={child.label}
+                            sx={{
+                              '& .MuiTypography-root': { fontWeight: 500 },
+                            }}
+                          />
+                        </ListItemButton>
+                      </ListItem>
+                    ))}
+                  </Box>
+                </Collapse>
+              )}
+            </Box>
+          )
+        })}
       </List>
       <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
         <ListItemButton

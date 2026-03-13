@@ -64,6 +64,8 @@ export interface Device {
   last_heartbeat?: string // 前端兼容字段
   disable_send?: boolean  // 禁用发送
   disable_recv?: boolean  // 禁用接收
+  note?: string           // 备注
+  password?: string       // 设备密码
   group_name?: string     // 所属群组名称（前端扩展）
   owner_id?: number       // 设备所有者ID
   owner_name?: string     // 设备所有者名称

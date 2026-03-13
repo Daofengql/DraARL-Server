@@ -22,7 +22,11 @@ interface BackendDevice {
   is_online: boolean
   status: number
   priority?: number
+  disable_send?: boolean
+  disable_recv?: boolean
   qth?: string
+  note?: string
+  password?: string
   online_time?: string
   create_time?: string
   update_time?: string
@@ -41,7 +45,10 @@ const normalizeDevice = (d: BackendDevice): Device => ({
   online: d.is_online, // 前端兼容
   status: d.status,
   priority: d.priority,
+  disable_send: d.disable_send,
+  disable_recv: d.disable_recv,
   qth: d.qth,
+  note: d.note,
   online_time: d.online_time,
   last_heartbeat: d.online_time,
   create_time: d.create_time,
@@ -93,7 +100,11 @@ export const deviceService = {
       is_online: data.online ?? data.is_online,
       status: data.status,
       priority: data.priority,
+      disable_send: data.disable_send,
+      disable_recv: data.disable_recv,
       qth: data.qth,
+      note: data.note,
+      password: data.password,
       online_time: data.last_heartbeat ?? data.online_time,
       create_time: data.created_at ?? data.create_time,
       update_time: data.updated_at ?? data.update_time,
@@ -114,7 +125,11 @@ export const deviceService = {
       is_online: data.online ?? data.is_online,
       status: data.status,
       priority: data.priority,
+      disable_send: data.disable_send,
+      disable_recv: data.disable_recv,
       qth: data.qth,
+      note: data.note,
+      password: data.password,
       online_time: data.last_heartbeat ?? data.online_time,
       create_time: data.created_at ?? data.create_time,
       update_time: data.updated_at ?? data.update_time,

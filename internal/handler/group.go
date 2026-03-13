@@ -161,6 +161,12 @@ func GetGroups(c *gin.Context) {
 		}
 	}
 
+	// 获取当前用户ID用于判断是否是群组所有者
+	currentUserID := 0
+	if currentUser != nil {
+		currentUserID = currentUser.ID
+	}
+
 	// 转换为前端期望的带有扩展状态的结构
 	resultItems := make([]gin.H, 0, len(groups))
 	for _, g := range groups {
@@ -174,6 +180,9 @@ func GetGroups(c *gin.Context) {
 			// 私有群组检查是否在已加入列表中
 			isJoined = joinedGroupIDs[g.ID]
 		}
+
+		// 判断当前用户是否是群组所有者
+		isOwner := g.OwerID == currentUserID
 
 		stat := groupDeviceStats[g.ID]
 
@@ -190,6 +199,7 @@ func GetGroups(c *gin.Context) {
 			"status":              g.Status,
 			"note":                g.Note,
 			"is_joined":           isJoined,   // 提供给前端用于渲染已加入标识
+			"is_owner":            isOwner,    // 提供给前端用于判断是否显示编辑/删除按钮
 			"online_count":        stat.online, // 实时在线设备数
 			"total_count":         stat.total,  // 总设备数
 			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
@@ -231,24 +241,39 @@ func GetGroup(c *gin.Context) {
 		return
 	}
 
+	// 获取当前用户ID用于判断是否是群组所有者
+	username, _ := c.Get("username")
+	var currentUserID int
+	if username != nil {
+		userRepo := gormdb.NewUserRepository()
+		currentUser, _ := userRepo.GetUserByName(username.(string))
+		if currentUser != nil {
+			currentUserID = currentUser.ID
+		}
+	}
+
+	// 判断当前用户是否是群组所有者
+	isOwner := group.OwerID == currentUserID
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
-		"data": &GroupInfo{
-			ID:                group.ID,
-			Name:              group.Name,
-			Type:              group.Type,
-			CallSign:          group.CallSign,
-			AllowCallSignSSID: group.AllowCallSignSSID,
-			OwerID:            group.OwerID,
-			OwerCallSign:      group.OwerCallSign,
-			DevList:           group.DevList,
-			MasterServer:      group.MasterServer,
-			SlaveServer:       group.SlaveServer,
-			Status:            group.Status,
-			CreateTime:        group.CreateTime.Format("2006-01-02 15:04:05"),
-			UpdateTime:        group.UpdateTime.Format("2006-01-02 15:04:05"),
-			Note:              group.Note,
+		"data": gin.H{
+			"id":                  group.ID,
+			"name":                group.Name,
+			"type":                group.Type,
+			"callsign":            group.CallSign,
+			"allow_callsign_ssid": group.AllowCallSignSSID,
+			"ower_id":             group.OwerID,
+			"ower_callsign":       group.OwerCallSign,
+			"devlist":             group.DevList,
+			"master_server":       group.MasterServer,
+			"slave_server":        group.SlaveServer,
+			"status":              group.Status,
+			"note":                group.Note,
+			"is_owner":            isOwner,
+			"create_time":         group.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":         group.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
@@ -424,6 +449,22 @@ func UpdateGroup(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
+		"data": gin.H{
+			"id":                  group.ID,
+			"name":                group.Name,
+			"type":                group.Type,
+			"callsign":            group.CallSign,
+			"allow_callsign_ssid": group.AllowCallSignSSID,
+			"ower_id":             group.OwerID,
+			"ower_callsign":       group.OwerCallSign,
+			"devlist":             group.DevList,
+			"master_server":       group.MasterServer,
+			"slave_server":        group.SlaveServer,
+			"status":              group.Status,
+			"note":                group.Note,
+			"create_time":         group.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":         group.UpdateTime.Format("2006-01-02 15:04:05"),
+		},
 	})
 }
 

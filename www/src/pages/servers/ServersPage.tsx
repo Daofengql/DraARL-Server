@@ -27,6 +27,7 @@ import {
 import { Add, Edit, Delete, Search, Dns } from '@mui/icons-material'
 import { serverService } from '../../services'
 import type { Server } from '../../types'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 const SERVER_TYPES = [
   { value: 0, label: '主服务器' },
@@ -57,6 +58,15 @@ export function ServersPage() {
     location: '',
     description: '',
   })
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    type: 'danger' | 'warning' | 'info'
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   useEffect(() => {
     loadServers()
@@ -120,13 +130,21 @@ export function ServersPage() {
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定要删除这个服务器吗？')) return
-    try {
-      await serverService.delete(id)
-      loadServers()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '删除失败')
-    }
+    const server = servers.find(s => s.id === id)
+    setConfirmDialog({
+      open: true,
+      title: '删除服务器',
+      message: `确定要删除服务器 "${server?.name || id}" 吗？`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await serverService.delete(id)
+          loadServers()
+        } catch (err: any) {
+          setError(err.response?.data?.message || '删除失败')
+        }
+      },
+    })
   }
 
   const filteredServers = servers.filter(
@@ -311,6 +329,19 @@ export function ServersPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 确认对话框 */}
+      <ConfirmDialog
+        isOpen={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog(prev => ({ ...prev, open: false }))
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
+      />
     </Box>
   )
 }

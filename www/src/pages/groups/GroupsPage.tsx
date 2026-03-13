@@ -45,6 +45,7 @@ import {
 import { groupService, userService } from '../../services'
 import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 const GROUP_TYPE_PUBLIC = 1
 const GROUP_TYPE_PRIVATE = 2
@@ -81,6 +82,15 @@ export function GroupsPage() {
     password: '',
     status: 1,
   })
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    type: 'danger' | 'warning' | 'info'
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   useEffect(() => {
     loadGroups()
@@ -165,13 +175,20 @@ export function GroupsPage() {
   }
 
   const handleLeaveGroup = async (group: Group) => {
-    if (!confirm(`确定要退出群组 "${group.name}" 吗？这会将您在该群组的设备移至默认群组。`)) return
-    try {
-      await groupService.leave(group.id)
-      loadGroups()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '退出群组失败')
-    }
+    setConfirmDialog({
+      open: true,
+      title: '退出群组',
+      message: `确定要退出群组 "${group.name}" 吗？这会将您在该群组的设备移至默认群组。`,
+      type: 'warning',
+      onConfirm: async () => {
+        try {
+          await groupService.leave(group.id)
+          loadGroups()
+        } catch (err: any) {
+          setError(err.response?.data?.message || '退出群组失败')
+        }
+      },
+    })
   }
 
   // 打开新建弹窗
@@ -234,8 +251,42 @@ export function GroupsPage() {
     }
   }
 
-  const getStatusLabel = (status?: number) => {
-    switch (status) {
+  // 切换群组状态（启用/禁用）
+  const handleToggleStatus = async (group: Group) => {
+    const newStatus = group.status === 1 ? 0 : 1
+    const actionText = newStatus === 1 ? '启用' : '禁用'
+    setConfirmDialog({
+      open: true,
+      title: `${actionText}群组`,
+      message: `确定要${actionText}群组 "${group.name}" 吗？`,
+      type: newStatus === 1 ? 'info' : 'warning',
+      onConfirm: async () => {
+        try {
+          await groupService.update(group.id, { status: newStatus })
+          loadGroups()
+        } catch (err: any) {
+          setError(err.response?.data?.message || `${actionText}失败`)
+        }
+      },
+    })
+  }
+
+  const getStatusLabel = (group: Group) => {
+    // 如果是群组所有者，显示可切换的 Switch
+    if (group.is_owner) {
+      return (
+        <Tooltip title={group.status === 1 ? '点击禁用' : '点击启用'}>
+          <Switch
+            checked={group.status === 1}
+            onChange={() => handleToggleStatus(group)}
+            size="small"
+            color={group.status === 1 ? 'success' : 'default'}
+          />
+        </Tooltip>
+      )
+    }
+    // 非所有者显示只读的 Chip
+    switch (group.status) {
       case 1:
         return <Chip label="启用" size="small" color="success" />
       case 0:
@@ -292,7 +343,7 @@ export function GroupsPage() {
           <span>{group.online_count || 0}/{group.total_count || 0}</span>
         </Stack>
       </TableCell>
-      <TableCell>{getStatusLabel(group.status)}</TableCell>
+      <TableCell>{getStatusLabel(group)}</TableCell>
       <TableCell>
         <Typography
           sx={{
@@ -317,7 +368,7 @@ export function GroupsPage() {
             <Logout fontSize="small" />
           </IconButton>
         )}
-        {group.is_owner !== false && (
+        {group.is_owner && (
           <>
             <Tooltip title="编辑">
               <IconButton size="small" onClick={() => handleOpenEdit(group)}>
@@ -535,19 +586,6 @@ export function GroupsPage() {
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               />
             )}
-            {/* 编辑模式时显示状态切换 */}
-            {editingGroup && (
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={formData.status === 1}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.checked ? 1 : 0 })}
-                    color="primary"
-                  />
-                }
-                label={formData.status === 1 ? "群组已启用" : "群组已禁用"}
-              />
-            )}
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -578,6 +616,19 @@ export function GroupsPage() {
         anchorEl={userDetailAnchorEl}
         onClose={handleCloseUserDetail}
         user={selectedUser}
+      />
+
+      {/* 通用确认对话框 */}
+      <ConfirmDialog
+        isOpen={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog(prev => ({ ...prev, open: false }))
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
       />
     </Box>
   )

@@ -29,6 +29,12 @@ interface BackendGroup {
   create_time: string
   update_time: string
   note: string
+  // 扩展字段
+  is_joined?: boolean
+  is_owner?: boolean
+  online_count?: number
+  total_count?: number
+  require_password?: boolean
 }
 
 // 标准化群组数据
@@ -46,6 +52,11 @@ const normalizeGroup = (g: BackendGroup): Group => ({
   slave_server: g.slave_server,
   status: g.status,
   note: g.note,
+  is_joined: g.is_joined,
+  is_owner: g.is_owner,
+  online_count: g.online_count,
+  total_count: g.total_count,
+  require_password: g.require_password,
   create_time: g.create_time,
   created_at: g.create_time, // 前端兼容
   update_time: g.update_time,

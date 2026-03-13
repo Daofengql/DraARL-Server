@@ -19,7 +19,7 @@ func NewGroupRepository() *GroupRepository {
 
 // AddPublicGroup 添加公共群组
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
-	query := `INSERT INTO public_groups (name, type, callsign, password, allow_callsign_ssid,
+	query := `INSERT INTO public_groups (name, type, call_sign, password, allow_callsign_ssid,
 		ower_id, devlist, master_server, slave_server, status, create_time, update_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
@@ -41,16 +41,16 @@ func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 
 // GetPublicGroup 获取公共群组
 func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
-	query := `SELECT id, name, type, callsign, password, allow_dmrid, allow_callsign_ssid,
-		ower_id, devlist, master_server, slave_server, status,
+	query := `SELECT id, name, type, call_sign, password, allow_callsign_ssid,
+		ower_id, dev_list, master_server, slave_server, status,
 		create_time, update_time, note FROM public_groups WHERE id = ?`
 	return r.scanGroup(r.db.QueryRow(query, id))
 }
 
 // ListPublicGroups 列出所有公共群组
 func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
-	query := `SELECT id, name, type, callsign, password, allow_dmrid, allow_callsign_ssid,
-		ower_id, devlist, master_server, slave_server, status,
+	query := `SELECT id, name, type, call_sign, password, allow_callsign_ssid,
+		ower_id, dev_list, master_server, slave_server, status,
 		create_time, update_time, note FROM public_groups ORDER BY id`
 	rows, err := r.db.Query(query)
 	if err != nil {
@@ -92,10 +92,10 @@ func (r *GroupRepository) DeletePublicGroup(id int) error {
 func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	group := &models.Group{}
 
-	var nullCallSign, nullPassword, nullAllowDMRID, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
+	var nullCallSign, nullPassword, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
 
 	err := row.Scan(&group.ID, &group.Name, &group.Type, &nullCallSign, &nullPassword,
-		&nullAllowDMRID, &nullAllowCallSignSSID, &group.OwerID,
+		&nullAllowCallSignSSID, &group.OwerID,
 		&nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
 		&group.CreateTime, &group.UpdateTime, &nullNote)
 
@@ -112,9 +112,6 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	}
 	if nullPassword.Valid {
 		group.Password = nullPassword.String
-	}
-	if nullAllowDMRID.Valid {
-		group.AllowDMRID = nullAllowDMRID.String
 	}
 	if nullAllowCallSignSSID.Valid {
 		group.AllowCallSignSSID = nullAllowCallSignSSID.String
@@ -135,10 +132,10 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 func (r *GroupRepository) scanGroupFromRows(rows *sql.Rows) (*models.Group, error) {
 	group := &models.Group{}
 
-	var nullCallSign, nullPassword, nullAllowDMRID, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
+	var nullCallSign, nullPassword, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
 
 	err := rows.Scan(&group.ID, &group.Name, &group.Type, &nullCallSign, &nullPassword,
-		&nullAllowDMRID, &nullAllowCallSignSSID, &group.OwerID,
+		&nullAllowCallSignSSID, &group.OwerID,
 		&nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
 		&group.CreateTime, &group.UpdateTime, &nullNote)
 
@@ -152,9 +149,6 @@ func (r *GroupRepository) scanGroupFromRows(rows *sql.Rows) (*models.Group, erro
 	}
 	if nullPassword.Valid {
 		group.Password = nullPassword.String
-	}
-	if nullAllowDMRID.Valid {
-		group.AllowDMRID = nullAllowDMRID.String
 	}
 	if nullAllowCallSignSSID.Valid {
 		group.AllowCallSignSSID = nullAllowCallSignSSID.String

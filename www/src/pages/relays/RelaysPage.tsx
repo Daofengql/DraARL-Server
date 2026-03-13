@@ -22,6 +22,7 @@ import {
 import { Add, Edit, Delete, Search, SettingsInputAntenna } from '@mui/icons-material'
 import { relayService } from '../../services'
 import type { Relay } from '../../types'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 export function RelaysPage() {
   const [relays, setRelays] = useState<Relay[]>([])
@@ -41,6 +42,15 @@ export function RelaysPage() {
     location: '',
     description: '',
   })
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    type: 'danger' | 'warning' | 'info'
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   useEffect(() => {
     loadRelays()
@@ -106,13 +116,21 @@ export function RelaysPage() {
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定要删除这个中继台吗？')) return
-    try {
-      await relayService.delete(id)
-      loadRelays()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '删除失败')
-    }
+    const relay = relays.find(r => r.id === id)
+    setConfirmDialog({
+      open: true,
+      title: '删除中继台',
+      message: `确定要删除中继台 "${relay?.name || id}" 吗？`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await relayService.delete(id)
+          loadRelays()
+        } catch (err: any) {
+          setError(err.response?.data?.message || '删除失败')
+        }
+      },
+    })
   }
 
   const filteredRelays = relays.filter(
@@ -291,6 +309,19 @@ export function RelaysPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 确认对话框 */}
+      <ConfirmDialog
+        isOpen={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog(prev => ({ ...prev, open: false }))
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
+      />
     </Box>
   )
 }

@@ -28,8 +28,6 @@ interface UserDetailPopoverProps {
 }
 
 export function UserDetailPopover({ open, anchorEl, onClose, user }: UserDetailPopoverProps) {
-  console.log('UserDetailPopover props:', { open, hasAnchorEl: !!anchorEl, user })
-
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-'
     return new Date(dateStr).toLocaleDateString('zh-CN')

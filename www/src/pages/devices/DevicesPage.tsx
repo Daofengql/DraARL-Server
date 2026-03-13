@@ -37,6 +37,7 @@ import {
 import { deviceService, groupService } from '../../services'
 import type { Device, Group } from '../../types'
 import { SwitchGroupDialog } from './SwitchGroupDialog'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 const DEVICE_MODELS = [
   { value: 0, label: '微信小程序' },
@@ -77,6 +78,15 @@ export function DevicesPage() {
     disable_send: false,
     disable_recv: false,
   })
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    type: 'danger' | 'warning' | 'info'
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   useEffect(() => {
     loadDevices()
@@ -230,13 +240,21 @@ export function DevicesPage() {
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定要删除这个设备吗？')) return
-    try {
-      await deviceService.delete(id)
-      loadDevices()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '删除失败')
-    }
+    const device = devices.find(d => d.id === id)
+    setConfirmDialog({
+      open: true,
+      title: '删除设备',
+      message: `确定要删除设备 "${device?.name || id}" 吗？`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await deviceService.delete(id)
+          loadDevices()
+        } catch (err: any) {
+          setError(err.response?.data?.message || '删除失败')
+        }
+      },
+    })
   }
 
   const filteredDevices = devices.filter(
@@ -423,6 +441,19 @@ export function DevicesPage() {
           onSwitch={handleSwitchGroup}
         />
       )}
+
+      {/* 确认对话框 */}
+      <ConfirmDialog
+        isOpen={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog(prev => ({ ...prev, open: false }))
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
+      />
     </Box>
   )
 }

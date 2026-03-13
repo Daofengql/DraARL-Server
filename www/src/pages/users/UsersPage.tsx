@@ -50,6 +50,7 @@ import {
 import { userService } from '../../services'
 import { authService } from '../../services'
 import type { User } from '../../types'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 const USER_ROLES = [
   { value: 'admin', label: '管理员' },
@@ -84,6 +85,15 @@ export function UsersPage() {
     password: '',
     role: 'user',
   })
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    type: 'danger' | 'warning' | 'info'
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   useEffect(() => {
     loadUsers()
@@ -164,18 +174,26 @@ export function UsersPage() {
   }
 
   const handleDelete = async (id: number) => {
-    // 不允许删除ID为1的主管理员
+    // 不允许删除ID为1的主管��员
     if (id === 1) {
       setError('主管理员不能被删除')
       return
     }
-    if (!confirm('确定要删除这个用户吗？')) return
-    try {
-      await userService.delete(id)
-      loadUsers()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '删除失败')
-    }
+    const user = users.find(u => u.id === id)
+    setConfirmDialog({
+      open: true,
+      title: '删除用户',
+      message: `确定要删除用户 "${user?.username || id}" 吗？`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await userService.delete(id)
+          loadUsers()
+        } catch (err: any) {
+          setError(err.response?.data?.message || '删除失败')
+        }
+      },
+    })
   }
 
   const handleToggleStatus = async (user: User) => {
@@ -188,14 +206,20 @@ export function UsersPage() {
     const newStatus = user.status === 1 ? 0 : 1
     const action = newStatus === 1 ? '启用' : '禁用'
 
-    if (!confirm(`确定要${action}用户 ${user.username} 吗？`)) return
-
-    try {
-      await userService.updateStatus(user.id, newStatus)
-      loadUsers()
-    } catch (err: any) {
-      setError(err.response?.data?.message || `${action}失败`)
-    }
+    setConfirmDialog({
+      open: true,
+      title: `${action}用户`,
+      message: `确定要${action}用户 ${user.username} 吗？`,
+      type: newStatus === 1 ? 'info' : 'warning',
+      onConfirm: async () => {
+        try {
+          await userService.updateStatus(user.id, newStatus)
+          loadUsers()
+        } catch (err: any) {
+          setError(err.response?.data?.message || `${action}失败`)
+        }
+      },
+    })
   }
 
   const handleOpenUserDetail = (event: React.MouseEvent<HTMLElement>, user: User) => {
@@ -577,6 +601,19 @@ export function UsersPage() {
           </Card>
         )}
       </Popover>
+
+      {/* 确认对话框 */}
+      <ConfirmDialog
+        isOpen={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog(prev => ({ ...prev, open: false }))
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
+      />
     </Box>
   )
 }

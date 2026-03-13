@@ -25,6 +25,7 @@ import {
   MenuItem,
   TablePagination,
   Typography,
+  Switch,
 } from '@mui/material'
 import {
   Add,
@@ -43,6 +44,7 @@ import { groupService } from '../../services/group'
 import { userService } from '../../services'
 import type { Group, Device, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 const GROUP_TYPE_PUBLIC = 1
 const GROUP_TYPE_PRIVATE = 2
@@ -70,6 +72,15 @@ export function AdminGroupPage() {
   // 用户详情弹窗状态
   const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
+
+  // 确认对话框状态
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    message: string
+    type: 'danger' | 'warning' | 'info'
+    onConfirm: () => void
+  }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   // 表单状态
   const [formData, setFormData] = useState({
@@ -252,6 +263,40 @@ export function AdminGroupPage() {
     }
   }
 
+  // 快捷切换群组状态
+  const handleToggleStatus = async (group: Group) => {
+    const newStatus = group.status === 1 ? 0 : 1
+    const actionText = newStatus === 1 ? '启用' : '禁用'
+    setConfirmDialog({
+      open: true,
+      title: `${actionText}群组`,
+      message: `确定要${actionText}群组 "${group.name}" 吗？`,
+      type: newStatus === 1 ? 'info' : 'warning',
+      onConfirm: async () => {
+        try {
+          await groupService.update(group.id, { status: newStatus })
+          fetchGroups()
+        } catch (err) {
+          setError(`${actionText}失败`)
+        }
+      },
+    })
+  }
+
+  // 渲染状态列（管理员可切换）
+  const renderStatusSwitch = (group: Group) => {
+    return (
+      <Tooltip title={group.status === 1 ? '点击禁用' : '点击启用'}>
+        <Switch
+          checked={group.status === 1}
+          onChange={() => handleToggleStatus(group)}
+          size="small"
+          color={group.status === 1 ? 'success' : 'default'}
+        />
+      </Tooltip>
+    )
+  }
+
   // 更新设备禁发/禁收状态
   const handleUpdateDeviceStatus = async (groupId: number, deviceId: number, disableSend: boolean, disableRecv: boolean) => {
     try {
@@ -270,19 +315,26 @@ export function AdminGroupPage() {
 
   // 踢出设备
   const handleKickDevice = async (groupId: number, deviceId: number, deviceName: string) => {
-    if (!confirm(`确定要将设备"${deviceName}"踢出群组吗？`)) return
-    try {
-      await groupService.kickDevice(groupId, deviceId)
-      // 刷新设备列表
-      setGroupDevices((prev) => {
-        const newCache = { ...prev }
-        delete newCache[groupId]
-        return newCache
-      })
-      fetchGroupDevices(groupId)
-    } catch (err) {
-      setError('踢出设备失败')
-    }
+    setConfirmDialog({
+      open: true,
+      title: '踢出设备',
+      message: `确定要将设备"${deviceName}"踢出群组吗？`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await groupService.kickDevice(groupId, deviceId)
+          // 刷新设备列表
+          setGroupDevices((prev) => {
+            const newCache = { ...prev }
+            delete newCache[groupId]
+            return newCache
+          })
+          fetchGroupDevices(groupId)
+        } catch (err) {
+          setError('踢出设备失败')
+        }
+      },
+    })
   }
 
   // 渲染群组表格行
@@ -353,7 +405,7 @@ export function AdminGroupPage() {
               </IconButton>
             </Stack>
           </TableCell>
-          <TableCell>{getStatusLabel(group.status)}</TableCell>
+          <TableCell>{renderStatusSwitch(group)}</TableCell>
           <TableCell>
             <Typography
               sx={{
@@ -652,17 +704,6 @@ export function AdminGroupPage() {
               onChange={(e) => setFormData({ ...formData, allow_callsign_ssid: e.target.value })}
               placeholder="例: BG5XXX-0,BG5XXX-1"
             />
-            <FormControl fullWidth>
-              <InputLabel>状态</InputLabel>
-              <Select
-                value={formData.status}
-                label="状态"
-                onChange={(e) => setFormData({ ...formData, status: e.target.value as number })}
-              >
-                <MenuItem value={1}>启用</MenuItem>
-                <MenuItem value={0}>禁用</MenuItem>
-              </Select>
-            </FormControl>
             <TextField
               label="备注"
               fullWidth
@@ -703,6 +744,19 @@ export function AdminGroupPage() {
         anchorEl={userDetailAnchorEl}
         onClose={handleCloseUserDetail}
         user={selectedUser}
+      />
+
+      {/* 通用确认对话框 */}
+      <ConfirmDialog
+        isOpen={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        onConfirm={() => {
+          confirmDialog.onConfirm()
+          setConfirmDialog(prev => ({ ...prev, open: false }))
+        }}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
       />
     </Box>
   )

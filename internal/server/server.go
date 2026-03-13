@@ -160,23 +160,27 @@ func (s *Server) setupRoutes() {
 				approved.GET("/groups/:id/devices", handler.GetGroupDevices)
 				approved.POST("/groups", handler.CreateGroup)
 				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
-				approved.PUT("/groups/:id", handler.UpdateGroup)
-				approved.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
-				approved.DELETE("/groups/:id", handler.DeleteGroup)
-				approved.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
-
-				// 群组搜索（使用POST以支持请求体）
 				approved.POST("/groups/search", handler.SearchGroups)
-				// 加入群组
+				// 加入群���
 				approved.POST("/groups/:id/join", handler.JoinGroup)
 				// 获取群组成员列表
 				approved.GET("/groups/:id/members", handler.GetGroupMembers)
-				// 设置设备禁发/禁收
-				approved.PUT("/groups/:id/devices/:deviceId", handler.UpdateDeviceStatus)
-				// 踢出设备
-				approved.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
 				// 离开群组
 				approved.POST("/groups/:id/leave", handler.LeaveGroup)
+
+				// 群组管理操作（需要群组所有者或管理员权限）
+				groupOwner := approved.Group("")
+				groupOwner.Use(middleware.RequireAdminOrOwner())
+				{
+					groupOwner.PUT("/groups/:id", handler.UpdateGroup)
+					groupOwner.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
+					groupOwner.DELETE("/groups/:id", handler.DeleteGroup)
+					groupOwner.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
+					// 设置设备禁发/禁收
+					groupOwner.PUT("/groups/:id/devices/:deviceId", handler.UpdateDeviceStatus)
+					// 踢出设备
+					groupOwner.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
+				}
 			}
 
 			// 中继台和服务器（需要管理员权限）

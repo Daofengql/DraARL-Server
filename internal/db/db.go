@@ -96,6 +96,8 @@ func UpdateDatabase() error {
 		{"users", "mdcid", "VARCHAR(255)", "''"},
 		{"devices", "dmrid", "INT", "0"},
 		{"users", "dmrid", "INT", "0"},
+		{"public_groups", "allow_callsign_ssid", "TEXT", "NULL"},
+		{"public_groups", "ower_callsign", "VARCHAR(255)", "''"},
 	} {
 		if err := addColumnIfNotExists(stmt.table, stmt.column, stmt.dataType, stmt.defaultVal); err != nil {
 			log.Printf("Warning: could not add column %s.%s: %v", stmt.table, stmt.column, err)

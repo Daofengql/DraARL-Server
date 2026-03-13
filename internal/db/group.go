@@ -19,7 +19,7 @@ func NewGroupRepository() *GroupRepository {
 
 // AddPublicGroup 添加公共群组
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
-	query := `INSERT INTO public_groups (name, type, call_sign, password, allow_callsign_ssid,
+	query := `INSERT INTO public_groups (name, type, callsign, password, allow_callsign_ssid,
 		ower_id, devlist, master_server, slave_server, status, create_time, update_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
@@ -41,7 +41,7 @@ func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 
 // GetPublicGroup 获取公共群组
 func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
-	query := `SELECT id, name, type, call_sign, password, allow_callsign_ssid,
+	query := `SELECT id, name, type, callsign, password, allow_callsign_ssid,
 		ower_id, dev_list, master_server, slave_server, status,
 		create_time, update_time, note FROM public_groups WHERE id = ?`
 	return r.scanGroup(r.db.QueryRow(query, id))
@@ -49,7 +49,7 @@ func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
 
 // ListPublicGroups 列出所有公共群组
 func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
-	query := `SELECT id, name, type, call_sign, password, allow_callsign_ssid,
+	query := `SELECT id, name, type, callsign, password, allow_callsign_ssid,
 		ower_id, dev_list, master_server, slave_server, status,
 		create_time, update_time, note FROM public_groups ORDER BY id`
 	rows, err := r.db.Query(query)
@@ -73,10 +73,10 @@ func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
 
 // UpdatePublicGroup 更新公共群组
 func (r *GroupRepository) UpdatePublicGroup(group *models.Group) error {
-	query := `UPDATE public_groups SET name = ?, type = ?, password = ?, allow_callsign_ssid = ?,
+	query := `UPDATE public_groups SET name = ?, type = ?, callsign = ?, password = ?, allow_callsign_ssid = ?,
 		update_time = NOW() WHERE id = ?`
 
-	_, err := r.db.Exec(query, group.Name, group.Type, group.Password,
+	_, err := r.db.Exec(query, group.Name, group.Type, group.CallSign, group.Password,
 		group.AllowCallSignSSID, group.ID)
 	return err
 }

@@ -95,6 +95,11 @@ func main() {
 		stdlog.Printf("数据库表迁移失败: %v", err)
 	}
 
+	// 更新数据库结构（添加缺失的列）
+	if err := db.UpdateDatabase(); err != nil {
+		stdlog.Printf("数据库结构更新失败: %v", err)
+	}
+
 	// 初始化管理员用户（首次启动时）
 	adminUser, adminPass, err := db.InitAdminUser()
 	if err != nil {

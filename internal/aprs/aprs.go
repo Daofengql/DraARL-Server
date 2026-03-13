@@ -276,7 +276,7 @@ func (a *APRS) sendAPRSPosition() error {
 
 	// 构造 APRS 数据包
 	aprsPacket := a.formatAPRSPacket(currentAPRSConfig.CallSign, currentAPRSConfig.SSID, currentAPRSConfig.SelfAddress, currentAPRSConfig.SelfPort,
-		currentAPRSConfig.Longitude, currentAPRSConfig.Latitude, currentAPRSConfig.Altitude)
+		currentAPRSConfig.Latitude, currentAPRSConfig.Longitude, currentAPRSConfig.Altitude)
 
 	// 发送数据
 	err := client.Send(aprsPacket)

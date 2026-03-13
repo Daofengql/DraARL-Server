@@ -9,10 +9,10 @@ import (
 // User 用户模型
 type User struct {
 	ID              int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name            string     `gorm:"type:varchar(255);column:name" json:"name"`
-	CallSign        string     `gorm:"type:varchar(32);uniqueIndex;column:callsign" json:"callsign"`
+	Name            string     `gorm:"type:varchar(255);uniqueIndex;column:name" json:"name"`
+	CallSign        string     `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`
 	Gird            string     `gorm:"type:varchar(255);column:gird" json:"gird"`
-	Phone           string     `gorm:"type:varchar(32);uniqueIndex;column:phone" json:"phone"`
+	Phone           string     `gorm:"type:varchar(32);index;column:phone" json:"phone"`
 	Password        string     `gorm:"type:varchar(255);column:password" json:"-"`
 	Birthday        string     `gorm:"type:varchar(32);column:birthday" json:"birthday"`
 	Sex             int        `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
@@ -31,7 +31,7 @@ type User struct {
 	LastLoginTime   *time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
 	LoginErrTimes   int        `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
 	CreateTime      time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	OpenID          string     `gorm:"type:varchar(255);uniqueIndex;column:openid" json:"openid"`
+	OpenID          string     `gorm:"type:varchar(255);index;column:openid" json:"openid"`
 	NickName        string     `gorm:"type:varchar(255);column:nickname" json:"nickname"`
 	PID             string     `gorm:"type:varchar(255);column:pid" json:"pid"`
 	LastLoginIP     string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`

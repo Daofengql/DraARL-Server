@@ -90,14 +90,21 @@ func main() {
 	}
 	defer gormdb.Close()
 
-	// 自动迁移表结构（创建新表或更新表结构）
-	if err := gormdb.AutoMigrate(); err != nil {
-		stdlog.Printf("数据库表迁移失败: %v", err)
-	}
+	// 只有在指定 -auto-migrate 参数时才执行数据库迁移
+	if *autoMigrate {
+		stdlog.Println("执行数据库自动迁移...")
 
-	// 更新数据库结构（添加缺失的列）
-	if err := db.UpdateDatabase(); err != nil {
-		stdlog.Printf("数据库结构更新失败: %v", err)
+		// 自动迁移表结构（创建新表或更新表结构）
+		if err := gormdb.AutoMigrate(); err != nil {
+			stdlog.Fatalf("数据库表迁移失败: %v", err)
+		}
+		stdlog.Println("GORM 表结构迁移完成")
+
+		// 更新数据库结构（添加缺失的列）
+		if err := db.UpdateDatabase(); err != nil {
+			stdlog.Fatalf("数据库结构更新失败: %v", err)
+		}
+		stdlog.Println("数据库结构更新完成")
 	}
 
 	// 初始化管理员用户（首次启动时）

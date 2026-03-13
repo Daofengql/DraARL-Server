@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"nrllink/internal/db"
+	"nrllink/internal/gormdb"
 	"nrllink/internal/models"
 	"nrllink/internal/protocol"
 )
@@ -15,30 +15,30 @@ import (
 func initPublicGroups() {
 	// 创建默认群组 0
 	publicGroupMap[0] = &models.Group{
-		ID:            0,
-		Name:          "公共大厅",
-		OwerCallSign:  "default",
-		Status:        1,
-		DevMap:        make(map[int]*models.Device),
-		CreateTime:    time.Now().Format("2006-01-02 15:04:05"),
-		UpdateTime:    time.Now().Format("2006-01-02 15:04:05"),
-		ConnPool:      &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ID:           0,
+		Name:         "公共大厅",
+		OwerCallSign: "default",
+		Status:       1,
+		DevMap:       make(map[int]*models.Device),
+		CreateTime:   time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime:   time.Now().Format("2006-01-02 15:04:05"),
+		ConnPool:     &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
 	}
 
 	// 创建全网通群组 999
 	publicGroupMap[models.GroupIDPublicMin] = &models.Group{
-		ID:            models.GroupIDPublicMin,
-		Name:          "全网互联",
-		OwerCallSign:  "default",
-		Status:        1,
-		DevMap:        make(map[int]*models.Device),
-		CreateTime:    time.Now().Format("2006-01-02 15:04:05"),
-		UpdateTime:    time.Now().Format("2006-01-02 15:04:05"),
-		ConnPool:      &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ID:           models.GroupIDPublicMin,
+		Name:         "全网互联",
+		OwerCallSign: "default",
+		Status:       1,
+		DevMap:       make(map[int]*models.Device),
+		CreateTime:   time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime:   time.Now().Format("2006-01-02 15:04:05"),
+		ConnPool:     &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
 	}
 
 	// 从数据库加载公共群组
-	repo := db.NewGroupRepository()
+	repo := gormdb.NewGroupRepository()
 	groups, err := repo.ListPublicGroups()
 	if err != nil {
 		log.Printf("Load public groups from database failed: %v", err)
@@ -46,25 +46,9 @@ func initPublicGroups() {
 	}
 
 	for _, gp := range groups {
-		newGroup := &models.Group{
-			ID:                gp.ID,
-			Name:              gp.Name,
-			Type:              gp.Type,
-			CallSign:          gp.CallSign,
-			Password:          gp.Password,
-			AllowCallSignSSID: gp.AllowCallSignSSID,
-			OwerID:            gp.OwerID,
-			OwerCallSign:      gp.OwerCallSign,
-			DevList:           gp.DevList,
-			MasterServer:      gp.MasterServer,
-			SlaveServer:       gp.SlaveServer,
-			Status:            gp.Status,
-			CreateTime:        gp.CreateTime,
-			UpdateTime:        gp.UpdateTime,
-			Note:              gp.Note,
-			ConnPool:          &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
-			DevMap:            make(map[int]*models.Device),
-		}
+		newGroup := gp.ToModelGroup()
+		newGroup.ConnPool = &CurrentConnPool{DevConnMap: make(map[string]*models.Device)}
+		newGroup.DevMap = make(map[int]*models.Device)
 
 		publicGroupMap[newGroup.ID] = newGroup
 
@@ -92,15 +76,17 @@ func GetAllPublicGroups() map[int]*models.Group {
 
 // CreatePublicGroup 创建公共群组
 func CreatePublicGroup(gp *models.Group) error {
-	repo := db.NewGroupRepository()
+	repo := gormdb.NewGroupRepository()
 
-	gp.Status = 1
-	gp.CreateTime = time.Now().Format("2006-01-02 15:04:05")
-	gp.UpdateTime = time.Now().Format("2006-01-02 15:04:05")
+	gormGroup := gormdb.FromModelGroup(gp)
+	gormGroup.Status = 1
 
-	if err := repo.AddPublicGroup(gp); err != nil {
+	if err := repo.CreateGroup(gormGroup); err != nil {
 		return err
 	}
+
+	// 更新 models.Group 的 ID
+	gp.ID = gormGroup.ID
 
 	newGroup := &models.Group{
 		ID:                gp.ID,
@@ -114,9 +100,9 @@ func CreatePublicGroup(gp *models.Group) error {
 		DevList:           gp.DevList,
 		MasterServer:      gp.MasterServer,
 		SlaveServer:       gp.SlaveServer,
-		Status:            gp.Status,
-		CreateTime:        gp.CreateTime,
-		UpdateTime:        gp.UpdateTime,
+		Status:            1,
+		CreateTime:        time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime:        time.Now().Format("2006-01-02 15:04:05"),
 		Note:              gp.Note,
 		ConnPool:          &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
 		DevMap:            make(map[int]*models.Device),
@@ -134,11 +120,10 @@ func CreatePublicGroup(gp *models.Group) error {
 
 // UpdatePublicGroup 更新公共群组
 func UpdatePublicGroup(gp *models.Group) error {
-	repo := db.NewGroupRepository()
+	repo := gormdb.NewGroupRepository()
 
-	gp.UpdateTime = time.Now().Format("2006-01-02 15:04:05")
-
-	if err := repo.UpdatePublicGroup(gp); err != nil {
+	gormGroup := gormdb.FromModelGroup(gp)
+	if err := repo.UpdateGroup(gormGroup); err != nil {
 		return err
 	}
 
@@ -149,7 +134,7 @@ func UpdatePublicGroup(gp *models.Group) error {
 		existing.Password = gp.Password
 		existing.AllowCallSignSSID = gp.AllowCallSignSSID
 		existing.Note = gp.Note
-		existing.UpdateTime = gp.UpdateTime
+		existing.UpdateTime = time.Now().Format("2006-01-02 15:04:05")
 	}
 
 	return nil
@@ -157,9 +142,9 @@ func UpdatePublicGroup(gp *models.Group) error {
 
 // DeletePublicGroup 删除公共群组
 func DeletePublicGroup(id int) error {
-	repo := db.NewGroupRepository()
+	repo := gormdb.NewGroupRepository()
 
-	if err := repo.DeletePublicGroup(id); err != nil {
+	if err := repo.DeleteGroup(id); err != nil {
 		return err
 	}
 

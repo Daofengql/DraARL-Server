@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"nrllink/internal/db"
+	"nrllink/internal/gormdb"
 	"nrllink/internal/models"
 	"nrllink/internal/protocol"
 	"nrllink/pkg/geoip"
@@ -25,7 +25,7 @@ func getGroupConnPool(gp *models.Group) *CurrentConnPool {
 
 // loadAllDevices 从数据库加载所有设备
 func loadAllDevices() {
-	repo := db.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository()
 	devices, _, err := repo.ListDevices(10000, 1)
 	if err != nil {
 		log.Printf("Load devices from database failed: %v", err)
@@ -33,28 +33,30 @@ func loadAllDevices() {
 	}
 
 	for _, dev := range devices {
-		dev.PcmG711Chan = make(chan [][]byte, 3)
-		dev.PcmBuffer = make([]int, 160)
+		// 转换为 models.Device
+		modelDev := dev.ToModelDevice()
+		modelDev.PcmG711Chan = make(chan [][]byte, 3)
+		modelDev.PcmBuffer = make([]int, 160)
 
-		callsignSSID := protocol.GetCallSignSSID(dev.CallSign, dev.SSID)
-		dev.CallSignSSID = callsignSSID
+		callsignSSID := protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
+		modelDev.CallSignSSID = callsignSSID
 
 		// 255 设备加入 999 群组
-		if dev.SSID == models.SSIDServerMax || dev.DevModel == models.DevModelFullNet {
-			dev.GroupID = models.GroupIDPublicMin
+		if modelDev.SSID == models.SSIDServerMax || modelDev.DevModel == models.DevModelFullNet {
+			modelDev.GroupID = models.GroupIDPublicMin
 		}
 
-		devCallsignSSIDMap[callsignSSID] = dev
+		devCallsignSSIDMap[callsignSSID] = modelDev
 
 		// 加入群组
-		if gp, ok := publicGroupMap[dev.GroupID]; ok {
-			gp.DevMap[dev.ID] = dev
-			gp.DevList = append(gp.DevList, dev.ID)
+		if gp, ok := publicGroupMap[modelDev.GroupID]; ok {
+			gp.DevMap[modelDev.ID] = modelDev
+			gp.DevList = append(gp.DevList, modelDev.ID)
 		} else {
 			// 如果群组不存在，加入默认群组
 			if gp0, ok := publicGroupMap[0]; ok {
-				gp0.DevMap[dev.ID] = dev
-				gp0.DevList = append(gp0.DevList, dev.ID)
+				gp0.DevMap[modelDev.ID] = modelDev
+				gp0.DevList = append(gp0.DevList, modelDev.ID)
 			}
 		}
 	}
@@ -64,26 +66,30 @@ func loadAllDevices() {
 
 // addDevice 添加新设备（如果已存在则从数据库加载）
 func addDevice(dev *models.Device) (*models.Device, error) {
-	repo := db.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository()
 
 	// 检查设备是否已存在
-	existingDev, err := repo.GetDevice(dev.CallSign, dev.SSID)
-	if err == nil {
-		// 设备已存在，直接返回现有设备
-		log.Printf("Device %s-%d already exists in database (ID: %d), reusing", dev.CallSign, dev.SSID, existingDev.ID)
-		return existingDev, nil
+	existingDev, err := repo.GetDeviceByCallSignSSID(dev.CallSign, dev.SSID)
+	if err == nil && existingDev != nil {
+		// 设备已存在，转换为 models.Device 并返回
+		modelDev := existingDev.ToModelDevice()
+		log.Printf("Device %s-%d already exists in database (ID: %d), reusing", dev.CallSign, dev.SSID, modelDev.ID)
+		return modelDev, nil
 	}
 
 	// 设备不存在，创建新设备
-	dev.CreateTime = time.Now()
-	dev.UpdateTime = time.Now()
+	gormDev := gormdb.FromModelDevice(dev)
+	gormDev.CreateTime = time.Now()
+	gormDev.UpdateTime = time.Now()
 
-	if err := repo.AddDevice(dev); err != nil {
+	if err := repo.CreateDevice(gormDev); err != nil {
 		return nil, fmt.Errorf("add device to database failed: %w", err)
 	}
 
-	log.Printf("Created new device in database: %s-%d (ID: %d)", dev.CallSign, dev.SSID, dev.ID)
-	return dev, nil
+	// 转换回 models.Device
+	modelDev := gormDev.ToModelDevice()
+	log.Printf("Created new device in database: %s-%d (ID: %d)", dev.CallSign, dev.SSID, modelDev.ID)
+	return modelDev, nil
 }
 
 // getDevice 获取设备
@@ -94,12 +100,13 @@ func getDevice(callsign string, ssid byte) *models.Device {
 	}
 
 	// 从数据库查询
-	repo := db.NewDeviceRepository()
-	dev, err := repo.GetDevice(callsign, ssid)
-	if err != nil {
+	repo := gormdb.NewDeviceRepository()
+	gormDev, err := repo.GetDeviceByCallSignSSID(callsign, ssid)
+	if err != nil || gormDev == nil {
 		return nil
 	}
 
+	dev := gormDev.ToModelDevice()
 	dev.CallSignSSID = callsignSSID
 	dev.PcmG711Chan = make(chan [][]byte, 3)
 	dev.PcmBuffer = make([]int, 160)
@@ -110,20 +117,25 @@ func getDevice(callsign string, ssid byte) *models.Device {
 
 // getDeviceByDMRID 通过 DMRID 获取设备
 func getDeviceByDMRID(dmrid uint32) *models.Device {
-	repo := db.NewDeviceRepository()
-	dev, err := repo.GetDeviceByDMRID(dmrid)
-	if err != nil {
+	repo := gormdb.NewDeviceRepository()
+	gormDev, err := repo.GetDeviceByDMRID(int64(dmrid))
+	if err != nil || gormDev == nil {
 		return nil
 	}
 
-	callsignSSID := protocol.GetCallSignSSID(dev.CallSign, dev.SSID)
-	dev.CallSignSSID = callsignSSID
+	callsignSSID := protocol.GetCallSignSSID(gormDev.CallSign, uint8(gormDev.SSID))
 
-	if _, ok := devCallsignSSIDMap[callsignSSID]; !ok {
-		dev.PcmG711Chan = make(chan [][]byte, 3)
-		dev.PcmBuffer = make([]int, 160)
-		devCallsignSSIDMap[callsignSSID] = dev
+	// 检查是否已在内存中
+	if dev, ok := devCallsignSSIDMap[callsignSSID]; ok {
+		return dev
 	}
+
+	// 转换并添加到内存
+	dev := gormDev.ToModelDevice()
+	dev.CallSignSSID = callsignSSID
+	dev.PcmG711Chan = make(chan [][]byte, 3)
+	dev.PcmBuffer = make([]int, 160)
+	devCallsignSSIDMap[callsignSSID] = dev
 
 	return dev
 }

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/db"
+	"nrllink/internal/gormdb"
 )
 
 // OperatorLog 操作日志
@@ -23,13 +23,13 @@ type OperatorLog struct {
 var (
 	logBuffer = make(chan *OperatorLog, 100)
 	logOnce   sync.Once
-	repo      *db.OperatorLogRepository
+	repo      *gormdb.OperatorLogRepository
 )
 
 // Start 启动日志处理器
 func Start() {
 	logOnce.Do(func() {
-		repo = db.NewOperatorLogRepository()
+		repo = gormdb.NewOperatorLogRepository()
 		go processLogBuffer()
 		log.Println("Operator log processor started")
 	})
@@ -70,7 +70,7 @@ func AddOperatorLog(content, operation string, user interface{}) {
 
 // processLogBuffer 处理日志缓冲区
 func processLogBuffer() {
-	batch := make([]*db.OperatorLog, 0, 50)
+	batch := make([]*gormdb.OperatorLog, 0, 50)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -78,7 +78,7 @@ func processLogBuffer() {
 		select {
 		case logEntry := <-logBuffer:
 			// 转换为数据库模型
-			dbLog := &db.OperatorLog{
+			dbLog := &gormdb.OperatorLog{
 				Content:    logEntry.Content,
 				EventType:  logEntry.Operation,
 				Operator:   logEntry.UserName + "-" + logEntry.CallSign,
@@ -101,7 +101,7 @@ func processLogBuffer() {
 }
 
 // writeBatch 批量写入日志到数据库
-func writeBatch(logs []*db.OperatorLog) {
+func writeBatch(logs []*gormdb.OperatorLog) {
 	if len(logs) == 0 {
 		return
 	}
@@ -117,7 +117,7 @@ func writeBatch(logs []*db.OperatorLog) {
 
 // writeLog 写入单条日志到数据库
 func writeLog(logEntry *OperatorLog) {
-	dbLog := &db.OperatorLog{
+	dbLog := &gormdb.OperatorLog{
 		Content:    logEntry.Content,
 		EventType:  logEntry.Operation,
 		Operator:   logEntry.UserName + "-" + logEntry.CallSign,
@@ -133,7 +133,7 @@ func writeLog(logEntry *OperatorLog) {
 }
 
 // QueryLogs 查询操作日志
-func QueryLogs(userID int, page, limit int, operation string) ([]*OperatorLog, int, error) {
+func QueryLogs(userID int, page, limit int, operation string) ([]*OperatorLog, int64, error) {
 	dbLogs, total, err := repo.Query(userID, page, limit, operation)
 	if err != nil {
 		return nil, 0, err
@@ -168,12 +168,12 @@ func GetRecentLogs(limit int) ([]*OperatorLog, error) {
 
 // Flush 刷新日志缓冲区
 func Flush() {
-	batch := make([]*db.OperatorLog, 0, 100)
+	batch := make([]*gormdb.OperatorLog, 0, 100)
 
 	for {
 		select {
 		case logEntry := <-logBuffer:
-			dbLog := &db.OperatorLog{
+			dbLog := &gormdb.OperatorLog{
 				Content:    logEntry.Content,
 				EventType:  logEntry.Operation,
 				Operator:   logEntry.UserName + "-" + logEntry.CallSign,

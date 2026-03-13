@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"nrllink/internal/db"
+	"nrllink/internal/gormdb"
 )
 
 // ATCommand AT命令结构
@@ -83,8 +83,9 @@ func DeviceAT(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 20001,
 			"data": gin.H{
@@ -152,8 +153,9 @@ func QueryDeviceParm(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 20001,
 			"data": gin.H{
@@ -225,8 +227,9 @@ func ChangeDeviceParm(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 20001,
 			"data": gin.H{
@@ -236,7 +239,7 @@ func ChangeDeviceParm(c *gin.Context) {
 		return
 	}
 
-	// 检查权限
+	// ���查权限
 	isAdmin := false
 	if roleList, ok := roles.([]string); ok {
 		for _, r := range roleList {
@@ -289,8 +292,9 @@ func Change1W(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 20000,
 			"data": gin.H{
@@ -348,8 +352,9 @@ func Change2W(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	user, err := db.GetUserByUsername(username.(string))
-	if err != nil {
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 20000,
 			"data": gin.H{

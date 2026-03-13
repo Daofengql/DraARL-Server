@@ -147,3 +147,16 @@ func (r *DeviceRepository) UpdateDeviceOnlineTime(callsign string, ssid uint8) e
 		Where("callsign = ? AND ssid = ?", callsign, ssid).
 		Update("online_time", gorm.Expr("NOW()")).Error
 }
+
+// GetDeviceByDMRID 通过DMRID获取设备
+func (r *DeviceRepository) GetDeviceByDMRID(dmrid int64) (*Device, error) {
+	var device Device
+	err := r.db.Where("dmrid = ?", dmrid).First(&device).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &device, nil
+}

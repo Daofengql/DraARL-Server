@@ -135,6 +135,11 @@ func (r *GroupRepository) GetGroupsByIDs(ids []int) ([]*Group, error) {
 	return groups, err
 }
 
+// AddPublicGroup 添加公共群组（兼容旧接口）
+func (r *GroupRepository) AddPublicGroup(group *Group) error {
+	return r.db.Create(group).Error
+}
+
 // RelayRepository 中继台仓库
 type RelayRepository struct {
 	db *gorm.DB
@@ -384,6 +389,88 @@ func (r *OperatorLogRepository) GetLogStats() (map[string]int64, error) {
 	var total int64
 	r.db.Model(&OperatorLog{}).Count(&total)
 	stats["total"] = total
+
+	return stats, nil
+}
+
+// BatchCreate 批量创建操作日志
+func (r *OperatorLogRepository) BatchCreate(logs []*OperatorLog) error {
+	if len(logs) == 0 {
+		return nil
+	}
+	return r.db.CreateInBatches(logs, 100).Error
+}
+
+// AddOperatorLog 添加操作日志
+func (r *OperatorLogRepository) AddOperatorLog(content, eventType, operator string, operatorID int) error {
+	log := &OperatorLog{
+		Content:    content,
+		EventType:  eventType,
+		Operator:   operator,
+		OperatorID: operatorID,
+	}
+	return r.db.Create(log).Error
+}
+
+// Query 查询操作日志（分页）
+func (r *OperatorLogRepository) Query(userID int, page, limit int, eventType string) ([]*OperatorLog, int64, error) {
+	var logs []*OperatorLog
+	var total int64
+
+	offset := (page - 1) * limit
+	query := r.db.Model(&OperatorLog{})
+
+	if userID > 0 {
+		query = query.Where("operator_id = ?", userID)
+	}
+	if eventType != "" {
+		query = query.Where("event_type = ?", eventType)
+	}
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return logs, total, nil
+}
+
+// GetStats 获取日志统计信息（兼容旧接口）
+func (r *OperatorLogRepository) GetStats() (map[string]int64, error) {
+	stats := make(map[string]int64)
+
+	// 总数
+	var total int64
+	if err := r.db.Model(&OperatorLog{}).Count(&total).Error; err != nil {
+		return nil, err
+	}
+	stats["total"] = total
+
+	// 今日统计
+	var today int64
+	if err := r.db.Model(&OperatorLog{}).Where("DATE(timestamp) = CURDATE()").Count(&today).Error; err != nil {
+		return nil, err
+	}
+	stats["today"] = today
+
+	// 本周统计
+	var week int64
+	if err := r.db.Model(&OperatorLog{}).Where("YEARWEEK(timestamp, 1) = YEARWEEK(NOW(), 1)").Count(&week).Error; err != nil {
+		return nil, err
+	}
+	stats["this_week"] = week
+
+	// 本月统计
+	var month int64
+	if err := r.db.Model(&OperatorLog{}).Where("YEAR(timestamp) = YEAR(NOW()) AND MONTH(timestamp) = MONTH(NOW())").Count(&month).Error; err != nil {
+		return nil, err
+	}
+	stats["this_month"] = month
 
 	return stats, nil
 }

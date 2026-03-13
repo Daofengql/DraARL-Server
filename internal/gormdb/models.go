@@ -37,9 +37,6 @@ type User struct {
 	LastLoginIP     string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
 	DMRID           int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
 	MDCID           string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
-
-	// 关联
-	Groups []*Group `gorm:"many2many:user_groups;" json:"groups,omitempty"`
 }
 
 // TableName 指定表名

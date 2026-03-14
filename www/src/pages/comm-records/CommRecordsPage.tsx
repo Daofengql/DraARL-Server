@@ -22,7 +22,7 @@ import {
   Snackbar,
   Alert,
 } from '@mui/material'
-import { PlayArrow, Stop, Devices, Group, Download } from '@mui/icons-material'
+import { PlayArrow, Stop, Devices, Group, Download, Refresh } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
 
@@ -234,9 +234,19 @@ export function CommRecordsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 3, fontWeight: 600 }}>
-        通信记录
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+        <Typography variant="h4" sx={{ fontWeight: 600 }}>
+          通信记录
+        </Typography>
+        <IconButton
+          onClick={() => loadRecords()}
+          disabled={loading}
+          title="刷新"
+          color="primary"
+        >
+          <Refresh />
+        </IconButton>
+      </Box>
 
       {/* 筛选栏 */}
       <Card sx={{ mb: 2 }}>

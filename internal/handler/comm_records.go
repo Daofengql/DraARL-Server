@@ -53,6 +53,9 @@ func toCommRecordResponse(r gormdb.CommRecord) CommRecordResponse {
 }
 
 // GetCommRecords 获取通信记录列表
+// 权限规则：
+// - 后台路由（/admin/...）：管理员可查看所有记录
+// - 前台路由：所有用户只能查看自己设备的记录
 func GetCommRecords(c *gin.Context) {
 	// 获取分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -71,6 +74,37 @@ func GetCommRecords(c *gin.Context) {
 	// 只返回已完成的记录
 	db = db.Where("status = ?", 2)
 
+	// 判断是否是后台请求（根据路由前缀）
+	isAdminRoute := false
+	if path := c.Request.URL.Path; len(path) >= 7 && path[:7] == "/admin/" {
+		isAdminRoute = true
+	}
+
+	// 前台只能查看自己设备的记录
+	if !isAdminRoute {
+		// 获取当前用户ID
+		userID, _ := c.Get("userID")
+
+		// 查询该用户拥有的设备ID列表
+		var userDeviceIDs []uint
+		gormdb.Get().Model(&gormdb.Device{}).Where("user_id = ?", userID).Pluck("id", &userDeviceIDs)
+		if len(userDeviceIDs) == 0 {
+			// 用户没有设备，返回空列表
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "成功",
+				"data": gin.H{
+					"list":       []CommRecordResponse{},
+					"total":      0,
+					"page":       page,
+					"page_size":  pageSize,
+				},
+			})
+			return
+		}
+		db = db.Where("device_id IN ?", userDeviceIDs)
+	}
+
 	// 筛选条件
 	if deviceIDStr != "" {
 		deviceID, err := strconv.ParseUint(deviceIDStr, 10, 32)
@@ -84,10 +118,11 @@ func GetCommRecords(c *gin.Context) {
 			db = db.Where("group_id = ?", groupID)
 		}
 	}
-	if userIDStr != "" {
-		userID, err := strconv.ParseUint(userIDStr, 10, 32)
+	// 后台可以按 user_id 筛选
+	if isAdminRoute && userIDStr != "" {
+		userIDFilter, err := strconv.ParseUint(userIDStr, 10, 32)
 		if err == nil {
-			db = db.Where("user_id = ?", userID)
+			db = db.Where("user_id = ?", userIDFilter)
 		}
 	}
 

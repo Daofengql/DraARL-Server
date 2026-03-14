@@ -334,14 +334,10 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 
 // handleDraARLVoice 处理 DraARLv1 ���音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	// [注记] 暂时注释掉状态位检查
-	// 因为数据库中 Status=1 (Web端表示"启用") 会与底层的 TxDisable=0x01 产生数值上的冲突
-	// 导致合法设备的语音包被静默丢弃。待后续统一状态位定义后再启用此检查。
-	/*
-	if (dev.Status & models.DevStatusTxDisable) == models.DevStatusTxDisable {
+	// 检查设备是否被禁发
+	if dev.DisableSend {
 		return
 	}
-	*/
 
 	// 计算距离上次收到语音包的时间间隔
 	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
@@ -434,7 +430,8 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 
 // handleDraARLServerVoice 处理 DraARLv1 服务器互联语音
 func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	if (dev.Status & models.DevStatusTxDisable) == models.DevStatusTxDisable {
+	// 检查设备是否被禁发
+	if dev.DisableSend {
 		return
 	}
 
@@ -482,7 +479,7 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 		}
 
 		// 检查目标设备是否禁收
-		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
+		if targetDev.DisableRecv {
 			continue
 		}
 
@@ -505,7 +502,8 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 			continue
 		}
 
-		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
+		// 检查目标设备是否禁收
+		if targetDev.DisableRecv {
 			continue
 		}
 
@@ -529,7 +527,8 @@ func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Devic
 			continue
 		}
 
-		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
+		// 检查目标设备是否禁收
+		if targetDev.DisableRecv {
 			continue
 		}
 
@@ -578,8 +577,8 @@ func StartGroupCacheSync() {
 	refreshDeviceCache()
 
 	go func() {
-		// 每隔 60 秒同步一次数据库中的群组和设备状态
-		ticker := time.NewTicker(60 * time.Second)
+		// 每隔 10 秒同步一次数据库中的群组和设备状态
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -588,7 +587,7 @@ func StartGroupCacheSync() {
 			refreshDeviceCache()
 		}
 	}()
-	log.Println("[CACHE] 数据库群组和设备定时同步任务已启动 (间隔: 60s)")
+	log.Println("[CACHE] 数据库群组和设备定时同步任务已启动 (间隔: 10s)")
 }
 
 // refreshGroupCache 执行具体的数据库查询与内存缓存增量合并更新
@@ -665,7 +664,7 @@ func refreshGroupCache() {
 }
 
 // refreshDeviceCache 同步设备状态从数据库到内存
-// 核心原则：只更新动态属性（GroupID, Status, Priority），不碰连接状态
+// 核心原则：只更新动态属性（GroupID, DisableSend, DisableRecv, Priority），不碰连接状态
 func refreshDeviceCache() {
 	repo := gormdb.NewDeviceRepository()
 	// 获取所有设备（使用较大的 limit 来获取全部）
@@ -681,10 +680,11 @@ func refreshDeviceCache() {
 
 		// 只更新已在内存中的设备
 		if memDev, exists := devUsernameSSIDMap[usernameSSID]; exists {
-			// 检查是否需要更新
-			if memDev.GroupID != dbDev.GroupID || memDev.Status != byte(dbDev.Status) || memDev.Priority != dbDev.Priority {
+			// 检查是否需要更新（包括禁发/禁收状态）
+			if memDev.GroupID != dbDev.GroupID || memDev.DisableSend != dbDev.DisableSend || memDev.DisableRecv != dbDev.DisableRecv || memDev.Priority != dbDev.Priority {
 				memDev.GroupID = dbDev.GroupID
-				memDev.Status = byte(dbDev.Status)
+				memDev.DisableSend = dbDev.DisableSend
+				memDev.DisableRecv = dbDev.DisableRecv
 				memDev.Priority = dbDev.Priority
 				updatedCount++
 			}

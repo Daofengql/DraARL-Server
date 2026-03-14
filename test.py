@@ -161,6 +161,8 @@ class DraARLv1Client:
             rate=self.rate, output=True
         )
 
+        last_sender = None  # 记录上一个发言者，避免重复打印
+
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(4096)
@@ -173,6 +175,8 @@ class DraARLv1Client:
                 # 提取发送方 SSID (offset 53)
                 sender_ssid = data[53]
 
+                # 提取发送方呼号 (offset 57, 32字节)
+                callsign = ""
                 if len(data) >= 89:
                     callsign_bytes = data[57:89]
                     callsign = callsign_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
@@ -185,6 +189,12 @@ class DraARLv1Client:
                     # 半双工防回音：自己说话时不播放
                     if self.is_transmitting:
                         continue
+
+                    # 显示发言者信息
+                    sender_info = f"{callsign}-{sender_ssid}" if callsign else f"SSID-{sender_ssid}"
+                    if last_sender != sender_info:
+                        self._log(f"[接收] {sender_info} 正在发言...")
+                        last_sender = sender_info
 
                     try:
                         if pkt_type == DRAARL_TYPE_OPUS_16K:
@@ -199,7 +209,12 @@ class DraARLv1Client:
                 # --- 文本报文处理 ---
                 elif pkt_type == DRAARL_TYPE_TEXT_MESSAGE:
                     msg_text = payload.decode('utf-8', errors='replace')
-                    self._log(f"[收到文字] SSID-{sender_ssid}: {msg_text}")
+                    sender_info = f"{callsign}-{sender_ssid}" if callsign else f"SSID-{sender_ssid}"
+                    self._log(f"[文字] {sender_info}: {msg_text}")
+
+                # --- 语音结束检测（收到非语音包时重置发言者）---
+                elif pkt_type in [DRAARL_TYPE_CONTROL, DRAARL_TYPE_HEARTBEAT]:
+                    last_sender = None
 
             except socket.error:
                 pass
@@ -276,11 +291,11 @@ class DevicePanel(ttk.LabelFrame):
         param_frame.pack(fill=tk.X, padx=5, pady=2)
 
         ttk.Label(param_frame, text="用户名:").grid(row=0, column=0, sticky=tk.W)
-        self.username_var = tk.StringVar(value=f"test")
+        self.username_var = tk.StringVar(value="admin")
         ttk.Entry(param_frame, textvariable=self.username_var, width=12).grid(row=0, column=1, padx=2)
 
         ttk.Label(param_frame, text="密码:").grid(row=0, column=2, sticky=tk.W, padx=(5,0))
-        self.password_var = tk.StringVar(value="Abc123")
+        self.password_var = tk.StringVar(value="Jb1M1PCk")
         ttk.Entry(param_frame, textvariable=self.password_var, width=10).grid(row=0, column=3, padx=2)
 
         ttk.Label(param_frame, text="DMRID:").grid(row=0, column=4, sticky=tk.W, padx=(5,0))
@@ -296,29 +311,25 @@ class DevicePanel(ttk.LabelFrame):
         ttk.Radiobutton(audio_frame, text="Opus", variable=self.audio_var, value="5").pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(audio_frame, text="G.711", variable=self.audio_var, value="1").pack(side=tk.LEFT)
 
-        # 连接按钮
-        self.btn_connect = ttk.Button(self, text="连接", command=self.toggle_connection, width=10)
-        self.btn_connect.pack(side=tk.LEFT, padx=5, pady=3)
-
-        # PTT 按钮
-        self.btn_ptt = tk.Button(self, text="离线", font=("黑体", 12, "bold"),
-                                  bg="lightgray", width=15, height=2, state=tk.DISABLED)
-        self.btn_ptt.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
-
-        self.btn_ptt.bind("<ButtonPress-1>", self.on_ptt_press)
-        self.btn_ptt.bind("<ButtonRelease-1>", self.on_ptt_release)
-
         # 日志区域
         log_frame = ttk.Frame(self)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
 
-        self.log_area = scrolledtext.ScrolledText(log_frame, height=8, wrap=tk.WORD,
+        self.log_area = scrolledtext.ScrolledText(log_frame, width=30, height=4, wrap=tk.WORD,
                                                    font=("Consolas", 9), state='disabled')
         self.log_area.pack(fill=tk.BOTH, expand=True)
 
         # 设置日志标签颜色
         self.log_area.tag_configure("blue", foreground="blue")
         self.log_area.tag_configure("green", foreground="green")
+
+        # PTT 按钮
+        self.btn_ptt = tk.Button(self, text="离线", font=("黑体", 11, "bold"),
+                                  bg="lightgray", height=1, state=tk.DISABLED)
+        self.btn_ptt.pack(fill=tk.X, padx=5, pady=3)
+
+        self.btn_ptt.bind("<ButtonPress-1>", self.on_ptt_press)
+        self.btn_ptt.bind("<ButtonRelease-1>", self.on_ptt_release)
 
     def log(self, message, tag=None):
         """线程安全的日志输出"""
@@ -348,7 +359,6 @@ class DevicePanel(ttk.LabelFrame):
                 self.client.start()
 
                 self.is_connected = True
-                self.btn_connect.config(text="断开")
                 self.btn_ptt.config(state=tk.NORMAL, text=f"按住说话 (SSID-{self.ssid})", bg="white")
                 self.log(f"[系统] 已连接")
 
@@ -358,7 +368,6 @@ class DevicePanel(ttk.LabelFrame):
             if self.client:
                 self.client.stop()
             self.is_connected = False
-            self.btn_connect.config(text="连接")
             self.btn_ptt.config(state=tk.DISABLED, text="离线", bg="lightgray")
             self.log(f"[系统] 已断开")
 
@@ -390,7 +399,8 @@ class DualDeviceApp:
     def __init__(self, root):
         self.root = root
         self.root.title("DraARLv1 双设备模拟器 (SSID 1 & 2)")
-        self.root.geometry("900x600")
+        self.root.geometry("1000x550")
+        self.root.minsize(700, 450)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self._build_ui()

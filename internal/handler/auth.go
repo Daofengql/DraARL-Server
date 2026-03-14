@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
+	"nrllink/pkg/cache"
 	"nrllink/pkg/jwt"
 	"nrllink/pkg/minio"
 )
@@ -336,8 +337,19 @@ func Register(c *gin.Context) {
 func GetCurrentUser(c *gin.Context) {
 	username, _ := c.Get("username")
 
-	repo := gormdb.NewUserRepository()
-	user, err := repo.GetUserByName(username.(string))
+	var user *gormdb.User
+	var err error
+
+	// 尝试从缓存获取用户信息
+	userCache := cache.GetUserCache()
+	if userCache != nil {
+		user, err = userCache.GetUserByName(c.Request.Context(), username.(string))
+	} else {
+		// 缓存不可用，直接从数据库查询
+		repo := gormdb.NewUserRepository()
+		user, err = repo.GetUserByName(username.(string))
+	}
+
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -702,6 +714,11 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+	}
+
 	// 获取当前操作用户信息
 	if username, exists := c.Get("username"); exists {
 		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
@@ -785,6 +802,11 @@ func DeleteUser(c *gin.Context) {
 			"message": "删除用户失败",
 		})
 		return
+	}
+
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), targetUser.ID, targetUser.Name)
 	}
 
 	// 获取当前操作用户信息
@@ -876,6 +898,11 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+	}
+
 	// 获取当前操作用户信息
 	if username, exists := c.Get("username"); exists {
 		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
@@ -939,10 +966,11 @@ func GetTotalStats(c *gin.Context) {
 	userCount, _ := userRepo.UserCount()
 	devCount, _ := deviceRepo.DeviceCount()
 	groupCount, _ := groupRepo.GroupCount()
+	onlineCount, _ := deviceRepo.OnlineDeviceCount()
 
 	stats := TotalStats{
 		TotalDevices:  devCount,
-		OnlineDevices: 0, // 需要运行时状态
+		OnlineDevices: onlineCount,
 		TotalUsers:    userCount,
 		TotalGroups:   groupCount,
 	}
@@ -1047,6 +1075,11 @@ func UpdateUserPassword(c *gin.Context) {
 		return
 	}
 
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), targetUser.ID, targetUser.Name)
+	}
+
 	// 记录审计日志
 	if isAdmin {
 		oplog.AddLog(
@@ -1089,8 +1122,16 @@ func GetUserDetail(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
-	user, err := repo.GetUserByID(id)
+	ctx := c.Request.Context()
+	userCache := cache.GetUserCache()
+
+	var user *gormdb.User
+	if userCache != nil {
+		user, err = userCache.GetUserByID(ctx, id)
+	} else {
+		repo := gormdb.NewUserRepository()
+		user, err = repo.GetUserByID(id)
+	}
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -1143,8 +1184,16 @@ func GetUserPublicInfo(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
-	user, err := repo.GetUserByID(id)
+	ctx := c.Request.Context()
+	userCache := cache.GetUserCache()
+
+	var user *gormdb.User
+	if userCache != nil {
+		user, err = userCache.GetUserByID(ctx, id)
+	} else {
+		repo := gormdb.NewUserRepository()
+		user, err = repo.GetUserByID(id)
+	}
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -1252,6 +1301,11 @@ func UpdateProfile(c *gin.Context) {
 		return
 	}
 
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+	}
+
 	// 记录审计日志
 	oplog.AddLog(
 		fmt.Sprintf("用户更新个人资料: %s (%s)", user.Name, user.CallSign),
@@ -1353,6 +1407,11 @@ func ChangeOwnPassword(c *gin.Context) {
 			"message": "密码修改失败",
 		})
 		return
+	}
+
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
 	}
 
 	// 记录审计日志

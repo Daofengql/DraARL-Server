@@ -121,11 +121,11 @@ func (r *DeviceRepository) DeviceCount() (int64, error) {
 	return count, err
 }
 
-// OnlineDeviceCount 获取在线设备数（需要运行时状态）
+// OnlineDeviceCount 获取在线设备数（从数据库查询 is_online = true 的记录）
 func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
-	// 这个需要结合运行时状态，暂时返回0
 	var count int64
-	return count, nil
+	err := r.db.Model(&Device{}).Where("is_online = ?", true).Count(&count).Error
+	return count, err
 }
 
 // UpdateDeviceOnlineStatus 更新设备在线状态

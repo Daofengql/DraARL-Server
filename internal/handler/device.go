@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/internal/udphub"
+	"nrllink/pkg/cache"
 )
 
 // DeviceListRequest 设备列表请求
@@ -57,12 +58,19 @@ func GetDevices(c *gin.Context) {
 		page = 1
 	}
 
-	repo := gormdb.NewDeviceRepository()
+	ctx := c.Request.Context()
+	deviceCache := cache.GetDeviceCache()
 
-	// 获取当前用户信息
+	// 获取当前用户信息（使用缓存）
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
+	var currentUser *gormdb.User
+	if userCache := cache.GetUserCache(); userCache != nil {
+		currentUser, _ = userCache.GetUserByName(ctx, username.(string))
+	}
+	if currentUser == nil {
+		userRepo := gormdb.NewUserRepository()
+		currentUser, _ = userRepo.GetUserByName(username.(string))
+	}
 
 	var devices []*gormdb.Device
 	var total int64
@@ -70,7 +78,8 @@ func GetDevices(c *gin.Context) {
 
 	// 根据查询条件选择不同的查询方法
 	if callsign != "" {
-		// 按呼号搜索
+		// 按呼号搜索（搜索功能不缓存）
+		repo := gormdb.NewDeviceRepository()
 		devicesRaw, _ := repo.ListDevicesByCallSign(callsign)
 		// 非管理员只能看到自己的设备
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
@@ -94,9 +103,15 @@ func GetDevices(c *gin.Context) {
 			devices = devicesRaw[start:end]
 		}
 	} else if groupID != "" {
-		// 按群组过滤
+		// 按群组过滤（使用缓存）
 		gid, _ := strconv.Atoi(groupID)
-		devicesRaw, _ := repo.ListDevicesByGroupID(gid)
+		var devicesRaw []*gormdb.Device
+		if deviceCache != nil {
+			devicesRaw, _ = deviceCache.GetDevicesByGroupID(ctx, gid)
+		} else {
+			repo := gormdb.NewDeviceRepository()
+			devicesRaw, _ = repo.ListDevicesByGroupID(gid)
+		}
 		// 非管理员只能看到自己的设备
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
 			filtered := make([]*gormdb.Device, 0)
@@ -121,8 +136,16 @@ func GetDevices(c *gin.Context) {
 	} else {
 		// 普通用户只获取自己的设备，管理员获取所有设备
 		if currentUser != nil && hasRoleGORM(currentUser, "admin") {
-			devices, total, err = repo.ListDevices(limit, page)
+			// 管理员获取所有设备（使用缓存）
+			if deviceCache != nil {
+				devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)
+			} else {
+				repo := gormdb.NewDeviceRepository()
+				devices, total, err = repo.ListDevices(limit, page)
+			}
 		} else {
+			// 普通用户获取自己的设备（按用户查询不缓存）
+			repo := gormdb.NewDeviceRepository()
 			userDevices, _ := repo.ListDevicesByUsername(currentUser.Name)
 			total = int64(len(userDevices))
 			// 手动分页
@@ -193,16 +216,29 @@ func GetDevice(c *gin.Context) {
 
 	idStr := c.Query("id")
 
-	repo := gormdb.NewDeviceRepository()
 	var device *gormdb.Device
 	var err error
+
+	// 尝试使用缓存
+	deviceCache := cache.GetDeviceCache()
+	ctx := c.Request.Context()
 
 	// 优先使用ID查询
 	if idStr != "" {
 		id, _ := strconv.Atoi(idStr)
-		device, err = repo.GetDeviceByID(id)
+		if deviceCache != nil {
+			device, err = deviceCache.GetDeviceByID(ctx, id)
+		} else {
+			repo := gormdb.NewDeviceRepository()
+			device, err = repo.GetDeviceByID(id)
+		}
 	} else if callsign != "" {
-		device, err = repo.GetDeviceByCallSignSSID(callsign, ssid)
+		if deviceCache != nil {
+			device, err = deviceCache.GetDeviceByCallSignSSID(ctx, callsign, ssid)
+		} else {
+			repo := gormdb.NewDeviceRepository()
+			device, err = repo.GetDeviceByCallSignSSID(callsign, ssid)
+		}
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
@@ -313,6 +349,14 @@ func CreateDevice(c *gin.Context) {
 		return
 	}
 
+	// 使设备列表和群组设备列表缓存失效
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		_ = deviceCache.InvalidateDeviceList(c.Request.Context())
+		if device.GroupID > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), device.GroupID)
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "创建成功",
@@ -415,12 +459,28 @@ func UpdateDevice(c *gin.Context) {
 	updates["disable_send"] = req.DisableSend
 	updates["disable_recv"] = req.DisableRecv
 
+	// 记录旧群组ID（用于缓存失效）
+	oldGroupID := device.GroupID
+
 	if err := repo.UpdateDeviceFields(id, updates); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新设备失败",
 		})
 		return
+	}
+
+	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		_ = deviceCache.InvalidateDevice(ctx, id, device.CallSign, uint8(device.SSID))
+		// 如果群组改变，使新旧群组设备列表缓存都失效
+		if req.GroupID > 0 && oldGroupID != req.GroupID {
+			if oldGroupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, oldGroupID)
+			}
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, req.GroupID)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -468,6 +528,16 @@ func DeleteDevice(c *gin.Context) {
 				"message": "删除设备失败",
 			})
 			return
+		}
+
+		// 使设备详情、设备列表和群组设备列表缓存失效
+		ctx := c.Request.Context()
+		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+			_ = deviceCache.InvalidateDevice(ctx, id, device.CallSign, uint8(device.SSID))
+			_ = deviceCache.InvalidateDeviceList(ctx)
+			if device.GroupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
+			}
 		}
 	} else {
 		// 通过呼号和SSID删除（兼容旧接口）
@@ -620,6 +690,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 	}
 
 	// 更新设备的群组（数据库）
+	oldGroupID := device.GroupID
 	if err := repo.UpdateDeviceFields(req.DeviceID, map[string]interface{}{
 		"group_id": req.GroupID,
 	}); err != nil {
@@ -628,6 +699,19 @@ func ChangeDeviceGroup(c *gin.Context) {
 			"message": "修改设备群组失败",
 		})
 		return
+	}
+
+	// 使设备详情、设备列表和新旧群组设备列表缓存失效
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		_ = deviceCache.InvalidateDevice(ctx, req.DeviceID, device.CallSign, uint8(device.SSID))
+		_ = deviceCache.InvalidateDeviceList(ctx)
+		// 使旧群组设备列表缓存失效
+		if oldGroupID > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, oldGroupID)
+		}
+		// 使新群组设备列表缓存失效
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, req.GroupID)
 	}
 
 	// 更新内存中的设备群组
@@ -642,10 +726,22 @@ func ChangeDeviceGroup(c *gin.Context) {
 	})
 }
 
-// GetDeviceQTHs 获取设备位置列表
+// GetDeviceQTHs 获取设备位置��表
 func GetDeviceQTHs(c *gin.Context) {
-	repo := gormdb.NewDeviceRepository()
-	devicesRaw, _, err := repo.ListDevices(1000, 1)
+	ctx := c.Request.Context()
+	deviceCache := cache.GetDeviceCache()
+
+	var devicesRaw []*gormdb.Device
+	var err error
+
+	// 使用缓存获取设备列表
+	if deviceCache != nil {
+		devicesRaw, _, err = deviceCache.GetDeviceList(ctx, 1, 1000)
+	} else {
+		repo := gormdb.NewDeviceRepository()
+		devicesRaw, _, err = repo.ListDevices(1000, 1)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

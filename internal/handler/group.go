@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
+	"nrllink/pkg/cache"
 )
 
 // GroupInfo 群组信息响应
@@ -35,17 +36,28 @@ func GetGroups(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	keyword := c.Query("keyword")
 
-	// 获取当前用户
+	ctx := c.Request.Context()
+	groupCache := cache.GetGroupCache()
+	userCache := cache.GetUserCache()
+	deviceCache := cache.GetDeviceCache()
+
+	// 获取当前用户（使用缓存）
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
+	var currentUser *gormdb.User
+	if userCache != nil {
+		currentUser, _ = userCache.GetUserByName(ctx, username.(string))
+	}
+	if currentUser == nil {
+		userRepo := gormdb.NewUserRepository()
+		currentUser, _ = userRepo.GetUserByName(username.(string))
+	}
 
 	var groups []*gormdb.Group
 	var total int64
 	var err error
 
 	if keyword != "" {
-		// 关键词搜索
+		// 关键词搜索（搜索功能不缓存）
 		groups, err = gormdb.NewGroupRepository().SearchGroups(keyword)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -58,9 +70,14 @@ func GetGroups(c *gin.Context) {
 		// 获取所有可见群组
 		// 公开群组所有人可见，私有群组只对已验证用户可见
 		if currentUser != nil {
-			// 获取用户已验证的群组ID列表
-			memberRepo := gormdb.NewGroupMemberRepository()
-			members, err := memberRepo.ListGroupsByUser(currentUser.ID)
+			// 获取用户已验证的群组ID列表（使用缓存）
+			var members []*gormdb.GroupMember
+			if groupCache != nil {
+				members, err = groupCache.GetGroupsByUserID(ctx, currentUser.ID)
+			} else {
+				memberRepo := gormdb.NewGroupMemberRepository()
+				members, err = memberRepo.ListGroupsByUser(currentUser.ID)
+			}
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
@@ -69,8 +86,13 @@ func GetGroups(c *gin.Context) {
 				return
 			}
 
-			// 获取所有公开群组
-			publicGroups, err := gormdb.NewGroupRepository().ListPublicGroups()
+			// 获取所有公开群组（使用缓存）
+			var publicGroups []*gormdb.Group
+			if groupCache != nil {
+				publicGroups, err = groupCache.GetPublicGroups(ctx)
+			} else {
+				publicGroups, err = gormdb.NewGroupRepository().ListPublicGroups()
+			}
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
@@ -132,9 +154,14 @@ func GetGroups(c *gin.Context) {
 		groups = groups[offset : offset+pageSize]
 	}
 
-	// 获取所有设备，用于统计各个群组的在线/总设备数
-	deviceRepo := gormdb.NewDeviceRepository()
-	allDevices, _, _ := deviceRepo.ListDevices(10000, 1)
+	// 获取所有设备，用于统计各个群组的在线/总设备数（使用缓存）
+	var allDevices []*gormdb.Device
+	if deviceCache != nil {
+		allDevices, _, _ = deviceCache.GetDeviceList(ctx, 1, 10000)
+	} else {
+		deviceRepo := gormdb.NewDeviceRepository()
+		allDevices, _, _ = deviceRepo.ListDevices(10000, 1)
+	}
 
 	type groupStats struct {
 		online int
@@ -231,8 +258,17 @@ func GetGroup(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewGroupRepository()
-	group, err := repo.GetGroupByID(id)
+	ctx := c.Request.Context()
+	groupCache := cache.GetGroupCache()
+	userCache := cache.GetUserCache()
+
+	var group *gormdb.Group
+	if groupCache != nil {
+		group, err = groupCache.GetGroupByID(ctx, id)
+	} else {
+		repo := gormdb.NewGroupRepository()
+		group, err = repo.GetGroupByID(id)
+	}
 	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -241,12 +277,17 @@ func GetGroup(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户ID用于判断是否是群组所有者
+	// 获取当前用户ID用于判断是否是群组所有者（使用缓存）
 	username, _ := c.Get("username")
 	var currentUserID int
 	if username != nil {
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ := userRepo.GetUserByName(username.(string))
+		var currentUser *gormdb.User
+		if userCache != nil {
+			currentUser, _ = userCache.GetUserByName(ctx, username.(string))
+		} else {
+			userRepo := gormdb.NewUserRepository()
+			currentUser, _ = userRepo.GetUserByName(username.(string))
+		}
 		if currentUser != nil {
 			currentUserID = currentUser.ID
 		}
@@ -362,6 +403,11 @@ func CreateGroup(c *gin.Context) {
 	}
 	_ = memberRepo.CreateMember(groupMember)
 
+	// 使群组列表缓存失效（新创建群组后列表应更新）
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		_ = groupCache.InvalidateGroupList(c.Request.Context())
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "创建成功",
@@ -446,6 +492,11 @@ func UpdateGroup(c *gin.Context) {
 		return
 	}
 
+	// 使群组详情缓存失效（列表缓存依赖TTL自然过期）
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		_ = groupCache.InvalidateGroup(c.Request.Context(), id)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -489,6 +540,11 @@ func DeleteGroup(c *gin.Context) {
 		return
 	}
 
+	// 使群组详情缓存失效
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		_ = groupCache.InvalidateGroup(c.Request.Context(), id)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "删除成功",
@@ -507,8 +563,17 @@ func GetGroupDevices(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewDeviceRepository()
-	devicesRaw, err := repo.ListDevicesByGroupID(groupID)
+	ctx := c.Request.Context()
+	deviceCache := cache.GetDeviceCache()
+	groupCache := cache.GetGroupCache()
+
+	var devicesRaw []*gormdb.Device
+	if deviceCache != nil {
+		devicesRaw, err = deviceCache.GetDevicesByGroupID(ctx, groupID)
+	} else {
+		repo := gormdb.NewDeviceRepository()
+		devicesRaw, err = repo.ListDevicesByGroupID(groupID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -517,9 +582,14 @@ func GetGroupDevices(c *gin.Context) {
 		return
 	}
 
-	// 获取群组成员记录，用于获取群组级别的禁发/禁收设置
-	memberRepo := gormdb.NewGroupMemberRepository()
-	groupMembers, _ := memberRepo.ListMembersByGroup(groupID)
+	// 获取群组成员记录，用于获取群组级别的禁发/禁收设置（使用缓存）
+	var groupMembers []*gormdb.GroupMember
+	if groupCache != nil {
+		groupMembers, _ = groupCache.GetGroupMembers(ctx, groupID)
+	} else {
+		memberRepo := gormdb.NewGroupMemberRepository()
+		groupMembers, _ = memberRepo.ListMembersByGroup(groupID)
+	}
 
 	// 构建设备ID到群组成员状态的映射
 	type memberStatus struct {
@@ -844,6 +914,13 @@ func JoinGroup(c *gin.Context) {
 		}
 	}
 
+	// 使群组成员缓存和用户群组列表缓存失效
+	ctx := c.Request.Context()
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		_ = groupCache.InvalidateGroupMembers(ctx, id)
+		_ = groupCache.InvalidateUserGroups(ctx, currentUser.ID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "加入成功",
@@ -1014,6 +1091,18 @@ func UpdateDeviceStatus(c *gin.Context) {
 		return
 	}
 
+	// 使设备详情和群组设备列表缓存失效
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		// 获取设备信息以获取 callsign 和 ssid
+		repo := gormdb.NewDeviceRepository()
+		if device, err := repo.GetDeviceByID(deviceID); err == nil && device != nil {
+			_ = deviceCache.InvalidateDevice(ctx, deviceID, device.CallSign, uint8(device.SSID))
+		}
+		// 使群组设备列表缓存失效
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -1122,6 +1211,16 @@ func KickDevice(c *gin.Context) {
 		return
 	}
 
+	// 使设备详情、群组设备列表和默认群组设备列表缓存失效
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		_ = deviceCache.InvalidateDevice(ctx, deviceID, device.CallSign, uint8(device.SSID))
+		// 使原群组设备列表缓存失效
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
+		// 使默认群组设备列表缓存失效（设备移入默认群组）
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "踢出成功",
@@ -1203,6 +1302,7 @@ func LeaveGroup(c *gin.Context) {
 	// 将用户在该群组中的所有设备移到默认群组
 	deviceRepo := gormdb.NewDeviceRepository()
 	devices, _ := deviceRepo.ListDevicesByGroupID(id)
+	movedDeviceIDs := make([]int, 0)
 	for _, device := range devices {
 		if device.Username == currentUser.Name {
 			err = deviceRepo.UpdateDeviceFields(device.ID, map[string]interface{}{
@@ -1215,7 +1315,28 @@ func LeaveGroup(c *gin.Context) {
 				})
 				return
 			}
+			movedDeviceIDs = append(movedDeviceIDs, device.ID)
 		}
+	}
+
+	// 使设备缓存和群组设备列表缓存失效
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		// 使移动的设备缓存失效
+		for _, deviceID := range movedDeviceIDs {
+			_ = deviceCache.InvalidateDevice(ctx, deviceID, "", 0)
+		}
+		// 使原群组和默认群组的设备列表缓存失效
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, id)
+		if len(movedDeviceIDs) > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)
+		}
+	}
+
+	// 使群组成员缓存和用户群组列表缓存失效
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		_ = groupCache.InvalidateGroupMembers(ctx, id)
+		_ = groupCache.InvalidateUserGroups(ctx, currentUser.ID)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

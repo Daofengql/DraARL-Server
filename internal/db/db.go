@@ -98,6 +98,9 @@ func UpdateDatabase() error {
 		{"users", "dmrid", "INT", "0"},
 		{"public_groups", "allow_callsign_ssid", "TEXT", "NULL"},
 		{"public_groups", "ower_callsign", "VARCHAR(255)", "''"},
+		{"devices", "is_online", "TINYINT(1)", "0"},    // 设备在线状态（同步到数据库供Web端查询）
+		{"devices", "disable_send", "TINYINT(1)", "0"}, // 设备级禁发
+		{"devices", "disable_recv", "TINYINT(1)", "0"}, // 设备级禁收
 	} {
 		if err := addColumnIfNotExists(stmt.table, stmt.column, stmt.dataType, stmt.defaultVal); err != nil {
 			log.Printf("Warning: could not add column %s.%s: %v", stmt.table, stmt.column, err)

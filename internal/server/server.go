@@ -206,7 +206,7 @@ func (s *Server) setupRoutes() {
 			admin.GET("/operatorlog/list", handler.GetOperatorLogs)
 			admin.GET("/operatorlog/stats", handler.GetOperatorLogStats)
 
-			// 通信记录（需要登录）
+			// 通信记录（需要登录，管理员可查看所有记录，普通用户只能查看自己设备的记录）
 			protected.GET("/comm-records", handler.GetCommRecords)
 			protected.GET("/comm-records/:id", handler.GetCommRecord)
 			// 通信记录管理（需要管理员权限）

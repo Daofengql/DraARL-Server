@@ -9,11 +9,12 @@ import (
 
 // Manager 缓存管理器（单例模式）
 type Manager struct {
-	User   *UserCache
-	Device *DeviceCache
-	Group  *GroupCache
-	Config *ConfigCache
-	Cert   *CertCache
+	User       *UserCache
+	Device     *DeviceCache
+	Group      *GroupCache
+	Config     *ConfigCache
+	Cert       *CertCache
+	CommRecord *CommRecordCache
 }
 
 var (
@@ -86,12 +87,25 @@ func InitManager() error {
 			return
 		}
 
+		// 创建通信记录缓存
+		commRecordCache, err := NewCommRecordCache(CommRecordCacheConfig{
+			LocalTTL: 30 * time.Second, // 列表缓存时间较短
+			RedisTTL: 2 * time.Minute,
+			MaxSize:  5000,
+		})
+		if err != nil {
+			initErr = err
+			log.Printf("创建通信记录缓存失败: %v", err)
+			return
+		}
+
 		manager = &Manager{
-			User:   userCache,
-			Device: deviceCache,
-			Group:  groupCache,
-			Config: configCache,
-			Cert:   certCache,
+			User:       userCache,
+			Device:     deviceCache,
+			Group:      groupCache,
+			Config:     configCache,
+			Cert:       certCache,
+			CommRecord: commRecordCache,
 		}
 
 		log.Println("缓存管理器初始化成功")
@@ -152,6 +166,15 @@ func GetCertCache() *CertCache {
 	return m.Cert
 }
 
+// GetCommRecordCache 获取通信记录缓存实例
+func GetCommRecordCache() *CommRecordCache {
+	m := GetManager()
+	if m == nil {
+		return nil
+	}
+	return m.CommRecord
+}
+
 // ClearAll 清空所有缓存（慎用，仅用于测试或特殊场景）
 func (m *Manager) ClearAll(ctx context.Context) error {
 	var lastErr error
@@ -188,6 +211,13 @@ func (m *Manager) ClearAll(ctx context.Context) error {
 		if err := m.Cert.cache.Clear(ctx); err != nil {
 			lastErr = err
 			log.Printf("清空操作证缓存失败: %v", err)
+		}
+	}
+
+	if m.CommRecord != nil {
+		if err := m.CommRecord.cache.Clear(ctx); err != nil {
+			lastErr = err
+			log.Printf("清空通信记录缓存失败: %v", err)
 		}
 	}
 

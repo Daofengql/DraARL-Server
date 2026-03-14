@@ -35,8 +35,6 @@ func loadAllDevices() {
 	for _, dev := range devices {
 		// 转换为 models.Device
 		modelDev := dev.ToModelDevice()
-		modelDev.PcmG711Chan = make(chan [][]byte, 3)
-		modelDev.PcmBuffer = make([]int, 160)
 
 		callsignSSID := protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
 		modelDev.CallSignSSID = callsignSSID
@@ -108,8 +106,6 @@ func getDevice(callsign string, ssid byte) *models.Device {
 
 	dev := gormDev.ToModelDevice()
 	dev.CallSignSSID = callsignSSID
-	dev.PcmG711Chan = make(chan [][]byte, 3)
-	dev.PcmBuffer = make([]int, 160)
 
 	devCallsignSSIDMap[callsignSSID] = dev
 	return dev
@@ -133,8 +129,6 @@ func getDeviceByDMRID(dmrid uint32) *models.Device {
 	// 转换并添加到内存
 	dev := gormDev.ToModelDevice()
 	dev.CallSignSSID = callsignSSID
-	dev.PcmG711Chan = make(chan [][]byte, 3)
-	dev.PcmBuffer = make([]int, 160)
 	devCallsignSSIDMap[callsignSSID] = dev
 
 	return dev

@@ -10,13 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"nrllink/internal/config"
 	"nrllink/internal/gormdb"
 	"nrllink/internal/handler"
 	"nrllink/internal/middleware"
-	ws "nrllink/pkg/websocket"
 	"nrllink/pkg/minio"
+	ws "nrllink/pkg/websocket"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Server struct {
@@ -205,6 +206,17 @@ func (s *Server) setupRoutes() {
 			admin.GET("/operatorlog/list", handler.GetOperatorLogs)
 			admin.GET("/operatorlog/stats", handler.GetOperatorLogStats)
 
+			// 通信记录（需要登录）
+			protected.GET("/comm-records", handler.GetCommRecords)
+			protected.GET("/comm-records/:id", handler.GetCommRecord)
+			// 通信记录管理（需要管理员权限）
+			admin.DELETE("/comm-records/:id", handler.DeleteCommRecord)
+			admin.GET("/comm-records/stats", handler.GetCommRecorderStats)
+
+			// 通信设置（管理员权限）
+			admin.GET("/config/comm-settings", handler.GetCommSettings)
+			admin.PUT("/config/comm-settings", handler.UpdateCommSettings)
+
 			// 缓存监控（需要管理员权限）
 			cacheHandler := handler.NewCacheMetricsHandler()
 			admin.GET("/cache/metrics", cacheHandler.GetCacheMetrics)
@@ -256,24 +268,24 @@ func initSiteConfigs(cfg *config.Configuration) {
 
 	// 初始化默认配置（空值或最小默认值）
 	if err := repo.InitDefaultConfigs(
-		"",                      // ICP - 空
-		"NRL Link",              // 系统名称
-		"NRL",                   // 系统简称
-		"",                      // Logo URL
-		"zh",                    // 语言
-		"china.aprs2.net",       // APRS 服务器
-		"14580",                 // APRS 端口
-		"",                      // 本机地址
-		"60050",                 // 本机端口
-		"",                      // 呼号
-		"10",                    // SSID
-		"000000",                // 海拔
-		0,                       // Passcode
-		0,                       // 纬度
-		0,                       // 经度
-		"",                      // OpenAI BaseURL
-		"",                      // OpenAI APIKey
-		"",                      // OpenAI Engine
+		"",                // ICP - 空
+		"NRL Link",        // 系统名称
+		"NRL",             // 系统简称
+		"",                // Logo URL
+		"zh",              // 语言
+		"china.aprs2.net", // APRS 服务器
+		"14580",           // APRS 端口
+		"",                // 本机地址
+		"60050",           // 本机端口
+		"",                // 呼号
+		"10",              // SSID
+		"000000",          // 海拔
+		0,                 // Passcode
+		0,                 // 纬度
+		0,                 // 经度
+		"",                // OpenAI BaseURL
+		"",                // OpenAI APIKey
+		"",                // OpenAI Engine
 	); err != nil {
 		log.Printf("初始化站点配置失败: %v", err)
 		return

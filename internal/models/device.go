@@ -51,10 +51,8 @@ type Device struct {
 	LastCtlDuration    int             `json:"last_ctl_duration"`
 	UDPSocket          *net.UDPConn    `json:"-"`
 	CallSignSSID       string          `json:"callsign_ssid"`
-	PcmG711Chan        chan [][]byte   `json:"-"`        // Exported for use in udphub package
-	PcmBuffer          []int           `json:"-"`        // Exported for use in udphub package
 	LastATcommand      *ATCommand      `json:"last_at_command,omitempty"`
-	Speaking           *bool           `json:"-"`        // Exported for use in udphub package (meeting mode)
+	Speaking           *bool           `json:"-"` // Exported for use in udphub package (meeting mode)
 
 	// Connection state tracking
 	LastDisconnectTime  time.Time `json:"last_disconnect_time"`  // Last time device went offline

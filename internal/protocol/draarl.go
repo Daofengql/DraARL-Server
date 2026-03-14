@@ -18,7 +18,6 @@ const DraARLv1HeaderSize = 93
 // DraARLv1 数据包类型常量
 const (
 	DraARLTypeControl       byte = 0 // 控制指令
-	DraARLTypeG711Voice     byte = 1 // G.711 语音
 	DraARLTypeHeartbeat     byte = 2 // 心跳包
 	DraARLTypeConfig        byte = 3 // 设备配置
 	DraARLTypeTextMessage   byte = 4 // 文本消息

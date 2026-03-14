@@ -268,6 +268,44 @@ func (GroupMember) TableName() string {
 	return "group_members"
 }
 
+// CommRecord 通信记录
+type CommRecord struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	DeviceID    uint      `gorm:"index;not null;column:device_id" json:"device_id"`       // 发送设备ID
+	DeviceName  string    `gorm:"type:varchar(50);column:device_name" json:"device_name"` // 设备名称（冗余）
+	GroupID     *uint     `gorm:"index;column:group_id" json:"group_id"`                  // 所属群组ID
+	GroupName   string    `gorm:"type:varchar(100);column:group_name" json:"group_name"`  // 群组名称（冗余）
+	UserID      *uint     `gorm:"index;column:user_id" json:"user_id"`                    // 所属用户ID
+	Username    string    `gorm:"type:varchar(50);column:username" json:"username"`       // 用户名（冗余）
+	StartTime   time.Time `gorm:"index;not null;column:start_time" json:"start_time"`     // 通信开始时间
+	EndTime     time.Time `gorm:"column:end_time" json:"end_time"`                        // 通信结束时间
+	DurationMs  int       `gorm:"column:duration_ms" json:"duration_ms"`                  // 通信时长（毫秒）
+	AudioPath   string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`  // MinIO 音频文件路径
+	AudioSize   int64     `gorm:"column:audio_size" json:"audio_size"`                    // 音频文件大小（字节）
+	Status      int       `gorm:"default:0;index;column:status" json:"status"`            // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
+	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+}
+
+// TableName 指定表名
+func (CommRecord) TableName() string {
+	return "comm_records"
+}
+
+// CommSettings 通信设置（站点配置的一部分）
+type CommSettings struct {
+	ID              uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	Enabled         bool `gorm:"default:false;column:enabled" json:"enabled"`                   // 是否启用通信记录
+	RetentionDays   int  `gorm:"default:30;column:retention_days" json:"retention_days"`       // 数据保留天数
+	MinDurationMs   int  `gorm:"default:500;column:min_duration_ms" json:"min_duration_ms"`    // 最小录制阈值（毫秒）
+	MaxDurationSec  int  `gorm:"default:300;column:max_duration_sec" json:"max_duration_sec"`  // 最大录制时长（秒），0=不限制
+	BatchUploadSec  int  `gorm:"default:10;column:batch_upload_sec" json:"batch_upload_sec"`   // 批量上传间隔（秒）
+}
+
+// TableName 指定表名
+func (CommSettings) TableName() string {
+	return "comm_settings"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -280,5 +318,7 @@ func AutoMigrate() error {
 		&OperatorCert{},
 		&SiteConfig{},
 		&GroupMember{},
+		&CommRecord{},
+		&CommSettings{},
 	)
 }

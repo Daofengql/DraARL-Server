@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
   Box,
@@ -10,8 +10,6 @@ import {
   TableHead,
   TableRow,
   TablePagination,
-  TextField,
-  Button,
   FormControl,
   InputLabel,
   Select,
@@ -20,9 +18,13 @@ import {
   Card,
   CardContent,
   IconButton,
+  CircularProgress,
+  Snackbar,
+  Alert,
 } from '@mui/material'
-import { Search, PlayArrow, Stop, Devices, Group } from '@mui/icons-material'
+import { PlayArrow, Stop, Devices, Group, Download } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
+import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
 
 interface CommRecord {
   id: number
@@ -33,8 +35,12 @@ interface CommRecord {
   user_id?: number
   username?: string
   start_time: string
+  end_time: string
   duration_ms: number
+  audio_path?: string
   audio_url?: string
+  audio_size?: number
+  status: number
 }
 
 export function CommRecordsPage() {
@@ -51,6 +57,8 @@ export function CommRecordsPage() {
   const [userList, setUserList] = useState<{ id: number; username: string }[]>([])
   const [groupList, setGroupList] = useState<{ id: number; name: string }[]>([])
   const [playingId, setPlayingId] = useState<number | null>(null)
+  const [loadingId, setLoadingId] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   // 判断是否在后台管理页面
   const isAdminPage = location.pathname.startsWith('/admin/')
@@ -65,10 +73,17 @@ export function CommRecordsPage() {
     loadGroups()
   }, [page, rowsPerPage, filterUserId, filterDeviceId, filterGroupId])
 
+  // 组件卸载时停止播放
+  useEffect(() => {
+    return () => {
+      opusPlayer.stop()
+    }
+  }, [])
+
   const loadRecords = async () => {
     setLoading(true)
     try {
-      const params: any = {
+      const params: Record<string, unknown> = {
         page: page + 1,
         page_size: rowsPerPage,
       }
@@ -78,13 +93,12 @@ export function CommRecordsPage() {
 
       const res = await apiClient.get<any>('/api/comm-records', { params })
       if (res.code === 200) {
-        const items = res.data?.items || res.data?.data || res.data || []
+        const items = res.data?.list || res.data?.items || res.data?.data || res.data || []
         setRecords(Array.isArray(items) ? items : [])
         setTotal(res.data?.total || res.data?.count || 0)
       }
     } catch (err) {
       console.error('Failed to load comm records:', err)
-      // API可能不存在，设置为空数组
       setRecords([])
       setTotal(0)
     } finally {
@@ -146,13 +160,77 @@ export function CommRecordsPage() {
     return new Date(timeStr).toLocaleString('zh-CN')
   }
 
-  const handlePlay = (record: CommRecord) => {
-    if (playingId === record.id) {
-      setPlayingId(null)
-    } else {
-      setPlayingId(record.id)
-    }
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes) return ''
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
+
+  // 播放/停止音频（支持 Raw Opus 格式）
+  const handlePlay = useCallback(async (record: CommRecord) => {
+    // 如果正在播放同一个，则停止
+    if (playingId === record.id) {
+      opusPlayer.stop()
+      setPlayingId(null)
+      return
+    }
+
+    // 停止之前的播放
+    opusPlayer.stop()
+    setLoadingId(record.id)
+    setError(null)
+
+    try {
+      if (!record.audio_url && !record.audio_path) {
+        throw new Error('无音频数据')
+      }
+
+      // 构建 URL
+      const audioUrl = record.audio_url || `/api/minio/${record.audio_path}`
+
+      // 使用 Opus 播放器播放
+      await opusPlayer.play(audioUrl, () => {
+        setPlayingId(null)
+      })
+
+      setPlayingId(record.id)
+    } catch (err) {
+      console.error('播放失败:', err)
+      setError(`播放失败: ${err instanceof Error ? err.message : '未知错误'}`)
+      setPlayingId(null)
+    } finally {
+      setLoadingId(null)
+    }
+  }, [playingId])
+
+  // 下载音频（转换为 WAV 格式）
+  const handleDownload = useCallback(async (record: CommRecord) => {
+    if (!record.audio_url && !record.audio_path) {
+      setError('无音频数据')
+      return
+    }
+
+    try {
+      const audioUrl = record.audio_url || `/api/minio/${record.audio_path}`
+
+      // 解码并转换为 WAV
+      const wavBlob = await getWavBlobFromOpusUrl(audioUrl)
+
+      // 创建下载链接
+      const url = URL.createObjectURL(wavBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `comm_${record.device_name}_${new Date(record.start_time).toISOString().slice(0, 19).replace(/[:-]/g, '')}.wav`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('下载失败:', err)
+      setError(`下载失败: ${err instanceof Error ? err.message : '未知错误'}`)
+    }
+  }, [])
 
   return (
     <Box>
@@ -273,27 +351,32 @@ export function CommRecordsPage() {
                   {showUserFilter && <TableCell>{record.username || '-'}</TableCell>}
                   <TableCell>{formatDuration(record.duration_ms)}</TableCell>
                   <TableCell>
-                    {record.audio_url ? (
+                    {(record.audio_url || record.audio_path) ? (
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <audio
-                          ref={(el) => {
-                            if (el && playingId === record.id) {
-                              el.play().catch(() => setPlayingId(null))
-                            }
-                          }}
-                          src={record.audio_url}
-                          onEnded={() => setPlayingId(null)}
-                          style={{ display: 'none' }}
-                        />
                         <IconButton
                           size="small"
                           onClick={() => handlePlay(record)}
                           color={playingId === record.id ? 'error' : 'primary'}
+                          disabled={loadingId !== null && loadingId !== record.id}
                         >
-                          {playingId === record.id ? <Stop /> : <PlayArrow />}
+                          {loadingId === record.id ? (
+                            <CircularProgress size={20} />
+                          ) : playingId === record.id ? (
+                            <Stop />
+                          ) : (
+                            <PlayArrow />
+                          )}
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleDownload(record)}
+                          color="default"
+                          title="下载 WAV"
+                        >
+                          <Download />
                         </IconButton>
                         <Typography variant="caption" color="text.secondary">
-                          {playingId === record.id ? '播放中' : '播放'}
+                          {formatFileSize(record.audio_size)}
                         </Typography>
                       </Box>
                     ) : (
@@ -321,6 +404,18 @@ export function CommRecordsPage() {
           labelDisplayedRows={({ from, to, count }) => `${from}-${to} 共 ${count}`}
         />
       </TableContainer>
+
+      {/* 错误提示 */}
+      <Snackbar
+        open={!!error}
+        autoHideDuration={4000}
+        onClose={() => setError(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="error" onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }

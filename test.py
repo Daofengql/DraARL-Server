@@ -3,7 +3,6 @@ import struct
 import threading
 import time
 import pyaudio
-import audioop
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
@@ -23,7 +22,6 @@ DRAARL_HEADER_SIZE = 93
 
 # 数据包类型
 DRAARL_TYPE_CONTROL       = 0  # 控制指令
-DRAARL_TYPE_G711_VOICE    = 1  # G.711 语音
 DRAARL_TYPE_HEARTBEAT     = 2  # 心跳包
 DRAARL_TYPE_CONFIG        = 3  # 设备配置
 DRAARL_TYPE_TEXT_MESSAGE  = 4  # 文本消息
@@ -64,7 +62,7 @@ class DraARLv1Client:
     | 89   | 4B   | Reserved      | 保留
     | 93   | 变长  | DATA          | 负载数据
     """
-    def __init__(self, server_ip, server_port, username, device_password, ssid, dmrid_int, audio_type, log_callback, color_tag=None):
+    def __init__(self, server_ip, server_port, username, device_password, ssid, dmrid_int, log_callback, color_tag=None):
         self.server_addr = (server_ip, server_port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.log = log_callback
@@ -91,23 +89,18 @@ class DraARLv1Client:
         self.is_transmitting = False
 
         # --- 音频引擎配置 ---
-        self.audio_type = int(audio_type)
+        self.audio_type = DRAARL_TYPE_OPUS_16K  # 只支持 Opus 16K
+        if not OPUS_AVAILABLE:
+            raise RuntimeError("未检测到 opuslib 库，无法运行。请安装: pip install opuslib")
+
         self.pyaudio_inst = pyaudio.PyAudio()
         self.audio_format = pyaudio.paInt16
         self.channels = 1
-
-        if self.audio_type == DRAARL_TYPE_OPUS_16K:
-            if not OPUS_AVAILABLE:
-                raise RuntimeError("未检测到 opuslib 库，无法使用 Opus 编码。")
-            self.rate = 16000
-            self.chunk_size = 320
-            self.opus_encoder = opuslib.Encoder(self.rate, self.channels, opuslib.APPLICATION_VOIP)
-            self.opus_decoder = opuslib.Decoder(self.rate, self.channels)
-            self._log(f"[SSID-{self.ssid}] 音频引擎: Opus 16kHz (Type 5)")
-        elif self.audio_type == DRAARL_TYPE_G711_VOICE:
-            self.rate = 8000
-            self.chunk_size = 160
-            self._log(f"[SSID-{self.ssid}] 音频引擎: G.711 A-law 8kHz (Type 1)")
+        self.rate = 16000
+        self.chunk_size = 320
+        self.opus_encoder = opuslib.Encoder(self.rate, self.channels, opuslib.APPLICATION_VOIP)
+        self.opus_decoder = opuslib.Decoder(self.rate, self.channels)
+        self._log(f"[SSID-{self.ssid}] 音频引擎: Opus 16kHz (Type 5)")
 
     def _log(self, message):
         """带颜色标签的日志输出"""
@@ -199,10 +192,7 @@ class DraARLv1Client:
                     try:
                         if pkt_type == DRAARL_TYPE_OPUS_16K:
                             pcm_data = self.opus_decoder.decode(payload, self.chunk_size)
-                        elif pkt_type == DRAARL_TYPE_G711_VOICE:
-                            pcm_data = audioop.alaw2lin(payload, 2)
-
-                        stream_out.write(pcm_data)
+                            stream_out.write(pcm_data)
                     except Exception as e:
                         self._log(f"[音频解码失败] {e}")
 
@@ -240,12 +230,8 @@ class DraARLv1Client:
                 pcm_data = stream_in.read(self.chunk_size, exception_on_overflow=False)
 
                 if self.is_transmitting:
-                    if self.audio_type == DRAARL_TYPE_OPUS_16K:
-                        encoded_data = self.opus_encoder.encode(pcm_data, self.chunk_size)
-                    elif self.audio_type == DRAARL_TYPE_G711_VOICE:
-                        encoded_data = audioop.lin2alaw(pcm_data, 2)
-
-                    self.send_packet(pkt_type=self.audio_type, payload=encoded_data)
+                    encoded_data = self.opus_encoder.encode(pcm_data, self.chunk_size)
+                    self.send_packet(pkt_type=DRAARL_TYPE_OPUS_16K, payload=encoded_data)
 
             except Exception as e:
                 self._log(f"[音频采集异常] {e}")
@@ -302,15 +288,6 @@ class DevicePanel(ttk.LabelFrame):
         self.dmrid_var = tk.StringVar(value="123456")
         ttk.Entry(param_frame, textvariable=self.dmrid_var, width=8).grid(row=0, column=5, padx=2)
 
-        # 音频编码选择
-        audio_frame = ttk.Frame(self)
-        audio_frame.pack(fill=tk.X, padx=5, pady=2)
-
-        ttk.Label(audio_frame, text="编码:").pack(side=tk.LEFT)
-        self.audio_var = tk.StringVar(value="5" if OPUS_AVAILABLE else "1")
-        ttk.Radiobutton(audio_frame, text="Opus", variable=self.audio_var, value="5").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(audio_frame, text="G.711", variable=self.audio_var, value="1").pack(side=tk.LEFT)
-
         # 日志区域
         log_frame = ttk.Frame(self)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
@@ -352,7 +329,6 @@ class DevicePanel(ttk.LabelFrame):
                     device_password=self.password_var.get(),
                     ssid=self.ssid,
                     dmrid_int=self.dmrid_var.get() or 0,
-                    audio_type=self.audio_var.get(),
                     log_callback=lambda msg, t=color_tag: self.log(msg, t),
                     color_tag=f"SSID-{self.ssid}"
                 )

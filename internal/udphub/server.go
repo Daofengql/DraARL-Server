@@ -118,6 +118,9 @@ func StartDraARLServer(port int) error {
 	// 启动日志处理器
 	go processLogBuffer()
 
+	// 初始化通信录制管理器
+	InitCommRecorder()
+
 	// 处理数据包
 	for {
 		limitChan <- true
@@ -252,7 +255,6 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 		Priority:     100,
 		Status:       0,
 		ChanName:     make([]string, 8),
-		PcmBuffer:    make([]int, 160),
 		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
 	}
 
@@ -264,8 +266,6 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 	}
 
 	if dev != nil {
-		dev.PcmG711Chan = make(chan [][]byte, 3)
-		dev.PcmBuffer = make([]int, 160)
 		dev.UDPAddr = packet.UDPAddr
 		dev.ISOnline = true
 		dev.LastPacketTime = packet.TimeStamp
@@ -303,8 +303,8 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 		// 控制指令
 		log.Printf("Received DraARLv1 control command: %v", packet)
 
-	case protocol.DraARLTypeG711Voice, protocol.DraARLTypeOpus16K:
-		// 语音消息
+	case protocol.DraARLTypeOpus16K:
+		// 语音消息 (Opus 16K)
 		handleDraARLVoice(packet, data, dev, conn, gp)
 
 	case protocol.DraARLTypeHeartbeat:
@@ -360,6 +360,18 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 	dev.LastCtlEndTime = packet.TimeStamp
 
 	// 普通设备语��转发
+	// 【通信录制】在转发前录制音频数据
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+		if gp != nil {
+			gid := uint(gp.ID)
+			groupID = &gid
+		}
+		deviceName := fmt.Sprintf("%s-%d", dev.CallSign, dev.SSID)
+		RecordCommPacket(uint(dev.ID), deviceName, groupID, gp.Name, userID, dev.Username, packet.DATA)
+	}
+
 	forwardDraARLVoice(packet, dev, data, gp)
 }
 

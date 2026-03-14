@@ -9,17 +9,16 @@ import (
 // PacketType 数据包类型
 const (
 	TypeControl         byte = 0
-	TypeG711Voice      byte = 1
-	TypeHeartbeat      byte = 2
-	TypeConfig         byte = 3
-	TypeReserved       byte = 4
-	TypeTextMessage    byte = 5
-	TypeDeviceControl  byte = 6
-	TypeGroupCommand   byte = 7
-	TypeOpus16K        byte = 8
-	TypeServerVoice    byte = 9
-	TypeReserved2      byte = 10
-	TypeATPassThrough  byte = 11
+	TypeHeartbeat       byte = 2
+	TypeConfig          byte = 3
+	TypeReserved        byte = 4
+	TypeTextMessage     byte = 5
+	TypeDeviceControl   byte = 6
+	TypeGroupCommand    byte = 7
+	TypeOpus16K         byte = 8
+	TypeServerVoice     byte = 9
+	TypeReserved2       byte = 10
+	TypeATPassThrough   byte = 11
 )
 
 // DeviceModel 设备型号

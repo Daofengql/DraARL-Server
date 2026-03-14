@@ -8,7 +8,6 @@ import (
 
 	"nrllink/internal/gormdb"
 	"nrllink/internal/models"
-	"nrllink/internal/protocol"
 )
 
 // initPublicGroups 初始化公共群组
@@ -153,6 +152,7 @@ func DeletePublicGroup(id int) error {
 }
 
 // startMixPCM 会议模式混音（独立函数，不是方法）
+// 注意：当前版本暂不支持混音功能，未来需要实现 Opus 编解码
 func startMixPCM(g *models.Group) {
 	pool := getGroupConnPool(g)
 	if pool == nil {
@@ -160,228 +160,11 @@ func startMixPCM(g *models.Group) {
 		pool = g.ConnPool.(*CurrentConnPool)
 	}
 
-	pcm := make([]int, 160)
-	globalG711 := make([]byte, 160)
-	newG711 := make([]byte, 160)
-	data := make([]byte, 160)
+	log.Printf("[MEETING] Group %d - %s: Meeting mode started (audio mixing currently disabled)", g.ID, g.Name)
 
-	// 使用 DraARLv1 协议编码会议混音包
-	globalPacket := protocol.EncodeDraARLv1("MEETLY", "", 201, protocol.DraARLTypeG711Voice, 201, 0, "MEETLY", data)
-	speakerPacket := protocol.EncodeDraARLv1("MEETLY", "", 201, protocol.DraARLTypeG711Voice, 201, 0, "MEETLY", data)
-	speakerBPacket := protocol.EncodeDraARLv1("MEETLY", "", 201, protocol.DraARLTypeG711Voice, 201, 0, "MEETLY", data)
-
-	log.Printf("Starting mixPCM for group: %d - %s", g.ID, g.Name)
-
-	type activeSpeaker struct {
-		dev     *models.Device
-		rawG711 []byte
-	}
-	speakers := make([]activeSpeaker, 0, 10)
-
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		speakers = speakers[:0]
-		for i := range pcm {
-			pcm[i] = 0
-		}
-
-		if pool.DevConnList == nil || len(pool.DevConnList) <= 2 {
-			continue
-		}
-
-		// 收集发言者数据
-		for _, vv := range pool.DevConnList {
-			if vv.Speaking != nil {
-				*vv.Speaking = false
-			}
-			select {
-			case g711 := <-vv.PcmG711Chan:
-				if len(g711) > 0 {
-					raw := g711[0]
-					if len(raw) >= 160 {
-						raw = raw[:160]
-					}
-					vv.Speaking = new(bool)
-					*vv.Speaking = true
-					speakers = append(speakers, activeSpeaker{vv, raw})
-				}
-			default:
-			}
-		}
-
-		numbs := len(speakers)
-		if numbs == 0 {
-			continue
-		}
-
-		// 单人发言直通
-		if numbs == 1 {
-			copy(globalPacket[93:], speakers[0].rawG711)
-
-			for _, vv := range pool.DevConnList {
-				if vv.UDPAddr == nil || (vv.Speaking != nil && *vv.Speaking) {
-					continue
-				}
-				if globalConn != nil {
-					globalConn.WriteToUDP(globalPacket, vv.UDPAddr)
-				}
-			}
-		} else {
-			// 多人混音处理
-			for _, s := range speakers {
-				for i, v := range s.rawG711 {
-					if i < len(s.dev.PcmBuffer) {
-						ori := int(alaw2linear(v))
-						pcm[i] += ori
-						s.dev.PcmBuffer[i] = ori
-					}
-				}
-			}
-
-			// 计算全局混合音
-			for i, v := range pcm {
-				if v > 32767 {
-					v = 32767
-				} else if v < -32768 {
-					v = -32768
-				}
-				globalG711[i] = linear2Alaw(int16(v))
-			}
-			copy(globalPacket[93:], globalG711)
-
-			if numbs == 2 {
-				// 双人对讲互传
-				if len(speakers[0].rawG711) >= 160 {
-					copy(speakerPacket[93:], speakers[0].rawG711[:160])
-				}
-				if len(speakers[1].rawG711) >= 160 {
-					copy(speakerBPacket[93:], speakers[1].rawG711[:160])
-				}
-
-				for _, vv := range pool.DevConnList {
-					if vv.UDPAddr == nil {
-						continue
-					}
-					if vv.Speaking != nil && *vv.Speaking && len(speakers) > 1 {
-						if globalConn != nil {
-							globalConn.WriteToUDP(speakerBPacket, vv.UDPAddr)
-						}
-					} else if vv.Speaking != nil && *vv.Speaking && len(speakers) > 0 {
-						if globalConn != nil {
-							globalConn.WriteToUDP(speakerPacket, vv.UDPAddr)
-						}
-					} else {
-						if globalConn != nil {
-							globalConn.WriteToUDP(globalPacket, vv.UDPAddr)
-						}
-					}
-				}
-			} else {
-				// 3 人及以上标准混音
-				for _, vv := range pool.DevConnList {
-					if vv.UDPAddr == nil {
-						continue
-					}
-					if vv.Speaking != nil && *vv.Speaking {
-						for i, v := range pcm {
-							v -= vv.PcmBuffer[i]
-							if v > 32767 {
-								v = 32767
-							} else if v < -32768 {
-								v = -32768
-							}
-							newG711[i] = linear2Alaw(int16(v))
-						}
-						copy(speakerPacket[93:], newG711)
-						if globalConn != nil {
-							globalConn.WriteToUDP(speakerPacket, vv.UDPAddr)
-						}
-					} else {
-						if globalConn != nil {
-							globalConn.WriteToUDP(globalPacket, vv.UDPAddr)
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-// G.711 编解码表
-var (
-	alaw2linearTable = [256]int16{}
-	linear2alawTable = [65536]byte{}
-)
-
-func init() {
-	// 初始化 G.711 编解码表
-	for i := range 256 {
-		alaw2linearTable[i] = rawAlaw2linear(byte(i))
-	}
-
-	for i := range 65536 {
-		linear2alawTable[i] = rawLinear2Alaw(int16(i))
-	}
-}
-
-func rawAlaw2linear(code byte) int16 {
-	code ^= 0x55
-
-	iexp := int16((code & 0x70) >> 4)
-	mant := int16(code & 0x0F)
-
-	if iexp > 0 {
-		mant += 16
-	}
-
-	mant = (mant << 4) + 8
-
-	if iexp > 1 {
-		mant <<= (iexp - 1)
-	}
-
-	if (code & 0x80) != 0 {
-		return mant
-	}
-	return -mant
-}
-
-func rawLinear2Alaw(sample int16) byte {
-	var sign byte
-	var ix int16
-
-	if sample < 0 {
-		sign = 0x80
-		ix = (^sample) >> 4
-	} else {
-		ix = sample >> 4
-	}
-
-	if ix > 15 {
-		iexp := byte(1)
-		for ix > 31 {
-			ix >>= 1
-			iexp++
-		}
-		ix -= 16
-		ix += int16(iexp << 4)
-	}
-
-	if sign == 0 {
-		ix |= 0x80
-	}
-
-	return byte(ix) ^ 0x55
-}
-
-func alaw2linear(code byte) int16 {
-	return alaw2linearTable[code]
-}
-
-func linear2Alaw(sample int16) byte {
-	return linear2alawTable[uint16(sample)]
+	// 空闲等待，不做任何处理
+	// 未来可实现 Opus 编解码进行混音
+	select {}
 }
 
 // convertStr2IntArray 将字符串转换为整数数组

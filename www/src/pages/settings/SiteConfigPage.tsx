@@ -92,12 +92,13 @@ interface OpenAIConfig {
   engine: string
 }
 
-// 通信设置配置
+// 通信设置���置
 interface CommSettingsConfig {
   enabled: boolean
   retention_days: number
   min_duration_ms: number
-  max_duration_seconds: number
+  max_duration_sec: number
+  batch_upload_sec: number
 }
 
 // 操作日志事件类型
@@ -191,8 +192,9 @@ export function SiteConfigPage() {
   const [commSettings, setCommSettings] = useState<CommSettingsConfig>({
     enabled: false,
     retention_days: 30,
-    min_duration_ms: 1000,
-    max_duration_seconds: 0,
+    min_duration_ms: 500,
+    max_duration_sec: 300,
+    batch_upload_sec: 10,
   })
 
   // APRS日志
@@ -985,7 +987,7 @@ export function SiteConfigPage() {
                   />
 
                   <TextField
-                    label="记录阈值（毫秒）"
+                    label="最小录制阈值（毫秒）"
                     type="number"
                     fullWidth
                     value={commSettings.min_duration_ms}
@@ -995,14 +997,25 @@ export function SiteConfigPage() {
                     disabled={!commSettings.enabled}
                   />
 
-                  <TextField
-                    label="最大通信时长（秒）"
+				  <TextField
+                    label="最大录制时长（秒）"
                     type="number"
                     fullWidth
-                    value={commSettings.max_duration_seconds}
-                    onChange={(e) => setCommSettings({ ...commSettings, max_duration_seconds: parseInt(e.target.value) || 0 })}
+                    value={commSettings.max_duration_sec}
+                    onChange={(e) => setCommSettings({ ...commSettings, max_duration_sec: parseInt(e.target.value) || 0 })}
                     helperText="0表示不限制，通信超过此时长将自动断开"
                     inputProps={{ min: 0 }}
+                    disabled={!commSettings.enabled}
+                  />
+
+				  <TextField
+                    label="批量上传间隔（秒）"
+                    type="number"
+                    fullWidth
+                    value={commSettings.batch_upload_sec}
+                    onChange={(e) => setCommSettings({ ...commSettings, batch_upload_sec: parseInt(e.target.value) || 10 })}
+                    helperText="音频数据批量上传到MinIO的间隔时间"
+                    inputProps={{ min: 1, max: 300 }}
                     disabled={!commSettings.enabled}
                   />
                 </Box>

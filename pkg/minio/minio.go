@@ -150,6 +150,26 @@ func GetFileURL(objectName string) string {
 	return fmt.Sprintf("%s://%s/%s/%s", protocol, cfg.MinIO.Endpoint, cfg.MinIO.Bucket, objectName)
 }
 
+// GetAvatarURL 根据头像相对路径生成原图完整URL
+// 输入: 2026/03/uuid.jpg
+// 输出: https://oss.example.com/bucket/uploads/avatar/2026/03/uuid.jpg
+func GetAvatarURL(avatarPath string) string {
+	if avatarPath == "" {
+		return ""
+	}
+	return GetFileURL("uploads/avatar/" + avatarPath)
+}
+
+// GetAvatarThumbURL 根据头像相对路径生成缩略图完整URL
+// 输入: 2026/03/uuid.jpg
+// 输出: https://oss.example.com/bucket/thumb/uploads/avatar/2026/03/uuid.jpg
+func GetAvatarThumbURL(avatarPath string) string {
+	if avatarPath == "" {
+		return ""
+	}
+	return GetFileURL("thumb/uploads/avatar/" + avatarPath)
+}
+
 // DeleteFile 删除文件
 func DeleteFile(ctx context.Context, objectName string) error {
 	if Client == nil {

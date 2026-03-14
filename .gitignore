@@ -67,5 +67,7 @@ dist/
 # IP database
 *.ipdb
 
+# Development notes
+TODO*.md
 
 .claude/

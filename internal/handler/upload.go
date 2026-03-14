@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -100,8 +101,17 @@ func UploadFile(c *gin.Context) {
 			return
 		}
 
-		// 更新用户头像字段
-		userRepo.UpdateUserAvatar(user.ID, objectName)
+		// 提取相对路径：从 "uploads/avatar/2026/03/uuid.jpg" 提取 "2026/03/uuid.jpg"
+		avatarRelativePath := objectName
+		if idx := strings.Index(objectName, "/"); idx != -1 {
+			// 跳过 "uploads/avatar/" 前缀 (长度为15)
+			if len(objectName) > 15 && objectName[:15] == "uploads/avatar/" {
+				avatarRelativePath = objectName[15:]
+			}
+		}
+
+		// 更新用户头像字段（只存储相对路径）
+		userRepo.UpdateUserAvatar(user.ID, avatarRelativePath)
 
 		// 生成240x240缩略图
 		thumbObjectName, thumbData, err := minio.GenerateThumbnail(objectName, 240, 240, ".jpg")
@@ -112,10 +122,9 @@ func UploadFile(c *gin.Context) {
 			contentType := "image/jpeg"
 			if err := minio.UploadThumbnail(thumbObjectName, thumbData, contentType); err != nil {
 				log.Printf("上传缩略图失败: %v", err)
-			} else {
-				userRepo.UpdateUserAvatarThumb(user.ID, thumbObjectName)
-				thumbnailURL = minio.GetFileURL(thumbObjectName)
 			}
+			// 缩略图URL通过后端动态拼接，不再单独存储到数据库
+			thumbnailURL = minio.GetFileURL(thumbObjectName)
 		}
 	} else {
 		// 其他文件类型：直接上传

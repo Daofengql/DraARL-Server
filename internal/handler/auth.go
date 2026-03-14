@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -133,8 +132,8 @@ func Login(c *gin.Context) {
 		"roles":           roles,
 		"status":          user.Status,
 		"approval_status":  user.ApprovalStatus,
-		"avatar":          user.Avatar,
-		"avatar_thumb":    user.AvatarThumb,
+		"avatar":          minio.GetAvatarURL(user.Avatar),
+		"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
 		"phone":           user.Phone,
 		"address":         user.Address,
 		"introduction":    user.Introduction,
@@ -154,14 +153,6 @@ func Login(c *gin.Context) {
 		"login_err_times": user.LoginErrTimes,
 		"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
 		"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
-	}
-
-	// 处理头像URL
-	if avatarVal, ok := userData["avatar"].(string); ok && avatarVal != "" && !strings.HasPrefix(avatarVal, "http") {
-		userData["avatar"] = minio.GetFileURL(avatarVal)
-	}
-	if avatarThumbVal, ok := userData["avatar_thumb"].(string); ok && avatarThumbVal != "" && !strings.HasPrefix(avatarThumbVal, "http") {
-		userData["avatar_thumb"] = minio.GetFileURL(avatarThumbVal)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -317,16 +308,6 @@ func GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	// 处理头像URL
-	avatarURL := user.Avatar
-	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
-		avatarURL = minio.GetFileURL(avatarURL)
-	}
-	avatarThumbURL := user.AvatarThumb
-	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
-		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
@@ -338,8 +319,8 @@ func GetCurrentUser(c *gin.Context) {
 			"phone":          user.Phone,
 			"address":        user.Address,
 			"introduction":   user.Introduction,
-			"avatar":         avatarURL,
-			"avatar_thumb":   avatarThumbURL,
+			"avatar":         minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb":   minio.GetAvatarThumbURL(user.Avatar),
 			"sex":            user.Sex,
 			"birthday":       user.Birthday,
 			"role":           getRoleNameFromUser(user),
@@ -432,16 +413,6 @@ func GetUsers(c *gin.Context) {
 	// 转换为响应格式
 	items := make([]gin.H, 0, len(users))
 	for _, u := range users {
-		// 处理头像URL：如果数据库中存的是完整URL则直接使用，否则拼接
-		avatarURL := u.Avatar
-		if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
-			avatarURL = minio.GetFileURL(avatarURL)
-		}
-		avatarThumbURL := u.AvatarThumb
-		if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
-			avatarThumbURL = minio.GetFileURL(avatarThumbURL)
-		}
-
 		items = append(items, gin.H{
 			"id":           u.ID,
 			"username":     u.Name,
@@ -453,8 +424,8 @@ func GetUsers(c *gin.Context) {
 			"role":         getRoleNameFromUser(u),
 			"isAdmin":      hasRoleGORM(u, "admin"),
 			"roles":        u.Roles,
-			"avatar":       avatarURL,
-			"avatar_thumb": avatarThumbURL,
+			"avatar":       minio.GetAvatarURL(u.Avatar),
+			"avatar_thumb": minio.GetAvatarThumbURL(u.Avatar),
 			"created_at":   u.CreateTime.Format("2006-01-02 15:04:05"),
 			"updated_at":   u.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
@@ -1090,16 +1061,6 @@ func GetUserDetail(c *gin.Context) {
 		return
 	}
 
-	// 处理头像URL
-	avatarURL := user.Avatar
-	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
-		avatarURL = minio.GetFileURL(avatarURL)
-	}
-	avatarThumbURL := user.AvatarThumb
-	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
-		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
@@ -1112,8 +1073,8 @@ func GetUserDetail(c *gin.Context) {
 			"status":     user.Status,
 			"isAdmin":    hasRoleGORM(user, "admin"),
 			"roles":      user.Roles,
-			"avatar":     avatarURL,
-			"avatar_thumb": avatarThumbURL,
+			"avatar":     minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"introduction": user.Introduction,
 			"address":    user.Address,
 			"sex":        user.Sex,
@@ -1154,16 +1115,6 @@ func GetUserPublicInfo(c *gin.Context) {
 		return
 	}
 
-	// 处理头像URL
-	avatarURL := user.Avatar
-	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
-		avatarURL = minio.GetFileURL(avatarURL)
-	}
-	avatarThumbURL := user.AvatarThumb
-	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
-		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
-	}
-
 	// 只返回公开信息
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -1171,8 +1122,8 @@ func GetUserPublicInfo(c *gin.Context) {
 		"data": gin.H{
 			"id":           user.ID,
 			"username":     user.Name,
-			"avatar":       avatarURL,
-			"avatar_thumb": avatarThumbURL,
+			"avatar":       minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"callsign":     user.CallSign,
 			"phone":        user.Phone,
 			"address":      user.Address,
@@ -1273,16 +1224,6 @@ func UpdateProfile(c *gin.Context) {
 		c.ClientIP(),
 	)
 
-	// 处理头像URL
-	avatarURL := user.Avatar
-	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http") {
-		avatarURL = minio.GetFileURL(avatarURL)
-	}
-	avatarThumbURL := user.AvatarThumb
-	if avatarThumbURL != "" && !strings.HasPrefix(avatarThumbURL, "http") {
-		avatarThumbURL = minio.GetFileURL(avatarThumbURL)
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -1294,8 +1235,8 @@ func UpdateProfile(c *gin.Context) {
 			"phone":           user.Phone,
 			"address":         user.Address,
 			"introduction":    user.Introduction,
-			"avatar":          avatarURL,
-			"avatar_thumb":    avatarThumbURL,
+			"avatar":          minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
 			"sex":             user.Sex,
 			"birthday":        user.Birthday,
 			"dmrid":           user.DMRID,

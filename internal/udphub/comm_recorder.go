@@ -263,6 +263,34 @@ func loadCommSettings() *CommSettingsConfig {
 		}
 	}
 
+	// 检查零值并应用默认值（FirstOrCreate 会用 Go 零值插入，忽略数据库默认值）
+	needsUpdate := false
+	if settings.RetentionDays == 0 {
+		settings.RetentionDays = 30
+		needsUpdate = true
+	}
+	if settings.MinDurationMs == 0 {
+		settings.MinDurationMs = 500
+		needsUpdate = true
+	}
+	if settings.MaxDurationSec == 0 {
+		settings.MaxDurationSec = 300
+		needsUpdate = true
+	}
+	if settings.BatchUploadSec == 0 {
+		settings.BatchUploadSec = 10
+		needsUpdate = true
+	}
+
+	// 如果有零值被修正，更新数据库
+	if needsUpdate {
+		if err := db.Save(&settings).Error; err != nil {
+			log.Printf("[COMM_RECORDER] 保存默认配置失败: %v", err)
+		} else {
+			log.Printf("[COMM_RECORDER] 已修正默认配置: MinDurationMs=%d", settings.MinDurationMs)
+		}
+	}
+
 	return &CommSettingsConfig{
 		Enabled:        settings.Enabled,
 		RetentionDays:  settings.RetentionDays,

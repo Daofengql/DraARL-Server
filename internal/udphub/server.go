@@ -1,72 +1,90 @@
 package udphub
 
 import (
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
+	"nrllink/internal/gormdb"
 	"nrllink/internal/models"
 	"nrllink/internal/protocol"
 )
 
+// 全局变量声明
 var (
-	// Global UDP connection
+	// 全局 UDP 连接
 	globalConn *net.UDPConn
 
-	// Device maps
+	// Username 索引的设备映射 (DraARLv1)
+	devUsernameSSIDMap = make(map[string]*models.Device) // key: username-ssid
+
+	// CallSign 索引的设���映射 (向后兼容)
 	devCallsignSSIDMap = make(map[string]*models.Device) // key: callsign-ssid
-	onlineDevMap        = make(map[int]*models.Device)  // key: device ID
-	serverMap           = make(map[string]*models.Device) // key: callsign
 
-	// Group maps
-	publicGroupMap = make(map[int]*models.Group) // public groups (0, 999, 1000+)
+	// 在线设备映射
+	onlineDevMap    = make(map[int]*models.Device) // key: device ID
+	onlineDevMapDraARL = make(map[int]*models.Device) // key: device ID (DraARLv1)
 
-	// QTH maps
-	qthMap    = make(map[string]string)               // callsign-ssid -> qth
-	qthMapNew = make(map[string]models.QTH)           // callsign-ssid -> QTH
+	// 已认证设备缓存 (username -> auth result)
+	authedUserCache = make(map[string]*DeviceAuthResult)
+	authCacheMutex  sync.RWMutex
 
-	// User list (for private groups)
-	// TODO: 使用 username 作为 key 而不是 callsign，以支持多设备共享同一用户账户
-	userList sync.Map // callsign -> *UserInfo
+	// 服务器映射
+	serverMap = make(map[int]*models.Server)
 
-	// Statistics
-	totalStats = &models.TotalStats{}
+	// 公共群组映射 (保留用于向后兼容)
+	publicGroupMap = make(map[int]*models.Group)
 
-	// Channel for device logging
-	logBuffer = make(chan *models.Device, 100)
+	// ==========================================
+	// 架构重构：全局统一群组缓存
+	// 替代原有的 publicGroupMap 和 userList 的群组路由功能
+	// ==========================================
+	globalGroupCache = make(map[int]*models.Group)
+	groupCacheMutex  sync.RWMutex
 
-	// Limit channel for concurrent packet processing
-	limitChan = make(chan bool, 1)
+	// QTH 映射
+	qthMap    = make(map[string]string)
+	qthMapNew = make(map[string]models.QTH)
+
+	// 用户列表 (sync.Map)
+	userList sync.Map
+
+	// 统计信息
+	totalStats = &models.ServerStats{}
+
+	// 日志缓冲
+	logBuffer = make(chan *models.Device, 1000)
+
+	// 并发限制
+	limitChan = make(chan bool, 100)
 )
 
-// UserInfo 用户信息（用于私有群组）
-// TODO: 将 CallSign 字段改为 Username，以支持多设备共享同一用户账户
+// UserInfo 用户信息结构
 type UserInfo struct {
-	ID      int
+	ID       int
 	CallSign string
-	Name    string
-	Roles   []string
-	Groups  map[int]*models.Group // 1, 2, 3 - private groups
-	DevList map[int]*models.Device
+	Name     string
+	Groups   map[int]*models.Group
 }
 
 // CurrentConnPool 当前连接池
 type CurrentConnPool struct {
-	UDPAddr       *net.UDPAddr
+	DevConnMap   map[string]*models.Device // key: UDPAddr.String()
+	DevConnList  []*models.Device
+	UDPAddr      *net.UDPAddr
 	LastVoiceTime time.Time
-	LastCtlTime   time.Time
-	LastPriority  int
-
-	DevConnMap  map[string]*models.Device // key: UDP address string
-	DevConnList []*models.Device
+	LastPriority int
 }
 
-// StartUDPServer 启动 UDP 服务器
+// StartUDPServer 启动 UDP 服务器（DraARLv1 协议）
 func StartUDPServer(port int) error {
+	return StartDraARLServer(port)
+}
+
+// StartDraARLServer 启动 DraARLv1 协议的 UDP 服务器
+func StartDraARLServer(port int) error {
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return fmt.Errorf("resolve UDP address failed: %w", err)
@@ -78,29 +96,37 @@ func StartUDPServer(port int) error {
 	}
 
 	globalConn = conn
-	log.Printf("UDP server started on port %d", port)
+	log.Printf("DraARLv1 UDP server started on port %d", port)
 
-	// Initialize public groups
+	// 启动认证失败记录清理器
+	StartAuthCleaner()
+
+	// 初始化公共群组
 	initPublicGroups()
 
-	// Load all devices from database
+	// ==========================================
+	// 架构重构：启动全局群组缓存定时同步
+	// ==========================================
+	StartGroupCacheSync()
+
+	// 加载所有设备
 	loadAllDevices()
 
-	// Start device online checker
+	// 启动设备在线检查
 	go checkDeviceOnline()
 
-	// Start log processor
+	// 启动日志处理器
 	go processLogBuffer()
 
-	// Process packets
+	// 处理数据包
 	for {
 		limitChan <- true
-		processUDPConn(conn)
+		processDraARLConn(conn)
 	}
 }
 
-// processUDPConn 处理 UDP 连接
-func processUDPConn(conn *net.UDPConn) {
+// processDraARLConn 处理 DraARLv1 UDP 连接
+func processDraARLConn(conn *net.UDPConn) {
 	defer func() { <-limitChan }()
 
 	data := make([]byte, 1460)
@@ -112,7 +138,7 @@ func processUDPConn(conn *net.UDPConn) {
 			return
 		}
 
-		// Panic recovery for packet processing
+		// Panic recovery
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -120,390 +146,497 @@ func processUDPConn(conn *net.UDPConn) {
 				}
 			}()
 
-			nrl, err := protocol.NewNRL2Packet(remoteAddr, data[:n])
-			if err != nil {
-				log.Printf("[DECODE] Error from %v: %v % X", remoteAddr, err, data[:n])
-				return
-			}
-
-			totalStats.PacketNumber++
-
-			callsignSSID := protocol.GetCallSignSSID(nrl.CallSign, nrl.SSID)
-
-			if dev, ok := devCallsignSSIDMap[callsignSSID]; ok {
-				// 设备已存在
-				dev.LastPacketTime = nrl.TimeStamp
-				dev.Traffic += int64(42 + 48 + len(nrl.DATA))
-				totalStats.Traffic += int64(42 + 48 + len(nrl.DATA))
-
-				// 更新 DMRID（非 200 设备）
-				if nrl.DevModel != models.DevModelServer {
-					protocol.SetDevDMRID(dev.DMRID, data[:n])
-				}
-
-				// 根据群组类型处理
-				if dev.GroupID > 0 && dev.GroupID <= 3 {
-					// 私有群组
-					if u, ok := userList.Load(dev.CallSign); ok {
-						if gp, ok := u.(*UserInfo).Groups[dev.GroupID]; ok {
-							parseNRL2(nrl, data[:n], dev, conn, gp)
-						}
-					}
-				} else if dev.GroupID >= models.GroupIDPublicMin || dev.GroupID == 0 {
-					// 公共群组
-					if gp, ok := publicGroupMap[dev.GroupID]; ok {
-						parseNRL2(nrl, data[:n], dev, conn, gp)
-					}
-				}
+			// 处理 DraARLv1 数据包
+			if n >= 4 && string(data[0:4]) == "DraA" {
+				processDraARLPacket(data[:n], remoteAddr, conn)
 			} else {
-			// 新设备，添加到默认群组
-			newDevice := &models.Device{
-				CallSign:    nrl.CallSign,
-				SSID:        nrl.SSID,
-				CallSignSSID: callsignSSID,
-				DevModel:    nrl.DevModel,
-				Priority:    100,
-				Status:      0,
-				ChanName:    make([]string, 8),
-				PcmBuffer:   make([]int, 160),
+				log.Printf("[DECODE] Unknown protocol from %v: %s", remoteAddr, string(data[:min(4, n)]))
 			}
-
-			// 255 设备加入 999 全网通群组
-			if nrl.DevModel == models.DevModelFullNet && nrl.SSID == 255 {
-				newDevice.GroupID = models.GroupIDPublicMin
-			}
-
-			dev, err := addDevice(newDevice)
-			if err != nil {
-				log.Printf("Add device failed: %v, %v", err, nrl)
-				return
-			}
-
-			if dev != nil {
-				dev.PcmG711Chan = make(chan [][]byte, 3)
-				dev.PcmBuffer = make([]int, 160)
-				devCallsignSSIDMap[callsignSSID] = dev
-
-				// 加入群组
-				if gp, ok := publicGroupMap[dev.GroupID]; ok {
-					gp.DevMap[dev.ID] = dev
-					parseNRL2(nrl, data[:n], dev, conn, gp)
-				} else {
-					// 加入默��群组
-					if gp0, ok := publicGroupMap[0]; ok {
-						gp0.DevMap[dev.ID] = dev
-						parseNRL2(nrl, data[:n], dev, conn, gp0)
-					}
-				}
-			}
-		}
 		}()
 	}
 }
 
-// parseNRL2 解析并处理 NRL2 报文
-func parseNRL2(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	switch nrl.Type {
-	case models.TypeControl:
-		// 控制指令
-		log.Printf("Received control command: %v", nrl)
-
-	case models.TypeG711Voice, models.TypeOpus16K:
-		// 语音消息
-		handleVoice(nrl, packet, dev, conn, gp)
-
-	case models.TypeHeartbeat:
-		// 心跳包
-		handleHeartbeat(nrl, packet, dev, conn, gp)
-
-	case models.TypeConfig:
-		// 设备配置
-		handleConfig(nrl, dev)
-
-	case models.TypeTextMessage:
-		// 文本消息
-		handleTextMessage(nrl, packet, dev, conn, gp)
-
-	case models.TypeDeviceControl:
-		// 设备控制
-		handleDeviceControl(nrl, packet, dev, conn, gp)
-
-	case models.TypeGroupCommand:
-		// 组加入指令
-		handleGroupCommand(nrl, packet, dev, conn)
-
-	case models.TypeServerVoice:
-		// 服务器互联语音
-		handleServerVoice(nrl, packet, dev, conn, gp)
-
-	case models.TypeATPassThrough:
-		// AT 透传
-		handleATCommand(nrl, dev)
-
-	default:
-		log.Printf("Unknown packet type: %d, %v", nrl.Type, nrl)
-	}
-}
-
-// handleVoice 处理语音消息
-func handleVoice(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	// 检查设备状态（是否禁发）
-	if (dev.Status & models.DevStatusTxDisable) == models.DevStatusTxDisable {
+// processDraARLPacket 处理 DraARLv1 数据包
+func processDraARLPacket(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn) {
+	packet, err := protocol.NewDraARLv1Packet(remoteAddr, data)
+	if err != nil {
+		log.Printf("[DECODE] DraARLv1 decode error from %v: %v", remoteAddr, err)
 		return
 	}
 
-	// 记录语音开始时间
-	td := nrl.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
-	if td > 200 {
-		dev.LastVoiceBeginTime = nrl.TimeStamp
-		logBuffer <- dev
-		dev.Loged = true
-	}
-	dev.Loged = false
+	totalStats.PacketNumber++
+	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 
-	dev.LastVoiceDuration = int(nrl.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
-	dev.LastVoiceEndTime = nrl.TimeStamp
+	// 查找已存在的设备
+	dev, exists := devUsernameSSIDMap[usernameSSID]
+	if !exists {
+		// 新设备，需要先认证
+		handleNewDraARLDevice(packet, data, conn, usernameSSID)
+		return
+	}
+
+	// ==========================================
+	// 修复1：即使设备已在内存中(如从数据库加载)，
+	// 当它发送心跳包上线或更换 IP 端口时，依然需要执行密码鉴权
+	// ==========================================
+	if packet.Type == protocol.DraARLTypeHeartbeat {
+		currentAddr := packet.UDPAddr.String()
+		// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
+		if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
+			authResult := AuthenticateDevice(packet.UDPAddr.IP.String(), packet.Username, packet.DevicePassword)
+			if !authResult.Success {
+				log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
+				return // 密码错误，直接丢弃该数据包
+			}
+			// 鉴权成功后，补全由于直接从 DB 加载可能缺失的呼号字段
+			dev.CallSign = authResult.CallSign
+			log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
+		}
+	}
+
+	// 已存在的设备，更新状态
+	dev.LastPacketTime = packet.TimeStamp
+	dev.Traffic += int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
+	totalStats.Traffic += int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
+
+	// ==========================================
+	// 修复2：修正 GroupID 为 0 时导致数据包被静默丢弃的问题
+	// ==========================================
+	targetGroupID := dev.GroupID
+	if targetGroupID == 0 {
+		targetGroupID = models.GroupIDPublicMin // 如果读出为 0，映射到默认的公共群组(999)
+		dev.GroupID = targetGroupID             // 同步修正设备内存状态
+	}
+
+	// ==========================================
+	// 架构重构：使用纯粹的全局缓存进行路由分发
+	// 不再区分"私有群组"和"公共群组"，统一从数据库加载的群组缓存中查找
+	// ==========================================
+	gp, exists := GetGroupFromCache(targetGroupID)
+	if exists {
+		parseDraARL(packet, data, dev, conn, gp)
+	} else {
+		// 找不到对应的群组实例
+		// 可能是数据库中删除了该群组，或者设备被分配了一个错误的群组 ID
+		if packet.Type != protocol.DraARLTypeHeartbeat {
+			log.Printf("[ROUTING] 路由丢弃: 设备 %s 请求的群组 ID: %d 不存在或已停用", dev.Username, targetGroupID)
+		}
+	}
+}
+
+// handleNewDraARLDevice 处理新 DraARLv1 设备
+func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *net.UDPConn, usernameSSID string) {
+	// 心跳包需要进行认证
+	if packet.Type != protocol.DraARLTypeHeartbeat {
+		// 非心跳包，忽略未认证设备
+		log.Printf("[AUTH] Ignoring packet from unauthenticated device: %s, type: %d", usernameSSID, packet.Type)
+		return
+	}
+
+	// 认证设备
+	authResult := AuthenticateDevice(packet.UDPAddr.IP.String(), packet.Username, packet.DevicePassword)
+	if !authResult.Success {
+		// 认证失败，不创建设备
+		log.Printf("[AUTH] Device authentication failed: %s, error: %s", usernameSSID, authResult.Error)
+		return
+	}
+
+	// 认证成功，创建或更新设备
+	newDevice := &models.Device{
+		Username:     packet.Username,
+		CallSign:     authResult.CallSign,
+		SSID:         packet.SSID,
+		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
+		CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID),
+		DevModel:     packet.DevModel,
+		Priority:     100,
+		Status:       0,
+		ChanName:     make([]string, 8),
+		PcmBuffer:    make([]int, 160),
+		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
+	}
+
+	// 保存设备到数据库
+	dev, err := addDevice(newDevice)
+	if err != nil {
+		log.Printf("[DEVICE] Add device failed: %v, %v", err, packet.Username)
+		return
+	}
+
+	if dev != nil {
+		dev.PcmG711Chan = make(chan [][]byte, 3)
+		dev.PcmBuffer = make([]int, 160)
+		dev.UDPAddr = packet.UDPAddr
+		dev.ISOnline = true
+		dev.LastPacketTime = packet.TimeStamp
+		devUsernameSSIDMap[usernameSSID] = dev
+
+		// 同时更新 callsign 索引（向后兼容）
+		callsignSSID := protocol.GetCallSignSSID(dev.CallSign, dev.SSID)
+		devCallsignSSIDMap[callsignSSID] = dev
+
+		// 加入群组
+		if gp, ok := publicGroupMap[dev.GroupID]; ok {
+			gp.DevMap[dev.ID] = dev
+
+			// 加入连接池
+			pool := gp.ConnPool.(*CurrentConnPool)
+			if pool.DevConnMap == nil {
+				pool.DevConnMap = make(map[string]*models.Device)
+			}
+			pool.DevConnMap[packet.UDPAddr.String()] = dev
+			pool.DevConnList = append(pool.DevConnList, dev)
+
+			// 发送心跳响应（填充 CallSign）
+			response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
+			conn.WriteToUDP(response, packet.UDPAddr)
+			log.Printf("[ONLINE] New DraARLv1 device online: %s (%s) from %v, group: %d",
+				packet.Username, authResult.CallSign, packet.UDPAddr, dev.GroupID)
+		}
+	}
+}
+
+// parseDraARL 解析并处理 DraARLv1 报文
+func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+	switch packet.Type {
+	case protocol.DraARLTypeControl:
+		// 控制指令
+		log.Printf("Received DraARLv1 control command: %v", packet)
+
+	case protocol.DraARLTypeG711Voice, protocol.DraARLTypeOpus16K:
+		// 语音消息
+		handleDraARLVoice(packet, data, dev, conn, gp)
+
+	case protocol.DraARLTypeHeartbeat:
+		// 心跳包
+		handleDraARLHeartbeat(packet, data, dev, conn, gp)
+
+	case protocol.DraARLTypeConfig:
+		// 设备配置
+		handleDraARLConfig(packet, dev)
+
+	case protocol.DraARLTypeTextMessage:
+		// 文本消息
+		handleDraARLTextMessage(packet, data, dev, conn, gp)
+
+	case protocol.DraARLTypeServerVoice:
+		// 服务器互联语音
+		handleDraARLServerVoice(packet, data, dev, conn, gp)
+
+	case protocol.DraARLTypeATPassThrough:
+		// AT 透传
+		handleDraARLATCommand(packet, dev)
+
+	default:
+		log.Printf("Unknown DraARLv1 packet type: %d, %v", packet.Type, packet)
+	}
+}
+
+// handleDraARLVoice 处理 DraARLv1 ���音消息
+func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+	// [注记] 暂时注释掉状态位检查
+	// 因为数据库中 Status=1 (Web端表示"启用") 会与底层的 TxDisable=0x01 产生数值上的冲突
+	// 导致合法设备的语音包被静默丢弃。待后续统一状态位定义后再启用此检查。
+	/*
+	if (dev.Status & models.DevStatusTxDisable) == models.DevStatusTxDisable {
+		return
+	}
+	*/
+
+	// 计算距离上次收到语音包的时间间隔
+	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
+
+	// td > 200 表示距离上次语音已经超过 200ms，说明这是一次"新"的按键发言(PTT)
+	// 此时仅记录起始时间，推迟到心跳包机制检测到语音彻底结束时，再投递最终包含时长的日志
+	if td > 200 {
+		dev.LastVoiceBeginTime = packet.TimeStamp
+		// 将标记位置为 false，交由 handleDraARLHeartbeat 在松开 PTT 时接管日志生成
+		dev.Loged = false
+	}
+
+	// 实时更新本次发言的累计持续时间
+	dev.LastVoiceDuration = int(packet.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
+	dev.LastVoiceEndTime = packet.TimeStamp
 
 	dev.VoiceTime += 63
 	totalStats.VoiceTime += 63
 
-	dev.LastVoiceEndTime = nrl.TimeStamp
-	dev.LastCtlEndTime = nrl.TimeStamp
+	dev.LastCtlEndTime = packet.TimeStamp
 
-	// 来自 255 设备的包
-	if nrl.DevModel == models.DevModelFullNet && nrl.SSID == 255 {
-		dev.ISOnline = true
-		forwardServerVoice(nrl, dev, packet, conn, gp)
-		return
-	}
-
-	// 来自 200 设备的包
-	if nrl.DevModel == models.DevModelServer && nrl.SSID == models.DevModelServer {
-		forwardServerVoice(nrl, dev, packet, conn, gp)
-		return
-	}
-
-	// 普通设备语音转发
-	forwardVoice(nrl, dev, packet, gp)
+	// 普通设备语��转发
+	forwardDraARLVoice(packet, dev, data, gp)
 }
 
-// handleHeartbeat 处理心跳包
-func handleHeartbeat(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	// 处理服务器转发的定制心跳（不响应）
-	if len(packet) == 52 {
-		dev.QTH = getQTH(net.IP(packet[48:]).String())
-		log.Printf("[FORWARD] Device online: %v %v %v-%v %v", nrl.UDPAddrStr, net.IP(packet[48:]).String(), dev.CallSign, dev.SSID, dev.QTH)
-		return
-	}
-
+// handleDraARLHeartbeat 处理 DraARLv1 心跳包
+func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	wasOnline := dev.ISOnline
-	currentAddr := nrl.UDPAddr.String()
+	currentAddr := packet.UDPAddr.String()
 	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
 
 	// 更新设备地址和时间
-	dev.UDPAddr = nrl.UDPAddr
-	dev.LastPacketTime = nrl.TimeStamp
+	dev.UDPAddr = packet.UDPAddr
+	dev.LastPacketTime = packet.TimeStamp
 
 	// 检测重连
 	if addrChanged && wasOnline {
-		log.Printf("[RECONNECT] Device %v-%v reconnected from %v to %v",
-			dev.CallSign, dev.SSID, dev.PreviousUDPAddr, currentAddr)
+		log.Printf("[RECONNECT] DraARLv1 device %s-%d reconnected from %v to %v",
+			dev.Username, dev.SSID, dev.PreviousUDPAddr, currentAddr)
 		dev.ReconnectCount++
 		dev.PreviousUDPAddr = currentAddr
 		dev.IsReconnecting = true
 	} else if !wasOnline && !dev.LastDisconnectTime.IsZero() {
-		// 从离线恢复
-		timeOffline := nrl.TimeStamp.Sub(dev.LastDisconnectTime)
-		log.Printf("[RECOVER] Device %v-%v back online after %v (addr: %v, reconnect count: %d)",
-			dev.CallSign, dev.SSID, timeOffline, currentAddr, dev.ReconnectCount)
+		timeOffline := packet.TimeStamp.Sub(dev.LastDisconnectTime)
+		log.Printf("[RECOVER] DraARLv1 device %s-%d back online after %v",
+			dev.Username, dev.SSID, timeOffline)
 		dev.IsReconnecting = false
 	}
 
 	// 记录日志
-	if !dev.Loged && nrl.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
+	if !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
 		logBuffer <- dev
 		dev.Loged = true
 	}
 
-	// 判断设备是否已加入连接池
+	// 加入连接池
 	pool := gp.ConnPool.(*CurrentConnPool)
 	if _, exists := pool.DevConnMap[currentAddr]; !exists {
 		pool.DevConnMap[currentAddr] = dev
 		pool.DevConnList = append(pool.DevConnList, dev)
-
-		// 200 设备保存到 serverMap
-		if nrl.SSID == models.SSIDServerMin {
-			serverMap[nrl.CallSign] = dev
-		}
 	}
 
-	// 如果不是主动发出心跳的设备，需要回复
-	if dev.UDPSocket == nil {
-		if dev.DeviceParm == nil && dev.DevModel < 100 {
-			// 发送查询设备参数
-			conn.WriteToUDP(protocol.Encode(dev.CallSign, dev.SSID, models.TypeConfig, 0, 0, []byte{0x01}), dev.UDPAddr)
-		} else {
-			conn.WriteToUDP(packet, nrl.UDPAddr)
-		}
-	}
+	// 发送心跳响应（填充 CallSign）
+	response := protocol.EncodeHeartbeatResponse(packet, dev.CallSign)
+	conn.WriteToUDP(response, packet.UDPAddr)
 
 	if !dev.ISOnline {
 		// 新设备上线
-		// 更新设备型号
-		if nrl.DevModel != 0 {
-			dev.DevModel = nrl.DevModel
+		if packet.DevModel != 0 {
+			dev.DevModel = packet.DevModel
 		}
 
-		// 查询设备 QTH 信息
 		dev.QTH = getQTH(dev.UDPAddr.IP.String())
-		qthMap[dev.CallSignSSID] = dev.QTH
-		qthMapNew[dev.CallSignSSID] = models.QTH{
-			QTH:          dev.QTH,
-			CallSignSSID: dev.CallSignSSID,
-			JoinTime:     time.Now(),
-			Name:         dev.Name,
-		}
-
-		log.Printf("[ONLINE] Device %v-%v online from %v, QTH: %v, group: %d, model: %d",
-			dev.CallSign, dev.SSID, dev.UDPAddr.String(), dev.QTH, gp.ID, dev.DevModel)
-
-		if dev.DevModel != models.DevModelServer {
-			// 发送 AT 查询
-			at := &models.ATCommand{CallSign: dev.CallSign, SSID: dev.SSID, Type: 0x01, ATcommand: "AT+READ", Data: "123"}
-			deviceAT(at)
-		}
+		log.Printf("[ONLINE] DraARLv1 device %s (%s) online from %v, QTH: %v, group: %d, model: %d",
+			dev.Username, dev.CallSign, dev.UDPAddr.String(), dev.QTH, gp.ID, dev.DevModel)
 
 		dev.ISOnline = true
 	}
 }
 
-// handleConfig 处理设备配置
-func handleConfig(nrl *models.NRL2Packet, dev *models.Device) {
-	// 解析设备配置参数
-	dev.DeviceParm = decodeControlPacket(nrl.DATA)
+// handleDraARLConfig 处理 DraARLv1 设备配置
+func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
+	dev.DeviceParm = decodeControlPacket(packet.DATA)
 }
 
-// handleTextMessage 处理文本消息
-func handleTextMessage(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	forwardMessage(nrl, packet, dev, conn, gp.ConnPool.(*CurrentConnPool))
+// handleDraARLTextMessage 处理 DraARLv1 文本消息
+func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool))
 }
 
-// handleDeviceControl 处理设备控制
-func handleDeviceControl(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+// handleDraARLServerVoice 处理 DraARLv1 服务器互联语音
+func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	if (dev.Status & models.DevStatusTxDisable) == models.DevStatusTxDisable {
 		return
 	}
 
-	if nrl.TimeStamp.Sub(dev.LastCtlEndTime).Milliseconds() > 200 {
-		dev.LastCtlBeginTime = nrl.TimeStamp
-	}
-	dev.LastCtlDuration = int(nrl.TimeStamp.Sub(dev.LastCtlBeginTime).Milliseconds())
-	dev.LastCtlEndTime = nrl.TimeStamp
-
-	dev.CtlTime += 63
-
-	forwardControl(nrl, packet, conn, gp)
-}
-
-// handleGroupCommand 处理组加入指令
-func handleGroupCommand(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn) {
-	// 边界检查：数据包至少需要 53 字节才能读取 cmdType 和 groupID
-	if len(packet) < 53 {
-		log.Printf("Device %v-%v group command packet too short: %d bytes", dev.CallSign, dev.SSID, len(packet))
-		return
-	}
-
-	cmdType := packet[48]
-
-	switch cmdType {
-	case 1: // 切换组指令
-		groupID := int(binary.BigEndian.Uint32(packet[49:53]))
-		log.Printf("Device %v-%v change group from %v to %v, data: % X", dev.CallSign, dev.SSID, dev.GroupID, groupID, packet)
-
-		str, err := changeDeviceGroup(dev, groupID)
-		if err != nil {
-			log.Println("Change group error:", err)
-			conn.WriteToUDP(append(packet, []byte(strconv.Itoa(groupID)+",error")...), nrl.UDPAddr)
-		} else {
-			conn.WriteToUDP(append(packet, str...), nrl.UDPAddr)
-		}
-
-	case 2: // 获取组列表
-		resp := getGroupListForDevice(packet)
-		conn.WriteToUDP(resp, nrl.UDPAddr)
-		log.Printf("Device %v-%v download group list, size: %v", dev.CallSign, dev.SSID, len(resp))
-	}
-}
-
-// handleServerVoice 处理服务器互联语音
-func handleServerVoice(nrl *models.NRL2Packet, packet []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	if (dev.Status & models.DevStatusTxDisable) == models.DevStatusTxDisable {
-		return
-	}
-
-	td := nrl.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
+	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
 	if td > 200 {
-		dev.LastVoiceBeginTime = nrl.TimeStamp
+		dev.LastVoiceBeginTime = packet.TimeStamp
 		logBuffer <- dev
 		dev.Loged = true
 	}
 	dev.Loged = false
 
-	dev.LastVoiceDuration = int(nrl.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
-	dev.LastVoiceEndTime = nrl.TimeStamp
+	dev.LastVoiceDuration = int(packet.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
+	dev.LastVoiceEndTime = packet.TimeStamp
 
 	dev.VoiceTime += 20
 	totalStats.VoiceTime += 20
 
-	dev.LastVoiceEndTime = nrl.TimeStamp
-	dev.LastCtlEndTime = nrl.TimeStamp
+	dev.LastCtlEndTime = packet.TimeStamp
 
-	forwardServerVoice(nrl, dev, packet, conn, gp)
+	forwardDraARLServerVoice(packet, dev, data, conn, gp)
 }
 
-// handleATCommand 处理 AT 命令
-func handleATCommand(nrl *models.NRL2Packet, dev *models.Device) {
-	at := decodeATPacket(dev.CallSign, dev.SSID, nrl.DATA)
+// handleDraARLATCommand 处理 DraARLv1 AT 命令
+func handleDraARLATCommand(packet *protocol.DraARLv1Packet, dev *models.Device) {
+	at := decodeATPacket(dev.CallSign, dev.SSID, packet.DATA)
 	dev.LastATcommand = at
 }
 
-// GetTotalStats 获取统计信息
-func GetTotalStats() *models.TotalStats {
+// forwardDraARLVoice 转发 DraARLv1 语音
+func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, gp *models.Group) {
+	pool := gp.ConnPool.(*CurrentConnPool)
+
+	for _, targetDev := range pool.DevConnList {
+		if targetDev.ID == dev.ID {
+			continue // 不转发给自己
+		}
+
+		// 检查目标设备是否禁收
+		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
+			continue
+		}
+
+		if targetDev.UDPAddr != nil && targetDev.ISOnline {
+			// 转发时保留原始发送方信息
+			globalConn.WriteToUDP(data, targetDev.UDPAddr)
+		}
+	}
+}
+
+// forwardDraARLMessage 转发 DraARLv1 文本消息
+func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool) {
+	for _, targetDev := range pool.DevConnList {
+		if targetDev.ID == dev.ID {
+			continue
+		}
+
+		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
+			continue
+		}
+
+		if targetDev.UDPAddr != nil && targetDev.ISOnline {
+			globalConn.WriteToUDP(data, targetDev.UDPAddr)
+		}
+	}
+}
+
+// forwardDraARLServerVoice 转发 DraARLv1 服务器互联语音
+func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, conn *net.UDPConn, gp *models.Group) {
+	pool := gp.ConnPool.(*CurrentConnPool)
+
+	for _, targetDev := range pool.DevConnList {
+		if targetDev.ID == dev.ID {
+			continue
+		}
+
+		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
+			continue
+		}
+
+		if targetDev.UDPAddr != nil && targetDev.ISOnline {
+			globalConn.WriteToUDP(data, targetDev.UDPAddr)
+		}
+	}
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// GetGlobalConn 获取全局 UDP 连接
+func GetGlobalConn() *net.UDPConn {
+	return globalConn
+}
+
+// GetTotalStats 获取服务器统计信息
+func GetTotalStats() *models.ServerStats {
 	return totalStats
 }
 
-// GetOnlineDeviceCount 获取在线设备数量
-func GetOnlineDeviceCount() int {
-	return totalStats.OnlineDevNumber
+// GetUserList 获取用户列表
+func GetUserList() *sync.Map {
+	return &userList
 }
 
-// GetQTHMap 获取 QTH 映射
-func GetQTHMap() map[string]string {
-	return qthMap
+// GetPublicGroupMap 获取公共群组映射
+func GetPublicGroupMap() map[int]*models.Group {
+	return publicGroupMap
 }
 
-// GetQTHMapNew 获取新 QTH 映射
-func GetQTHMapNew() map[string]models.QTH {
-	return qthMapNew
+// ==========================================
+// 架构重构：全局群组缓存管理
+// ==========================================
+
+// StartGroupCacheSync 启动群组缓存定时同步后台任务
+func StartGroupCacheSync() {
+	// 启动时立即执行一次，确保服务器刚启动就有数据
+	refreshGroupCache()
+
+	go func() {
+		// 每隔 60 秒同步一次数据库中的群组状态
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			refreshGroupCache()
+		}
+	}()
+	log.Println("[CACHE] 数据库群组定时同步任务已启动 (间隔: 60s)")
 }
 
-// GetDeviceByCallsignSSID 通过呼号-SSID 获取设备
-func GetDeviceByCallsignSSID(callsignSSID string) (*models.Device, bool) {
-	dev, ok := devCallsignSSIDMap[callsignSSID]
-	return dev, ok
-}
-
-// AddUser 添加用户到用户列表
-// TODO: 将 callsign 认证改为 username，以支持多设备共享同一用户账户
-func AddUser(userInfo *UserInfo) {
-	userList.Store(userInfo.CallSign, userInfo)
-}
-
-// GetUser 获取用户信息
-// TODO: 将 callsign 认证改为 username，以支持多设备共享同一用户账户
-func GetUser(callsign string) (*UserInfo, bool) {
-	if u, ok := userList.Load(callsign); ok {
-		return u.(*UserInfo), true
+// refreshGroupCache 执行具体的数据库查询与内存缓存替换逻辑
+func refreshGroupCache() {
+	repo := gormdb.NewGroupRepository()
+	dbGroups, err := repo.ListGroups()
+	if err != nil {
+		log.Printf("[CACHE] 从数据库加载群组失败: %v", err)
+		return
 	}
-	return nil, false
+
+	// 临时构建一个新的 map 存放最新数据，避免在组装数据过程中阻塞 UDP 锁
+	newGroupCache := make(map[int]*models.Group)
+
+	for _, dbGroup := range dbGroups {
+		group := dbGroup.ToModelGroup()
+
+		// 尝试保留现有群组的连接池和设备映射（如果群组已存在）
+		groupCacheMutex.RLock()
+		if existingGroup, ok := globalGroupCache[group.ID]; ok {
+			// 迁移现有的连接池和设备映射
+			group.ConnPool = existingGroup.ConnPool
+			group.DevMap = existingGroup.DevMap
+		} else {
+			// 新群组，初始化连接池和设备映射
+			group.ConnPool = &CurrentConnPool{
+				DevConnMap:  make(map[string]*models.Device),
+				DevConnList: make([]*models.Device, 0),
+			}
+			group.DevMap = make(map[int]*models.Device)
+
+			// 如果是会议模式，启动混音
+			if group.Type == models.GroupTypeMeeting {
+				go startMixPCM(group)
+			}
+		}
+		groupCacheMutex.RUnlock()
+
+		newGroupCache[group.ID] = group
+	}
+
+	// 加写锁，原子化地将新的 map 替换掉旧的 map
+	groupCacheMutex.Lock()
+	globalGroupCache = newGroupCache
+	groupCacheMutex.Unlock()
+
+	// 同时更新 publicGroupMap 以保持向后兼容
+	publicGroupMap = newGroupCache
+
+	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(newGroupCache))
+}
+
+// GetGroupFromCache 从缓存中获取群组（线程安全）
+func GetGroupFromCache(groupID int) (*models.Group, bool) {
+	groupCacheMutex.RLock()
+	defer groupCacheMutex.RUnlock()
+	gp, ok := globalGroupCache[groupID]
+	return gp, ok
+}
+
+// GetAllGroupsFromCache 获取所有群组（线程安全）
+func GetAllGroupsFromCache() map[int]*models.Group {
+	groupCacheMutex.RLock()
+	defer groupCacheMutex.RUnlock()
+
+	// 返回副本以避免外部修改
+	result := make(map[int]*models.Group, len(globalGroupCache))
+	for k, v := range globalGroupCache {
+		result[k] = v
+	}
+	return result
 }

@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
+	"nrllink/internal/udphub"
 )
 
 // DeviceListRequest 设备列表请求
@@ -617,7 +619,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 		}
 	}
 
-	// 更新设备的群组
+	// 更新设备的群组（数据库）
 	if err := repo.UpdateDeviceFields(req.DeviceID, map[string]interface{}{
 		"group_id": req.GroupID,
 	}); err != nil {
@@ -626,6 +628,12 @@ func ChangeDeviceGroup(c *gin.Context) {
 			"message": "修改设备群组失败",
 		})
 		return
+	}
+
+	// 更新内存中的设备群组
+	if err := udphub.ChangeDeviceGroupByID(req.DeviceID, req.GroupID); err != nil {
+		// 内存更新失败只记录日志，不影响响应（数据库已更新成功）
+		log.Printf("[WARN] Failed to update device group in memory: %v", err)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

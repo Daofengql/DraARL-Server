@@ -96,6 +96,11 @@ func (s *Server) setupRoutes() {
 			protected.PUT("/me", handler.UpdateProfile)
 			protected.PUT("/me/password", handler.ChangeOwnPassword)
 
+			// 设备密码管理（所有认证用户可访问）
+			protected.GET("/user/device-password", handler.GetDevicePassword)
+			protected.PUT("/user/device-password", handler.UpdateDevicePassword)
+			protected.POST("/user/device-password/regenerate", handler.RegenerateDevicePassword)
+
 			// 文件上传（所有认证用户可访问，用于头像���传）
 			protected.POST("/upload/file", handler.UploadFile)
 
@@ -143,7 +148,8 @@ func (s *Server) setupRoutes() {
 				approved.POST("/devices", handler.CreateDevice)
 				approved.PUT("/devices/:id", handler.UpdateDevice)
 				approved.DELETE("/devices/:id", handler.DeleteDevice)
-				approved.POST("/device/changegroupnrl", handler.ChangeDeviceGroup)
+				approved.POST("/device/changegroup", handler.ChangeDeviceGroup)
+				approved.PUT("/devices/:id/group", handler.ChangeDeviceGroup) // RESTful 风格
 
 				// 设备 AT 命令和参数
 				approved.POST("/device/at", handler.DeviceAT)

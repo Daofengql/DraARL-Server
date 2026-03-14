@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,20 @@ import (
 	"nrllink/pkg/jwt"
 	"nrllink/pkg/minio"
 )
+
+// generateDevicePassword 生成随机设备准入密码
+// 8位随机字符串，仅包含大小写字母和数字
+func generateDevicePassword() string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 8)
+	// 使用 crypto/rand 生成安全的随机数
+	randBytes := make([]byte, 8)
+	rand.Read(randBytes)
+	for i := range b {
+		b[i] = charset[int(randBytes[i])%len(charset)]
+	}
+	return string(b)
+}
 
 // LoginRequest 登录请求
 type LoginRequest struct {
@@ -256,6 +271,17 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	// 生成设备准入密码
+	devicePassword := generateDevicePassword()
+	hashedDevicePassword, err := bcrypt.GenerateFromPassword([]byte(devicePassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "设备密码加密失败",
+		})
+		return
+	}
+
 	// 创建用户
 	nickname := req.NickName
 	if nickname == "" {
@@ -265,6 +291,7 @@ func Register(c *gin.Context) {
 	user := &gormdb.User{
 		Name:           req.Username,
 		Password:       string(hashedPassword),
+		DevicePassword: string(hashedDevicePassword),
 		NickName:       nickname,
 		CallSign:       req.CallSign,
 		Phone:          req.Phone,
@@ -282,14 +309,25 @@ func Register(c *gin.Context) {
 		return
 	}
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("用户注册成功: %s (%s)", user.Name, user.CallSign),
+		"register",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "注册成功，请等待管理员审核",
 		"data": gin.H{
-			"id":              user.ID,
-			"username":        user.Name,
-			"nickname":        user.NickName,
+			"id":               user.ID,
+			"username":         user.Name,
+			"nickname":         user.NickName,
 			"approval_status":  user.ApprovalStatus,
+			"device_password":  devicePassword, // 仅显示一次
 		},
 	})
 }

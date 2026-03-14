@@ -36,6 +36,7 @@ type User struct {
 	LastLoginIP     string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
 	DMRID           int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
 	MDCID           string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
+	DevicePassword  string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码(bcrypt哈希)
 }
 
 // TableName 指定表名
@@ -95,6 +96,14 @@ type Device struct {
 // TableName 指定表名
 func (Device) TableName() string {
 	return "devices"
+}
+
+// BeforeCreate GORM hook: 新设备创建时，设置上线时间为当前时间
+func (d *Device) BeforeCreate(tx *gorm.DB) error {
+	if d.OnlineTime.IsZero() {
+		d.OnlineTime = time.Now()
+	}
+	return nil
 }
 
 // Group 群组模型

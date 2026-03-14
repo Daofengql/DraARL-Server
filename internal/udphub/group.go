@@ -165,9 +165,10 @@ func startMixPCM(g *models.Group) {
 	newG711 := make([]byte, 160)
 	data := make([]byte, 160)
 
-	globalPacket := protocol.Encode("MEETLY", 201, models.TypeG711Voice, 201, 0, data)
-	speakerPacket := protocol.Encode("MEETLY", 201, models.TypeG711Voice, 201, 0, data)
-	speakerBPacket := protocol.Encode("MEETLY", 201, models.TypeG711Voice, 201, 0, data)
+	// 使用 DraARLv1 协议编码会议混音包
+	globalPacket := protocol.EncodeDraARLv1("MEETLY", "", 201, protocol.DraARLTypeG711Voice, 201, 0, "MEETLY", data)
+	speakerPacket := protocol.EncodeDraARLv1("MEETLY", "", 201, protocol.DraARLTypeG711Voice, 201, 0, "MEETLY", data)
+	speakerBPacket := protocol.EncodeDraARLv1("MEETLY", "", 201, protocol.DraARLTypeG711Voice, 201, 0, "MEETLY", data)
 
 	log.Printf("Starting mixPCM for group: %d - %s", g.ID, g.Name)
 
@@ -217,7 +218,7 @@ func startMixPCM(g *models.Group) {
 
 		// 单人发言直通
 		if numbs == 1 {
-			copy(globalPacket[48:], speakers[0].rawG711)
+			copy(globalPacket[93:], speakers[0].rawG711)
 
 			for _, vv := range pool.DevConnList {
 				if vv.UDPAddr == nil || (vv.Speaking != nil && *vv.Speaking) {
@@ -248,15 +249,15 @@ func startMixPCM(g *models.Group) {
 				}
 				globalG711[i] = linear2Alaw(int16(v))
 			}
-			copy(globalPacket[48:], globalG711)
+			copy(globalPacket[93:], globalG711)
 
 			if numbs == 2 {
 				// 双人对讲互传
 				if len(speakers[0].rawG711) >= 160 {
-					copy(speakerPacket[48:], speakers[0].rawG711[:160])
+					copy(speakerPacket[93:], speakers[0].rawG711[:160])
 				}
 				if len(speakers[1].rawG711) >= 160 {
-					copy(speakerBPacket[48:], speakers[1].rawG711[:160])
+					copy(speakerBPacket[93:], speakers[1].rawG711[:160])
 				}
 
 				for _, vv := range pool.DevConnList {
@@ -293,7 +294,7 @@ func startMixPCM(g *models.Group) {
 							}
 							newG711[i] = linear2Alaw(int16(v))
 						}
-						copy(speakerPacket[48:], newG711)
+						copy(speakerPacket[93:], newG711)
 						if globalConn != nil {
 							globalConn.WriteToUDP(speakerPacket, vv.UDPAddr)
 						}

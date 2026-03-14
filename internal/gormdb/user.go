@@ -253,3 +253,21 @@ func (r *UserRepository) GetPendingUsers(limit, page int) ([]*User, int64, error
 
 	return users, total, nil
 }
+
+// UpdateUserDevicePassword 更新用户设备准入密码
+func (r *UserRepository) UpdateUserDevicePassword(id int, devicePassword string) error {
+	return r.db.Model(&User{}).Where("id = ?", id).Update("device_password", devicePassword).Error
+}
+
+// GetUserDevicePassword 获取用户设备密码哈希
+func (r *UserRepository) GetUserDevicePassword(id int) (string, error) {
+	var user User
+	err := r.db.Select("device_password").First(&user, id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	return user.DevicePassword, nil
+}

@@ -385,14 +385,19 @@ func processLogBuffer() {
 
 // deviceAT 发送 AT 命令到设备
 func deviceAT(at *models.ATCommand) (*models.Device, error) {
-	callsignSSID := protocol.GetCallSignSSID(at.CallSign, at.SSID)
-	dev, ok := devCallsignSSIDMap[callsignSSID]
+	usernameSSID := protocol.GetUsernameSSID(at.CallSign, at.SSID)
+	dev, ok := devUsernameSSIDMap[usernameSSID]
 	if !ok {
-		return nil, errors.New("device not found")
+		// ��后兼容：尝试 callsign 索引
+		callsignSSID := protocol.GetCallSignSSID(at.CallSign, at.SSID)
+		dev, ok = devCallsignSSIDMap[callsignSSID]
+		if !ok {
+			return nil, errors.New("device not found")
+		}
 	}
 
 	atCommand := append([]byte{at.Type}, []byte(at.ATcommand+"="+at.Data+"\r\n")...)
-	packet := protocol.Encode(at.CallSign, at.SSID, models.TypeATPassThrough, models.DevModelServer, dev.DMRID, atCommand)
+	packet := protocol.EncodeDraARLv1(dev.Username, "", at.SSID, protocol.DraARLTypeATPassThrough, models.DevModelServer, dev.DMRID, dev.CallSign, atCommand)
 
 	if globalConn != nil && dev.UDPAddr != nil {
 		globalConn.WriteToUDP(packet, dev.UDPAddr)
@@ -409,7 +414,8 @@ func queryDeviceParm(callsignSSID string) (*models.Device, error) {
 	}
 
 	if globalConn != nil && dev.UDPAddr != nil {
-		globalConn.WriteToUDP(protocol.Encode(dev.CallSign, dev.SSID, models.TypeConfig, 0, 0, []byte{0x01}), dev.UDPAddr)
+		packet := protocol.EncodeDraARLv1(dev.Username, "", dev.SSID, protocol.DraARLTypeConfig, 0, 0, dev.CallSign, []byte{0x01})
+		globalConn.WriteToUDP(packet, dev.UDPAddr)
 		time.Sleep(300 * time.Millisecond)
 	}
 
@@ -527,4 +533,41 @@ func GetDeviceCount() int {
 // GetAllDevices 获取所有设备
 func GetAllDevices() map[string]*models.Device {
 	return devCallsignSSIDMap
+}
+
+// ChangeDeviceGroupByID 通过设备ID更改设备群组（供 API 调用）
+func ChangeDeviceGroupByID(deviceID int, newGroupID int) error {
+	// 在内存中查找设备
+	var dev *models.Device
+
+	// 先从 username 索引查找
+	for _, d := range devUsernameSSIDMap {
+		if d.ID == deviceID {
+			dev = d
+			break
+		}
+	}
+
+	// 如果没找到，从 callsign 索引查找
+	if dev == nil {
+		for _, d := range devCallsignSSIDMap {
+			if d.ID == deviceID {
+				dev = d
+				break
+			}
+		}
+	}
+
+	if dev == nil {
+		return errors.New("device not found in memory")
+	}
+
+	// 使用内部的 changeDeviceGroup 函数
+	_, err := changeDeviceGroup(dev, newGroupID)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[GROUP] Device %s (ID: %d) changed to group %d", dev.CallSign, deviceID, newGroupID)
+	return nil
 }

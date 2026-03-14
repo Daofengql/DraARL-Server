@@ -492,9 +492,12 @@ func UpdateGroup(c *gin.Context) {
 		return
 	}
 
-	// 使群组详情缓存失效（列表缓存依赖TTL自然过期）
+	// 使群组详情缓存和列表缓存统统主动失效
 	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		// 失效群组详情
 		_ = groupCache.InvalidateGroup(c.Request.Context(), id)
+		// 主动使群组的公开列表和所有分页列表失效
+		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -540,9 +543,11 @@ func DeleteGroup(c *gin.Context) {
 		return
 	}
 
-	// 使群组详情缓存失效
+	// 使群组详情缓存和列表缓存统统失效
 	if groupCache := cache.GetGroupCache(); groupCache != nil {
 		_ = groupCache.InvalidateGroup(c.Request.Context(), id)
+		// 彻底清空相关的群组列表
+		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1219,6 +1224,8 @@ func KickDevice(c *gin.Context) {
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 		// 使默认群组设备列表缓存失效（设备移入默认群组）
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)
+		// 由于设备的 GroupID 发生了改变，必须使全局设备列表也主动失效
+		_ = deviceCache.InvalidateDeviceList(ctx)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1326,11 +1333,13 @@ func LeaveGroup(c *gin.Context) {
 		for _, deviceID := range movedDeviceIDs {
 			_ = deviceCache.InvalidateDevice(ctx, deviceID, "", 0)
 		}
-		// 使原群组和默认群组的设备列表缓存失效
+		// 使原群组和默认群组的设���列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, id)
 		if len(movedDeviceIDs) > 0 {
 			_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)
 		}
+		// 由于设备的 GroupID 发生了改变，必须使全局设备列表也主动失效
+		_ = deviceCache.InvalidateDeviceList(ctx)
 	}
 
 	// 使群组成员缓存和用户群组列表缓存失效

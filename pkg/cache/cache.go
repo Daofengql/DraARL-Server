@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,8 @@ type Cache interface {
 	Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error
 	Delete(ctx context.Context, keys ...string) error
 	Clear(ctx context.Context) error
+	// DeletePrefix 按前缀删除缓存，用于列表等动态Key的批量失效
+	DeletePrefix(ctx context.Context, prefix string) error
 }
 
 // ThreeLevelCache 三级缓存
@@ -111,6 +114,39 @@ func (c *ThreeLevelCache) Clear(ctx context.Context) error {
 	c.local.Clear()
 	// 注意：这会清除整个Redis DB，慎用
 	return c.redis.FlushDB(ctx).Err()
+}
+
+// DeletePrefix 按前缀删除缓存 (同时清理L1和L2)
+// 使用 Redis SCAN 命令迭代匹配前缀的 Key，避免 KEYS 命令阻塞 Redis
+func (c *ThreeLevelCache) DeletePrefix(ctx context.Context, prefix string) error {
+	// L1: 清理本地缓存
+	c.local.DeletePrefix(prefix)
+
+	// L2: 清理 Redis 缓存
+	// 使用 SCAN 命令迭代，每次获取一批 keys 进行删除
+	var cursor uint64
+	for {
+		var keys []string
+		var err error
+		// 每次扫描 1000 个元素
+		keys, cursor, err = c.redis.Scan(ctx, cursor, prefix+"*", 1000).Result()
+		if err != nil {
+			return err
+		}
+
+		// 如果匹配到 key，则批量删除
+		if len(keys) > 0 {
+			if err := c.redis.Del(ctx, keys...).Err(); err != nil {
+				return err
+			}
+		}
+
+		// 游标返回 0 说明迭代结束
+		if cursor == 0 {
+			break
+		}
+	}
+	return nil
 }
 
 // GetRedis 获取Redis客户端 (用于特殊操作)
@@ -210,6 +246,19 @@ func (lc *localCache) Clear() {
 	defer lc.mu.Unlock()
 	lc.items = make(map[string]*cacheItem)
 	lc.lru.items = make([]string, 0, lc.maxSize)
+}
+
+// DeletePrefix 本地缓存按前缀删除
+// 遍历 Map，发现前缀匹配的直接 delete
+func (lc *localCache) DeletePrefix(prefix string) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+
+	for key := range lc.items {
+		if strings.HasPrefix(key, prefix) {
+			delete(lc.items, key)
+		}
+	}
 }
 
 func (lc *localCache) evict() {

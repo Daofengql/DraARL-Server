@@ -473,8 +473,13 @@ func UpdateDevice(c *gin.Context) {
 	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
 	ctx := c.Request.Context()
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		// 1. 失效单个设备详情
 		_ = deviceCache.InvalidateDevice(ctx, id, device.CallSign, uint8(device.SSID))
-		// 如果群组改变，使新旧群组设备列表缓存都失效
+
+		// 2. 主动清理全局设备分页列表（设备属性修改后列表应更新）
+		_ = deviceCache.InvalidateDeviceList(ctx)
+
+		// 3. 如果群组改变，使新旧群组设备列表缓存都失效
 		if req.GroupID > 0 && oldGroupID != req.GroupID {
 			if oldGroupID > 0 {
 				_ = deviceCache.InvalidateDevicesByGroup(ctx, oldGroupID)

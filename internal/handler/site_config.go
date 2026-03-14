@@ -10,6 +10,7 @@ import (
 	"nrllink/internal/aprs"
 	"nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
+	"nrllink/pkg/cache"
 )
 
 // SiteConfigHandler 站点配置处理器
@@ -38,7 +39,17 @@ func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 
 	_ = user
 
-	configs, err := h.repo.GetAll()
+	ctx := c.Request.Context()
+	configCache := cache.GetConfigCache()
+
+	var configs []gormdb.SiteConfig
+	var err error
+
+	if configCache != nil {
+		configs, err = configCache.GetAllConfigs(ctx)
+	} else {
+		configs, err = h.repo.GetAll()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -67,7 +78,18 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 
 	// 任何已登录用户都可以读取��置
 	category := c.Param("category")
-	configs, err := h.repo.GetByCategory(category)
+
+	ctx := c.Request.Context()
+	configCache := cache.GetConfigCache()
+
+	var configs []gormdb.SiteConfig
+	var err error
+
+	if configCache != nil {
+		configs, err = configCache.GetConfigsByCategory(ctx, category)
+	} else {
+		configs, err = h.repo.GetByCategory(category)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -85,8 +107,19 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 
 // GetPublicConfigs 获取公开配置（不需要登录）
 func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
-	// 获取公开配置：ICP、SystemInfo
-	icpConfig, err := h.repo.GetICPConfig()
+	ctx := c.Request.Context()
+	configCache := cache.GetConfigCache()
+
+	var icpConfig *gormdb.ICPConfig
+	var systemConfig *gormdb.SystemInfoConfig
+	var err error
+
+	// 获取公开配置：ICP、SystemInfo（使用缓存）
+	if configCache != nil {
+		icpConfig, err = configCache.GetICPConfig(ctx)
+	} else {
+		icpConfig, err = h.repo.GetICPConfig()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -95,7 +128,11 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 		return
 	}
 
-	systemConfig, err := h.repo.GetSystemInfoConfig()
+	if configCache != nil {
+		systemConfig, err = configCache.GetSystemInfoConfig(ctx)
+	} else {
+		systemConfig, err = h.repo.GetSystemInfoConfig()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -150,6 +187,14 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
+	// 使配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateConfig(c.Request.Context(), req.Key)
+		if req.Category != "" {
+			_ = configCache.InvalidateCategory(c.Request.Context(), req.Category)
+		}
+	}
+
 	// 记录审计日志
 	oplog.AddLog(
 		fmt.Sprintf("更新站点配置: %s = %s (分类: %s)", req.Key, req.Value, req.Category),
@@ -200,6 +245,11 @@ func (h *SiteConfigHandler) UpdateICPConfig(c *gin.Context) {
 		return
 	}
 
+	// 使ICP配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateICPConfig(c.Request.Context())
+	}
+
 	// 记录审计日志
 	oplog.AddLog(
 		fmt.Sprintf("更新ICP配置: %s", req.ICP),
@@ -245,6 +295,11 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 			Message: "更新系统信息配置失败",
 		})
 		return
+	}
+
+	// 使系统信息配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
 	}
 
 	// 记录审计日志
@@ -310,6 +365,11 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 		return
 	}
 
+	// 使APRS配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateAPRSConfig(c.Request.Context())
+	}
+
 	// 重启 APRS 服务
 	go func() {
 		defer func() {
@@ -367,6 +427,11 @@ func (h *SiteConfigHandler) UpdateOpenAIConfig(c *gin.Context) {
 		return
 	}
 
+	// 使OpenAI配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateOpenAIConfig(c.Request.Context())
+	}
+
 	// 记录审计日志
 	oplog.AddLog(
 		fmt.Sprintf("更新OpenAI配置: BaseURL=%s, Engine=%s", req.BaseURL, req.Engine),
@@ -396,7 +461,17 @@ func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 
 	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
-	config, err := h.repo.GetAPRSConfig()
+	ctx := c.Request.Context()
+	configCache := cache.GetConfigCache()
+
+	var config *gormdb.APRSConfig
+	var err error
+
+	if configCache != nil {
+		config, err = configCache.GetAPRSConfig(ctx)
+	} else {
+		config, err = h.repo.GetAPRSConfig()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -425,7 +500,17 @@ func (h *SiteConfigHandler) GetOpenAIConfig(c *gin.Context) {
 
 	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
-	config, err := h.repo.GetOpenAIConfig()
+	ctx := c.Request.Context()
+	configCache := cache.GetConfigCache()
+
+	var config *gormdb.OpenAIConfig
+	var err error
+
+	if configCache != nil {
+		config, err = configCache.GetOpenAIConfig(ctx)
+	} else {
+		config, err = h.repo.GetOpenAIConfig()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -454,7 +539,17 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 
 	_ = user // 路由已通过 RequireAdmin 中���件验证权限
 
-	config, err := h.repo.GetSystemInfoConfig()
+	ctx := c.Request.Context()
+	configCache := cache.GetConfigCache()
+
+	var config *gormdb.SystemInfoConfig
+	var err error
+
+	if configCache != nil {
+		config, err = configCache.GetSystemInfoConfig(ctx)
+	} else {
+		config, err = h.repo.GetSystemInfoConfig()
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,

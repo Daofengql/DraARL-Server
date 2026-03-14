@@ -205,6 +205,12 @@ func (s *Server) setupRoutes() {
 			admin.GET("/operatorlog/list", handler.GetOperatorLogs)
 			admin.GET("/operatorlog/stats", handler.GetOperatorLogStats)
 
+			// 缓存监控（需要管理员权限）
+			cacheHandler := handler.NewCacheMetricsHandler()
+			admin.GET("/cache/metrics", cacheHandler.GetCacheMetrics)
+			admin.POST("/cache/metrics/reset", cacheHandler.ResetCacheMetrics)
+			admin.POST("/cache/clear", cacheHandler.ClearAllCache)
+
 			// 站点配置管理（读取需要登录，修改需要管理员权限）
 			configHandler := handler.NewSiteConfigHandler()
 			// 读取路由（已登录用户可访问）

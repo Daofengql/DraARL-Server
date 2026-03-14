@@ -12,6 +12,7 @@ import (
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/internal/config"
 	oplog "nrllink/internal/log"
+	"nrllink/pkg/cache"
 	"nrllink/pkg/minio"
 )
 
@@ -168,8 +169,18 @@ func UploadOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
-	user, err := userRepo.GetUserByName(username.(string))
+	// 获取用户信息（使用缓存）
+	ctx := c.Request.Context()
+	userCache := cache.GetUserCache()
+	var user *gormdb.User
+	var err error
+
+	if userCache != nil {
+		user, err = userCache.GetUserByName(ctx, username.(string))
+	} else {
+		userRepo := gormdb.NewUserRepository()
+		user, err = userRepo.GetUserByName(username.(string))
+	}
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -263,6 +274,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	// 修复逻辑3：仅更新用户表的呼号字段，绝对不重置 UserApproval 状态
 	if callsign != "" && callsign != user.CallSign {
+		userRepo := gormdb.NewUserRepository()
 		if err := userRepo.UpdateUserCallSign(user.ID, callsign); err != nil {
 			log.Printf("更新用户呼号失败: %v", err)
 		}
@@ -307,6 +319,11 @@ func UploadOperatorCertificate(c *gin.Context) {
 		}
 	}
 
+	// 使操作证缓存失效
+	if certCache := cache.GetCertCache(); certCache != nil {
+		_ = certCache.InvalidateUserCert(c.Request.Context(), user.ID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "操作证信息已提交，请等待管理员审核",
@@ -331,9 +348,18 @@ func GetOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
-	user, err := userRepo.GetUserByName(username.(string))
+	// 获取用户信息（使用缓存）
+	ctx := c.Request.Context()
+	userCache := cache.GetUserCache()
+	var user *gormdb.User
+	var err error
+
+	if userCache != nil {
+		user, err = userCache.GetUserByName(ctx, username.(string))
+	} else {
+		userRepo := gormdb.NewUserRepository()
+		user, err = userRepo.GetUserByName(username.(string))
+	}
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
@@ -343,16 +369,34 @@ func GetOperatorCertificate(c *gin.Context) {
 	}
 
 	// 返回两个操作证：active_cert 和 pending_cert
-	certRepo := gormdb.NewOperatorCertRepository()
+	certCache := cache.GetCertCache()
+
+	var activeCert, pendingCert *gormdb.OperatorCert
 
 	// 获取当前有效的操作证（已通过）
-	activeCert, _ := certRepo.GetActiveByUserID(user.ID)
+	if certCache != nil {
+		activeCert, _ = certCache.GetActiveCertByUserID(ctx, user.ID)
+	} else {
+		certRepo := gormdb.NewOperatorCertRepository()
+		activeCert, _ = certRepo.GetActiveByUserID(user.ID)
+	}
 
 	// 获取待审核或被拒绝的最新操作证
-	pendingCert, _ := certRepo.GetPendingByUserID(user.ID)
+	if certCache != nil {
+		pendingCert, _ = certCache.GetPendingCertByUserID(ctx, user.ID)
+	} else {
+		certRepo := gormdb.NewOperatorCertRepository()
+		pendingCert, _ = certRepo.GetPendingByUserID(user.ID)
+	}
 	if pendingCert == nil {
 		// 获取最新的操作证（可能是被拒绝的）
-		latestCert, _ := certRepo.GetLatestByUserID(user.ID)
+		var latestCert *gormdb.OperatorCert
+		if certCache != nil {
+			latestCert, _ = certCache.GetLatestCertByUserID(ctx, user.ID)
+		} else {
+			certRepo := gormdb.NewOperatorCertRepository()
+			latestCert, _ = certRepo.GetLatestByUserID(user.ID)
+		}
 		// 只有当最新操作证不是已通过状态时才返回（避免重复返回 activeCert）
 		if latestCert != nil && latestCert.Status != 1 {
 			pendingCert = latestCert
@@ -874,8 +918,18 @@ func ApproveOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
-	currentUser, err := userRepo.GetUserByName(username.(string))
+	// 获取当前用户（使用缓存）
+	ctx := c.Request.Context()
+	userCache := cache.GetUserCache()
+	var currentUser *gormdb.User
+	var err error
+
+	if userCache != nil {
+		currentUser, err = userCache.GetUserByName(ctx, username.(string))
+	} else {
+		userRepo := gormdb.NewUserRepository()
+		currentUser, err = userRepo.GetUserByName(username.(string))
+	}
 	if err != nil || currentUser == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
@@ -922,10 +976,17 @@ func ApproveOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	// 获取操作证
-	certRepo := gormdb.NewOperatorCertRepository()
-	_, err = certRepo.GetByID(certID)
-	if err != nil {
+	// 获取操作证（使用缓存）
+	certCache := cache.GetCertCache()
+	var cert *gormdb.OperatorCert
+
+	if certCache != nil {
+		cert, err = certCache.GetCertByID(ctx, certID)
+	} else {
+		certRepo := gormdb.NewOperatorCertRepository()
+		cert, err = certRepo.GetByID(certID)
+	}
+	if err != nil || cert == nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "操作证不存在",
@@ -934,6 +995,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	}
 
 	// 更新操作证审批状态
+	certRepo := gormdb.NewOperatorCertRepository()
 	if req.Status == 1 {
 		err = certRepo.ApproveCert(certID, currentUser.ID, req.Note)
 	} else {
@@ -947,6 +1009,12 @@ func ApproveOperatorCertificate(c *gin.Context) {
 			"message": "更新审批状态失败",
 		})
 		return
+	}
+
+	// 使操作证缓存失效
+	if certCache := cache.GetCertCache(); certCache != nil {
+		_ = certCache.InvalidateCert(ctx, certID, cert.UserID)
+		_ = certCache.InvalidatePendingList(ctx)
 	}
 
 	statusText := "通过"

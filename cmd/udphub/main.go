@@ -17,6 +17,7 @@ import (
 	oplog "nrllink/internal/log"
 	"nrllink/internal/server"
 	"nrllink/internal/udphub"
+	"nrllink/pkg/cache"
 	"nrllink/pkg/geoip"
 	"nrllink/pkg/redis"
 )
@@ -130,6 +131,12 @@ func main() {
 	}
 	defer redis.Close()
 	stdlog.Println("Redis 初始化成功")
+
+	// 初始化缓存管理器（依赖 Redis）
+	if err := cache.InitManager(); err != nil {
+		stdlog.Fatalf("初始化缓存管理器失败: %v", err)
+	}
+	stdlog.Println("缓存管理器初始化成功")
 
 	// 初始化 IP 地理位置数据库
 	if cfg.System.IPFile != "" {

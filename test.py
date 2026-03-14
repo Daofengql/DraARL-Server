@@ -44,59 +44,51 @@ DRAARL_DEV_MODEL_INTERCONNECT = 106 # 互联设备
 # 核心协议与网络通信类
 # ==========================================
 class DraARLv1Client:
-    def __init__(self, server_ip, server_port, username, device_password, ssid, dmrid_int, audio_type, log_callback):
-        """
-        初始化对讲机客户端的核心参数和音频流配置
+    """
+    DraARLv1 协议客户端 - 支持独立配置 SSID
 
-        DraARLv1 协议头部结构 (93 字节):
-        | 偏移 | 长度 | 字段名        |
-        |------|------|---------------|
-        | 0    | 4B   | Version       | "DraA"
-        | 4    | 2B   | Length        | 报文总长度
-        | 6    | 32B  | Username      | 用户名
-        | 38   | 10B  | DevicePassword| 设备准入密码
-        | 48   | 1B   | Type          | 数据包类型
-        | 49   | 1B   | Status        | 状态字节
-        | 50   | 2B   | SeqNum        | 序列号
-        | 52   | 1B   | DevModel      | 设备型号
-        | 53   | 1B   | SSID          | 设备子号
-        | 54   | 3B   | DMRID         | DMR ID
-        | 57   | 32B  | CallSign      | 呼号（服务器填充，设备发送时留空）
-        | 89   | 4B   | Reserved      | 保留
-        | 93   | 变长  | DATA          | 负载数据
-        """
+    协议头部结构 (93 字节):
+    | 偏移 | 长度 | 字段名        |
+    |------|------|---------------|
+    | 0    | 4B   | Version       | "DraA"
+    | 4    | 2B   | Length        | 报文总长度
+    | 6    | 32B  | Username      | 用户名
+    | 38   | 10B  | DevicePassword| 设备准入密码
+    | 48   | 1B   | Type          | 数据包类型
+    | 49   | 1B   | Status        | 状态字节
+    | 50   | 2B   | SeqNum        | 序列号
+    | 52   | 1B   | DevModel      | 设备型号
+    | 53   | 1B   | SSID          | 设备子号
+    | 54   | 3B   | DMRID         | DMR ID
+    | 57   | 32B  | CallSign      | 呼号（服务器填充，设备发送时留空）
+    | 89   | 4B   | Reserved      | 保留
+    | 93   | 变长  | DATA          | 负载数据
+    """
+    def __init__(self, server_ip, server_port, username, device_password, ssid, dmrid_int, audio_type, log_callback, color_tag=None):
         self.server_addr = (server_ip, server_port)
-        # 使用 UDP 协议进行通信
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # 绑定前端传递进来的日志刷新函数，用于线程安全的 UI 更新
         self.log = log_callback
+        self.color_tag = color_tag  # 用于区分不同设备的日志颜色
 
         # --- 协议头部基础字段装配 ---
         self.version = DRAARL_VERSION
-
-        # Username: 32B, UTF-8 编码，不足部分用 \0 填充
         self.username = username.encode('utf-8')[:32].ljust(32, b'\x00')
-
-        # DevicePassword: 10B, ASCII 字母数字，不足部分用 \0 填充
         self.device_password = device_password.encode('ascii')[:10].ljust(10, b'\x00')
 
         try:
-            # 将十进制的 DMRID 转换为 3 字节的大端序字节流
             self.dmrid = int(dmrid_int).to_bytes(3, 'big')
         except OverflowError:
-            self.log("[错误] DMRID 数值溢出 (最大16777215)，已重置为 0")
+            self._log("[错误] DMRID 数值溢出，已重置为 0")
             self.dmrid = b'\x00\x00\x00'
 
-        # CallSign: 32B - 设备发送时留空，由服务器填充
         self.callsign = b'\x00' * 32
-
-        self.ssid = int(ssid) & 0xFF  # SSID 为 1 字节 (0-255)
-        self.dev_model = DRAARL_DEV_MODEL_WINDOWS  # Windows 客户端
+        self.ssid = int(ssid) & 0xFF
+        self.dev_model = DRAARL_DEV_MODEL_WINDOWS
         self.pkt_count = 0
 
         # --- 运行状态与 PTT 控制 ---
         self.running = False
-        self.is_transmitting = False  # PTT 状态锁：为 True 时才将采集的音频发送到网络
+        self.is_transmitting = False
 
         # --- 音频引擎配置 ---
         self.audio_type = int(audio_type)
@@ -104,85 +96,66 @@ class DraARLv1Client:
         self.audio_format = pyaudio.paInt16
         self.channels = 1
 
-        # 根据选定的协议 Type 初始化对应的采样率和编解码器
         if self.audio_type == DRAARL_TYPE_OPUS_16K:
             if not OPUS_AVAILABLE:
                 raise RuntimeError("未检测到 opuslib 库，无法使用 Opus 编码。")
             self.rate = 16000
-            self.chunk_size = 320  # 16kHz 下 20ms 帧长对应 320 个采样点
+            self.chunk_size = 320
             self.opus_encoder = opuslib.Encoder(self.rate, self.channels, opuslib.APPLICATION_VOIP)
             self.opus_decoder = opuslib.Decoder(self.rate, self.channels)
-            self.log("[系统初始化] 音频引擎加载完毕: Opus 16kHz (Type 5)")
+            self._log(f"[SSID-{self.ssid}] 音频引擎: Opus 16kHz (Type 5)")
         elif self.audio_type == DRAARL_TYPE_G711_VOICE:
             self.rate = 8000
-            self.chunk_size = 160  # 8kHz 下 20ms 帧长对应 160 个采样点
-            self.log("[系统初始化] 音频引擎加载完毕: G.711 A-law 8kHz (Type 1)")
+            self.chunk_size = 160
+            self._log(f"[SSID-{self.ssid}] 音频引擎: G.711 A-law 8kHz (Type 1)")
+
+    def _log(self, message):
+        """带颜色标签的日志输出"""
+        if self.color_tag:
+            self.log(f"[{self.color_tag}] {message}")
+        else:
+            self.log(message)
 
     def _pack_header(self, payload_length, pkt_type, status=0):
-        """
-        按照 DraARLv1 规范组装固定 93 字节长度的报文头部 (大端序)
-
-        头部结构:
-        - Version:      4B   offset 0
-        - Length:       2B   offset 4
-        - Username:     32B  offset 6
-        - DevicePassword: 10B offset 38
-        - Type:         1B   offset 48
-        - Status:       1B   offset 49
-        - SeqNum:       2B   offset 50
-        - DevModel:     1B   offset 52
-        - SSID:         1B   offset 53
-        - DMRID:        3B   offset 54
-        - CallSign:     32B  offset 57  (设备发送时留空)
-        - Reserved:     4B   offset 89
-        """
         total_length = DRAARL_HEADER_SIZE + payload_length
-
-        # 报文计数器自增，超过 65535 自动归零
         self.pkt_count = (self.pkt_count + 1) & 0xFFFF
-
-        reserved = b'\x00' * 4  # 保留字段填 0
+        reserved = b'\x00' * 4
 
         header = struct.pack(
             '>4sH32s10sBBHBB3s32s4s',
-            self.version,           # 4B  - "DraA"
-            total_length,           # 2B  - 报文总长度
-            self.username,          # 32B - 用户名
-            self.device_password,   # 10B - 设备准入密码
-            pkt_type,               # 1B  - 数据包类型
-            status,                 # 1B  - 状态字节
-            self.pkt_count,         # 2B  - 序列号
-            self.dev_model,         # 1B  - 设备型号
-            self.ssid,              # 1B  - SSID
-            self.dmrid,             # 3B  - DMRID
-            self.callsign,          # 32B - 呼号（设备留空）
-            reserved                # 4B  - 保留
+            self.version,
+            total_length,
+            self.username,
+            self.device_password,
+            pkt_type,
+            status,
+            self.pkt_count,
+            self.dev_model,
+            self.ssid,
+            self.dmrid,
+            self.callsign,
+            reserved
         )
-
         return header
 
     def send_packet(self, pkt_type, payload=b'', status=0):
-        """底层网络发送逻辑，负责拼接头部和数据并投递"""
         try:
             header = self._pack_header(len(payload), pkt_type, status)
             self.sock.sendto(header + payload, self.server_addr)
         except Exception as e:
-            self.log(f"[网络发送错误] {e}")
+            self._log(f"[网络发送错误] {e}")
 
     def send_text_message(self, text):
-        """封装并发送 Type 4 的文本消息"""
         payload = text.encode('utf-8')
         self.send_packet(pkt_type=DRAARL_TYPE_TEXT_MESSAGE, payload=payload)
-        self.log(f"[文字发出] {text}")
+        self._log(f"[文字发出] {text}")
 
     def heartbeat_loop(self):
-        """心跳守护线程：维持 UDP NAT 穿透和设备在线状态 (2秒一次)"""
         while self.running:
             self.send_packet(pkt_type=DRAARL_TYPE_HEARTBEAT)
             time.sleep(2)
 
     def receive_loop(self):
-        """接收守护线程：监听网络端口，解析报文并驱动扬声器播放"""
         stream_out = self.pyaudio_inst.open(
             format=self.audio_format, channels=self.channels,
             rate=self.rate, output=True
@@ -190,110 +163,91 @@ class DraARLv1Client:
 
         while self.running:
             try:
-                # 阻塞接收网络数据
                 data, addr = self.sock.recvfrom(4096)
                 if len(data) < DRAARL_HEADER_SIZE:
-                    continue  # 丢弃长度不合法的畸形包
+                    continue
 
-                # 提取协议类型和负载数据
-                # Type 在 offset 48
                 pkt_type = data[48]
-                # DATA 从 offset 93 开始
                 payload = data[DRAARL_HEADER_SIZE:]
 
-                # 提取服务器返回的 CallSign (offset 57-88)
+                # 提取发送方 SSID (offset 53)
+                sender_ssid = data[53]
+
                 if len(data) >= 89:
                     callsign_bytes = data[57:89]
                     callsign = callsign_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
                     if callsign and not hasattr(self, '_logged_callsign'):
-                        self.log(f"[认证成功] 服务器返回呼号: {callsign}")
+                        self._log(f"[认证成功] 服务器返回呼号: {callsign}")
                         self._logged_callsign = True
 
-                # --- 语音报文处理分支 ---
+                # --- 语音报文处理 ---
                 if pkt_type == self.audio_type and len(payload) > 0:
-
-                    # 【逻辑关键点：半双工防回音机制】
-                    # 如果你和别人联机对讲，请把下面两行代码取消注释，避免听到自己的回音。
-                    # 目前处于注释状态，是为了方便你连接自己的服务器进行单机的"录音回环测试"。
-                    # if self.is_transmitting:
-                    #     continue
+                    # 半双工防回音：自己说话时不播放
+                    if self.is_transmitting:
+                        continue
 
                     try:
-                        # 根据音频类型进行解码，还原为 PCM 原始音频数据
                         if pkt_type == DRAARL_TYPE_OPUS_16K:
                             pcm_data = self.opus_decoder.decode(payload, self.chunk_size)
                         elif pkt_type == DRAARL_TYPE_G711_VOICE:
                             pcm_data = audioop.alaw2lin(payload, 2)
 
-                        # 写入扬声器缓冲区进行播放
                         stream_out.write(pcm_data)
                     except Exception as e:
-                        self.log(f"[音频解码失败] {e} (可能原因：网络丢包导致帧损坏)")
+                        self._log(f"[音频解码失败] {e}")
 
-                # --- 文本报文处理分支 ---
+                # --- 文本报文处理 ---
                 elif pkt_type == DRAARL_TYPE_TEXT_MESSAGE:
                     msg_text = payload.decode('utf-8', errors='replace')
-                    self.log(f"[收到文字] {addr[0]}: {msg_text}")
+                    self._log(f"[收到文字] SSID-{sender_ssid}: {msg_text}")
 
             except socket.error:
-                pass  # 忽略 Socket 在非阻塞或关闭时的合法异常
+                pass
             except Exception as e:
-                self.log(f"[接收线程未捕获异常] {e}")
+                self._log(f"[接收异常] {e}")
 
-        # 清理音频输出流资源
         stream_out.stop_stream()
         stream_out.close()
 
     def transmit_loop(self):
-        """发送守护线程：持续采集麦克风，并根据 PTT 状态决定是否编码发送"""
         try:
             stream_in = self.pyaudio_inst.open(
                 format=self.audio_format, channels=self.channels,
                 rate=self.rate, input=True, frames_per_buffer=self.chunk_size
             )
-            self.log(f"[麦克风状态] 已就绪 (当前静音)。按住 PTT 按钮或空格键开始说话...")
+            self._log(f"[麦克风] 已就绪")
         except Exception as e:
-            self.log(f"[严重错误] 麦克风初始化失败: {e}")
-            self.log("请检查��否接入麦克风，或在系统设置中允许应用访问麦克风。")
+            self._log(f"[严重错误] 麦克风初始化失败: {e}")
             return
 
         while self.running:
             try:
-                # 必须持续读取麦克风数据以清空底层 Buffer，防止缓冲区溢出崩溃
                 pcm_data = stream_in.read(self.chunk_size, exception_on_overflow=False)
 
-                # 仅当按下 PTT 键 (is_transmitting 为 True) 时，才执行编码和网络发送
                 if self.is_transmitting:
                     if self.audio_type == DRAARL_TYPE_OPUS_16K:
                         encoded_data = self.opus_encoder.encode(pcm_data, self.chunk_size)
                     elif self.audio_type == DRAARL_TYPE_G711_VOICE:
                         encoded_data = audioop.lin2alaw(pcm_data, 2)
 
-                    # 组装语音报文投递到网络
                     self.send_packet(pkt_type=self.audio_type, payload=encoded_data)
 
             except Exception as e:
-                # 不要静默吞��异常，打印出来方便定位问题
-                self.log(f"[音频采集异常] {e}")
-                time.sleep(0.1)  # 防止异常死循环刷屏
+                self._log(f"[音频采集异常] {e}")
+                time.sleep(0.1)
 
-        # 清理音频输入流资源
         stream_in.stop_stream()
         stream_in.close()
 
     def start(self):
-        """启动所有相关线程并发送上线指令"""
         self.running = True
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
         threading.Thread(target=self.receive_loop, daemon=True).start()
         threading.Thread(target=self.transmit_loop, daemon=True).start()
-
-        # 建立连接后稍微延迟，发送上线心跳
         time.sleep(0.5)
         self.send_packet(pkt_type=DRAARL_TYPE_HEARTBEAT)
 
     def stop(self):
-        """安全停止所有线程并释放硬件资源"""
         self.running = False
         time.sleep(0.3)
         self.sock.close()
@@ -301,121 +255,102 @@ class DraARLv1Client:
 
 
 # ==========================================
-# Tkinter 图形界面与交互逻辑类
+# 单设备控制面板
 # ==========================================
-class DraARLv1App:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("DraARLv1 模拟对讲终端")
-        self.root.geometry("500x750")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)  # 绑定关闭窗口事件
+class DevicePanel(ttk.LabelFrame):
+    """单个设备的控制面板"""
 
+    def __init__(self, parent, ssid, app, **kwargs):
+        super().__init__(parent, text=f"设备 SSID-{ssid}", **kwargs)
+        self.ssid = ssid
+        self.app = app
         self.client = None
         self.is_connected = False
-
-        # 键盘空格键防连发状态锁 (防止操作系统一直发送 KeyPress 事件)
         self.space_pressed = False
 
         self._build_ui()
-        self.log_to_gui("就绪。请配置参数并点击[连接]。\n连接后，按住底部大按钮或键盘【空格键】进行对讲。")
 
     def _build_ui(self):
-        """构建界面的各项控件分布"""
-        # --- 1. 参数设置面板 ---
-        param_frame = ttk.LabelFrame(self.root, text="连接参数", padding=(10, 5))
-        param_frame.pack(fill=tk.X, padx=10, pady=5)
+        # 参数设置
+        param_frame = ttk.Frame(self)
+        param_frame.pack(fill=tk.X, padx=5, pady=2)
 
-        # 设定默认输入参数 (默认 IP 指向本地，方便你直接进行回环测试)
-        self.vars = {
-            '服务器IP': tk.StringVar(value="127.0.0.1"),
-            '端口': tk.StringVar(value="60050"),
-            '用户名': tk.StringVar(value="test"),        # DraARLv1 使用用户名
-            '设备密码': tk.StringVar(value="Abc123"),    # DraARLv1 设备准入密码 (6-10位)
-            'SSID': tk.StringVar(value="1"),
-            'DMRID': tk.StringVar(value="123456"),
-        }
+        ttk.Label(param_frame, text="用户名:").grid(row=0, column=0, sticky=tk.W)
+        self.username_var = tk.StringVar(value=f"test")
+        ttk.Entry(param_frame, textvariable=self.username_var, width=12).grid(row=0, column=1, padx=2)
 
-        row, col = 0, 0
-        for label_text, string_var in self.vars.items():
-            ttk.Label(param_frame, text=label_text+":").grid(row=row, column=col, sticky=tk.W, pady=2, padx=5)
-            entry = ttk.Entry(param_frame, textvariable=string_var, width=15)
-            entry.grid(row=row, column=col+1, pady=2, padx=5)
-            col += 2
-            if col > 2:
-                col, row = 0, row + 1
+        ttk.Label(param_frame, text="密码:").grid(row=0, column=2, sticky=tk.W, padx=(5,0))
+        self.password_var = tk.StringVar(value="Abc123")
+        ttk.Entry(param_frame, textvariable=self.password_var, width=10).grid(row=0, column=3, padx=2)
 
-        # 音频编码格式单选框
-        audio_frame = ttk.Frame(param_frame)
-        audio_frame.grid(row=row, column=0, columnspan=4, sticky=tk.W, pady=5, padx=5)
-        ttk.Label(audio_frame, text="音频编码:").pack(side=tk.LEFT)
+        ttk.Label(param_frame, text="DMRID:").grid(row=0, column=4, sticky=tk.W, padx=(5,0))
+        self.dmrid_var = tk.StringVar(value="123456")
+        ttk.Entry(param_frame, textvariable=self.dmrid_var, width=8).grid(row=0, column=5, padx=2)
+
+        # 音频编码选择
+        audio_frame = ttk.Frame(self)
+        audio_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        ttk.Label(audio_frame, text="编码:").pack(side=tk.LEFT)
         self.audio_var = tk.StringVar(value="5" if OPUS_AVAILABLE else "1")
-        r1 = ttk.Radiobutton(audio_frame, text="Opus 16K (Type 5)", variable=self.audio_var, value="5")
-        r2 = ttk.Radiobutton(audio_frame, text="G.711 (Type 1)", variable=self.audio_var, value="1")
-        r1.pack(side=tk.LEFT, padx=5)
-        r2.pack(side=tk.LEFT, padx=5)
-        if not OPUS_AVAILABLE:
-            r1.state(['disabled'])  # 若未安装 opuslib 则禁用该选项
+        ttk.Radiobutton(audio_frame, text="Opus", variable=self.audio_var, value="5").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(audio_frame, text="G.711", variable=self.audio_var, value="1").pack(side=tk.LEFT)
 
-        # 连接控制按钮
-        self.btn_connect = ttk.Button(self.root, text="启动连接", command=self.toggle_connection)
-        self.btn_connect.pack(fill=tk.X, padx=10, pady=5)
+        # 连接按钮
+        self.btn_connect = ttk.Button(self, text="连接", command=self.toggle_connection, width=10)
+        self.btn_connect.pack(side=tk.LEFT, padx=5, pady=3)
 
-        # --- 2. 状态/日志打印面板 ---
-        log_frame = ttk.LabelFrame(self.root, text="运行日志", padding=(10, 5))
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # PTT 按钮
+        self.btn_ptt = tk.Button(self, text="离线", font=("黑体", 12, "bold"),
+                                  bg="lightgray", width=15, height=2, state=tk.DISABLED)
+        self.btn_ptt.pack(side=tk.LEFT, padx=5, pady=3, fill=tk.X, expand=True)
 
-        self.log_area = scrolledtext.ScrolledText(log_frame, state='disabled', wrap=tk.WORD, font=("Consolas", 9))
-        self.log_area.pack(fill=tk.BOTH, expand=True)
-
-        # --- 3. PTT 对讲交互面板 ---
-        ptt_frame = ttk.LabelFrame(self.root, text="对讲控制 (PTT)", padding=(10, 10))
-        ptt_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        # 使用 tk.Button 以支持动态修改背景颜色，提供明确的视觉反馈
-        self.btn_ptt = tk.Button(ptt_frame, text="离线状态", font=("黑体", 14, "bold"), bg="lightgray", state=tk.DISABLED)
-        self.btn_ptt.pack(fill=tk.BOTH, expand=True, ipady=20)
-
-        # 绑定鼠标左右键按下与松开事件
         self.btn_ptt.bind("<ButtonPress-1>", self.on_ptt_press)
         self.btn_ptt.bind("<ButtonRelease-1>", self.on_ptt_release)
 
-        # 绑定全局键盘空格键事件
-        self.root.bind("<KeyPress-space>", self.on_ptt_press)
-        self.root.bind("<KeyRelease-space>", self.on_ptt_release)
+        # 日志区域
+        log_frame = ttk.Frame(self)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
 
-    def log_to_gui(self, message):
-        """将日志操作委托给主线程执行，保障线程安全"""
-        self.root.after(0, self._insert_log, message)
+        self.log_area = scrolledtext.ScrolledText(log_frame, height=8, wrap=tk.WORD,
+                                                   font=("Consolas", 9), state='disabled')
+        self.log_area.pack(fill=tk.BOTH, expand=True)
 
-    def _insert_log(self, message):
-        """实际执行日志文本插入的底层方法"""
+        # 设置日志标签颜色
+        self.log_area.tag_configure("blue", foreground="blue")
+        self.log_area.tag_configure("green", foreground="green")
+
+    def log(self, message, tag=None):
+        """线程安全的日志输出"""
+        self.app.root.after(0, self._insert_log, message, tag)
+
+    def _insert_log(self, message, tag=None):
         self.log_area.config(state='normal')
-        self.log_area.insert(tk.END, message + "\n")
-        self.log_area.see(tk.END)  # 自动滚动到底部
+        self.log_area.insert(tk.END, message + "\n", tag)
+        self.log_area.see(tk.END)
         self.log_area.config(state='disabled')
 
     def toggle_connection(self):
-        """处理连接与断开的切换状态"""
         if not self.is_connected:
             try:
-                # 实例化核心协议类
+                color_tag = "blue" if self.ssid == 1 else "green"
                 self.client = DraARLv1Client(
-                    server_ip=self.vars['服务器IP'].get(),
-                    server_port=int(self.vars['端口'].get()),
-                    username=self.vars['用户名'].get(),
-                    device_password=self.vars['设备密码'].get(),
-                    ssid=self.vars['SSID'].get(),
-                    dmrid_int=self.vars['DMRID'].get() or 0,
+                    server_ip=self.app.server_ip.get(),
+                    server_port=int(self.app.server_port.get()),
+                    username=self.username_var.get(),
+                    device_password=self.password_var.get(),
+                    ssid=self.ssid,
+                    dmrid_int=self.dmrid_var.get() or 0,
                     audio_type=self.audio_var.get(),
-                    log_callback=self.log_to_gui
+                    log_callback=lambda msg, t=color_tag: self.log(msg, t),
+                    color_tag=f"SSID-{self.ssid}"
                 )
                 self.client.start()
 
-                # 更新前端 UI 状态
                 self.is_connected = True
-                self.btn_connect.config(text="断开连接")
-                self.btn_ptt.config(state=tk.NORMAL, text="按住说话 (空格键 / 左键)", bg="white")
-                self.log_to_gui(f"\n[系统] 已连接至服务器: {self.vars['服务器IP'].get()}:{self.vars['端口'].get()}")
+                self.btn_connect.config(text="断开")
+                self.btn_ptt.config(state=tk.NORMAL, text=f"按住说话 (SSID-{self.ssid})", bg="white")
+                self.log(f"[系统] 已连接")
 
             except Exception as e:
                 messagebox.showerror("连接错误", str(e))
@@ -423,41 +358,116 @@ class DraARLv1App:
             if self.client:
                 self.client.stop()
             self.is_connected = False
-            self.btn_connect.config(text="启动连接")
-            self.btn_ptt.config(state=tk.DISABLED, text="离线状态", bg="lightgray")
-            self.log_to_gui("\n[系统] 连接已断开。")
+            self.btn_connect.config(text="连接")
+            self.btn_ptt.config(state=tk.DISABLED, text="离线", bg="lightgray")
+            self.log(f"[系统] 已断开")
 
-    def on_ptt_press(self, event):
-        """按下 PTT 键，通知底层网络开始将录音发包"""
+    def on_ptt_press(self, event=None):
         if not self.is_connected or not self.client:
             return
-
-        # 过滤键盘的长按连发信号
-        if hasattr(event, 'keysym') and event.keysym == 'space':
-            if self.space_pressed:
-                return
-            self.space_pressed = True
-
         self.client.is_transmitting = True
-        self.btn_ptt.config(bg="lightgreen", text="正在发射中...")
-        self.log_to_gui(">>> [开始发射语音]")
+        self.btn_ptt.config(bg="lightgreen", text="发射中...")
+        self.log(f">>> [开始发射]")
 
-    def on_ptt_release(self, event):
-        """松开 PTT 键，通知底层网络停止发包"""
+    def on_ptt_release(self, event=None):
         if not self.is_connected or not self.client:
             return
-
-        if hasattr(event, 'keysym') and event.keysym == 'space':
-            self.space_pressed = False
-
         self.client.is_transmitting = False
-        self.btn_ptt.config(bg="white", text="按住说话 (空格键 / 左键)")
-        self.log_to_gui("<<< [停止发射]")
+        self.btn_ptt.config(bg="white", text=f"按住说话 (SSID-{self.ssid})")
+        self.log(f"<<< [停止发射]")
+
+    def stop(self):
+        if self.client:
+            self.client.stop()
+
+
+# ==========================================
+# 主应用程序
+# ==========================================
+class DualDeviceApp:
+    """双设备模拟器主应用"""
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title("DraARLv1 双设备模拟器 (SSID 1 & 2)")
+        self.root.geometry("900x600")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # 顶部：服务器配置
+        server_frame = ttk.LabelFrame(self.root, text="服务器配置", padding=(10, 5))
+        server_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(server_frame, text="服务器IP:").grid(row=0, column=0, sticky=tk.W)
+        self.server_ip = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(server_frame, textvariable=self.server_ip, width=15).grid(row=0, column=1, padx=5)
+
+        ttk.Label(server_frame, text="端口:").grid(row=0, column=2, sticky=tk.W, padx=(10,0))
+        self.server_port = tk.StringVar(value="60050")
+        ttk.Entry(server_frame, textvariable=self.server_port, width=8).grid(row=0, column=3, padx=5)
+
+        # 快捷按钮
+        ttk.Button(server_frame, text="全部连接", command=self.connect_all).grid(row=0, column=4, padx=10)
+        ttk.Button(server_frame, text="全部断开", command=self.disconnect_all).grid(row=0, column=5, padx=5)
+
+        # 中部：两个设备面板并排
+        devices_frame = ttk.Frame(self.root)
+        devices_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # 左侧设备 (SSID 1)
+        self.device1 = DevicePanel(devices_frame, ssid=1, app=self)
+        self.device1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        # 右侧设备 (SSID 2)
+        self.device2 = DevicePanel(devices_frame, ssid=2, app=self)
+        self.device2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+
+        # 底部：键盘快捷键说明
+        help_frame = ttk.LabelFrame(self.root, text="快捷键", padding=(10, 5))
+        help_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(help_frame, text="[1] = SSID-1 发射").pack(side=tk.LEFT, padx=20)
+        ttk.Label(help_frame, text="[2] = SSID-2 发射").pack(side=tk.LEFT, padx=20)
+        ttk.Label(help_frame, text="松开即停止").pack(side=tk.LEFT, padx=20)
+
+        # 绑定全局快捷键
+        self.root.bind("<KeyPress-1>", lambda e: self.device1.on_ptt_press())
+        self.root.bind("<KeyRelease-1>", lambda e: self.device1.on_ptt_release())
+        self.root.bind("<KeyPress-2>", lambda e: self.device2.on_ptt_press())
+        self.root.bind("<KeyRelease-2>", lambda e: self.device2.on_ptt_release())
+
+        # 也支持空格键控制当前焦点的设备
+        self.root.bind("<KeyPress-space>", self._on_space_press)
+        self.root.bind("<KeyRelease-space>", self._on_space_release)
+
+    def _on_space_press(self, event):
+        # 空格键控制已连接的第一个设备
+        if self.device1.is_connected:
+            self.device1.on_ptt_press()
+        elif self.device2.is_connected:
+            self.device2.on_ptt_press()
+
+    def _on_space_release(self, event):
+        self.device1.on_ptt_release()
+        self.device2.on_ptt_release()
+
+    def connect_all(self):
+        if not self.device1.is_connected:
+            self.device1.toggle_connection()
+        if not self.device2.is_connected:
+            self.device2.toggle_connection()
+
+    def disconnect_all(self):
+        if self.device1.is_connected:
+            self.device1.toggle_connection()
+        if self.device2.is_connected:
+            self.device2.toggle_connection()
 
     def on_closing(self):
-        """捕获窗口关闭事件，确保底层线程和端口资源被安全回收"""
-        if self.is_connected and self.client:
-            self.client.stop()
+        self.device1.stop()
+        self.device2.stop()
         self.root.destroy()
 
 
@@ -466,7 +476,6 @@ class DraARLv1App:
 # ==========================================
 if __name__ == "__main__":
     root = tk.Tk()
-    app = DraARLv1App(root)
-    # 将焦点强制设定在主窗口，保障启动后按空格键能立即响应
+    app = DualDeviceApp(root)
     root.focus_set()
     root.mainloop()

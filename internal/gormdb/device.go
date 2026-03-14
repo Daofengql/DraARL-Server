@@ -141,6 +141,19 @@ func (r *DeviceRepository) UpdateDeviceOnlineStatus(callsign string, ssid uint8,
 		Updates(updates).Error
 }
 
+// UpdateDeviceOnlineStatusByUsername 通过 username 更新设备在线状态
+func (r *DeviceRepository) UpdateDeviceOnlineStatusByUsername(username string, ssid uint8, isOnline bool, onlineTime string) error {
+	updates := map[string]interface{}{
+		"is_online": isOnline,
+	}
+	if onlineTime != "" {
+		updates["online_time"] = onlineTime
+	}
+	return r.db.Model(&Device{}).
+		Where("username = ? AND ssid = ?", username, ssid).
+		Updates(updates).Error
+}
+
 // UpdateDeviceOnlineTime 更新设备上线时间
 func (r *DeviceRepository) UpdateDeviceOnlineTime(callsign string, ssid uint8) error {
 	return r.db.Model(&Device{}).

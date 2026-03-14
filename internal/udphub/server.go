@@ -665,6 +665,7 @@ func refreshGroupCache() {
 
 // refreshDeviceCache 同步设备状态从数据库到内存
 // 核心原则：只更新动态属性（GroupID, DisableSend, DisableRecv, Priority），不碰连接状态
+// 同时将内存中的在线状态同步回数据库，供 Web 端查询
 func refreshDeviceCache() {
 	repo := gormdb.NewDeviceRepository()
 	// 获取所有设备（使用较大的 limit 来获取全部）
@@ -675,6 +676,8 @@ func refreshDeviceCache() {
 	}
 
 	updatedCount := 0
+	onlineSyncCount := 0
+
 	for _, dbDev := range dbDevices {
 		usernameSSID := protocol.GetUsernameSSID(dbDev.Username, dbDev.SSID)
 
@@ -688,11 +691,23 @@ func refreshDeviceCache() {
 				memDev.Priority = dbDev.Priority
 				updatedCount++
 			}
+
+			// ==========================================
+			// 关键修复：将内存中的在线状态同步回数据库
+			// 这样 Web 端查询时就能看到正确的在线状态
+			// ==========================================
+			if memDev.ISOnline != dbDev.ISOnline {
+				repo.UpdateDeviceOnlineStatus(memDev.CallSign, memDev.SSID, memDev.ISOnline, "")
+				onlineSyncCount++
+			}
 		}
 	}
 
 	if updatedCount > 0 {
-		log.Printf("[CACHE] 设备状态同步完成，更新了 %d 个设备的属性", updatedCount)
+		log.Printf("[CACHE] 设备属性同步完成，更新了 %d 个设备", updatedCount)
+	}
+	if onlineSyncCount > 0 {
+		log.Printf("[CACHE] 设备在线状态已同步到数据库，更新了 %d 个设备", onlineSyncCount)
 	}
 }
 

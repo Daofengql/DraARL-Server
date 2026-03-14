@@ -88,7 +88,7 @@ type Device struct {
 	UpdateTime time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
 	Note       string    `gorm:"type:text;column:note" json:"note"`
 	Priority   int       `gorm:"type:int;default:100;column:priority" json:"priority"`
-	ISOnline   bool      `gorm:"-" json:"is_online"` // 运行时字段
+	ISOnline   bool      `gorm:"type:tinyint(1);default:0;column:is_online" json:"is_online"` // 在线状态（同步到数据库供Web端查询）
 	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"` // 设备级禁发
 	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"` // 设备级禁收
 }

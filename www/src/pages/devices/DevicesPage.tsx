@@ -24,6 +24,11 @@ import {
   Alert,
   Stack,
   Tooltip,
+  Card,
+  CardContent,
+  Chip,
+  Snackbar,
+  Divider,
 } from '@mui/material'
 import {
   Add,
@@ -33,8 +38,12 @@ import {
   Circle,
   LockOpen,
   Lock,
+  Key,
+  ContentCopy,
+  Refresh,
+  CheckCircle,
 } from '@mui/icons-material'
-import { deviceService, groupService } from '../../services'
+import { deviceService, groupService, authService } from '../../services'
 import type { Device, Group } from '../../types'
 import { SwitchGroupDialog } from './SwitchGroupDialog'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
@@ -88,9 +97,25 @@ export function DevicesPage() {
     onConfirm: () => void
   }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
+  // 设备密码相关状态
+  const [devicePasswordInfo, setDevicePasswordInfo] = useState<{
+    masked_password: string
+    has_password: boolean
+    is_new: boolean
+  } | null>(null)
+  const [regeneratedPassword, setRegeneratedPassword] = useState<string | null>(null)
+  const [showDevicePassword, setShowDevicePassword] = useState(false)
+  const [generatingDevicePassword, setGeneratingDevicePassword] = useState(false)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  })
+
   useEffect(() => {
     loadDevices()
     loadGroups()
+    loadDevicePasswordInfo()
   }, [])
 
   const loadDevices = async () => {
@@ -111,6 +136,40 @@ export function DevicesPage() {
       setGroups(data)
     } catch (err) {
       console.error('Failed to load groups:', err)
+    }
+  }
+
+  // 加载设备密码信息
+  const loadDevicePasswordInfo = async () => {
+    try {
+      const info = await authService.getDevicePassword()
+      setDevicePasswordInfo(info)
+    } catch (err) {
+      console.error('Failed to load device password info:', err)
+    }
+  }
+
+  // 生成/重新生成设备密码
+  const handleRegenerateDevicePassword = async () => {
+    setGeneratingDevicePassword(true)
+    try {
+      const result = await authService.regenerateDevicePassword()
+      setRegeneratedPassword(result.device_password)
+      setShowDevicePassword(true)
+      await loadDevicePasswordInfo()
+      setSnackbar({ open: true, message: '设备密码已生成', severity: 'success' })
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err.response?.data?.message || '生成失败', severity: 'error' })
+    } finally {
+      setGeneratingDevicePassword(false)
+    }
+  }
+
+  // 复制设备密码
+  const handleCopyDevicePassword = () => {
+    if (regeneratedPassword) {
+      navigator.clipboard.writeText(regeneratedPassword)
+      setSnackbar({ open: true, message: '已复制到剪贴板', severity: 'success' })
     }
   }
 
@@ -276,6 +335,80 @@ export function DevicesPage() {
 
   return (
     <Box>
+      {/* 设备准入密码卡片 */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Key fontSize="small" color="action" />
+            <Typography variant="h6">设备准入密码</Typography>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            用于 DraARLv1 协议设备认证，配置设备时需要填写此密码
+          </Typography>
+
+          {devicePasswordInfo ? (
+            <Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                {devicePasswordInfo.has_password && (
+                  <Chip
+                    icon={<CheckCircle />}
+                    label="已设置"
+                    size="small"
+                    color="success"
+                  />
+                )}
+                <Typography variant="body2" color="text.secondary">
+                  脱敏显示: {devicePasswordInfo.masked_password}
+                </Typography>
+              </Box>
+
+              {showDevicePassword && regeneratedPassword && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  <Typography variant="body2">
+                    新设备密码: <strong style={{ fontSize: '1.1em', letterSpacing: '0.5px' }}>{regeneratedPassword}</strong>
+                  </Typography>
+                  <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+                    请立即保存，此密码仅显示一次！
+                  </Typography>
+                  <Button
+                    size="small"
+                    startIcon={<ContentCopy />}
+                    onClick={handleCopyDevicePassword}
+                    sx={{ mt: 1 }}
+                  >
+                    复制密码
+                  </Button>
+                </Alert>
+              )}
+
+              <Stack direction="row" spacing={1}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<Refresh />}
+                  onClick={handleRegenerateDevicePassword}
+                  disabled={generatingDevicePassword}
+                  color="warning"
+                >
+                  {generatingDevicePassword ? '生成中...' : '重新生成密码'}
+                </Button>
+              </Stack>
+            </Box>
+          ) : (
+            <Button
+              variant="contained"
+              startIcon={<Key />}
+              onClick={handleRegenerateDevicePassword}
+              disabled={generatingDevicePassword}
+            >
+              {generatingDevicePassword ? '生成中...' : '生成设备密码'}
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Divider sx={{ mb: 3 }} />
+
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" fontWeight={600}>设备管理</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
@@ -454,6 +587,18 @@ export function DevicesPage() {
         }}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
       />
+
+      {/* 提示消息 */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={3000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }

@@ -32,8 +32,9 @@ export const authService = {
   },
 
   // 用户注册
-  async register(data: RegisterRequest): Promise<void> {
-    return apiClient.post('/api/auth/register', data)
+  async register(data: RegisterRequest): Promise<RegisterResponse> {
+    const res = await apiClient.post<BackendResponse<RegisterResponse>>('/api/auth/register', data)
+    return res.data!
   },
 
   // 获取当前用户信息
@@ -156,4 +157,50 @@ export const authService = {
     // 检查审核状态：1=已通过
     return user.approval_status === 1
   },
+
+  // ========== 设备密码管理 ==========
+
+  // 获取设备密码（脱敏显示）
+  async getDevicePassword(): Promise<DevicePasswordResponse> {
+    const res = await apiClient.get<BackendResponse<DevicePasswordResponse>>('/api/user/device-password')
+    return res.data!
+  },
+
+  // 修改设备密码
+  async updateDevicePassword(newPassword: string): Promise<UpdateDevicePasswordResponse> {
+    const res = await apiClient.put<BackendResponse<UpdateDevicePasswordResponse>>('/api/user/device-password', {
+      new_password: newPassword,
+    })
+    return res.data!
+  },
+
+  // 重新生成设备密码
+  async regenerateDevicePassword(): Promise<RegenerateDevicePasswordResponse> {
+    const res = await apiClient.post<BackendResponse<RegenerateDevicePasswordResponse>>('/api/user/device-password/regenerate')
+    return res.data!
+  },
+}
+
+// 设备密码响应类型
+export interface DevicePasswordResponse {
+  masked_password: string
+  has_password: boolean
+  is_new: boolean
+  created_at: string
+}
+
+export interface UpdateDevicePasswordResponse {
+  masked_password: string
+}
+
+export interface RegenerateDevicePasswordResponse {
+  device_password: string
+}
+
+export interface RegisterResponse {
+  id: number
+  username: string
+  nickname: string
+  approval_status: number
+  device_password: string
 }

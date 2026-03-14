@@ -156,8 +156,8 @@ export const deviceService = {
   },
 
   // 修改设备群组
-  async changeGroup(data: { device_id: number; group_id: number }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/changegroupnrl', data)
+  async changeGroup(data: { device_id: number; group_id: number; password?: string }): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/changegroup', data)
   },
 
   // 执行AT命令
@@ -191,12 +191,11 @@ export const deviceService = {
     deviceId: number,
     groupId: number,
     password?: string
-  ): Promise<Device> {
-    const res = await apiClient.post<BackendResponse<BackendDevice>>('/api/device/changegroup', {
+  ): Promise<void> {
+    await apiClient.post<BackendResponse<unknown>>('/api/device/changegroup', {
       device_id: deviceId,
       group_id: groupId,
       password: password || ''
     })
-    return normalizeDevice(res.data!)
   },
 }

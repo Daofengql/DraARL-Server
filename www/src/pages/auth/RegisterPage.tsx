@@ -13,8 +13,9 @@ import {
   Stepper,
   Step,
   StepLabel,
+  IconButton,
 } from '@mui/material'
-import { Radio, CheckCircle } from '@mui/icons-material'
+import { Radio, CheckCircle, ContentCopy } from '@mui/icons-material'
 import { authService } from '../../services'
 
 const steps = ['基本信息', '联系方式', '设置密码']
@@ -50,6 +51,8 @@ export function RegisterPage() {
   const [errors, setErrors] = useState<FormErrors>({})
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [registerSuccess, setRegisterSuccess] = useState(false)
+  const [devicePassword, setDevicePassword] = useState('')
 
   // 验证呼号格式（字母开头，后跟字母数字，3-10个字符）
   const validateCallsign = (callsign: string): boolean => {
@@ -146,18 +149,28 @@ export function RegisterPage() {
     setLoading(true)
 
     try {
-      await authService.register({
+      const result = await authService.register({
         username: formData.username,
         callsign: formData.callsign,
         phone: formData.phone,
         password: formData.password,
         nickname: formData.nickname || formData.username,
       })
-      navigate('/login', { state: { message: '注册成功，请等待管理员审核' } })
+      // 保存设备密码并显示成功页面
+      if (result?.device_password) {
+        setDevicePassword(result.device_password)
+      }
+      setRegisterSuccess(true)
     } catch (err: any) {
       setError(err.response?.data?.message || '注册失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleCopyPassword = () => {
+    if (devicePassword) {
+      navigator.clipboard.writeText(devicePassword)
     }
   }
 
@@ -262,70 +275,125 @@ export function RegisterPage() {
       <Container maxWidth="sm">
         <Card elevation={3}>
           <CardContent sx={{ p: 4 }}>
-            <Box sx={{ textAlign: 'center', mb: 4 }}>
-              <Radio sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h4" component="h1" gutterBottom>
-                DraARL
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                创建新账号
-              </Typography>
-            </Box>
+            {registerSuccess ? (
+              // 注册成功页面
+              <Box sx={{ textAlign: 'center' }}>
+                <CheckCircle sx={{ fontSize: 64, color: 'success.main', mb: 2 }} />
+                <Typography variant="h4" gutterBottom>
+                  注册成功
+                </Typography>
+                <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                  您的账号已创建成功，请等待管理员审核。
+                </Typography>
 
-            <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
-              {steps.map((label) => (
-                <Step key={label}>
-                  <StepLabel>{label}</StepLabel>
-                </Step>
-              ))}
-            </Stepper>
+                <Alert severity="warning" sx={{ mb: 3, textAlign: 'left' }}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    设备准入密码（请立即保存）
+                  </Typography>
+                  <Box sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    bgcolor: 'grey.100',
+                    p: 1.5,
+                    borderRadius: 1,
+                    fontFamily: 'monospace',
+                    fontSize: '1.2rem',
+                  }}>
+                    <strong>{devicePassword}</strong>
+                    <IconButton size="small" onClick={handleCopyPassword}>
+                      <ContentCopy fontSize="small" />
+                    </IconButton>
+                  </Box>
+                  <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                    此密码用于 DraARLv1 协议设备认证，仅显示一次，请务必保存！
+                  </Typography>
+                </Alert>
 
-            {error && (
-              <Alert severity="error" sx={{ mb: 3 }}>
-                {error}
-              </Alert>
+                <Alert severity="info" sx={{ mb: 3, textAlign: 'left' }}>
+                  <Typography variant="body2">
+                    审核通过后，您可以在"设备管理"页面查看或重新生成设备密码。
+                  </Typography>
+                </Alert>
+
+                <Button
+                  variant="contained"
+                  size="large"
+                  onClick={() => navigate('/login')}
+                  sx={{ mt: 2 }}
+                >
+                  前往登录
+                </Button>
+              </Box>
+            ) : (
+              // 注册表单
+              <>
+                <Box sx={{ textAlign: 'center', mb: 4 }}>
+                  <Radio sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
+                  <Typography variant="h4" component="h1" gutterBottom>
+                    DraARL
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    创建新账号
+                  </Typography>
+                </Box>
+
+                <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
+                  {steps.map((label) => (
+                    <Step key={label}>
+                      <StepLabel>{label}</StepLabel>
+                    </Step>
+                  ))}
+                </Stepper>
+
+                {error && (
+                  <Alert severity="error" sx={{ mb: 3 }}>
+                    {error}
+                  </Alert>
+                )}
+
+                <Box sx={{ mb: 4 }}>
+                  {renderStepContent()}
+                </Box>
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                  <Button
+                    disabled={activeStep === 0}
+                    onClick={handleBack}
+                  >
+                    上一步
+                  </Button>
+                  {activeStep === steps.length - 1 ? (
+                    <Button
+                      variant="contained"
+                      onClick={handleSubmit}
+                      disabled={loading}
+                      startIcon={<CheckCircle />}
+                    >
+                      {loading ? '注册中...' : '完成注册'}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      onClick={handleNext}
+                    >
+                      下一步
+                    </Button>
+                  )}
+                </Box>
+
+                <Box sx={{ textAlign: 'center', mt: 3 }}>
+                  <Link
+                    component="button"
+                    type="button"
+                    variant="body2"
+                    onClick={() => navigate('/login')}
+                  >
+                    已有账号？返回登录
+                  </Link>
+                </Box>
+              </>
             )}
-
-            <Box sx={{ mb: 4 }}>
-              {renderStepContent()}
-            </Box>
-
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
-              <Button
-                disabled={activeStep === 0}
-                onClick={handleBack}
-              >
-                上一步
-              </Button>
-              {activeStep === steps.length - 1 ? (
-                <Button
-                  variant="contained"
-                  onClick={handleSubmit}
-                  disabled={loading}
-                  startIcon={<CheckCircle />}
-                >
-                  {loading ? '注册中...' : '完成注册'}
-                </Button>
-              ) : (
-                <Button
-                  variant="contained"
-                  onClick={handleNext}
-                >
-                  下一步
-                </Button>
-              )}
-            </Box>
-
-            <Box sx={{ textAlign: 'center', mt: 3 }}>
-              <Link
-                component="button"
-                type="button"
-                variant="body2"
-                onClick={() => navigate('/login')}
-              >
-                已有账号？返回登录
-              </Link>
-            </Box>
           </CardContent>
         </Card>
       </Container>

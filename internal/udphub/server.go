@@ -570,7 +570,8 @@ func StartGroupCacheSync() {
 	log.Println("[CACHE] 数据库群组定时同步任务已启动 (间隔: 60s)")
 }
 
-// refreshGroupCache 执行具体的数据库查询与内存缓存替换逻辑
+// refreshGroupCache 执行具体的数据库查询与内存缓存增量合并更新
+// 核心原则：只更新静态配置属性，绝对不碰动态连接池(ConnPool)
 func refreshGroupCache() {
 	repo := gormdb.NewGroupRepository()
 	dbGroups, err := repo.ListGroups()
@@ -579,45 +580,67 @@ func refreshGroupCache() {
 		return
 	}
 
-	// 临时构建一个新的 map 存放最新数据，避免在组装数据过程中阻塞 UDP 锁
-	newGroupCache := make(map[int]*models.Group)
+	// 加写锁，安全更新内存
+	groupCacheMutex.Lock()
+	defer groupCacheMutex.Unlock()
+
+	// 记录当前数据库中存在的群组 ID，用于后续清理被删除的群组
+	validGroupIDs := make(map[int]bool)
 
 	for _, dbGroup := range dbGroups {
-		group := dbGroup.ToModelGroup()
+		modelGroup := dbGroup.ToModelGroup()
+		validGroupIDs[modelGroup.ID] = true
 
-		// 尝试保留现有群组的连接池和设备映射（如果群组已存在）
-		groupCacheMutex.RLock()
-		if existingGroup, ok := globalGroupCache[group.ID]; ok {
-			// 迁移现有的连接池和设备映射
-			group.ConnPool = existingGroup.ConnPool
-			group.DevMap = existingGroup.DevMap
+		// 检查群组是否已经在内存中
+		if existingGroup, exists := globalGroupCache[modelGroup.ID]; exists {
+			// 【关键操作】：如果存在，只更新静态配置，绝对不碰 ConnPool 和 DevMap！
+			existingGroup.Name = modelGroup.Name
+			existingGroup.Type = modelGroup.Type
+			existingGroup.CallSign = modelGroup.CallSign
+			existingGroup.Password = modelGroup.Password
+			existingGroup.AllowCallSignSSID = modelGroup.AllowCallSignSSID
+			existingGroup.AllowDMRID = modelGroup.AllowDMRID
+			existingGroup.OwerID = modelGroup.OwerID
+			existingGroup.OwerCallSign = modelGroup.OwerCallSign
+			existingGroup.MasterServer = modelGroup.MasterServer
+			existingGroup.SlaveServer = modelGroup.SlaveServer
+			existingGroup.Status = modelGroup.Status
+			existingGroup.Note = modelGroup.Note
+			existingGroup.UpdateTime = modelGroup.UpdateTime
+			// 注意：ConnPool 和 DevMap 保持不变，在线设备状态不受影响
 		} else {
-			// 新群组，初始化连接池和设备映射
-			group.ConnPool = &CurrentConnPool{
+			// 【关键操作】：如果是不存在的新群组，初始化它的动态连接池
+			newGroup := modelGroup
+			newGroup.ConnPool = &CurrentConnPool{
 				DevConnMap:  make(map[string]*models.Device),
 				DevConnList: make([]*models.Device, 0),
 			}
-			group.DevMap = make(map[int]*models.Device)
+			newGroup.DevMap = make(map[int]*models.Device)
 
 			// 如果是会议模式，启动混音
-			if group.Type == models.GroupTypeMeeting {
-				go startMixPCM(group)
+			if newGroup.Type == models.GroupTypeMeeting {
+				go startMixPCM(newGroup)
 			}
-		}
-		groupCacheMutex.RUnlock()
 
-		newGroupCache[group.ID] = group
+			globalGroupCache[newGroup.ID] = newGroup
+			log.Printf("[CACHE] 新群组已加载: %d - %s", newGroup.ID, newGroup.Name)
+		}
 	}
 
-	// 加写锁，原子化地将新的 map 替换掉旧的 map
-	groupCacheMutex.Lock()
-	globalGroupCache = newGroupCache
-	groupCacheMutex.Unlock()
+	// 清理内存中存在，但数据库中已经被删除/停用的群组
+	for id := range globalGroupCache {
+		if !validGroupIDs[id] {
+			// 注意：这里只删除 map 中的引用，不影响正在使用该群组的设备
+			// 它们会在下次心跳时重新路由到有效群组
+			delete(globalGroupCache, id)
+			log.Printf("[CACHE] 群组 %d 已从数据库移除，清理缓存", id)
+		}
+	}
 
 	// 同时更新 publicGroupMap 以保持向后兼容
-	publicGroupMap = newGroupCache
+	publicGroupMap = globalGroupCache
 
-	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(newGroupCache))
+	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(globalGroupCache))
 }
 
 // GetGroupFromCache 从缓存中获取群组（线程安全）

@@ -429,7 +429,7 @@ func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
 
 // handleDraARLTextMessage 处理 DraARLv1 文本消息
 func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool))
+	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool), gp)
 }
 
 // handleDraARLServerVoice 处理 DraARLv1 服务器互联语音
@@ -472,6 +472,15 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 			continue // 不转发给自己
 		}
 
+		// ==========================================
+		// 终极防御：懒剔除拦截
+		// 检查池子里的这个设备，它当前的真实 GroupID 还是不是本群组？
+		// 如果不是，说明它是被移出的"幽灵设备"，直接跳过！
+		// ==========================================
+		if targetDev.GroupID != gp.ID {
+			continue
+		}
+
 		// 检查目标设备是否禁收
 		if (targetDev.Status & models.DevStatusRxDisable) == models.DevStatusRxDisable {
 			continue
@@ -485,9 +494,14 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 }
 
 // forwardDraARLMessage 转发 DraARLv1 文本消息
-func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool) {
+func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
+			continue
+		}
+
+		// 懒剔除拦截：检查目标设备是否还属于本群组
+		if targetDev.GroupID != gp.ID {
 			continue
 		}
 
@@ -507,6 +521,11 @@ func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Devic
 
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
+			continue
+		}
+
+		// 懒剔除拦截：检查目标设备是否还属于本群组
+		if targetDev.GroupID != gp.ID {
 			continue
 		}
 
@@ -552,22 +571,24 @@ func GetPublicGroupMap() map[int]*models.Group {
 // 架构重构：全局群组缓存管理
 // ==========================================
 
-// StartGroupCacheSync 启动群组缓存定时同步后台任务
+// StartGroupCacheSync 启动群组和设备缓存定时同步后台任务
 func StartGroupCacheSync() {
 	// 启动时立即执行一次，确保服务器刚启动就有数据
 	refreshGroupCache()
+	refreshDeviceCache()
 
 	go func() {
-		// 每隔 60 秒同步一次数据库中的群组状态
+		// 每隔 60 秒同步一次数据库中的群组和设备状态
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 
 		for {
 			<-ticker.C
 			refreshGroupCache()
+			refreshDeviceCache()
 		}
 	}()
-	log.Println("[CACHE] 数据库群组定时同步任务已启动 (间隔: 60s)")
+	log.Println("[CACHE] 数据库群组和设备定时同步任务已启动 (间隔: 60s)")
 }
 
 // refreshGroupCache 执行具体的数据库查询与内存缓存增量合并更新
@@ -641,6 +662,38 @@ func refreshGroupCache() {
 	publicGroupMap = globalGroupCache
 
 	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(globalGroupCache))
+}
+
+// refreshDeviceCache 同步设备状态从数据库到内存
+// 核心原则：只更新动态属性（GroupID, Status, Priority），不碰连接状态
+func refreshDeviceCache() {
+	repo := gormdb.NewDeviceRepository()
+	// 获取所有设备（使用较大的 limit 来获取全部）
+	dbDevices, _, err := repo.ListDevices(10000, 1)
+	if err != nil {
+		log.Printf("[CACHE] 从数据库加载设备失败: %v", err)
+		return
+	}
+
+	updatedCount := 0
+	for _, dbDev := range dbDevices {
+		usernameSSID := protocol.GetUsernameSSID(dbDev.Username, dbDev.SSID)
+
+		// 只更新已在内存中的设备
+		if memDev, exists := devUsernameSSIDMap[usernameSSID]; exists {
+			// 检查是否需要更新
+			if memDev.GroupID != dbDev.GroupID || memDev.Status != byte(dbDev.Status) || memDev.Priority != dbDev.Priority {
+				memDev.GroupID = dbDev.GroupID
+				memDev.Status = byte(dbDev.Status)
+				memDev.Priority = dbDev.Priority
+				updatedCount++
+			}
+		}
+	}
+
+	if updatedCount > 0 {
+		log.Printf("[CACHE] 设备状态同步完成，更新了 %d 个设备的属性", updatedCount)
+	}
 }
 
 // GetGroupFromCache 从缓存中获取群组（线程安全）

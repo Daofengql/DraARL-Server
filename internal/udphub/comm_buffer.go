@@ -128,7 +128,8 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	durationMs := int(time.Since(session.StartTime).Milliseconds())
+	// 使用最后一个数据包时间计算时长，与数据库保存逻辑一致
+	durationMs := int(session.LastPacketTime.Sub(session.StartTime).Milliseconds())
 
 	// 检查最小时长阈值
 	if durationMs < cb.config.MinDurationMs {

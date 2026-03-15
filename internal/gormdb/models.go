@@ -114,6 +114,7 @@ type Group struct {
 	MasterServer      int       `gorm:"type:int;column:master_server" json:"master_server"`
 	SlaveServer       int       `gorm:"type:int;column:slave_server" json:"slave_server"`
 	Status            int       `gorm:"type:int;default:1;column:status" json:"status"`
+	IsVirtual         bool      `gorm:"type:tinyint(1);default:0;column:is_virtual" json:"is_virtual"` // 是否为虚拟互联组
 	CreateTime        time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
 	UpdateTime        time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
 	Note              string    `gorm:"type:text;column:note" json:"note"`
@@ -125,6 +126,20 @@ type Group struct {
 // TableName 指定表名
 func (Group) TableName() string {
 	return "public_groups"
+}
+
+// GroupLink 群组互联关联模型
+type GroupLink struct {
+	ID            int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	LinkGroupID   int       `gorm:"type:int;not null;uniqueIndex:uk_link_target,priority:1;column:link_group_id" json:"link_group_id"`   // 互联组ID
+	TargetGroupID int       `gorm:"type:int;not null;uniqueIndex:uk_link_target,priority:2;column:target_group_id" json:"target_group_id"` // 目标群组ID
+	CreatedAt     time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt     time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (GroupLink) TableName() string {
+	return "group_links"
 }
 
 // Server 服务器模型
@@ -288,6 +303,7 @@ func AutoMigrate() error {
 		&User{},
 		&Device{},
 		&Group{},
+		&GroupLink{},
 		&Server{},
 		&Relay{},
 		&OperatorLog{},

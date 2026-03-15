@@ -124,7 +124,10 @@ func GetGroups(c *gin.Context) {
 			for _, g := range groups {
 				if !seen[g.ID] {
 					seen[g.ID] = true
-					uniqueGroups = append(uniqueGroups, g)
+					// 过滤掉虚拟互联组（对普通用户不可见）
+					if !g.IsVirtual {
+						uniqueGroups = append(uniqueGroups, g)
+					}
 				}
 			}
 			groups = uniqueGroups
@@ -774,6 +777,15 @@ func SearchGroups(c *gin.Context) {
 		})
 		return
 	}
+
+	// 过滤掉虚拟互联组（对普通用户不可见）
+	filteredGroups := make([]*gormdb.Group, 0, len(groups))
+	for _, g := range groups {
+		if !g.IsVirtual {
+			filteredGroups = append(filteredGroups, g)
+		}
+	}
+	groups = filteredGroups
 
 	// 获取当前用户，用于判断是否已加入私有群组
 	username, _ := c.Get("username")

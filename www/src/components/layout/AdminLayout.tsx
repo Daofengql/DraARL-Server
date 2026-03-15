@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography, Collapse, Divider, Link } from '@mui/material'
-import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess } from '@mui/icons-material'
+import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess, Link as LinkIcon } from '@mui/icons-material'
 import { useState, useEffect } from 'react'
 import { authService, apiClient } from '../../services'
 
@@ -27,7 +27,15 @@ const adminMenuItems: MenuItem[] = [
     ]
   },
   { path: '/admin/devices', label: '设备管理', icon: <Devices /> },
-  { path: '/admin/groups', label: '群组管理', icon: <Group /> },
+  {
+    path: '/admin/groups',
+    label: '群组管理',
+    icon: <Group />,
+    children: [
+      { path: '/admin/groups', label: '普通群组', icon: <Group /> },
+      { path: '/admin/group-links', label: '互联管理', icon: <LinkIcon /> },
+    ]
+  },
   { path: '/admin/relays', label: '中继台', icon: <Radio /> },
   { path: '/admin/servers', label: '服务器', icon: <Dns /> },
   { path: '/admin/comm-records', label: '通信记录', icon: <Mic /> },
@@ -39,7 +47,9 @@ export function AdminLayout() {
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
   // 用户管理菜单的展开/折叠状态
-  const [userMenuExpanded, setUserMenuExpanded] = useState(true)
+  const [userMenuExpanded, setUserMenuExpanded] = useState(false)
+  // 群组管理菜单的展开/折叠状态
+  const [groupMenuExpanded, setGroupMenuExpanded] = useState(false)
   const [icp, setIcp] = useState('')
 
   useEffect(() => {
@@ -64,6 +74,22 @@ export function AdminLayout() {
     }
   }, [])
 
+  // 当路由变化时，如果焦点不在子菜单上，自动折叠
+  useEffect(() => {
+    const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
+    const groupPaths = ['/admin/groups', '/admin/group-links']
+
+    // 如果当前路径不在用户管理子菜单下，折叠
+    if (!userPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
+      setUserMenuExpanded(false)
+    }
+
+    // 如果当前路径不在群组管理子菜单下，折叠
+    if (!groupPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
+      setGroupMenuExpanded(false)
+    }
+  }, [location.pathname])
+
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen)
   }
@@ -85,6 +111,11 @@ export function AdminLayout() {
   // 切换用户管理菜单展开/折叠
   const toggleUserMenu = () => {
     setUserMenuExpanded(!userMenuExpanded)
+  }
+
+  // 切换群组管理菜单展开/折叠
+  const toggleGroupMenu = () => {
+    setGroupMenuExpanded(!groupMenuExpanded)
   }
 
   const isActive = (path: string) => {
@@ -119,7 +150,18 @@ export function AdminLayout() {
       <List sx={{ flex: 1, py: 1 }}>
         {adminMenuItems.map((item) => {
           const isUserMenu = item.path === '/admin/users'
-          const showChildren = isUserMenu ? userMenuExpanded : (isActive(item.path) || isParentActive(item))
+          const isGroupMenu = item.path === '/admin/groups'
+          const isExpandableMenu = isUserMenu || isGroupMenu
+          const getMenuExpanded = () => {
+            if (isUserMenu) return userMenuExpanded
+            if (isGroupMenu) return groupMenuExpanded
+            return false
+          }
+          const showChildren = isExpandableMenu ? getMenuExpanded() : (isActive(item.path) || isParentActive(item))
+          const toggleMenu = () => {
+            if (isUserMenu) toggleUserMenu()
+            if (isGroupMenu) toggleGroupMenu()
+          }
 
           return (
             <Box key={item.path}>
@@ -127,7 +169,7 @@ export function AdminLayout() {
               <ListItem disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
                   selected={shouldHighlight(item)}
-                  onClick={() => isUserMenu ? toggleUserMenu() : handleNavigate(item.path)}
+                  onClick={() => isExpandableMenu ? toggleMenu() : handleNavigate(item.path)}
                   sx={{
                     mx: 1,
                     borderRadius: 2,
@@ -149,7 +191,7 @@ export function AdminLayout() {
                     }}
                   />
                   {item.children && (
-                    userMenuExpanded ? <ExpandLess sx={{ ml: 1 }} /> : <ExpandMore sx={{ ml: 1 }} />
+                    getMenuExpanded() ? <ExpandLess sx={{ ml: 1 }} /> : <ExpandMore sx={{ ml: 1 }} />
                   )}
                 </ListItemButton>
               </ListItem>

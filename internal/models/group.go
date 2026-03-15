@@ -19,6 +19,7 @@ type Group struct {
 	MasterServer int                   `json:"master_server"`
 	SlaveServer  int                   `json:"slave_server"`
 	Status       int                   `json:"status"`
+	IsVirtual    bool                  `json:"is_virtual"`  // 是否为虚拟互联组
 	CreateTime   string                `json:"create_time"`
 	UpdateTime   string                `json:"update_time"`
 	Note         string                `json:"note"`

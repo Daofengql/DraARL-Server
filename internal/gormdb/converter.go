@@ -28,7 +28,7 @@ func (d *Device) ToModelDevice() *models.Device {
 	}
 }
 
-// ToModelGroup 将 GORM Group 转换为 models.Group
+// ToModelGroup 将 GORM Group 转���为 models.Group
 func (g *Group) ToModelGroup() *models.Group {
 	return &models.Group{
 		ID:                g.ID,
@@ -41,6 +41,7 @@ func (g *Group) ToModelGroup() *models.Group {
 		MasterServer:      g.MasterServer,
 		SlaveServer:       g.SlaveServer,
 		Status:            g.Status,
+		IsVirtual:         g.IsVirtual,
 		Note:              g.Note,
 		CreateTime:        g.CreateTime.Format("2006-01-02 15:04:05"),
 		UpdateTime:        g.UpdateTime.Format("2006-01-02 15:04:05"),
@@ -85,6 +86,7 @@ func FromModelGroup(g *models.Group) *Group {
 		MasterServer:      g.MasterServer,
 		SlaveServer:       g.SlaveServer,
 		Status:            g.Status,
+		IsVirtual:         g.IsVirtual,
 		Note:              g.Note,
 	}
 }

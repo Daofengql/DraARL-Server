@@ -189,6 +189,17 @@ func (s *Server) setupRoutes() {
 				}
 			}
 
+			// 虚拟互联组管理（需要管理员权限）
+			admin.POST("/group-links", handler.CreateVirtualGroup)
+			admin.GET("/group-links", handler.GetVirtualGroups)
+			admin.GET("/group-links/available-targets", handler.GetAvailableTargetGroups)
+			admin.GET("/group-links/:id", handler.GetVirtualGroup)
+			admin.PUT("/group-links/:id", handler.UpdateVirtualGroup)
+			admin.DELETE("/group-links/:id", handler.DeleteVirtualGroup)
+			admin.GET("/group-links/:id/targets", handler.GetGroupLinkTargets)
+			admin.POST("/group-links/:id/targets", handler.AddGroupLinkTarget)
+			admin.DELETE("/group-links/:id/targets/:targetId", handler.RemoveGroupLinkTarget)
+
 			// 中继台和服务器（需要管理员权限）
 			admin.GET("/relays", handler.GetRelays)
 			admin.GET("/relay/list", handler.GetRelays) // 兼容旧接口

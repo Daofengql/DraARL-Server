@@ -498,16 +498,13 @@ func handleDraARLATCommand(packet *protocol.DraARLv1Packet, dev *models.Device) 
 func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, gp *models.Group) {
 	pool := gp.ConnPool.(*CurrentConnPool)
 
+	// 1. 在本群组内广播
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
 			continue // 不转发给自己
 		}
 
-		// ==========================================
 		// 终极防御：懒剔除拦截
-		// 检查池子里的这个设备，它当前的真实 GroupID 还是不是本群组？
-		// 如果不是，说明它是被移出的"幽灵设备"，直接跳过！
-		// ==========================================
 		if targetDev.GroupID != gp.ID {
 			continue
 		}
@@ -518,14 +515,63 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 		}
 
 		if targetDev.UDPAddr != nil && targetDev.ISOnline {
-			// 转发时保留原始发送方信息
 			globalConn.WriteToUDP(data, targetDev.UDPAddr)
+		}
+	}
+
+	// 2. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
+	forwardVoiceToLinkedGroups(dev, data, gp.ID)
+}
+
+// forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
+func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID int) {
+	// 获取该群组所属的所有互联组
+	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
+	if len(linkGroupIDs) == 0 {
+		return // 不属于任何互联组，无需转发
+	}
+
+	// 遍历每个互联组
+	for _, linkGroupID := range linkGroupIDs {
+		// 获取互联组并检查状态
+		linkGroup, exists := GetGroupFromCache(linkGroupID)
+		if !exists || linkGroup.Status != 1 {
+			continue // 互联组不存在或已禁用，跳过
+		}
+
+		// 获取该互联组关联的所有目标群组
+		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
+		for _, targetID := range targetGroupIDs {
+			if targetID == sourceGroupID {
+				continue // 不转发回自己
+			}
+
+			// 获取目标群组���转发
+			if targetGroup, exists := GetGroupFromCache(targetID); exists {
+				pool := targetGroup.ConnPool.(*CurrentConnPool)
+				for _, targetDev := range pool.DevConnList {
+					// 懒剔除拦截
+					if targetDev.GroupID != targetID {
+						continue
+					}
+
+					// 检查目标设备是否禁收
+					if targetDev.DisableRecv {
+						continue
+					}
+
+					if targetDev.UDPAddr != nil && targetDev.ISOnline {
+						globalConn.WriteToUDP(data, targetDev.UDPAddr)
+					}
+				}
+			}
 		}
 	}
 }
 
 // forwardDraARLMessage 转发 DraARLv1 文本消息
 func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
+	// 1. 在本群组内广播
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
 			continue
@@ -543,6 +589,46 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 
 		if targetDev.UDPAddr != nil && targetDev.ISOnline {
 			globalConn.WriteToUDP(data, targetDev.UDPAddr)
+		}
+	}
+
+	// 2. 跨虚拟组转发文本消息
+	forwardMessageToLinkedGroups(dev, data, gp.ID)
+}
+
+// forwardMessageToLinkedGroups 将文本消息转发到互联组关联的其他群组
+func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID int) {
+	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
+	if len(linkGroupIDs) == 0 {
+		return
+	}
+
+	for _, linkGroupID := range linkGroupIDs {
+		linkGroup, exists := GetGroupFromCache(linkGroupID)
+		if !exists || linkGroup.Status != 1 {
+			continue
+		}
+
+		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
+		for _, targetID := range targetGroupIDs {
+			if targetID == sourceGroupID {
+				continue
+			}
+
+			if targetGroup, exists := GetGroupFromCache(targetID); exists {
+				pool := targetGroup.ConnPool.(*CurrentConnPool)
+				for _, targetDev := range pool.DevConnList {
+					if targetDev.GroupID != targetID {
+						continue
+					}
+					if targetDev.DisableRecv {
+						continue
+					}
+					if targetDev.UDPAddr != nil && targetDev.ISOnline {
+						globalConn.WriteToUDP(data, targetDev.UDPAddr)
+					}
+				}
+			}
 		}
 	}
 }
@@ -551,6 +637,7 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, conn *net.UDPConn, gp *models.Group) {
 	pool := gp.ConnPool.(*CurrentConnPool)
 
+	// 1. 在本群组内广播
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
 			continue
@@ -570,6 +657,9 @@ func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Devic
 			globalConn.WriteToUDP(data, targetDev.UDPAddr)
 		}
 	}
+
+	// 2. 跨虚拟组转发服务器语音
+	forwardVoiceToLinkedGroups(dev, data, gp.ID)
 }
 
 // min 返回两个整数中的较小值
@@ -609,6 +699,7 @@ func StartGroupCacheSync() {
 	// 启动时立即执行一次，确保服务器刚启动就有数据
 	refreshGroupCache()
 	refreshDeviceCache()
+	InitGroupLinkCache() // 初始化群组互联缓存
 
 	go func() {
 		// 每隔 10 秒同步一次数据库中的群组和设备状态
@@ -619,6 +710,7 @@ func StartGroupCacheSync() {
 			<-ticker.C
 			refreshGroupCache()
 			refreshDeviceCache()
+			refreshGroupLinkCache() // 同步群组互联缓存
 		}
 	}()
 	log.Println("[CACHE] 数据库群组和设备定时同步任务已启动 (间隔: 10s)")
@@ -657,6 +749,7 @@ func refreshGroupCache() {
 			existingGroup.MasterServer = modelGroup.MasterServer
 			existingGroup.SlaveServer = modelGroup.SlaveServer
 			existingGroup.Status = modelGroup.Status
+			existingGroup.IsVirtual = modelGroup.IsVirtual // 补全：虚拟组属性同步
 			existingGroup.Note = modelGroup.Note
 			existingGroup.UpdateTime = modelGroup.UpdateTime
 			// 注意：ConnPool 和 DevMap 保持不变，在线设备状态不受影响

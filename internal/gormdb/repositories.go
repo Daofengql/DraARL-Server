@@ -97,6 +97,27 @@ func (r *GroupRepository) ListPublicGroups() ([]*Group, error) {
 	return groups, err
 }
 
+// ListPublicGroupsExcludeVirtual 获取公开群组列表（排除虚拟互联组）
+func (r *GroupRepository) ListPublicGroupsExcludeVirtual() ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("type = ? AND (is_virtual = ? OR is_virtual IS NULL)", 1, false).Order("id DESC").Find(&groups).Error
+	return groups, err
+}
+
+// ListVirtualGroups 获取所有虚拟互联组
+func (r *GroupRepository) ListVirtualGroups() ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("is_virtual = ?", true).Order("id DESC").Find(&groups).Error
+	return groups, err
+}
+
+// ListGroupsExcludeVirtual 获取所有群组（排除虚拟互联组）
+func (r *GroupRepository) ListGroupsExcludeVirtual() ([]*Group, error) {
+	var groups []*Group
+	err := r.db.Where("is_virtual = ? OR is_virtual IS NULL", false).Order("id DESC").Find(&groups).Error
+	return groups, err
+}
+
 // ListPublicGroupsPaginated 分页获取公开群组列表
 func (r *GroupRepository) ListPublicGroupsPaginated(limit, page int, keyword string) ([]*Group, int64, error) {
 	var groups []*Group

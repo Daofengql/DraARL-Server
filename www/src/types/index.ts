@@ -100,6 +100,7 @@ export interface Group {
   master_server?: number
   slave_server?: number
   status?: number  // 0=禁用, 1=启用
+  is_virtual?: boolean  // 是否为虚拟互联组
   note?: string
   devices?: Device[]
 
@@ -116,6 +117,32 @@ export interface Group {
   created_at?: string // 前端兼容字段
   update_time?: string
   updated_at?: string // 前端兼容字段
+}
+
+// 群组互联关联类型
+export interface GroupLink {
+  id: number
+  link_group_id: number      // 互联组ID
+  target_group_id: number    // 目标群组ID
+  target_group_name?: string // 目标群组名称
+  target_group_status?: number // 目标群组状态
+  created_at: string
+  updated_at: string
+}
+
+// 虚拟互联组（包含关联信息）
+export interface VirtualGroup extends Group {
+  target_count?: number  // 关联的目标群组数量
+  targets?: GroupLinkTarget[]
+}
+
+// 互联组关联的目标群组
+export interface GroupLinkTarget {
+  id: number
+  target_group_id: number
+  target_group_name: string
+  target_group_status: number
+  created_at: string
 }
 
 // 群组成员类型

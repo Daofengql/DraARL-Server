@@ -17,6 +17,7 @@ import { AdminLayout } from './components/layout/AdminLayout'
 import { AdminDashboardPage } from './pages/admin/DashboardPage'
 import { AdminDevicePage } from './pages/admin/DevicePage'
 import { AdminGroupPage } from './pages/admin/GroupPage'
+import { GroupLinkPage } from './pages/admin/GroupLinkPage'
 import { authService } from './services'
 
 function App() {
@@ -72,6 +73,7 @@ function App() {
           <Route path="users" element={<UsersPage />} />
           <Route path="devices" element={<AdminDevicePage />} />
           <Route path="groups" element={<AdminGroupPage />} />
+          <Route path="group-links" element={<GroupLinkPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="certificate-approvals" element={<CertificateApprovalsPage />} />
           <Route path="relays" element={<RelaysPage />} />

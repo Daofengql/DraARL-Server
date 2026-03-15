@@ -388,9 +388,16 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		lat := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[0:8]))
 		lon := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[8:16]))
 		alt := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[16:24]))
-		if lat != 0 || lon != 0 {
-			log.Printf("[GPS] %s-%d: lat=%.6f, lon=%.6f, alt=%.1fm",
-				dev.Username, dev.SSID, lat, lon, alt)
+
+		// 校验 GPS 坐标是否在有效范���内
+		if lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 {
+			if lat != 0 || lon != 0 {
+				log.Printf("[GPS] %s-%d: lat=%.6f, lon=%.6f, alt=%.1fm",
+					dev.Username, dev.SSID, lat, lon, alt)
+			}
+		} else {
+			log.Printf("[GPS] %s-%d: 无效坐标 lat=%.6f, lon=%.6f (超出范围)",
+				dev.Username, dev.SSID, lat, lon)
 		}
 	}
 

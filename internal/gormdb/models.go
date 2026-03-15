@@ -69,28 +69,24 @@ func (u *User) GetRoles() []string {
 
 // Device 设备模型
 type Device struct {
-	ID         int       `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name       string    `gorm:"type:varchar(255);column:name" json:"name"`
-	DMRID      int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
-	CallSign   string    `gorm:"type:varchar(32);index:idx_callsign_ssid,priority:1;column:callsign" json:"callsign"`
-	SSID       uint8     `gorm:"type:tinyint unsigned;index:idx_callsign_ssid,priority:2;column:ssid" json:"ssid"`
-	Username   string    `gorm:"type:varchar(255);index;column:username" json:"username"` // 所属用户名
-	Password   string    `gorm:"type:varchar(255);column:password" json:"password"`
-	Gird       string    `gorm:"type:varchar(255);column:gird" json:"gird"`
-	DevType    int       `gorm:"type:int;column:dev_type" json:"dev_type"`
-	DevModel   int       `gorm:"type:int;column:dev_model" json:"dev_model"`
-	GroupID    int       `gorm:"type:int;index;column:group_id" json:"group_id"`
-	Status     int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
-	IsCerted   bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
-	ChanName   string    `gorm:"type:text;column:chan_name" json:"chan_name"`
-	OnlineTime time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
-	CreateTime time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	Note       string    `gorm:"type:text;column:note" json:"note"`
-	Priority   int       `gorm:"type:int;default:100;column:priority" json:"priority"`
-	ISOnline   bool      `gorm:"type:tinyint(1);default:0;column:is_online" json:"is_online"` // 在线状态（同步到数据库供Web端查询）
+	ID          int       `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Name        string    `gorm:"type:varchar(255);column:name" json:"name"`
+	DMRID       int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
+	SSID        uint8     `gorm:"type:tinyint unsigned;index:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
+	OwnerID     int       `gorm:"type:int;index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
+	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                                   // 位置信息 (原 gird 字段)
+	DevModel    int       `gorm:"type:int;column:dev_model" json:"dev_model"`
+	GroupID     int       `gorm:"type:int;index;column:group_id" json:"group_id"`
+	Status      int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	IsCerted    bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
+	Priority    int       `gorm:"type:int;default:100;column:priority" json:"priority"`
 	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"` // 设备级禁发
 	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"` // 设备级禁收
+	ISOnline    bool      `gorm:"type:tinyint(1);default:0;column:is_online" json:"is_online"`       // 在线状态（同步到数据库供Web端查询）
+	OnlineTime  time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
+	Note        string    `gorm:"type:text;column:note" json:"note"`
+	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
 }
 
 // TableName 指定表名
@@ -268,22 +264,20 @@ func (GroupMember) TableName() string {
 	return "group_members"
 }
 
-// CommRecord 通信记录
+// CommRecord 通信记录（精简版，名称通过联表查询获取）
 type CommRecord struct {
-	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	DeviceID    uint      `gorm:"index;not null;column:device_id" json:"device_id"`       // 发送设备ID
-	DeviceName  string    `gorm:"type:varchar(50);column:device_name" json:"device_name"` // 设备名称（冗余）
-	GroupID     *uint     `gorm:"index;column:group_id" json:"group_id"`                  // 所属群组ID
-	GroupName   string    `gorm:"type:varchar(100);column:group_name" json:"group_name"`  // 群组名称（冗余）
-	UserID      *uint     `gorm:"index;column:user_id" json:"user_id"`                    // 所属用户ID
-	Username    string    `gorm:"type:varchar(50);column:username" json:"username"`       // 用户名（冗余）
-	StartTime   time.Time `gorm:"index;not null;column:start_time" json:"start_time"`     // 通信开始时间
-	EndTime     time.Time `gorm:"column:end_time" json:"end_time"`                        // 通信结束时间
-	DurationMs  int       `gorm:"column:duration_ms" json:"duration_ms"`                  // 通信时长（毫秒）
-	AudioPath   string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`  // MinIO 音频文件路径
-	AudioSize   int64     `gorm:"column:audio_size" json:"audio_size"`                    // 音频文件大小（字节）
-	Status      int       `gorm:"default:0;index;column:status" json:"status"`            // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
-	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`    // 发送设备ID
+	DeviceSSID uint8     `gorm:"column:device_ssid" json:"device_ssid"`               // 设备 SSID（冗余，便于查询）
+	GroupID    *uint     `gorm:"index;column:group_id" json:"group_id"`               // 所属群组ID
+	UserID     *uint     `gorm:"index;column:user_id" json:"user_id"`                 // 所属用户ID
+	StartTime  time.Time `gorm:"index;not null;column:start_time" json:"start_time"`  // 通信开始时间
+	EndTime    time.Time `gorm:"column:end_time" json:"end_time"`                     // 通信结束时间
+	DurationMs int       `gorm:"column:duration_ms" json:"duration_ms"`               // 通信时长（毫秒）
+	AudioPath  string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"` // MinIO 音频文件路径
+	AudioSize  int64     `gorm:"column:audio_size" json:"audio_size"`                 // 音频文件大小（字节）
+	Status     int       `gorm:"default:0;index;column:status" json:"status"`         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
+	CreatedAt  time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 }
 
 // TableName 指定表名

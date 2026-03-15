@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -12,9 +11,10 @@ import (
 )
 
 // 设备表列顺序（重要！修改表结构时需要同步更新）
-// 0: id, 1: name, 2: dmrid, 3: callsign, 4: ssid, 5: username, 6: password,
-// 7: gird, 8: dev_type, 9: dev_model, 10: group_id, 11: status, 12: is_certed,
-// 13: chan_name, 14: online_time, 15: create_time, 16: update_time, 17: note, 18: priority
+// 0: id, 1: name, 2: dmrid, 3: ssid, 4: owner_id, 5: qth,
+// 6: dev_model, 7: group_id, 8: status, 9: is_certed, 10: priority,
+// 11: disable_send, 12: disable_recv, 13: is_online, 14: online_time,
+// 15: create_time, 16: update_time, 17: note
 //
 // 注意：所有查询必须明确指定列名（不要用 SELECT *），确保列顺序与上述定义一致
 
@@ -35,11 +35,11 @@ func NewDeviceRepository() *DeviceRepository {
 
 // AddDevice 添加设备
 func (r *DeviceRepository) AddDevice(device *models.Device) error {
-	query := `INSERT INTO devices (name, dmrid, callsign, ssid, username, password, dev_model, group_id, status, priority, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+	query := `INSERT INTO devices (name, dmrid, ssid, owner_id, qth, dev_model, group_id, status, priority, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
-	result, err := r.db.Exec(query, device.Name, device.DMRID, device.CallSign, device.SSID,
-		device.Username, device.Password, device.DevModel, device.GroupID, device.Status, device.Priority)
+	result, err := r.db.Exec(query, device.Name, device.DMRID, device.SSID, device.OwnerID, device.QTH,
+		device.DevModel, device.GroupID, device.Status, device.Priority)
 	if err != nil {
 		return err
 	}
@@ -56,41 +56,28 @@ func (r *DeviceRepository) AddDevice(device *models.Device) error {
 // scanDevice 扫描设备行数据的通用函数
 func scanDevice(row *sql.Row) (*models.Device, error) {
 	device := &models.Device{}
-	var gird, note, chanNameStr, username, password sql.NullString
-	var devType sql.NullInt32
+	var qth, note sql.NullString
 	var isCerted sql.NullBool
 	var createTime, updateTime, onlineTime sql.NullTime
 
 	err := row.Scan(
-		&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-		&username, &password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
-		&isCerted, &chanNameStr, &onlineTime, &createTime, &updateTime, &note, &device.Priority,
+		&device.ID, &device.Name, &device.DMRID, &device.SSID, &device.OwnerID, &qth,
+		&device.DevModel, &device.GroupID, &device.Status, &isCerted, &device.Priority,
+		&device.DisableSend, &device.DisableRecv, &device.ISOnline, &onlineTime, &createTime, &updateTime, &note,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	// 处理可能为 NULL 的字段
-	if gird.Valid {
-		device.Gird = gird.String
-	}
-	if username.Valid {
-		device.Username = username.String
-	}
-	if password.Valid {
-		device.Password = password.String
-	}
-	if devType.Valid {
-		device.DevType = int(devType.Int32)
+	if qth.Valid {
+		device.QTH = qth.String
 	}
 	if isCerted.Valid {
 		device.IsCerted = isCerted.Bool
 	}
 	if note.Valid {
 		device.Note = note.String
-	}
-	if chanNameStr.Valid && chanNameStr.String != "" {
-		json.Unmarshal([]byte(chanNameStr.String), &device.ChanName)
 	}
 	if createTime.Valid {
 		device.CreateTime = createTime.Time
@@ -108,48 +95,34 @@ func scanDevice(row *sql.Row) (*models.Device, error) {
 		device.OnlineTime = time.Time{}
 	}
 
-	device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
 	return device, nil
 }
 
 // scanDeviceFromRows 从 Rows 扫描设备
 func scanDeviceFromRows(rows *sql.Rows) (*models.Device, error) {
 	device := &models.Device{}
-	var gird, note, chanNameStr, username, password sql.NullString
-	var devType sql.NullInt32
+	var qth, note sql.NullString
 	var isCerted sql.NullBool
 	var createTime, updateTime, onlineTime sql.NullTime
 
 	err := rows.Scan(
-		&device.ID, &device.Name, &device.DMRID, &device.CallSign, &device.SSID,
-		&username, &password, &gird, &devType, &device.DevModel, &device.GroupID, &device.Status,
-		&isCerted, &chanNameStr, &onlineTime, &createTime, &updateTime, &note, &device.Priority,
+		&device.ID, &device.Name, &device.DMRID, &device.SSID, &device.OwnerID, &qth,
+		&device.DevModel, &device.GroupID, &device.Status, &isCerted, &device.Priority,
+		&device.DisableSend, &device.DisableRecv, &device.ISOnline, &onlineTime, &createTime, &updateTime, &note,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	// 处理可能为 NULL 的字段
-	if gird.Valid {
-		device.Gird = gird.String
-	}
-	if username.Valid {
-		device.Username = username.String
-	}
-	if password.Valid {
-		device.Password = password.String
-	}
-	if devType.Valid {
-		device.DevType = int(devType.Int32)
+	if qth.Valid {
+		device.QTH = qth.String
 	}
 	if isCerted.Valid {
 		device.IsCerted = isCerted.Bool
 	}
 	if note.Valid {
 		device.Note = note.String
-	}
-	if chanNameStr.Valid && chanNameStr.String != "" {
-		json.Unmarshal([]byte(chanNameStr.String), &device.ChanName)
 	}
 	if createTime.Valid {
 		device.CreateTime = createTime.Time
@@ -167,17 +140,17 @@ func scanDeviceFromRows(rows *sql.Rows) (*models.Device, error) {
 		device.OnlineTime = time.Time{}
 	}
 
-	device.CallSignSSID = device.CallSign + "-" + string(rune(device.SSID))
 	return device, nil
 }
 
-// GetDevice 获取设备
-func (r *DeviceRepository) GetDevice(callsign string, ssid byte) (*models.Device, error) {
+// GetDevice 获取设备（通过 owner_id 和 ssid）
+func (r *DeviceRepository) GetDevice(ownerID int, ssid byte) (*models.Device, error) {
 	// 明确指定列名，确保顺序与 scanDevice 函数一致
-	query := `SELECT id, name, dmrid, callsign, ssid, username, password, gird, dev_type, dev_model,
-	              group_id, status, is_certed, chan_name, online_time, create_time, update_time, note, priority
-	              FROM devices WHERE callsign = ? AND ssid = ?`
-	row := r.db.QueryRow(query, callsign, ssid)
+	query := `SELECT id, name, dmrid, ssid, owner_id, qth, dev_model,
+	              group_id, status, is_certed, priority, disable_send, disable_recv, is_online,
+	              online_time, create_time, update_time, note
+	              FROM devices WHERE owner_id = ? AND ssid = ?`
+	row := r.db.QueryRow(query, ownerID, ssid)
 
 	device, err := scanDevice(row)
 	if err == sql.ErrNoRows {
@@ -193,17 +166,17 @@ func (r *DeviceRepository) GetDevice(callsign string, ssid byte) (*models.Device
 // UpdateDevice 更新设备
 func (r *DeviceRepository) UpdateDevice(device *models.Device) error {
 	query := `UPDATE devices SET name = ?, group_id = ?, status = ?, priority = ?, note = ?, update_time = NOW()
-		WHERE callsign = ? AND ssid = ?`
+		WHERE owner_id = ? AND ssid = ?`
 
 	_, err := r.db.Exec(query, device.Name, device.GroupID, device.Status, device.Priority,
-		device.Note, device.CallSign, device.SSID)
+		device.Note, device.OwnerID, device.SSID)
 	return err
 }
 
 // DeleteDevice 删除设备
-func (r *DeviceRepository) DeleteDevice(callsign string, ssid byte) error {
-	query := `DELETE FROM devices WHERE callsign = ? AND ssid = ?`
-	_, err := r.db.Exec(query, callsign, ssid)
+func (r *DeviceRepository) DeleteDevice(ownerID int, ssid byte) error {
+	query := `DELETE FROM devices WHERE owner_id = ? AND ssid = ?`
+	_, err := r.db.Exec(query, ownerID, ssid)
 	return err
 }
 
@@ -219,8 +192,9 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*models.Device, int, 
 	}
 
 	// 获取分页数据，明确指定列名
-	query := `SELECT id, name, dmrid, callsign, ssid, username, password, gird, dev_type, dev_model,
-	              group_id, status, is_certed, chan_name, online_time, create_time, update_time, note, priority
+	query := `SELECT id, name, dmrid, ssid, owner_id, qth, dev_model,
+	              group_id, status, is_certed, priority, disable_send, disable_recv, is_online,
+	              online_time, create_time, update_time, note
 	              FROM devices ORDER BY id LIMIT ? OFFSET ?`
 	rows, err := r.db.Query(query, limit, offset)
 	if err != nil {
@@ -242,17 +216,18 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*models.Device, int, 
 }
 
 // ChangeDeviceGroup 更改设备群组
-func (r *DeviceRepository) ChangeDeviceGroup(callsign string, ssid byte, groupID int) error {
-	query := `UPDATE devices SET group_id = ?, update_time = NOW() WHERE callsign = ? AND ssid = ?`
-	_, err := r.db.Exec(query, groupID, callsign, ssid)
+func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid byte, groupID int) error {
+	query := `UPDATE devices SET group_id = ?, update_time = NOW() WHERE owner_id = ? AND ssid = ?`
+	_, err := r.db.Exec(query, groupID, ownerID, ssid)
 	return err
 }
 
 // GetDeviceByDMRID 通过DMRID获取设备
 func (r *DeviceRepository) GetDeviceByDMRID(dmrid uint32) (*models.Device, error) {
 	// 明确指定列名，确保顺序与 scanDevice 函数一致
-	query := `SELECT id, name, dmrid, callsign, ssid, username, password, gird, dev_type, dev_model,
-	              group_id, status, is_certed, chan_name, online_time, create_time, update_time, note, priority
+	query := `SELECT id, name, dmrid, ssid, owner_id, qth, dev_model,
+	              group_id, status, is_certed, priority, disable_send, disable_recv, is_online,
+	              online_time, create_time, update_time, note
 	              FROM devices WHERE dmrid = ?`
 	row := r.db.QueryRow(query, dmrid)
 

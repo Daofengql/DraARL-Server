@@ -611,12 +611,27 @@ func GetGroupDevices(c *gin.Context) {
 		}
 	}
 
+	// 构建 OwnerID 到 CallSign 的映射
+	userRepo := gormdb.NewUserRepository()
+	ownerCallSigns := make(map[int]string)
+	for _, d := range devicesRaw {
+		if d.OwnerID > 0 {
+			if _, exists := ownerCallSigns[d.OwnerID]; !exists {
+				if owner, err := userRepo.GetUserByID(d.OwnerID); err == nil && owner != nil {
+					ownerCallSigns[d.OwnerID] = owner.CallSign
+				}
+			}
+		}
+	}
+
 	// 转换为响应格式
 	devices := make([]gin.H, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
 		// 获取设备级别的禁发/禁收状态
 		deviceDisableSend := d.DisableSend
 		deviceDisableRecv := d.DisableRecv
+		// 获取所有者呼号
+		callsign := ownerCallSigns[d.OwnerID]
 
 		// 如果有群组成员级别的设置，需要进行合并（设备级别优先）
 		if memberStatus, ok := deviceMemberStatus[d.ID]; ok {
@@ -627,7 +642,7 @@ func GetGroupDevices(c *gin.Context) {
 			devices = append(devices, gin.H{
 				"id":           d.ID,
 				"name":         d.Name,
-				"callsign":     d.CallSign,
+				"callsign":     callsign,
 				"ssid":         d.SSID,
 				"dev_model":    d.DevModel,
 				"group_id":     d.GroupID,
@@ -644,7 +659,7 @@ func GetGroupDevices(c *gin.Context) {
 			devices = append(devices, gin.H{
 				"id":           d.ID,
 				"name":         d.Name,
-				"callsign":     d.CallSign,
+				"callsign":     callsign,
 				"ssid":         d.SSID,
 				"dev_model":    d.DevModel,
 				"group_id":     d.GroupID,
@@ -1099,10 +1114,11 @@ func UpdateDeviceStatus(c *gin.Context) {
 	// 使设备详情和群组设备列表缓存失效
 	ctx := c.Request.Context()
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		// 获取设备信息以获取 callsign 和 ssid
+		// 获取设备信息以获取 owner_id 和 ssid
 		repo := gormdb.NewDeviceRepository()
 		if device, err := repo.GetDeviceByID(deviceID); err == nil && device != nil {
-			_ = deviceCache.InvalidateDevice(ctx, deviceID, device.CallSign, uint8(device.SSID))
+			// 使用 OwnerID 作为缓存键
+			_ = deviceCache.InvalidateDevice(ctx, deviceID, device.OwnerID, uint8(device.SSID))
 		}
 		// 使群组设备列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
@@ -1219,7 +1235,8 @@ func KickDevice(c *gin.Context) {
 	// 使设备详情、群组设备列表和默认群组设备列表缓存失效
 	ctx := c.Request.Context()
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		_ = deviceCache.InvalidateDevice(ctx, deviceID, device.CallSign, uint8(device.SSID))
+		// 使用 OwnerID 作为缓存键
+		_ = deviceCache.InvalidateDevice(ctx, deviceID, device.OwnerID, uint8(device.SSID))
 		// 使原群组设备列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 		// 使默认群组设备列表缓存失效（设备移入默认群组）
@@ -1311,7 +1328,7 @@ func LeaveGroup(c *gin.Context) {
 	devices, _ := deviceRepo.ListDevicesByGroupID(id)
 	movedDeviceIDs := make([]int, 0)
 	for _, device := range devices {
-		if device.Username == currentUser.Name {
+		if device.OwnerID == currentUser.ID {
 			err = deviceRepo.UpdateDeviceFields(device.ID, map[string]interface{}{
 				"group_id": 1,
 			})
@@ -1331,7 +1348,7 @@ func LeaveGroup(c *gin.Context) {
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 		// 使移动的设备缓存失效
 		for _, deviceID := range movedDeviceIDs {
-			_ = deviceCache.InvalidateDevice(ctx, deviceID, "", 0)
+			_ = deviceCache.InvalidateDevice(ctx, deviceID, 0, 0)
 		}
 		// 使原群组和默认群组的设���列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, id)

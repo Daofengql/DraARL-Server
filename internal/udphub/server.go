@@ -251,12 +251,12 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 		Username:     packet.Username,
 		CallSign:     authResult.CallSign,
 		SSID:         packet.SSID,
+		OwnerID:      authResult.User.ID, // 设置所有者ID
 		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
 		CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID),
 		DevModel:     packet.DevModel,
 		Priority:     100,
 		Status:       0,
-		ChanName:     make([]string, 8),
 		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
 	}
 
@@ -292,8 +292,8 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 			// 发送心跳响应（填充 CallSign）
 			response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
 			conn.WriteToUDP(response, packet.UDPAddr)
-			log.Printf("[ONLINE] New DraARLv1 device online: %s (%s) from %v, group: %d",
-				packet.Username, authResult.CallSign, packet.UDPAddr, dev.GroupID)
+			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, 群组: %d)",
+				packet.Username, dev.Name, packet.UDPAddr, dev.GroupID)
 		}
 	}
 }
@@ -370,8 +370,8 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 			gid := uint(gp.ID)
 			groupID = &gid
 		}
-		deviceName := fmt.Sprintf("%s-%d", dev.CallSign, dev.SSID)
-		RecordCommPacket(uint(dev.ID), deviceName, groupID, gp.Name, userID, dev.Username, packet.DATA)
+		// 精简版：只记录 ID，不再记录名称
+		RecordCommPacket(uint(dev.ID), uint8(dev.SSID), groupID, userID, packet.DATA)
 	}
 
 	forwardDraARLVoice(packet, dev, data, gp)
@@ -443,8 +443,8 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 
 		dev.QTH = getQTH(dev.UDPAddr.IP.String())
-		log.Printf("[ONLINE] DraARLv1 device %s (%s) online from %v, QTH: %v, group: %d, model: %d",
-			dev.Username, dev.CallSign, dev.UDPAddr.String(), dev.QTH, gp.ID, dev.DevModel)
+		log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
+			dev.Username, dev.Name, dev.UDPAddr.String(), dev.QTH, gp.ID, dev.DevModel)
 
 		dev.ISOnline = true
 	}
@@ -703,15 +703,25 @@ func refreshDeviceCache() {
 	// 获取所有设备（使用较大的 limit 来获取全部）
 	dbDevices, _, err := repo.ListDevices(10000, 1)
 	if err != nil {
-		log.Printf("[CACHE] 从数据库加载设备失败: %v", err)
+		log.Printf("[CACHE] 从���据库加载设备失败: %v", err)
 		return
 	}
 
 	updatedCount := 0
 	onlineSyncCount := 0
 
+	// 用户仓库用于获取用户名
+	userRepo := gormdb.NewUserRepository()
+
 	for _, dbDev := range dbDevices {
-		usernameSSID := protocol.GetUsernameSSID(dbDev.Username, dbDev.SSID)
+		// 从 owner_id 获取用户名构建索引 key
+		var username string
+		if dbDev.OwnerID > 0 {
+			if user, err := userRepo.GetUserByID(dbDev.OwnerID); err == nil && user != nil {
+				username = user.Name
+			}
+		}
+		usernameSSID := protocol.GetUsernameSSID(username, dbDev.SSID)
 
 		// 只更新已在内存中的设备
 		if memDev, exists := devUsernameSSIDMap[usernameSSID]; exists {
@@ -729,7 +739,7 @@ func refreshDeviceCache() {
 			// 这样 Web 端查询时就能看到正确的在线状态
 			// ==========================================
 			if memDev.ISOnline != dbDev.ISOnline {
-				repo.UpdateDeviceOnlineStatus(memDev.CallSign, memDev.SSID, memDev.ISOnline, "")
+				repo.UpdateDeviceOnlineStatus(memDev.OwnerID, uint8(memDev.SSID), memDev.ISOnline, "")
 				onlineSyncCount++
 			}
 		}

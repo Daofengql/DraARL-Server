@@ -10,18 +10,15 @@ type Device struct {
 	ID             int       `json:"id"`
 	Name           string    `json:"name"`
 	DMRID          uint32    `json:"dmrid"`
-	CallSign       string    `json:"callsign"`
 	SSID           byte      `json:"ssid"`
-	Username       string    `json:"username"`      // 所属用户名
-	Password       string    `json:"password"`
-	Gird           string    `json:"gird"`           // 数据库字段
-	DevType        int       `json:"dev_type"`        // 数据库字段
+	OwnerID        int       `json:"owner_id"`        // 所有者用户ID (外键关联 users.id)
+	CallSign       string    `json:"callsign"`        // 运行时字段：从用户缓存获取
+	QTH            string    `json:"qth"`             // 位置信息 (原 gird 字段)
 	DevModel       byte      `json:"dev_model"`
 	GroupID        int       `json:"group_id"`
 	Status         byte      `json:"status"`
-	IsCerted       bool      `json:"is_certed"`      // 数据库字段
+	IsCerted       bool      `json:"is_certed"`
 	Priority       int       `json:"priority"`
-	ChanName       []string  `json:"chan_name"`
 	OnlineTime     time.Time `json:"online_time"`
 	CreateTime     time.Time `json:"create_time"`
 	UpdateTime     time.Time `json:"update_time"`
@@ -38,7 +35,6 @@ type Device struct {
 	LastVoiceTime    int64             `json:"last_voice_time"`
 	LastCtlTime      int64             `json:"last_ctl_time"`
 	Traffic          int64             `json:"traffic"`
-	QTH              string            `json:"qth"`
 	DeviceParm       map[string]string `json:"device_parm,omitempty"`
 	Loged            bool              `json:"-"`
 	LastVoiceEndTime time.Time         `json:"last_voice_end_time"`
@@ -53,6 +49,7 @@ type Device struct {
 	CallSignSSID       string          `json:"callsign_ssid"`
 	LastATcommand      *ATCommand      `json:"last_at_command,omitempty"`
 	Speaking           *bool           `json:"-"` // Exported for use in udphub package (meeting mode)
+	Username           string          `json:"username"` // 运行时字段：从认证结果获取，用于索引
 
 	// Connection state tracking
 	LastDisconnectTime  time.Time `json:"last_disconnect_time"`  // Last time device went offline

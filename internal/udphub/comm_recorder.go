@@ -114,11 +114,9 @@ func (cr *CommRecorder) runTimers() {
 // 注意：由于 CGO 限制，服务端不解码 Opus，直接存储原始数据
 func (cr *CommRecorder) RecordPacket(
 	deviceID uint,
-	deviceName string,
+	deviceSSID uint8,
 	groupID *uint,
-	groupName string,
 	userID *uint,
-	username string,
 	audioData []byte,
 ) {
 	if cr == nil || !cr.running || !cr.config.Enabled {
@@ -126,7 +124,7 @@ func (cr *CommRecorder) RecordPacket(
 	}
 
 	// 直接存储 Opus 数据（标记为 Opus 格式）
-	cr.buffer.AppendPacket(deviceID, deviceName, groupID, groupName, userID, username, audioData)
+	cr.buffer.AppendPacket(deviceID, deviceSSID, groupID, userID, audioData)
 }
 
 // Stop 停止录制管理器
@@ -218,15 +216,13 @@ func StopCommRecorder() {
 // 传入的 audioData 是 Opus 编码数据，直接存储为 .opus 文件
 func RecordCommPacket(
 	deviceID uint,
-	deviceName string,
+	deviceSSID uint8,
 	groupID *uint,
-	groupName string,
 	userID *uint,
-	username string,
 	audioData []byte,
 ) {
 	if globalCommRecorder != nil {
-		globalCommRecorder.RecordPacket(deviceID, deviceName, groupID, groupName, userID, username, audioData)
+		globalCommRecorder.RecordPacket(deviceID, deviceSSID, groupID, userID, audioData)
 	}
 }
 

@@ -55,9 +55,9 @@ func deviceKey(deviceID int) string {
 	return fmt.Sprintf("device:info:%d", deviceID)
 }
 
-// deviceByCallSignKey 通过呼号和SSID查询的缓存键
-func deviceByCallSignKey(callsign string, ssid uint8) string {
-	return fmt.Sprintf("device:callsign:%s:%d", callsign, ssid)
+// deviceByOwnerKey 通过 OwnerID 和 SSID 查询的缓存键
+func deviceByOwnerKey(ownerID int, ssid uint8) string {
+	return fmt.Sprintf("device:owner:%d:%d", ownerID, ssid)
 }
 
 // deviceListKey 设备列表缓存键（分页）
@@ -106,15 +106,10 @@ func (c *DeviceCache) GetDeviceByID(ctx context.Context, id int) (*gormdb.Device
 }
 
 // GetDeviceByCallSignSSID 通过呼号和SSID获取设备详情（带缓存）
+// Deprecated: 呼号已从设备表移除，请使用 GetDeviceByID 或通过 OwnerID 查询
 func (c *DeviceCache) GetDeviceByCallSignSSID(ctx context.Context, callsign string, ssid uint8) (*gormdb.Device, error) {
-	key := deviceByCallSignKey(callsign, ssid)
-
-	var device gormdb.Device
-	if err := c.cache.Get(ctx, key, &device); err == nil {
-		return &device, nil
-	}
-
-	// 缓存未命中，从数据库查询
+	// 呼号已从设备表移除，此方法不再支持缓存查询
+	// 直接调用数据库的废弃方法（可能返回空结果）
 	repo := gormdb.NewDeviceRepository()
 	dbDevice, err := repo.GetDeviceByCallSignSSID(callsign, ssid)
 	if err != nil {
@@ -124,8 +119,7 @@ func (c *DeviceCache) GetDeviceByCallSignSSID(ctx context.Context, callsign stri
 		return nil, nil
 	}
 
-	// 写入缓存（详情缓存 5 分钟，同时写入按ID的键）
-	_ = c.cache.Set(ctx, key, dbDevice, 5*time.Minute)
+	// 写入按ID的缓存
 	_ = c.cache.Set(ctx, deviceKey(dbDevice.ID), dbDevice, 5*time.Minute)
 
 	return dbDevice, nil
@@ -169,12 +163,13 @@ func (c *DeviceCache) GetDeviceList(ctx context.Context, page, pageSize int) ([]
 
 // InvalidateDevice 使设备详情缓存失效（更新/删除设备时调用）
 // 注意：列表缓存不主动失效，依赖TTL自然过期
-func (c *DeviceCache) InvalidateDevice(ctx context.Context, deviceID int, callsign string, ssid uint8) error {
+// 参数 ownerID 用于删除按 owner_id+ssid 维度的缓存键
+func (c *DeviceCache) InvalidateDevice(ctx context.Context, deviceID int, ownerID int, ssid uint8) error {
 	keys := []string{
 		deviceKey(deviceID),
 	}
-	if callsign != "" {
-		keys = append(keys, deviceByCallSignKey(callsign, ssid))
+	if ownerID > 0 {
+		keys = append(keys, deviceByOwnerKey(ownerID, ssid))
 	}
 	return c.cache.Delete(ctx, keys...)
 }

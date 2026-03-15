@@ -96,11 +96,9 @@ func (cs *CommSyncer) SyncToDatabase() {
 
 		records = append(records, gormdb.CommRecord{
 			DeviceID:   item.Session.DeviceID,
-			DeviceName: item.Session.DeviceName,
+			DeviceSSID: item.Session.DeviceSSID,
 			GroupID:    item.Session.GroupID,
-			GroupName:  item.Session.GroupName,
 			UserID:     item.Session.UserID,
-			Username:   item.Session.Username,
 			StartTime:  item.Session.StartTime,
 			EndTime:    endTime,
 			DurationMs: durationMs,

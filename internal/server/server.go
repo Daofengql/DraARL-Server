@@ -146,7 +146,6 @@ func (s *Server) setupRoutes() {
 				approved.GET("/devices/list", handler.GetDevices) // 兼容旧接口
 				approved.GET("/device/get", handler.GetDevice)
 				approved.GET("/device/qths", handler.GetDeviceQTHs)
-				approved.POST("/devices", handler.CreateDevice)
 				approved.PUT("/devices/:id", handler.UpdateDevice)
 				approved.DELETE("/devices/:id", handler.DeleteDevice)
 				approved.POST("/device/changegroup", handler.ChangeDeviceGroup)

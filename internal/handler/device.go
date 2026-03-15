@@ -88,7 +88,7 @@ func GetDevices(c *gin.Context) {
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
 			filtered := make([]*gormdb.Device, 0)
 			for _, d := range devicesRaw {
-				if d.Username == currentUser.Name {
+				if d.OwnerID == currentUser.ID {
 					filtered = append(filtered, d)
 				}
 			}
@@ -115,11 +115,11 @@ func GetDevices(c *gin.Context) {
 			repo := gormdb.NewDeviceRepository()
 			devicesRaw, _ = repo.ListDevicesByGroupID(gid)
 		}
-		// 非管理员只能看到自己的设备
+		// 非管理员只能看到自���的设备
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
 			filtered := make([]*gormdb.Device, 0)
 			for _, d := range devicesRaw {
-				if d.Username == currentUser.Name {
+				if d.OwnerID == currentUser.ID {
 					filtered = append(filtered, d)
 				}
 			}
@@ -137,7 +137,7 @@ func GetDevices(c *gin.Context) {
 			devices = devicesRaw[start:end]
 		}
 	} else {
-		// 普通用户只获取自己的设备，管理员获取所有设备
+		// 普通���户只获取自己的设备，管理员获取所有设备
 		if currentUser != nil && hasRoleGORM(currentUser, "admin") {
 			// 管理员获取所有设备（使用缓存）
 			if deviceCache != nil {
@@ -149,7 +149,7 @@ func GetDevices(c *gin.Context) {
 		} else {
 			// 普通用户获取自己的设备（按用户查询不缓存）
 			repo := gormdb.NewDeviceRepository()
-			userDevices, _ := repo.ListDevicesByUsername(currentUser.Name)
+			userDevices, _ := repo.ListDevicesByOwnerID(currentUser.ID)
 			total = int64(len(userDevices))
 			// 手动分页
 			start := (page - 1) * limit
@@ -181,7 +181,6 @@ func GetDevices(c *gin.Context) {
 		info := &DeviceInfo{
 			ID:          d.ID,
 			Name:       d.Name,
-			CallSign:   d.CallSign,
 			SSID:       d.SSID,
 			DevModel:   d.DevModel,
 			GroupID:    d.GroupID,
@@ -190,19 +189,20 @@ func GetDevices(c *gin.Context) {
 			IsOnline:   d.ISOnline,
 			DisableSend: d.DisableSend, // 补充设备级禁发状态
 			DisableRecv: d.DisableRecv, // 补充设备级禁收状态
+			QTH:        d.QTH,
 			Note:       d.Note,
 			CreateTime: d.CreateTime.Format("2006-01-02 15:04:05"),
 			UpdateTime: d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
 
-		// 获取设备所有者信息
-		if d.Username != "" {
+		// 获取设备所有者信息（通过 owner_id）
+		if d.OwnerID > 0 {
 			var owner *gormdb.User
 			if userCache != nil {
-				owner, _ = userCache.GetUserByName(ctx, d.Username)
+				owner, _ = userCache.GetUserByID(ctx, d.OwnerID)
 			}
 			if owner == nil {
-				owner, _ = userRepo.GetUserByName(d.Username)
+				owner, _ = userRepo.GetUserByID(d.OwnerID)
 			}
 			if owner != nil {
 				info.OwnerID = owner.ID
@@ -211,6 +211,7 @@ func GetDevices(c *gin.Context) {
 					info.OwnerName = owner.Name
 				}
 				info.OwnerCallSign = owner.CallSign
+				info.CallSign = owner.CallSign // 从用户获取呼号
 			}
 		}
 
@@ -231,17 +232,6 @@ func GetDevices(c *gin.Context) {
 
 // GetDevice 获取单个设备
 func GetDevice(c *gin.Context) {
-	callsign := c.Query("callsign")
-	ssidStr := c.Query("ssid")
-	ssid := uint8(0)
-
-	if ssidStr != "" {
-		s, err := strconv.ParseUint(ssidStr, 10, 8)
-		if err == nil {
-			ssid = uint8(s)
-		}
-	}
-
 	idStr := c.Query("id")
 
 	var device *gormdb.Device
@@ -251,7 +241,7 @@ func GetDevice(c *gin.Context) {
 	deviceCache := cache.GetDeviceCache()
 	ctx := c.Request.Context()
 
-	// 优先使用ID查询
+	// 必须使用ID查询
 	if idStr != "" {
 		id, _ := strconv.Atoi(idStr)
 		if deviceCache != nil {
@@ -260,17 +250,10 @@ func GetDevice(c *gin.Context) {
 			repo := gormdb.NewDeviceRepository()
 			device, err = repo.GetDeviceByID(id)
 		}
-	} else if callsign != "" {
-		if deviceCache != nil {
-			device, err = deviceCache.GetDeviceByCallSignSSID(ctx, callsign, ssid)
-		} else {
-			repo := gormdb.NewDeviceRepository()
-			device, err = repo.GetDeviceByCallSignSSID(callsign, ssid)
-		}
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "缺少设备标识",
+			"message": "缺少设备ID",
 		})
 		return
 	}
@@ -283,19 +266,36 @@ func GetDevice(c *gin.Context) {
 		return
 	}
 
+	// 获取所有者呼号
+	var callsign string
+	userRepo := gormdb.NewUserRepository()
+	if device.OwnerID > 0 {
+		var owner *gormdb.User
+		if userCache := cache.GetUserCache(); userCache != nil {
+			owner, _ = userCache.GetUserByID(ctx, device.OwnerID)
+		}
+		if owner == nil {
+			owner, _ = userRepo.GetUserByID(device.OwnerID)
+		}
+		if owner != nil {
+			callsign = owner.CallSign
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
 			"id":         device.ID,
 			"name":       device.Name,
-			"callsign":   device.CallSign,
+			"callsign":   callsign,
 			"ssid":       device.SSID,
 			"dev_model":  device.DevModel,
 			"group_id":   device.GroupID,
 			"status":     device.Status,
 			"priority":   device.Priority,
 			"is_online":  device.ISOnline,
+			"owner_id":    device.OwnerID,
 			"note":       device.Note,
 			"create_time": device.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time": device.UpdateTime.Format("2006-01-02 15:04:05"),
@@ -310,7 +310,6 @@ type UpdateDeviceRequest struct {
 	Status      int8   `json:"status"`
 	Priority    int    `json:"priority"`
 	Note        string `json:"note"`
-	Password    string `json:"password"`
 	DevModel    int    `json:"dev_model"`
 	DisableSend bool   `json:"disable_send"` // 设备级禁发
 	DisableRecv bool   `json:"disable_recv"` // 设备级禁收
@@ -354,7 +353,7 @@ func UpdateDevice(c *gin.Context) {
 	userRepo := gormdb.NewUserRepository()
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 
-	if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.Username != currentUser.Name {
+	if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.OwnerID != currentUser.ID {
 		c.JSON(http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "无权修改此设备",
@@ -384,10 +383,6 @@ func UpdateDevice(c *gin.Context) {
 		updates["note"] = req.Note
 		device.Note = req.Note
 	}
-	if req.Password != "" {
-		updates["password"] = req.Password
-		device.Password = req.Password
-	}
 	if req.DevModel > 0 {
 		updates["dev_model"] = req.DevModel
 		device.DevModel = req.DevModel
@@ -410,8 +405,8 @@ func UpdateDevice(c *gin.Context) {
 	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
 	ctx := c.Request.Context()
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		// 1. 失效单个设备详情
-		_ = deviceCache.InvalidateDevice(ctx, id, device.CallSign, uint8(device.SSID))
+		// 1. 失效单个设备详情（使用 OwnerID 作为缓存键）
+		_ = deviceCache.InvalidateDevice(ctx, id, device.OwnerID, uint8(device.SSID))
 
 		// 2. 主动清理全局设备分页列表（设备属性修改后列表应更新）
 		_ = deviceCache.InvalidateDeviceList(ctx)
@@ -456,7 +451,7 @@ func DeleteDevice(c *gin.Context) {
 		userRepo := gormdb.NewUserRepository()
 		currentUser, _ := userRepo.GetUserByName(username.(string))
 
-		if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.Username != currentUser.Name {
+		if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.OwnerID != currentUser.ID {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    403,
 				"message": "无权删除此设备",
@@ -475,15 +470,16 @@ func DeleteDevice(c *gin.Context) {
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()
 		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-			_ = deviceCache.InvalidateDevice(ctx, id, device.CallSign, uint8(device.SSID))
+			// 使用 OwnerID 作为缓存键（不再查询呼号）
+			_ = deviceCache.InvalidateDevice(ctx, id, device.OwnerID, uint8(device.SSID))
 			_ = deviceCache.InvalidateDeviceList(ctx)
 			if device.GroupID > 0 {
 				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
 			}
 		}
 	} else {
-		// 通过呼号和SSID删除（兼容旧接口）
-		callsign := c.Query("callsign")
+		// 通过 owner_id 和 ssid 删除（兼容旧接口，需要先查询获取设备ID）
+		ownerIDStr := c.Query("owner_id")
 		ssidStr := c.Query("ssid")
 		ssid := uint8(0)
 
@@ -494,7 +490,7 @@ func DeleteDevice(c *gin.Context) {
 			}
 		}
 
-		if callsign == "" {
+		if ownerIDStr == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "缺少设备标识",
@@ -502,13 +498,42 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 
+		ownerID, err := strconv.Atoi(ownerIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "无效的所有者ID",
+			})
+			return
+		}
+
 		repo := gormdb.NewDeviceRepository()
-		if err := repo.DeleteDevice(callsign, ssid); err != nil {
+		device, err := repo.GetDeviceByOwnerSSID(ownerID, ssid)
+		if err != nil || device == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "设备不存在",
+			})
+			return
+		}
+
+		if err := repo.DeleteDeviceByID(device.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "删除设备失败",
 			})
 			return
+		}
+
+		// 使设备详情、设备列表和群组设备列表缓存失效
+		ctx := c.Request.Context()
+		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+			// 使用 OwnerID 作为缓存键
+			_ = deviceCache.InvalidateDevice(ctx, device.ID, device.OwnerID, uint8(device.SSID))
+			_ = deviceCache.InvalidateDeviceList(ctx)
+			if device.GroupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
+			}
 		}
 	}
 
@@ -646,7 +671,8 @@ func ChangeDeviceGroup(c *gin.Context) {
 	// 使设备详情、设备列表和新旧群组设备列表缓存失效
 	ctx := c.Request.Context()
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		_ = deviceCache.InvalidateDevice(ctx, req.DeviceID, device.CallSign, uint8(device.SSID))
+		// 使用 OwnerID 作为缓存键（不再查询呼号）
+		_ = deviceCache.InvalidateDevice(ctx, req.DeviceID, device.OwnerID, uint8(device.SSID))
 		_ = deviceCache.InvalidateDeviceList(ctx)
 		// 使旧群组设备列表缓存失效
 		if oldGroupID > 0 {
@@ -693,14 +719,22 @@ func GetDeviceQTHs(c *gin.Context) {
 	}
 
 	// 转换为响应格式
+	userRepo := gormdb.NewUserRepository()
 	devices := make([]gin.H, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
+		// 从用户表获取呼号
+		var callsign string
+		if d.OwnerID > 0 {
+			if owner, err := userRepo.GetUserByID(d.OwnerID); err == nil && owner != nil {
+				callsign = owner.CallSign
+			}
+		}
 		devices = append(devices, gin.H{
 			"id":       d.ID,
 			"name":     d.Name,
-			"callsign": d.CallSign,
+			"callsign": callsign,
 			"ssid":     d.SSID,
-			"qth":      "", // TODO: 需要添加 QTH 字段到设备表
+			"qth":      d.QTH,
 		})
 	}
 

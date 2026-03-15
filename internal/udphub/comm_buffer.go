@@ -8,15 +8,13 @@ import (
 	"time"
 )
 
-// AudioSession 单次通信会话
+// AudioSession 单次通信会话（精简版，只保留 ID）
 type AudioSession struct {
 	SessionID      string        // 会话唯一标识 (DeviceID_Timestamp)
-	DeviceID       uint          // 设备ID
-	DeviceName     string        // 设备名称
+	DeviceID       uint          // ���备ID
+	DeviceSSID     uint8         // 设备 SSID
 	GroupID        *uint         // 群组ID
-	GroupName      string        // 群组名称
 	UserID         *uint         // 用户ID
-	Username       string        // 用户名
 	StartTime      time.Time     // 开始时间
 	LastPacketTime time.Time     // 最后一个包的时间（用于判断会话结束）
 	Buffer         *bytes.Buffer // PCM 音频数据缓冲
@@ -55,14 +53,12 @@ func generateSessionID(deviceID uint) string {
 	return fmt.Sprintf("%d", deviceID)
 }
 
-// AppendPacket 追加音频数据包
+// AppendPacket 追加音频数据包（精简版，只记录 ID���
 func (cb *CommBuffer) AppendPacket(
 	deviceID uint,
-	deviceName string,
+	deviceSSID uint8,
 	groupID *uint,
-	groupName string,
 	userID *uint,
-	username string,
 	pcmData []byte,
 ) {
 	if cb == nil || !cb.config.Enabled {
@@ -88,11 +84,9 @@ func (cb *CommBuffer) AppendPacket(
 		session = &AudioSession{
 			SessionID:      fmt.Sprintf("%d_%s", deviceID, now.Format("20060102_150405.000")),
 			DeviceID:       deviceID,
-			DeviceName:     deviceName,
+			DeviceSSID:     deviceSSID,
 			GroupID:        groupID,
-			GroupName:      groupName,
 			UserID:         userID,
-			Username:       username,
 			StartTime:      now,
 			LastPacketTime: now,
 			Buffer:         bytes.NewBuffer(nil),
@@ -142,11 +136,9 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 		sessionCopy := &AudioSession{
 			SessionID:      session.SessionID,
 			DeviceID:       session.DeviceID,
-			DeviceName:     session.DeviceName,
+			DeviceSSID:     session.DeviceSSID,
 			GroupID:        session.GroupID,
-			GroupName:      session.GroupName,
 			UserID:         session.UserID,
-			Username:       session.Username,
 			StartTime:      session.StartTime,
 			LastPacketTime: session.LastPacketTime,
 			Buffer:         bytes.NewBuffer(session.Buffer.Bytes()),

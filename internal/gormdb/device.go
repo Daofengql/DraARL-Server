@@ -2,6 +2,7 @@ package gormdb
 
 import (
 	"errors"
+
 	"gorm.io/gorm"
 )
 
@@ -35,24 +36,10 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*Device, int64, error
 	return devices, total, nil
 }
 
-// ListDevicesByGroupID 获取指定��组的设备列表
+// ListDevicesByGroupID 获取指定群组的设备列表
 func (r *DeviceRepository) ListDevicesByGroupID(groupID int) ([]*Device, error) {
 	var devices []*Device
 	err := r.db.Where("group_id = ?", groupID).Find(&devices).Error
-	return devices, err
-}
-
-// ListDevicesByCallSign 按呼号搜索设备
-func (r *DeviceRepository) ListDevicesByCallSign(callsign string) ([]*Device, error) {
-	var devices []*Device
-	err := r.db.Where("callsign LIKE ?", "%"+callsign+"%").Find(&devices).Error
-	return devices, err
-}
-
-// ListDevicesByUsername 按用户名搜索设备
-func (r *DeviceRepository) ListDevicesByUsername(username string) ([]*Device, error) {
-	var devices []*Device
-	err := r.db.Where("username = ?", username).Find(&devices).Error
 	return devices, err
 }
 
@@ -69,10 +56,10 @@ func (r *DeviceRepository) GetDeviceByID(id int) (*Device, error) {
 	return &device, nil
 }
 
-// GetDeviceByCallSignSSID 通过呼号和SSID获取设备
-func (r *DeviceRepository) GetDeviceByCallSignSSID(callsign string, ssid uint8) (*Device, error) {
+// GetDeviceByOwnerSSID 根据 owner_id + ssid 查询设备（设备唯一性）
+func (r *DeviceRepository) GetDeviceByOwnerSSID(ownerID int, ssid uint8) (*Device, error) {
 	var device Device
-	err := r.db.Where("callsign = ? AND ssid = ?", callsign, ssid).First(&device).Error
+	err := r.db.Where("owner_id = ? AND ssid = ?", ownerID, ssid).First(&device).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -80,6 +67,13 @@ func (r *DeviceRepository) GetDeviceByCallSignSSID(callsign string, ssid uint8) 
 		return nil, err
 	}
 	return &device, nil
+}
+
+// ListDevicesByOwnerID 根据���有者ID查询设备
+func (r *DeviceRepository) ListDevicesByOwnerID(ownerID int) ([]*Device, error) {
+	var devices []*Device
+	err := r.db.Where("owner_id = ?", ownerID).Find(&devices).Error
+	return devices, err
 }
 
 // CreateDevice 创建设备
@@ -95,18 +89,6 @@ func (r *DeviceRepository) UpdateDevice(device *Device) error {
 // UpdateDeviceFields 更新设备指定字段
 func (r *DeviceRepository) UpdateDeviceFields(id int, fields map[string]interface{}) error {
 	return r.db.Model(&Device{}).Where("id = ?", id).Updates(fields).Error
-}
-
-// ChangeDeviceGroup 修改设备群组
-func (r *DeviceRepository) ChangeDeviceGroup(callsign string, ssid uint8, groupID int) error {
-	return r.db.Model(&Device{}).
-		Where("callsign = ? AND ssid = ?", callsign, ssid).
-		Update("group_id", groupID).Error
-}
-
-// DeleteDevice 删除设备（通过呼号和SSID）
-func (r *DeviceRepository) DeleteDevice(callsign string, ssid uint8) error {
-	return r.db.Where("callsign = ? AND ssid = ?", callsign, ssid).Delete(&Device{}).Error
 }
 
 // DeleteDeviceByID 删除设备（通过ID）
@@ -128,8 +110,8 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 	return count, err
 }
 
-// UpdateDeviceOnlineStatus 更新设备在线状态
-func (r *DeviceRepository) UpdateDeviceOnlineStatus(callsign string, ssid uint8, isOnline bool, onlineTime string) error {
+// UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）
+func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime string) error {
 	updates := map[string]interface{}{
 		"is_online": isOnline,
 	}
@@ -137,28 +119,8 @@ func (r *DeviceRepository) UpdateDeviceOnlineStatus(callsign string, ssid uint8,
 		updates["online_time"] = onlineTime
 	}
 	return r.db.Model(&Device{}).
-		Where("callsign = ? AND ssid = ?", callsign, ssid).
+		Where("owner_id = ? AND ssid = ?", ownerID, ssid).
 		Updates(updates).Error
-}
-
-// UpdateDeviceOnlineStatusByUsername 通过 username 更新设备在线状态
-func (r *DeviceRepository) UpdateDeviceOnlineStatusByUsername(username string, ssid uint8, isOnline bool, onlineTime string) error {
-	updates := map[string]interface{}{
-		"is_online": isOnline,
-	}
-	if onlineTime != "" {
-		updates["online_time"] = onlineTime
-	}
-	return r.db.Model(&Device{}).
-		Where("username = ? AND ssid = ?", username, ssid).
-		Updates(updates).Error
-}
-
-// UpdateDeviceOnlineTime 更新设备上线时间
-func (r *DeviceRepository) UpdateDeviceOnlineTime(callsign string, ssid uint8) error {
-	return r.db.Model(&Device{}).
-		Where("callsign = ? AND ssid = ?", callsign, ssid).
-		Update("online_time", gorm.Expr("NOW()")).Error
 }
 
 // GetDeviceByDMRID 通过DMRID获取设备
@@ -172,4 +134,54 @@ func (r *DeviceRepository) GetDeviceByDMRID(dmrid int64) (*Device, error) {
 		return nil, err
 	}
 	return &device, nil
+}
+
+// ============================================================
+// 以下方法保留用于向后兼容，标记为废弃
+// ============================================================
+
+// GetDeviceByCallSignSSID 通过呼号和SSID获取设备
+// Deprecated: 使用 GetDeviceByOwnerSSID 替代。此方法通过联表查询实现向后兼容。
+func (r *DeviceRepository) GetDeviceByCallSignSSID(callsign string, ssid uint8) (*Device, error) {
+	var device Device
+	// 通过联表查询：devices.owner_id = users.id 且 users.callsign = ?
+	err := r.db.Model(&Device{}).
+		Select("devices.*").
+		Joins("JOIN users ON devices.owner_id = users.id").
+		Where("users.callsign = ? AND devices.ssid = ?", callsign, ssid).
+		First(&device).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &device, nil
+}
+
+// ListDevicesByCallSign 按呼号搜索设备（联表查询）
+// 通过 users 表关联查询，呼号存储在 users 表中
+func (r *DeviceRepository) ListDevicesByCallSign(callsign string) ([]*Device, error) {
+	var devices []*Device
+
+	// 使用 Joins 引入 users 表进行内连接
+	// 关联条件：devices.owner_id = users.id
+	// 过滤条件：users.callsign 匹配传入的呼号
+	err := r.db.Model(&Device{}).
+		Select("devices.*").
+		Joins("JOIN users ON devices.owner_id = users.id").
+		Where("users.callsign = ?", callsign).
+		Find(&devices).Error
+
+	if err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
+// ChangeDeviceGroup 修改设备群组（通过 owner_id）
+func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID int) error {
+	return r.db.Model(&Device{}).
+		Where("owner_id = ? AND ssid = ?", ownerID, ssid).
+		Update("group_id", groupID).Error
 }

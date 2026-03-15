@@ -32,9 +32,30 @@ func loadAllDevices() {
 		return
 	}
 
+	// 批量获取所有用户信息（用于获取呼号）
+	userRepo := gormdb.NewUserRepository()
+	userCache := make(map[int]*gormdb.User)
+	for _, dev := range devices {
+		if dev.OwnerID > 0 {
+			if _, ok := userCache[dev.OwnerID]; !ok {
+				if user, err := userRepo.GetUserByID(dev.OwnerID); err == nil && user != nil {
+					userCache[dev.OwnerID] = user
+				}
+			}
+		}
+	}
+
 	for _, dev := range devices {
 		// 转换为 models.Device
 		modelDev := dev.ToModelDevice()
+
+		// 从用户缓存获取呼号
+		if dev.OwnerID > 0 {
+			if owner, ok := userCache[dev.OwnerID]; ok && owner != nil {
+				modelDev.CallSign = owner.CallSign
+				modelDev.Username = owner.Name
+			}
+		}
 
 		callsignSSID := protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
 		modelDev.CallSignSSID = callsignSSID
@@ -119,17 +140,32 @@ func getDeviceByDMRID(dmrid uint32) *models.Device {
 		return nil
 	}
 
-	callsignSSID := protocol.GetCallSignSSID(gormDev.CallSign, uint8(gormDev.SSID))
+	// 转换为 models.Device
+	dev := gormDev.ToModelDevice()
 
-	// 检查是否已在内存中
-	if dev, ok := devCallsignSSIDMap[callsignSSID]; ok {
-		return dev
+	// 获取所有者呼号（运行时填充）
+	if dev.OwnerID > 0 {
+		userRepo := gormdb.NewUserRepository()
+		if owner, err := userRepo.GetUserByID(dev.OwnerID); err == nil && owner != nil {
+			dev.CallSign = owner.CallSign
+			dev.Username = owner.Name
+		}
 	}
 
-	// 转换并添加到内存
-	dev := gormDev.ToModelDevice()
-	dev.CallSignSSID = callsignSSID
-	devCallsignSSIDMap[callsignSSID] = dev
+	// 使用 owner_id + ssid 构建索引 key
+	key := fmt.Sprintf("%d-%d", dev.OwnerID, dev.SSID)
+
+	// 检查是否已在内存中（使用 owner_id 索引）
+	if existingDev, ok := devUsernameSSIDMap[key]; ok {
+		return existingDev
+	}
+
+	// 同时更新 callsign 索引（向后兼容）
+	if dev.CallSign != "" {
+		callsignSSID := protocol.GetCallSignSSID(dev.CallSign, uint8(dev.SSID))
+		dev.CallSignSSID = callsignSSID
+		devCallsignSSIDMap[callsignSSID] = dev
+	}
 
 	return dev
 }
@@ -278,8 +314,8 @@ func checkDeviceOnline() {
 							}
 
 							// 确认离线
-							log.Printf("[OFFLINE] Device %v-%v group %v timed out after %v (addr: %v)",
-								dev.CallSign, dev.SSID, dev.GroupID, timeSinceLastPacket, dev.UDPAddr)
+							log.Printf("[OFFLINE] %s的-%s 已下线 (群组: %d, 地址: %s, 超时: %v)",
+								dev.Username, dev.Name, dev.GroupID, dev.UDPAddr, timeSinceLastPacket)
 
 							dev.LastDisconnectTime = t
 							dev.ISOnline = false

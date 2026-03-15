@@ -283,7 +283,7 @@ class DevicePanel(ttk.LabelFrame):
         ttk.Entry(param_frame, textvariable=self.username_var, width=12).grid(row=0, column=1, padx=2)
 
         ttk.Label(param_frame, text="密码:").grid(row=0, column=2, sticky=tk.W, padx=(5,0))
-        self.password_var = tk.StringVar(value="Jb1M1PCk")
+        self.password_var = tk.StringVar(value="7lYvYLF8")
         ttk.Entry(param_frame, textvariable=self.password_var, width=10).grid(row=0, column=3, padx=2)
 
         ttk.Label(param_frame, text="DMRID:").grid(row=0, column=4, sticky=tk.W, padx=(5,0))

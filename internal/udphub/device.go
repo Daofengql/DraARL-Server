@@ -92,6 +92,15 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 	if err == nil && existingDev != nil {
 		// 设备已存在，转换为 models.Device 并返回
 		modelDev := existingDev.ToModelDevice()
+
+		// 获取所有者信息填充 Username
+		if existingDev.OwnerID > 0 {
+			userRepo := gormdb.NewUserRepository()
+			if owner, err := userRepo.GetUserByID(existingDev.OwnerID); err == nil && owner != nil {
+				modelDev.Username = owner.Name
+			}
+		}
+
 		log.Printf("Device %s-%d already exists in database (ID: %d), reusing", dev.CallSign, dev.SSID, modelDev.ID)
 		return modelDev, nil
 	}
@@ -107,6 +116,15 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 
 	// 转换回 models.Device
 	modelDev := gormDev.ToModelDevice()
+
+	// 获取所有者信息填充 Username
+	if gormDev.OwnerID > 0 {
+		userRepo := gormdb.NewUserRepository()
+		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
+			modelDev.Username = owner.Name
+		}
+	}
+
 	log.Printf("Created new device in database: %s-%d (ID: %d)", dev.CallSign, dev.SSID, modelDev.ID)
 	return modelDev, nil
 }
@@ -127,6 +145,14 @@ func getDevice(callsign string, ssid byte) *models.Device {
 
 	dev := gormDev.ToModelDevice()
 	dev.CallSignSSID = callsignSSID
+
+	// 获取所有者信息填充 Username
+	if gormDev.OwnerID > 0 {
+		userRepo := gormdb.NewUserRepository()
+		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
+			dev.Username = owner.Name
+		}
+	}
 
 	devCallsignSSIDMap[callsignSSID] = dev
 	return dev

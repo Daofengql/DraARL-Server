@@ -105,26 +105,6 @@ func (c *DeviceCache) GetDeviceByID(ctx context.Context, id int) (*gormdb.Device
 	return dbDevice, nil
 }
 
-// GetDeviceByCallSignSSID 通过呼号和SSID获取设备详情（带缓存）
-// Deprecated: 呼号已从设备表移除，请使用 GetDeviceByID 或通过 OwnerID 查询
-func (c *DeviceCache) GetDeviceByCallSignSSID(ctx context.Context, callsign string, ssid uint8) (*gormdb.Device, error) {
-	// 呼号已从设备表移除，此方法不再支持缓存查询
-	// 直接调用数据库的废弃方法（可能返回空结果）
-	repo := gormdb.NewDeviceRepository()
-	dbDevice, err := repo.GetDeviceByCallSignSSID(callsign, ssid)
-	if err != nil {
-		return nil, err
-	}
-	if dbDevice == nil {
-		return nil, nil
-	}
-
-	// 写入按ID的缓存
-	_ = c.cache.Set(ctx, deviceKey(dbDevice.ID), dbDevice, 5*time.Minute)
-
-	return dbDevice, nil
-}
-
 // GetDeviceList 获取设备列表（带缓存，列表使用短TTL被动过期）
 func (c *DeviceCache) GetDeviceList(ctx context.Context, page, pageSize int) ([]*gormdb.Device, int64, error) {
 	itemsKey := deviceListKey(page, pageSize)

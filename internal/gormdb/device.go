@@ -137,11 +137,10 @@ func (r *DeviceRepository) GetDeviceByDMRID(dmrid int64) (*Device, error) {
 }
 
 // ============================================================
-// 以下方法保留用于向后兼容，标记为废弃
+// 以下方法通过联表查询 users 表获取设备（呼号存储在 users 表）
 // ============================================================
 
-// GetDeviceByCallSignSSID 通过呼号和SSID获取设备
-// Deprecated: 使用 GetDeviceByOwnerSSID 替代。此方法通过联表查询实现向后兼容。
+// GetDeviceByCallSignSSID 通过呼号和SSID获取设备（联表查询 users 表）
 func (r *DeviceRepository) GetDeviceByCallSignSSID(callsign string, ssid uint8) (*Device, error) {
 	var device Device
 	// 通过联表查询：devices.owner_id = users.id 且 users.callsign = ?

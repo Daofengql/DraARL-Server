@@ -54,7 +54,6 @@ type Configuration struct {
 	} `yaml:"Redis" json:"redis"`
 
 	Web struct {
-		Path   string `yaml:"Path" json:"path"`
 		Port   string `yaml:"Port" json:"port"`
 		SSLCrt string `yaml:"SSLCrt" json:"ssl_crt"`
 		SSLKey string `yaml:"SSLKey" json:"ssl_key"`

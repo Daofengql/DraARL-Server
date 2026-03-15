@@ -7,13 +7,25 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          // React 核心库
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+        manualChunks(id) {
+          // React 核心库和 emotion（emotion 依赖 react，必须放在一起）
+          if (id.includes('node_modules/react/') ||
+              id.includes('node_modules/react-dom/') ||
+              id.includes('node_modules/react-router-dom/') ||
+              id.includes('node_modules/@emotion/') ||
+              id.includes('node_modules/scheduler/')) {
+            return 'vendor-react'
+          }
           // MUI 组件库
-          'vendor-mui': ['@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled'],
+          if (id.includes('node_modules/@mui/')) {
+            return 'vendor-mui'
+          }
           // 其他第三方库
-          'vendor': ['axios', 'opus-decoder', 'react-easy-crop'],
+          if (id.includes('node_modules/axios/') ||
+              id.includes('node_modules/opus-decoder/') ||
+              id.includes('node_modules/react-easy-crop/')) {
+            return 'vendor'
+          }
         },
       },
     },

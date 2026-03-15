@@ -63,12 +63,8 @@ func New(cfg *config.Configuration) *Server {
 }
 
 func (s *Server) setupRoutes() {
-	// 静态文件服务（前端）
-	s.engine.Static("/assets", "./www/dist/assets")
-	s.engine.StaticFile("/", "./www/dist/index.html")
-	s.engine.NoRoute(func(c *gin.Context) {
-		c.File("./www/dist/index.html")
-	})
+	// 前端静态文件服务（根据编译标签选择嵌入模式或磁盘模式）
+	setupFrontend(s.engine)
 
 	// API 路由
 	api := s.engine.Group("/api")

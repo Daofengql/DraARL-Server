@@ -40,7 +40,6 @@ Redis:
 
 # Web服务配置
 Web:
-    Path: ./www                # 静态文件目录
     Port: "9000"               # Web服务端口
     SSLCrt: ""                 # SSL证书路径
     SSLKey: ""                 # SSL密钥路径

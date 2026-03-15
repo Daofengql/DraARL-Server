@@ -334,7 +334,7 @@ export function RegisterPage() {
                 </Button>
               </Box>
             ) : (
-              // 注册表单
+              // 注��表单
               <>
                 <Box sx={{ textAlign: 'center', mb: 4 }}>
                   {logoUrl ? (
@@ -342,17 +342,22 @@ export function RegisterPage() {
                       component="img"
                       src={logoUrl}
                       alt={siteName}
+                      onClick={() => navigate('/')}
                       sx={{
                         height: 80,
                         mb: 1.5,
                         objectFit: 'contain',
+                        cursor: 'pointer',
                       }}
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = 'none'
                       }}
                     />
                   ) : (
-                    <Radio sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
+                    <Radio
+                      sx={{ fontSize: 64, color: 'primary.main', mb: 1, cursor: 'pointer' }}
+                      onClick={() => navigate('/')}
+                    />
                   )}
                   <Typography variant="h6" component="h1" gutterBottom sx={{ fontWeight: 500 }}>
                     {siteShorthand}

@@ -478,26 +478,18 @@ func InitAdminUser() (string, string, error) {
 		return "", "", fmt.Errorf("密码哈希失败: %w", err)
 	}
 
-	// 创建默认管理员
-	admin := &models.User{
-		Name:     "admin",
-		Password: string(hashedPassword),
-		NickName: "系统管理员",
-		Status:   1,
-		Roles:    []string{"admin"},
-	}
-
-	// 使用 SQL 直接插入（绕过仓库层的角色序列化）
-	query := `INSERT INTO users (name, password, nickname, status, roles, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, NOW(), NOW())`
-	_, err = Get().Exec(query, admin.Name, admin.Password, admin.NickName, admin.Status, serializeRoles(admin.Roles))
+	// 创建默认管理员（已审核通过，拥有完整权限）
+	// 角色使用单角色系统：直接存储 "admin" 而不是 ["admin"]
+	// 审核状态设为 1（已通过）
+	query := `INSERT INTO users (name, password, nickname, status, roles, approval_status, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW())`
+	_, err = Get().Exec(query, "admin", string(hashedPassword), "系统管理员", 1, "admin")
 	if err != nil {
 		return "", "", fmt.Errorf("创建管理员失败: %w", err)
 	}
 
-	return admin.Name, password, nil
+	return "admin", password, nil
 }
-
 // generateRandomPassword 生成随机密码
 func generateRandomPassword(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"

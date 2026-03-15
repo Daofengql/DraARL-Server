@@ -79,7 +79,6 @@ interface APRSConfig {
   self_port: string
   callsign: string
   ssid: string
-  passcode: number
   latitude: number
   longitude: number
   altitude: string
@@ -175,7 +174,6 @@ export function SiteConfigPage() {
     self_port: '',
     callsign: '',
     ssid: '',
-    passcode: 0,
     latitude: 0,
     longitude: 0,
     altitude: '',
@@ -721,31 +719,6 @@ export function SiteConfigPage() {
                           placeholder="10"
                         />
                       </Box>
-
-                      <TextField
-                        label="Passcode"
-                        type="number"
-                        fullWidth
-                        value={aprs.passcode || ''}
-                        onChange={(e) => setAPRS({ ...aprs, passcode: parseInt(e.target.value) || 0 })}
-                        placeholder="-1"
-                        slotProps={{
-                          input: {
-                            endAdornment: (
-                              <InputAdornment position="end">
-                                <IconButton
-                                  edge="end"
-                                  size="small"
-                                  onClick={() => window.open('https://apps.magicbug.co.uk/passcode/', '_blank')}
-                                  title="前往获取Passcode"
-                                >
-                                  <Info color="primary" fontSize="small" />
-                                </IconButton>
-                              </InputAdornment>
-                            ),
-                          },
-                        }}
-                      />
 
                       {/* 经度,纬度,海拔 */}
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

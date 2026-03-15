@@ -247,47 +247,16 @@ func GetCommRecorderStats() map[string]interface{} {
 
 // loadCommSettings 从数据库加载通信设置
 func loadCommSettings() *CommSettingsConfig {
-	var settings gormdb.CommSettings
-	db := gormdb.Get()
-
-	// 尝试获取第一条记录（ID=1）
-	result := db.FirstOrCreate(&settings, 1)
-	if result.Error != nil {
-		log.Printf("[COMM_RECORDER] 加载通信设置失败: %v, 使用默认配置", result.Error)
+	repo := gormdb.GetSiteConfigRepo()
+	settings, err := repo.GetCommSettingsConfig()
+	if err != nil {
+		log.Printf("[COMM_RECORDER] 加载通信设置失败: %v, 使用默认配置", err)
 		return &CommSettingsConfig{
 			Enabled:        false,
 			RetentionDays:  30,
 			MinDurationMs:  500,
 			MaxDurationSec: 300,
 			BatchUploadSec: 10,
-		}
-	}
-
-	// 检查零值并应用默认值（FirstOrCreate 会用 Go 零值插入，忽略数据库默认值）
-	needsUpdate := false
-	if settings.RetentionDays == 0 {
-		settings.RetentionDays = 30
-		needsUpdate = true
-	}
-	if settings.MinDurationMs == 0 {
-		settings.MinDurationMs = 500
-		needsUpdate = true
-	}
-	if settings.MaxDurationSec == 0 {
-		settings.MaxDurationSec = 300
-		needsUpdate = true
-	}
-	if settings.BatchUploadSec == 0 {
-		settings.BatchUploadSec = 10
-		needsUpdate = true
-	}
-
-	// 如果有零值被修正，更新数据库
-	if needsUpdate {
-		if err := db.Save(&settings).Error; err != nil {
-			log.Printf("[COMM_RECORDER] 保存默认配置失败: %v", err)
-		} else {
-			log.Printf("[COMM_RECORDER] 已修正默认配置: MinDurationMs=%d", settings.MinDurationMs)
 		}
 	}
 

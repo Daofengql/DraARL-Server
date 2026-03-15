@@ -3,6 +3,7 @@ package gormdb
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"gorm.io/gorm"
@@ -31,10 +32,11 @@ type SiteConfigValue interface{}
 
 // ConfigCategory 配置分类
 const (
-	CategoryICP     = "icp"
-	CategorySystem  = "system"
-	CategoryAPRS    = "aprs"
-	CategoryOpenAI  = "openai"
+	CategoryICP        = "icp"
+	CategorySystem     = "system"
+	CategoryAPRS       = "aprs"
+	CategoryOpenAI     = "openai"
+	CategoryCommConfig = "comm_config"
 )
 
 // ICPConfig ICP配置
@@ -58,7 +60,6 @@ type APRSConfig struct {
 	SelfPort       string  `json:"self_port"`
 	CallSign       string  `json:"callsign"`
 	SSID           string  `json:"ssid"`
-	Passcode       int     `json:"passcode"`
 	Latitude       float64 `json:"latitude"`
 	Longitude      float64 `json:"longitude"`
 	Altitude       string  `json:"altitude"`
@@ -69,6 +70,15 @@ type OpenAIConfig struct {
 	BaseURL string `json:"base_url"`
 	APIKEY  string `json:"api_key"`
 	Engine  string `json:"engine"`
+}
+
+// CommSettingsConfig 通信设置配置
+type CommSettingsConfig struct {
+	Enabled        bool `json:"enabled"`
+	RetentionDays  int  `json:"retention_days"`
+	MinDurationMs  int  `json:"min_duration_ms"`
+	MaxDurationSec int  `json:"max_duration_sec"`
+	BatchUploadSec int  `json:"batch_upload_sec"`
 }
 
 // GetAll 获取所有配置
@@ -228,7 +238,6 @@ func (r *SiteConfigRepository) GetAPRSConfig() (*APRSConfig, error) {
 		SelfPort:       "60050",
 		CallSign:       "",
 		SSID:           "10",
-		Passcode:       0,
 		Latitude:       0,
 		Longitude:      0,
 		Altitude:       "000000",
@@ -248,11 +257,6 @@ func (r *SiteConfigRepository) GetAPRSConfig() (*APRSConfig, error) {
 			result.CallSign = config.Value
 		case "aprs.ssid":
 			result.SSID = config.Value
-		case "aprs.passcode":
-			var passcode int
-			if _, err := fmt.Sscanf(config.Value, "%d", &passcode); err == nil {
-				result.Passcode = passcode
-			}
 		case "aprs.latitude":
 			var lat float64
 			if _, err := fmt.Sscanf(config.Value, "%f", &lat); err == nil {
@@ -280,7 +284,6 @@ func (r *SiteConfigRepository) SetAPRSConfig(config APRSConfig) error {
 		{Key: "aprs.self_port", Value: config.SelfPort, Category: CategoryAPRS, Description: "本机端口"},
 		{Key: "aprs.callsign", Value: config.CallSign, Category: CategoryAPRS, Description: "呼号"},
 		{Key: "aprs.ssid", Value: config.SSID, Category: CategoryAPRS, Description: "SSID"},
-		{Key: "aprs.passcode", Value: fmt.Sprintf("%d", config.Passcode), Category: CategoryAPRS, Description: "APRS密码"},
 		{Key: "aprs.latitude", Value: fmt.Sprintf("%.6f", config.Latitude), Category: CategoryAPRS, Description: "纬度"},
 		{Key: "aprs.longitude", Value: fmt.Sprintf("%.6f", config.Longitude), Category: CategoryAPRS, Description: "经度"},
 		{Key: "aprs.altitude", Value: config.Altitude, Category: CategoryAPRS, Description: "海拔高度"},
@@ -325,6 +328,63 @@ func (r *SiteConfigRepository) SetOpenAIConfig(config OpenAIConfig) error {
 	return r.SetBatch(configs)
 }
 
+// GetCommSettingsConfig 获取通信设置配置
+func (r *SiteConfigRepository) GetCommSettingsConfig() (*CommSettingsConfig, error) {
+	configs, err := r.GetByCategory(CategoryCommConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &CommSettingsConfig{
+		Enabled:        false,
+		RetentionDays:  30,
+		MinDurationMs:  500,
+		MaxDurationSec: 300,
+		BatchUploadSec: 10,
+	}
+
+	for _, config := range configs {
+		switch config.Key {
+		case "comm.enabled":
+			result.Enabled = config.Value == "true"
+		case "comm.retention_days":
+			if val, err := strconv.Atoi(config.Value); err == nil {
+				result.RetentionDays = val
+			}
+		case "comm.min_duration_ms":
+			if val, err := strconv.Atoi(config.Value); err == nil {
+				result.MinDurationMs = val
+			}
+		case "comm.max_duration_sec":
+			if val, err := strconv.Atoi(config.Value); err == nil {
+				result.MaxDurationSec = val
+			}
+		case "comm.batch_upload_sec":
+			if val, err := strconv.Atoi(config.Value); err == nil {
+				result.BatchUploadSec = val
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// SetCommSettingsConfig 设置通信设置配置
+func (r *SiteConfigRepository) SetCommSettingsConfig(config CommSettingsConfig) error {
+	enabledStr := "false"
+	if config.Enabled {
+		enabledStr = "true"
+	}
+	configs := []SiteConfig{
+		{Key: "comm.enabled", Value: enabledStr, Category: CategoryCommConfig, Description: "是否启用通信记录"},
+		{Key: "comm.retention_days", Value: strconv.Itoa(config.RetentionDays), Category: CategoryCommConfig, Description: "数据保留天数"},
+		{Key: "comm.min_duration_ms", Value: strconv.Itoa(config.MinDurationMs), Category: CategoryCommConfig, Description: "最小录制阈值(毫秒)"},
+		{Key: "comm.max_duration_sec", Value: strconv.Itoa(config.MaxDurationSec), Category: CategoryCommConfig, Description: "最大录制时长(秒)"},
+		{Key: "comm.batch_upload_sec", Value: strconv.Itoa(config.BatchUploadSec), Category: CategoryCommConfig, Description: "批量上传间隔(秒)"},
+	}
+	return r.SetBatch(configs)
+}
+
 // GetAllConfigMap 获取所有配置的map形式
 func (r *SiteConfigRepository) GetAllConfigMap() (map[string]string, error) {
 	configs, err := r.GetAll()
@@ -342,7 +402,7 @@ func (r *SiteConfigRepository) GetAllConfigMap() (map[string]string, error) {
 // InitDefaultConfigs 初始化默认配置（从YAML配置迁移）
 func (r *SiteConfigRepository) InitDefaultConfigs(yamlICP, yamlName, yamlNameShorthand, yamlLogoURL, yamlLanguage string,
 	yamlAPRSServerHost, yamlAPRSServerPort, yamlSelfAddress, yamlSelfPort, yamlCallSign, yamlSSID, yamlAltitude string,
-	yamlPasscode int, yamlLatitude, yamlLongitude float64,
+	yamlLatitude, yamlLongitude float64,
 	yamlOpenAIBaseURL, yamlOpenAIAPIKey, yamlOpenAIEngine string) error {
 
 	// ICP配置
@@ -369,7 +429,6 @@ func (r *SiteConfigRepository) InitDefaultConfigs(yamlICP, yamlName, yamlNameSho
 		SelfPort:       yamlSelfPort,
 		CallSign:       yamlCallSign,
 		SSID:           yamlSSID,
-		Passcode:       yamlPasscode,
 		Latitude:       yamlLatitude,
 		Longitude:      yamlLongitude,
 		Altitude:       yamlAltitude,

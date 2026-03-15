@@ -291,21 +291,6 @@ func (CommRecord) TableName() string {
 	return "comm_records"
 }
 
-// CommSettings 通信设置（站点配置的一部分）
-type CommSettings struct {
-	ID              uint `gorm:"primaryKey;autoIncrement" json:"id"`
-	Enabled         bool `gorm:"default:false;column:enabled" json:"enabled"`                   // 是否启用通信记录
-	RetentionDays   int  `gorm:"default:30;column:retention_days" json:"retention_days"`       // 数据保留天数
-	MinDurationMs   int  `gorm:"default:500;column:min_duration_ms" json:"min_duration_ms"`    // 最小录制阈值（毫秒）
-	MaxDurationSec  int  `gorm:"default:300;column:max_duration_sec" json:"max_duration_sec"`  // 最大录制时长（秒），0=不限制
-	BatchUploadSec  int  `gorm:"default:10;column:batch_upload_sec" json:"batch_upload_sec"`   // 批量上传间隔（秒）
-}
-
-// TableName 指定表名
-func (CommSettings) TableName() string {
-	return "comm_settings"
-}
-
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -319,6 +304,5 @@ func AutoMigrate() error {
 		&SiteConfig{},
 		&GroupMember{},
 		&CommRecord{},
-		&CommSettings{},
 	)
 }

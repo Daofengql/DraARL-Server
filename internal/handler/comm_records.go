@@ -216,9 +216,9 @@ func DeleteCommRecord(c *gin.Context) {
 
 // GetCommSettings 获取通信设置
 func GetCommSettings(c *gin.Context) {
-	var settings gormdb.CommSettings
-	result := gormdb.Get().FirstOrCreate(&settings, 1)
-	if result.Error != nil {
+	repo := gormdb.GetSiteConfigRepo()
+	settings, err := repo.GetCommSettingsConfig()
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取设置失败",
@@ -282,18 +282,17 @@ func UpdateCommSettings(c *gin.Context) {
 		return
 	}
 
-	// 更新数据库
-	settings := gormdb.CommSettings{
-		ID:              1,
-		Enabled:         req.Enabled,
-		RetentionDays:   req.RetentionDays,
-		MinDurationMs:   req.MinDurationMs,
-		MaxDurationSec:  req.MaxDurationSec,
-		BatchUploadSec:  req.BatchUploadSec,
+	// 保存到 site_configs 表
+	repo := gormdb.GetSiteConfigRepo()
+	settings := gormdb.CommSettingsConfig{
+		Enabled:        req.Enabled,
+		RetentionDays:  req.RetentionDays,
+		MinDurationMs:  req.MinDurationMs,
+		MaxDurationSec: req.MaxDurationSec,
+		BatchUploadSec: req.BatchUploadSec,
 	}
 
-	result := gormdb.Get().Save(&settings)
-	if result.Error != nil {
+	if err := repo.SetCommSettingsConfig(settings); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "保存失败",

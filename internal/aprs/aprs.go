@@ -131,7 +131,6 @@ type APRSConfig struct {
 	SelfPort       string
 	CallSign       string
 	SSID           string
-	Passcode       int
 	Latitude       float64
 	Longitude      float64
 	Altitude       string
@@ -162,7 +161,6 @@ func LoadAPRSConfig() error {
 		SelfPort:       config.SelfPort,
 		CallSign:       config.CallSign,
 		SSID:           config.SSID,
-		Passcode:       config.Passcode,
 		Latitude:       config.Latitude,
 		Longitude:      config.Longitude,
 		Altitude:       config.Altitude,
@@ -253,11 +251,8 @@ func (a *APRS) startLocationWatch() {
 
 // Login 登录 APRS 服务器
 func (a *APRS) Login() {
-	passcode := currentAPRSConfig.Passcode
-
-	if currentAPRSConfig.Passcode == 0 {
-		passcode = GenerateAPRSPasscode(currentAPRSConfig.CallSign)
-	}
+	// 始终从呼号自动计算 passcode
+	passcode := GenerateAPRSPasscode(currentAPRSConfig.CallSign)
 
 	for {
 		err := a.tcpClient.Send(fmt.Sprintf("user %s pass %d vers DraARL 1.0\n", currentAPRSConfig.CallSign, passcode))

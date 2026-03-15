@@ -280,7 +280,6 @@ func initSiteConfigs(cfg *config.Configuration) {
 		"",                // 呼号
 		"10",              // SSID
 		"000000",          // 海拔
-		0,                 // Passcode
 		0,                 // 纬度
 		0,                 // 经度
 		"",                // OpenAI BaseURL

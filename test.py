@@ -18,7 +18,7 @@ except ImportError:
 # DraARLv1 协议常量定义 (参考 Protocol.md)
 # ==========================================
 DRAARL_VERSION = b"DraA"
-DRAARL_HEADER_SIZE = 93
+DRAARL_HEADER_SIZE = 90
 
 # 数据包类型
 DRAARL_TYPE_CONTROL       = 0  # 控制指令
@@ -45,7 +45,7 @@ class DraARLv1Client:
     """
     DraARLv1 协议客户端 - 支持独立配置 SSID
 
-    协议头部结构 (93 字节):
+    协议头部结构 (90 字节):
     | 偏移 | 长度 | 字段名        |
     |------|------|---------------|
     | 0    | 4B   | Version       | "DraA"
@@ -53,14 +53,12 @@ class DraARLv1Client:
     | 6    | 32B  | Username      | 用户名
     | 38   | 10B  | DevicePassword| 设备准入密码
     | 48   | 1B   | Type          | 数据包类型
-    | 49   | 1B   | Status        | 状态字节
-    | 50   | 2B   | SeqNum        | 序列号
-    | 52   | 1B   | DevModel      | 设备型号
-    | 53   | 1B   | SSID          | 设备子号
-    | 54   | 3B   | DMRID         | DMR ID
-    | 57   | 32B  | CallSign      | 呼号（服务器填充，设备发送时留空）
-    | 89   | 4B   | Reserved      | 保留
-    | 93   | 变长  | DATA          | 负载数据
+    | 49   | 1B   | DevModel      | 设备型号
+    | 50   | 1B   | SSID          | 设备子号
+    | 51   | 3B   | DMRID         | DMR ID
+    | 54   | 32B  | CallSign      | 呼号（服务器填充，设备发送时留空）
+    | 86   | 4B   | Reserved      | 保留
+    | 90   | 变长  | DATA          | 负载数据
     """
     def __init__(self, server_ip, server_port, username, device_password, ssid, dmrid_int, log_callback, color_tag=None):
         self.server_addr = (server_ip, server_port)
@@ -109,20 +107,17 @@ class DraARLv1Client:
         else:
             self.log(message)
 
-    def _pack_header(self, payload_length, pkt_type, status=0):
+    def _pack_header(self, payload_length, pkt_type):
         total_length = DRAARL_HEADER_SIZE + payload_length
-        self.pkt_count = (self.pkt_count + 1) & 0xFFFF
         reserved = b'\x00' * 4
 
         header = struct.pack(
-            '>4sH32s10sBBHBB3s32s4s',
+            '>4sH32s10sBBB3s32s4s',
             self.version,
             total_length,
             self.username,
             self.device_password,
             pkt_type,
-            status,
-            self.pkt_count,
             self.dev_model,
             self.ssid,
             self.dmrid,
@@ -131,9 +126,9 @@ class DraARLv1Client:
         )
         return header
 
-    def send_packet(self, pkt_type, payload=b'', status=0):
+    def send_packet(self, pkt_type, payload=b''):
         try:
-            header = self._pack_header(len(payload), pkt_type, status)
+            header = self._pack_header(len(payload), pkt_type)
             self.sock.sendto(header + payload, self.server_addr)
         except Exception as e:
             self._log(f"[网络发送错误] {e}")
@@ -165,13 +160,13 @@ class DraARLv1Client:
                 pkt_type = data[48]
                 payload = data[DRAARL_HEADER_SIZE:]
 
-                # 提取发送方 SSID (offset 53)
-                sender_ssid = data[53]
+                # 提取发送方 SSID (offset 50)
+                sender_ssid = data[50]
 
-                # 提取发送方呼号 (offset 57, 32字节)
+                # 提取发送方呼号 (offset 54, 32字节)
                 callsign = ""
-                if len(data) >= 89:
-                    callsign_bytes = data[57:89]
+                if len(data) >= 86:
+                    callsign_bytes = data[54:86]
                     callsign = callsign_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
                     if callsign and not hasattr(self, '_logged_callsign'):
                         self._log(f"[认证成功] 服务器返回呼号: {callsign}")

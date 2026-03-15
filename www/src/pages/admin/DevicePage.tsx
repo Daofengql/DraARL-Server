@@ -40,18 +40,13 @@ import { SwitchGroupDialog } from '../devices/SwitchGroupDialog'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 
 const DEVICE_MODELS = [
-  { value: 0, label: '微信小程序' },
-  { value: 1, label: 'Android' },
-  { value: 2, label: 'iOS' },
-  { value: 3, label: 'Windows' },
-  { value: 4, label: '浏览器' },
-  { value: 5, label: '服务器' },
-  { value: 6, label: 'BM网关' },
-  { value: 7, label: 'DMR网关' },
-  { value: 8, label: 'YSF网关' },
-  { value: 9, label: 'P25网关' },
-  { value: 10, label: 'NXDN网关' },
-  { value: 11, label: 'MMDVM' },
+  { value: 0, label: '未知设备' },
+  { value: 100, label: '微信小程序' },
+  { value: 101, label: 'Android 客户端' },
+  { value: 102, label: 'iOS 客户端' },
+  { value: 103, label: 'Windows 客户端' },
+  { value: 105, label: '浏览器客户端' },
+  { value: 106, label: '互联设备' },
 ]
 
 const GROUP_TYPE_PRIVATE = 2

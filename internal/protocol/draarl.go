@@ -13,7 +13,7 @@ import (
 const DraARLVersion = "DraA"
 
 // 固定头部大小
-const DraARLv1HeaderSize = 93
+const DraARLv1HeaderSize = 90
 
 // DraARLv1 数据包类型常量
 const (
@@ -37,27 +37,18 @@ const (
 	DraARLDevModelInterconnect byte = 106 // 互联设备
 )
 
-// DraARLv1 状态字节定义
-const (
-	DraARLStatusTxDisable byte = 0x01 // 禁止发射
-	DraARLStatusRxDisable byte = 0x02 // 禁止接收
-	DraARLStatusNoRelay   byte = 0x04 // 不参与转发
-)
-
 // DraARLv1Packet DraARLv1协议数据包
 type DraARLv1Packet struct {
 	TimeStamp       time.Time
 	UDPAddrStr      string
 	UDPAddr         *net.UDPAddr
 
-	// Header fields (93 bytes)
+	// Header fields (90 bytes)
 	Version         string // 4B  - "DraA"
 	Length          uint16 // 2B  - 报文总长度
 	Username        string // 32B - 用户名
 	DevicePassword  string // 10B - 设备准入密码
 	Type            byte   // 1B  - 数据包类型
-	Status          byte   // 1B  - 状态字节
-	SeqNum          uint16 // 2B  - 序列号
 	DevModel        byte   // 1B  - 设备型号
 	SSID            byte   // 1B  - 设备子号
 	DMRID           uint32 // 3B  - DMR ID (uint24)
@@ -93,7 +84,7 @@ func NewDraARLv1Packet(remoteAddr *net.UDPAddr, data []byte) (*DraARLv1Packet, e
 // Decode 解码 DraARLv1 报文
 func (p *DraARLv1Packet) Decode(data []byte) error {
 	if len(data) < DraARLv1HeaderSize {
-		return errors.New("packet too short, minimum 93 bytes required")
+		return errors.New("packet too short, minimum 90 bytes required")
 	}
 
 	// 解析 Version (0-3)
@@ -114,28 +105,22 @@ func (p *DraARLv1Packet) Decode(data []byte) error {
 	// 解析 Type (48)
 	p.Type = data[48]
 
-	// 解析 Status (49)
-	p.Status = data[49]
+	// 解析 DevModel (49)
+	p.DevModel = data[49]
 
-	// 解析 SeqNum (50-51)
-	p.SeqNum = binary.BigEndian.Uint16(data[50:52])
+	// 解析 SSID (50)
+	p.SSID = data[50]
 
-	// 解析 DevModel (52)
-	p.DevModel = data[52]
+	// 解析 DMRID (51-53) - uint24 big-endian
+	p.DMRID = bytesToUint24(data[51:54])
 
-	// 解析 SSID (53)
-	p.SSID = data[53]
+	// 解析 CallSign (54-85)
+	p.CallSign = string(bytes.TrimRight(data[54:86], "\x00"))
 
-	// 解析 DMRID (54-56) - uint24 big-endian
-	p.DMRID = bytesToUint24(data[54:57])
+	// 解析 Reserved (86-89)
+	p.Reserved = data[86:90]
 
-	// 解析 CallSign (57-88)
-	p.CallSign = string(bytes.TrimRight(data[57:89], "\x00"))
-
-	// 解析 Reserved (89-92)
-	p.Reserved = data[89:93]
-
-	// 解析 DATA (93+)
+	// 解析 DATA (90+)
 	if len(data) > DraARLv1HeaderSize {
 		p.DATA = data[DraARLv1HeaderSize:]
 
@@ -181,31 +166,25 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	// 写入 Type (48)
 	packet[48] = packetType
 
-	// 写入 Status (49)
-	packet[49] = 0
+	// 写入 DevModel (49)
+	packet[49] = devModel
 
-	// 写入 SeqNum (50-51)
-	binary.BigEndian.PutUint16(packet[50:52], 0)
+	// 写入 SSID (50)
+	packet[50] = ssid
 
-	// 写入 DevModel (52)
-	packet[52] = devModel
+	// 写入 DMRID (51-53)
+	uint24ToBytes(dmrid, packet[51:54])
 
-	// 写入 SSID (53)
-	packet[53] = ssid
-
-	// 写入 DMRID (54-56)
-	uint24ToBytes(dmrid, packet[54:57])
-
-	// 写入 CallSign (57-88)
+	// 写入 CallSign (54-85)
 	callsignBytes := []byte(callsign)
 	if len(callsignBytes) > 32 {
 		callsignBytes = callsignBytes[:32]
 	}
-	copy(packet[57:89], callsignBytes)
+	copy(packet[54:86], callsignBytes)
 
-	// Reserved (89-92) - 已经是 0
+	// Reserved (86-89) - 已经是 0
 
-	// 写入 DATA (93+)
+	// 写入 DATA (90+)
 	if len(data) > 0 {
 		copy(packet[DraARLv1HeaderSize:], data)
 	}
@@ -233,30 +212,23 @@ func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
 	// 复制 Type
 	packet[48] = req.Type
 
-	// 复制 Status
-	packet[49] = req.Status
-
-	// 复制 SeqNum
-	binary.BigEndian.PutUint16(packet[50:52], req.SeqNum)
-
 	// 复制 DevModel
-	packet[52] = req.DevModel
+	packet[49] = req.DevModel
 
 	// 复制 SSID
-	packet[53] = req.SSID
+	packet[50] = req.SSID
 
 	// 复制 DMRID
-	uint24ToBytes(req.DMRID, packet[54:57])
+	uint24ToBytes(req.DMRID, packet[51:54])
 
 	// 填充 CallSign（服务器填充）
 	callsignBytes := []byte(callsign)
 	if len(callsignBytes) > 32 {
 		callsignBytes = callsignBytes[:32]
 	}
-	copy(packet[57:89], callsignBytes)
+	copy(packet[54:86], callsignBytes)
 
-	// Reserved
-	copy(packet[89:93], req.Reserved)
+	// Reserved - 已经是 0
 
 	// 复制 DATA
 	if len(req.DATA) > 0 {
@@ -315,8 +287,8 @@ func uint24ToBytes(v uint32, b []byte) {
 
 // String 返回报文的字符串表示
 func (p *DraARLv1Packet) String() string {
-	return fmt.Sprintf("DraARLv1[ver:%s len:%d user:%s type:%d status:%02x seq:%d model:%d ssid:%d dmrid:%d callsign:%s data_len:%d]",
-		p.Version, p.Length, p.Username, p.Type, p.Status, p.SeqNum, p.DevModel, p.SSID, p.DMRID, p.CallSign, len(p.DATA))
+	return fmt.Sprintf("DraARLv1[ver:%s len:%d user:%s type:%d model:%d ssid:%d dmrid:%d callsign:%s data_len:%d]",
+		p.Version, p.Length, p.Username, p.Type, p.DevModel, p.SSID, p.DMRID, p.CallSign, len(p.DATA))
 }
 
 // GetUsernameSSID 获取组合 username-ssid

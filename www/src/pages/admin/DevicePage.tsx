@@ -32,6 +32,7 @@ import {
   Circle,
   Lock,
   Person,
+  Refresh,
 } from '@mui/icons-material'
 import { deviceService, groupService, userService } from '../../services'
 import type { Device, Group, User } from '../../types'
@@ -70,6 +71,9 @@ export function AdminDevicePage() {
   const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
 
+  // 自动刷新状态
+  const [autoRefresh, setAutoRefresh] = useState(0) // 0=关闭, 10/30/60=秒数
+
   const [formData, setFormData] = useState({
     name: '',
     callsign: '',
@@ -85,6 +89,17 @@ export function AdminDevicePage() {
     loadGroups()
     loadUsers()
   }, [])
+
+  // 自动刷新逻辑
+  useEffect(() => {
+    if (autoRefresh === 0) return
+
+    const timer = setInterval(() => {
+      loadDevices()
+    }, autoRefresh * 1000)
+
+    return () => clearInterval(timer)
+  }, [autoRefresh, page, rowsPerPage, searchKeyword])
 
   const loadDevices = async () => {
     setLoading(true)
@@ -323,6 +338,31 @@ export function AdminDevicePage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4">设备管理</Typography>
+        <Stack direction="row" spacing={1} alignItems="center">
+          {/* 自动刷新控制 */}
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>自动刷新</InputLabel>
+            <Select
+              value={autoRefresh}
+              label="自动刷新"
+              onChange={(e) => setAutoRefresh(e.target.value as number)}
+            >
+              <MenuItem value={0}>关闭</MenuItem>
+              <MenuItem value={10}>10秒</MenuItem>
+              <MenuItem value={30}>30秒</MenuItem>
+              <MenuItem value={60}>60秒</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Refresh />}
+            onClick={loadDevices}
+            disabled={loading}
+          >
+            刷新
+          </Button>
+        </Stack>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}

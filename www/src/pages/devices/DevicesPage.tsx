@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Box,
   Paper,
@@ -34,6 +34,7 @@ import {
   Lock,
   Key,
   ContentCopy,
+  Refresh,
 } from '@mui/icons-material'
 import { deviceService, groupService, authService } from '../../services'
 import type { Device, Group } from '../../types'
@@ -94,10 +95,24 @@ export function DevicesPage() {
     severity: 'success',
   })
 
+  // 自动刷新状态
+  const [autoRefresh, setAutoRefresh] = useState(0) // 0=关闭, 10/30/60=秒数
+
   useEffect(() => {
     loadDevices()
     loadGroups()
   }, [])
+
+  // 自动刷新逻辑
+  useEffect(() => {
+    if (autoRefresh === 0) return
+
+    const timer = setInterval(() => {
+      loadDevices()
+    }, autoRefresh * 1000)
+
+    return () => clearInterval(timer)
+  }, [autoRefresh])
 
   const loadDevices = async () => {
     setLoading(true)
@@ -304,16 +319,41 @@ export function DevicesPage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" fontWeight={600}>设备管理</Typography>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<Key />}
-          onClick={handleRegenerateDevicePassword}
-          disabled={generatingDevicePassword}
-          color="primary"
-        >
-          {generatingDevicePassword ? '生成中...' : '重新生成设备密码'}
-        </Button>
+        <Stack direction="row" spacing={1} alignItems="center">
+          {/* 自动刷新控制 */}
+          <FormControl size="small" sx={{ minWidth: 120 }}>
+            <InputLabel>自动刷新</InputLabel>
+            <Select
+              value={autoRefresh}
+              label="自动刷新"
+              onChange={(e) => setAutoRefresh(e.target.value as number)}
+            >
+              <MenuItem value={0}>关闭</MenuItem>
+              <MenuItem value={10}>10秒</MenuItem>
+              <MenuItem value={30}>30秒</MenuItem>
+              <MenuItem value={60}>60秒</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<Refresh />}
+            onClick={loadDevices}
+            disabled={loading}
+          >
+            刷新
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<Key />}
+            onClick={handleRegenerateDevicePassword}
+            disabled={generatingDevicePassword}
+            color="primary"
+          >
+            {generatingDevicePassword ? '生成中...' : '重新生成设备密码'}
+          </Button>
+        </Stack>
       </Box>
 
       {showDevicePassword && regeneratedPassword && (

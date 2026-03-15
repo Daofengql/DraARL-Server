@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-set BINARY_NAME=nrllink.exe
+set BINARY_NAME=DraARL.exe
 
 for /f "delims=" %%i in ('git describe --tags --always --dirty 2^>nul') do set VERSION=%%i
 if not defined VERSION set VERSION=dev
@@ -10,7 +10,7 @@ for /f "tokens=*" %%i in ('powershell -Command "Get-Date -Format yyyy-MM-ddTHH:m
 if not defined BUILD_TIME set BUILD_TIME=unknown
 
 echo ==========================================
-echo nrllink Release Build
+echo DraARL Release Build
 echo ==========================================
 echo Version:    %VERSION%
 echo Build Time: %BUILD_TIME%

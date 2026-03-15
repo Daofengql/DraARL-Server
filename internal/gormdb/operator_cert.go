@@ -65,12 +65,12 @@ func (r *OperatorCertRepository) GetAllCertsByUserID(userID int) ([]*OperatorCer
 // GetPendingByUserID 获取用户待审核的操作证（status=0）
 func (r *OperatorCertRepository) GetPendingByUserID(userID int) (*OperatorCert, error) {
 	var cert OperatorCert
-	err := r.db.Where("user_id = ? AND status = ?", userID, 0).Order("id DESC").First(&cert).Error
+	err := r.db.Where("user_id = ? AND status = ?", userID, 0).Order("id DESC").Limit(1).Find(&cert).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil // 没有记录时返回 nil 而不是错误
-		}
 		return nil, err
+	}
+	if cert.ID == 0 {
+		return nil, nil // 没有记录时返回 nil
 	}
 	return &cert, nil
 }

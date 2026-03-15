@@ -81,8 +81,9 @@ func Init(cfg *Config) error {
 		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
 		sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
-		// 设置连接最大空闲时间，MySQL wait_timeout 默认 8 小时，设置 5 分钟确保连接有效
-		sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+		// 设置连接最大空闲时间��� 30 秒，避免使用已失效的连接
+		// MySQL wait_timeout 默认 8 小时，但网络环境可能导致连接提前失效
+		sqlDB.SetConnMaxIdleTime(30 * time.Second)
 
 		// 验证连接
 		if err = sqlDB.Ping(); err != nil {
@@ -135,7 +136,7 @@ func (m *DBManager) checkHealth() bool {
 	return true
 }
 
-// GetDB 获取一个新的数据库会话，避免复用同一个 *gorm.DB 实例
+// GetDB 获取数据库会话
 func GetDB() *gorm.DB {
 	if dbManager == nil {
 		panic("database not initialized, call Init() first")
@@ -148,14 +149,11 @@ func GetDB() *gorm.DB {
 		panic("database connection is nil")
 	}
 
-	// 返回一个新的会话，确保每次请求都使用独立的上下文
-	// 这样可以避免连接状态问题
+	// 返回一个新的会话
 	return dbManager.db.Session(&gorm.Session{
-		Context: context.Background(),
-		// 跳过默认事务，提高性能
+		Context:               context.Background(),
 		SkipDefaultTransaction: true,
-		// 禁用预编译语句缓存（某些情况下可能有问题）
-		PrepareStmt: true,
+		PrepareStmt:           false, // 禁用预编译语句缓存，避免连接失效问题
 	})
 }
 

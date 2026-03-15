@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
 	"nrllink/internal/aprs"
@@ -25,6 +26,9 @@ import (
 var (
 	version   = "1.0.0"
 	buildTime = "unknown"
+	// release 模式标志，通过 ldflags 设置
+	// release 模式下会禁用 gin 和 gorm 的调试日志
+	isRelease = "false"
 )
 
 // 命令行参数
@@ -33,6 +37,11 @@ var (
 )
 
 func main() {
+	// release 模式下禁用 gin 调试日志
+	if isRelease == "true" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	// 解析命令行参数
 	configPath := flag.String("c", "", "配置文件路径")
 	showVersion := flag.Bool("v", false, "显示版本信息")
@@ -79,12 +88,16 @@ func main() {
 	defer db.Close()
 
 	// 初始化 GORM 数据库
+	gormLogLevel := "info"
+	if isRelease == "true" {
+		gormLogLevel = "error" // release 模式下只记录错误
+	}
 	gormCfg := &gormdb.Config{
 		DSN:          dsn,
 		MaxOpenConns: cfg.Database.MaxOpenConns,
 		MaxIdleConns: cfg.Database.MaxIdleConns,
 		MaxLifetime:  cfg.Database.MaxLifetime,
-		LogLevel:     "info", // 可通过配置文件控制
+		LogLevel:     gormLogLevel,
 	}
 	if err := gormdb.Init(gormCfg); err != nil {
 		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)

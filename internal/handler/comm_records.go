@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -507,12 +506,6 @@ func GetUserCommTrend(c *gin.Context) {
 		Order("date ASC").
 		Scan(&trends).Error
 
-	// 调试日志
-	log.Printf("[GetUserCommTrend] userID=%d, thirtyDaysAgo=%s, trends count=%d, err=%v", user.ID, thirtyDaysAgo, len(trends), err)
-	for i, t := range trends {
-		log.Printf("[GetUserCommTrend] trends[%d]: date=%s, count=%d, duration=%d", i, t.Date, t.Count, t.Duration)
-	}
-
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -572,12 +565,6 @@ func GetSystemCommTrend(c *gin.Context) {
 		Group("DATE_FORMAT(start_time, '%Y-%m-%d')").
 		Order("date ASC").
 		Scan(&trends).Error
-
-	// 调试日志
-	log.Printf("[GetSystemCommTrend] thirtyDaysAgo=%s, trends count=%d, err=%v", thirtyDaysAgo, len(trends), err)
-	for i, t := range trends {
-		log.Printf("[GetSystemCommTrend] trends[%d]: Date=%s, Count=%d, Duration=%d", i, t.Date, t.Count, t.Duration)
-	}
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

@@ -17,7 +17,11 @@ echo Build Time: %BUILD_TIME%
 echo Binary:     %BINARY_NAME%
 echo ==========================================
 
-if exist %BINARY_NAME% del /f %BINARY_NAME% >/dev/null 2>&1
+REM 删除旧的二进制文件
+if exist %BINARY_NAME% (
+    echo Removing old %BINARY_NAME%...
+    del /f %BINARY_NAME% 2>nul
+)
 
 echo Building...
 go build -ldflags="-s -w -X main.version=%VERSION% -X main.buildTime=%BUILD_TIME% -X main.isRelease=true" -o %BINARY_NAME% ./cmd/udphub

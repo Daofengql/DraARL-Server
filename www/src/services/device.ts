@@ -28,6 +28,9 @@ interface BackendDevice {
   note?: string
   password?: string
   online_time?: string
+  owner_id?: number
+  owner_name?: string
+  owner_callsign?: string
   create_time?: string
   update_time?: string
 }
@@ -49,6 +52,9 @@ const normalizeDevice = (d: BackendDevice): Device => ({
   disable_recv: d.disable_recv,
   qth: d.qth,
   note: d.note,
+  owner_id: d.owner_id,
+  owner_name: d.owner_name,
+  owner_callsign: d.owner_callsign,
   online_time: d.online_time,
   last_heartbeat: d.online_time,
   create_time: d.create_time,
@@ -85,31 +91,6 @@ export const deviceService = {
   // 获取单个设备（兼容旧接口）
   async getById(id: number): Promise<Device> {
     const res = await apiClient.get<BackendResponse<BackendDevice>>('/api/device/get', { params: { id } })
-    return normalizeDevice(res.data!)
-  },
-
-  // 创建设备
-  async create(data: Partial<Device>): Promise<Device> {
-    const backendData: Partial<BackendDevice> = {
-      id: data.id,
-      name: data.name,
-      callsign: data.callsign,
-      ssid: data.ssid,
-      dev_model: data.model ?? data.dev_model,
-      group_id: data.group_id,
-      is_online: data.online ?? data.is_online,
-      status: data.status,
-      priority: data.priority,
-      disable_send: data.disable_send,
-      disable_recv: data.disable_recv,
-      qth: data.qth,
-      note: data.note,
-      password: data.password,
-      online_time: data.last_heartbeat ?? data.online_time,
-      create_time: data.created_at ?? data.create_time,
-      update_time: data.updated_at ?? data.update_time,
-    }
-    const res = await apiClient.post<BackendResponse<BackendDevice>>('/api/devices', backendData)
     return normalizeDevice(res.data!)
   },
 

@@ -24,22 +24,25 @@ type DeviceListRequest struct {
 
 // DeviceInfo 设备信息响应
 type DeviceInfo struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	CallSign    string `json:"callsign"`
-	SSID        uint8  `json:"ssid"`
-	DevModel    int    `json:"dev_model"`
-	GroupID     int    `json:"group_id"`
-	Status      int8   `json:"status"`
-	Priority    int    `json:"priority"`
-	IsOnline    bool   `json:"is_online"`
-	DisableSend bool   `json:"disable_send"`
-	DisableRecv bool   `json:"disable_recv"`
-	QTH         string `json:"qth"`
-	Note        string `json:"note"`
-	OnlineTime  string `json:"online_time,omitempty"`
-	CreateTime  string `json:"create_time,omitempty"`
-	UpdateTime  string `json:"update_time,omitempty"`
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	CallSign      string `json:"callsign"`
+	SSID          uint8  `json:"ssid"`
+	DevModel      int    `json:"dev_model"`
+	GroupID       int    `json:"group_id"`
+	Status        int8   `json:"status"`
+	Priority      int    `json:"priority"`
+	IsOnline      bool   `json:"is_online"`
+	DisableSend   bool   `json:"disable_send"`
+	DisableRecv   bool   `json:"disable_recv"`
+	QTH           string `json:"qth"`
+	Note          string `json:"note"`
+	OwnerID       int    `json:"owner_id,omitempty"`
+	OwnerName     string `json:"owner_name,omitempty"`
+	OwnerCallSign string `json:"owner_callsign,omitempty"`
+	OnlineTime    string `json:"online_time,omitempty"`
+	CreateTime    string `json:"create_time,omitempty"`
+	UpdateTime    string `json:"update_time,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -168,11 +171,15 @@ func GetDevices(c *gin.Context) {
 		}
 	}
 
+	// 获取所有用户信息（用于关联所有者）
+	userCache := cache.GetUserCache()
+	userRepo := gormdb.NewUserRepository()
+
 	// 转换为响应格式
 	items := make([]*DeviceInfo, 0, len(devices))
 	for _, d := range devices {
-		items = append(items, &DeviceInfo{
-			ID:         d.ID,
+		info := &DeviceInfo{
+			ID:          d.ID,
 			Name:       d.Name,
 			CallSign:   d.CallSign,
 			SSID:       d.SSID,
@@ -186,7 +193,28 @@ func GetDevices(c *gin.Context) {
 			Note:       d.Note,
 			CreateTime: d.CreateTime.Format("2006-01-02 15:04:05"),
 			UpdateTime: d.UpdateTime.Format("2006-01-02 15:04:05"),
-		})
+		}
+
+		// 获取设备所有者信息
+		if d.Username != "" {
+			var owner *gormdb.User
+			if userCache != nil {
+				owner, _ = userCache.GetUserByName(ctx, d.Username)
+			}
+			if owner == nil {
+				owner, _ = userRepo.GetUserByName(d.Username)
+			}
+			if owner != nil {
+				info.OwnerID = owner.ID
+				info.OwnerName = owner.NickName
+				if owner.NickName == "" {
+					info.OwnerName = owner.Name
+				}
+				info.OwnerCallSign = owner.CallSign
+			}
+		}
+
+		items = append(items, info)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -271,97 +299,6 @@ func GetDevice(c *gin.Context) {
 			"note":       device.Note,
 			"create_time": device.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time": device.UpdateTime.Format("2006-01-02 15:04:05"),
-		},
-	})
-}
-
-// CreateDeviceRequest 创建设备请求
-type CreateDeviceRequest struct {
-	Name     string `json:"name" binding:"required"`
-	CallSign string `json:"callsign" binding:"required"`
-	SSID     uint8  `json:"ssid"`
-	DevModel int    `json:"dev_model"`
-	GroupID  int    `json:"group_id"`
-	Password string `json:"password"`
-	Note     string `json:"note"`
-	Priority int    `json:"priority"`
-}
-
-// CreateDevice 创建设备
-func CreateDevice(c *gin.Context) {
-	var req CreateDeviceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-		})
-		return
-	}
-
-	// 获取当前用户
-	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, err := userRepo.GetUserByName(username.(string))
-	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
-		return
-	}
-
-	repo := gormdb.NewDeviceRepository()
-
-	// 检查设备是否已存在
-	existing, _ := repo.GetDeviceByCallSignSSID(req.CallSign, req.SSID)
-	if existing != nil {
-		c.JSON(http.StatusConflict, gin.H{
-			"code":    409,
-			"message": "设备已存在",
-		})
-		return
-	}
-
-	device := &gormdb.Device{
-		Name:       req.Name,
-		CallSign:   req.CallSign,
-		SSID:       req.SSID,
-		Username:   currentUser.Name, // 绑定当前用户
-		DevModel:   req.DevModel,
-		GroupID:    req.GroupID,
-		Password:   req.Password,
-		Status:     1,
-		Priority:   req.Priority,
-		Note:       req.Note,
-		CreateTime: time.Now(),
-		UpdateTime: time.Now(),
-	}
-
-	if device.Priority == 0 {
-		device.Priority = 100
-	}
-
-	if err := repo.CreateDevice(device); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "创建设备失败",
-		})
-		return
-	}
-
-	// 使设备列表和群组设备列表缓存失效
-	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		_ = deviceCache.InvalidateDeviceList(c.Request.Context())
-		if device.GroupID > 0 {
-			_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), device.GroupID)
-		}
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    201,
-		"message": "创建成功",
-		"data": gin.H{
-			"id": device.ID,
 		},
 	})
 }

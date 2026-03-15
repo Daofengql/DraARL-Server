@@ -26,7 +26,6 @@ import {
   Tooltip,
 } from '@mui/material'
 import {
-  Add,
   Edit,
   Delete,
   Search,
@@ -274,12 +273,11 @@ export function AdminDevicePage() {
       setError('请输入设备名称')
       return
     }
+    if (!editingDevice) {
+      return
+    }
     try {
-      if (editingDevice) {
-        await deviceService.update(editingDevice.id, formData)
-      } else {
-        await deviceService.create(formData)
-      }
+      await deviceService.update(editingDevice.id, formData)
       handleCloseDialog()
       loadDevices()
     } catch (err: any) {
@@ -325,9 +323,6 @@ export function AdminDevicePage() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4">设备管理</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
-          添加设备
-        </Button>
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
@@ -354,6 +349,7 @@ export function AdminDevicePage() {
             <TableRow>
               <TableCell width={80}>在线</TableCell>
               <TableCell>名称</TableCell>
+              <TableCell>设备类型</TableCell>
               <TableCell>呼号SSID</TableCell>
               <TableCell>所有者</TableCell>
               <TableCell>所在群组</TableCell>
@@ -363,9 +359,9 @@ export function AdminDevicePage() {
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
             ) : filteredDevices.length === 0 ? (
-              <TableRow><TableCell colSpan={7} align="center">暂无设备数据</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} align="center">暂无设备数据</TableCell></TableRow>
             ) : (
               filteredDevices.map((device) => {
                 const group = getGroupInfo(device.group_id)
@@ -380,6 +376,11 @@ export function AdminDevicePage() {
                       }
                     </TableCell>
                     <TableCell sx={{ fontWeight: 500 }}>{device.name}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {DEVICE_MODELS.find(m => m.value === (device.model ?? device.dev_model))?.label || '未知设备'}
+                      </Typography>
+                    </TableCell>
                     <TableCell>{device.callsign}-{device.ssid}</TableCell>
                     <TableCell>
                       {owner ? (
@@ -472,7 +473,7 @@ export function AdminDevicePage() {
 
       {/* 编辑设备对话框 */}
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>{editingDevice ? '编辑设备' : '添加设备'}</DialogTitle>
+        <DialogTitle>编辑设备</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <TextField

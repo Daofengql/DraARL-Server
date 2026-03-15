@@ -24,24 +24,16 @@ import {
   Alert,
   Stack,
   Tooltip,
-  Card,
-  CardContent,
-  Chip,
   Snackbar,
-  Divider,
 } from '@mui/material'
 import {
-  Add,
   Edit,
   Delete,
   Search,
   Circle,
-  LockOpen,
   Lock,
   Key,
   ContentCopy,
-  Refresh,
-  CheckCircle,
 } from '@mui/icons-material'
 import { deviceService, groupService, authService } from '../../services'
 import type { Device, Group } from '../../types'
@@ -93,11 +85,6 @@ export function DevicesPage() {
   }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
   // 设备密码相关状态
-  const [devicePasswordInfo, setDevicePasswordInfo] = useState<{
-    masked_password: string
-    has_password: boolean
-    is_new: boolean
-  } | null>(null)
   const [regeneratedPassword, setRegeneratedPassword] = useState<string | null>(null)
   const [showDevicePassword, setShowDevicePassword] = useState(false)
   const [generatingDevicePassword, setGeneratingDevicePassword] = useState(false)
@@ -110,7 +97,6 @@ export function DevicesPage() {
   useEffect(() => {
     loadDevices()
     loadGroups()
-    loadDevicePasswordInfo()
   }, [])
 
   const loadDevices = async () => {
@@ -134,16 +120,6 @@ export function DevicesPage() {
     }
   }
 
-  // 加载设备密码信息
-  const loadDevicePasswordInfo = async () => {
-    try {
-      const info = await authService.getDevicePassword()
-      setDevicePasswordInfo(info)
-    } catch (err) {
-      console.error('Failed to load device password info:', err)
-    }
-  }
-
   // 生成/重新生成设备密码
   const handleRegenerateDevicePassword = async () => {
     setGeneratingDevicePassword(true)
@@ -151,7 +127,6 @@ export function DevicesPage() {
       const result = await authService.regenerateDevicePassword()
       setRegeneratedPassword(result.device_password)
       setShowDevicePassword(true)
-      await loadDevicePasswordInfo()
       setSnackbar({ open: true, message: '设备密码已生成', severity: 'success' })
     } catch (err: any) {
       setSnackbar({ open: true, message: err.response?.data?.message || '生成失败', severity: 'error' })
@@ -280,12 +255,9 @@ export function DevicesPage() {
       setError('请输入设备名称')
       return
     }
+    if (!editingDevice) return
     try {
-      if (editingDevice) {
-        await deviceService.update(editingDevice.id, { name: formData.name, model: formData.model })
-      } else {
-        await deviceService.create(formData)
-      }
+      await deviceService.update(editingDevice.id, { name: formData.name, model: formData.model })
       handleCloseDialog()
       loadDevices()
     } catch (err: any) {
@@ -330,86 +302,38 @@ export function DevicesPage() {
 
   return (
     <Box>
-      {/* 设备准入密码卡片 */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-            <Key fontSize="small" color="action" />
-            <Typography variant="h6">设备准入密码</Typography>
-          </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            用于 DraARLv1 协议设备认证，配置设备时需要填写此密码
-          </Typography>
-
-          {devicePasswordInfo ? (
-            <Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                {devicePasswordInfo.has_password && (
-                  <Chip
-                    icon={<CheckCircle />}
-                    label="已设置"
-                    size="small"
-                    color="success"
-                  />
-                )}
-                <Typography variant="body2" color="text.secondary">
-                  脱敏显示: {devicePasswordInfo.masked_password}
-                </Typography>
-              </Box>
-
-              {showDevicePassword && regeneratedPassword && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  <Typography variant="body2">
-                    新设备密码: <strong style={{ fontSize: '1.1em', letterSpacing: '0.5px' }}>{regeneratedPassword}</strong>
-                  </Typography>
-                  <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
-                    请立即保存，此密码仅显示一次！
-                  </Typography>
-                  <Button
-                    size="small"
-                    startIcon={<ContentCopy />}
-                    onClick={handleCopyDevicePassword}
-                    sx={{ mt: 1 }}
-                  >
-                    复制密码
-                  </Button>
-                </Alert>
-              )}
-
-              <Stack direction="row" spacing={1}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<Refresh />}
-                  onClick={handleRegenerateDevicePassword}
-                  disabled={generatingDevicePassword}
-                  color="warning"
-                >
-                  {generatingDevicePassword ? '生成中...' : '重新生成密码'}
-                </Button>
-              </Stack>
-            </Box>
-          ) : (
-            <Button
-              variant="contained"
-              startIcon={<Key />}
-              onClick={handleRegenerateDevicePassword}
-              disabled={generatingDevicePassword}
-            >
-              {generatingDevicePassword ? '生成中...' : '生成设备密码'}
-            </Button>
-          )}
-        </CardContent>
-      </Card>
-
-      <Divider sx={{ mb: 3 }} />
-
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" fontWeight={600}>设备管理</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
-          添加设备
+        <Button
+          variant="contained"
+          size="small"
+          startIcon={<Key />}
+          onClick={handleRegenerateDevicePassword}
+          disabled={generatingDevicePassword}
+          color="primary"
+        >
+          {generatingDevicePassword ? '生成中...' : '重新生成设备密码'}
         </Button>
       </Box>
+
+      {showDevicePassword && regeneratedPassword && (
+        <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setShowDevicePassword(false)}>
+          <Typography variant="body2">
+            新设备密码: <strong style={{ fontSize: '1.1em', letterSpacing: '0.5px' }}>{regeneratedPassword}</strong>
+          </Typography>
+          <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
+            请立即保存，此密码仅显示一次！
+          </Typography>
+          <Button
+            size="small"
+            startIcon={<ContentCopy />}
+            onClick={handleCopyDevicePassword}
+            sx={{ mt: 1 }}
+          >
+            复制密码
+          </Button>
+        </Alert>
+      )}
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
 
@@ -434,6 +358,7 @@ export function DevicesPage() {
             <TableRow>
               <TableCell width={80}>在线状态</TableCell>
               <TableCell>名称</TableCell>
+              <TableCell>设备类型</TableCell>
               <TableCell>呼号及SSID</TableCell>
               <TableCell>所在群组</TableCell>
               <TableCell width={130}>收发控制</TableCell>
@@ -442,15 +367,15 @@ export function DevicesPage() {
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={6} align="center">加载中...</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
             ) : paginatedDevices.length === 0 ? (
-              <TableRow><TableCell colSpan={6} align="center">暂无设备数据</TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} align="center">暂无设备数据</TableCell></TableRow>
             ) : (
               paginatedDevices.map((device) => {
                 const group = getGroupInfo(device.group_id)
                 return (
                   <TableRow key={device.id} hover>
-                    {/* 在线状态使用绿圆点或灰圆圈 */}
+                    {/* 在线���态使用绿圆点或灰圆圈 */}
                     <TableCell>
                       {device.online || device.is_online ?
                         <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :
@@ -458,6 +383,11 @@ export function DevicesPage() {
                       }
                     </TableCell>
                     <TableCell sx={{ fontWeight: 500 }}>{device.name}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {DEVICE_MODELS.find(m => m.value === (device.model ?? device.dev_model))?.label || '未知设备'}
+                      </Typography>
+                    </TableCell>
                     <TableCell>{device.callsign}-{device.ssid}</TableCell>
                     <TableCell>
                       {group ? (
@@ -522,7 +452,7 @@ export function DevicesPage() {
 
       {/* 编辑设备对话框 */}
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>{editingDevice ? '编辑设备' : '添加设备'}</DialogTitle>
+        <DialogTitle>编辑设备</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <TextField

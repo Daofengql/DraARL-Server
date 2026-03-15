@@ -1,9 +1,8 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography, Collapse, Divider } from '@mui/material'
+import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography, Collapse, Divider, Link } from '@mui/material'
 import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess } from '@mui/icons-material'
-import { useState } from 'react'
-import { authService } from '../../services'
-import { Footer } from './Footer'
+import { useState, useEffect } from 'react'
+import { authService, apiClient } from '../../services'
 
 const DRAWER_WIDTH = 240
 
@@ -41,6 +40,29 @@ export function AdminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   // 用户管理菜单的展开/折叠状态
   const [userMenuExpanded, setUserMenuExpanded] = useState(true)
+  const [icp, setIcp] = useState('')
+
+  useEffect(() => {
+    const fetchICP = async () => {
+      try {
+        const res = await apiClient.get<any>('/api/config/public')
+        if (res.code === 200 && res.data?.icp?.icp) {
+          setIcp(res.data.icp.icp)
+        }
+      } catch (err) {
+        console.error('Failed to fetch ICP config:', err)
+      }
+    }
+    fetchICP()
+
+    const handleConfigUpdate = () => {
+      fetchICP()
+    }
+    window.addEventListener('config-updated', handleConfigUpdate)
+    return () => {
+      window.removeEventListener('config-updated', handleConfigUpdate)
+    }
+  }, [])
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen)
@@ -196,6 +218,34 @@ export function AdminLayout() {
           </ListItemIcon>
           <ListItemText primary="退出登录" />
         </ListItemButton>
+        {icp && (
+          <>
+            <Divider sx={{ my: 1.5 }} />
+            <Link
+              href="http://beian.miit.gov.cn/"
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.5,
+                color: 'text.secondary',
+                textDecoration: 'none',
+                fontSize: '0.875rem',
+                '&:hover': { color: 'text.primary' },
+              }}
+            >
+              <Box
+                component="img"
+                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
+                alt="备案图标"
+                sx={{ height: 21, width: 21 }}
+              />
+              {icp}
+            </Link>
+          </>
+        )}
       </Box>
     </Box>
   )
@@ -256,7 +306,6 @@ export function AdminLayout() {
         <Box sx={{ p: 3, minHeight: '100vh' }}>
           <Outlet />
         </Box>
-        <Footer />
       </Box>
     </Box>
   )

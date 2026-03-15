@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import {
   List,
   ListItem,
@@ -7,6 +8,8 @@ import {
   Box,
   Typography,
   Drawer,
+  Divider,
+  Link,
   type DrawerProps,
 } from '@mui/material'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -19,7 +22,7 @@ import {
   ExitToApp,
   Mic,
 } from '@mui/icons-material'
-import { authService } from '../../services'
+import { authService, apiClient } from '../../services'
 
 const DRAWER_WIDTH = 240
 
@@ -47,6 +50,29 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = authService.isAdmin()
+  const [icp, setIcp] = useState('')
+
+  useEffect(() => {
+    const fetchICP = async () => {
+      try {
+        const res = await apiClient.get<any>('/api/config/public')
+        if (res.code === 200 && res.data?.icp?.icp) {
+          setIcp(res.data.icp.icp)
+        }
+      } catch (err) {
+        console.error('Failed to fetch ICP config:', err)
+      }
+    }
+    fetchICP()
+
+    const handleConfigUpdate = () => {
+      fetchICP()
+    }
+    window.addEventListener('config-updated', handleConfigUpdate)
+    return () => {
+      window.removeEventListener('config-updated', handleConfigUpdate)
+    }
+  }, [])
 
   const handleNavigate = (path: string) => {
     navigate(path)
@@ -129,6 +155,34 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
           </ListItemIcon>
           <ListItemText primary="退出登录" />
         </ListItemButton>
+        {icp && (
+          <>
+            <Divider sx={{ my: 1.5 }} />
+            <Link
+              href="http://beian.miit.gov.cn/"
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.5,
+                color: 'text.secondary',
+                textDecoration: 'none',
+                fontSize: '0.875rem',
+                '&:hover': { color: 'text.primary' },
+              }}
+            >
+              <Box
+                component="img"
+                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
+                alt="备案图标"
+                sx={{ height: 21, width: 21 }}
+              />
+              {icp}
+            </Link>
+          </>
+        )}
       </Box>
     </Box>
   )

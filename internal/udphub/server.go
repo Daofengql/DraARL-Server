@@ -653,9 +653,7 @@ func refreshGroupCache() {
 			existingGroup.CallSign = modelGroup.CallSign
 			existingGroup.Password = modelGroup.Password
 			existingGroup.AllowCallSignSSID = modelGroup.AllowCallSignSSID
-			existingGroup.AllowDMRID = modelGroup.AllowDMRID
 			existingGroup.OwerID = modelGroup.OwerID
-			existingGroup.OwerCallSign = modelGroup.OwerCallSign
 			existingGroup.MasterServer = modelGroup.MasterServer
 			existingGroup.SlaveServer = modelGroup.SlaveServer
 			existingGroup.Status = modelGroup.Status

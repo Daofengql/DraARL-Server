@@ -19,8 +19,6 @@ type GroupInfo struct {
 	Password          string `json:"password,omitempty"`
 	AllowCallSignSSID string `json:"allow_callsign_ssid"`
 	OwerID            int    `json:"ower_id"`
-	OwerCallSign      string `json:"ower_callsign"`
-	DevList           string `json:"devlist"`
 	MasterServer      int    `json:"master_server"`
 	SlaveServer       int    `json:"slave_server"`
 	Status            int    `json:"status"`
@@ -188,30 +186,46 @@ func GetGroups(c *gin.Context) {
 		}
 	}
 
-	// 获取当前用户ID用于判断是否是群组所有者
+	// Build ownerID -> callsign mapping
+	userRepo := gormdb.NewUserRepository()
+	ownerCallSigns := make(map[int]string)
+	for _, g := range groups {
+		if g.OwerID > 0 {
+			if _, exists := ownerCallSigns[g.OwerID]; !exists {
+				if owner, err := userRepo.GetUserByID(g.OwerID); err == nil && owner != nil {
+					ownerCallSigns[g.OwerID] = owner.CallSign
+				}
+			}
+		}
+	}
+
+	// Get current user ID for owner check
 	currentUserID := 0
 	if currentUser != nil {
 		currentUserID = currentUser.ID
 	}
 
-	// 转换为前端期望的带有扩展状态的结构
+	// Convert to frontend expected format with extended status
 	resultItems := make([]gin.H, 0, len(groups))
 	for _, g := range groups {
 		isJoined := false
 
-		// 判断用户是否已加入该群组
+		// Check if user has joined the group
 		if g.Type == 1 {
-			// 公开群组默认视为已加入
+			// Public groups are considered joined by default
 			isJoined = true
 		} else if g.Type == 2 && currentUser != nil {
-			// 私有群组检查是否在已加入列表中
+			// Private groups check if in joined list
 			isJoined = joinedGroupIDs[g.ID]
 		}
 
-		// 判断当前用户是否是群组所有者
+		// Check if current user is the group owner
 		isOwner := g.OwerID == currentUserID
 
 		stat := groupDeviceStats[g.ID]
+
+		// Get owner callsign from lookup map
+		ownerCallSign := ownerCallSigns[g.OwerID]
 
 		resultItems = append(resultItems, gin.H{
 			"id":                  g.ID,
@@ -220,15 +234,15 @@ func GetGroups(c *gin.Context) {
 			"callsign":            g.CallSign,
 			"allow_callsign_ssid": g.AllowCallSignSSID,
 			"ower_id":             g.OwerID,
-			"ower_callsign":       g.OwerCallSign,
+			"ower_callsign":       ownerCallSign,
 			"master_server":       g.MasterServer,
 			"slave_server":        g.SlaveServer,
 			"status":              g.Status,
 			"note":                g.Note,
-			"is_joined":           isJoined,   // 提供给前端用于渲染已加入标识
-			"is_owner":            isOwner,    // 提供给前端用于判断是否显示编辑/删除按钮
-			"online_count":        stat.online, // 实时在线设备数
-			"total_count":         stat.total,  // 总设备数
+			"is_joined":           isJoined,
+			"is_owner":            isOwner,
+			"online_count":        stat.online,
+			"total_count":         stat.total,
 			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
@@ -293,8 +307,17 @@ func GetGroup(c *gin.Context) {
 		}
 	}
 
-	// 判断当前用户是否是群组所有者
+	// Check if current user is the group owner
 	isOwner := group.OwerID == currentUserID
+
+	// Get owner callsign from user table
+	var ownerCallSign string
+	if group.OwerID > 0 {
+		userRepo := gormdb.NewUserRepository()
+		if owner, err := userRepo.GetUserByID(group.OwerID); err == nil && owner != nil {
+			ownerCallSign = owner.CallSign
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -306,8 +329,7 @@ func GetGroup(c *gin.Context) {
 			"callsign":            group.CallSign,
 			"allow_callsign_ssid": group.AllowCallSignSSID,
 			"ower_id":             group.OwerID,
-			"ower_callsign":       group.OwerCallSign,
-			"devlist":             group.DevList,
+			"ower_callsign":       ownerCallSign,
 			"master_server":       group.MasterServer,
 			"slave_server":        group.SlaveServer,
 			"status":              group.Status,
@@ -319,15 +341,13 @@ func GetGroup(c *gin.Context) {
 	})
 }
 
-// CreateGroupRequest 创建群组请求
+// CreateGroupRequest 创建群组请���
 type CreateGroupRequest struct {
 	Name              string `json:"name" binding:"required"`
 	Type              int    `json:"type"`
 	CallSign          string `json:"callsign"`
 	Password          string `json:"password"`
 	AllowCallSignSSID string `json:"allow_callsign_ssid"`
-	AllowDMRID        string `json:"allow_dmrid"`
-	OwerCallSign      string `json:"ower_callsign"`
 	Note              string `json:"note"`
 	Status            int    `json:"status"`
 }
@@ -363,9 +383,6 @@ func CreateGroup(c *gin.Context) {
 		return
 	}
 
-	// 拥有者呼号直接使用用户名（username）
-	owerCallSign := currentUser.Name
-
 	repo := gormdb.NewGroupRepository()
 	group := &gormdb.Group{
 		Name:              req.Name,
@@ -373,13 +390,9 @@ func CreateGroup(c *gin.Context) {
 		CallSign:          req.CallSign,
 		Password:          req.Password,
 		AllowCallSignSSID: req.AllowCallSignSSID,
-		AllowDMRID:        req.AllowDMRID,
-		// 2. 修复：强制绑定拥有者 ID 和 拥有者呼号
 		OwerID:            currentUser.ID,
-		OwerCallSign:      owerCallSign,
 		Note:              req.Note,
 		Status:            1,
-		DevList:           "",
 	}
 
 	// 3. 写入群组表
@@ -500,6 +513,15 @@ func UpdateGroup(c *gin.Context) {
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
 
+	// Get owner callsign from user table
+	var ownerCallSign string
+	if group.OwerID > 0 {
+		userRepo := gormdb.NewUserRepository()
+		if owner, err := userRepo.GetUserByID(group.OwerID); err == nil && owner != nil {
+			ownerCallSign = owner.CallSign
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -510,8 +532,7 @@ func UpdateGroup(c *gin.Context) {
 			"callsign":            group.CallSign,
 			"allow_callsign_ssid": group.AllowCallSignSSID,
 			"ower_id":             group.OwerID,
-			"ower_callsign":       group.OwerCallSign,
-			"devlist":             group.DevList,
+			"ower_callsign":       ownerCallSign,
 			"master_server":       group.MasterServer,
 			"slave_server":        group.SlaveServer,
 			"status":              group.Status,
@@ -764,37 +785,50 @@ func SearchGroups(c *gin.Context) {
 
 	memberRepo := gormdb.NewGroupMemberRepository()
 
-	// 重新组装响应数据，添加用户状态
+	// Build ownerID -> callsign mapping
+	userRepo := gormdb.NewUserRepository()
+	ownerCallSigns := make(map[int]string)
+	for _, g := range groups {
+		if g.OwerID > 0 {
+			if _, exists := ownerCallSigns[g.OwerID]; !exists {
+				if owner, err := userRepo.GetUserByID(g.OwerID); err == nil && owner != nil {
+					ownerCallSigns[g.OwerID] = owner.CallSign
+				}
+			}
+		}
+	}
+
+	// Reassemble response data with user status
 	resultItems := make([]gin.H, 0, len(groups))
 	for _, g := range groups {
-		isJoined := false // 统一使用 is_joined 字段名
+		isJoined := false
 		requirePassword := false
 
 		if g.Type == 2 {
-			// 私有群组需要密码
+			// Private group requires password
 			requirePassword = true
 			if currentUser != nil {
-				// 检查用户是否已经验证过
+				// Check if user has verified
 				isJoined = memberRepo.IsVerifiedMember(g.ID, currentUser.ID)
 			}
 		}
 
 		resultItems = append(resultItems, gin.H{
-			"id":               g.ID,
-			"name":             g.Name,
-			"type":             g.Type,
-			"callsign":         g.CallSign,
+			"id":                  g.ID,
+			"name":                g.Name,
+			"type":                g.Type,
+			"callsign":            g.CallSign,
 			"allow_callsign_ssid": g.AllowCallSignSSID,
-			"ower_id":          g.OwerID,
-			"ower_callsign":    g.OwerCallSign,
-			"master_server":    g.MasterServer,
-			"slave_server":     g.SlaveServer,
-			"status":           g.Status,
-			"note":             g.Note,
-			"require_password": requirePassword, // 告知前端是否需要密码
-			"is_joined":        isJoined,        // 统一使用 is_joined 字段名
-			"create_time":      g.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":      g.UpdateTime.Format("2006-01-02 15:04:05"),
+			"ower_id":             g.OwerID,
+			"ower_callsign":       ownerCallSigns[g.OwerID],
+			"master_server":       g.MasterServer,
+			"slave_server":        g.SlaveServer,
+			"status":              g.Status,
+			"note":                g.Note,
+			"require_password":    requirePassword,
+			"is_joined":           isJoined,
+			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 

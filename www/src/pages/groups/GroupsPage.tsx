@@ -81,6 +81,7 @@ export function GroupsPage() {
     callsign: '',
     password: '',
     status: 1,
+    note: '',
   })
 
   // 确认对话框状态
@@ -191,22 +192,23 @@ export function GroupsPage() {
     })
   }
 
-  // 打开新建弹窗
+  // Open add dialog
   const handleOpenAdd = () => {
     setEditingGroup(null)
-    setFormData({ name: '', type: 1, callsign: '', password: '', status: 1 })
+    setFormData({ name: '', type: 1, callsign: '', password: '', status: 1, note: '' })
     setDialogOpen(true)
   }
 
-  // 打开编辑弹窗
+  // Open edit dialog
   const handleOpenEdit = (group: Group) => {
     setEditingGroup(group)
     setFormData({
       name: group.name,
       type: group.type,
       callsign: group.callsign || '',
-      password: '', // 编辑时不强制回显密码
+      password: '', // Don't show password when editing
       status: group.status ?? 1,
+      note: group.note || '',
     })
     setDialogOpen(true)
   }
@@ -575,7 +577,7 @@ export function GroupsPage() {
               </Select>
             </FormControl>
             <TextField label="呼号标识（可选）" fullWidth value={formData.callsign} onChange={(e) => setFormData({ ...formData, callsign: e.target.value })} />
-            {/* 只在私有群组时显示密码框 */}
+            {/* Only show password field for private groups */}
             {formData.type === GROUP_TYPE_PRIVATE && (
               <TextField
                 label={editingGroup ? "重置密码（留空则不修改）" : "加入密码"}
@@ -586,6 +588,14 @@ export function GroupsPage() {
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               />
             )}
+            <TextField
+              label="备注（可选）"
+              fullWidth
+              multiline
+              rows={2}
+              value={formData.note}
+              onChange={(e) => setFormData({ ...formData, note: e.target.value })}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>

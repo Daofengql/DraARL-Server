@@ -109,11 +109,8 @@ type Group struct {
 	Type              int       `gorm:"type:int;column:type" json:"type"`
 	CallSign          string    `gorm:"type:varchar(255);column:call_sign" json:"callsign"`
 	Password          string    `gorm:"type:varchar(255);column:password" json:"password"`
-	AllowDMRID        string    `gorm:"type:text;column:allow_dmr_id" json:"allow_dmrid"`
 	AllowCallSignSSID string    `gorm:"type:text;column:allow_callsign_ssid" json:"allow_callsign_ssid"`
 	OwerID            int       `gorm:"type:int;column:ower_id" json:"ower_id"`
-	OwerCallSign      string    `gorm:"type:varchar(255);column:ower_callsign" json:"ower_callsign"`
-	DevList           string    `gorm:"type:text;column:dev_list" json:"devlist"`
 	MasterServer      int       `gorm:"type:int;column:master_server" json:"master_server"`
 	SlaveServer       int       `gorm:"type:int;column:slave_server" json:"slave_server"`
 	Status            int       `gorm:"type:int;default:1;column:status" json:"status"`

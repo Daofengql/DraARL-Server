@@ -14,26 +14,24 @@ import (
 func initPublicGroups() {
 	// 创建默认群组 0
 	publicGroupMap[0] = &models.Group{
-		ID:           0,
-		Name:         "公共大厅",
-		OwerCallSign: "default",
-		Status:       1,
-		DevMap:       make(map[int]*models.Device),
-		CreateTime:   time.Now().Format("2006-01-02 15:04:05"),
-		UpdateTime:   time.Now().Format("2006-01-02 15:04:05"),
-		ConnPool:     &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ID:         0,
+		Name:       "公共大厅",
+		Status:     1,
+		DevMap:     make(map[int]*models.Device),
+		CreateTime: time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
+		ConnPool:   &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
 	}
 
 	// 创建全网通群组 999
 	publicGroupMap[models.GroupIDPublicMin] = &models.Group{
-		ID:           models.GroupIDPublicMin,
-		Name:         "全网互联",
-		OwerCallSign: "default",
-		Status:       1,
-		DevMap:       make(map[int]*models.Device),
-		CreateTime:   time.Now().Format("2006-01-02 15:04:05"),
-		UpdateTime:   time.Now().Format("2006-01-02 15:04:05"),
-		ConnPool:     &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ID:         models.GroupIDPublicMin,
+		Name:       "全网互联",
+		Status:     1,
+		DevMap:     make(map[int]*models.Device),
+		CreateTime: time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
+		ConnPool:   &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
 	}
 
 	// 从数据库加载公共群组
@@ -95,7 +93,6 @@ func CreatePublicGroup(gp *models.Group) error {
 		Password:          gp.Password,
 		AllowCallSignSSID: gp.AllowCallSignSSID,
 		OwerID:            gp.OwerID,
-		OwerCallSign:      gp.OwerCallSign,
 		DevList:           gp.DevList,
 		MasterServer:      gp.MasterServer,
 		SlaveServer:       gp.SlaveServer,

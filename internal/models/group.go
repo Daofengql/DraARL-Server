@@ -13,11 +13,9 @@ type Group struct {
 	Type        int                    `json:"type"`        // 1: 中继, 7: 会议
 	CallSign    string                 `json:"callsign"`
 	Password    string                 `json:"password"`
-	AllowDMRID  string                 `json:"allow_dmrid"`
 	AllowCallSignSSID string           `json:"allow_callsign_ssid"`
 	OwerID      int                    `json:"ower_id"`
-	OwerCallSign string                `json:"ower_callsign"`
-	DevList     []int                  `json:"devlist"`
+	DevList     []int                  `json:"devlist"`     // 内存中动态计算的设备ID列表
 	MasterServer int                   `json:"master_server"`
 	SlaveServer  int                   `json:"slave_server"`
 	Status       int                   `json:"status"`

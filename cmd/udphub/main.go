@@ -50,7 +50,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("nrllink version %s (build time: %s)\n", version, buildTime)
+		fmt.Printf("DraARL version %s (build time: %s)\n", version, buildTime)
 		os.Exit(0)
 	}
 
@@ -187,7 +187,7 @@ func main() {
 		}
 	}()
 
-	stdlog.Printf("nrllink v%s 启动成功", version)
+	stdlog.Printf("DraARL v%s 启动成功", version)
 	stdlog.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s:%d/%s",
 		cfg.System.Port, cfg.Web.Port, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
 
@@ -204,7 +204,7 @@ func main() {
 	// 刷新日志缓冲区
 	oplog.Flush()
 
-	stdlog.Println("nrllink 已关闭")
+	stdlog.Println("DraARL 已关闭")
 }
 
 // resetAdminPassword 重置管理员密码

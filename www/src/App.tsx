@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { MainLayout } from './components/layout'
 import { ProtectedRoute, AdminRoute, ToastContainer } from './components/common'
 import { LoginPage, RegisterPage } from './pages/auth'
+import { HomePage } from './pages/home'
 import { DashboardPage } from './pages/dashboard'
 import { DevicesPage } from './pages/devices'
 import { GroupsPage } from './pages/groups'
@@ -26,14 +27,17 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* 公开路由 */}
+        {/* 公开路由 - 首页 */}
+        <Route path="/" element={<HomePage />} />
+
+        {/* 公开路由 - 登录/注册 */}
         <Route
           path="/login"
-          element={!isAuthenticated ? <LoginPage /> : <Navigate to="/" replace />}
+          element={!isAuthenticated ? <LoginPage /> : <Navigate to="/dashboard" replace />}
         />
         <Route
           path="/register"
-          element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/" replace />}
+          element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/dashboard" replace />}
         />
 
         {/* 普通用户路由（管理员和用户一样可见） */}
@@ -45,7 +49,7 @@ function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<DashboardPage />} />
+          <Route path="dashboard" element={<DashboardPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="groups" element={<GroupsPage />} />
           <Route path="profile" element={<ProfilePage />} />

@@ -73,13 +73,13 @@ export function AdminLayout() {
     setMobileOpen(false)
   }
 
-  const handleLogout = () => {
-    authService.logout()
-    navigate('/login')
+  const handleLogout = async () => {
+    await authService.logout()
+    window.location.href = '/login'
   }
 
   const handleBackToMain = () => {
-    navigate('/')
+    navigate('/dashboard')
   }
 
   // 切换用户管理菜单展开/折叠

@@ -36,9 +36,9 @@ interface MenuItem {
   icon: React.ReactNode
 }
 
-// 普通用户菜单项（管理员和普通用户都可见）
+// 普通用户菜单项（管理员和普通用户���可见）
 const menuItems: MenuItem[] = [
-  { path: '/', label: '仪表盘', icon: <Dashboard /> },
+  { path: '/dashboard', label: '仪表盘', icon: <Dashboard /> },
   { path: '/devices', label: '设备管理', icon: <Devices /> },
   { path: '/groups', label: '群组管理', icon: <Group /> },
   { path: '/profile', label: '个人中心', icon: <Person /> },
@@ -81,9 +81,9 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
     }
   }
 
-  const handleLogout = () => {
-    authService.logout()
-    navigate('/login')
+  const handleLogout = async () => {
+    await authService.logout()
+    window.location.href = '/login'
   }
 
   const handleAdminPanel = () => {

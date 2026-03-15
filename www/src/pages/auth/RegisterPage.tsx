@@ -17,6 +17,7 @@ import {
 } from '@mui/material'
 import { Radio, CheckCircle, ContentCopy } from '@mui/icons-material'
 import { authService } from '../../services'
+import { usePublicConfig } from '../../hooks/usePublicConfig'
 
 const steps = ['基本信息', '联系方式', '设置密码']
 
@@ -39,6 +40,7 @@ interface FormErrors {
 
 export function RegisterPage() {
   const navigate = useNavigate()
+  const { config } = usePublicConfig()
   const [activeStep, setActiveStep] = useState(0)
   const [formData, setFormData] = useState<FormData>({
     username: '',
@@ -53,6 +55,11 @@ export function RegisterPage() {
   const [loading, setLoading] = useState(false)
   const [registerSuccess, setRegisterSuccess] = useState(false)
   const [devicePassword, setDevicePassword] = useState('')
+
+  const logoUrl = config.systemInfo.logo_url
+  const siteName = config.systemInfo.name || 'DraARL'
+  const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
+  const icp = config.icp?.icp || ''
 
   // 验证呼号格式（字母开头，后跟字母数字，3-10个字符）
   const validateCallsign = (callsign: string): boolean => {
@@ -266,6 +273,7 @@ export function RegisterPage() {
       sx={{
         minHeight: '100vh',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: (theme) => theme.palette.background.default,
@@ -329,12 +337,28 @@ export function RegisterPage() {
               // 注册表单
               <>
                 <Box sx={{ textAlign: 'center', mb: 4 }}>
-                  <Radio sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
-                  <Typography variant="h4" component="h1" gutterBottom>
-                    DraARL
+                  {logoUrl ? (
+                    <Box
+                      component="img"
+                      src={logoUrl}
+                      alt={siteName}
+                      sx={{
+                        height: 80,
+                        mb: 1.5,
+                        objectFit: 'contain',
+                      }}
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none'
+                      }}
+                    />
+                  ) : (
+                    <Radio sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
+                  )}
+                  <Typography variant="h6" component="h1" gutterBottom sx={{ fontWeight: 500 }}>
+                    {siteShorthand}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    创建新账号
+                  <Typography variant="body1" color="text.secondary">
+                    {siteName} - 创建新账号
                   </Typography>
                 </Box>
 
@@ -396,6 +420,34 @@ export function RegisterPage() {
             )}
           </CardContent>
         </Card>
+
+        {icp && (
+          <Box sx={{ textAlign: 'center', mt: 2 }}>
+            <Link
+              href="http://beian.miit.gov.cn/"
+              target="_blank"
+              rel="noopener noreferrer"
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.5,
+                color: 'text.secondary',
+                textDecoration: 'none',
+                fontSize: '0.875rem',
+                '&:hover': { color: 'text.primary' },
+              }}
+            >
+              <Box
+                component="img"
+                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
+                alt="备案图标"
+                sx={{ height: 18, width: 18 }}
+              />
+              {icp}
+            </Link>
+          </Box>
+        )}
       </Container>
     </Box>
   )

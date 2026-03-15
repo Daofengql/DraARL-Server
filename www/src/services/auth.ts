@@ -28,7 +28,12 @@ export const authService = {
 
   // 用户登出
   async logout(): Promise<void> {
-    return apiClient.post('/api/auth/logout')
+    try {
+      await apiClient.post('/api/auth/logout')
+    } finally {
+      // 无论 API 调用成功与否，都清除本地认证信息
+      this.clearAuth()
+    }
   },
 
   // 用户注册

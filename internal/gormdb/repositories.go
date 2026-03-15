@@ -85,7 +85,7 @@ func (r *GroupRepository) GroupCount() (int64, error) {
 // SearchGroups 搜索群组
 func (r *GroupRepository) SearchGroups(keyword string) ([]*Group, error) {
 	var groups []*Group
-	err := r.db.Where("name LIKE ? OR callsign LIKE ?", "%"+keyword+"%", "%"+keyword+"%").Find(&groups).Error
+	err := r.db.Where("name LIKE ? OR call_sign LIKE ?", "%"+keyword+"%", "%"+keyword+"%").Find(&groups).Error
 	return groups, err
 }
 
@@ -105,7 +105,7 @@ func (r *GroupRepository) ListPublicGroupsPaginated(limit, page int, keyword str
 	query := r.db.Model(&Group{}).Where("type = ?", 1)
 
 	if keyword != "" {
-		query = query.Where("name LIKE ? OR callsign LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+		query = query.Where("name LIKE ? OR call_sign LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
 	// 获取总数

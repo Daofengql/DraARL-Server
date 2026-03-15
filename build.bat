@@ -17,10 +17,9 @@ echo Build Time: %BUILD_TIME%
 echo Binary:     %BINARY_NAME%
 echo ==========================================
 
-REM 删除旧的二进制文件
 if exist %BINARY_NAME% (
     echo Removing old %BINARY_NAME%...
-    del /f %BINARY_NAME% 2>nul
+    del /f %BINARY_NAME% 2>/dev/null
 )
 
 echo Building...

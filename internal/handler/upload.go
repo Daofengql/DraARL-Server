@@ -114,6 +114,11 @@ func UploadFile(c *gin.Context) {
 		// 更新用户头像字段（只存储相对路径）
 		userRepo.UpdateUserAvatar(user.ID, avatarRelativePath)
 
+		// 使缓存失效
+		if userCache := cache.GetUserCache(); userCache != nil {
+			_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		}
+
 		// 生成240x240缩略图
 		thumbObjectName, thumbData, err := minio.GenerateThumbnail(objectName, 240, 240, ".jpg")
 		if err != nil {

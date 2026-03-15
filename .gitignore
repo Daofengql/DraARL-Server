@@ -39,6 +39,7 @@ udphub.yaml
 !udphub.yaml.example
 !*.example.yaml
 !*.example.yml
+!.github/workflows/*.yml
 
 # Database files
 *.sqlite3

@@ -1,0 +1,186 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # 仅在推送形如 v1.0.0 的 tag 时触发此工作流
+      - 'v*.*.*'
+
+permissions:
+  # 允许工作流具有写入权限，这是创建 Release 和上传文件所必需的
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # 矩阵构建：定义需要编译的所有目标平台和架构的组合
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            filename: DraARL-linux-amd64
+            packname: DraARL-linux-amd64.tar.gz
+          - goos: linux
+            goarch: arm64
+            filename: DraARL-linux-arm64
+            packname: DraARL-linux-arm64.tar.gz
+          - goos: windows
+            goarch: amd64
+            filename: DraARL-windows-amd64.exe
+            packname: DraARL-windows-amd64.zip
+          - goos: darwin
+            goarch: amd64
+            filename: DraARL-darwin-amd64
+            packname: DraARL-darwin-amd64.tar.gz
+          - goos: darwin
+            goarch: arm64
+            filename: DraARL-darwin-arm64
+            packname: DraARL-darwin-arm64.tar.gz
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          # 关闭默认缓存，避免跨平台编译时��一些潜在问题
+          cache: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Go dependencies
+        run: go mod download
+
+      - name: Build Frontend
+        working-directory: ./www
+        run: |
+          # 干净地安装前端依赖并执行构建
+          npm ci
+          npm run build
+
+      - name: Prepare embedded files
+        run: |
+          # 将前端打包后的静态资源复制到指定目录，以便 Go 编译器进行内嵌 (embed)
+          mkdir -p internal/server/web/dist
+          cp -r www/dist/* internal/server/web/dist/
+
+      - name: Build Backend (${{ matrix.goos }}/${{ matrix.goarch }})
+        env:
+          # 根据矩阵参数设置 Go 交叉编译环境变量
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0 # 禁用 CGO 以实现静态链接，保证二进制文件跨环境运行
+        run: |
+          # 编译 Go 后端
+          # -ldflags="-s -w" 用于去除调试信息，减小体积
+          # -X main.version 注入当前的 tag 名称作为版本号
+          # -X main.buildTime 注入构建时间
+          # -X main.isRelease=true 启用 release 模式
+          # -tags=embed 启用内嵌资源的构建标签
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          go build \
+            -ldflags="-s -w -X main.version=${{ github.ref_name }} -X main.buildTime=${BUILD_TIME} -X main.isRelease=true" \
+            -tags=embed \
+            -o ${{ matrix.filename }} \
+            ./cmd/udphub/...
+
+      - name: Create package
+        run: |
+          # 创建一个临时打包目录，放入可执行文件和示例配置文件
+          mkdir -p package
+          cp ${{ matrix.filename }} package/
+          cp udphub.yaml.example package/
+
+          # 根据平台差异，将文件打包为 zip 或 tar.gz
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cd package && zip -r ../${{ matrix.packname }} *
+          else
+            tar czf ${{ matrix.packname }} -C package .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # 将打包好的压缩文件作为 artifact 上传，以便在后续的 release job 中使用
+          name: ${{ matrix.packname }}
+          path: ${{ matrix.packname }}
+
+  release:
+    needs: build # 确保所有矩阵构建任务完成后才执行发布
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          # 开启 merge-multiple
+          # 这会让 v4 版本的动作不再为每个产物创建同名文件夹，而是直接将所有压缩包放置在 ./artifacts 根目录下
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: ./artifacts
+        run: |
+          # 遍历所有下载回来的压缩包，生成对应的 SHA256 校验文件
+          for file in DraARL-*; do
+            if [ -f "$file" ]; then
+              sha256sum "$file" > "$file.sha256"
+            fi
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DraARL ${{ github.ref_name }}
+          # 选取 artifacts 目录下的所有文件（包括压缩包和刚才生成的校验和文件）
+          files: ./artifacts/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          update_existing_files: true
+          body: |
+            ## DraARL ${{ github.ref_name }}
+
+            ### 下载
+            | 平台 | 架构 | 文件 |
+            |------|------|------|
+            | Linux | AMD64 | `DraARL-linux-amd64.tar.gz` |
+            | Linux | ARM64 | `DraARL-linux-arm64.tar.gz` |
+            | Windows | AMD64 | `DraARL-windows-amd64.zip` |
+            | macOS | Intel | `DraARL-darwin-amd64.tar.gz` |
+            | macOS | Apple Silicon | `DraARL-darwin-arm64.tar.gz` |
+
+            ### 验证
+            下载后请使用 SHA256 校验和验证文件完整性。
+
+            ### 快速开始
+            ```bash
+            # 解压
+            tar xzf DraARL-linux-amd64.tar.gz
+            cd DraARL-linux-amd64
+
+            # 复制配置文件
+            cp udphub.yaml.example udphub.yaml
+            # 编辑 udphub.yaml 配置数据库、Redis 等信息
+
+            # 运行
+            chmod +x DraARL-*
+            ./DraARL-linux-amd64 -c udphub.yaml
+            ```
+
+            ### 系统要求
+            - MySQL 5.7+ 或 MariaDB 10.3+
+            - Redis 6.0+
+            - 可选：MinIO（用于对象存储）
+            - 可选：Keycloak（用于 SSO 单点登录）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

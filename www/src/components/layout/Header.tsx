@@ -115,15 +115,23 @@ export function Header({ onMenuClick }: HeaderProps) {
               component="img"
               src={logoUrl}
               alt="Logo"
+              onClick={() => navigate('/')}
               sx={{
                 height: 48,
                 maxWidth: 240,
                 objectFit: 'contain',
+                cursor: 'pointer',
               }}
               onError={() => setLogoError(true)}
             />
           ) : (
-            <Typography variant="h6" noWrap component="div" sx={{ fontWeight: 600, color: 'primary.main' }}>
+            <Typography
+              variant="h6"
+              noWrap
+              component="div"
+              onClick={() => navigate('/')}
+              sx={{ fontWeight: 600, color: 'primary.main', cursor: 'pointer' }}
+            >
               {displayTitle}
             </Typography>
           )}

@@ -211,11 +211,9 @@ export function ProfilePage() {
       // 将 Blob 转换为 File
       const file = new File([croppedBlob], 'avatar.jpg', { type: 'image/jpeg' })
 
-      const res = await authService.uploadFile(file, 'avatar')
-      const updateData: Partial<User> = {
-        avatar: res.file_url,
-      }
-      const updatedUser = await authService.updateProfile(updateData)
+      await authService.uploadFile(file, 'avatar')
+      // 后端已经更新了头像，重新获取用户信息
+      const updatedUser = await authService.getMe()
       setUser(updatedUser)
       authService.saveAuth(authService.getToken()!, updatedUser)
       showMessage('success', '头像更新成功')

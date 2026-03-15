@@ -1,4 +1,4 @@
-// 导出所有服务
+// 导出所有服���
 export { apiClient } from './api'
 export { authService } from './auth'
 export { approvalService } from './approval'
@@ -9,3 +9,4 @@ export { relayService } from './relay'
 export { serverService } from './server'
 export { logService } from './log'
 export { platformService } from './platform'
+export { commStatsService } from './commStats'

@@ -273,6 +273,24 @@ export interface ApprovalRequest {
   note: string
 }
 
+// 通信统计相关类型
+export interface UserCommStats {
+  total_count: number
+  total_size: number      // 文件总大小（字节）
+  total_duration: number  // 总时长（毫秒）
+}
+
+export interface SystemCommStats {
+  total_count: number
+  total_size: number      // 文件总大小（字节）
+  total_duration: number  // 总时长（毫秒）
+}
+
+export interface DailyCommStats {
+  date: string
+  count: number
+}
+
 // 操作证审批相关类型
 export interface CertificateApproval {
   id: number

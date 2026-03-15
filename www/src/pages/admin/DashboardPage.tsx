@@ -18,11 +18,24 @@ import {
   Dashboard as DashboardIcon,
   Person,
   Public,
+  RecordVoiceOver,
+  Storage,
+  Timer,
 } from '@mui/icons-material'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts'
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
-import { deviceService } from '../../services/device'
 import { apiClient } from '../../services'
+import { commStatsService } from '../../services/commStats'
+import type { DailyCommStats } from '../../types'
 
 const DEFAULT_SITE_NAME = 'DraARL 麟云业余无线电链路平台'
 const SYSTEM_NAME = 'DraARL 麟链'
@@ -75,6 +88,31 @@ function StatCard({ title, value, icon, color }: StatCardProps) {
   )
 }
 
+// 格式化文件大小
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 格式化时长
+function formatDuration(ms: number): string {
+  if (ms === 0) return '0秒'
+  const seconds = Math.floor(ms / 1000)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+
+  const parts: string[] = []
+  if (hours > 0) parts.push(`${hours}小时`)
+  if (minutes > 0) parts.push(`${minutes}分钟`)
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}秒`)
+
+  return parts.join(' ')
+}
+
 // 骨架屏
 function DashboardSkeleton() {
   return (
@@ -96,6 +134,7 @@ function DashboardSkeleton() {
           </Card>
         ))}
       </Box>
+      <Skeleton variant="rectangular" height={200} />
     </Stack>
   )
 }
@@ -107,6 +146,12 @@ export function AdminDashboardPage() {
     total_groups: 0,
     total_users: 0,
   })
+  const [commStats, setCommStats] = useState({
+    total_count: 0,
+    total_size: 0,
+    total_duration: 0,
+  })
+  const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [platformInfo, setPlatformInfo] = useState({ name: '', version: SYSTEM_VERSION })
@@ -114,10 +159,12 @@ export function AdminDashboardPage() {
 
   const fetchSystemStats = async () => {
     try {
-      const [statsData, infoData, publicConfig] = await Promise.all([
+      const [statsData, infoData, publicConfig, commStatsData, commTrendData] = await Promise.all([
         platformService.getTotalStats(),
         platformService.getInfo(),
         apiClient.get<any>('/api/config/public'),
+        commStatsService.getSystemStats(),
+        commStatsService.getSystemTrend(),
       ])
       setStats({
         total_devices: statsData.total_devices || 0,
@@ -125,6 +172,12 @@ export function AdminDashboardPage() {
         total_groups: statsData.total_groups || 0,
         total_users: statsData.total_users || 0,
       })
+      setCommStats({
+        total_count: commStatsData.total_count || 0,
+        total_size: commStatsData.total_size || 0,
+        total_duration: commStatsData.total_duration || 0,
+      })
+      setCommTrend(commTrendData)
       setPlatformInfo(infoData)
       if (publicConfig.code === 200 && publicConfig.data) {
         setSystemConfig(publicConfig.data)
@@ -183,7 +236,7 @@ export function AdminDashboardPage() {
         </Box>
       )}
 
-      {/* 统计卡片 */}
+      {/* 基础统计卡片 */}
       <Box
         sx={{
           display: 'grid',
@@ -216,6 +269,77 @@ export function AdminDashboardPage() {
           color="warning"
         />
       </Box>
+
+      {/* 通信统计卡片 */}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
+          gap: 2,
+        }}
+      >
+        <StatCard
+          title="通信记录数"
+          value={commStats.total_count}
+          icon={<RecordVoiceOver />}
+          color="primary"
+        />
+        <StatCard
+          title="通信总大小"
+          value={formatFileSize(commStats.total_size)}
+          icon={<Storage />}
+          color="info"
+        />
+        <StatCard
+          title="通信总时长"
+          value={formatDuration(commStats.total_duration)}
+          icon={<Timer />}
+          color="success"
+        />
+      </Box>
+
+      {/* 通信趋势图 */}
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} mb={2}>
+            <RecordVoiceOver color="primary" />
+            <Typography variant="h6" fontWeight={600}>
+              近30天平台通信趋势
+            </Typography>
+          </Stack>
+          <Box sx={{ width: '100%', height: 300, minHeight: 300 }}>
+            {commTrend.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={commTrend} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(value) => value ? value.slice(5) : ''}
+                  />
+                  <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                  <Tooltip
+                    labelFormatter={(label) => `日期: ${label}`}
+                    formatter={(value) => [value ?? 0, '通信次数']}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="count"
+                    stroke="#1976d2"
+                    strokeWidth={2}
+                    dot={false}
+                    name="通信次数"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                <Typography color="text.secondary">暂无通信记录数据</Typography>
+              </Box>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
 
       {/* 详细信息面板 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>

@@ -206,11 +206,16 @@ func (s *Server) setupRoutes() {
 			admin.GET("/operatorlog/stats", handler.GetOperatorLogStats)
 
 			// 通信记录（需要登录，管理员可查看所有记录，普通用户只能查看自己设备的记录）
+			// 注意：具体路径必须在 :id 路由之前定义，否则会被 :id 匹配
 			protected.GET("/comm-records", handler.GetCommRecords)
+			protected.GET("/comm-records/user-stats", handler.GetUserCommStats)
+			protected.GET("/comm-records/user-trend", handler.GetUserCommTrend)
 			protected.GET("/comm-records/:id", handler.GetCommRecord)
 			// 通信记录管理（需要管理员权限）
 			admin.DELETE("/comm-records/:id", handler.DeleteCommRecord)
 			admin.GET("/comm-records/stats", handler.GetCommRecorderStats)
+			admin.GET("/comm-records/system-stats", handler.GetSystemCommStats)
+			admin.GET("/comm-records/system-trend", handler.GetSystemCommTrend)
 
 			// 通信设置（管理员权限）
 			admin.GET("/config/comm-settings", handler.GetCommSettings)

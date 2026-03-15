@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -392,4 +393,234 @@ func GetCommRecorderStats(c *gin.Context) {
 		"message": "成功",
 		"data":    stats,
 	})
+}
+
+// DailyCommStats 每日通信���计
+type DailyCommStats struct {
+	Date  string `json:"date" gorm:"column:date"`
+	Count int64  `json:"count" gorm:"column:count"`
+}
+
+// UserCommStats 用户通信统计
+type UserCommStats struct {
+	TotalCount   int64 `json:"total_count"`
+	TotalSize    int64 `json:"total_size"`    // 文件总大小（字节）
+	TotalDuration int64 `json:"total_duration"` // 总时长（毫秒）
+}
+
+// SystemCommStats 系统通信统计
+type SystemCommStats struct {
+	TotalCount    int64 `json:"total_count"`
+	TotalSize     int64 `json:"total_size"`     // 文件总大小（字节）
+	TotalDuration int64 `json:"total_duration"` // 总时长（毫秒）
+}
+
+// GetUserCommStats 获取当��用户的通信统计
+func GetUserCommStats(c *gin.Context) {
+	// 获取当前用户名
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	// 获取用户信息
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	var stats UserCommStats
+
+	// 查询用户设备的通信统计
+	// 通过 devices 表关联查询，获取用户所有设备的通信记录
+	err = gormdb.Get().Table("comm_records cr").
+		Select(`
+			COALESCE(COUNT(cr.id), 0) as total_count,
+			COALESCE(SUM(cr.audio_size), 0) as total_size,
+			COALESCE(SUM(cr.duration_ms), 0) as total_duration
+		`).
+		Joins("INNER JOIN devices d ON cr.device_id = d.id").
+		Where("d.owner_id = ?", user.ID).
+		Scan(&stats).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取统计失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data":    stats,
+	})
+}
+
+// GetUserCommTrend 获取当前用户近30天通信趋势
+func GetUserCommTrend(c *gin.Context) {
+	// 获取当前用户名
+	username, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	// 获取用户信息
+	userRepo := gormdb.NewUserRepository()
+	user, err := userRepo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 计算30天前的日期
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	var trends []DailyCommStats
+
+	// 查询用户设备近30天的通信趋势
+	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
+	err = gormdb.Get().Table("comm_records cr").
+		Select(`DATE_FORMAT(cr.start_time, '%Y-%m-%d') as date, COUNT(cr.id) as count`).
+		Joins("INNER JOIN devices d ON cr.device_id = d.id").
+		Where("d.owner_id = ?", user.ID).
+		Where("DATE_FORMAT(cr.start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
+		Group("DATE_FORMAT(cr.start_time, '%Y-%m-%d')").
+		Order("date ASC").
+		Scan(&trends).Error
+
+	// 调试日志
+	log.Printf("[GetUserCommTrend] userID=%d, thirtyDaysAgo=%s, trends count=%d, err=%v", user.ID, thirtyDaysAgo, len(trends), err)
+	for i, t := range trends {
+		log.Printf("[GetUserCommTrend] trends[%d]: date=%s, count=%d", i, t.Date, t.Count)
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取趋势失败",
+		})
+		return
+	}
+
+	// 填充缺失的日期
+	trends = fillMissingDates(trends, thirtyDaysAgo)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data":    trends,
+	})
+}
+
+// GetSystemCommStats 获取系统通信统计（管理员）
+func GetSystemCommStats(c *gin.Context) {
+	var stats SystemCommStats
+
+	err := gormdb.Get().Table("comm_records").
+		Select(`
+			COALESCE(COUNT(id), 0) as total_count,
+			COALESCE(SUM(audio_size), 0) as total_size,
+			COALESCE(SUM(duration_ms), 0) as total_duration
+		`).
+		Scan(&stats).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取统计失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data":    stats,
+	})
+}
+
+// GetSystemCommTrend 获取系统近30天通信趋势（管理员）
+func GetSystemCommTrend(c *gin.Context) {
+	// 计算30天前的日期
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+
+	var trends []DailyCommStats
+
+	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
+	err := gormdb.Get().Table("comm_records").
+		Select(`DATE_FORMAT(start_time, '%Y-%m-%d') as date, COUNT(id) as count`).
+		Where("DATE_FORMAT(start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
+		Group("DATE_FORMAT(start_time, '%Y-%m-%d')").
+		Order("date ASC").
+		Scan(&trends).Error
+
+	// 调试日志
+	log.Printf("[GetSystemCommTrend] thirtyDaysAgo=%s, trends count=%d, err=%v", thirtyDaysAgo, len(trends), err)
+	for i, t := range trends {
+		log.Printf("[GetSystemCommTrend] trends[%d]: Date=%s, Count=%d", i, t.Date, t.Count)
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取趋势失败",
+		})
+		return
+	}
+
+	// 填充缺失的日期
+	trends = fillMissingDates(trends, thirtyDaysAgo)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data":    trends,
+	})
+}
+
+// fillMissingDates 填充缺失的日期
+func fillMissingDates(trends []DailyCommStats, startDate string) []DailyCommStats {
+	// 创建日期映射
+	trendMap := make(map[string]int64)
+	for _, t := range trends {
+		trendMap[t.Date] = t.Count
+	}
+
+	// 解析开始日期
+	start, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return trends
+	}
+
+	// 生成完整的日期列表
+	var result []DailyCommStats
+	now := time.Now()
+	for d := start; d.Before(now) || d.Format("2006-01-02") == now.Format("2006-01-02"); d = d.AddDate(0, 0, 1) {
+		dateStr := d.Format("2006-01-02")
+		count := trendMap[dateStr]
+		result = append(result, DailyCommStats{
+			Date:  dateStr,
+			Count: count,
+		})
+	}
+
+	return result
 }

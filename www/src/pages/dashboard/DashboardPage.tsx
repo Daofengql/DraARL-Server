@@ -17,11 +17,23 @@ import {
   Group,
   Radio,
   Dashboard as DashboardIcon,
+  RecordVoiceOver,
 } from '@mui/icons-material'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts'
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
 import { deviceService } from '../../services/device'
+import { commStatsService } from '../../services/commStats'
 import { apiClient } from '../../services'
+import type { DailyCommStats } from '../../types'
 
 const DEFAULT_PLATFORM_VERSION = 'v1.0.0'
 const DEFAULT_PROTOCOL_VERSION = 'DraARLv1'
@@ -30,7 +42,7 @@ interface StatCardProps {
   title: string
   value: number | string
   icon: React.ReactNode
-  color: 'primary' | 'success' | 'info'
+  color: 'primary' | 'success' | 'info' | 'warning'
 }
 
 function StatCard({ title, value, icon, color }: StatCardProps) {
@@ -38,6 +50,7 @@ function StatCard({ title, value, icon, color }: StatCardProps) {
     primary: { bg: 'primary.50', color: 'primary.main' },
     success: { bg: 'success.50', color: 'success.main' },
     info: { bg: 'info.50', color: 'info.main' },
+    warning: { bg: 'warning.50', color: 'warning.main' },
   }
 
   const config = colorConfig[color]
@@ -79,11 +92,11 @@ function DashboardSkeleton() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           gap: 2,
         }}
       >
-        {[1, 2, 3].map((i) => (
+        {[1, 2, 3, 4].map((i) => (
           <Card key={i}>
             <CardContent>
               <Skeleton variant="text" width={80} sx={{ mb: 2 }} />
@@ -92,6 +105,7 @@ function DashboardSkeleton() {
           </Card>
         ))}
       </Box>
+      <Skeleton variant="rectangular" height={200} />
     </Stack>
   )
 }
@@ -101,7 +115,9 @@ export function DashboardPage() {
     my_devices: 0,
     online_devices: 0,
     total_groups: 0,
+    comm_count: 0,
   })
+  const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const user = authService.getStoredUser()
@@ -116,9 +132,11 @@ export function DashboardPage() {
         : []
 
       // 获取所有群组和用户统计
-      const [statsData, publicConfig] = await Promise.all([
+      const [statsData, publicConfig, commStatsData, commTrendData] = await Promise.all([
         platformService.getTotalStats(),
         apiClient.get<any>('/api/config/public'),
+        commStatsService.getUserStats(),
+        commStatsService.getUserTrend(),
       ])
 
       // 处理公开配置
@@ -130,7 +148,9 @@ export function DashboardPage() {
         my_devices: myDevices.length,
         online_devices: myDevices.filter(d => d.is_online || d.online).length,
         total_groups: statsData.total_groups || 0,
+        comm_count: commStatsData.total_count || 0,
       })
+      setCommTrend(commTrendData)
     } catch (err) {
       setError('获取统计数据失败')
     } finally {
@@ -218,7 +238,7 @@ export function DashboardPage() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           gap: 2,
         }}
       >
@@ -240,7 +260,56 @@ export function DashboardPage() {
           icon={<Group />}
           color="info"
         />
+        <StatCard
+          title="通信记录"
+          value={stats.comm_count}
+          icon={<RecordVoiceOver />}
+          color="warning"
+        />
       </Box>
+
+      {/* 通信趋势图 */}
+      <Card>
+        <CardContent>
+          <Stack direction="row" alignItems="center" spacing={1} mb={2}>
+            <RecordVoiceOver color="primary" />
+            <Typography variant="h6" fontWeight={600}>
+              近30天通信趋势
+            </Typography>
+          </Stack>
+          <Box sx={{ width: '100%', height: 300, minHeight: 300 }}>
+            {commTrend.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={commTrend} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(value) => value ? value.slice(5) : ''}
+                  />
+                  <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                  <Tooltip
+                    labelFormatter={(label) => `日期: ${label}`}
+                    formatter={(value) => [value ?? 0, '通信次数']}
+                  />
+                    <Line
+                    type="monotone"
+                    dataKey="count"
+                    stroke="#1976d2"
+                    strokeWidth={2}
+                    dot={false}
+                    name="通信次数"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                <Typography color="text.secondary">暂无通信记录数据</Typography>
+              </Box>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
 
       {/* 详细信息面板 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>

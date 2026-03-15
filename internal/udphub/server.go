@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"nrllink/internal/gormdb"
 	"nrllink/internal/models"
 	"nrllink/internal/protocol"
+	"nrllink/pkg/cache"
 )
 
 // 全局变量声明
@@ -735,12 +737,30 @@ func refreshDeviceCache() {
 			}
 
 			// ==========================================
-			// 关键修复：将内存中的在线状态同步回数据库
-			// 这样 Web 端查询时就能看到正确的在线状态
+			// 关键修复：补全缓存失效逻辑
+			// 当检测到设备的在线状态发生改变时，不仅需要失效单设备缓存，
+			// 还必须使全局设备列表和对应群组的设备列表缓存同时失效。
 			// ==========================================
 			if memDev.ISOnline != dbDev.ISOnline {
 				repo.UpdateDeviceOnlineStatus(memDev.OwnerID, uint8(memDev.SSID), memDev.ISOnline, "")
 				onlineSyncCount++
+
+				// 获取缓存接口实例
+				if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+					ctx := context.Background()
+
+					// 1. 失效单个设备的详细信息缓存
+					_ = deviceCache.InvalidateDevice(ctx, memDev.ID, memDev.OwnerID, uint8(memDev.SSID))
+
+					// 2. 失效全局设备分页列表缓存，确保前端 "所有设备" 页面能刷新状态
+					_ = deviceCache.InvalidateDeviceList(ctx)
+
+					// 3. 如果设备已经加入某个群组，还要失效该群组的设备列表缓存
+					// 确保前端 "群组内的设备列表" 也能立刻体现设备的上下线情况
+					if memDev.GroupID > 0 {
+						_ = deviceCache.InvalidateDevicesByGroup(ctx, memDev.GroupID)
+					}
+				}
 			}
 		}
 	}

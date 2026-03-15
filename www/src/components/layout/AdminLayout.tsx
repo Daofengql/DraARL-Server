@@ -3,6 +3,7 @@ import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer
 import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess } from '@mui/icons-material'
 import { useState } from 'react'
 import { authService } from '../../services'
+import { Footer } from './Footer'
 
 const DRAWER_WIDTH = 240
 
@@ -246,13 +247,16 @@ export function AdminLayout() {
       <Box
         component="main"
         sx={{
+          display: 'flex',
+          flexDirection: 'column',
           flexGrow: 1,
-          p: 3,
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
-          minHeight: '100vh',
         }}
       >
-        <Outlet />
+        <Box sx={{ p: 3, minHeight: '100vh' }}>
+          <Outlet />
+        </Box>
+        <Footer />
       </Box>
     </Box>
   )

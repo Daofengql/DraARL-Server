@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Box } from '@mui/material'
 import { Header } from './Header'
 import { Sidebar, DRAWER_WIDTH } from './Sidebar'
+import { Footer } from './Footer'
 import { Outlet } from 'react-router-dom'
 
 interface MainLayoutProps {
@@ -38,14 +39,17 @@ export function MainLayout({ children }: MainLayoutProps) {
       <Box
         component="main"
         sx={{
+          display: 'flex',
+          flexDirection: 'column',
           flexGrow: 1,
           width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
-          mt: { xs: 8, sm: 0 }, // 移动端保留顶部边距，桌面端不需要
+          mt: { xs: 8, sm: 0 },
         }}
       >
-        <Box sx={{ p: 3, mt: { sm: 8 } }}>
+        <Box sx={{ p: 3, mt: { sm: 8 }, minHeight: 'calc(100vh - 64px)' }}>
           {children || <Outlet />}
         </Box>
+        <Footer />
       </Box>
     </Box>
   )

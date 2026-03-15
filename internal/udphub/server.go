@@ -1,8 +1,10 @@
 package udphub
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -380,6 +382,17 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	wasOnline := dev.ISOnline
 	currentAddr := packet.UDPAddr.String()
 	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
+
+	// 解析 GPS 信息 (DATA 区域前 24 字节)
+	if len(packet.DATA) >= 24 {
+		lat := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[0:8]))
+		lon := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[8:16]))
+		alt := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[16:24]))
+		if lat != 0 || lon != 0 {
+			log.Printf("[GPS] %s-%d: lat=%.6f, lon=%.6f, alt=%.1fm",
+				dev.Username, dev.SSID, lat, lon, alt)
+		}
+	}
 
 	// 更新设备地址和时间
 	dev.UDPAddr = packet.UDPAddr

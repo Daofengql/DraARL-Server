@@ -86,6 +86,11 @@ class DraARLv1Client:
         self.running = False
         self.is_transmitting = False
 
+        # --- GPS 位置信息 ---
+        self.gps_lat = 0.0  # 纬度
+        self.gps_lon = 0.0  # 经度
+        self.gps_alt = 0.0  # 海拔高度
+
         # --- 音频引擎配置 ---
         self.audio_type = DRAARL_TYPE_OPUS_16K  # 只支持 Opus 16K
         if not OPUS_AVAILABLE:
@@ -140,7 +145,9 @@ class DraARLv1Client:
 
     def heartbeat_loop(self):
         while self.running:
-            self.send_packet(pkt_type=DRAARL_TYPE_HEARTBEAT)
+            # 构造 GPS 数据 (24 字节: lat(8) + lon(8) + alt(8))
+            gps_data = struct.pack('>ddd', self.gps_lat, self.gps_lon, self.gps_alt)
+            self.send_packet(pkt_type=DRAARL_TYPE_HEARTBEAT, payload=gps_data)
             time.sleep(2)
 
     def receive_loop(self):
@@ -283,6 +290,22 @@ class DevicePanel(ttk.LabelFrame):
         self.dmrid_var = tk.StringVar(value="123456")
         ttk.Entry(param_frame, textvariable=self.dmrid_var, width=8).grid(row=0, column=5, padx=2)
 
+        # GPS 位置设置
+        gps_frame = ttk.Frame(self)
+        gps_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        ttk.Label(gps_frame, text="纬度:").grid(row=0, column=0, sticky=tk.W)
+        self.gps_lat_var = tk.StringVar(value="0.0")
+        ttk.Entry(gps_frame, textvariable=self.gps_lat_var, width=10).grid(row=0, column=1, padx=2)
+
+        ttk.Label(gps_frame, text="经度:").grid(row=0, column=2, sticky=tk.W, padx=(5,0))
+        self.gps_lon_var = tk.StringVar(value="0.0")
+        ttk.Entry(gps_frame, textvariable=self.gps_lon_var, width=10).grid(row=0, column=3, padx=2)
+
+        ttk.Label(gps_frame, text="高度(m):").grid(row=0, column=4, sticky=tk.W, padx=(5,0))
+        self.gps_alt_var = tk.StringVar(value="0.0")
+        ttk.Entry(gps_frame, textvariable=self.gps_alt_var, width=8).grid(row=0, column=5, padx=2)
+
         # 日志区域
         log_frame = ttk.Frame(self)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
@@ -327,6 +350,13 @@ class DevicePanel(ttk.LabelFrame):
                     log_callback=lambda msg, t=color_tag: self.log(msg, t),
                     color_tag=f"SSID-{self.ssid}"
                 )
+                # 设置 GPS 位置
+                try:
+                    self.client.gps_lat = float(self.gps_lat_var.get() or 0)
+                    self.client.gps_lon = float(self.gps_lon_var.get() or 0)
+                    self.client.gps_alt = float(self.gps_alt_var.get() or 0)
+                except ValueError:
+                    pass  # 如果解析失败，保持默认值 0
                 self.client.start()
 
                 self.is_connected = True

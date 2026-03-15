@@ -397,8 +397,9 @@ func GetCommRecorderStats(c *gin.Context) {
 
 // DailyCommStats 每日通信���计
 type DailyCommStats struct {
-	Date  string `json:"date" gorm:"column:date"`
-	Count int64  `json:"count" gorm:"column:count"`
+	Date     string `json:"date" gorm:"column:date"`
+	Count    int64  `json:"count" gorm:"column:count"`
+	Duration int64  `json:"duration" gorm:"column:duration"` // 总时长（毫秒）
 }
 
 // UserCommStats 用户通信统计
@@ -498,7 +499,7 @@ func GetUserCommTrend(c *gin.Context) {
 	// 查询用户设备近30天的通信趋势
 	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
 	err = gormdb.Get().Table("comm_records cr").
-		Select(`DATE_FORMAT(cr.start_time, '%Y-%m-%d') as date, COUNT(cr.id) as count`).
+		Select(`DATE_FORMAT(cr.start_time, '%Y-%m-%d') as date, COUNT(cr.id) as count, COALESCE(SUM(cr.duration_ms), 0) as duration`).
 		Joins("INNER JOIN devices d ON cr.device_id = d.id").
 		Where("d.owner_id = ?", user.ID).
 		Where("DATE_FORMAT(cr.start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
@@ -509,7 +510,7 @@ func GetUserCommTrend(c *gin.Context) {
 	// 调试日志
 	log.Printf("[GetUserCommTrend] userID=%d, thirtyDaysAgo=%s, trends count=%d, err=%v", user.ID, thirtyDaysAgo, len(trends), err)
 	for i, t := range trends {
-		log.Printf("[GetUserCommTrend] trends[%d]: date=%s, count=%d", i, t.Date, t.Count)
+		log.Printf("[GetUserCommTrend] trends[%d]: date=%s, count=%d, duration=%d", i, t.Date, t.Count, t.Duration)
 	}
 
 	if err != nil {
@@ -566,7 +567,7 @@ func GetSystemCommTrend(c *gin.Context) {
 
 	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
 	err := gormdb.Get().Table("comm_records").
-		Select(`DATE_FORMAT(start_time, '%Y-%m-%d') as date, COUNT(id) as count`).
+		Select(`DATE_FORMAT(start_time, '%Y-%m-%d') as date, COUNT(id) as count, COALESCE(SUM(duration_ms), 0) as duration`).
 		Where("DATE_FORMAT(start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
 		Group("DATE_FORMAT(start_time, '%Y-%m-%d')").
 		Order("date ASC").
@@ -575,7 +576,7 @@ func GetSystemCommTrend(c *gin.Context) {
 	// 调试日志
 	log.Printf("[GetSystemCommTrend] thirtyDaysAgo=%s, trends count=%d, err=%v", thirtyDaysAgo, len(trends), err)
 	for i, t := range trends {
-		log.Printf("[GetSystemCommTrend] trends[%d]: Date=%s, Count=%d", i, t.Date, t.Count)
+		log.Printf("[GetSystemCommTrend] trends[%d]: Date=%s, Count=%d, Duration=%d", i, t.Date, t.Count, t.Duration)
 	}
 
 	if err != nil {
@@ -600,8 +601,10 @@ func GetSystemCommTrend(c *gin.Context) {
 func fillMissingDates(trends []DailyCommStats, startDate string) []DailyCommStats {
 	// 创建日期映射
 	trendMap := make(map[string]int64)
+	durationMap := make(map[string]int64)
 	for _, t := range trends {
 		trendMap[t.Date] = t.Count
+		durationMap[t.Date] = t.Duration
 	}
 
 	// 解析开始日期
@@ -615,10 +618,10 @@ func fillMissingDates(trends []DailyCommStats, startDate string) []DailyCommStat
 	now := time.Now()
 	for d := start; d.Before(now) || d.Format("2006-01-02") == now.Format("2006-01-02"); d = d.AddDate(0, 0, 1) {
 		dateStr := d.Format("2006-01-02")
-		count := trendMap[dateStr]
 		result = append(result, DailyCommStats{
-			Date:  dateStr,
-			Count: count,
+			Date:     dateStr,
+			Count:    trendMap[dateStr],
+			Duration: durationMap[dateStr],
 		})
 	}
 

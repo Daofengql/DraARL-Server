@@ -289,6 +289,7 @@ export interface SystemCommStats {
 export interface DailyCommStats {
   date: string
   count: number
+  duration: number  // 总时长（毫秒）
 }
 
 // 操作证审批相关类型

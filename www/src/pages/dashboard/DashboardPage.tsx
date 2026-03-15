@@ -18,6 +18,7 @@ import {
   Radio,
   Dashboard as DashboardIcon,
   RecordVoiceOver,
+  Timer,
 } from '@mui/icons-material'
 import {
   LineChart,
@@ -27,6 +28,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from 'recharts'
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
@@ -84,6 +86,22 @@ function StatCard({ title, value, icon, color }: StatCardProps) {
   )
 }
 
+// 格式化时长
+function formatDuration(ms: number): string {
+  if (ms === 0) return '0秒'
+  const seconds = Math.floor(ms / 1000)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+
+  const parts: string[] = []
+  if (hours > 0) parts.push(`${hours}小时`)
+  if (minutes > 0) parts.push(`${minutes}分钟`)
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}秒`)
+
+  return parts.join(' ')
+}
+
 // 骨架屏
 function DashboardSkeleton() {
   return (
@@ -116,6 +134,7 @@ export function DashboardPage() {
     online_devices: 0,
     total_groups: 0,
     comm_count: 0,
+    comm_duration: 0,
   })
   const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
@@ -149,6 +168,7 @@ export function DashboardPage() {
         online_devices: myDevices.filter(d => d.is_online || d.online).length,
         total_groups: statsData.total_groups || 0,
         comm_count: commStatsData.total_count || 0,
+        comm_duration: commStatsData.total_duration || 0,
       })
       setCommTrend(commTrendData)
     } catch (err) {
@@ -238,7 +258,7 @@ export function DashboardPage() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)' },
           gap: 2,
         }}
       >
@@ -260,11 +280,27 @@ export function DashboardPage() {
           icon={<Group />}
           color="info"
         />
+      </Box>
+
+      {/* 通信统计卡片 */}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' },
+          gap: 2,
+        }}
+      >
         <StatCard
           title="通信记录"
           value={stats.comm_count}
           icon={<RecordVoiceOver />}
           color="warning"
+        />
+        <StatCard
+          title="通信总时长"
+          value={formatDuration(stats.comm_duration)}
+          icon={<Timer />}
+          color="success"
         />
       </Box>
 
@@ -280,25 +316,51 @@ export function DashboardPage() {
           <Box sx={{ width: '100%', height: 300, minHeight: 300 }}>
             {commTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={commTrend} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+                <LineChart data={commTrend} margin={{ top: 5, right: 60, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 12 }}
                     tickFormatter={(value) => value ? value.slice(5) : ''}
                   />
-                  <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 12 }}
+                    allowDecimals={false}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(value) => `${Math.round(value / 60000)}分`}
+                  />
                   <Tooltip
                     labelFormatter={(label) => `日期: ${label}`}
-                    formatter={(value) => [value ?? 0, '通信次数']}
+                    formatter={(value, name) => {
+                      if (name === '通信时长') {
+                        return [formatDuration(value as number), name]
+                      }
+                      return [value ?? 0, name]
+                    }}
                   />
-                    <Line
+                  <Legend />
+                  <Line
+                    yAxisId="left"
                     type="monotone"
                     dataKey="count"
                     stroke="#1976d2"
                     strokeWidth={2}
                     dot={false}
                     name="通信次数"
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="duration"
+                    stroke="#2e7d32"
+                    strokeWidth={2}
+                    dot={false}
+                    name="通信时长"
                   />
                 </LineChart>
               </ResponsiveContainer>

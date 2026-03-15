@@ -30,6 +30,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from 'recharts'
 import { authService } from '../../services'
 import { platformService } from '../../services/platform'
@@ -310,25 +311,51 @@ export function AdminDashboardPage() {
           <Box sx={{ width: '100%', height: 300, minHeight: 300 }}>
             {commTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={commTrend} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+                <LineChart data={commTrend} margin={{ top: 5, right: 60, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 12 }}
                     tickFormatter={(value) => value ? value.slice(5) : ''}
                   />
-                  <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 12 }}
+                    allowDecimals={false}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tick={{ fontSize: 12 }}
+                    tickFormatter={(value) => `${Math.round(value / 60000)}分`}
+                  />
                   <Tooltip
                     labelFormatter={(label) => `日期: ${label}`}
-                    formatter={(value) => [value ?? 0, '通信次数']}
+                    formatter={(value, name) => {
+                      if (name === '通信时长') {
+                        return [formatDuration(value as number), name]
+                      }
+                      return [value ?? 0, name]
+                    }}
                   />
+                  <Legend />
                   <Line
+                    yAxisId="left"
                     type="monotone"
                     dataKey="count"
                     stroke="#1976d2"
                     strokeWidth={2}
                     dot={false}
                     name="通信次数"
+                  />
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="duration"
+                    stroke="#2e7d32"
+                    strokeWidth={2}
+                    dot={false}
+                    name="通信时长"
                   />
                 </LineChart>
               </ResponsiveContainer>

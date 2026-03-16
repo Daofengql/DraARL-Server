@@ -221,12 +221,17 @@ func processDraARLPacket(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn
 	// ==========================================
 	gp, exists := GetGroupFromCache(targetGroupID)
 	if exists {
+		// 检查群组是否已禁用（Status != 1）
+		if gp.Status != 1 {
+			// 群组已禁用，静默丢弃数据包（避免语音包持续发送时刷屏日志）
+			return
+		}
 		parseDraARL(packet, data, dev, conn, gp)
 	} else {
 		// 找不到对应的群组实例
 		// 可能是数据库中删除了该群组，或者设备被分配了一个错误的群组 ID
 		if packet.Type != protocol.DraARLTypeHeartbeat {
-			log.Printf("[ROUTING] 路由丢弃: 设备 %s 请求的群组 ID: %d 不存在或已停用", dev.Username, targetGroupID)
+			log.Printf("[ROUTING] 路由丢弃: 设备 %s 请求的群组 ID: %d 不存在", dev.Username, targetGroupID)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 /**
  * Opus 音频引擎
- * 处理音频采集、��码、解码和播放
+ * 处理音频采集、编码、解码和播放
  */
 
 import { OpusEncoder, OpusApplication } from '@minceraftmc/opus-encoder'
@@ -308,7 +308,7 @@ export class AudioCapture {
 /**
  * 音频播放器
  * 解码 Opus 数据并播放
- * 使用改良版的动态抖动缓冲（Dynamic Jitter Buffer）机制，解决 UDP 跨协议带来的延迟放大和卡顿
+ * 使用预调度机制 (Ahead-of-time Scheduling) 实现无缝拼接播放
  */
 export class AudioPlayer {
   private audioContext: AudioContext | null = null
@@ -330,7 +330,7 @@ export class AudioPlayer {
   private volume = 0.8
 
   // Opus 解码器
-  private opusDecoder: OpusDecoder | null = null
+  private opusDecoder: OpusDecoder<16000> | null = null
   private decoderReady = false
 
   /**
@@ -370,11 +370,12 @@ export class AudioPlayer {
     // 初始化 Opus 解码器
     if (!this.decoderReady) {
       try {
-        this.opusDecoder = new OpusDecoder({
+        const decoder = new OpusDecoder({
           sampleRate: OPUS_SAMPLE_RATE,
           channels: OPUS_CHANNELS,
         })
-        await this.opusDecoder.ready
+        await decoder.ready
+        this.opusDecoder = decoder
         this.decoderReady = true
         console.log('[AudioPlayer] Opus decoder ready (16kHz)')
       } catch (error) {
@@ -392,9 +393,6 @@ export class AudioPlayer {
 
     try {
       // 解码 Opus 数据为 PCM
-      // 注意：这里假设传入的是已经解码的 PCM 数据
-      // 实际项目中需要使用 opus-decoder 进行解码
-
       const audioBuffer = await this.decodeToAudioBuffer(opusData)
       if (audioBuffer) {
         this.queueAudio(audioBuffer)
@@ -447,7 +445,7 @@ export class AudioPlayer {
    * 重构缓冲调度机制，实现预缓冲状态机
    */
   private queueAudio(audioBuffer: AudioBuffer): void {
-    // 1. 防止内存和延迟无限增长：如果网络极其糟糕导致积压
+    // 1. 防止内存和延迟无限增长
     if (this.audioQueue.length >= this.maxQueueLength) {
       console.warn('[AudioPlayer] 队列溢出，丢弃最旧的音频帧以追赶实时进度')
       this.audioQueue.shift()
@@ -455,61 +453,61 @@ export class AudioPlayer {
 
     this.audioQueue.push(audioBuffer)
 
-    // 2. 状态机���度逻辑
-    if (!this.isPlaying) {
-      if (this.isBuffering) {
-        // 【新增逻辑】：处于缓冲饥饿期，必须等攒够一定帧数才开播，避免"来一帧播一帧"导致的碎片化卡顿
-        if (this.audioQueue.length >= this.minBufferFrames) {
-          this.isBuffering = false
-          this.playNext()
-        }
-      } else {
-        // 非缓冲期（可能是偶发的极短暂饥饿），直接尝试起播
-        this.playNext()
+    // 2. 状态机调度逻辑
+    if (this.isBuffering) {
+      // 处于缓冲饥饿期，必须等攒够一定帧数才开播
+      if (this.audioQueue.length >= this.minBufferFrames) {
+        this.isBuffering = false
+        this.isPlaying = true
+        this.setState('playing')
+        this.scheduleQueue() // 调用批量调度
       }
+    } else {
+      // 非缓冲期，直接将新来的帧安排进底层播放计划
+      this.scheduleQueue() // 调用批量调度
     }
   }
 
   /**
-   * 播放下一个音频
-   * 使用抖动缓冲机制处理延迟和卡顿
+   * 批量调度音频队列
+   * 将队列中的音频帧全部提前推入底层音频线程，实现完美的无缝拼接
    */
-  private playNext(): void {
-    if (!this.audioContext || !this.gainNode || this.audioQueue.length === 0) {
-      this.isPlaying = false
-      // 【核心修复】：队列耗尽说明发生了音频饥饿。立即进入缓冲保护状态。
-      // 下次数据到来时，会重新积攒 minBufferFrames 帧后再平滑播放。
-      this.isBuffering = true
-      this.setState('idle')
-      return
-    }
+  private scheduleQueue(): void {
+    if (!this.audioContext || !this.gainNode) return
 
-    this.isPlaying = true
-    this.setState('playing')
-
-    const audioBuffer = this.audioQueue.shift()!
-
-    // 创建音频源
-    const source = this.audioContext.createBufferSource()
-    source.buffer = audioBuffer
-    source.connect(this.gainNode)
-
-    // 计算播放时间
     const currentTime = this.audioContext.currentTime
 
-    // 如果 nextStartTime 落后于当前时间，重新调度
-    // 但保留一个小缓冲，避免立即播放导致的爆音
+    // 如果 nextStartTime 落后于当前时间，说明发生了音频饥饿（或者刚起播）
+    // 需要重新对齐时间轴，并增加 50ms (0.05秒) 的初始安全缓冲，对抗网络抖动
     if (this.nextStartTime < currentTime) {
-      this.nextStartTime = currentTime + 0.01
+      this.nextStartTime = currentTime + 0.05
     }
 
-    // 开始播放
-    source.start(this.nextStartTime)
-    this.nextStartTime += audioBuffer.duration
+    // 将队列中所有的帧立刻全部推入 Web Audio API 的调度队列
+    while (this.audioQueue.length > 0) {
+      const audioBuffer = this.audioQueue.shift()!
 
-    // 播放结束后播放���一个
-    source.onended = () => {
-      this.playNext()
+      const source = this.audioContext.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(this.gainNode)
+
+      // 精确安排在未来的时间点播放，底层会自动严丝合缝地拼接
+      source.start(this.nextStartTime)
+
+      // 累加时间，推算下一帧的开始时间
+      const nodeEndTime = this.nextStartTime + audioBuffer.duration
+      this.nextStartTime = nodeEndTime
+
+      // onended 仅用于检测播放队列是否彻底干涸（饥饿），绝不参与调度
+      source.onended = () => {
+        // 检查当前时间是否达到了我们计划排期的最后时间
+        // 减去 0.01 秒容差，如果达到了，说明底层缓冲已经被彻底播光了
+        if (this.audioContext && this.audioContext.currentTime >= this.nextStartTime - 0.01) {
+          this.isPlaying = false
+          this.isBuffering = true
+          this.setState('idle')
+        }
+      }
     }
   }
 

@@ -91,7 +91,7 @@ interface OpenAIConfig {
   engine: string
 }
 
-// 通信设置���置
+// 通信设置配置
 interface CommSettingsConfig {
   enabled: boolean
   retention_days: number
@@ -664,7 +664,7 @@ export function SiteConfigPage() {
 
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {/* APRS服务器地址:端口 */}
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
                         <TextField
                           label="APRS服务器"
                           fullWidth
@@ -672,10 +672,10 @@ export function SiteConfigPage() {
                           onChange={(e) => setAPRS({ ...aprs, aprs_server_host: e.target.value })}
                           placeholder="china.aprs2.net"
                         />
-                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>:</Typography>
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', display: { xs: 'none', sm: 'block' }, minWidth: '20px', textAlign: 'center' }}>:</Typography>
                         <TextField
                           label="端口"
-                          sx={{ width: '100px' }}
+                          sx={{ width: { xs: '100%', sm: '100px' } }}
                           value={aprs.aprs_server_port}
                           onChange={(e) => setAPRS({ ...aprs, aprs_server_port: e.target.value })}
                           placeholder="14580"
@@ -683,7 +683,7 @@ export function SiteConfigPage() {
                       </Box>
 
                       {/* 本机地址:端口 */}
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
                         <TextField
                           label="本机地址"
                           fullWidth
@@ -691,10 +691,10 @@ export function SiteConfigPage() {
                           onChange={(e) => setAPRS({ ...aprs, self_address: e.target.value })}
                           placeholder="yourdomain.com"
                         />
-                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>:</Typography>
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', display: { xs: 'none', sm: 'block' }, minWidth: '20px', textAlign: 'center' }}>:</Typography>
                         <TextField
                           label="端口"
-                          sx={{ width: '100px' }}
+                          sx={{ width: { xs: '100%', sm: '100px' } }}
                           value={aprs.self_port}
                           onChange={(e) => setAPRS({ ...aprs, self_port: e.target.value })}
                           placeholder="60050"
@@ -702,7 +702,7 @@ export function SiteConfigPage() {
                       </Box>
 
                       {/* 呼号-SSID */}
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
                         <TextField
                           label="呼号"
                           fullWidth
@@ -710,10 +710,10 @@ export function SiteConfigPage() {
                           onChange={(e) => setAPRS({ ...aprs, callsign: e.target.value })}
                           placeholder="BH0AAA"
                         />
-                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>-</Typography>
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', display: { xs: 'none', sm: 'block' }, minWidth: '20px', textAlign: 'center' }}>-</Typography>
                         <TextField
                           label="SSID"
-                          sx={{ width: '100px' }}
+                          sx={{ width: { xs: '100%', sm: '100px' } }}
                           value={aprs.ssid}
                           onChange={(e) => setAPRS({ ...aprs, ssid: e.target.value })}
                           placeholder="10"
@@ -721,7 +721,7 @@ export function SiteConfigPage() {
                       </Box>
 
                       {/* 经度,纬度,海拔 */}
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
                         <TextField
                           label="经度"
                           fullWidth
@@ -733,7 +733,7 @@ export function SiteConfigPage() {
                           helperText="-180 到 180"
                           error={aprs.longitude < -180 || aprs.longitude > 180}
                         />
-                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', display: { xs: 'none', sm: 'block' }, minWidth: '20px', textAlign: 'center' }}>,</Typography>
                         <TextField
                           label="纬度"
                           fullWidth
@@ -745,10 +745,10 @@ export function SiteConfigPage() {
                           helperText="-90 到 90"
                           error={aprs.latitude < -90 || aprs.latitude > 90}
                         />
-                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', minWidth: '20px', textAlign: 'center' }}>,</Typography>
+                        <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', display: { xs: 'none', sm: 'block' }, minWidth: '20px', textAlign: 'center' }}>,</Typography>
                         <TextField
                           label="海拔(m)"
-                          fullWidth
+                          sx={{ width: { xs: '100%', sm: '120px' } }}
                           value={aprs.altitude}
                           onChange={(e) => setAPRS({ ...aprs, altitude: e.target.value })}
                           placeholder="000000"
@@ -772,7 +772,7 @@ export function SiteConfigPage() {
                 </Card>
               </Box>
 
-              {/* APRS日志卡��� */}
+              {/* APRS日志卡片 */}
               <Box sx={{ flex: { xs: '1 1 auto', md: '0 1 50%' }, display: 'flex', minHeight: 0 }}>
                 <Card sx={{ width: '100%', display: 'flex', flexDirection: 'column', height: configCardHeight || 'auto', minHeight: 0 }}>
                   <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
@@ -1022,14 +1022,15 @@ export function SiteConfigPage() {
                   查看系统操作日志记录
                 </Typography>
 
-                <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 2 }}>
                   <TextField
                     placeholder="搜索日志内容"
                     value={searchKeyword}
                     onChange={(e) => setSearchKeyword(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && loadOpLogs()}
                     size="small"
-                    sx={{ flexGrow: 1, minWidth: 200 }}
+                    fullWidth
+                    sx={{ maxWidth: { sm: 300 } }}
                   />
                   <FormControl size="small" sx={{ minWidth: 120 }}>
                     <InputLabel>事件类型</InputLabel>
@@ -1048,13 +1049,13 @@ export function SiteConfigPage() {
                       ))}
                     </Select>
                   </FormControl>
-                  <Button variant="outlined" startIcon={<Search />} onClick={loadOpLogs}>
+                  <Button variant="outlined" size="small" startIcon={<Search />} onClick={loadOpLogs}>
                     搜索
                   </Button>
                 </Box>
 
-                <TableContainer component={Paper} variant="outlined">
-                  <Table>
+                <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
+                  <Table sx={{ minWidth: 500 }}>
                     <TableHead>
                       <TableRow>
                         <TableCell>ID</TableCell>

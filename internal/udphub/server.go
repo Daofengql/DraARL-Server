@@ -24,11 +24,11 @@ var (
 	// Username 索引的设备映射 (DraARLv1)
 	devUsernameSSIDMap = make(map[string]*models.Device) // key: username-ssid
 
-	// CallSign 索引的设���映射 (向后兼容)
+	// CallSign 索引的设备映射 (向后兼容)
 	devCallsignSSIDMap = make(map[string]*models.Device) // key: callsign-ssid
 
 	// 在线设备映射
-	onlineDevMap    = make(map[int]*models.Device) // key: device ID
+	onlineDevMap       = make(map[int]*models.Device) // key: device ID
 	onlineDevMapDraARL = make(map[int]*models.Device) // key: device ID (DraARLv1)
 
 	// 已认证设备缓存 (username -> auth result)
@@ -75,11 +75,11 @@ type UserInfo struct {
 
 // CurrentConnPool 当前连接池
 type CurrentConnPool struct {
-	DevConnMap   map[string]*models.Device // key: UDPAddr.String()
-	DevConnList  []*models.Device
-	UDPAddr      *net.UDPAddr
+	DevConnMap    map[string]*models.Device // key: UDPAddr.String()
+	DevConnList   []*models.Device
+	UDPAddr       *net.UDPAddr
 	LastVoiceTime time.Time
-	LastPriority int
+	LastPriority  int
 }
 
 // StartUDPServer 启动 UDP 服务器（DraARLv1 协议）
@@ -250,10 +250,10 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 
 	// 认证成功，创建或更新设备
 	newDevice := &models.Device{
-		Username:     packet.Username,
-		CallSign:     authResult.CallSign,
-		SSID:         packet.SSID,
-		OwnerID:      authResult.User.ID, // 设置所有者ID
+		Username: packet.Username,
+		CallSign: authResult.CallSign,
+		SSID:     packet.SSID,
+		OwnerID:  authResult.User.ID, // 设置所有者ID
 		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
 		CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID),
 		DevModel:     packet.DevModel,
@@ -336,7 +336,7 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 	}
 }
 
-// handleDraARLVoice 处理 DraARLv1 ���音消息
+// handleDraARLVoice 处理 DraARLv1 语音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
 	if dev.DisableSend {
@@ -363,7 +363,7 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 
 	dev.LastCtlEndTime = packet.TimeStamp
 
-	// 普通设备语��转发
+	// 普通设备语音转发
 	// 【通信录制】在转发前录制音频数据
 	if len(packet.DATA) > 0 {
 		var groupID *uint
@@ -391,7 +391,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		lon := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[8:16]))
 		alt := math.Float64frombits(binary.BigEndian.Uint64(packet.DATA[16:24]))
 
-		// 校验 GPS 坐标是否在有效范���内
+		// 校验 GPS 坐标是否在有效范围内
 		if lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 {
 			if lat != 0 || lon != 0 {
 				log.Printf("[GPS] %s-%d: lat=%.6f, lon=%.6f, alt=%.1fm",
@@ -546,7 +546,7 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 				continue // 不转发回自己
 			}
 
-			// 获取目标群组���转发
+			// 获取目标群组的转发
 			if targetGroup, exists := GetGroupFromCache(targetID); exists {
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
 				for _, targetDev := range pool.DevConnList {
@@ -796,7 +796,7 @@ func refreshDeviceCache() {
 	// 获取所有设备（使用较大的 limit 来获取全部）
 	dbDevices, _, err := repo.ListDevices(10000, 1)
 	if err != nil {
-		log.Printf("[CACHE] 从���据库加载设备失败: %v", err)
+		log.Printf("[CACHE] 从数据库加载设备失败: %v", err)
 		return
 	}
 

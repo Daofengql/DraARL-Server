@@ -174,7 +174,7 @@ export function UsersPage() {
   }
 
   const handleDelete = async (id: number) => {
-    // 不允许删除ID为1的主管��员
+    // 不允许删除ID为1的主管理员
     if (id === 1) {
       setError('主管理员不能被删除')
       return
@@ -264,10 +264,10 @@ export function UsersPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">用户管理</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
-          添加用户
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
+        <Typography variant="h4" fontWeight={600}>用户管理</Typography>
+        <Button variant="contained" size="small" startIcon={<Add />} onClick={() => handleOpenDialog()}>
+          添加
         </Button>
       </Box>
 
@@ -292,8 +292,8 @@ export function UsersPage() {
         </Box>
       </Paper>
 
-      <TableContainer component={Paper}>
-        <Table>
+      <TableContainer component={Paper} sx={{ overflow: 'auto' }}>
+        <Table sx={{ minWidth: 600 }}>
           <TableHead>
             <TableRow>
               <TableCell>ID</TableCell>

@@ -11,7 +11,7 @@ import (
 // AudioSession 单次通信会话（精简版，只保留 ID）
 type AudioSession struct {
 	SessionID      string        // 会话唯一标识 (DeviceID_Timestamp)
-	DeviceID       uint          // ���备ID
+	DeviceID       uint          // 设备ID
 	DeviceSSID     uint8         // 设备 SSID
 	GroupID        *uint         // 群组ID
 	UserID         *uint         // 用户ID
@@ -27,7 +27,7 @@ type AudioSession struct {
 type CommBuffer struct {
 	sessions     map[string]*AudioSession // 活跃会话 (key: deviceID)
 	mu           sync.RWMutex
-	config       *CommSettingsConfig // ���信配置
+	config       *CommSettingsConfig // 通信配置
 	onSessionEnd func(*AudioSession) // 会话结束回调
 }
 
@@ -53,7 +53,7 @@ func generateSessionID(deviceID uint) string {
 	return fmt.Sprintf("%d", deviceID)
 }
 
-// AppendPacket 追加音频数据包（精简版，只记录 ID���
+// AppendPacket 追加音频数据包（精简版，只记录 ID）
 func (cb *CommBuffer) AppendPacket(
 	deviceID uint,
 	deviceSSID uint8,
@@ -100,7 +100,7 @@ func (cb *CommBuffer) AppendPacket(
 	lenBuf := make([]byte, 2)
 	binary.LittleEndian.PutUint16(lenBuf, uint16(len(pcmData)))
 	session.Buffer.Write(lenBuf)
-	// 写��� Opus 帧数据
+	// 写入 Opus 帧数据
 	session.Buffer.Write(pcmData)
 	session.PacketCount++
 	session.TotalBytes += len(pcmData) + 2 // 包含长度前缀

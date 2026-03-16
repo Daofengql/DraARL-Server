@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
+
+	"github.com/gin-gonic/gin"
 )
 
 // GetOperatorLogs 获取操作日志列表
@@ -33,7 +34,7 @@ func GetOperatorLogs(c *gin.Context) {
 	var total int64
 	var err error
 
-	// 根据是��指定事件类型选择不同的查询方法
+	// 根据是否指定事件类型选择不同的查询方法
 	if eventType != "" {
 		logs, total, err = repo.ListLogsByEventType(eventType, limit, page)
 	} else {

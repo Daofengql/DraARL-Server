@@ -158,7 +158,7 @@ export function DevicesPage() {
     }
   }
 
-  // 对设备禁发/禁收状态进行直观的圆���渲染（绿灯正常，红灯禁用）
+  // 对设备禁发/禁收状态进行直观的圆渲染（绿灯正常，红灯禁用）
   const renderStatusDots = (device: Device) => (
     <Stack direction="row" spacing={1} alignItems="center">
       {/* 发送控制 */}
@@ -317,11 +317,11 @@ export function DevicesPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
         <Typography variant="h5" fontWeight={600}>设备管理</Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {/* 自动刷新控制 */}
-          <FormControl size="small" sx={{ minWidth: 120 }}>
+          <FormControl size="small" sx={{ minWidth: 100 }}>
             <InputLabel>自动刷新</InputLabel>
             <Select
               value={autoRefresh}
@@ -351,7 +351,12 @@ export function DevicesPage() {
             disabled={generatingDevicePassword}
             color="primary"
           >
-            {generatingDevicePassword ? '生成中...' : '重新生成设备密码'}
+            <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>
+              {generatingDevicePassword ? '生成中...' : '重新生成设备密码'}
+            </Box>
+            <Box sx={{ display: { xs: 'inline', sm: 'none' } }}>
+              {generatingDevicePassword ? '生成中...' : '设备密码'}
+            </Box>
           </Button>
         </Stack>
       </Box>
@@ -392,8 +397,8 @@ export function DevicesPage() {
         </Box>
       </Paper>
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table>
+      <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
+        <Table sx={{ minWidth: 800 }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
               <TableCell width={80}>在线状态</TableCell>
@@ -415,7 +420,7 @@ export function DevicesPage() {
                 const group = getGroupInfo(device.group_id)
                 return (
                   <TableRow key={device.id} hover>
-                    {/* 在线���态使用绿圆点或灰圆圈 */}
+                    {/* 在线状态使用绿圆点或灰圆圈 */}
                     <TableCell>
                       {device.online || device.is_online ?
                         <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :

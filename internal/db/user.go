@@ -8,8 +8,9 @@ import (
 	"math/big"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
 	"nrllink/internal/models"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // UserRepository 用户数据访问层
@@ -472,7 +473,7 @@ func InitAdminUser() (string, string, error) {
 		return "", "", fmt.Errorf("生成密码失败: %w", err)
 	}
 
-	// ���希密码
+	// 哈希密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", "", fmt.Errorf("密码哈希失败: %w", err)
@@ -490,6 +491,7 @@ func InitAdminUser() (string, string, error) {
 
 	return "admin", password, nil
 }
+
 // generateRandomPassword 生成随机密码
 func generateRandomPassword(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"

@@ -98,7 +98,7 @@ func (s *Server) setupRoutes() {
 			protected.PUT("/user/device-password", handler.UpdateDevicePassword)
 			protected.POST("/user/device-password/regenerate", handler.RegenerateDevicePassword)
 
-			// 文件上传（所有认证用户可访问，用于头像���传）
+			// 文件上传（所有认证用户可访问，用于头像上传）
 			protected.POST("/upload/file", handler.UploadFile)
 
 			// 操作证相关（所有认证用户可访问）
@@ -163,7 +163,7 @@ func (s *Server) setupRoutes() {
 				approved.POST("/groups", handler.CreateGroup)
 				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
 				approved.POST("/groups/search", handler.SearchGroups)
-				// 加入群���
+				// 加入群组
 				approved.POST("/groups/:id/join", handler.JoinGroup)
 				// 获取群组成员列表
 				approved.GET("/groups/:id/members", handler.GetGroupMembers)
@@ -275,7 +275,7 @@ func initSiteConfigs(cfg *config.Configuration) {
 		return
 	}
 
-	log.Println("站点配置为空���初始化默认值")
+	log.Println("站点配置为空的初始化默认值")
 
 	// 初始化默认配置（空值或最小默认值）
 	if err := repo.InitDefaultConfigs(

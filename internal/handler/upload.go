@@ -282,6 +282,11 @@ func UploadOperatorCertificate(c *gin.Context) {
 		userRepo := gormdb.NewUserRepository()
 		if err := userRepo.UpdateUserCallSign(user.ID, callsign); err != nil {
 			log.Printf("更新用户呼号失败: %v", err)
+		} else {
+			// 更新呼号成功后，使用户缓存失效
+			if userCache := cache.GetUserCache(); userCache != nil {
+				_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+			}
 		}
 	}
 
@@ -526,6 +531,11 @@ func UploadLogo(c *gin.Context) {
 	if err := siteConfigRepo.Set("system.logo_url", fileURL, "system", "站点Logo URL"); err != nil {
 		log.Printf("更新Logo配置失败: %v", err)
 		// 配置更新失败不影响文件上传
+	}
+
+	// 使系统信息配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
 	}
 
 	// 记录审计日志
@@ -884,6 +894,11 @@ func ApproveUser(c *gin.Context) {
 		return
 	}
 
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), targetUser.ID, targetUser.Name)
+	}
+
 	statusText := "通过"
 	if req.Status == 2 {
 		statusText = "拒绝"
@@ -1020,6 +1035,17 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	if certCache := cache.GetCertCache(); certCache != nil {
 		_ = certCache.InvalidateCert(ctx, certID, cert.UserID)
 		_ = certCache.InvalidatePendingList(ctx)
+	}
+
+	// 审批通过时会同步更新用户表的approval_status字段，需要使用户缓存失效
+	if req.Status == 1 {
+		if userCache := cache.GetUserCache(); userCache != nil {
+			// 获取用户信息以获取用户名
+			userRepo := gormdb.NewUserRepository()
+			if certUser, err := userRepo.GetUserByID(cert.UserID); err == nil && certUser != nil {
+				_ = userCache.InvalidateUser(ctx, cert.UserID, certUser.Name)
+			}
+		}
 	}
 
 	statusText := "通过"

@@ -3,6 +3,7 @@ import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer
 import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess, Link as LinkIcon } from '@mui/icons-material'
 import { useState, useEffect } from 'react'
 import { authService, apiClient } from '../../services'
+import { Header } from './Header'
 
 const DRAWER_WIDTH = 240
 
@@ -293,60 +294,66 @@ export function AdminLayout() {
   )
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'grey.50' }}>
-      {/* 移动端抽屉 */}
-      <Drawer
-        variant="temporary"
-        open={mobileOpen}
-        onClose={handleDrawerToggle}
-        ModalProps={{ keepMounted: true }}
-        sx={{
-          display: { xs: 'block', sm: 'none' },
-          width: DRAWER_WIDTH,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
-            width: DRAWER_WIDTH,
-            boxSizing: 'border-box',
-          },
-        }}
-      >
-        {drawer}
-      </Drawer>
-      {/* 桌面端抽屉 */}
-      <Drawer
-        variant="permanent"
-        sx={{
-          width: DRAWER_WIDTH,
-          flexShrink: 0,
-          whiteSpace: 'nowrap',
-          display: { xs: 'none', sm: 'block' },
-          '& .MuiDrawer-paper': {
-            width: DRAWER_WIDTH,
-            boxSizing: 'border-box',
-            top: 0,
-            height: '100vh',
-            zIndex: (theme) => theme.zIndex.drawer - 1,
-            borderRight: '1px solid',
-            borderColor: 'grey.200',
-          },
-        }}
-        open
-      >
-        {drawer}
-      </Drawer>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'grey.50' }}>
+      {/* 顶部导航栏 - 复用前台 Header */}
+      <Header onMenuClick={handleDrawerToggle} />
 
-      {/* 主内容区域 */}
-      <Box
-        component="main"
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          flexGrow: 1,
-          width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
-        }}
-      >
-        <Box sx={{ p: 3, minHeight: '100vh' }}>
-          <Outlet />
+      {/* 中间核心区域 */}
+      <Box sx={{ display: 'flex', flex: 1, mt: 8 }}>
+        {/* 移动端抽屉 */}
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={handleDrawerToggle}
+          ModalProps={{ keepMounted: true }}
+          sx={{
+            display: { xs: 'block', sm: 'none' },
+            width: DRAWER_WIDTH,
+            flexShrink: 0,
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+            },
+          }}
+        >
+          {drawer}
+        </Drawer>
+        {/* 桌面端抽屉 */}
+        <Drawer
+          variant="permanent"
+          sx={{
+            width: DRAWER_WIDTH,
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            display: { xs: 'none', sm: 'block' },
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+              top: 64,
+              height: 'calc(100vh - 64px)',
+              zIndex: (theme) => theme.zIndex.drawer - 1,
+              borderRight: '1px solid',
+              borderColor: 'grey.200',
+            },
+          }}
+          open
+        >
+          {drawer}
+        </Drawer>
+
+        {/* 主内容区域 */}
+        <Box
+          component="main"
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            flexGrow: 1,
+            width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
+          }}
+        >
+          <Box sx={{ p: { xs: 2, sm: 3 }, minHeight: '100vh' }}>
+            <Outlet />
+          </Box>
         </Box>
       </Box>
     </Box>

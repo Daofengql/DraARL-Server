@@ -3,8 +3,9 @@ package handler
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"nrllink/internal/gormdb"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ATCommand AT命令结构
@@ -40,7 +41,7 @@ type ControlPacket struct {
 	LoaclPort         uint16 `json:"local_port"`          // 0x32-0x33
 	SSID              byte   `json:"ssid"`                // 0x40
 	CallSign          string `json:"callsign"`            // 0x41-0x47
-	DestDomainName    string `json:"dest_domainname"`    // 0x50-0x7F
+	DestDomainName    string `json:"dest_domainname"`     // 0x50-0x7F
 	OneGBWBand        byte   `json:"one_band"`
 	OneGBWDTMF        byte   `json:"one_dtmf"`
 	OneReciveFreq     string `json:"one_recive_freq"`
@@ -53,17 +54,17 @@ type ControlPacket struct {
 	OneMICEncryption  int    `json:"one_mic_encryption"`  // 0xA2
 	OneUVPower        byte   `json:"one_uv_power"`        // 0xA3
 	MotoChannel       byte   `json:"moto_channel"`
-	TwoReciveFreq     string `json:"two_recive_freq"`     // 0xC0-0xC8
-	TwoTransmitFreq   string `json:"two_transmit_freq"`   // 0xCA-0xD3
-	TwoReciveCXCSS    string `json:"two_recive_cxcss"`    // 0xD4-0xD8
+	TwoReciveFreq     string `json:"two_recive_freq"`    // 0xC0-0xC8
+	TwoTransmitFreq   string `json:"two_transmit_freq"`  // 0xCA-0xD3
+	TwoReciveCXCSS    string `json:"two_recive_cxcss"`   // 0xD4-0xD8
 	TwoTransmitCXCSS  string `json:"two_transmit_cxcss"` // 0xDA-0xDE
-	FLAG1             string `json:"flag1"`               // 0xE0
-	FLAG2             string `json:"flag2"`               // 0xE2
-	TwoVolume         int    `json:"two_volume"`          // 0xEE
-	TwoSavePower      int    `json:"two_save_power"`      // 0xEF
-	TwoSQLLevel       int    `json:"two_sql_level"`       // 0xF0
-	TwoMICLevel       int    `json:"two_mic_level"`       // 0xF2
-	TwoTOTLevel       int    `json:"two_tot_level"`       // 0xF4
+	FLAG1             string `json:"flag1"`              // 0xE0
+	FLAG2             string `json:"flag2"`              // 0xE2
+	TwoVolume         int    `json:"two_volume"`         // 0xEE
+	TwoSavePower      int    `json:"two_save_power"`     // 0xEF
+	TwoSQLLevel       int    `json:"two_sql_level"`      // 0xF0
+	TwoMICLevel       int    `json:"two_mic_level"`      // 0xF2
+	TwoTOTLevel       int    `json:"two_tot_level"`      // 0xF4
 }
 
 // DeviceAT 执行设备AT命令
@@ -194,13 +195,13 @@ func QueryDeviceParm(c *gin.Context) {
 		"code": 20000,
 		"data": gin.H{
 			"items": gin.H{
-				"callsign":        req.CallSign,
-				"ssid":            req.SSID,
-				"dcd_select":      0,
-				"ptt_enable":      1,
+				"callsign":           req.CallSign,
+				"ssid":               req.SSID,
+				"dcd_select":         0,
+				"ptt_enable":         1,
 				"ptt_level_reversed": 0,
-				"add_tail_voice":   100,
-				"remove_tail_voice": 250,
+				"add_tail_voice":     100,
+				"remove_tail_voice":  250,
 			},
 		},
 	})
@@ -239,7 +240,7 @@ func ChangeDeviceParm(c *gin.Context) {
 		return
 	}
 
-	// ���查权限
+	// 检查权限
 	isAdmin := false
 	if roleList, ok := roles.([]string); ok {
 		for _, r := range roleList {

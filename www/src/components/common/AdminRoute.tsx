@@ -31,7 +31,7 @@ export function AdminRoute({ children }: AdminRouteProps) {
           访问被拒绝
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          您没有权限访问此页面，该页面需要管理员权限���
+          您没有权限访问此页面，该页面需要管理员权限！
         </Typography>
       </Box>
     )

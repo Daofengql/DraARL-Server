@@ -292,7 +292,7 @@ export function SwitchGroupDialog({
 
       {/* 密码验证对话框 */}
       <Dialog open={passwordDialogOpen} onClose={() => setPasswordDialogOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>��证密码</DialogTitle>
+        <DialogTitle>验证密码</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary">

@@ -277,10 +277,10 @@ func checkDeviceOnline() {
 
 	// 配置参数
 	const (
-		checkInterval    = 5 * time.Second // 检查间隔
-		offlineTimeout   = 20 * time.Second // 离线超时
-		reconnectGrace   = 10 * time.Second // 重连宽限期
-		maxRetryLog      = 3               // 最大重复日志次数
+		checkInterval  = 5 * time.Second  // 检查间隔
+		offlineTimeout = 20 * time.Second // 离线超时
+		reconnectGrace = 10 * time.Second // 重连宽限期
+		maxRetryLog    = 3                // 最大重复日志次数
 	)
 
 	for {
@@ -444,7 +444,7 @@ func deviceAT(at *models.ATCommand) (*models.Device, error) {
 	usernameSSID := protocol.GetUsernameSSID(at.CallSign, at.SSID)
 	dev, ok := devUsernameSSIDMap[usernameSSID]
 	if !ok {
-		// ��后兼容：尝试 callsign 索引
+		// 向后兼容：尝试 callsign 索引
 		callsignSSID := protocol.GetCallSignSSID(at.CallSign, at.SSID)
 		dev, ok = devCallsignSSIDMap[callsignSSID]
 		if !ok {

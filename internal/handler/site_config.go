@@ -6,11 +6,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"nrllink/internal/aprs"
 	"nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
+
+	"github.com/gin-gonic/gin"
 )
 
 // SiteConfigHandler 站点配置处理器
@@ -76,7 +77,7 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 		return
 	}
 
-	// 任何已登录用户都可以读取��置
+	// 任何已登录用户都可以读取配置
 	category := c.Param("category")
 
 	ctx := c.Request.Context()
@@ -318,7 +319,7 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 	})
 }
 
-// UpdateAPRSConfig 更新APRS��置（管理员）
+// UpdateAPRSConfig 更新APRS配置（管理员）
 func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
@@ -537,7 +538,7 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 		return
 	}
 
-	_ = user // 路由已通过 RequireAdmin 中���件验证权限
+	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
 	ctx := c.Request.Context()
 	configCache := cache.GetConfigCache()
@@ -576,7 +577,7 @@ func (h *SiteConfigHandler) GetAPRSLogs(c *gin.Context) {
 		return
 	}
 
-	_ = user // ���由已通过 RequireAdmin 中间件验证权限
+	_ = user // 由已通过 RequireAdmin 中间件验证权限
 
 	logs := aprs.GetAPRSLogs()
 
@@ -625,6 +626,11 @@ func (h *SiteConfigHandler) DeleteLogo(c *gin.Context) {
 			Message: "删除Logo配置失败",
 		})
 		return
+	}
+
+	// 使系统信息配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
 	}
 
 	// 记录审计日志

@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"image"
+	_ "image/gif" // 注册 GIF 解码器
 	"image/jpeg"
 	_ "image/jpeg" // 注册 JPEG 解码器
 	"image/png"
 	_ "image/png" // 注册 PNG 解码器
-	_ "image/gif" // 注册 GIF 解码器
 
 	"nrllink/internal/config"
 
@@ -304,7 +304,7 @@ func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 			size = height
 		}
 
-		// 计算裁��区域（中心裁切）
+		// 计算裁切区域（中心裁切）
 		x := (width - size) / 2
 		y := (height - size) / 2
 		cropped = imaging.Crop(img, image.Rect(x, y, x+size, y+size))
@@ -500,4 +500,3 @@ func UploadLogo(imageData []byte, ext string) (string, int64, error) {
 
 	return objectName, size, nil
 }
-

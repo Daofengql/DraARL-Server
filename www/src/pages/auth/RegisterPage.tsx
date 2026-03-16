@@ -334,7 +334,7 @@ export function RegisterPage() {
                 </Button>
               </Box>
             ) : (
-              // 注��表单
+              // 注册表单
               <>
                 <Box sx={{ textAlign: 'center', mb: 4 }}>
                   {logoUrl ? (

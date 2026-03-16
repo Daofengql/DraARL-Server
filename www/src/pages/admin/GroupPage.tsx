@@ -120,7 +120,7 @@ export function AdminGroupPage() {
     }
   }
 
-  // 获取用户信息（用于显示��组创建者详情）
+  // 获取用户信息（用于显示群组创建者详情）
   const getUserInfo = (userId?: number) => {
     if (!userId) return null
     return users.find((u) => u.id === userId)

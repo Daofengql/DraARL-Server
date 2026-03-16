@@ -69,7 +69,7 @@ func (r *DeviceRepository) GetDeviceByOwnerSSID(ownerID int, ssid uint8) (*Devic
 	return &device, nil
 }
 
-// ListDevicesByOwnerID 根据���有者ID查询设备
+// ListDevicesByOwnerID 根据所有者ID查询设备
 func (r *DeviceRepository) ListDevicesByOwnerID(ownerID int) ([]*Device, error) {
 	var devices []*Device
 	err := r.db.Where("owner_id = ?", ownerID).Find(&devices).Error

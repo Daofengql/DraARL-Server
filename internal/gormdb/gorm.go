@@ -81,7 +81,7 @@ func Init(cfg *Config) error {
 		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
 		sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
-		// 设置连接最大空闲时间��� 30 秒，避免使用已失效的连接
+		// 设置连接最大空闲时间为 30 秒，避免使用已失效的连接
 		// MySQL wait_timeout 默认 8 小时，但网络环境可能导致连接提前失效
 		sqlDB.SetConnMaxIdleTime(30 * time.Second)
 
@@ -151,9 +151,9 @@ func GetDB() *gorm.DB {
 
 	// 返回一个新的会话
 	return dbManager.db.Session(&gorm.Session{
-		Context:               context.Background(),
+		Context:                context.Background(),
 		SkipDefaultTransaction: true,
-		PrepareStmt:           false, // 禁用预编译语句缓存，避免连接失效问题
+		PrepareStmt:            false, // 禁用预编译语句缓存，避免连接失效问题
 	})
 }
 
@@ -200,4 +200,3 @@ func Ping() error {
 
 	return sqlDB.PingContext(ctx)
 }
-

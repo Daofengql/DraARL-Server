@@ -1,8 +1,9 @@
 package gormdb
 
 import (
-	"gorm.io/gorm"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // OperatorCertRepository 操作证仓储
@@ -25,7 +26,7 @@ func (r *OperatorCertRepository) GetByUserID(userID int) (*OperatorCert, error) 
 	return r.GetActiveByUserID(userID)
 }
 
-// GetActiveByUserID 获取用户当前有效��操作证（status=1）
+// GetActiveByUserID 获取用户当前有效的操作证（status=1）
 func (r *OperatorCertRepository) GetActiveByUserID(userID int) (*OperatorCert, error) {
 	var cert OperatorCert
 	err := r.db.Where("user_id = ? AND status = ?", userID, 1).First(&cert).Error
@@ -192,7 +193,7 @@ func (r *OperatorCertRepository) ApproveCert(certID int, reviewerID int, note st
 	})
 }
 
-// RejectCert 审核拒绝操��证
+// RejectCert 审核拒绝操作证
 func (r *OperatorCertRepository) RejectCert(certID int, reviewerID int, note string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// 获取待审核的操作证
@@ -232,7 +233,7 @@ func (r *OperatorCertRepository) ListPendingCerts(limit, page int) ([]*OperatorC
 	return certs, total, err
 }
 
-// ListPending 获取待审核���户的操作证列表（用于管理员审批）
+// ListPending 获取待审核用户的操作证列表（用于管理员审批）
 func (r *OperatorCertRepository) ListPending(limit, offset int) ([]*UserWithCert, int64, error) {
 	return r.ListByCertStatus(0, limit, offset)
 }
@@ -366,23 +367,23 @@ type UserWithCert struct {
 
 // CertificateApproval 操作证审批项
 type CertificateApproval struct {
-	ID          int
-	UserID      int
-	UserName    string
-	NickName    string
-	CallSign    string
-	FileName    string
-	MinioPath   string
-	FileSize    int64
-	FileType    string
-	UploadTime  time.Time
-	Status      int
-	ReviewNote  string
-	ReviewTime  *time.Time
-	ReviewerID  *int
-	OldCertID   *int
-	IsUpdate    bool // true=更新(非首次), false=首次
-	IsReplaced  bool // true=被新证替换(但之前是通过), false=未替换或真正被拒绝
+	ID         int
+	UserID     int
+	UserName   string
+	NickName   string
+	CallSign   string
+	FileName   string
+	MinioPath  string
+	FileSize   int64
+	FileType   string
+	UploadTime time.Time
+	Status     int
+	ReviewNote string
+	ReviewTime *time.Time
+	ReviewerID *int
+	OldCertID  *int
+	IsUpdate   bool // true=更新(非首次), false=首次
+	IsReplaced bool // true=被新证替换(但之前是通过), false=未替换或真正被拒绝
 }
 
 // ListCertificateApprovals 获取操作证审批列表（按上传记录列出）
@@ -452,23 +453,23 @@ func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, off
 		isReplaced := cert.Status == 3
 
 		result = append(result, &CertificateApproval{
-			ID:          cert.ID,
-			UserID:      cert.UserID,
-			UserName:    userName,
-			NickName:    nickName,
-			CallSign:    callSign,
-			FileName:    cert.FileName,
-			MinioPath:   cert.MinioPath,
-			FileSize:    cert.FileSize,
-			FileType:    cert.FileType,
-			UploadTime:  cert.UploadTime,
-			Status:      cert.Status,
-			ReviewNote:  cert.ReviewNote,
-			ReviewTime:  cert.ReviewTime,
-			ReviewerID:  cert.ReviewerID,
-			OldCertID:   cert.OldCertID,
-			IsUpdate:    isUpdate,
-			IsReplaced:  isReplaced,
+			ID:         cert.ID,
+			UserID:     cert.UserID,
+			UserName:   userName,
+			NickName:   nickName,
+			CallSign:   callSign,
+			FileName:   cert.FileName,
+			MinioPath:  cert.MinioPath,
+			FileSize:   cert.FileSize,
+			FileType:   cert.FileType,
+			UploadTime: cert.UploadTime,
+			Status:     cert.Status,
+			ReviewNote: cert.ReviewNote,
+			ReviewTime: cert.ReviewTime,
+			ReviewerID: cert.ReviewerID,
+			OldCertID:  cert.OldCertID,
+			IsUpdate:   isUpdate,
+			IsReplaced: isReplaced,
 		})
 	}
 

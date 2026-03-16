@@ -5,9 +5,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/pkg/cache"
+
+	"github.com/gin-gonic/gin"
 )
 
 // GroupInfo 群组信息响应
@@ -116,7 +117,7 @@ func GetGroups(c *gin.Context) {
 				}
 			}
 
-			// 合并公开群组和私��群组，并去重
+			// 合并公开群组和私有群组，并去重
 			groups = append(publicGroups, privateGroups...)
 			// 使用 map 去重
 			seen := make(map[int]bool)
@@ -344,7 +345,7 @@ func GetGroup(c *gin.Context) {
 	})
 }
 
-// CreateGroupRequest 创建群组请���
+// CreateGroupRequest 创建群组请求
 type CreateGroupRequest struct {
 	Name              string `json:"name" binding:"required"`
 	Type              int    `json:"type"`
@@ -752,8 +753,8 @@ func GetServers(c *gin.Context) {
 
 // SearchGroupsRequest 搜索群组请求
 type SearchGroupsRequest struct {
-	Keyword string `json:"keyword"`
-	Page    int    `json:"page"`
+	Keyword  string `json:"keyword"`
+	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`
 }
 
@@ -849,7 +850,7 @@ func SearchGroups(c *gin.Context) {
 		"message": "成功",
 		"data": gin.H{
 			"items": resultItems,
-			"total":  len(groups),
+			"total": len(groups),
 		},
 	})
 }
@@ -859,7 +860,7 @@ type JoinGroupRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// JoinGroup 加入群组（验��密码）
+// JoinGroup 加入群组（验证密码）
 func JoinGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -968,7 +969,7 @@ func JoinGroup(c *gin.Context) {
 			UserID:     currentUser.ID,
 			IsVerified: true,
 			JoinTime:   time.Now(),
-			LastVerify:  time.Now(),
+			LastVerify: time.Now(),
 		}
 		err = memberRepo.CreateMember(&groupMember)
 		if err != nil {
@@ -991,9 +992,9 @@ func JoinGroup(c *gin.Context) {
 		"code":    200,
 		"message": "加入成功",
 		"data": gin.H{
-			"group_id":   id,
+			"group_id":    id,
 			"is_verified": true,
-			"join_time": time.Now().Format("2006-01-02 15:04:05"),
+			"join_time":   time.Now().Format("2006-01-02 15:04:05"),
 		},
 	})
 }
@@ -1065,7 +1066,7 @@ func GetGroupMembers(c *gin.Context) {
 		"message": "成功",
 		"data": gin.H{
 			"items": members,
-			"total":  len(members),
+			"total": len(members),
 		},
 	})
 }
@@ -1396,7 +1397,7 @@ func LeaveGroup(c *gin.Context) {
 		for _, deviceID := range movedDeviceIDs {
 			_ = deviceCache.InvalidateDevice(ctx, deviceID, 0, 0)
 		}
-		// 使原群组和默认群组的设���列表缓存失效
+		// 使原群组和默认群组的设备列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, id)
 		if len(movedDeviceIDs) > 0 {
 			_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)

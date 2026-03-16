@@ -234,7 +234,7 @@ export function CommRecordsPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
         <Typography variant="h4" sx={{ fontWeight: 600 }}>
           通信记录
         </Typography>
@@ -252,7 +252,7 @@ export function CommRecordsPage() {
       <Card sx={{ mb: 2 }}>
         <CardContent>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-            <FormControl size="small" sx={{ minWidth: 150 }}>
+            <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 150 } }}>
               <InputLabel>设备筛选</InputLabel>
               <Select
                 value={filterDeviceId || ''}
@@ -271,7 +271,7 @@ export function CommRecordsPage() {
               </Select>
             </FormControl>
 
-            <FormControl size="small" sx={{ minWidth: 150 }}>
+            <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 150 } }}>
               <InputLabel>群组筛选</InputLabel>
               <Select
                 value={filterGroupId || ''}
@@ -291,7 +291,7 @@ export function CommRecordsPage() {
             </FormControl>
 
             {showUserFilter && (
-              <FormControl size="small" sx={{ minWidth: 150 }}>
+              <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 150 } }}>
                 <InputLabel>用户筛选</InputLabel>
                 <Select
                   value={filterUserId || ''}
@@ -315,8 +315,8 @@ export function CommRecordsPage() {
       </Card>
 
       {/* 通信记录表格 */}
-      <TableContainer component={Paper}>
-        <Table>
+      <TableContainer component={Paper} sx={{ overflow: 'auto' }}>
+        <Table sx={{ minWidth: 700 }}>
           <TableHead>
             <TableRow>
               <TableCell>ID</TableCell>

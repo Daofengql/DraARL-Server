@@ -5,48 +5,50 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/internal/udphub"
+	"nrllink/pkg/cache"
 	minio_local "nrllink/pkg/minio"
+
+	"github.com/gin-gonic/gin"
 )
 
 // CommRecordResponse 通信记录响应结构（用于前端显示）
 type CommRecordResponse struct {
-	ID          uint   `json:"id"`
-	DeviceID    uint   `json:"device_id"`
-	DeviceName  string `json:"device_name"`  // 通过联表查询获取：users.callsign + devices.ssid
-	GroupID     *uint  `json:"group_id"`
-	GroupName   string `json:"group_name"`   // 通过联表查询获取：public_groups.name
-	UserID      *uint  `json:"user_id"`
-	Username    string `json:"username"`     // 通过联表查询获取：users.nickname 或 users.name
-	StartTime   string `json:"start_time"`
-	EndTime     string `json:"end_time"`
-	DurationMs  int    `json:"duration_ms"`
-	AudioPath   string `json:"audio_path"`
-	AudioURL    string `json:"audio_url"`
-	AudioSize   int64  `json:"audio_size"`
-	Status      int    `json:"status"`
+	ID         uint   `json:"id"`
+	DeviceID   uint   `json:"device_id"`
+	DeviceName string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
+	GroupID    *uint  `json:"group_id"`
+	GroupName  string `json:"group_name"` // 通过联表查询获取：public_groups.name
+	UserID     *uint  `json:"user_id"`
+	Username   string `json:"username"` // 通过联表查询获取：users.nickname 或 users.name
+	StartTime  string `json:"start_time"`
+	EndTime    string `json:"end_time"`
+	DurationMs int    `json:"duration_ms"`
+	AudioPath  string `json:"audio_path"`
+	AudioURL   string `json:"audio_url"`
+	AudioSize  int64  `json:"audio_size"`
+	Status     int    `json:"status"`
 }
 
 // CommRecordWithDetails 联表查询结果
 type CommRecordWithDetails struct {
-	ID          uint
-	DeviceID    uint
-	DeviceSSID  uint8
+	ID            uint
+	DeviceID      uint
+	DeviceSSID    uint8
 	OwnerCallSign string
 	OwnerNickName string
-	GroupID     *uint
-	GroupName   string
-	UserID      *uint
-	UserCallSign string
-	UserNickName string
-	StartTime   time.Time
-	EndTime     time.Time
-	DurationMs  int
-	AudioPath   string
-	AudioSize   int64
-	Status      int
+	GroupID       *uint
+	GroupName     string
+	UserID        *uint
+	UserCallSign  string
+	UserNickName  string
+	StartTime     time.Time
+	EndTime       time.Time
+	DurationMs    int
+	AudioPath     string
+	AudioSize     int64
+	Status        int
 }
 
 // toCommRecordResponse 将联表查询结果转换为响应结构
@@ -202,10 +204,10 @@ func GetCommRecords(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"list":       list,
-			"total":      total,
-			"page":       page,
-			"page_size":  pageSize,
+			"list":      list,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
 		},
 	})
 }
@@ -367,6 +369,11 @@ func UpdateCommSettings(c *gin.Context) {
 		return
 	}
 
+	// 使通信设置配置缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateCategory(c.Request.Context(), "comm")
+	}
+
 	// 重新加载录制器配置
 	udphub.ReloadCommSettings(&udphub.CommSettingsConfig{
 		Enabled:        settings.Enabled,
@@ -394,7 +401,7 @@ func GetCommRecorderStats(c *gin.Context) {
 	})
 }
 
-// DailyCommStats 每日通信���计
+// DailyCommStats 每日通信统计
 type DailyCommStats struct {
 	Date     string `json:"date" gorm:"column:date"`
 	Count    int64  `json:"count" gorm:"column:count"`
@@ -403,8 +410,8 @@ type DailyCommStats struct {
 
 // UserCommStats 用户通信统计
 type UserCommStats struct {
-	TotalCount   int64 `json:"total_count"`
-	TotalSize    int64 `json:"total_size"`    // 文件总大小（字节）
+	TotalCount    int64 `json:"total_count"`
+	TotalSize     int64 `json:"total_size"`     // 文件总大小（字节）
 	TotalDuration int64 `json:"total_duration"` // 总时长（毫秒）
 }
 
@@ -415,7 +422,7 @@ type SystemCommStats struct {
 	TotalDuration int64 `json:"total_duration"` // 总时长（毫秒）
 }
 
-// GetUserCommStats 获取当��用户的通信统计
+// GetUserCommStats 获取当前用户的通信统计
 func GetUserCommStats(c *gin.Context) {
 	// 获取当前用户名
 	username, exists := c.Get("username")

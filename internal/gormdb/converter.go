@@ -7,28 +7,28 @@ import (
 // ToModelDevice 将 GORM Device 转换为 models.Device
 func (d *Device) ToModelDevice() *models.Device {
 	return &models.Device{
-		ID:           d.ID,
-		Name:         d.Name,
-		DMRID:        uint32(d.DMRID),
-		SSID:         uint8(d.SSID),
-		OwnerID:      d.OwnerID,
-		QTH:          d.QTH,
-		DevModel:     byte(d.DevModel),
-		GroupID:      d.GroupID,
-		Status:       byte(d.Status),
-		IsCerted:     d.IsCerted,
-		Priority:     d.Priority,
-		OnlineTime:   d.OnlineTime,
-		CreateTime:   d.CreateTime,
-		UpdateTime:   d.UpdateTime,
-		Note:         d.Note,
-		DisableSend:  d.DisableSend,
-		DisableRecv:  d.DisableRecv,
-		ISOnline:     d.ISOnline,
+		ID:          d.ID,
+		Name:        d.Name,
+		DMRID:       uint32(d.DMRID),
+		SSID:        uint8(d.SSID),
+		OwnerID:     d.OwnerID,
+		QTH:         d.QTH,
+		DevModel:    byte(d.DevModel),
+		GroupID:     d.GroupID,
+		Status:      byte(d.Status),
+		IsCerted:    d.IsCerted,
+		Priority:    d.Priority,
+		OnlineTime:  d.OnlineTime,
+		CreateTime:  d.CreateTime,
+		UpdateTime:  d.UpdateTime,
+		Note:        d.Note,
+		DisableSend: d.DisableSend,
+		DisableRecv: d.DisableRecv,
+		ISOnline:    d.ISOnline,
 	}
 }
 
-// ToModelGroup 将 GORM Group 转���为 models.Group
+// ToModelGroup 将 GORM Group 转换为 models.Group
 func (g *Group) ToModelGroup() *models.Group {
 	return &models.Group{
 		ID:                g.ID,
@@ -52,24 +52,24 @@ func (g *Group) ToModelGroup() *models.Group {
 // FromModelDevice 从 models.Device 转换为 GORM Device
 func FromModelDevice(d *models.Device) *Device {
 	return &Device{
-		ID:           d.ID,
-		Name:         d.Name,
-		DMRID:        int64(d.DMRID),
-		SSID:         uint8(d.SSID),
-		OwnerID:      d.OwnerID,
-		QTH:          d.QTH,
-		DevModel:     int(d.DevModel),
-		GroupID:      d.GroupID,
-		Status:       int8(d.Status),
-		IsCerted:     d.IsCerted,
-		Priority:     d.Priority,
-		OnlineTime:   d.OnlineTime,
-		CreateTime:   d.CreateTime,
-		UpdateTime:   d.UpdateTime,
-		Note:         d.Note,
-		DisableSend:  d.DisableSend,
-		DisableRecv:  d.DisableRecv,
-		ISOnline:     d.ISOnline,
+		ID:          d.ID,
+		Name:        d.Name,
+		DMRID:       int64(d.DMRID),
+		SSID:        uint8(d.SSID),
+		OwnerID:     d.OwnerID,
+		QTH:         d.QTH,
+		DevModel:    int(d.DevModel),
+		GroupID:     d.GroupID,
+		Status:      int8(d.Status),
+		IsCerted:    d.IsCerted,
+		Priority:    d.Priority,
+		OnlineTime:  d.OnlineTime,
+		CreateTime:  d.CreateTime,
+		UpdateTime:  d.UpdateTime,
+		Note:        d.Note,
+		DisableSend: d.DisableSend,
+		DisableRecv: d.DisableRecv,
+		ISOnline:    d.ISOnline,
 	}
 }
 

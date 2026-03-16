@@ -10,6 +10,8 @@ import {
   Skeleton,
   Alert,
   Chip,
+  useTheme,
+  useMediaQuery,
 } from '@mui/material'
 import {
   Devices,
@@ -129,6 +131,8 @@ function DashboardSkeleton() {
 }
 
 export function DashboardPage() {
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const [stats, setStats] = useState({
     my_devices: 0,
     online_devices: 0,
@@ -316,7 +320,7 @@ export function DashboardPage() {
           <Box sx={{ width: '100%', height: 300, minHeight: 300 }}>
             {commTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={commTrend} margin={{ top: 5, right: 60, left: 0, bottom: 5 }}>
+                <LineChart data={commTrend} margin={{ top: 5, right: isMobile ? 10 : 60, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"

@@ -46,7 +46,7 @@ export interface RegisterRequest {
   nickname?: string
 }
 
-// 设备相���类型
+// 设备相关类型
 export interface Device {
   id: number
   name: string
@@ -251,7 +251,7 @@ export interface OperatorCertificate {
   file_type: string
   upload_time: string
   file_url?: string
-  status?: number  // 0=待审核, 1=已通过, 2=���拒绝
+  status?: number  // 0=待审核, 1=已通过, 2=已拒绝
   review_note?: string
 }
 

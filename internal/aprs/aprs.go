@@ -23,8 +23,8 @@ var (
 
 	// APRSLogBuffer APRS 日志缓冲
 	APRSLogBuffer []APRSLogEntry
-	APRSLogMutex sync.RWMutex
-	APRSLogChan  chan string
+	APRSLogMutex  sync.RWMutex
+	APRSLogChan   chan string
 )
 
 // APRSLogEntry APRS 日志条目
@@ -224,7 +224,7 @@ func (a *APRS) Stop() {
 	}
 }
 
-// startLocationWatch 启动位置定时��送
+// startLocationWatch 启动位置定时发送
 func (a *APRS) startLocationWatch() {
 	a.sendAPRSPosition()
 
@@ -434,7 +434,7 @@ func StopAPRSService() {
 
 // RestartAPRSService 重启 APRS 服务
 func RestartAPRSService() {
-	// 停���现有服务
+	// 停止现有服务
 	StopAPRSService()
 
 	// 重新加载配置
@@ -528,7 +528,7 @@ func getNRLFromAPRSTV() {
 			continue
 		}
 
-		// ���滤自身
+		// 过滤自身
 		if host == currentAPRSConfig.SelfAddress {
 			continue
 		}

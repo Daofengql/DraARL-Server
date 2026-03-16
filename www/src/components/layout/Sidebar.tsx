@@ -36,7 +36,7 @@ interface MenuItem {
   icon: React.ReactNode
 }
 
-// 普通用户菜单项（管理员和普通用户���可见）
+// 普通用户菜单项（管理员和普通用户均可见）
 const menuItems: MenuItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: <Dashboard /> },
   { path: '/devices', label: '设备管理', icon: <Devices /> },

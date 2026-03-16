@@ -56,7 +56,7 @@ export function GroupsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 对话框状态��制
+  // 对话框状态限制
   const [dialogOpen, setDialogOpen] = useState(false)
   const [searchDialogOpen, setSearchDialogOpen] = useState(false)
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false)
@@ -110,7 +110,7 @@ export function GroupsPage() {
     }
   }
 
-  // 打开用户详��（通过 API 获取公开信息）
+  // 打开用户详情（通过 API 获取公开信息）
   const handleOpenUserDetail = async (event: React.MouseEvent<HTMLElement>, userId: number) => {
     event.stopPropagation()
     // 先保存 currentTarget，因为异步操作后 event 对象会被重用
@@ -390,18 +390,19 @@ export function GroupsPage() {
 
   return (
     <Box sx={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexShrink: 0 }}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 2, flexShrink: 0 }}>
         <Typography variant="h5" fontWeight={600}>我的群组</Typography>
-        <Stack direction="row" spacing={2}>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Button
             variant="outlined"
+            size="small"
             startIcon={<Search />}
             onClick={() => setSearchDialogOpen(true)}
           >
-            搜索群组
+            搜索
           </Button>
-          <Button variant="contained" startIcon={<Add />} onClick={handleOpenAdd}>
-            新建群组
+          <Button variant="contained" size="small" startIcon={<Add />} onClick={handleOpenAdd}>
+            新建
           </Button>
         </Stack>
       </Box>
@@ -417,8 +418,8 @@ export function GroupsPage() {
             <Typography variant="body2" color="text.secondary">({publicGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1 }}>
-          <Table stickyHeader>
+        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+          <Table stickyHeader sx={{ minWidth: 700 }}>
             <TableHead>
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
@@ -453,8 +454,8 @@ export function GroupsPage() {
             <Typography variant="body2" color="text.secondary">({privateGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1 }}>
-          <Table stickyHeader>
+        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+          <Table stickyHeader sx={{ minWidth: 700 }}>
             <TableHead>
               <TableRow>
                 <TableCell width={60}>ID</TableCell>

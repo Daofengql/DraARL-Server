@@ -6,10 +6,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	"nrllink/internal/udphub"
 	"nrllink/pkg/cache"
+
+	"github.com/gin-gonic/gin"
 )
 
 // DeviceListRequest 设备列表请求
@@ -115,7 +116,7 @@ func GetDevices(c *gin.Context) {
 			repo := gormdb.NewDeviceRepository()
 			devicesRaw, _ = repo.ListDevicesByGroupID(gid)
 		}
-		// 非管理员只能看到自���的设备
+		// 非管理员只能看到自己的设备
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
 			filtered := make([]*gormdb.Device, 0)
 			for _, d := range devicesRaw {
@@ -137,7 +138,7 @@ func GetDevices(c *gin.Context) {
 			devices = devicesRaw[start:end]
 		}
 	} else {
-		// 普通���户只获取自己的设备，管理员获取所有设备
+		// 普通用户只获取自己的设备，管理员获取所有设备
 		if currentUser != nil && hasRoleGORM(currentUser, "admin") {
 			// 管理员获取所有设备（使用缓存）
 			if deviceCache != nil {
@@ -180,19 +181,19 @@ func GetDevices(c *gin.Context) {
 	for _, d := range devices {
 		info := &DeviceInfo{
 			ID:          d.ID,
-			Name:       d.Name,
-			SSID:       d.SSID,
-			DevModel:   d.DevModel,
-			GroupID:    d.GroupID,
-			Status:     d.Status,
-			Priority:   d.Priority,
-			IsOnline:   d.ISOnline,
+			Name:        d.Name,
+			SSID:        d.SSID,
+			DevModel:    d.DevModel,
+			GroupID:     d.GroupID,
+			Status:      d.Status,
+			Priority:    d.Priority,
+			IsOnline:    d.ISOnline,
 			DisableSend: d.DisableSend, // 补充设备级禁发状态
 			DisableRecv: d.DisableRecv, // 补充设备级禁收状态
-			QTH:        d.QTH,
-			Note:       d.Note,
-			CreateTime: d.CreateTime.Format("2006-01-02 15:04:05"),
-			UpdateTime: d.UpdateTime.Format("2006-01-02 15:04:05"),
+			QTH:         d.QTH,
+			Note:        d.Note,
+			CreateTime:  d.CreateTime.Format("2006-01-02 15:04:05"),
+			UpdateTime:  d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
 
 		// 获取设备所有者信息（通过 owner_id）
@@ -286,17 +287,17 @@ func GetDevice(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":         device.ID,
-			"name":       device.Name,
-			"callsign":   callsign,
-			"ssid":       device.SSID,
-			"dev_model":  device.DevModel,
-			"group_id":   device.GroupID,
-			"status":     device.Status,
-			"priority":   device.Priority,
-			"is_online":  device.ISOnline,
+			"id":          device.ID,
+			"name":        device.Name,
+			"callsign":    callsign,
+			"ssid":        device.SSID,
+			"dev_model":   device.DevModel,
+			"group_id":    device.GroupID,
+			"status":      device.Status,
+			"priority":    device.Priority,
+			"is_online":   device.ISOnline,
 			"owner_id":    device.OwnerID,
-			"note":       device.Note,
+			"note":        device.Note,
 			"create_time": device.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time": device.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
@@ -545,9 +546,9 @@ func DeleteDevice(c *gin.Context) {
 
 // ChangeDeviceGroupRequest 切换设备群组请求
 type ChangeDeviceGroupRequest struct {
-	DeviceID   int    `json:"device_id" binding:"required"`
-	GroupID   int    `json:"group_id" binding:"required"`
-	Password  string `json:"password"` // 私有群组且未验证时需要
+	DeviceID int    `json:"device_id" binding:"required"`
+	GroupID  int    `json:"group_id" binding:"required"`
+	Password string `json:"password"` // 私有群组且未验证时需要
 }
 
 // ChangeDeviceGroup 修改设备群组
@@ -694,7 +695,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 	})
 }
 
-// GetDeviceQTHs 获取设备位置��表
+// GetDeviceQTHs 获取设备位置列表
 func GetDeviceQTHs(c *gin.Context) {
 	ctx := c.Request.Context()
 	deviceCache := cache.GetDeviceCache()

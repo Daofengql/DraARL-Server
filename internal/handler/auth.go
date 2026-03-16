@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
 	"nrllink/pkg/jwt"
 	"nrllink/pkg/minio"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // generateDevicePassword 生成随机设备准入密码
@@ -86,8 +87,6 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
-
-	// 验证密码（支持 bcrypt 和���文向后兼容)
 	// 验证密码（仅支持 bcrypt）
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		log.Printf("密码验证失败: %v", err)
@@ -112,7 +111,7 @@ func Login(c *gin.Context) {
 
 	// 更新最后登录时间
 	if err := repo.UpdateLastLogin(user.ID, c.ClientIP()); err != nil {
-		log.Printf("更新��后登录时间失败: %v", err)
+		log.Printf("更新最后登录时间失败: %v", err)
 	}
 
 	// 生成 JWT token
@@ -147,7 +146,7 @@ func Login(c *gin.Context) {
 		"role":            getRoleName(roles),
 		"roles":           roles,
 		"status":          user.Status,
-		"approval_status":  user.ApprovalStatus,
+		"approval_status": user.ApprovalStatus,
 		"avatar":          minio.GetAvatarURL(user.Avatar),
 		"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
 		"phone":           user.Phone,
@@ -324,11 +323,11 @@ func Register(c *gin.Context) {
 		"code":    201,
 		"message": "注册成功，请等待管理员审核",
 		"data": gin.H{
-			"id":               user.ID,
-			"username":         user.Name,
-			"nickname":         user.NickName,
-			"approval_status":  user.ApprovalStatus,
-			"device_password":  devicePassword, // 仅显示一次
+			"id":              user.ID,
+			"username":        user.Name,
+			"nickname":        user.NickName,
+			"approval_status": user.ApprovalStatus,
+			"device_password": devicePassword, // 仅显示一次
 		},
 	})
 }
@@ -362,36 +361,36 @@ func GetCurrentUser(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":             user.ID,
-			"username":       user.Name,
-			"nickname":       user.NickName,
-			"callsign":       user.CallSign,
-			"phone":          user.Phone,
-			"address":        user.Address,
-			"introduction":   user.Introduction,
-			"avatar":         minio.GetAvatarURL(user.Avatar),
-			"avatar_thumb":   minio.GetAvatarThumbURL(user.Avatar),
-			"sex":            user.Sex,
-			"birthday":       user.Birthday,
-			"role":           getRoleNameFromUser(user),
-			"roles":          user.Roles,
-			"isAdmin":        hasRoleGORM(user, "admin"),
-			"status":         user.Status,
+			"id":              user.ID,
+			"username":        user.Name,
+			"nickname":        user.NickName,
+			"callsign":        user.CallSign,
+			"phone":           user.Phone,
+			"address":         user.Address,
+			"introduction":    user.Introduction,
+			"avatar":          minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
+			"sex":             user.Sex,
+			"birthday":        user.Birthday,
+			"role":            getRoleNameFromUser(user),
+			"roles":           user.Roles,
+			"isAdmin":         hasRoleGORM(user, "admin"),
+			"status":          user.Status,
 			"approval_status": user.ApprovalStatus,
-			"review_note":    user.ReviewNote,
-			"dmrid":          user.DMRID,
-			"mdcid":          user.MDCID,
-			"alarm_msg":      user.AlarmMsg,
+			"review_note":     user.ReviewNote,
+			"dmrid":           user.DMRID,
+			"mdcid":           user.MDCID,
+			"alarm_msg":       user.AlarmMsg,
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
 					return user.LastLoginTime.Format("2006-01-02 15:04:05")
 				}
 				return ""
 			}(),
-			"last_login_ip":  user.LastLoginIP,
+			"last_login_ip":   user.LastLoginIP,
 			"login_err_times": user.LoginErrTimes,
-			"created_at":     user.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at":     user.UpdateTime.Format("2006-01-02 15:04:05"),
+			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
@@ -758,7 +757,7 @@ func DeleteUser(c *gin.Context) {
 	if id == 1 {
 		c.JSON(http.StatusForbidden, gin.H{
 			"code":    403,
-			"message": "主管��员不能被删除",
+			"message": "主管理员不能被删除",
 		})
 		return
 	}
@@ -888,7 +887,7 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
-	// ���新用户状态
+	// 更新用户状态
 	if err := repo.UpdateUserStatus(id, req.Status); err != nil {
 		log.Printf("更新用户状态失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -1144,20 +1143,20 @@ func GetUserDetail(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":         user.ID,
-			"name":       user.Name,
-			"nickname":   user.NickName,
-			"callsign":   user.CallSign,
-			"phone":      user.Phone,
-			"status":     user.Status,
-			"isAdmin":    hasRoleGORM(user, "admin"),
-			"roles":      user.Roles,
-			"avatar":     minio.GetAvatarURL(user.Avatar),
+			"id":           user.ID,
+			"name":         user.Name,
+			"nickname":     user.NickName,
+			"callsign":     user.CallSign,
+			"phone":        user.Phone,
+			"status":       user.Status,
+			"isAdmin":      hasRoleGORM(user, "admin"),
+			"roles":        user.Roles,
+			"avatar":       minio.GetAvatarURL(user.Avatar),
 			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"introduction": user.Introduction,
-			"address":    user.Address,
-			"sex":        user.Sex,
-			"birthday":   user.Birthday,
+			"address":      user.Address,
+			"sex":          user.Sex,
+			"birthday":     user.Birthday,
 		},
 	})
 }
@@ -1227,11 +1226,11 @@ type UpdateProfileRequest struct {
 	Address      string `json:"address"`
 	Introduction string `json:"introduction"`
 	Avatar       string `json:"avatar"`
-	Sex          *int   `json:"sex"`       // 使用指针，允许不更新
+	Sex          *int   `json:"sex"` // 使用指针，允许不更新
 	Birthday     string `json:"birthday"`
-	DMRID        *int   `json:"dmrid"`      // 允许更新 DMRID
-	MDCID        string `json:"mdcid"`      // 允许更新 MDCID
-	AlarmMsg     *bool  `json:"alarm_msg"`  // 允许更新报警消息设置
+	DMRID        *int   `json:"dmrid"`     // 允许更新 DMRID
+	MDCID        string `json:"mdcid"`     // 允许更新 MDCID
+	AlarmMsg     *bool  `json:"alarm_msg"` // 允许更新报警消息设置
 }
 
 // UpdateProfile 更新当前用户个人资料
@@ -1320,24 +1319,24 @@ func UpdateProfile(c *gin.Context) {
 		"code":    200,
 		"message": "更新成功",
 		"data": gin.H{
-			"id":              user.ID,
-			"username":        user.Name,
-			"nickname":        user.NickName,
-			"callsign":        user.CallSign,
-			"phone":           user.Phone,
-			"address":         user.Address,
-			"introduction":    user.Introduction,
-			"avatar":          minio.GetAvatarURL(user.Avatar),
-			"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
-			"sex":             user.Sex,
-			"birthday":        user.Birthday,
-			"dmrid":           user.DMRID,
-			"mdcid":           user.MDCID,
-			"alarm_msg":       user.AlarmMsg,
-			"role":            getRoleNameFromUser(user),
-			"roles":           user.Roles,
-			"status":          user.Status,
-			"isAdmin":         hasRoleGORM(user, "admin"),
+			"id":           user.ID,
+			"username":     user.Name,
+			"nickname":     user.NickName,
+			"callsign":     user.CallSign,
+			"phone":        user.Phone,
+			"address":      user.Address,
+			"introduction": user.Introduction,
+			"avatar":       minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
+			"sex":          user.Sex,
+			"birthday":     user.Birthday,
+			"dmrid":        user.DMRID,
+			"mdcid":        user.MDCID,
+			"alarm_msg":    user.AlarmMsg,
+			"role":         getRoleNameFromUser(user),
+			"roles":        user.Roles,
+			"status":       user.Status,
+			"isAdmin":      hasRoleGORM(user, "admin"),
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
 					return user.LastLoginTime.Format("2006-01-02 15:04:05")

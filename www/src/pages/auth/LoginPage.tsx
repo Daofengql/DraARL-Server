@@ -14,6 +14,7 @@ import {
 import { Radio } from '@mui/icons-material'
 import { authService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
+import { usePageTitle } from '../../hooks/usePageTitle'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -22,6 +23,9 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // 同步页面标题
+  usePageTitle()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

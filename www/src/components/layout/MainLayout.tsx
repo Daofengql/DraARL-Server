@@ -3,6 +3,7 @@ import { Box } from '@mui/material'
 import { Header } from './Header'
 import { Sidebar, DRAWER_WIDTH } from './Sidebar'
 import { Outlet } from 'react-router-dom'
+import { usePageTitle } from '../../hooks/usePageTitle'
 
 interface MainLayoutProps {
   children?: React.ReactNode
@@ -10,6 +11,9 @@ interface MainLayoutProps {
 
 export function MainLayout({ children }: MainLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
+
+  // 同步页面标题
+  usePageTitle()
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen)

@@ -18,6 +18,7 @@ import {
 import { Radio, CheckCircle, ContentCopy } from '@mui/icons-material'
 import { authService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
+import { usePageTitle } from '../../hooks/usePageTitle'
 
 const steps = ['基本信息', '联系方式', '设置密码']
 
@@ -42,6 +43,10 @@ export function RegisterPage() {
   const navigate = useNavigate()
   const { config } = usePublicConfig()
   const [activeStep, setActiveStep] = useState(0)
+
+  // 同步页面标题
+  usePageTitle()
+
   const [formData, setFormData] = useState<FormData>({
     username: '',
     callsign: '',

@@ -4,6 +4,7 @@ import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, 
 import { useState, useEffect } from 'react'
 import { authService, apiClient } from '../../services'
 import { Header } from './Header'
+import { usePageTitle } from '../../hooks/usePageTitle'
 
 const DRAWER_WIDTH = 240
 
@@ -62,6 +63,9 @@ export function AdminLayout() {
   // 群组管理菜单的展开/折叠状态
   const [groupMenuExpanded, setGroupMenuExpanded] = useState(false)
   const [icp, setIcp] = useState('')
+
+  // 同步页面标题
+  usePageTitle()
 
   useEffect(() => {
     const fetchICP = async () => {

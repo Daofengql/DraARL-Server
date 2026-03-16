@@ -288,15 +288,27 @@ func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
 	defer m.mu.Unlock()
 
 	addr := device.Conn.RemoteAddr().String()
-	delete(m.connMap, addr)
+
+	// 【关键修复：防并发覆盖】
+	// 只有当 connMap 中的指针与当前尝试注销的设备指针一致时，才执行删除。
+	// 防止旧连接在超时退出时，误删了同 IP 刚刚建立的新连接。
+	if existing, ok := m.connMap[addr]; ok && existing == device {
+		delete(m.connMap, addr)
+	}
 
 	if device.DeviceType == DeviceTypeGhost {
-		delete(m.ghostDevices, device.UserID)
-		log.Printf("[WS] Ghost device unregistered: user-%d", device.UserID)
+		// 【关键修复：指针比对】防止旧的 Ghost 连接超时清理掉新的 Ghost 连接
+		if existing, ok := m.ghostDevices[device.UserID]; ok && existing == device {
+			delete(m.ghostDevices, device.UserID)
+			log.Printf("[WS] Ghost device unregistered: user-%d", device.UserID)
+		}
 	} else if device.Username != "" {
 		key := fmt.Sprintf("%s-%d", device.Username, device.SSID)
-		delete(m.normalDevices, key)
-		log.Printf("[WS] Normal device unregistered: %s", key)
+		// 【关键修复：指针比对】
+		if existing, ok := m.normalDevices[key]; ok && existing == device {
+			delete(m.normalDevices, key)
+			log.Printf("[WS] Normal device unregistered: %s", key)
+		}
 	}
 
 	device.IsOnline = false

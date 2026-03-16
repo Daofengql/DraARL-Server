@@ -35,6 +35,11 @@ export class AudioCapture {
   private bufferSize = 0
   private targetBufferSize = OPUS_FRAME_SIZE
 
+  // 【关键修复】保存节点引用，以便后续销毁
+  // 防止 ScriptProcessorNode 内存泄漏导致重音和卡顿
+  private processor: ScriptProcessorNode | null = null
+  private source: MediaStreamAudioSourceNode | null = null
+
   // Opus 编码器
   private opusEncoder: OpusEncoder<typeof OPUS_SAMPLE_RATE> | null = null
   private encoderReady = false
@@ -143,22 +148,23 @@ export class AudioCapture {
     }
 
     try {
+      // 【修改】将创建的节点赋值给类的私有属性
       // 创建音频源
-      const source = this.audioContext!.createMediaStreamSource(this.mediaStream!)
+      this.source = this.audioContext!.createMediaStreamSource(this.mediaStream!)
 
       // 创建 ScriptProcessor (旧 API，但兼容性好)
       // 实际项目中建议使用 AudioWorklet
-      const processor = this.audioContext!.createScriptProcessor(4096, 1, 1)
+      this.processor = this.audioContext!.createScriptProcessor(4096, 1, 1)
 
-      processor.onaudioprocess = (event) => {
+      this.processor.onaudioprocess = (event) => {
         if (this.state !== 'capturing') return
 
         const inputData = event.inputBuffer.getChannelData(0)
         this.processAudioData(inputData)
       }
 
-      source.connect(processor)
-      processor.connect(this.audioContext!.destination)
+      this.source.connect(this.processor)
+      this.processor.connect(this.audioContext!.destination)
 
       this.setState('capturing')
       console.log('[AudioCapture] Started capturing')
@@ -179,7 +185,21 @@ export class AudioCapture {
     this.buffer = []
     this.bufferSize = 0
 
-    console.log('[AudioCapture] Stopped')
+    // 【关键修复：彻底清理节点】
+    // 必须在此处断开并销毁音频处理节点，否则下一次 start() 会产生重复的事件监听，
+    // 导致同一段音频被捕获多次，进而引发服务器收到的 Opus 数据翻倍产生重音和卡顿。
+    if (this.processor) {
+      this.processor.disconnect()
+      this.processor.onaudioprocess = null
+      this.processor = null
+    }
+
+    if (this.source) {
+      this.source.disconnect()
+      this.source = null
+    }
+
+    console.log('[AudioCapture] Stopped and nodes cleaned up')
   }
 
   /**
@@ -288,6 +308,7 @@ export class AudioCapture {
 /**
  * 音频播放器
  * 解码 Opus 数据并播放
+ * 使用改良版的动态抖动缓冲（Dynamic Jitter Buffer）机制，解决 UDP 跨协议带来的延迟放大和卡顿
  */
 export class AudioPlayer {
   private audioContext: AudioContext | null = null
@@ -298,6 +319,11 @@ export class AudioPlayer {
   private audioQueue: AudioBuffer[] = []
   private isPlaying = false
   private nextStartTime = 0
+
+  // --- 抖动缓冲配置 ---
+  private maxQueueLength = 15 // 适当扩大最大队列，允许应对更极端的 UDP 突发抖动
+  private minBufferFrames = 3 // 【核心参数】预缓冲帧数：发生饥饿时，至少攒够 3 帧（约60ms）再连续播放，对抗卡顿
+  private isBuffering = true  // 标记当前是否处于"等待缓冲积攒"的状态
 
   // 音量控制
   private gainNode: GainNode | null = null
@@ -418,21 +444,42 @@ export class AudioPlayer {
 
   /**
    * 将 AudioBuffer 加入播放队列
+   * 重构缓冲调度机制，实现预缓冲状态机
    */
   private queueAudio(audioBuffer: AudioBuffer): void {
+    // 1. 防止内存和延迟无限增长：如果网络极其糟糕导致积压
+    if (this.audioQueue.length >= this.maxQueueLength) {
+      console.warn('[AudioPlayer] 队列溢出，丢弃最旧的音频帧以追赶实时进度')
+      this.audioQueue.shift()
+    }
+
     this.audioQueue.push(audioBuffer)
 
+    // 2. 状态机���度逻辑
     if (!this.isPlaying) {
-      this.playNext()
+      if (this.isBuffering) {
+        // 【新增逻辑】：处于缓冲饥饿期，必须等攒够一定帧数才开播，避免"来一帧播一帧"导致的碎片化卡顿
+        if (this.audioQueue.length >= this.minBufferFrames) {
+          this.isBuffering = false
+          this.playNext()
+        }
+      } else {
+        // 非缓冲期（可能是偶发的极短暂饥饿），直接尝试起播
+        this.playNext()
+      }
     }
   }
 
   /**
    * 播放下一个音频
+   * 使用抖动缓冲机制处理延迟和卡顿
    */
   private playNext(): void {
     if (!this.audioContext || !this.gainNode || this.audioQueue.length === 0) {
       this.isPlaying = false
+      // 【核心修复】：队列耗尽说明发生了音频饥饿。立即进入缓冲保护状态。
+      // 下次数据到来时，会重新积攒 minBufferFrames 帧后再平滑播放。
+      this.isBuffering = true
       this.setState('idle')
       return
     }
@@ -449,15 +496,18 @@ export class AudioPlayer {
 
     // 计算播放时间
     const currentTime = this.audioContext.currentTime
+
+    // 如果 nextStartTime 落后于当前时间，重新调度
+    // 但保留一个小缓冲，避免立即播放导致的爆音
     if (this.nextStartTime < currentTime) {
-      this.nextStartTime = currentTime
+      this.nextStartTime = currentTime + 0.01
     }
 
     // 开始播放
     source.start(this.nextStartTime)
     this.nextStartTime += audioBuffer.duration
 
-    // 播放结束后播放下一个
+    // 播放结束后播放���一个
     source.onended = () => {
       this.playNext()
     }
@@ -505,7 +555,43 @@ export class AudioPlayer {
     this.audioQueue = []
     this.isPlaying = false
     this.nextStartTime = 0
+    this.isBuffering = true
     this.setState('idle')
+    console.log('[AudioPlayer] Stopped and queue cleared')
+  }
+
+  /**
+   * 重置解码器状态
+   * 用于 WebSocket 重连或新说话人开始时清除 Opus 解码器的内部状态
+   * Opus 解码器是带状态的，如果不重置，旧连接的残留状态会导致重音和卡顿
+   */
+  resetDecoder(): void {
+    if (this.opusDecoder) {
+      try {
+        // 释放旧的解码器
+        this.opusDecoder.free()
+        this.opusDecoder = null
+        this.decoderReady = false
+        console.log('[AudioPlayer] Decoder reset for new stream')
+      } catch (error) {
+        console.error('[AudioPlayer] Failed to reset decoder:', error)
+      }
+    }
+    // 同时重置播放状态
+    this.stop()
+  }
+
+  /**
+   * 重置播放调度（用于新说话人开始时）
+   * 清除队列并重置时间调度，避免旧数据干扰新语音流
+   */
+  resetSchedule(): void {
+    this.audioQueue = []
+    this.nextStartTime = 0
+    // 重置时必须恢复初始的缓冲保护状态
+    this.isBuffering = true
+    this.isPlaying = false
+    console.log('[AudioPlayer] Schedule reset for new speaker')
   }
 
   /**

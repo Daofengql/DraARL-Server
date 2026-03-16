@@ -89,14 +89,22 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, c
 }
 
 // RemoveGhostDevice 移除幽灵设备
-func (m *GhostDeviceManager) RemoveGhostDevice(userID int) {
+// 【修改】增加 device *WSDevice 参数用于比对验证，防止旧连接误删新连接
+func (m *GhostDeviceManager) RemoveGhostDevice(userID int, device *WSDevice) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if ghost, ok := m.devices[userID]; ok {
-		ghost.ISOnline = false
-		delete(m.devices, userID)
-		log.Printf("[GHOST] Removed ghost device: user-%d (%s-%d)", userID, ghost.CallSign, ghost.SSID)
+		// 【关键修复：防止僵尸清理误杀】
+		// 只有当缓存中记录的关联 WS 连接，确实等于当��正在触发断开流程的连接时，
+		// 才将其从在线列表中移除。避免刷新页面引发的旧连接超时，把新连接踢下线。
+		if ghost.Conn == device {
+			ghost.ISOnline = false
+			delete(m.devices, userID)
+			log.Printf("[GHOST] Removed ghost device: user-%d (%s-%d)", userID, ghost.CallSign, ghost.SSID)
+		} else {
+			log.Printf("[GHOST] Ignored remove request for user-%d (connection superseded by new one)", userID)
+		}
 	}
 }
 

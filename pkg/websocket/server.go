@@ -95,7 +95,9 @@ func handleAuthenticatedConnection(device *WSDevice) {
 
 		// 如果是幽灵设备，从幽灵设备管理器中移除
 		if device.DeviceType == DeviceTypeGhost {
-			GlobalGhostManager.RemoveGhostDevice(device.UserID)
+			// 【修改】传入 device 本身的指针用于二次身份验证
+			// 防止旧连接超时时误删新连接
+			GlobalGhostManager.RemoveGhostDevice(device.UserID, device)
 		}
 
 		log.Printf("[WS] Device disconnected: %s", device.GetIdentifier())

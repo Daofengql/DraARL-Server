@@ -549,6 +549,13 @@ export class RadioService {
         this.emit('speakingEnd', this.currentSpeaker.callsign, this.currentSpeaker.ssid)
       }
 
+      // 新说话人开始 - 重置解码器和播放队列，避免旧状态干扰
+      // 【关键修复】：resetDecoder() 会重置 Opus 解码器的内部状态，
+      // 解决 WebSocket 重连后"重音和卡顿"的问题
+      if (this.audioPlayer) {
+        this.audioPlayer.resetDecoder()
+      }
+
       // 新说话人开始
       this.currentSpeaker = newSpeaker
       this.emit('speaking', callsign, ssid)

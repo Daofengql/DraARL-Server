@@ -297,6 +297,36 @@ func (CommRecord) TableName() string {
 	return "comm_records"
 }
 
+// Asset 资源管理模型（虚拟文件系统）
+type Asset struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ParentID  *uint     `gorm:"index;column:parent_id" json:"parent_id"`           // 父目录ID（NULL表示根目录）
+	Name      string    `gorm:"type:varchar(255);not null;column:name" json:"name"` // 显示名称（虚拟）
+	Type      string    `gorm:"type:varchar(20);not null;column:type" json:"type"`  // "folder" | "file"
+	Path      string    `gorm:"type:varchar(512);column:path" json:"path"`          // MinIO真实路径（仅文件有值）
+	Size      int64     `gorm:"column:size" json:"size"`                            // 文件大小（字节）
+	MimeType  string    `gorm:"type:varchar(100);column:mime_type" json:"mime_type"` // MIME类型
+	Remark    string    `gorm:"type:text;column:remark" json:"remark"`              // 备注
+	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`      // 排序权重
+	CreatedAt time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (Asset) TableName() string {
+	return "assets"
+}
+
+// IsFolder 判断是否为文件夹
+func (a *Asset) IsFolder() bool {
+	return a.Type == "folder"
+}
+
+// IsFile 判断是否为文件
+func (a *Asset) IsFile() bool {
+	return a.Type == "file"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -311,5 +341,6 @@ func AutoMigrate() error {
 		&SiteConfig{},
 		&GroupMember{},
 		&CommRecord{},
+		&Asset{},
 	)
 }

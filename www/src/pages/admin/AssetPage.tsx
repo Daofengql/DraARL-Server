@@ -70,10 +70,9 @@ export function AssetPage() {
   // 对话框状态
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false)
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [moveDialogOpen, setMoveDialogOpen] = useState(false)
-  const [remarkDialogOpen, setRemarkDialogOpen] = useState(false)
 
   // 表单数据
   const [newFolderName, setNewFolderName] = useState('')
@@ -81,8 +80,8 @@ export function AssetPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploadFileName, setUploadFileName] = useState('')
   const [uploadFileRemark, setUploadFileRemark] = useState('')
-  const [renameValue, setRenameValue] = useState('')
-  const [remarkValue, setRemarkValue] = useState('')
+  const [editName, setEditName] = useState('')
+  const [editRemark, setEditRemark] = useState('')
 
   // 当前操作的资源
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
@@ -201,27 +200,16 @@ export function AssetPage() {
     }
   }
 
-  // 重命名
-  const handleRename = async () => {
-    if (!renameValue.trim() || !selectedAsset) return
+  // 编辑资源（名称和备注）
+  const handleEdit = async () => {
+    if (!editName.trim() || !selectedAsset) return
     try {
-      await updateAsset(selectedAsset.id, { name: renameValue.trim() })
-      setSnackbar({ open: true, message: '重命名成功', severity: 'success' })
-      setRenameDialogOpen(false)
-      setSelectedAsset(null)
-      loadAssets()
-    } catch (err: any) {
-      setSnackbar({ open: true, message: err.message || '重命名失败', severity: 'error' })
-    }
-  }
-
-  // 编辑备注
-  const handleUpdateRemark = async () => {
-    if (!selectedAsset) return
-    try {
-      await updateAsset(selectedAsset.id, { remark: remarkValue.trim() })
+      await updateAsset(selectedAsset.id, {
+        name: editName.trim(),
+        remark: editRemark.trim()
+      })
       setSnackbar({ open: true, message: '更新成功', severity: 'success' })
-      setRemarkDialogOpen(false)
+      setEditDialogOpen(false)
       setSelectedAsset(null)
       loadAssets()
     } catch (err: any) {
@@ -480,26 +468,15 @@ export function AssetPage() {
         <MenuItem
           onClick={() => {
             handleMenuClose()
-            setRenameValue(selectedAsset?.name || '')
-            setRenameDialogOpen(true)
+            setEditName(selectedAsset?.name || '')
+            setEditRemark(selectedAsset?.remark || '')
+            setEditDialogOpen(true)
           }}
         >
           <ListItemIcon>
             <EditIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText>重命名</ListItemText>
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            handleMenuClose()
-            setRemarkValue(selectedAsset?.remark || '')
-            setRemarkDialogOpen(true)
-          }}
-        >
-          <ListItemIcon>
-            <DescriptionIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>编辑备注</ListItemText>
+          <ListItemText>编辑</ListItemText>
         </MenuItem>
         <MenuItem
           onClick={async () => {
@@ -604,45 +581,32 @@ export function AssetPage() {
         </DialogActions>
       </Dialog>
 
-      {/* 重命名对话框 */}
-      <Dialog open={renameDialogOpen} onClose={() => setRenameDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>重命名</DialogTitle>
+      {/* 编辑对话框 */}
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>编辑</DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
             margin="dense"
             label="名称"
             fullWidth
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            sx={{ mb: 2 }}
           />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRenameDialogOpen(false)}>取消</Button>
-          <Button variant="contained" onClick={handleRename}>
-            保存
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 编辑备注对话框 */}
-      <Dialog open={remarkDialogOpen} onClose={() => setRemarkDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>编辑备注</DialogTitle>
-        <DialogContent>
           <TextField
-            autoFocus
             margin="dense"
             label="备注"
             fullWidth
             multiline
             rows={3}
-            value={remarkValue}
-            onChange={(e) => setRemarkValue(e.target.value)}
+            value={editRemark}
+            onChange={(e) => setEditRemark(e.target.value)}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setRemarkDialogOpen(false)}>取消</Button>
-          <Button variant="contained" onClick={handleUpdateRemark}>
+          <Button onClick={() => setEditDialogOpen(false)}>取消</Button>
+          <Button variant="contained" onClick={handleEdit}>
             保存
           </Button>
         </DialogActions>

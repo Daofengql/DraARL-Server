@@ -53,9 +53,9 @@ type CreateFolderRequest struct {
 
 // UpdateAssetRequest 更新资源请求
 type UpdateAssetRequest struct {
-	Name      string `json:"name"`
-	Remark    string `json:"remark"`
-	SortOrder *int   `json:"sort_order"`
+	Name      string  `json:"name"`
+	Remark    *string `json:"remark"`
+	SortOrder *int    `json:"sort_order"`
 }
 
 // MoveAssetRequest 移动资源请求
@@ -442,8 +442,8 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 		}
 		updates["name"] = req.Name
 	}
-	if req.Remark != asset.Remark {
-		updates["remark"] = req.Remark
+	if req.Remark != nil {
+		updates["remark"] = *req.Remark
 	}
 	if req.SortOrder != nil {
 		updates["sort_order"] = *req.SortOrder

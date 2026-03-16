@@ -13,6 +13,7 @@ import { ServersPage } from './pages/servers'
 import { ProfilePage } from './pages/profile'
 import { SiteConfigPage } from './pages/settings'
 import { CommRecordsPage } from './pages/comm-records'
+import { NotFoundPage } from './pages/not-found'
 import { AdminLayout } from './components/layout/AdminLayout'
 import { AdminDashboardPage } from './pages/admin/DashboardPage'
 import { AdminDevicePage } from './pages/admin/DevicePage'
@@ -82,8 +83,19 @@ function App() {
           <Route path="settings" element={<SiteConfigPage />} />
         </Route>
 
-        {/* 404 */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* 404 - 已登录用户显示带布局的404页面 */}
+        <Route
+          path="*"
+          element={
+            isAuthenticated ? (
+              <MainLayout>
+                <NotFoundPage />
+              </MainLayout>
+            ) : (
+              <NotFoundPage />
+            )
+          }
+        />
       </Routes>
 
       {/* 全局 Toast 通知 */}

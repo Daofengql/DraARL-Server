@@ -236,7 +236,7 @@ func (r *AssetRepository) GetFileCount(folderID uint) (int64, error) {
 	return count, err
 }
 
-// GetFileCountRecursive 递归获取文件夹下的所有文件数量���包括子文件夹中的文件）
+// GetFileCountRecursive 递归获取文件夹下的所有文件数量（包括子文件夹中的文件）
 func (r *AssetRepository) GetFileCountRecursive(folderID uint) (int64, error) {
 	var count int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {

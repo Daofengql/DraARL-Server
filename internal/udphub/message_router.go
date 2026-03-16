@@ -39,7 +39,6 @@ func (r *MessageRouter) RouteVoiceFromUDP(source *models.Device, data []byte, gr
 
 	// 获取群组内的所有在线 WebSocket 设备
 	devices := r.wsManager.GetDevicesByGroup(groupID)
-	log.Printf("[ROUTE_DEBUG] UDP -> WS: 群组 %d 内找到 %d 个 WS 设备", groupID, len(devices))
 
 	for _, device := range devices {
 		// 不转发给自己（如果是普通设备）

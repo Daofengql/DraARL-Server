@@ -257,7 +257,6 @@ func UpdateRadioGroup(c *gin.Context) {
 
 	// 验证群组是否存在
 	group, exists := udphub.GetGroupFromCache(req.GroupID)
-	log.Printf("[RADIO_DEBUG] 群组验证: groupID=%d, exists=%v", req.GroupID, exists)
 	if !exists {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "目标群组不存在或未激活"})
 		return
@@ -266,7 +265,6 @@ func UpdateRadioGroup(c *gin.Context) {
 
 	// 获取幽灵设备
 	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
-	log.Printf("[RADIO_DEBUG] 获取幽灵设备: userID=%d, ok=%v, ghostDevice=nil:%v", userID, ok, ghostDevice == nil)
 	if !ok || ghostDevice == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    200,
@@ -279,7 +277,6 @@ func UpdateRadioGroup(c *gin.Context) {
 	}
 
 	oldGroupID := ghostDevice.GroupID
-	log.Printf("[RADIO_DEBUG] 幽灵设备当前群组: %d, Conn=nil:%v", oldGroupID, ghostDevice.Conn == nil)
 
 	// 【关键修复】同时更新两个管理器中的 GroupID
 	// 1. 更新 GhostDeviceManager 中的 GroupID

@@ -558,6 +558,7 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 			// 获取目标群组的转发
 			if targetGroup, exists := GetGroupFromCache(targetID); exists {
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
+				// 1. 发送给目标组的 UDP 设备
 				for _, targetDev := range pool.DevConnList {
 					// 懒剔除拦截
 					if targetDev.GroupID != targetID {
@@ -573,6 +574,10 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 						globalConn.WriteToUDP(data, targetDev.UDPAddr)
 					}
 				}
+
+				// 2. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
+				// 否则 WS 客户端永远听不到其他实体组传来的 UDP 声音
+				BroadcastVoiceFromUDP(dev, data, targetID)
 			}
 		}
 	}
@@ -629,6 +634,7 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 
 			if targetGroup, exists := GetGroupFromCache(targetID); exists {
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
+				// 1. 发送给目标组的 UDP 设备
 				for _, targetDev := range pool.DevConnList {
 					if targetDev.GroupID != targetID {
 						continue
@@ -640,6 +646,9 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 						globalConn.WriteToUDP(data, targetDev.UDPAddr)
 					}
 				}
+
+				// 2. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
+				BroadcastTextFromUDP(dev, data, targetID)
 			}
 		}
 	}

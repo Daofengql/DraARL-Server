@@ -108,17 +108,6 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
           />
         </FormControl>
 
-        <FormControl fullWidth margin="normal">
-          <FormLabel>默认群组</FormLabel>
-          <TextField
-            type="number"
-            size="small"
-            value={localConfig.defaultGroupId}
-            onChange={(e) => updateConfig('defaultGroupId', parseInt(e.target.value, 10))}
-            inputProps={{ min: 0 }}
-          />
-        </FormControl>
-
         <Divider sx={{ my: 2 }} />
 
         {/* 音频设置 */}

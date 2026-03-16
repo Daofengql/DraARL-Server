@@ -23,7 +23,6 @@ import {
   CloudSync,
   MenuBook,
   Build,
-  CloudDownload,
 } from '@mui/icons-material'
 
 // 导入 SVG 图像
@@ -641,23 +640,6 @@ function DevGuideContent() {
   )
 }
 
-// 下载中心内容
-function DownloadCenterContent() {
-  return (
-    <Stack spacing={3}>
-      <Paper variant="outlined" sx={{ p: 3, textAlign: 'center' }}>
-        <CloudDownload sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
-        <Typography variant="h6" color="text.secondary" gutterBottom>
-          下载中心
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          功能开发中，敬请期待...
-        </Typography>
-      </Paper>
-    </Stack>
-  )
-}
-
 // 主页面组件
 export function DocsPage() {
   const theme = useTheme()
@@ -671,12 +653,6 @@ export function DocsPage() {
       label: '设备接入指南',
       icon: <SettingsEthernet fontSize="small" />,
       content: <DeviceProtocolContent />,
-    },
-    {
-      id: 'download-center',
-      label: '下载中心',
-      icon: <CloudDownload fontSize="small" />,
-      content: <DownloadCenterContent />,
     },
     {
       id: 'dev-guide',

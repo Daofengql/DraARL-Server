@@ -49,14 +49,14 @@ export interface AssetTreeItem {
   updated_at: string;
 }
 
-// 获取资源列表（管理员）
+// 获取资源列表（管理员���
 export const getAssets = async (parentId?: number | null): Promise<Asset[]> => {
   const params = new URLSearchParams();
   if (parentId !== undefined && parentId !== null) {
     params.append('parent_id', parentId.toString());
   }
   const queryString = params.toString();
-  const url = queryString ? `/api/admin/assets?${queryString}` : '/api/admin/assets';
+  const url = queryString ? `/api/assets?${queryString}` : '/api/assets';
   const res = await apiClient.get<{ code: number; message: string; data: Asset[] }>(url);
   if (res.code !== 200) {
     throw new Error(res.message || '获取资源列表失败');
@@ -66,7 +66,7 @@ export const getAssets = async (parentId?: number | null): Promise<Asset[]> => {
 
 // 创建文件夹
 export const createFolder = async (data: CreateFolderRequest): Promise<Asset> => {
-  const res = await apiClient.post<{ code: number; message: string; data: Asset }>('/api/admin/assets/folder', data);
+  const res = await apiClient.post<{ code: number; message: string; data: Asset }>('/api/assets/folder', data);
   if (res.code !== 200) {
     throw new Error(res.message || '创建文件夹失败');
   }
@@ -86,7 +86,7 @@ export const uploadFile = async (file: File, parentId: number, name?: string, re
   }
 
   const res = await apiClient.postFormData<{ code: number; message: string; data: Asset }>(
-    '/api/admin/assets/upload',
+    '/api/assets/upload',
     formData
   );
   if (res.code !== 200) {
@@ -97,7 +97,7 @@ export const uploadFile = async (file: File, parentId: number, name?: string, re
 
 // 更新资源
 export const updateAsset = async (id: number, data: UpdateAssetRequest): Promise<void> => {
-  const res = await apiClient.put<{ code: number; message: string }>(`/api/admin/assets/${id}`, data);
+  const res = await apiClient.put<{ code: number; message: string }>(`/api/assets/${id}`, data);
   if (res.code !== 200) {
     throw new Error(res.message || '更新资源失败');
   }
@@ -105,7 +105,7 @@ export const updateAsset = async (id: number, data: UpdateAssetRequest): Promise
 
 // 移动资源
 export const moveAsset = async (id: number, data: MoveAssetRequest): Promise<void> => {
-  const res = await apiClient.put<{ code: number; message: string }>(`/api/admin/assets/${id}/move`, data);
+  const res = await apiClient.put<{ code: number; message: string }>(`/api/assets/${id}/move`, data);
   if (res.code !== 200) {
     throw new Error(res.message || '移动资源失败');
   }
@@ -117,7 +117,7 @@ export const replaceFile = async (id: number, file: File): Promise<Asset> => {
   formData.append('file', file);
 
   const res = await apiClient.postFormData<{ code: number; message: string; data: Asset }>(
-    `/api/admin/assets/${id}/replace`,
+    `/api/assets/${id}/replace`,
     formData
   );
   if (res.code !== 200) {
@@ -128,7 +128,7 @@ export const replaceFile = async (id: number, file: File): Promise<Asset> => {
 
 // 删除资源
 export const deleteAsset = async (id: number): Promise<void> => {
-  const res = await apiClient.delete<{ code: number; message: string }>(`/api/admin/assets/${id}`);
+  const res = await apiClient.delete<{ code: number; message: string }>(`/api/assets/${id}`);
   if (res.code !== 200) {
     throw new Error(res.message || '删除资源失败');
   }

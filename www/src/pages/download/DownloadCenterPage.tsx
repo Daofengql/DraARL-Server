@@ -308,9 +308,9 @@ export function DownloadCenterPage() {
 
   return (
     <MainLayout>
-      <Container maxWidth="xl" sx={{ pt: 0, pb: 2 }}>
+      <Box sx={{ width: '100%' }}>
         {/* 页面标题 */}
-        <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <Box sx={{ py: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <CloudDownloadIcon sx={{ fontSize: 36, color: 'primary.main', mb: 0.5 }} />
           <Typography variant="h4" sx={{ fontWeight: 700, color: 'text.primary' }}>
             下载中心
@@ -319,6 +319,8 @@ export function DownloadCenterPage() {
             获取客户端安装包、技术文档等资源
           </Typography>
         </Box>
+
+        <Container maxWidth="xl">
 
         {/* 错误提示 */}
         {error && (
@@ -383,7 +385,8 @@ export function DownloadCenterPage() {
             </Button>
           </DialogActions>
         </Dialog>
-      </Container>
+        </Container>
+      </Box>
     </MainLayout>
   )
 }

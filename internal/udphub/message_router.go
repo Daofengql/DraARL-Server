@@ -3,46 +3,29 @@ package udphub
 import (
 	"log"
 
+	"nrllink/internal/interfaces"
 	"nrllink/internal/models"
 	"nrllink/internal/protocol"
 )
 
-// WSDeviceInterface WebSocket 设备接口（用于解耦）
-type WSDeviceInterface interface {
-	GetIdentifier() string
-	GetCallSignSSID() string
-	GetGroupID() int
-	IsGhost() bool
-	GetUserID() int
-	GetDeviceID() int
-	GetUsername() string
-	GetCallSign() string
-	GetSSID() byte
-	GetDevModel() byte
-	IsDisabledRecv() bool
-}
-
-// WSManagerInterface WebSocket 连接管理器接口（用于解耦）
-type WSManagerInterface interface {
-	GetDevicesByGroup(groupID int) []WSDeviceInterface
-	SendToDevice(device WSDeviceInterface, data []byte, messageType int) error
-}
+// 消息路由器使用 interfaces.WSDeviceInterface 和 interfaces.WSManagerInterface
+// 来解耦 udphub 和 websocket 包
 
 // MessageRouter 消息路由器
 // 负责 UDP 和 WebSocket 之间的消息转发
 type MessageRouter struct {
-	wsManager WSManagerInterface
+	wsManager interfaces.WSManagerInterface
 }
 
 // NewMessageRouter 创建消息路由器
-func NewMessageRouter(wsManager WSManagerInterface) *MessageRouter {
+func NewMessageRouter(wsManager interfaces.WSManagerInterface) *MessageRouter {
 	return &MessageRouter{
 		wsManager: wsManager,
 	}
 }
 
 // SetWSManager 设置 WebSocket 管理器
-func (r *MessageRouter) SetWSManager(wsManager WSManagerInterface) {
+func (r *MessageRouter) SetWSManager(wsManager interfaces.WSManagerInterface) {
 	r.wsManager = wsManager
 }
 
@@ -119,7 +102,7 @@ func (r *MessageRouter) RouteServerVoiceFromUDP(source *models.Device, data []by
 
 // RouteVoiceToUDP 转发 WebSocket 语音到 UDP 设备
 // 当 WebSocket 设备发送语音时，通过 UDP 发送到同组的所有 UDP 设备
-func (r *MessageRouter) RouteVoiceToUDP(source WSDeviceInterface, opusData []byte, groupID int) {
+func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opusData []byte, groupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
 		return
@@ -182,7 +165,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source WSDeviceInterface, opusData []byt
 }
 
 // RouteTextToUDP 转发 WebSocket 文本消息到 UDP 设备
-func (r *MessageRouter) RouteTextToUDP(source WSDeviceInterface, textData []byte, groupID int) {
+func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, textData []byte, groupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
 		return
@@ -229,7 +212,7 @@ func (r *MessageRouter) RouteTextToUDP(source WSDeviceInterface, textData []byte
 }
 
 // routeServerVoiceToLinkedGroups 转发服务器互联语音到关联群组
-func (r *MessageRouter) routeServerVoiceToLinkedGroups(source WSDeviceInterface, data []byte, sourceGroupID int) {
+func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
 		return
@@ -288,7 +271,7 @@ func (r *MessageRouter) routeServerVoiceToLinkedGroups(source WSDeviceInterface,
 }
 
 // routeTextToLinkedGroups 转发文本消息到关联群组
-func (r *MessageRouter) routeTextToLinkedGroups(source WSDeviceInterface, data []byte, sourceGroupID int) {
+func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
 		return
@@ -355,7 +338,7 @@ func InitMessageRouter() {
 }
 
 // SetWSManagerForRouter 设置 WebSocket 管理器
-func SetWSManagerForRouter(wsManager WSManagerInterface) {
+func SetWSManagerForRouter(wsManager interfaces.WSManagerInterface) {
 	if GlobalMessageRouter != nil {
 		GlobalMessageRouter.SetWSManager(wsManager)
 		log.Println("[ROUTE] WebSocket manager set for message router")
@@ -363,14 +346,14 @@ func SetWSManagerForRouter(wsManager WSManagerInterface) {
 }
 
 // BroadcastVoiceToUDP 广播语音到 UDP 设备（便捷函数）
-func BroadcastVoiceToUDP(source WSDeviceInterface, opusData []byte, groupID int) {
+func BroadcastVoiceToUDP(source interfaces.WSDeviceInterface, opusData []byte, groupID int) {
 	if GlobalMessageRouter != nil {
 		GlobalMessageRouter.RouteVoiceToUDP(source, opusData, groupID)
 	}
 }
 
 // BroadcastTextToUDP 广播文本消息到 UDP 设备（便捷函数）
-func BroadcastTextToUDP(source WSDeviceInterface, textData []byte, groupID int) {
+func BroadcastTextToUDP(source interfaces.WSDeviceInterface, textData []byte, groupID int) {
 	if GlobalMessageRouter != nil {
 		GlobalMessageRouter.RouteTextToUDP(source, textData, groupID)
 	}

@@ -124,6 +124,51 @@ func (d *WSDevice) GetCallSignSSID() string {
 	return fmt.Sprintf("%s-%d", d.CallSign, d.SSID)
 }
 
+// GetGroupID 获取当前群组 ID
+func (d *WSDevice) GetGroupID() int {
+	return d.GroupID
+}
+
+// IsGhost 检��是否是幽灵设备
+func (d *WSDevice) IsGhost() bool {
+	return d.DeviceType == DeviceTypeGhost
+}
+
+// GetUserID 获取用户 ID
+func (d *WSDevice) GetUserID() int {
+	return d.UserID
+}
+
+// GetDeviceID 获取设备 ID
+func (d *WSDevice) GetDeviceID() int {
+	return d.DeviceID
+}
+
+// GetUsername 获取用户名
+func (d *WSDevice) GetUsername() string {
+	return d.Username
+}
+
+// GetCallSign 获取呼号
+func (d *WSDevice) GetCallSign() string {
+	return d.CallSign
+}
+
+// GetSSID 获取 SSID
+func (d *WSDevice) GetSSID() byte {
+	return d.SSID
+}
+
+// GetDevModel 获取设备型号
+func (d *WSDevice) GetDevModel() byte {
+	return d.DevModel
+}
+
+// IsDisabledRecv 检查是否禁收
+func (d *WSDevice) IsDisabledRecv() bool {
+	return d.DisableRecv
+}
+
 // WSConnectionManager WebSocket 连接管理器
 type WSConnectionManager struct {
 	// 普通设备连接 (key: username-ssid)

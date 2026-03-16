@@ -13,12 +13,12 @@ import (
 // GhostDevice 幽灵设备（Web 端浏览器客户端）
 type GhostDevice struct {
 	// 基本信息
-	ID           int    // 虚拟 ID（负数，如 -userID）
-	UserID       int    // 关联的用户 ID
-	CallSign     string // 用户呼号
-	Nickname     string // 用户昵称
-	Username     string // 用户名
-	SSID         byte   // 设备子号（可配置）
+	ID       int    // 虚拟 ID（负数，如 -userID）
+	UserID   int    // 关联的用户 ID
+	CallSign string // 用户呼号
+	Nickname string // 用户昵称
+	Username string // 用户名
+	SSID     byte   // 设备子号（可配置）
 
 	// 连接信息
 	Conn           *WSDevice // 关联的 WSDevice
@@ -96,7 +96,7 @@ func (m *GhostDeviceManager) RemoveGhostDevice(userID int, device *WSDevice) {
 
 	if ghost, ok := m.devices[userID]; ok {
 		// 【关键修复：防止僵尸清理误杀】
-		// 只有当缓存中记录的关联 WS 连接，确实等于当��正在触发断开流程的连接时，
+		// 只有当缓存中记录的关联 WS 连接，确实等于当前正在触发断开流程的连接时，
 		// 才将其从在线列表中移除。避免刷新页面引发的旧连接超时，把新连接踢下线。
 		if ghost.Conn == device {
 			ghost.ISOnline = false
@@ -192,19 +192,19 @@ func (m *GhostDeviceManager) GetOnlineGhostCount() int {
 // ConvertToModelDevice 将幽灵设备转换为 models.Device（用于消息路由）
 func (g *GhostDevice) ConvertToModelDevice() *models.Device {
 	return &models.Device{
-		ID:           g.ID,
-		Name:         g.Nickname,
-		SSID:         g.SSID,
-		OwnerID:      g.UserID,
-		CallSign:     g.CallSign,
-		Username:     g.Username,
-		DevModel:     protocol.DraARLDevModelBrowser,
-		GroupID:      g.GroupID,
-		ISOnline:     g.ISOnline,
-		DisableSend:  g.DisableSend,
-		DisableRecv:  g.DisableRecv,
-		VoiceTime:    g.VoiceTime,
-		Traffic:      g.Traffic,
+		ID:          g.ID,
+		Name:        g.Nickname,
+		SSID:        g.SSID,
+		OwnerID:     g.UserID,
+		CallSign:    g.CallSign,
+		Username:    g.Username,
+		DevModel:    protocol.DraARLDevModelBrowser,
+		GroupID:     g.GroupID,
+		ISOnline:    g.ISOnline,
+		DisableSend: g.DisableSend,
+		DisableRecv: g.DisableRecv,
+		VoiceTime:   g.VoiceTime,
+		Traffic:     g.Traffic,
 	}
 }
 

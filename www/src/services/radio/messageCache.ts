@@ -9,7 +9,7 @@ const DB_NAME = 'nrllink-radio'
 const DB_VERSION = 1
 const STORE_NAME = 'messages'
 
-// ���置
+// 配置
 const MAX_MESSAGES_PER_GROUP = 500
 const MAX_STORAGE_DAYS = 7
 const MAX_TOTAL_STORAGE = 100 * 1024 * 1024 // 100MB
@@ -25,7 +25,7 @@ class MessageCacheDB {
     // 如果已经初始化，直接返回
     if (this.db) return this.db
 
-    // 如果正在���始化，等待完成
+    // 如果正在初始化，等待完成
     if (this.initPromise) return this.initPromise
 
     this.initPromise = new Promise((resolve, reject) => {

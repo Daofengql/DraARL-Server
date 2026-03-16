@@ -107,7 +107,7 @@ func (r *MessageRouter) RouteServerVoiceFromUDP(source *models.Device, data []by
 func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opusData []byte, groupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
-		log.Println("[ROUTE_ERR] WS -> UDP 转发失��: 全局 UDP 连接尚未初始化")
+		log.Println("[ROUTE_ERR] WS -> UDP 转发失败: 全局 UDP 连接尚未初始化")
 		return
 	}
 

@@ -515,7 +515,7 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 			continue
 		}
 
-		// 检���目标设备是否禁收
+		// 检查目标设备是否禁收
 		if targetDev.DisableRecv {
 			continue
 		}

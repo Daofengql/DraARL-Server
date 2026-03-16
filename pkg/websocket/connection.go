@@ -16,12 +16,12 @@ import (
 type ConnectionState int
 
 const (
-	StateDisconnected  ConnectionState = iota // 已断开
-	StateConnecting                           // 连接中
-	StateAuthenticating                       // 认证中
-	StateOnline                               // 在线
-	StateDisconnecting                        // 断开中
-	StateReconnecting                         // 重连中
+	StateDisconnected   ConnectionState = iota // 已断开
+	StateConnecting                            // 连接中
+	StateAuthenticating                        // 认证中
+	StateOnline                                // 在线
+	StateDisconnecting                         // 断开中
+	StateReconnecting                          // 重连中
 )
 
 // String 返回连接状态的字符串表示
@@ -90,8 +90,8 @@ type WSDevice struct {
 	GroupID int
 
 	// 设备状态
-	DevModel   byte
-	IsOnline   bool
+	DevModel    byte
+	IsOnline    bool
 	DisableSend bool
 	DisableRecv bool
 
@@ -131,7 +131,7 @@ func (d *WSDevice) GetGroupID() int {
 	return d.GroupID
 }
 
-// IsGhost 检��是否是幽灵设备
+// IsGhost 检查是否是幽灵设备
 func (d *WSDevice) IsGhost() bool {
 	return d.DeviceType == DeviceTypeGhost
 }
@@ -184,11 +184,11 @@ type WSConnectionManager struct {
 	mu sync.RWMutex
 
 	// 配置
-	AuthTimeout       time.Duration // 认证超时
-	HeartbeatTimeout  time.Duration // 心跳超时
-	ReconnectGrace    time.Duration // 重连宽限期
-	ProxyTimeout      time.Duration // 反向代理超时
-	PreReconnectTime  time.Duration // 预重连时间（在代理超时前多久开始准备重连）
+	AuthTimeout      time.Duration // 认证超时
+	HeartbeatTimeout time.Duration // 心跳超时
+	ReconnectGrace   time.Duration // 重连宽限期
+	ProxyTimeout     time.Duration // 反向代理超时
+	PreReconnectTime time.Duration // 预重连时间（在代理超时前多久开始准备重连）
 }
 
 // NewWSConnectionManager 创建新的连接管理器
@@ -197,11 +197,11 @@ func NewWSConnectionManager() *WSConnectionManager {
 		normalDevices:    make(map[string]*WSDevice),
 		ghostDevices:     make(map[int]*WSDevice),
 		connMap:          make(map[string]*WSDevice),
-		AuthTimeout:      30 * time.Second,   // 30 秒认证超时
-		HeartbeatTimeout: 20 * time.Second,   // 20 秒心跳超时
-		ReconnectGrace:   30 * time.Second,   // 30 秒重连宽限期
-		ProxyTimeout:     300 * time.Second,  // 300 秒反向代理超时
-		PreReconnectTime: 240 * time.Second,  // 240 秒开始准备重连
+		AuthTimeout:      30 * time.Second,  // 30 秒认证超时
+		HeartbeatTimeout: 20 * time.Second,  // 20 秒心跳超时
+		ReconnectGrace:   30 * time.Second,  // 30 秒重连宽限期
+		ProxyTimeout:     300 * time.Second, // 300 秒反向代理超时
+		PreReconnectTime: 240 * time.Second, // 240 秒开始准备重连
 	}
 }
 

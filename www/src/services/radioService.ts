@@ -306,7 +306,7 @@ export class RadioService {
   /**
    * 切换群组
    * 【关键修复】幽灵设备切换群组需要调用 HTTP API 来同步更新内存状态
-   * 这会同时更新 WSDevice.GroupID 和 GhostDevice.GroupID，实现跨���议通信
+   * 这会同时更新 WSDevice.GroupID 和 GhostDevice.GroupID，实现跨协议通信
    */
   async switchGroup(groupId: number): Promise<boolean> {
     if (!this.ws || this.connectionState !== 'online') {

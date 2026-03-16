@@ -38,7 +38,7 @@ class GroupManagerService {
 
     try {
       const response = await apiClient.get<any>('/api/groups')
-      // ���端返回格式: { code: 200, data: { items: [...], total: ... } }
+      // 后端返回格式: { code: 200, data: { items: [...], total: ... } }
       const rawGroups = response.data?.items || []
 
       // 转换字段名：蛇形 -> 驼峰

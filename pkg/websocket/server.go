@@ -37,7 +37,7 @@ func init() {
 		manager: GlobalManager,
 	}
 
-	// 3. 将适配���注入到 udphub 的路由器中 (打通双向通信的桥梁)
+	// 3. 将适配器注入到 udphub 的路由器中 (打通双向通信的桥梁)
 	udphub.SetWSManagerForRouter(adapter)
 
 	// 4. 启动后台维护协程
@@ -225,7 +225,7 @@ func handleTextMessage(device *WSDevice, packet *WSPacket, rawData []byte) {
 
 // handleConfig 处理配置包
 // 注意：Config 包是服务器下发给设备的下行数据包，客户端不应上传此类型
-// 群组切换现在通过 HTTP API PUT /api/radio/group 实��
+// 群组切换现在通过 HTTP API PUT /api/radio/group 实现
 func handleConfig(device *WSDevice, packet *WSPacket) {
 	// Config 包是下行包，客户端上传此包应被忽略
 	log.Printf("[WS] 收到非预期的 Config 上行包，忽略。设备: %s", device.GetIdentifier())

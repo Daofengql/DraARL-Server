@@ -1,0 +1,82 @@
+<svg width="100%" viewBox="0 0 650 450" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="deviceGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#42a5f5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1976d2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="serverGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#66bb6a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#388e3c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="650" height="450" fill="#fafafa"/>
+
+  <!-- Device Actor -->
+  <g transform="translate(80, 30)">
+    <rect x="-30" y="0" width="60" height="60" rx="8" fill="url(#deviceGradient)"/>
+    <rect x="-20" y="10" width="40" height="30" rx="4" fill="white"/>
+    <circle cx="0" cy="50" r="5" fill="white"/>
+    <text x="0" y="85" text-anchor="middle" fill="#1976d2" font-size="14" font-weight="600">设备</text>
+  </g>
+
+  <!-- Device Lifeline -->
+  <line x1="80" y1="120" x2="80" y2="430" stroke="#1976d2" stroke-width="2" stroke-dasharray="8,4"/>
+
+  <!-- Server Actor -->
+  <g transform="translate(570, 30)">
+    <rect x="-30" y="0" width="60" height="60" rx="8" fill="url(#serverGradient)"/>
+    <rect x="-18" y="8" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-4" y="8" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-18" y="22" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-4" y="22" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-18" y="36" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-4" y="36" width="10" height="10" rx="1" fill="white"/>
+    <text x="0" y="85" text-anchor="middle" fill="#388e3c" font-size="14" font-weight="600">服务器</text>
+  </g>
+
+  <!-- Server Lifeline -->
+  <line x1="570" y1="120" x2="570" y2="430" stroke="#388e3c" stroke-width="2" stroke-dasharray="8,4"/>
+
+  <!-- Step 1: Heartbeat Request -->
+  <g>
+    <line x1="85" y1="170" x2="565" y2="170" stroke="#1976d2" stroke-width="2" marker-end="url(#blueArrow)"/>
+    <rect x="140" y="125" width="380" height="60" rx="6" fill="white" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="330" y="148" text-anchor="middle" fill="#1976d2" font-size="13" font-weight="600">Heartbeat (Type=2)</text>
+    <text x="330" y="166" text-anchor="middle" fill="#555" font-size="12">Username: "user1"  |  Password: "Abc12345"</text>
+    <text x="330" y="182" text-anchor="middle" fill="#555" font-size="12">CallSign: "" (空)</text>
+  </g>
+
+  <!-- Server Processing Box -->
+  <rect x="470" y="220" width="120" height="80" rx="6" fill="#e8f5e9" stroke="#388e3c" stroke-width="1.5"/>
+  <text x="530" y="245" text-anchor="middle" fill="#388e3c" font-size="12" font-weight="600">服务器处理</text>
+  <text x="530" y="265" text-anchor="middle" fill="#555" font-size="11">1. 验证用户密码</text>
+  <text x="530" y="282" text-anchor="middle" fill="#555" font-size="11">2. 查询呼号</text>
+  <text x="530" y="299" text-anchor="middle" fill="#555" font-size="11">3. 检查封禁状态</text>
+
+  <!-- Step 2: Heartbeat Response -->
+  <g>
+    <line x1="565" y1="340" x2="85" y2="340" stroke="#388e3c" stroke-width="2" marker-end="url(#greenArrow)"/>
+    <rect x="140" y="305" width="380" height="50" rx="6" fill="white" stroke="#388e3c" stroke-width="1.5"/>
+    <text x="330" y="328" text-anchor="middle" fill="#388e3c" font-size="13" font-weight="600">Heartbeat Response</text>
+    <text x="330" y="348" text-anchor="middle" fill="#555" font-size="12">CallSign: "BG1AAA" (服务器填充)</text>
+  </g>
+
+  <!-- Success Note -->
+  <g transform="translate(80, 390)">
+    <rect x="0" y="0" width="200" height="40" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="100" y="18" text-anchor="middle" fill="#1976d2" font-size="12" font-weight="600">认证成功</text>
+    <text x="100" y="34" text-anchor="middle" fill="#555" font-size="11">设备缓存 CallSign 用于后续通信</text>
+  </g>
+
+  <!-- Arrow Markers -->
+  <defs>
+    <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#1976d2"/>
+    </marker>
+    <marker id="greenArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#388e3c"/>
+    </marker>
+  </defs>
+</svg>

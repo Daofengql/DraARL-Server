@@ -1,9 +1,13 @@
 import { Box, Typography, Button, Container } from '@mui/material'
 import { Construction, Login } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '../../hooks/usePageTitle'
 
 export function HomePage() {
   const navigate = useNavigate()
+
+  // 同步页面标题
+  usePageTitle()
 
   return (
     <Box

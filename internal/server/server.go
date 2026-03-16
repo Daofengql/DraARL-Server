@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"nrllink/internal/common"
 	"nrllink/internal/config"
 	"nrllink/internal/gormdb"
 	"nrllink/internal/handler"
@@ -294,23 +295,23 @@ func initSiteConfigs(cfg *config.Configuration) {
 
 	// 初始化默认配置（空值或最小默认值）
 	if err := repo.InitDefaultConfigs(
-		"",                // ICP - 空
-		"NRL Link",        // 系统名称
-		"NRL",             // 系统简称
-		"",                // Logo URL
-		"zh",              // 语言
-		"china.aprs2.net", // APRS 服务器
-		"14580",           // APRS 端口
-		"",                // 本机地址
-		"60050",           // 本机端口
-		"",                // 呼号
-		"10",              // SSID
-		"000000",          // 海拔
-		0,                 // 纬度
-		0,                 // 经度
-		"",                // OpenAI BaseURL
-		"",                // OpenAI APIKey
-		"",                // OpenAI Engine
+		"",                    // ICP - 空
+		common.SiteName,       // 系统名称
+		common.SiteShortName,  // 系统简称
+		"",                    // Logo URL
+		"zh",                  // 语言
+		"china.aprs2.net",     // APRS 服务器
+		"14580",               // APRS 端口
+		"",                    // 本机地址
+		"60050",               // 本机端口
+		"",                    // 呼号
+		"10",                  // SSID
+		"000000",              // 海拔
+		0,                     // 纬度
+		0,                     // 经度
+		"",                    // OpenAI BaseURL
+		"",                    // OpenAI APIKey
+		"",                    // OpenAI Engine
 	); err != nil {
 		log.Printf("初始化站点配置失败: %v", err)
 		return

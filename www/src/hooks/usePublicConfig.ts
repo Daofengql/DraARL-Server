@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiClient } from '../services'
+import { SITE_CONFIG } from '../config/site'
 
 export interface PublicConfig {
   icp: { icp: string }
@@ -14,8 +15,8 @@ export interface PublicConfig {
 const DEFAULT_CONFIG: PublicConfig = {
   icp: { icp: '' },
   systemInfo: {
-    name: '麟云业余无线电链路平台',
-    nameshorthand: 'DraARL',
+    name: SITE_CONFIG.NAME,
+    nameshorthand: SITE_CONFIG.SHORT_NAME,
     logo_url: '',
     language: 'zh',
   },

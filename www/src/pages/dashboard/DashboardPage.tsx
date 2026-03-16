@@ -38,9 +38,7 @@ import { deviceService } from '../../services/device'
 import { commStatsService } from '../../services/commStats'
 import { apiClient } from '../../services'
 import type { DailyCommStats } from '../../types'
-
-const DEFAULT_PLATFORM_VERSION = 'v1.0.0'
-const DEFAULT_PROTOCOL_VERSION = 'DraARLv1'
+import { SITE_CONFIG } from '../../config/site'
 
 interface StatCardProps {
   title: string
@@ -189,11 +187,7 @@ export function DashboardPage() {
   const displayName = user?.nickname || user?.username || '用户'
 
   // 站点名称：欢迎卡片使用配置的站点名称或默认值
-  const DEFAULT_SITE_NAME = 'DraARL 麟云业余无线电链路平台'
-  const siteName = systemConfig?.systemInfo?.name || DEFAULT_SITE_NAME
-
-  // 系统信息卡片固定显示
-  const SYSTEM_NAME = 'DraARL 麟链'
+  const siteName = systemConfig?.systemInfo?.name || SITE_CONFIG.NAME
 
   // 用户状态判断和卡片颜色
   const getUserStatus = () => {
@@ -447,7 +441,7 @@ export function DashboardPage() {
                 系统名称
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {SYSTEM_NAME}
+                {SITE_CONFIG.NAME}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -455,7 +449,7 @@ export function DashboardPage() {
                 系统版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {DEFAULT_PLATFORM_VERSION}
+                {SITE_CONFIG.VERSION}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -463,7 +457,7 @@ export function DashboardPage() {
                 协议版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {DEFAULT_PROTOCOL_VERSION}
+                {SITE_CONFIG.PROTOCOL_VERSION}
               </Typography>
             </Box>
           </Stack>

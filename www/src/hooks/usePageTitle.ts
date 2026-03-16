@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { usePublicConfig } from './usePublicConfig'
+import { SITE_CONFIG, getCachedSiteName, cacheSiteConfig } from '../config/site'
 
 // 路由到标题后缀的映射
 const routeTitleMap: Record<string, string> = {
@@ -29,14 +30,28 @@ const routeTitleMap: Record<string, string> = {
 /**
  * 根据当前路由自动更新页面标题
  * 在 Layout 组件中使用此 hook，确保 SPA 路由切换时标题同步更新
+ *
+ * 使用 localStorage 缓存站点名称，解决移动端路由切换时的 title 闪烁问题
  */
 export function usePageTitle() {
   const location = useLocation()
   const { config } = usePublicConfig()
+  const prevTitleRef = useRef<string>('')
 
   useEffect(() => {
     const path = location.pathname
-    const siteName = config.systemInfo.name || '麟云链路'
+
+    // 优先使用缓存的站点名称，避免闪烁
+    const cachedName = getCachedSiteName()
+    const siteName = config.systemInfo.name || cachedName || SITE_CONFIG.NAME
+
+    // 如果配置已加载且与缓存不同，更新缓存
+    if (config.systemInfo.name && config.systemInfo.name !== cachedName) {
+      cacheSiteConfig({
+        name: config.systemInfo.name,
+        shortName: config.systemInfo.nameshorthand || SITE_CONFIG.SHORT_NAME,
+      })
+    }
 
     // 查找匹配的标题后缀
     let titleSuffix = ''
@@ -58,6 +73,12 @@ export function usePageTitle() {
     }
 
     // 设置标题
-    document.title = titleSuffix ? `${siteName} - ${titleSuffix}` : siteName
-  }, [location.pathname, config.systemInfo.name])
+    const newTitle = titleSuffix ? `${siteName} - ${titleSuffix}` : siteName
+
+    // 只有标题真正改变时才更新，避免不必要的 DOM 操作
+    if (prevTitleRef.current !== newTitle) {
+      document.title = newTitle
+      prevTitleRef.current = newTitle
+    }
+  }, [location.pathname, config.systemInfo.name, config.systemInfo.nameshorthand])
 }

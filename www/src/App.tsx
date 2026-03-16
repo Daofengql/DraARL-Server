@@ -20,6 +20,7 @@ import { AdminDashboardPage } from './pages/admin/DashboardPage'
 import { AdminDevicePage } from './pages/admin/DevicePage'
 import { AdminGroupPage } from './pages/admin/GroupPage'
 import { GroupLinkPage } from './pages/admin/GroupLinkPage'
+import { AssetPage } from './pages/admin/AssetPage'
 import { authService } from './services'
 
 function App() {
@@ -82,6 +83,7 @@ function App() {
           <Route path="relays" element={<RelaysPage />} />
           <Route path="servers" element={<ServersPage />} />
           <Route path="comm-records" element={<CommRecordsPage />} />
+          <Route path="assets" element={<AssetPage />} />
           <Route path="settings" element={<SiteConfigPage />} />
         </Route>
 

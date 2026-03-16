@@ -310,7 +310,7 @@ export function DownloadCenterPage() {
     <MainLayout>
       <Container maxWidth="xl" sx={{ pt: 0, pb: 2 }}>
         {/* 页面标题 */}
-        <Box sx={{ mb: 2, textAlign: 'center' }}>
+        <Box sx={{ mb: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <CloudDownloadIcon sx={{ fontSize: 36, color: 'primary.main', mb: 0.5 }} />
           <Typography variant="h4" sx={{ fontWeight: 700, color: 'text.primary' }}>
             下载中心

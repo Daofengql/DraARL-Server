@@ -1,6 +1,6 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography, Collapse, Divider, Link } from '@mui/material'
-import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess, Link as LinkIcon } from '@mui/icons-material'
+import { Dashboard, People, TaskAlt, Verified, Radio, Dns, Settings, ArrowBack, ExitToApp, Devices, Group, Mic, ExpandMore, ExpandLess, Link as LinkIcon, Folder } from '@mui/icons-material'
 import { useState, useEffect } from 'react'
 import { authService, apiClient } from '../../services'
 import { Header } from './Header'
@@ -27,7 +27,16 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/certificate-approvals', label: '操作证审批', icon: <TaskAlt /> },
     ]
   },
-  { path: '/admin/devices', label: '设备管理', icon: <Devices /> },
+  {
+    path: '/admin/devices',
+    label: '设备管理',
+    icon: <Devices />,
+    children: [
+      { path: '/admin/devices', label: '客户端', icon: <Devices /> },
+      { path: '/admin/relays', label: '中继台', icon: <Radio /> },
+      { path: '/admin/servers', label: '服务器', icon: <Dns /> },
+    ]
+  },
   {
     path: '/admin/groups',
     label: '群组管理',
@@ -37,9 +46,8 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/group-links', label: '互联管理', icon: <LinkIcon /> },
     ]
   },
-  { path: '/admin/relays', label: '中继台', icon: <Radio /> },
-  { path: '/admin/servers', label: '服务器', icon: <Dns /> },
   { path: '/admin/comm-records', label: '通信记录', icon: <Mic /> },
+  { path: '/admin/assets', label: '资源管理', icon: <Folder /> },
   { path: '/admin/settings', label: '站点配置', icon: <Settings /> },
 ]
 
@@ -49,6 +57,8 @@ export function AdminLayout() {
   const [mobileOpen, setMobileOpen] = useState(false)
   // 用户管理菜单的展开/折叠状态
   const [userMenuExpanded, setUserMenuExpanded] = useState(false)
+  // 设备管理菜单的展开/折叠状态
+  const [deviceMenuExpanded, setDeviceMenuExpanded] = useState(false)
   // 群组管理菜单的展开/折叠状态
   const [groupMenuExpanded, setGroupMenuExpanded] = useState(false)
   const [icp, setIcp] = useState('')
@@ -78,11 +88,17 @@ export function AdminLayout() {
   // 当路由变化时，如果焦点不在子菜单上，自动折叠
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
+    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers']
     const groupPaths = ['/admin/groups', '/admin/group-links']
 
     // 如果当前路径不在用户管理子菜单下，折叠
     if (!userPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
       setUserMenuExpanded(false)
+    }
+
+    // 如果当前路径不在设备管理子菜单下，折叠
+    if (!devicePaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
+      setDeviceMenuExpanded(false)
     }
 
     // 如果当前路径不在群组管理子菜单下，折叠
@@ -112,6 +128,11 @@ export function AdminLayout() {
   // 切换用户管理菜单展开/折叠
   const toggleUserMenu = () => {
     setUserMenuExpanded(!userMenuExpanded)
+  }
+
+  // 切换设备管理菜单展开/折叠
+  const toggleDeviceMenu = () => {
+    setDeviceMenuExpanded(!deviceMenuExpanded)
   }
 
   // 切换群组管理菜单展开/折叠
@@ -151,16 +172,19 @@ export function AdminLayout() {
       <List sx={{ flex: 1, py: 1 }}>
         {adminMenuItems.map((item) => {
           const isUserMenu = item.path === '/admin/users'
+          const isDeviceMenu = item.path === '/admin/devices'
           const isGroupMenu = item.path === '/admin/groups'
-          const isExpandableMenu = isUserMenu || isGroupMenu
+          const isExpandableMenu = isUserMenu || isDeviceMenu || isGroupMenu
           const getMenuExpanded = () => {
             if (isUserMenu) return userMenuExpanded
+            if (isDeviceMenu) return deviceMenuExpanded
             if (isGroupMenu) return groupMenuExpanded
             return false
           }
           const showChildren = isExpandableMenu ? getMenuExpanded() : (isActive(item.path) || isParentActive(item))
           const toggleMenu = () => {
             if (isUserMenu) toggleUserMenu()
+            if (isDeviceMenu) toggleDeviceMenu()
             if (isGroupMenu) toggleGroupMenu()
           }
 

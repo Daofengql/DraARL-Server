@@ -275,8 +275,8 @@ export function ApprovalsPage() {
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
-          <TableContainer>
-            <Table>
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table sx={{ minWidth: 700 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ID</TableCell>
@@ -388,8 +388,8 @@ export function ApprovalsPage() {
         </TabPanel>
 
         <TabPanel value={tabValue} index={1}>
-          <TableContainer>
-            <Table>
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table sx={{ minWidth: 600 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ID</TableCell>
@@ -458,8 +458,8 @@ export function ApprovalsPage() {
         </TabPanel>
 
         <TabPanel value={tabValue} index={2}>
-          <TableContainer>
-            <Table>
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table sx={{ minWidth: 600 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ID</TableCell>

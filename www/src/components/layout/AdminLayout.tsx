@@ -349,9 +349,10 @@ export function AdminLayout() {
             flexDirection: 'column',
             flexGrow: 1,
             width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
+            overflowX: 'hidden',
           }}
         >
-          <Box sx={{ p: { xs: 2, sm: 3 }, minHeight: '100vh' }}>
+          <Box sx={{ p: { xs: 2, sm: 3 }, minHeight: '100vh', overflowX: 'hidden' }}>
             <Outlet />
           </Box>
         </Box>

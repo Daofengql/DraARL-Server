@@ -224,8 +224,8 @@ export function CertificateApprovalsPage() {
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
-          <TableContainer>
-            <Table>
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table sx={{ minWidth: 800 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ID</TableCell>
@@ -344,8 +344,8 @@ export function CertificateApprovalsPage() {
         </TabPanel>
 
         <TabPanel value={tabValue} index={1}>
-          <TableContainer>
-            <Table>
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table sx={{ minWidth: 700 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ID</TableCell>
@@ -412,8 +412,8 @@ export function CertificateApprovalsPage() {
         </TabPanel>
 
         <TabPanel value={tabValue} index={2}>
-          <TableContainer>
-            <Table>
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table sx={{ minWidth: 700 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ID</TableCell>

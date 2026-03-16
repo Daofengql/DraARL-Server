@@ -47,6 +47,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
             mt: { xs: 8, sm: 8 },
             p: 3,
+            overflowX: 'hidden',
           }}
         >
           {children || <Outlet />}

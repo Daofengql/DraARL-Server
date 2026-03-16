@@ -383,8 +383,8 @@ export function AdminDevicePage() {
         </Box>
       </Paper>
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table>
+      <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
+        <Table sx={{ minWidth: 900 }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
               <TableCell width={80}>在线</TableCell>

@@ -21,6 +21,7 @@ import {
   AdminPanelSettings,
   ExitToApp,
   Mic,
+  MenuBook,
 } from '@mui/icons-material'
 import { authService, apiClient } from '../../services'
 
@@ -43,6 +44,7 @@ const menuItems: MenuItem[] = [
   { path: '/groups', label: '群组管理', icon: <Group /> },
   { path: '/profile', label: '个人中心', icon: <Person /> },
   { path: '/comm-records', label: '通信记录', icon: <Mic /> },
+  { path: '/docs', label: '技术文档', icon: <MenuBook /> },
 ]
 
 // 1. 在参数中单独解构出 sx，防止它留在 ...props 中覆盖内部样式

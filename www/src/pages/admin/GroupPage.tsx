@@ -584,8 +584,8 @@ export function AdminGroupPage() {
             <Typography variant="body2" color="text.secondary">({publicGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1 }}>
-          <Table stickyHeader>
+        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+          <Table sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
@@ -620,8 +620,8 @@ export function AdminGroupPage() {
             <Typography variant="body2" color="text.secondary">({privateGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1 }}>
-          <Table stickyHeader>
+        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+          <Table sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>
                 <TableCell width={60}>ID</TableCell>

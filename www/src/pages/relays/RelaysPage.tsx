@@ -179,8 +179,8 @@ export function RelaysPage() {
         </Box>
       </Paper>
 
-      <TableContainer component={Paper}>
-        <Table>
+      <TableContainer component={Paper} sx={{ overflow: 'auto' }}>
+        <Table sx={{ minWidth: 700 }}>
           <TableHead>
             <TableRow>
               <TableCell>ID</TableCell>

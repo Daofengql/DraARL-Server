@@ -320,23 +320,26 @@ export function DashboardPage() {
           <Box sx={{ width: '100%', height: 300, minHeight: 300 }}>
             {commTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={commTrend} margin={{ top: 5, right: isMobile ? 10 : 60, left: 0, bottom: 5 }}>
+                <LineChart data={commTrend} margin={{ top: 5, right: isMobile ? 5 : 60, left: isMobile ? 0 : 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
-                    tick={{ fontSize: 12 }}
+                    tick={{ fontSize: isMobile ? 10 : 12 }}
+                    interval={isMobile ? 'preserveStartEnd' : 0}
                     tickFormatter={(value) => value ? value.slice(5) : ''}
                   />
                   <YAxis
                     yAxisId="left"
-                    tick={{ fontSize: 12 }}
+                    tick={{ fontSize: isMobile ? 10 : 12 }}
                     allowDecimals={false}
+                    width={isMobile ? 35 : 60}
                   />
                   <YAxis
                     yAxisId="right"
                     orientation="right"
-                    tick={{ fontSize: 12 }}
+                    tick={{ fontSize: isMobile ? 10 : 12 }}
                     tickFormatter={(value) => `${Math.round(value / 60000)}分`}
+                    width={isMobile ? 35 : 60}
                   />
                   <Tooltip
                     labelFormatter={(label) => `日期: ${label}`}
@@ -347,7 +350,7 @@ export function DashboardPage() {
                       return [value ?? 0, name]
                     }}
                   />
-                  <Legend />
+                  <Legend wrapperStyle={{ fontSize: isMobile ? 12 : 14 }} />
                   <Line
                     yAxisId="left"
                     type="monotone"

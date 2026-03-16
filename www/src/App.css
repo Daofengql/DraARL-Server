@@ -1,11 +1,6 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
-}
+/* 全局样式已迁移到 MUI 主题系统，此文件保留用于自定义扩展 */
 
-.logo {
+/* Logo 动画（如果需要） */
   height: 6em;
   padding: 1.5em;
   will-change: filter;

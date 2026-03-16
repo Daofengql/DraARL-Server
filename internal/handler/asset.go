@@ -897,32 +897,42 @@ func (h *AssetHandler) GetFolderFiles(c *gin.Context) {
 		return
 	}
 
-	// 获取文件夹下的所有文件
-	files, err := h.repo.GetFilesByParentID(uint(id))
+	// 获取文件夹下的所有内容（包括子文件夹和文件）
+	children, err := h.repo.GetChildrenByParentID(uint(id))
 	if err != nil {
-		log.Printf("获取文件列表失败: %v", err)
+		log.Printf("获取内容列表失败: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
-			Message: "获取文件列表失败",
+			Message: "获取内容列表失败",
 		})
 		return
 	}
 
 	// 转换为响应格式
-	items := make([]AssetResponse, 0, len(files))
-	for _, file := range files {
-		items = append(items, AssetResponse{
-			ID:          file.ID,
-			Name:        file.Name,
-			Type:        file.Type,
-			Size:        file.Size,
-			MimeType:    file.MimeType,
-			Remark:      file.Remark,
-			SortOrder:   file.SortOrder,
-			DownloadURL: minio.GetFileURL(file.Path),
-			CreatedAt:   file.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:   file.UpdatedAt.Format("2006-01-02 15:04:05"),
-		})
+	items := make([]AssetResponse, 0, len(children))
+	for _, child := range children {
+		item := AssetResponse{
+			ID:        child.ID,
+			Name:      child.Name,
+			Type:      child.Type,
+			Size:      child.Size,
+			MimeType:  child.MimeType,
+			Remark:    child.Remark,
+			SortOrder: child.SortOrder,
+			CreatedAt: child.CreatedAt.Format("2006-01-02 15:04:05"),
+			UpdatedAt: child.UpdatedAt.Format("2006-01-02 15:04:05"),
+		}
+
+		// 如果是文件夹，获取子文件数量
+		if child.IsFolder() {
+			fileCount, _ := h.repo.GetFileCount(child.ID)
+			item.FileCount = fileCount
+		} else if child.IsFile() {
+			// 如果是文件，添加下载链接
+			item.DownloadURL = minio.GetFileURL(child.Path)
+		}
+
+		items = append(items, item)
 	}
 
 	c.JSON(http.StatusOK, Response{

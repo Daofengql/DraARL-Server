@@ -70,6 +70,15 @@ func (r *AssetRepository) GetFilesByParentID(parentID uint) ([]Asset, error) {
 	return files, err
 }
 
+// GetChildrenByParentID 获取文件夹下的所有子项（包括子文件夹和文件）
+func (r *AssetRepository) GetChildrenByParentID(parentID uint) ([]Asset, error) {
+	var children []Asset
+	err := r.db.Where("parent_id = ?", parentID).
+		Order("type DESC, sort_order ASC, created_at DESC"). // 文件夹优先
+		Find(&children).Error
+	return children, err
+}
+
 // Create 创建资源
 func (r *AssetRepository) Create(asset *Asset) error {
 	return r.db.Create(asset).Error

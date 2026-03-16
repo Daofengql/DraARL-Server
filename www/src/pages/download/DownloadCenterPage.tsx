@@ -259,38 +259,58 @@ export function DownloadCenterPage() {
         ) : files.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 6, color: 'text.secondary' }}>
             <FolderIcon sx={{ fontSize: 64, opacity: 0.3 }} />
-            <Typography sx={{ mt: 2 }}>该分类下暂无文件</Typography>
+            <Typography sx={{ mt: 2 }}>该分类下暂无内容</Typography>
           </Box>
         ) : (
           <List>
-            {files.map((file, index) => (
-              <Box key={file.id}>
+            {files.map((item, index) => (
+              <Box key={item.id}>
                 {index > 0 && <Divider />}
                 <ListItem
                   secondaryAction={
-                    <IconButton edge="end" onClick={() => handleDownload(file)}>
-                      <DownloadIcon />
-                    </IconButton>
+                    item.type === 'folder' ? (
+                      <IconButton edge="end" onClick={() => handleEnterFolder(item as any)}>
+                        <ArrowBackIcon sx={{ transform: 'rotate(180deg)' }} />
+                      </IconButton>
+                    ) : (
+                      <IconButton edge="end" onClick={() => handleDownload(item)}>
+                        <DownloadIcon />
+                      </IconButton>
+                    )
                   }
                 >
-                  <ListItemIcon>{getFileIcon(file.mime_type)}</ListItemIcon>
+                  <ListItemIcon>
+                    {item.type === 'folder' ? (
+                      <FolderIcon sx={{ color: 'primary.main', fontSize: 28 }} />
+                    ) : (
+                      getFileIcon(item.mime_type)
+                    )}
+                  </ListItemIcon>
                   <ListItemText
-                    primary={file.name}
+                    primary={item.name}
                     secondary={
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                        <Typography variant="caption" color="text.secondary">
-                          {formatFileSize(file.size)}
-                        </Typography>
-                        {file.mime_type && (
-                          <Chip
-                            label={file.mime_type.split('/')[1]?.toUpperCase()}
-                            size="small"
-                            sx={{ height: 18, fontSize: '0.65rem' }}
-                          />
-                        )}
-                        {file.remark && (
+                        {item.type === 'folder' ? (
                           <Typography variant="caption" color="text.secondary">
-                            · {file.remark}
+                            {item.file_count || 0} 个文件
+                          </Typography>
+                        ) : (
+                          <>
+                            <Typography variant="caption" color="text.secondary">
+                              {formatFileSize(item.size)}
+                            </Typography>
+                            {item.mime_type && (
+                              <Chip
+                                label={item.mime_type.split('/')[1]?.toUpperCase()}
+                                size="small"
+                                sx={{ height: 18, fontSize: '0.65rem' }}
+                              />
+                            )}
+                          </>
+                        )}
+                        {item.remark && (
+                          <Typography variant="caption" color="text.secondary">
+                            · {item.remark}
                           </Typography>
                         )}
                       </Box>

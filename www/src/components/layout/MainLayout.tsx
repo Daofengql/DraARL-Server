@@ -43,14 +43,17 @@ export function MainLayout({ children }: MainLayoutProps) {
         <Box
           component="main"
           sx={{
+            display: 'flex',
+            flexDirection: 'column',
             flexGrow: 1,
             width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
             mt: { xs: 8, sm: 8 },
-            p: 3,
             overflowX: 'hidden',
           }}
         >
-          {children || <Outlet />}
+          <Box sx={{ p: { xs: 2, sm: 3 }, flex: 1, overflowX: 'hidden' }}>
+            {children || <Outlet />}
+          </Box>
         </Box>
       </Box>
     </Box>

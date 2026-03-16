@@ -24,6 +24,7 @@ import {
   ListItemIcon,
   ListItemText,
   Divider,
+  Stack,
 } from '@mui/material'
 import {
   Folder as FolderIcon,
@@ -308,9 +309,9 @@ export function DownloadCenterPage() {
 
   return (
     <MainLayout>
-      <Box sx={{ width: '100%' }}>
+      <Stack spacing={3}>
         {/* 页面标题 */}
-        <Box sx={{ py: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <CloudDownloadIcon sx={{ fontSize: 36, color: 'primary.main', mb: 0.5 }} />
           <Typography variant="h4" sx={{ fontWeight: 700, color: 'text.primary' }}>
             下载中心
@@ -320,11 +321,9 @@ export function DownloadCenterPage() {
           </Typography>
         </Box>
 
-        <Container maxWidth="xl">
-
         {/* 错误提示 */}
         {error && (
-          <Alert severity="error" sx={{ mb: 3 }}>
+          <Alert severity="error">
             {error}
           </Alert>
         )}
@@ -385,8 +384,7 @@ export function DownloadCenterPage() {
             </Button>
           </DialogActions>
         </Dialog>
-        </Container>
-      </Box>
+      </Stack>
     </MainLayout>
   )
 }

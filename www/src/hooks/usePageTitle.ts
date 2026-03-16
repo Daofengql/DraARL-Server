@@ -8,6 +8,7 @@ const routeTitleMap: Record<string, string> = {
   '/login': '登录',
   '/register': '注册',
   '/dashboard': '仪表盘',
+  '/radio': '在线收发',
   '/devices': '我的设备',
   '/groups': '我的群组',
   '/profile': '个人中心',

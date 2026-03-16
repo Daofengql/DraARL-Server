@@ -103,9 +103,20 @@ export interface WSConfig {
   voiceEndTimeout: number // 语音结束超时 (ms)
 }
 
+// 获取 WebSocket URL
+function getDefaultWSUrl(): string {
+  // 优先使用环境变量
+  const envUrl = import.meta.env.VITE_WS_URL
+  if (envUrl) {
+    return envUrl
+  }
+  // 回退到基于当前页面地址的 URL
+  return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
+}
+
 // 默认配置
 export const defaultWSConfig: WSConfig = {
-  url: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`,
+  url: getDefaultWSUrl(),
   reconnectInterval: 3000,
   maxReconnectAttempts: 5,
   heartbeatInterval: 10000, // 10秒

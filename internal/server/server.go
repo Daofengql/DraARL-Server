@@ -265,6 +265,15 @@ func (s *Server) setupRoutes() {
 			api.GET("/assets/tree", assetHandler.GetAssetTree)              // 获取目录树
 			api.GET("/assets/folder/:id", assetHandler.GetFolderFiles)   // 获取文件夹下的文件
 			api.GET("/assets/:id/download", assetHandler.GetDownloadURL) // 获取下载链接
+
+			// 在线收发 API（需要审核通过）
+			radio := approved.Group("/radio")
+			{
+				radio.GET("/config", handler.GetRadioConfig)                          // 获取在线收发配置
+				radio.PUT("/ssid", handler.UpdateRadioSSID)                           // 更新 SSID
+				radio.GET("/status", handler.GetRadioStatus)                         // 获取幽灵设备状态
+				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices)       // 获取群组在线设备
+			}
 		}
 	}
 

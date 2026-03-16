@@ -168,6 +168,20 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 	// 标记正在发送语音
 	GlobalManager.MarkVoiceSending(device, true)
 
+	// 【通信录制】录制幽灵设备的语音
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+		gid := uint(device.GroupID)
+		groupID = &gid
+		uid := uint(device.UserID)
+		userID = &uid
+
+		// 使用负数 ID 表示幽灵设备
+		ghostDeviceID := -device.UserID
+		udphub.RecordCommPacket(ghostDeviceID, device.SSID, groupID, userID, packet.DATA)
+	}
+
 	// 转发语音到 UDP 设备（通过 udphub）
 	routeVoiceToUDP(device, packet)
 

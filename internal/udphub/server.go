@@ -378,7 +378,8 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 			groupID = &gid
 		}
 		// 精简版：只记录 ID，不再记录名称
-		RecordCommPacket(uint(dev.ID), uint8(dev.SSID), groupID, userID, packet.DATA)
+		// 使用正数 ID 表示普通设备
+		RecordCommPacket(int(dev.ID), uint8(dev.SSID), groupID, userID, packet.DATA)
 	}
 
 	forwardDraARLVoice(packet, dev, data, gp)

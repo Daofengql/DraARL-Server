@@ -94,11 +94,19 @@ func (cs *CommSyncer) SyncToDatabase() {
 		durationMs := int(item.Session.LastPacketTime.Sub(item.Session.StartTime).Milliseconds())
 		endTime := item.Session.StartTime.Add(time.Duration(durationMs) * time.Millisecond)
 
+		// 处理设备ID（幽灵设备使用负数ID）
+		deviceID := uint(0)
+		isGhost := item.Session.IsGhost
+		if item.Session.DeviceID > 0 {
+			deviceID = uint(item.Session.DeviceID)
+		}
+
 		records = append(records, gormdb.CommRecord{
-			DeviceID:   item.Session.DeviceID,
+			DeviceID:   deviceID,
 			DeviceSSID: item.Session.DeviceSSID,
 			GroupID:    item.Session.GroupID,
 			UserID:     item.Session.UserID,
+			IsGhost:    isGhost,
 			StartTime:  item.Session.StartTime,
 			EndTime:    endTime,
 			DurationMs: durationMs,

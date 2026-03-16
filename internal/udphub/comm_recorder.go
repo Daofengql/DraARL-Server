@@ -112,8 +112,9 @@ func (cr *CommRecorder) runTimers() {
 // RecordPacket 录制音频包（在转发前调用）
 // audioData 是 Opus 编码的数据，直接存储为 .raw 格式
 // 注意：由于 CGO 限制，服务端不解码 Opus，直接存储原始数据
+// deviceID: 设备ID，正数为普通设备，负数为幽灵设备
 func (cr *CommRecorder) RecordPacket(
-	deviceID uint,
+	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,
@@ -214,8 +215,9 @@ func StopCommRecorder() {
 
 // RecordCommPacket 录制通信数据包（全局接口）
 // 传入的 audioData 是 Opus 编码数据，直接存储为 .opus 文件
+// deviceID: 设备ID，正数为普通设备，负数为幽灵设备
 func RecordCommPacket(
-	deviceID uint,
+	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,

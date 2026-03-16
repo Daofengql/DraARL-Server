@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"nrllink/internal/models"
 )
 
 // ConnectionState 连接状态
@@ -208,13 +210,18 @@ func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 【前置逻辑说明】
+	// 统一跨协议的默认群组 ID。
+	// UDP 终端上报 0 时，服务端底层逻辑会将其定向到 models.GroupIDPublicMin (即 999)。
+	// 此处必须将 WS 端刚建立连接时的默认 GroupID 也设定为 999，
+	// 以确保两端在未进行主动切组操作的初始状态下，处于同一个广播域内。
 	device := &WSDevice{
 		Conn:                conn,
 		ConnState:           StateConnecting,
 		ConnectTime:         time.Now(),
 		LastPacketTime:      time.Now(),
 		ConnectionStartTime: time.Now(),
-		GroupID:             0, // 默认群组，后续认证时设置
+		GroupID:             models.GroupIDPublicMin, // 【核心修改】与 UDP 默认群组保持一致 (999)
 	}
 
 	addr := conn.RemoteAddr().String()

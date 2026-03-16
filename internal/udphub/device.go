@@ -425,6 +425,14 @@ func checkDeviceOnline() {
 
 		onlineDevMap = onlineMap
 	}
+
+	// 【关键修复】累加 WebSocket 设备的在线数（包含幽灵设备和普通 WS 设备）
+	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+		wsNormalCount, wsGhostCount := GlobalMessageRouter.wsManager.GetOnlineCount()
+		totalStats.OnlineDevNumber += wsNormalCount + wsGhostCount
+		log.Printf("[ONLINE] WS devices online: normal=%d, ghost=%d, total UDP+WS=%d",
+			wsNormalCount, wsGhostCount, totalStats.OnlineDevNumber)
+	}
 }
 
 // processLogBuffer 处理日志缓冲

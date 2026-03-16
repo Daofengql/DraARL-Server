@@ -1,10 +1,13 @@
 /**
  * Opus 音频引擎
- * 处理音频采集、编码、解码和播放
+ * 处理音频采集、��码、解码和播放
  */
 
+import { OpusEncoder, OpusApplication } from '@minceraftmc/opus-encoder'
+import { OpusDecoder } from 'opus-decoder'
+
 // Opus 编码器配置
-const OPUS_SAMPLE_RATE = 16000
+const OPUS_SAMPLE_RATE = 16000 as const
 const OPUS_CHANNELS = 1
 const OPUS_FRAME_DURATION = 20 // ms
 const OPUS_FRAME_SIZE = OPUS_SAMPLE_RATE * OPUS_FRAME_DURATION / 1000 // 320 samples
@@ -23,7 +26,6 @@ export type StateChangeCallback = (state: AudioState) => void
 export class AudioCapture {
   private audioContext: AudioContext | null = null
   private mediaStream: MediaStream | null = null
-  private workletNode: AudioWorkletNode | null = null
   private state: AudioState = 'idle'
   private onDataCallback: AudioDataCallback | null = null
   private onStateChangeCallback: StateChangeCallback | null = null
@@ -33,8 +35,9 @@ export class AudioCapture {
   private bufferSize = 0
   private targetBufferSize = OPUS_FRAME_SIZE
 
-  // Opus 编码器（使用 opus-recorder 或 opus-encoder）
-  private opusEncoder: any = null
+  // Opus 编码器
+  private opusEncoder: OpusEncoder<typeof OPUS_SAMPLE_RATE> | null = null
+  private encoderReady = false
 
   /**
    * 设置数据回调
@@ -93,7 +96,7 @@ export class AudioCapture {
       // 初始化 Opus 编码器
       await this.initOpusEncoder()
 
-      console.log('[AudioCapture] Initialized')
+      console.log('[AudioCapture] Initialized with Opus 16K encoder')
     } catch (error) {
       console.error('[AudioCapture] Init failed:', error)
       throw error
@@ -102,27 +105,23 @@ export class AudioCapture {
 
   /**
    * 初始化 Opus 编码器
-   * 这里使用简化的实现，实际项目中需要引入 opus-encoder 库
+   * 使用 @minceraftmc/opus-encoder 生成原始 Opus 帧
    */
   private async initOpusEncoder(): Promise<void> {
-    // 检查是否有可用的 Opus 编码器
-    // 实际实现中，可以使用 opus-encoder 或 opus-recorder 库
-    // 这里我们使用 MediaRecorder 作为后备方案
-
     try {
-      // 尝试使用 MediaRecorder 的 Opus 编码
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm'
+      this.opusEncoder = new OpusEncoder({
+        sampleRate: OPUS_SAMPLE_RATE,
+        application: OpusApplication.VOIP,
+      })
 
-      console.log('[AudioCapture] Using MediaRecorder with:', mimeType)
+      // 等待 WASM 编译完成
+      await this.opusEncoder.ready
+      this.encoderReady = true
 
-      // 注意：MediaRecorder 生成的是完整的 WebM 容器，不是原始 Opus 帧
-      // 对于实时通信，需要使用专门的 Opus 编码器库
-      // 这里简化处理，实际项目需要引入 opus-encoder
-
+      console.log('[AudioCapture] Opus encoder ready (16kHz VOIP mode)')
     } catch (error) {
-      console.warn('[AudioCapture] Opus encoder not available:', error)
+      console.error('[AudioCapture] Opus encoder init failed:', error)
+      throw error
     }
   }
 
@@ -136,6 +135,11 @@ export class AudioCapture {
 
     if (this.state === 'capturing') {
       return
+    }
+
+    if (!this.encoderReady || !this.opusEncoder) {
+      console.error('[AudioCapture] Opus encoder not ready')
+      throw new Error('Opus encoder not ready')
     }
 
     try {
@@ -157,7 +161,7 @@ export class AudioCapture {
       processor.connect(this.audioContext!.destination)
 
       this.setState('capturing')
-      console.log('[AudioCapture] Started')
+      console.log('[AudioCapture] Started capturing')
 
     } catch (error) {
       console.error('[AudioCapture] Start failed:', error)
@@ -224,28 +228,24 @@ export class AudioCapture {
 
   /**
    * 编码为 Opus
-   * 简化实现，实际需要使用 opus-encoder 库
+   * 使用真正的 Opus 编码器生成原始 Opus 帧
    */
   private encodeOpus(pcmData: Float32Array): void {
-    // 这里应该调用 Opus 编码器
-    // 由于浏览器原生不支持 Opus 编码为原始帧，
-    // 实际项目中需要引入 opus-encoder 库
-
-    // 简化处理：将 Float32 转换为 Int16 PCM
-    const int16Data = new Int16Array(pcmData.length)
-    for (let i = 0; i < pcmData.length; i++) {
-      const s = Math.max(-1, Math.min(1, pcmData[i]))
-      int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
+    if (!this.opusEncoder || !this.encoderReady) {
+      console.warn('[AudioCapture] Opus encoder not ready, skipping encode')
+      return
     }
 
-    // 将 Int16 PCM 转换为 Uint8Array
-    const uint8Data = new Uint8Array(int16Data.buffer)
+    try {
+      // 使用 Opus 编码器编码 PCM 数据
+      const opusFrame = this.opusEncoder.encodeFrame(pcmData)
 
-    // 回调发送数据
-    // 注意：这不是真正的 Opus 编码，只是 PCM 数据
-    // 实际项目中需要使用 opus-encoder 进行编码
-    if (this.onDataCallback) {
-      this.onDataCallback(uint8Data)
+      // 回调发送数据（原始 Opus 帧）
+      if (this.onDataCallback && opusFrame.length > 0) {
+        this.onDataCallback(opusFrame)
+      }
+    } catch (error) {
+      console.error('[AudioCapture] Opus encode failed:', error)
     }
   }
 
@@ -277,7 +277,11 @@ export class AudioCapture {
       this.audioContext = null
     }
 
-    this.opusEncoder = null
+    if (this.opusEncoder) {
+      this.opusEncoder.free()
+      this.opusEncoder = null
+      this.encoderReady = false
+    }
   }
 }
 
@@ -298,6 +302,10 @@ export class AudioPlayer {
   // 音量控制
   private gainNode: GainNode | null = null
   private volume = 0.8
+
+  // Opus 解码器
+  private opusDecoder: OpusDecoder | null = null
+  private decoderReady = false
 
   /**
    * 设置状态变化回调
@@ -332,6 +340,22 @@ export class AudioPlayer {
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume()
     }
+
+    // 初始化 Opus 解码器
+    if (!this.decoderReady) {
+      try {
+        this.opusDecoder = new OpusDecoder({
+          sampleRate: OPUS_SAMPLE_RATE,
+          channels: OPUS_CHANNELS,
+        })
+        await this.opusDecoder.ready
+        this.decoderReady = true
+        console.log('[AudioPlayer] Opus decoder ready (16kHz)')
+      } catch (error) {
+        console.error('[AudioPlayer] Opus decoder init failed:', error)
+        // 解码器初始化失败时，回退到 PCM 模式
+      }
+    }
   }
 
   /**
@@ -361,13 +385,20 @@ export class AudioPlayer {
     if (!this.audioContext) return null
 
     try {
-      // 假设数据是 Int16 PCM
-      const int16Data = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2)
+      let float32Data: Float32Array
 
-      // 转换为 Float32
-      const float32Data = new Float32Array(int16Data.length)
-      for (let i = 0; i < int16Data.length; i++) {
-        float32Data[i] = int16Data[i] / (int16Data[i] < 0 ? 0x8000 : 0x7FFF)
+      // 优先使用 Opus 解码器
+      if (this.decoderReady && this.opusDecoder) {
+        const decoded = this.opusDecoder.decodeFrame(data)
+        // decoded.channelData 是一个数组，单声道取第一个元素
+        float32Data = decoded.channelData[0]
+      } else {
+        // 回退：假设数据是 Int16 PCM（兼容旧格式）
+        const int16Data = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2)
+        float32Data = new Float32Array(int16Data.length)
+        for (let i = 0; i < int16Data.length; i++) {
+          float32Data[i] = int16Data[i] / (int16Data[i] < 0 ? 0x8000 : 0x7FFF)
+        }
       }
 
       // 创建 AudioBuffer
@@ -501,6 +532,12 @@ export class AudioPlayer {
     }
 
     this.gainNode = null
+
+    if (this.opusDecoder) {
+      this.opusDecoder.free()
+      this.opusDecoder = null
+      this.decoderReady = false
+    }
   }
 }
 
@@ -559,6 +596,9 @@ export class AudioVisualizer {
     return sum / (data.length * 255)
   }
 }
+
+// 导出常量
+export { OPUS_SAMPLE_RATE, OPUS_FRAME_SIZE }
 
 // 导出单例工厂
 let audioCaptureInstance: AudioCapture | null = null

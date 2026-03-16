@@ -504,7 +504,7 @@ func handleDraARLATCommand(packet *protocol.DraARLv1Packet, dev *models.Device) 
 func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, gp *models.Group) {
 	pool := gp.ConnPool.(*CurrentConnPool)
 
-	// 1. 在本群组内广播
+	// 1. 在本群组内广播（UDP 设备）
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
 			continue // 不转发给自己
@@ -515,7 +515,7 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 			continue
 		}
 
-		// 检查目标设备是否禁收
+		// 检���目标设备是否禁收
 		if targetDev.DisableRecv {
 			continue
 		}
@@ -527,6 +527,9 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 
 	// 2. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
 	forwardVoiceToLinkedGroups(dev, data, gp.ID)
+
+	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	BroadcastVoiceFromUDP(dev, data, gp.ID)
 }
 
 // forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
@@ -577,7 +580,7 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 
 // forwardDraARLMessage 转发 DraARLv1 文本消息
 func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
-	// 1. 在本群组内广播
+	// 1. 在本群组内广播（UDP 设备）
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
 			continue
@@ -600,6 +603,9 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 
 	// 2. 跨虚拟组转发文本消息
 	forwardMessageToLinkedGroups(dev, data, gp.ID)
+
+	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	BroadcastTextFromUDP(dev, data, gp.ID)
 }
 
 // forwardMessageToLinkedGroups 将文本消息转发到互联组关联的其他群组
@@ -643,7 +649,7 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, conn *net.UDPConn, gp *models.Group) {
 	pool := gp.ConnPool.(*CurrentConnPool)
 
-	// 1. 在本群组内广播
+	// 1. 在本群组内广播（UDP 设备）
 	for _, targetDev := range pool.DevConnList {
 		if targetDev.ID == dev.ID {
 			continue
@@ -666,6 +672,9 @@ func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Devic
 
 	// 2. 跨虚拟组转发服务器语音
 	forwardVoiceToLinkedGroups(dev, data, gp.ID)
+
+	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	BroadcastVoiceFromUDP(dev, data, gp.ID)
 }
 
 // min 返回两个整数中的较小值
@@ -738,6 +747,10 @@ func refreshGroupCache() {
 
 	// 记录当前数据库中存在的群组 ID，用于后续清理被删除的群组
 	validGroupIDs := make(map[int]bool)
+
+	// 【关键修复】公共群组 0 和 999 始终有效，即使不在数据库中
+	validGroupIDs[0] = true
+	validGroupIDs[models.GroupIDPublicMin] = true
 
 	for _, dbGroup := range dbGroups {
 		modelGroup := dbGroup.ToModelGroup()

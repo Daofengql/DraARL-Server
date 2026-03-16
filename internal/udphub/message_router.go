@@ -33,11 +33,13 @@ func (r *MessageRouter) SetWSManager(wsManager interfaces.WSManagerInterface) {
 // 当 UDP 设备发送语音时，转发到同组的所有 WebSocket 设备
 func (r *MessageRouter) RouteVoiceFromUDP(source *models.Device, data []byte, groupID int) {
 	if r.wsManager == nil {
+		log.Println("[ROUTE_ERR] UDP -> WS 转发失败: wsManager 未初始化 (init() 可能未执行)")
 		return
 	}
 
 	// 获取群组内的所有在线 WebSocket 设备
 	devices := r.wsManager.GetDevicesByGroup(groupID)
+	log.Printf("[ROUTE_DEBUG] UDP -> WS: 群组 %d 内找到 %d 个 WS 设备", groupID, len(devices))
 
 	for _, device := range devices {
 		// 不转发给自己（如果是普通设备）
@@ -105,30 +107,37 @@ func (r *MessageRouter) RouteServerVoiceFromUDP(source *models.Device, data []by
 func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opusData []byte, groupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
+		log.Println("[ROUTE_ERR] WS -> UDP 转发失��: 全局 UDP 连接尚未初始化")
 		return
 	}
 
 	// 获取群组信息
 	group, exists := GetGroupFromCache(groupID)
 	if !exists {
+		// 【核心补充】不再静默失败，暴露出内存中找不到目标群组的问题
+		log.Printf("[ROUTE_ERR] WS -> UDP 转发丢弃: 请求的目标群组 %d 不存在", groupID)
 		return
 	}
 
 	// 检查群组是否已禁用
 	if group.Status != 1 {
+		log.Printf("[ROUTE_WARN] WS -> UDP 转发丢弃: 目标群组 %d 已被禁用", groupID)
 		return
 	}
 
-	// 编码服务器互联语音包
-	serverVoiceData := protocol.EncodeServerVoice(
+	// 【前置逻辑说明】
+	// 这里是解决 UDP 客户端收不到声音的最关键一步。
+	// 我们必须放弃使用 EncodeServerVoice (会打包成 Type 6)，因为普通硬件终端不解析互联包扩展头。
+	// 改为调用 EncodeDraARLv1 并指定 Type 为 protocol.DraARLTypeOpus16K (即协议中的 Type 5)，
+	// 这样下发的就是最标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
+	voicePacket := protocol.EncodeDraARLv1(
 		source.GetUsername(),
-		source.GetCallSign(),
+		"", // 准入密码下发为空
 		source.GetSSID(),
+		protocol.DraARLTypeOpus16K, // 【核心修改】使用 Type 5：标准 Opus 16K 语音
 		source.GetDevModel(),
 		0, // DMRID
-		source.GetUsername(),
 		source.GetCallSign(),
-		nil, // OriginalIP
 		opusData,
 	)
 
@@ -155,13 +164,14 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 			continue
 		}
 
+		// 向在线设备发送标准语音包
 		if targetDev.UDPAddr != nil && targetDev.ISOnline {
-			conn.WriteToUDP(serverVoiceData, targetDev.UDPAddr)
+			conn.WriteToUDP(voicePacket, targetDev.UDPAddr)
 		}
 	}
 
-	// 转发到互联组
-	r.routeServerVoiceToLinkedGroups(source, serverVoiceData, groupID)
+	// 转发到互联组 (复用这个标准语音包)
+	r.routeServerVoiceToLinkedGroups(source, voicePacket, groupID)
 }
 
 // RouteTextToUDP 转发 WebSocket 文本消息到 UDP 设备
@@ -333,8 +343,17 @@ var GlobalMessageRouter *MessageRouter
 
 // InitMessageRouter 初始化全局消息路由器
 func InitMessageRouter() {
-	GlobalMessageRouter = NewMessageRouter(nil)
-	log.Println("[ROUTE] Message router initialized")
+	// 【前置逻辑说明】
+	// 此处增加单例防重写保护。
+	// 因为 websocket/server.go 的 init() 阶段已经通过 SetWSManagerForRouter 注入了适配器，
+	// 如果直接覆盖赋值为 NewMessageRouter(nil)，会导致 wsManager 丢失，从而切断 UDP 到 WS 的下行链路。
+	if GlobalMessageRouter == nil {
+		GlobalMessageRouter = NewMessageRouter(nil)
+		log.Println("[ROUTE] Message router initialized")
+	} else {
+		// 如果已经被初始化过（通常是带上了 wsManager），则保留现有实例，避免破坏依赖
+		log.Println("[ROUTE] Message router already initialized, preserving injected dependencies")
+	}
 }
 
 // SetWSManagerForRouter 设置 WebSocket 管理器

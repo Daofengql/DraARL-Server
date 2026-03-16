@@ -192,6 +192,11 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 			// 设置默认群组
 			device.GroupID = 999 // 默认公共群组
 			manager.RegisterGhostDevice(device, authResult.UserID, authResult.CallSign, authResult.Nickname, preAuth.SSID)
+
+			// 【关键修复】同时创建 GhostDevice 并建立与 WSDevice 的关联
+			// 这样 GetGhostDevice 才能获取到 GhostDevice，且 GhostDevice.Conn 指向 WSDevice
+			GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.CallSign, authResult.Nickname, preAuth.SSID)
+
 			return device, authResult
 		}
 

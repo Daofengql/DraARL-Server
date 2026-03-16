@@ -273,6 +273,7 @@ func (s *Server) setupRoutes() {
 				radio.PUT("/ssid", handler.UpdateRadioSSID)                           // 更新 SSID
 				radio.GET("/status", handler.GetRadioStatus)                         // 获取幽灵设备状态
 				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices)       // 获取群组在线设备
+				radio.PUT("/group", handler.UpdateRadioGroup)                        // 【新增】切换幽灵设备群组
 			}
 		}
 	}

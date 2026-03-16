@@ -2,9 +2,11 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
+	"nrllink/internal/gormdb"
 	"nrllink/internal/udphub"
 	ws "nrllink/pkg/websocket"
 
@@ -45,15 +47,29 @@ type RadioDeviceResponse struct {
 	LastActivity string `json:"last_activity,omitempty"`
 }
 
+// getUserIDFromContext 从 gin context 获取用户 ID
+// JWT 中只有 username，需要从数据库查询用户 ID
+func getUserIDFromContext(c *gin.Context) (int, bool) {
+	username, exists := c.Get("username")
+	if !exists {
+		return 0, false
+	}
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		return 0, false
+	}
+	return int(user.ID), true
+}
+
 // GetRadioConfig 获取在线收发配置 (API-001)
 func GetRadioConfig(c *gin.Context) {
-	// 获取当前用户
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
-	userID := int(userIDVal.(uint))
 
 	// 检查 WebSocket 幽灵设备状态
 	isConnected := false
@@ -89,13 +105,12 @@ func UpdateRadioSSID(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
-	userID := int(userIDVal.(uint))
 
 	// 更新幽灵设备的 SSID
 	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
@@ -118,13 +133,12 @@ func UpdateRadioSSID(c *gin.Context) {
 
 // GetRadioStatus 获取幽灵设备状态 (API-003)
 func GetRadioStatus(c *gin.Context) {
-	// 获取当前用户
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
-	userID := int(userIDVal.(uint))
 
 	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
 	if !ok || ghostDevice == nil {
@@ -217,5 +231,76 @@ func GetRadioGroupDevices(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": devices,
+	})
+}
+
+// UpdateRadioGroupRequest 更新幽灵设备群组请求
+type UpdateRadioGroupRequest struct {
+	GroupID int `json:"group_id" binding:"required"`
+}
+
+// UpdateRadioGroup 更新幽灵设备群组 (API-005)
+// 【核心修复】同时更新 WSDevice 和 GhostDevice 的 GroupID，确保跨协议路由正确
+func UpdateRadioGroup(c *gin.Context) {
+	var req UpdateRadioGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
+		return
+	}
+
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	// 验证群组是否存在
+	group, exists := udphub.GetGroupFromCache(req.GroupID)
+	log.Printf("[RADIO_DEBUG] 群组验证: groupID=%d, exists=%v", req.GroupID, exists)
+	if !exists {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "目标群组不存在或未激活"})
+		return
+	}
+	_ = group // 避免未使用变量警告
+
+	// 获取幽灵设备
+	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
+	log.Printf("[RADIO_DEBUG] 获取幽灵设备: userID=%d, ok=%v, ghostDevice=nil:%v", userID, ok, ghostDevice == nil)
+	if !ok || ghostDevice == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "幽灵设备未连接，群组设置将在下次连接时生效",
+			"data": gin.H{
+				"group_id": req.GroupID,
+			},
+		})
+		return
+	}
+
+	oldGroupID := ghostDevice.GroupID
+	log.Printf("[RADIO_DEBUG] 幽灵设备当前群组: %d, Conn=nil:%v", oldGroupID, ghostDevice.Conn == nil)
+
+	// 【关键修复】同时更新两个管理器中的 GroupID
+	// 1. 更新 GhostDeviceManager 中的 GroupID
+	if err := ws.GlobalGhostManager.SetGhostDeviceGroup(userID, req.GroupID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新群组失败"})
+		return
+	}
+
+	// 2. 更新 WSConnectionManager 中的 WSDevice.GroupID（路由时使用这个）
+	if ghostDevice.Conn != nil {
+		ws.GlobalManager.SetDeviceGroup(ghostDevice.Conn, req.GroupID)
+	}
+
+	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 从群组 %d 切换到群组 %d", userID, oldGroupID, req.GroupID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "群组切换成功",
+		"data": gin.H{
+			"group_id":     req.GroupID,
+			"old_group_id": oldGroupID,
+		},
 	})
 }

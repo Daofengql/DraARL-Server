@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"nrllink/internal/interfaces"
 	"nrllink/internal/protocol"
 	"nrllink/internal/udphub"
 
@@ -24,12 +25,26 @@ var (
 	GlobalManager = NewWSConnectionManager()
 )
 
-// init 初始化
+// init 包初始化函数
+// 前置逻辑：Go 语言在启动时会自动执行所有的 init 函数。
+// 我们利用这个特性，在系统启动的最早期，就把 UDP 和 WS 之间的消息路由器架设好。
 func init() {
-	// 启动心跳检查
+	// 1. 初始化全局消息路由器 (解决 GlobalMessageRouter == nil 的问题)
+	udphub.InitMessageRouter()
+
+	// 2. 实例化适配器，包装全局的 WebSocket 连接管理器
+	adapter := &WSManagerAdapter{
+		manager: GlobalManager,
+	}
+
+	// 3. 将适配���注入到 udphub 的路由器中 (打通双向通信的桥梁)
+	udphub.SetWSManagerForRouter(adapter)
+
+	// 4. 启动后台维护协程
 	go startHeartbeatChecker()
-	// 启动统计报告
 	go startStatsReporter()
+
+	log.Println("[WS] WebSocket manager adapter initialized and injected into udphub router")
 }
 
 // HandleWebSocket WebSocket 处理器
@@ -206,26 +221,12 @@ func handleTextMessage(device *WSDevice, packet *WSPacket, rawData []byte) {
 	GlobalManager.BroadcastToGroup(device.GroupID, device, rawData, websocket.BinaryMessage)
 }
 
-// handleConfig 处理配置包（群组切换）
+// handleConfig 处理配置包
+// 注意：Config 包是服务器下发给设备的下行数据包，客户端不应上传此类型
+// 群组切换现在通过 HTTP API PUT /api/radio/group 实��
 func handleConfig(device *WSDevice, packet *WSPacket) {
-	// 从 DATA 区域解析群组 ID
-	if len(packet.DATA) >= 4 {
-		groupID := int(uint32(packet.DATA[0])<<24 | uint32(packet.DATA[1])<<16 | uint32(packet.DATA[2])<<8 | uint32(packet.DATA[3]))
-
-		// 验证群组是否存在
-		if _, exists := udphub.GetGroupFromCache(groupID); exists {
-			GlobalManager.SetDeviceGroup(device, groupID)
-
-			// 如果是幽灵设备，同步更新幽灵设备管理器
-			if device.DeviceType == DeviceTypeGhost {
-				GlobalGhostManager.SetGhostDeviceGroup(device.UserID, groupID)
-			}
-
-			log.Printf("[WS] Device %s switched to group %d", device.GetIdentifier(), groupID)
-		} else {
-			log.Printf("[WS] Invalid group %d requested by %s", groupID, device.GetIdentifier())
-		}
-	}
+	// Config 包是下行包，客户端上传此包应被忽略
+	log.Printf("[WS] 收到非预期的 Config 上行包，忽略。设备: %s", device.GetIdentifier())
 }
 
 // handleServerVoice 处理服务器互联语音包
@@ -355,4 +356,43 @@ func GetConnectedClients() []string {
 func GetConnectionCount() int {
 	normalCount, ghostCount := GlobalManager.GetOnlineCount()
 	return normalCount + ghostCount
+}
+
+// ==========================================
+// 接口适配器 (Adapter Pattern)
+// 前置逻辑：解决 Go 语言中 []*WSDevice 无法直接转换为 []interfaces.WSDeviceInterface 的切片协变问题
+// ==========================================
+
+// WSManagerAdapter 充当 websocket 包和 udphub 包之间的桥梁
+type WSManagerAdapter struct {
+	manager *WSConnectionManager
+}
+
+// GetDevicesByGroup 获取指定群组的设备并转换为接口切片
+func (a *WSManagerAdapter) GetDevicesByGroup(groupID int) []interfaces.WSDeviceInterface {
+	// 1. 获取原始的 []*WSDevice 切片
+	devs := a.manager.GetDevicesByGroup(groupID)
+
+	// 2. 创建一个同等容量的接口类型切片
+	result := make([]interfaces.WSDeviceInterface, len(devs))
+
+	// 3. 逐个赋值，触发 Go 的隐式接口转换
+	for i, d := range devs {
+		result[i] = d
+	}
+	return result
+}
+
+// SendToDevice 将数据通过接口方法发送到具体的 WebSocket 设备
+func (a *WSManagerAdapter) SendToDevice(device interfaces.WSDeviceInterface, data []byte, messageType int) error {
+	// 使用类型断言 (Type Assertion)，将接口还原为具体的 *WSDevice 指针
+	if wsDev, ok := device.(*WSDevice); ok {
+		return a.manager.SendToDevice(wsDev, data, messageType)
+	}
+	return nil
+}
+
+// GetOnlineCount 获取当前在线的普通设备和幽灵设备数量
+func (a *WSManagerAdapter) GetOnlineCount() (int, int) {
+	return a.manager.GetOnlineCount()
 }

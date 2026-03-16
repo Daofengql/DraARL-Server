@@ -7,6 +7,7 @@ import { RadioWebSocket, getRadioWebSocket, closeRadioWebSocket } from './radio/
 import { AudioCapture, AudioPlayer, getAudioCapture, getAudioPlayer, destroyAudioInstances } from './radio/opus'
 import { messageCache, toCachedMessage, toRadioMessage, generateMessageId } from './radio/messageCache'
 import { groupManagerService, toRadioGroup } from './radio/groupManager'
+import { apiClient } from './api'
 import { PacketType, defaultRadioUserConfig } from '../types/radio'
 import type {
   WSConnectionState,
@@ -304,6 +305,8 @@ export class RadioService {
 
   /**
    * 切换群组
+   * 【关键修复】幽灵设备切换群组需要调用 HTTP API 来同步更新内存状态
+   * 这会同时更新 WSDevice.GroupID 和 GhostDevice.GroupID，实现跨���议通信
    */
   async switchGroup(groupId: number): Promise<boolean> {
     if (!this.ws || this.connectionState !== 'online') {
@@ -311,24 +314,31 @@ export class RadioService {
       return false
     }
 
-    // 验证群组是否存在
-    const group = await groupManagerService.getGroup(groupId)
-    if (!group) {
-      this.emit('error', '群组不存在')
+    // 【核心修改】调用 HTTP API 而不是 WebSocket Config 包
+    // 这样后端可以同步更新幽灵设备的内存群组状态
+    try {
+      const response = await apiClient.put<{ code: number; message: string }>(`/api/radio/group`, {
+        group_id: groupId,
+      })
+
+      if (response.code === 200) {
+        // 更新本地状态
+        this.currentGroupId = groupId
+        this.config.defaultGroupId = groupId
+        this.saveConfig()
+
+        // 加载新群组的历史消息
+        await this.loadHistoryMessages()
+
+        return true
+      }
+      this.emit('error', response.message || '切换群组失败')
+      return false
+    } catch (error) {
+      console.error('[RadioService] Failed to switch group:', error)
+      this.emit('error', '切换群组失败')
       return false
     }
-
-    const success = this.ws.sendGroupChange(groupId)
-    if (success) {
-      this.currentGroupId = groupId
-      this.config.defaultGroupId = groupId
-      this.saveConfig()
-
-      // 加载新群组的历史消息
-      await this.loadHistoryMessages()
-    }
-
-    return success
   }
 
   /**

@@ -20,4 +20,6 @@ type WSDeviceInterface interface {
 type WSManagerInterface interface {
 	GetDevicesByGroup(groupID int) []WSDeviceInterface
 	SendToDevice(device WSDeviceInterface, data []byte, messageType int) error
+	// GetOnlineCount 获取在线设备数量（普通设备数，幽灵设备数）
+	GetOnlineCount() (normalCount, ghostCount int)
 }

@@ -78,7 +78,7 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, c
 		Username:       callsign, // 使用呼号作为用户名
 		SSID:           ssid,
 		Conn:           wsDevice,
-		GroupID:        999, // 默认公共群组
+		GroupID:        models.GroupIDPublicMin, // 默认公共群组 (999)，与 UDP 和 WSDevice 保持一致
 		ISOnline:       true,
 		LastPacketTime: time.Now(),
 	}

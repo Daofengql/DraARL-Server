@@ -229,11 +229,44 @@ func (r *AssetRepository) GetPath(id uint) (string, error) {
 	return path, nil
 }
 
-// GetFileCount 获取文件夹下的文件数量
+// GetFileCount 获取文件夹下的直接子文件数量
 func (r *AssetRepository) GetFileCount(folderID uint) (int64, error) {
 	var count int64
 	err := r.db.Model(&Asset{}).Where("parent_id = ? AND type = ?", folderID, "file").Count(&count).Error
 	return count, err
+}
+
+// GetFileCountRecursive 递归获取文件夹下的所有文件数量���包括子文件夹中的文件）
+func (r *AssetRepository) GetFileCountRecursive(folderID uint) (int64, error) {
+	var count int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		return getFileCountRecursive(tx, folderID, &count)
+	})
+	return count, err
+}
+
+// getFileCountRecursive 递归统计文件数量的辅助函数
+func getFileCountRecursive(tx *gorm.DB, folderID uint, count *int64) error {
+	// 统计当前文件夹下的直接子文件数量
+	var fileCount int64
+	if err := tx.Model(&Asset{}).Where("parent_id = ? AND type = ?", folderID, "file").Count(&fileCount).Error; err != nil {
+		return err
+	}
+	*count += fileCount
+
+	// 获取子文件夹并递归统计
+	var subFolders []Asset
+	if err := tx.Where("parent_id = ? AND type = ?", folderID, "folder").Find(&subFolders).Error; err != nil {
+		return err
+	}
+
+	for _, folder := range subFolders {
+		if err := getFileCountRecursive(tx, folder.ID, count); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GetSubFolderCount 获取文件夹下的子文件夹数量

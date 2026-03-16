@@ -49,7 +49,7 @@ export interface AssetTreeItem {
   updated_at: string;
 }
 
-// 获取资源列表（管理员���
+// 获取资源列表（管理员）
 export const getAssets = async (parentId?: number | null): Promise<Asset[]> => {
   const params = new URLSearchParams();
   if (parentId !== undefined && parentId !== null) {

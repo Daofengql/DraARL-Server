@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,40 +9,44 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
+	"nrllink/pkg/cache"
 	"nrllink/pkg/minio"
+
+	"github.com/gin-gonic/gin"
 )
 
 // AssetHandler 资源管理处理器
 type AssetHandler struct {
-	repo *gormdb.AssetRepository
+	repo       *gormdb.AssetRepository
+	assetCache *cache.AssetCache
 }
 
 // NewAssetHandler 创建资源管理处理器
 func NewAssetHandler() *AssetHandler {
 	return &AssetHandler{
-		repo: gormdb.GetAssetRepo(),
+		repo:       gormdb.GetAssetRepo(),
+		assetCache: cache.GetAssetCache(),
 	}
 }
 
 // AssetResponse 资源响应结构
 type AssetResponse struct {
-	ID           uint   `json:"id"`
-	ParentID     *uint  `json:"parent_id"`
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	Path         string `json:"path,omitempty"`
-	Size         int64  `json:"size"`
-	MimeType     string `json:"mime_type,omitempty"`
-	Remark       string `json:"remark,omitempty"`
-	SortOrder    int    `json:"sort_order"`
-	FileCount    int64  `json:"file_count,omitempty"`    // 文件夹下的文件数
-	FolderCount  int64  `json:"folder_count,omitempty"`  // 文件夹下的子文件夹数
-	DownloadURL  string `json:"download_url,omitempty"` // 文件下载链接
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID          uint   `json:"id"`
+	ParentID    *uint  `json:"parent_id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Path        string `json:"path,omitempty"`
+	Size        int64  `json:"size"`
+	MimeType    string `json:"mime_type,omitempty"`
+	Remark      string `json:"remark,omitempty"`
+	SortOrder   int    `json:"sort_order"`
+	FileCount   int64  `json:"file_count,omitempty"`   // 文件夹下的文件数
+	FolderCount int64  `json:"folder_count,omitempty"` // 文件夹下的子文件夹数
+	DownloadURL string `json:"download_url,omitempty"` // 文件下载链接
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // CreateFolderRequest 创建文件夹请求
@@ -61,6 +66,35 @@ type UpdateAssetRequest struct {
 // MoveAssetRequest 移动资源请求
 type MoveAssetRequest struct {
 	TargetParentID *uint `json:"target_parent_id"` // null 表示移动到根目录
+}
+
+// invalidateAssetCache 使资源缓存失效
+// parentID 为 nil 时表示根目录，需要刷新目录树缓存
+func (h *AssetHandler) invalidateAssetCache(ctx interface{ Done() <-chan struct{} }, parentID *uint) {
+	if h.assetCache == nil {
+		return
+	}
+
+	// 转换 context
+	var goCtx context.Context
+	if c, ok := ctx.(context.Context); ok {
+		goCtx = c
+	} else {
+		goCtx = context.Background()
+	}
+
+	// 如果是根目录下的变更，需要刷新目录树缓存
+	if parentID == nil {
+		_ = h.assetCache.InvalidateTree(goCtx)
+	}
+
+	// 刷新父文件夹的内容缓存
+	if parentID != nil {
+		_ = h.assetCache.InvalidateFolder(goCtx, *parentID)
+	} else {
+		// 根目录变更，清除所有文件夹缓存
+		_ = h.assetCache.InvalidateAll(goCtx)
+	}
 }
 
 // GetAssets 获取资源列表
@@ -200,6 +234,9 @@ func (h *AssetHandler) CreateFolder(c *gin.Context) {
 		userModel.CallSign,
 		c.ClientIP(),
 	)
+
+	// 使缓存失效
+	h.invalidateAssetCache(c.Request.Context(), req.ParentID)
 
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
@@ -356,6 +393,9 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 		c.ClientIP(),
 	)
 
+	// 使缓存失效
+	h.invalidateAssetCache(c.Request.Context(), &parentID)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "上传成功",
@@ -481,6 +521,9 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 		c.ClientIP(),
 	)
 
+	// 使缓存失效
+	h.invalidateAssetCache(c.Request.Context(), asset.ParentID)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "更新成功",
@@ -595,6 +638,13 @@ func (h *AssetHandler) MoveAsset(c *gin.Context) {
 		userModel.CallSign,
 		c.ClientIP(),
 	)
+
+	// 使缓存失效（源目录和目标目录都需要刷新）
+	ctx := c.Request.Context()
+	h.invalidateAssetCache(ctx, asset.ParentID)
+	if req.TargetParentID != nil && (asset.ParentID == nil || *req.TargetParentID != *asset.ParentID) {
+		h.invalidateAssetCache(ctx, req.TargetParentID)
+	}
 
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
@@ -715,6 +765,9 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 		c.ClientIP(),
 	)
 
+	// 使缓存失效
+	h.invalidateAssetCache(c.Request.Context(), asset.ParentID)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "覆盖成功",
@@ -830,6 +883,9 @@ func (h *AssetHandler) DeleteAsset(c *gin.Context) {
 		c.ClientIP(),
 	)
 
+	// 使缓存失效
+	h.invalidateAssetCache(c.Request.Context(), asset.ParentID)
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "删除成功",
@@ -839,7 +895,34 @@ func (h *AssetHandler) DeleteAsset(c *gin.Context) {
 // GetAssetTree 获取资源目录树（前台公开接口）
 // GET /api/assets/tree
 func (h *AssetHandler) GetAssetTree(c *gin.Context) {
-	// 获取根目录下的文件夹列表
+	// 尝试从缓存获取
+	if h.assetCache != nil {
+		items, err := h.assetCache.GetAssetTree(c.Request.Context())
+		if err == nil && len(items) > 0 {
+			// 转换为响应格式
+			responses := make([]AssetResponse, 0, len(items))
+			for _, item := range items {
+				responses = append(responses, AssetResponse{
+					ID:        item.ID,
+					Name:      item.Name,
+					Type:      item.Type,
+					Remark:    item.Remark,
+					SortOrder: item.SortOrder,
+					FileCount: item.FileCount,
+					CreatedAt: item.CreatedAt,
+					UpdatedAt: item.UpdatedAt,
+				})
+			}
+			c.JSON(http.StatusOK, Response{
+				Code:    200,
+				Message: "获取成功",
+				Data:    responses,
+			})
+			return
+		}
+	}
+
+	// 缓存未命中，从数据库获取
 	folders, err := h.repo.GetRootFolders()
 	if err != nil {
 		log.Printf("获取资源目录树失败: %v", err)
@@ -853,16 +936,16 @@ func (h *AssetHandler) GetAssetTree(c *gin.Context) {
 	// 转换为响应格式
 	items := make([]AssetResponse, 0, len(folders))
 	for _, folder := range folders {
-		fileCount, _ := h.repo.GetFileCount(folder.ID)
+		fileCount, _ := h.repo.GetFileCountRecursive(folder.ID)
 		items = append(items, AssetResponse{
-			ID:          folder.ID,
-			Name:        folder.Name,
-			Type:        folder.Type,
-			Remark:      folder.Remark,
-			SortOrder:   folder.SortOrder,
-			FileCount:   fileCount,
-			CreatedAt:   folder.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:   folder.UpdatedAt.Format("2006-01-02 15:04:05"),
+			ID:        folder.ID,
+			Name:      folder.Name,
+			Type:      folder.Type,
+			Remark:    folder.Remark,
+			SortOrder: folder.SortOrder,
+			FileCount: fileCount,
+			CreatedAt: folder.CreatedAt.Format("2006-01-02 15:04:05"),
+			UpdatedAt: folder.UpdatedAt.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -897,42 +980,73 @@ func (h *AssetHandler) GetFolderFiles(c *gin.Context) {
 		return
 	}
 
-	// 获取文件夹下的所有内容（包括子文件夹和文件）
-	children, err := h.repo.GetChildrenByParentID(uint(id))
-	if err != nil {
-		log.Printf("获取内容列表失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取内容列表失败",
-		})
-		return
+	// 尝试从缓存获取
+	var items []AssetResponse
+	if h.assetCache != nil {
+		cachedItems, err := h.assetCache.GetFolderFiles(c.Request.Context(), uint(id))
+		if err == nil && len(cachedItems) > 0 {
+			// 转换为响应格式
+			items = make([]AssetResponse, 0, len(cachedItems))
+			for _, child := range cachedItems {
+				item := AssetResponse{
+					ID:        child.ID,
+					Name:      child.Name,
+					Type:      child.Type,
+					Size:      child.Size,
+					MimeType:  child.MimeType,
+					Remark:    child.Remark,
+					SortOrder: child.SortOrder,
+					FileCount: child.FileCount,
+					CreatedAt: child.CreatedAt,
+					UpdatedAt: child.UpdatedAt,
+				}
+				// 如果是文件，添加下载链接
+				if child.Type == "file" {
+					item.DownloadURL = minio.GetFileURL(child.Path)
+				}
+				items = append(items, item)
+			}
+		}
 	}
 
-	// 转换为响应格式
-	items := make([]AssetResponse, 0, len(children))
-	for _, child := range children {
-		item := AssetResponse{
-			ID:        child.ID,
-			Name:      child.Name,
-			Type:      child.Type,
-			Size:      child.Size,
-			MimeType:  child.MimeType,
-			Remark:    child.Remark,
-			SortOrder: child.SortOrder,
-			CreatedAt: child.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt: child.UpdatedAt.Format("2006-01-02 15:04:05"),
+	// 缓存未命中，从数据库获取
+	if len(items) == 0 {
+		children, err := h.repo.GetChildrenByParentID(uint(id))
+		if err != nil {
+			log.Printf("获取内容列表失败: %v", err)
+			c.JSON(http.StatusInternalServerError, Response{
+				Code:    500,
+				Message: "获取内容列表失败",
+			})
+			return
 		}
 
-		// 如果是文件夹，获取子文件数量
-		if child.IsFolder() {
-			fileCount, _ := h.repo.GetFileCount(child.ID)
-			item.FileCount = fileCount
-		} else if child.IsFile() {
-			// 如果是文件，添加下载链接
-			item.DownloadURL = minio.GetFileURL(child.Path)
-		}
+		// 转换为响应格式
+		items = make([]AssetResponse, 0, len(children))
+		for _, child := range children {
+			item := AssetResponse{
+				ID:        child.ID,
+				Name:      child.Name,
+				Type:      child.Type,
+				Size:      child.Size,
+				MimeType:  child.MimeType,
+				Remark:    child.Remark,
+				SortOrder: child.SortOrder,
+				CreatedAt: child.CreatedAt.Format("2006-01-02 15:04:05"),
+				UpdatedAt: child.UpdatedAt.Format("2006-01-02 15:04:05"),
+			}
 
-		items = append(items, item)
+			// 如果是文件夹，递归获取子文件数量
+			if child.IsFolder() {
+				fileCount, _ := h.repo.GetFileCountRecursive(child.ID)
+				item.FileCount = fileCount
+			} else if child.IsFile() {
+				// 如果是文件，添加下载链接
+				item.DownloadURL = minio.GetFileURL(child.Path)
+			}
+
+			items = append(items, item)
+		}
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -1038,15 +1152,15 @@ func IsAllowedMimeType(mimeType string) bool {
 		"image/webp": true,
 		"image/bmp":  true,
 		// 文档
-		"application/pdf":                true,
-		"application/msword":             true,
+		"application/pdf":    true,
+		"application/msword": true,
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
-		"application/vnd.ms-excel":       true,
-		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":       true,
-		"application/vnd.ms-powerpoint": true,
+		"application/vnd.ms-excel": true,
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+		"application/vnd.ms-powerpoint":                                             true,
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
 		// 压缩包
-		"application/zip":        true,
+		"application/zip":              true,
 		"application/x-zip-compressed": true,
 		"application/x-rar-compressed": true,
 		"application/x-7z-compressed":  true,
@@ -1055,19 +1169,19 @@ func IsAllowedMimeType(mimeType string) bool {
 		"application/x-msdownload": true,
 		"application/x-dosexec":    true,
 		// 音频
-		"audio/mpeg":  true,
-		"audio/wav":   true,
-		"audio/ogg":   true,
-		"audio/flac":  true,
+		"audio/mpeg": true,
+		"audio/wav":  true,
+		"audio/ogg":  true,
+		"audio/flac": true,
 		// 视频
-		"video/mp4":        true,
-		"video/webm":       true,
-		"video/x-msvideo":  true,
-		"video/quicktime":  true,
+		"video/mp4":       true,
+		"video/webm":      true,
+		"video/x-msvideo": true,
+		"video/quicktime": true,
 		// 文本
-		"text/plain": true,
-		"text/html":  true,
-		"text/css":   true,
+		"text/plain":      true,
+		"text/html":       true,
+		"text/css":        true,
 		"text/javascript": true,
 	}
 

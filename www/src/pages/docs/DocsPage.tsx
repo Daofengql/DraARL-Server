@@ -23,11 +23,14 @@ import {
   CloudSync,
   MenuBook,
   Build,
+  CloudDownload,
 } from '@mui/icons-material'
 
 // 导入 SVG 图像
 import deviceAccessFlow from '../../assets/device-access-flow.svg'
 import authSequence from '../../assets/auth-sequence.svg'
+// 导入下载中心组件
+import { DownloadCenterPage } from '../download/DownloadCenterPage'
 
 // 文档分区类型
 interface DocSection {
@@ -659,6 +662,12 @@ export function DocsPage() {
       label: '开发指南',
       icon: <Build fontSize="small" />,
       content: <DevGuideContent />,
+    },
+    {
+      id: 'download-center',
+      label: '下载中心',
+      icon: <CloudDownload fontSize="small" />,
+      content: <DownloadCenterPage />,
     },
   ]
 

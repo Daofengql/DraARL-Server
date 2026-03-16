@@ -20,6 +20,7 @@ import {
   DialogActions,
   List,
   ListItem,
+  ListItemButton,
   ListItemIcon,
   ListItemText,
   Divider,
@@ -74,8 +75,8 @@ export function DownloadCenterPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // 当前浏览状态
-  const [currentFolder, setCurrentFolder] = useState<{ id: number; name: string } | null>(null)
+  // 当前浏览状态 - 使用路径栈支持多级导航
+  const [pathStack, setPathStack] = useState<Array<{ id: number; name: string }>>([])
   const [files, setFiles] = useState<Asset[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
 
@@ -84,6 +85,9 @@ export function DownloadCenterPage() {
   const [selectedFile, setSelectedFile] = useState<Asset | null>(null)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
+
+  // 获取当前文件夹
+  const currentFolder = pathStack.length > 0 ? pathStack[pathStack.length - 1] : null
 
   // 加载分类列表
   useEffect(() => {
@@ -103,8 +107,9 @@ export function DownloadCenterPage() {
   }, [])
 
   // 进入文件夹
-  const handleEnterFolder = async (folder: AssetTreeItem) => {
-    setCurrentFolder({ id: folder.id, name: folder.name })
+  const handleEnterFolder = async (folder: AssetTreeItem | Asset) => {
+    const newPathStack = [...pathStack, { id: folder.id, name: folder.name }]
+    setPathStack(newPathStack)
     setFilesLoading(true)
     try {
       const data = await getFolderFiles(folder.id)
@@ -119,8 +124,49 @@ export function DownloadCenterPage() {
 
   // 返回分类列表
   const handleBackToCategories = () => {
-    setCurrentFolder(null)
+    setPathStack([])
     setFiles([])
+  }
+
+  // 返回上一级
+  const handleBackToParent = () => {
+    const newPathStack = pathStack.slice(0, -1)
+    setPathStack(newPathStack)
+    if (newPathStack.length > 0) {
+      // 加载上一级目录内容
+      const parentFolder = newPathStack[newPathStack.length - 1]
+      setFilesLoading(true)
+      getFolderFiles(parentFolder.id)
+        .then(data => setFiles(data.files || []))
+        .catch(err => {
+          console.error('加载文件列表失败', err)
+          setFiles([])
+        })
+        .finally(() => setFilesLoading(false))
+    } else {
+      setFiles([])
+    }
+  }
+
+  // 导航到路径栈中的某个位置
+  const handleNavigateTo = async (index: number) => {
+    const newPathStack = pathStack.slice(0, index + 1)
+    setPathStack(newPathStack)
+    if (newPathStack.length > 0) {
+      const targetFolder = newPathStack[newPathStack.length - 1]
+      setFilesLoading(true)
+      try {
+        const data = await getFolderFiles(targetFolder.id)
+        setFiles(data.files || [])
+      } catch (err: any) {
+        console.error('加载文件列表失败', err)
+        setFiles([])
+      } finally {
+        setFilesLoading(false)
+      }
+    } else {
+      setFiles([])
+    }
   }
 
   // 下载文件
@@ -229,10 +275,10 @@ export function DownloadCenterPage() {
       <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
         <Button
           startIcon={<ArrowBackIcon />}
-          onClick={handleBackToCategories}
+          onClick={pathStack.length > 1 ? handleBackToParent : handleBackToCategories}
           sx={{ color: 'text.secondary' }}
         >
-          返回分类
+          {pathStack.length > 1 ? '返回上一级' : '返回分类'}
         </Button>
         <Breadcrumbs separator="/">
           <Link
@@ -243,10 +289,28 @@ export function DownloadCenterPage() {
             <HomeIcon sx={{ mr: 0.5 }} fontSize="inherit" />
             下载中心
           </Link>
-          <Typography color="text.primary" sx={{ display: 'flex', alignItems: 'center' }}>
-            <FolderIcon sx={{ mr: 0.5 }} fontSize="inherit" />
-            {currentFolder?.name}
-          </Typography>
+          {pathStack.map((folder, index) => (
+            index === pathStack.length - 1 ? (
+              <Typography
+                key={folder.id}
+                color="text.primary"
+                sx={{ display: 'flex', alignItems: 'center' }}
+              >
+                <FolderIcon sx={{ mr: 0.5 }} fontSize="inherit" />
+                {folder.name}
+              </Typography>
+            ) : (
+              <Link
+                key={folder.id}
+                component="button"
+                onClick={() => handleNavigateTo(index)}
+                sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary' }}
+              >
+                <FolderIcon sx={{ mr: 0.5 }} fontSize="inherit" />
+                {folder.name}
+              </Link>
+            )
+          ))}
         </Breadcrumbs>
       </Box>
 
@@ -266,57 +330,60 @@ export function DownloadCenterPage() {
             {files.map((item, index) => (
               <Box key={item.id}>
                 {index > 0 && <Divider />}
-                <ListItem
-                  secondaryAction={
-                    item.type === 'folder' ? (
-                      <IconButton edge="end" onClick={() => handleEnterFolder(item as any)}>
-                        <ArrowBackIcon sx={{ transform: 'rotate(180deg)' }} />
-                      </IconButton>
-                    ) : (
-                      <IconButton edge="end" onClick={() => handleDownload(item)}>
-                        <DownloadIcon />
-                      </IconButton>
-                    )
-                  }
-                >
-                  <ListItemIcon>
-                    {item.type === 'folder' ? (
+                {item.type === 'folder' ? (
+                  <ListItemButton onClick={() => handleEnterFolder(item as any)}>
+                    <ListItemIcon>
                       <FolderIcon sx={{ color: 'primary.main', fontSize: 28 }} />
-                    ) : (
-                      getFileIcon(item.mime_type)
-                    )}
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={item.name}
-                    secondary={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                        {item.type === 'folder' ? (
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={item.name}
+                      secondary={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                           <Typography variant="caption" color="text.secondary">
                             {item.file_count || 0} 个文件
                           </Typography>
-                        ) : (
-                          <>
+                          {item.remark && (
                             <Typography variant="caption" color="text.secondary">
-                              {formatFileSize(item.size)}
+                              · {item.remark}
                             </Typography>
-                            {item.mime_type && (
-                              <Chip
-                                label={item.mime_type.split('/')[1]?.toUpperCase()}
-                                size="small"
-                                sx={{ height: 18, fontSize: '0.65rem' }}
-                              />
-                            )}
-                          </>
-                        )}
-                        {item.remark && (
-                          <Typography variant="caption" color="text.secondary">
-                            · {item.remark}
-                          </Typography>
-                        )}
-                      </Box>
+                          )}
+                        </Box>
+                      }
+                    />
+                  </ListItemButton>
+                ) : (
+                  <ListItem
+                    secondaryAction={
+                      <IconButton edge="end" onClick={() => handleDownload(item)}>
+                        <DownloadIcon />
+                      </IconButton>
                     }
-                  />
-                </ListItem>
+                  >
+                    <ListItemIcon>{getFileIcon(item.mime_type)}</ListItemIcon>
+                    <ListItemText
+                      primary={item.name}
+                      secondary={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            {formatFileSize(item.size)}
+                          </Typography>
+                          {item.mime_type && (
+                            <Chip
+                              label={item.mime_type.split('/')[1]?.toUpperCase()}
+                              size="small"
+                              sx={{ height: 18, fontSize: '0.65rem' }}
+                            />
+                          )}
+                          {item.remark && (
+                            <Typography variant="caption" color="text.secondary">
+                              · {item.remark}
+                            </Typography>
+                          )}
+                        </Box>
+                      }
+                    />
+                  </ListItem>
+                )}
               </Box>
             ))}
           </List>

@@ -38,7 +38,23 @@ class GroupManagerService {
 
     try {
       const response = await apiClient.get<any>('/api/groups')
-      const groups = response.data || []
+      // ���端返回格式: { code: 200, data: { items: [...], total: ... } }
+      const rawGroups = response.data?.items || []
+
+      // 转换字段名：蛇形 -> 驼峰
+      const groups: GroupWithOnline[] = rawGroups.map((g: any) => ({
+        id: g.id,
+        name: g.name,
+        callsign: g.callsign,
+        type: g.type,
+        status: g.status,
+        ownerId: g.ower_id,
+        note: g.note,
+        createTime: g.create_time,
+        updateTime: g.update_time,
+        onlineCount: g.online_count || 0,
+        deviceCount: g.total_count || 0,
+      }))
 
       // 更新缓存
       this.groupCache.clear()
@@ -67,13 +83,28 @@ class GroupManagerService {
 
     try {
       const response = await apiClient.get<any>(`/api/groups/${groupId}`)
-      const group = response.data
+      const g = response.data
 
-      if (group) {
+      if (g) {
+        // 转换字段名
+        const group: GroupWithOnline = {
+          id: g.id,
+          name: g.name,
+          callsign: g.callsign,
+          type: g.type,
+          status: g.status,
+          ownerId: g.ower_id,
+          note: g.note,
+          createTime: g.create_time,
+          updateTime: g.update_time,
+          onlineCount: g.online_count || 0,
+          deviceCount: g.total_count || 0,
+        }
         this.groupCache.set(groupId, group)
+        return group
       }
 
-      return group || null
+      return null
     } catch (error) {
       console.error('[GroupManager] Failed to get group:', error)
       return this.groupCache.get(groupId) || null
@@ -142,7 +173,22 @@ class GroupManagerService {
   async searchGroups(query: string): Promise<GroupWithOnline[]> {
     try {
       const response = await apiClient.post<any>('/api/groups/search', { query })
-      return response.data || []
+      const rawGroups = response.data || []
+
+      // 转换字段名：蛇形 -> 驼峰
+      return rawGroups.map((g: any) => ({
+        id: g.id,
+        name: g.name,
+        callsign: g.callsign,
+        type: g.type,
+        status: g.status,
+        ownerId: g.ower_id,
+        note: g.note,
+        createTime: g.create_time,
+        updateTime: g.update_time,
+        onlineCount: g.online_count || 0,
+        deviceCount: g.total_count || 0,
+      }))
     } catch (error) {
       console.error('[GroupManager] Failed to search groups:', error)
       return []

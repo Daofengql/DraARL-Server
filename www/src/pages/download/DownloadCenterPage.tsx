@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import {
   Box,
   Typography,
-  Container,
   Paper,
   Card,
   CardContent,
@@ -39,7 +38,6 @@ import {
   Home as HomeIcon,
   CloudDownload as CloudDownloadIcon,
 } from '@mui/icons-material'
-import { MainLayout } from '../../components/layout'
 import {
   getAssetTree,
   getFolderFiles,
@@ -308,8 +306,7 @@ export function DownloadCenterPage() {
   )
 
   return (
-    <MainLayout>
-      <Stack spacing={3}>
+    <Stack spacing={3}>
         {/* 页面标题 */}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <CloudDownloadIcon sx={{ fontSize: 36, color: 'primary.main', mb: 0.5 }} />
@@ -385,7 +382,6 @@ export function DownloadCenterPage() {
           </DialogActions>
         </Dialog>
       </Stack>
-    </MainLayout>
   )
 }
 

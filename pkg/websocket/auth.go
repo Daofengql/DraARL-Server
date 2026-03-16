@@ -189,6 +189,8 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 
 		if authResult.Success {
 			device.SSID = preAuth.SSID
+			// 设置默认群组
+			device.GroupID = 999 // 默认公共群组
 			manager.RegisterGhostDevice(device, authResult.UserID, authResult.CallSign, authResult.Nickname, preAuth.SSID)
 			return device, authResult
 		}

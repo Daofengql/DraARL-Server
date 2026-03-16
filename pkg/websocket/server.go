@@ -241,47 +241,14 @@ func handleServerVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 
 // routeVoiceToUDP 转发语音到 UDP 设备
 func routeVoiceToUDP(device *WSDevice, packet *WSPacket) {
-	// 获取群组信息
-	group, exists := udphub.GetGroupFromCache(device.GroupID)
-	if !exists {
-		return
-	}
-
-	// 构建服务器互联语音包
+	// 获取语音数据
 	voiceData := packet.DATA
 	if len(voiceData) == 0 {
 		return
 	}
 
-	// 使用 udphub 的全局连接发送
-	conn := udphub.GetGlobalConn()
-	if conn == nil {
-		return
-	}
-
-	// 获取群组内的 UDP 设备
-	pool := group.ConnPool
-	if pool == nil {
-		return
-	}
-
-	// 编码服务器互联语音包
-	serverVoiceData := protocol.EncodeServerVoice(
-		device.Username,
-		device.CallSign,
-		device.SSID,
-		device.DevModel,
-		0, // DMRID
-		device.Username,
-		device.CallSign,
-		nil, // OriginalIP
-		voiceData,
-	)
-
-	// 发送到群组内的 UDP 设备
-	// 这里需要遍历 UDP 设备并发送
-	// 暂时简化处理，后续完善
-	_ = serverVoiceData
+	// 使用 udphub 的全局消息路由器转发语音到 UDP 设备
+	udphub.BroadcastVoiceToUDP(device, voiceData, device.GroupID)
 }
 
 // routeVoiceToWS 转发语音到同组的 WS 设备
@@ -291,35 +258,14 @@ func routeVoiceToWS(device *WSDevice, rawData []byte) {
 
 // routeTextToUDP 转发文本消息到 UDP 设备
 func routeTextToUDP(device *WSDevice, packet *WSPacket) {
-	// 获取群组信息
-	group, exists := udphub.GetGroupFromCache(device.GroupID)
-	if !exists {
+	// 获取文本数据
+	textData := packet.DATA
+	if len(textData) == 0 {
 		return
 	}
 
-	// 获取群组内的 UDP 设备并转发
-	conn := udphub.GetGlobalConn()
-	if conn == nil {
-		return
-	}
-
-	// 构建文本消息包
-	textData := protocol.EncodeDraARLv1(
-		device.Username,
-		"",
-		device.SSID,
-		protocol.DraARLTypeTextMessage,
-		device.DevModel,
-		0,
-		device.CallSign,
-		packet.DATA,
-	)
-
-	// 发送到群组内的 UDP 设备
-	// 这里需要遍历 UDP 设备并发送
-	// 暂时简化处理，后续完善
-	_ = textData
-	_ = group
+	// 使用 udphub 的全局消息路由器转发文本消息到 UDP 设备
+	udphub.BroadcastTextToUDP(device, textData, device.GroupID)
 }
 
 // startHeartbeatChecker 启动心跳检查器

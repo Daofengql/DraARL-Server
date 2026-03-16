@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
+	"nrllink/internal/udphub"
 	ws "nrllink/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -158,21 +160,55 @@ func GetRadioGroupDevices(c *gin.Context) {
 		return
 	}
 
-	// 获取 WebSocket 设备
-	wsDevices := ws.GlobalManager.GetDevicesByGroup(groupID)
-	devices := make([]RadioDeviceResponse, 0, len(wsDevices))
+	devices := make([]RadioDeviceResponse, 0)
+	seenDevices := make(map[string]bool) // 用于去重
 
+	// 1. 获取 UDP 设备
+	udpDevices := udphub.GetOnlineDevicesByGroup(groupID)
+	for _, dev := range udpDevices {
+		key := fmt.Sprintf("udp-%d", dev.ID)
+		if seenDevices[key] {
+			continue
+		}
+		seenDevices[key] = true
+
+		devices = append(devices, RadioDeviceResponse{
+			ID:           dev.ID,
+			Username:     dev.Name,
+			CallSign:     dev.CallSign,
+			SSID:         int(dev.SSID),
+			Nickname:     dev.Name,
+			DevModel:     int(dev.DevModel),
+			GroupID:      dev.GroupID,
+			IsGhost:      false,
+			DisableSend:  dev.DisableSend,
+			DisableRecv:  dev.DisableRecv,
+			ConnectTime:  dev.OnlineTime.Format("2006-01-02 15:04:05"),
+			LastActivity: dev.LastPacketTime.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	// 2. 获取 WebSocket 设备（包括幽灵设备）
+	wsDevices := ws.GlobalManager.GetDevicesByGroup(groupID)
 	for _, device := range wsDevices {
+		key := fmt.Sprintf("ws-%d-%d", device.GetDeviceID(), device.GetSSID())
+		if seenDevices[key] {
+			continue
+		}
+		seenDevices[key] = true
+
 		dev := RadioDeviceResponse{
-			ID:          device.GetDeviceID(),
-			Username:    device.GetUsername(),
-			CallSign:    device.GetCallSign(),
-			SSID:        int(device.GetSSID()),
-			GroupID:     device.GetGroupID(),
-			IsGhost:     device.IsGhost(),
-			DisableSend: device.DisableSend,
-			DisableRecv: device.IsDisabledRecv(),
-			DevModel:    int(device.GetDevModel()),
+			ID:           device.GetDeviceID(),
+			Username:     device.GetUsername(),
+			CallSign:     device.GetCallSign(),
+			SSID:         int(device.GetSSID()),
+			GroupID:      device.GetGroupID(),
+			IsGhost:      device.IsGhost(),
+			DisableSend:  device.DisableSend,
+			DisableRecv:  device.IsDisabledRecv(),
+			DevModel:     int(device.GetDevModel()),
+			ConnectTime:  device.ConnectTime.Format("2006-01-02 15:04:05"),
+			LastActivity: device.LastPacketTime.Format("2006-01-02 15:04:05"),
 		}
 
 		devices = append(devices, dev)

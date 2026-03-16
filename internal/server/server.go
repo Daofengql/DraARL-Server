@@ -249,6 +249,21 @@ func (s *Server) setupRoutes() {
 			admin.GET("/config/aprs", configHandler.GetAPRSConfig)
 			admin.GET("/config/openai", configHandler.GetOpenAIConfig)
 			admin.GET("/config/aprs/logs", configHandler.GetAPRSLogs)
+
+			// 资源管理（需要管理员权限）
+			assetHandler := handler.NewAssetHandler()
+			admin.GET("/assets", assetHandler.GetAssets)             // 获取资源列表
+			admin.POST("/assets/folder", assetHandler.CreateFolder) // 创建文件夹
+			admin.POST("/assets/upload", assetHandler.UploadFile)   // 上传文件
+			admin.PUT("/assets/:id", assetHandler.UpdateAsset)     // 更新资源（重命名、备注）
+			admin.PUT("/assets/:id/move", assetHandler.MoveAsset)   // 移动资源
+			admin.POST("/assets/:id/replace", assetHandler.ReplaceFile) // 覆盖文件
+			admin.DELETE("/assets/:id", assetHandler.DeleteAsset)   // 删除资源
+
+			// 资源公开接口（前台下载中心使用）
+			api.GET("/assets/tree", assetHandler.GetAssetTree)              // 获取目录树
+			api.GET("/assets/folder/:id", assetHandler.GetFolderFiles)   // 获取文件夹下的文件
+			api.GET("/assets/:id/download", assetHandler.GetDownloadURL) // 获取下载链接
 		}
 	}
 

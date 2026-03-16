@@ -22,6 +22,7 @@ import {
   ExitToApp,
   Mic,
   MenuBook,
+  CloudDownload,
 } from '@mui/icons-material'
 import { authService, apiClient } from '../../services'
 
@@ -44,6 +45,7 @@ const menuItems: MenuItem[] = [
   { path: '/groups', label: '群组管理', icon: <Group /> },
   { path: '/profile', label: '个人中心', icon: <Person /> },
   { path: '/comm-records', label: '通信记录', icon: <Mic /> },
+  { path: '/download', label: '下载中心', icon: <CloudDownload /> },
   { path: '/docs', label: '技术支持', icon: <MenuBook /> },
 ]
 

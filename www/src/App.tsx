@@ -15,6 +15,7 @@ import { SiteConfigPage } from './pages/settings'
 import { CommRecordsPage } from './pages/comm-records'
 import { NotFoundPage } from './pages/not-found'
 import { DocsPage } from './pages/docs'
+import { DownloadCenterPage } from './pages/download'
 import { AdminLayout } from './components/layout/AdminLayout'
 import { AdminDashboardPage } from './pages/admin/DashboardPage'
 import { AdminDevicePage } from './pages/admin/DevicePage'
@@ -59,6 +60,7 @@ function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="comm-records" element={<CommRecordsPage />} />
           <Route path="docs" element={<DocsPage />} />
+          <Route path="download" element={<DownloadCenterPage />} />
         </Route>
 
         {/* 管理员专用路由 /admin */}

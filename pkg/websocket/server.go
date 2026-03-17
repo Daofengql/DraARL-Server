@@ -202,8 +202,9 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 	// 转发语音到 UDP 设备（通过 udphub）
 	routeVoiceToUDP(device, packet)
 
-	// 转发语音到同组的其他 WS 设备
-	routeVoiceToWS(device, rawData)
+	// 【修复】：不再传递 rawData，而是传递解析后的 packet
+	// 在 routeVoiceToWS 中使用服务端权威身份重新编码，杜绝盲目透传
+	routeVoiceToWS(device, packet)
 
 	// 更新语音统计
 	device.VoiceTime += 63 // Opus 帧时长
@@ -219,8 +220,14 @@ func handleTextMessage(device *WSDevice, packet *WSPacket, rawData []byte) {
 	// 转发消息到 UDP 设备
 	routeTextToUDP(device, packet)
 
+	// 【核心修复】：文本消息同样需要覆写权威身份，防止盲目透传
+	packet.Username = device.Username
+	packet.CallSign = device.CallSign
+	packet.SSID = device.SSID
+	authoritativeData := EncodeWSPacket(packet)
+
 	// 转发消息到同组的其他 WS 设备
-	GlobalManager.BroadcastToGroup(device.GroupID, device, rawData, websocket.BinaryMessage)
+	GlobalManager.BroadcastToGroup(device.GroupID, device, authoritativeData, websocket.BinaryMessage)
 }
 
 // handleConfig 处理配置包
@@ -255,8 +262,19 @@ func routeVoiceToUDP(device *WSDevice, packet *WSPacket) {
 }
 
 // routeVoiceToWS 转发语音到同组的 WS 设备
-func routeVoiceToWS(device *WSDevice, rawData []byte) {
-	GlobalManager.BroadcastToGroup(device.GroupID, device, rawData, websocket.BinaryMessage)
+// 【修复】：接收 *WSPacket 而不是 rawData，使用服务端权威身份重新编码
+func routeVoiceToWS(device *WSDevice, packet *WSPacket) {
+	// 【核心修复】：强制使用服务端鉴权后的权威身份信息覆盖前端的数据
+	// 防止前端发送空身份包导致接收端显示错误的发言人
+	packet.Username = device.Username
+	packet.CallSign = device.CallSign
+	packet.SSID = device.SSID
+
+	// 重新编码为标准的 WebSocket 二进制数据包
+	authoritativeData := EncodeWSPacket(packet)
+
+	// 发送干净、权威的数据包
+	GlobalManager.BroadcastToGroup(device.GroupID, device, authoritativeData, websocket.BinaryMessage)
 }
 
 // routeTextToUDP 转发文本消息到 UDP 设备

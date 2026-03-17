@@ -154,7 +154,9 @@ export class AudioCapture {
 
       // 创建 ScriptProcessor (旧 API，但兼容性好)
       // 实际项目中建议使用 AudioWorklet
-      this.processor = this.audioContext!.createScriptProcessor(4096, 1, 1)
+      // 【关键修复】：将 4096 改为 1024
+      // 1024 样本 @16kHz = 64ms 触发一次，确保数据发送间隔远低于 200ms 超时阈值，消除 UI 闪烁
+      this.processor = this.audioContext!.createScriptProcessor(1024, 1, 1)
 
       this.processor.onaudioprocess = (event) => {
         if (this.state !== 'capturing') return

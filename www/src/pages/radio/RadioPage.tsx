@@ -205,6 +205,7 @@ export const RadioPage: React.FC = () => {
   const [deviceListOpen, setDeviceListOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isPTTDown, setIsPTTDown] = useState(false)
+  const [connectionConflict, setConnectionConflict] = useState(false) // 【新增】连接冲突状态
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -242,6 +243,12 @@ export const RadioPage: React.FC = () => {
         radioService.on('error', (errorMsg) => {
           setError(errorMsg)
           setTimeout(() => setError(null), 5000)
+        })
+
+        // 【新增】处理连接冲突事件
+        radioService.on('conflict', () => {
+          setConnectionConflict(true)
+          setError('您的账号已在其他页面建立了电台连接，���先断开其他页面的连接')
         })
 
         // 初始化服务（传入用户上次选中的群组 ID，确保跨设备同步）
@@ -431,6 +438,21 @@ export const RadioPage: React.FC = () => {
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+
+      {/* 【新增】连接冲突警告 */}
+      {connectionConflict && (
+        <Alert
+          severity="warning"
+          icon={<HeadsetIcon />}
+          sx={{ alignItems: 'center' }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+            <Typography variant="body2">
+              您的账号已在其他页面建立了电台连接，请先断开其他页面的连接
+            </Typography>
+          </Box>
         </Alert>
       )}
 

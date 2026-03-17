@@ -396,6 +396,20 @@ func (m *WSConnectionManager) GetGhostDevice(userID int) (*WSDevice, bool) {
 	return device, exists
 }
 
+// IsGhostDeviceOnline 检查幽灵设备是否在线（用于互斥检查）
+// 返回 true 表示该用户已有在线的幽灵设备连接
+func (m *WSConnectionManager) IsGhostDeviceOnline(userID int) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	device, exists := m.ghostDevices[userID]
+	if !exists {
+		return false
+	}
+	// 检查连接是否真正在线
+	return device.IsOnline && device.ConnState == StateOnline
+}
+
 // GetAllOnlineDevices 获取所有在线设备
 func (m *WSConnectionManager) GetAllOnlineDevices() []*WSDevice {
 	m.mu.RLock()

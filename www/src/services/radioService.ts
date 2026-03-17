@@ -137,6 +137,7 @@ export type RadioEventType =
   | 'error'
   | 'speaking'
   | 'speakingEnd'
+  | 'conflict' // 【新增】连接冲突事件
 
 export interface RadioEventHandlers {
   connectionStateChange?: ConnectionStateCallback
@@ -146,6 +147,7 @@ export interface RadioEventHandlers {
   error?: ErrorCallback
   speaking?: (callsign: string, ssid: number) => void
   speakingEnd?: (callsign: string, ssid: number) => void
+  conflict?: () => void // 【新增】连接冲突回调
 }
 
 /**
@@ -243,6 +245,11 @@ export class RadioService {
 
     this.ws.setOnError((error) => {
       this.emit('error', error)
+    })
+
+    // 【新增】设置连接冲突回调
+    this.ws.setOnConflict(() => {
+      this.emit('conflict')
     })
 
     // 初始化音频

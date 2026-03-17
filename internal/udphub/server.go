@@ -650,7 +650,7 @@ func min(a, b int) int {
 
 // canForwardToDevice 检查是否可以转发数据到目标 UDP 设备
 // 参数说明：
-//   - target: 目标��备
+//   - target: 目标设备
 //   - sourceID: 源设备 ID（用于排除自己）
 //   - expectedGroupID: 期望的群组 ID（用于懒剔除）
 //   - skipSelf: 是否排除自己

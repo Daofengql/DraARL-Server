@@ -488,7 +488,7 @@ func (m *WSConnectionManager) SetDeviceGroup(device *WSDevice, groupID int) {
 	key := getDeviceKey(device)
 	m.removeFromGroupIndex(device.GroupID, key)
 
-	// 更���群组 ID
+	// 更新群组 ID
 	device.GroupID = groupID
 
 	// 添加到新群组索引

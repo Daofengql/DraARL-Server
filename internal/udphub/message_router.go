@@ -130,7 +130,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 这样下发的就是最标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
 	voicePacket := protocol.EncodeDraARLv1(
 		source.GetUsername(),
-		"", // 准入密码��发为空
+		"", // 准入密码转发为空
 		source.GetSSID(),
 		protocol.DraARLTypeOpus16K, // 【核心修改】使用 Type 5：标准 Opus 16K 语音
 		source.GetDevModel(),

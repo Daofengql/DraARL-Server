@@ -271,7 +271,7 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 	}
 }
 
-// checkDeviceOnline 检查设备在��状态
+// checkDeviceOnline 检查设备在线状态
 func checkDeviceOnline() {
 	time.Sleep(10 * time.Second)
 

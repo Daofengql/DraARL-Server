@@ -286,7 +286,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
 
     // 异步加载用户头像
     const loadUserAvatar = useCallback(async (username: string | number) => {
-      // 【核心修复】补充 trim() 防止不可见空格绕过��则
+      // 【核心修复】补充 trim() 防止不可见空格绕过规则
       const key = String(username).trim()
 
       // 已缓存则跳过
@@ -411,7 +411,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
           const usernameForCache = String((message as any).senderUsername || message.senderNickname || message.senderId).trim()
           const cachedInfo = userInfoCache.get(usernameForCache)
 
-          // 如果是己方消���，直接从 currentUser 提取头像，否则用缓存
+          // 如果是己方消息，直接从 currentUser 提取头像，否则用缓存
           const selfAvatar = currentUser?.avatar_thumb || currentUser?.avatar
           const avatarUrl = isSelf && selfAvatar
             ? selfAvatar

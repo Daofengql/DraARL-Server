@@ -300,7 +300,7 @@ func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username st
 	log.Printf("[WS] Normal device registered: %s (ID: %d, CallSign: %s)", key, deviceID, callsign)
 }
 
-// RegisterGhostDevice 注册幽灵设备（JWT 认���成功后调用）
+// RegisterGhostDevice 注册幽灵设备（JWT 认证成功后调用）
 func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, username, callsign, nickname string, ssid byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

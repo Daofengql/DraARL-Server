@@ -1,6 +1,6 @@
 /**
  * Radio 服务
- * 整合 WebSocket、音频、消息缓存和群组���理
+ * 整合 WebSocket、音频、消息缓存和群组管理
  */
 
 import { RadioWebSocket, getRadioWebSocket, closeRadioWebSocket } from './radio/websocket'
@@ -442,7 +442,7 @@ export class RadioService {
         duration: duration,
         timestamp: this.sendingVoiceStartTime,
         isSelf: true,
-        isPlayed: true, // 自己发送的语音默���已播放
+        isPlayed: true, // 自己发送的语音默认已播放
       }
 
       // 添加到缓存
@@ -597,7 +597,7 @@ export class RadioService {
    */
   public async clearAllMessageCache(): Promise<boolean> {
     try {
-      // 1. 清空底层 IndexedDB ���据库
+      // 1. 清空底层 IndexedDB 数据库
       await messageCache.clearAllMessages()
 
       // 2. 清空 Service 内部的语音缓存
@@ -749,7 +749,7 @@ export class RadioService {
           this.currentVoiceSSID = packet.ssid
           this.currentVoiceUsername = originalUsername
         }
-        // 收集语��数据
+        // 收集语音数据
         this.voiceChunks.push(new Uint8Array(voiceData))
       }
 

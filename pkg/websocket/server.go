@@ -222,7 +222,7 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 			recordSSID = 105
 		} else {
 			// 【模式 B】 非 JWT 认证的普通设备（物理硬件终端）
-			// 享受与 UDP 设���完全相同的待遇，传入其在数据库中映射的真实物理设备 ID
+			// 享受与 UDP 设备完全相同的待遇，传入其在数据库中映射的真实物理设备 ID
 			recordDevID = device.DeviceID
 
 			// 提取该物理终端自身配置的真实 SSID

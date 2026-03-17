@@ -386,9 +386,9 @@ func GetCurrentUser(c *gin.Context) {
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
 					return user.LastLoginTime.Format("2006-01-02 15:04:05")
-			}
-			return ""
-		}(),
+				}
+				return ""
+			}(),
 			"last_login_ip":   user.LastLoginIP,
 			"login_err_times": user.LoginErrTimes,
 			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
@@ -1221,7 +1221,7 @@ func GetUserPublicInfo(c *gin.Context) {
 	})
 }
 
-// GetUserPublicInfoByName 通过用户名获取用户公开信息（任何登录用户���访问）
+// GetUserPublicInfoByName 通过用户名获取用户公开信息（任何登录用户名访问）
 func GetUserPublicInfoByName(c *gin.Context) {
 	username := c.Param("username")
 	if username == "" {

@@ -1,6 +1,6 @@
 /**
  * Radio 服务
- * 整合 WebSocket、音频、消息缓存和群组���理
+ * 整合 WebSocket、音频、消息缓存和群组管理
  */
 
 import { RadioWebSocket, getRadioWebSocket, closeRadioWebSocket } from './radio/websocket'
@@ -79,7 +79,6 @@ function writeString(view: DataView, offset: number, str: string): void {
 
 // 将 Opus 帧数组解码为 WAV Blob
 async function opusFramesToWav(frames: Uint8Array[]): Promise<Blob> {
-  console.log('[opusFramesToWav] Converting frames:', frames.length)
   if (frames.length === 0) {
     throw new Error('No frames to decode')
   }
@@ -99,11 +98,9 @@ async function opusFramesToWav(frames: Uint8Array[]): Promise<Blob> {
         const decoded = decoder.decodeFrame(frame)
         decodedFrames.push(decoded.channelData[0])
       } catch (e) {
-        console.warn('[opusFramesToWav] Failed to decode frame:', e)
+        // 静默忽略解码失败的帧
       }
     }
-
-    console.log('[opusFramesToWav] Decoded frames:', decodedFrames.length)
     if (decodedFrames.length === 0) {
       throw new Error('No frames decoded successfully')
     }
@@ -442,7 +439,7 @@ export class RadioService {
         duration: duration,
         timestamp: this.sendingVoiceStartTime,
         isSelf: true,
-        isPlayed: true, // 自己发送的语音默���已播放
+        isPlayed: true, // 自己发送的语音默认已播放
       }
 
       // 添加到缓存
@@ -597,7 +594,7 @@ export class RadioService {
    */
   public async clearAllMessageCache(): Promise<boolean> {
     try {
-      // 1. 清空底层 IndexedDB ���据库
+      // 1. 清空底层 IndexedDB 数据库
       await messageCache.clearAllMessages()
 
       // 2. 清空 Service 内部的语音缓存
@@ -607,10 +604,8 @@ export class RadioService {
       this.currentVoiceSSID = 0
       this.currentVoiceUsername = ''
 
-      console.log('[RadioService] 缓存已彻底清空')
       return true
     } catch (error) {
-      console.error('[RadioService] 彻底清空缓存失败:', error)
       return false
     }
   }
@@ -623,17 +618,12 @@ export class RadioService {
    */
   private async syncGroupToServer(groupId: number): Promise<void> {
     try {
-      const response = await apiClient.put<{ code: number; message: string }>(`/api/radio/group`, {
+      await apiClient.put<{ code: number; message: string }>(`/api/radio/group`, {
         group_id: groupId,
       })
-
-      if (response.code === 200) {
-        console.log(`[RadioService] 重连后成功同步群组: ${groupId}`)
-      } else {
-        console.warn(`[RadioService] 重连后同步群组失败: ${response.message}`)
-      }
-    } catch (error) {
-      console.error('[RadioService] 重连后同步群组异常:', error)
+      // 静默处理同步结果
+    } catch {
+      // 静默处理同步失败
     }
   }
 
@@ -690,7 +680,6 @@ export class RadioService {
     if (packet.data && packet.data.length > 0) {
       // 如果是新说话人，重置缓存
       if (this.currentVoiceCallsign !== packet.callsign || this.currentVoiceSSID !== packet.ssid) {
-        console.log('[RadioService] 新说话人:', packet.callsign, packet.ssid)
         this.voiceChunks = []
         this.voiceStartTime = Date.now()
         this.currentVoiceCallsign = packet.callsign
@@ -699,7 +688,6 @@ export class RadioService {
       }
       // 收集语音数据
       this.voiceChunks.push(new Uint8Array(packet.data))
-      console.log('[RadioService] 收集语音数据, 当前chunks:', this.voiceChunks.length)
     }
 
     // 播放音频
@@ -749,7 +737,7 @@ export class RadioService {
           this.currentVoiceSSID = packet.ssid
           this.currentVoiceUsername = originalUsername
         }
-        // 收集语��数据
+        // 收集语音数据
         this.voiceChunks.push(new Uint8Array(voiceData))
       }
 
@@ -849,7 +837,6 @@ export class RadioService {
     }
 
     this.voiceEndTimer = setTimeout(async () => {
-      console.log('[RadioService] voiceEndTimer triggered, current chunks:', this.voiceChunks.length)
       // 保存语音消息到缓存
       try {
         await this.saveVoiceMessage()
@@ -869,35 +856,22 @@ export class RadioService {
    * 保存语音消息到缓存（仅保存接收的语音，自己发送的由 saveSendingVoiceMessage 处理）
    */
   private async saveVoiceMessage(): Promise<void> {
-    console.log('[RadioService] saveVoiceMessage called', {
-      chunksLength: this.voiceChunks.length,
-      callsign: this.currentVoiceCallsign,
-      ssid: this.currentVoiceSSID,
-      selfCallsign: this.callsign,
-      selfSsid: this.ssid,
-    })
-
     // 检查是否有语音数据
     if (this.voiceChunks.length === 0) {
-      console.log('[RadioService] saveVoiceMessage: 没有语音数据')
       return
     }
     if (!this.currentVoiceCallsign) {
-      console.log('[RadioService] saveVoiceMessage: 没有呼号')
       return
     }
 
     // 【关键修复】如果是自己发送的语音，跳过保存
     if (this.currentVoiceCallsign === this.callsign && this.currentVoiceSSID === this.ssid) {
-      console.log('[RadioService] 跳过保存自己的语音回声（已由 saveSendingVoiceMessage 处理）')
       this.voiceChunks = []
       this.currentVoiceCallsign = ''
       this.currentVoiceSSID = 0
       this.currentVoiceUsername = ''
       return
     }
-
-    console.log('[RadioService] 开始保存语音消息，chunks:', this.voiceChunks.length)
 
     // 计算语音时长
     const duration = Date.now() - this.voiceStartTime
@@ -925,7 +899,6 @@ export class RadioService {
 
       // 添加到缓存
       messageCache.addMessage(toCachedMessage(radioMessage))
-      console.log('[RadioService] 语音消息已保存到缓存:', radioMessage.id)
 
       // 触发事件（通知 UI 更新）
       this.emit('message', radioMessage)

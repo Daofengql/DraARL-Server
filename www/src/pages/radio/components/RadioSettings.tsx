@@ -38,7 +38,7 @@ interface RadioSettingsProps {
   config: RadioUserConfig
   onConfigChange: (config: RadioUserConfig) => void
   onClose: () => void
-  // 清除缓存的回调函数（由父组件提供，负责同时清理���据库和内存）
+  // 清除缓存的回调函数（由父组件提供，负责同时清理数据库和内存）
   onRequestClearCache?: () => Promise<void>
 }
 
@@ -87,7 +87,7 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
           alert('清除缓存时发生错误')
         }
       } else {
-        // 兼容��版本：如果没有传入 onRequestClearCache，仅显示提示
+        // 兼容旧版本：如果没有传入 onRequestClearCache，仅显示提示
         alert('请在主页面进行缓存清理')
       }
     }

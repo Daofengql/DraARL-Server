@@ -70,7 +70,7 @@ const useStyles = () => ({
   root: {
     // 使用固定高度计算，突破父容器的 padding 限制
     height: 'calc(100vh - 64px - 48px)', // 64px header + 24px padding (上下各 12px)
-    margin: { xs: -2, sm: -3 }, // 抵��父容器的 padding
+    margin: { xs: -2, sm: -3 }, // 抵消父容器的 padding
     display: 'flex',
     flexDirection: 'column',
     bgcolor: 'background.default',

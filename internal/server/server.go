@@ -132,7 +132,7 @@ func (s *Server) setupRoutes() {
 
 			// 修改用户密码（用户本人或管理员可访问）
 			protected.PUT("/users/:id/password", handler.UpdateUserPassword)
-			// 获取用户公开信息（任��登录用户可访问）
+			// 获取用户公开信息（任何登录用户可访问）
 			protected.GET("/users/:id/public", handler.GetUserPublicInfo)
 			// 通过用户名获取用户公开信息（任何登录用户可访问）
 			protected.GET("/users/name/:username/public", handler.GetUserPublicInfoByName)
@@ -255,28 +255,28 @@ func (s *Server) setupRoutes() {
 
 			// 资源管理（需要管理员权限）
 			assetHandler := handler.NewAssetHandler()
-			admin.GET("/assets", assetHandler.GetAssets)             // 获取资源列表
-			admin.POST("/assets/folder", assetHandler.CreateFolder) // 创建文件夹
-			admin.POST("/assets/upload", assetHandler.UploadFile)   // 上传文件
-			admin.PUT("/assets/:id", assetHandler.UpdateAsset)     // 更新资源（重命名、备注）
-			admin.PUT("/assets/:id/move", assetHandler.MoveAsset)   // 移动资源
+			admin.GET("/assets", assetHandler.GetAssets)                // 获取资源列表
+			admin.POST("/assets/folder", assetHandler.CreateFolder)     // 创建文件夹
+			admin.POST("/assets/upload", assetHandler.UploadFile)       // 上传文件
+			admin.PUT("/assets/:id", assetHandler.UpdateAsset)          // 更新资源（重命名、备注）
+			admin.PUT("/assets/:id/move", assetHandler.MoveAsset)       // 移动资源
 			admin.POST("/assets/:id/replace", assetHandler.ReplaceFile) // 覆盖文件
-			admin.DELETE("/assets/:id", assetHandler.DeleteAsset)   // 删除资源
+			admin.DELETE("/assets/:id", assetHandler.DeleteAsset)       // 删除资源
 
 			// 资源公开接口（前台下载中心使用）
-			api.GET("/assets/tree", assetHandler.GetAssetTree)              // 获取目录树
+			api.GET("/assets/tree", assetHandler.GetAssetTree)           // 获取目录树
 			api.GET("/assets/folder/:id", assetHandler.GetFolderFiles)   // 获取文件夹下的文件
 			api.GET("/assets/:id/download", assetHandler.GetDownloadURL) // 获取下载链接
 
 			// 在线收发 API（需要审核通过）
 			radio := approved.Group("/radio")
 			{
-				radio.GET("/config", handler.GetRadioConfig)                          // 获取在线收发配置
-				radio.PUT("/ssid", handler.UpdateRadioSSID)                           // 更新 SSID
-				radio.GET("/status", handler.GetRadioStatus)                         // 获取幽灵设备状态
-				radio.GET("/groups/stats", handler.GetRadioGroupStats)               // 获取所有群组实时统计（含 WS 设备）
-				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices)       // 获取群组在线设备
-				radio.PUT("/group", handler.UpdateRadioGroup)                        // 【新增】切换幽灵设备群组
+				radio.GET("/config", handler.GetRadioConfig)                   // 获取在线收发配置
+				radio.PUT("/ssid", handler.UpdateRadioSSID)                    // 更新 SSID
+				radio.GET("/status", handler.GetRadioStatus)                   // 获取幽灵设备状态
+				radio.GET("/groups/stats", handler.GetRadioGroupStats)         // 获取所有群组实时统计（含 WS 设备）
+				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices) // 获取群组在线设备
+				radio.PUT("/group", handler.UpdateRadioGroup)                  // 【新增】切换幽灵设备群组
 			}
 		}
 	}
@@ -308,23 +308,23 @@ func initSiteConfigs(cfg *config.Configuration) {
 
 	// 初始化默认配置（空值或最小默认值）
 	if err := repo.InitDefaultConfigs(
-		"",                    // ICP - 空
-		common.SiteName,       // 系统名称
-		common.SiteShortName,  // 系统简称
-		"",                    // Logo URL
-		"zh",                  // 语言
-		"china.aprs2.net",     // APRS 服务器
-		"14580",               // APRS 端口
-		"",                    // 本机地址
-		"60050",               // 本机端口
-		"",                    // 呼号
-		"10",                  // SSID
-		"000000",              // 海拔
-		0,                     // 纬度
-		0,                     // 经度
-		"",                    // OpenAI BaseURL
-		"",                    // OpenAI APIKey
-		"",                    // OpenAI Engine
+		"",                   // ICP - 空
+		common.SiteName,      // 系统名称
+		common.SiteShortName, // 系统简称
+		"",                   // Logo URL
+		"zh",                 // 语言
+		"china.aprs2.net",    // APRS 服务器
+		"14580",              // APRS 端口
+		"",                   // 本机地址
+		"60050",              // 本机端口
+		"",                   // 呼号
+		"10",                 // SSID
+		"000000",             // 海拔
+		0,                    // 纬度
+		0,                    // 经度
+		"",                   // OpenAI BaseURL
+		"",                   // OpenAI APIKey
+		"",                   // OpenAI Engine
 	); err != nil {
 		log.Printf("初始化站点配置失败: %v", err)
 		return

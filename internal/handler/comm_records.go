@@ -102,7 +102,8 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 
 // GetCommRecords 获取通信记录列表（使用联表查询）
 // 权限规则：
-// - 管理员：可查看所有记录
+// - 管理员 + admin_mode=true：可查看所有记录（管理员后台）
+// - 管理员 + admin_mode=false：只能查看自己的记录（管理员前台）
 // - 普通用户：只能查看自己设备的记录
 func GetCommRecords(c *gin.Context) {
 	// 获取分页参数
@@ -116,6 +117,8 @@ func GetCommRecords(c *gin.Context) {
 	deviceIDStr := c.Query("device_id")
 	groupIDStr := c.Query("group_id")
 	userIDStr := c.Query("user_id")
+	// 获取管理员模式参数：只有管理员在后台页面时才为 true
+	adminMode := c.Query("admin_mode") == "true"
 
 	db := gormdb.Get().Table("comm_records cr").
 		Select(`
@@ -138,13 +141,22 @@ func GetCommRecords(c *gin.Context) {
 			isAdmin = true
 		}
 	} else if roles, exists := c.Get("roles"); exists {
-		if rolesStr, ok := roles.(string); ok && rolesStr == "admin" {
-			isAdmin = true
+		// roles 是 []string 类型，需要正确处理
+		if rolesSlice, ok := roles.([]string); ok {
+			for _, role := range rolesSlice {
+				if role == "admin" {
+					isAdmin = true
+					break
+				}
+			}
 		}
 	}
 
-	// 非管理员只能查看自己设备的记录
-	if !isAdmin {
+	// 判断是否可以查看全局记录：必须是管理员且在后台模式
+	canViewGlobal := isAdmin && adminMode
+
+	// 非全局模式只能查看自己设备的记录
+	if !canViewGlobal {
 		// 获取当前用户名
 		username, exists := c.Get("username")
 		if !exists {
@@ -183,8 +195,8 @@ func GetCommRecords(c *gin.Context) {
 			db = db.Where("cr.group_id = ?", groupID)
 		}
 	}
-	// 管理员可以按 user_id 筛选
-	if isAdmin && userIDStr != "" {
+	// 全局模式下可以按 user_id 筛选
+	if canViewGlobal && userIDStr != "" {
 		userIDFilter, err := strconv.ParseUint(userIDStr, 10, 32)
 		if err == nil {
 			db = db.Where("cr.user_id = ?", userIDFilter)

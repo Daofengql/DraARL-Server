@@ -90,6 +90,8 @@ export function CommRecordsPage() {
       if (filterUserId) params.user_id = filterUserId
       if (filterDeviceId) params.device_id = filterDeviceId
       if (filterGroupId) params.group_id = filterGroupId
+      // 管理员后台模式：只有管理员在后台页面时才能查询全局记录
+      if (isAdminPage) params.admin_mode = true
 
       const res = await apiClient.get<any>('/api/comm-records', { params })
       if (res.code === 200) {

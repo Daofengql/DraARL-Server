@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Box } from '@mui/material'
 import { Header } from './Header'
 import { Sidebar, DRAWER_WIDTH } from './Sidebar'
 import { Outlet } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { authService } from '../../services'
 
 interface MainLayoutProps {
   children?: React.ReactNode
@@ -14,6 +15,11 @@ export function MainLayout({ children }: MainLayoutProps) {
 
   // 同步页面标题
   usePageTitle()
+
+  // 页面加载时刷新用户信息，确保审核状态等是最新的
+  useEffect(() => {
+    authService.refreshUserInfo()
+  }, [])
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen)

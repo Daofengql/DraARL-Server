@@ -158,6 +158,7 @@ func Login(c *gin.Context) {
 		"dmrid":           user.DMRID,
 		"mdcid":           user.MDCID,
 		"alarm_msg":       user.AlarmMsg,
+		"last_group_id":   user.LastGroupID, // 用户最后选中的群组
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
 				return user.LastLoginTime.Format("2006-01-02 15:04:05")
@@ -381,12 +382,13 @@ func GetCurrentUser(c *gin.Context) {
 			"dmrid":           user.DMRID,
 			"mdcid":           user.MDCID,
 			"alarm_msg":       user.AlarmMsg,
+			"last_group_id":   user.LastGroupID,
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
 					return user.LastLoginTime.Format("2006-01-02 15:04:05")
-				}
-				return ""
-			}(),
+			}
+			return ""
+		}(),
 			"last_login_ip":   user.LastLoginIP,
 			"login_err_times": user.LoginErrTimes,
 			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),

@@ -292,6 +292,13 @@ func UpdateRadioGroup(c *gin.Context) {
 
 	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 从群组 %d 切换到群组 %d", userID, oldGroupID, req.GroupID)
 
+	// 【持久化】将用户的群组偏好保存到数据库，以便下次登录时恢复
+	userRepo := gormdb.NewUserRepository()
+	if err := userRepo.UpdateLastGroupID(userID, req.GroupID); err != nil {
+		log.Printf("[RADIO] 警告: 更新用户 %d 的 LastGroupID 失败: %v", userID, err)
+		// 不影响响应，群组切换已成功
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "群组切换成功",
@@ -299,5 +306,56 @@ func UpdateRadioGroup(c *gin.Context) {
 			"group_id":     req.GroupID,
 			"old_group_id": oldGroupID,
 		},
+	})
+}
+
+// GetRadioGroupStats 获取用户有权限访问的群组实时统计信息
+// 此接口专门为 Radio 页面设计，返回包含 WS 设备的实时统计
+// 只返回用户有权限访问的群组（公开群组 + 用户已验证的私有群组）
+func GetRadioGroupStats(c *gin.Context) {
+	// 获取当前用户
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	// 获取用户有权限访问的群组 ID 列表
+	memberRepo := gormdb.NewGroupMemberRepository()
+	members, err := memberRepo.ListGroupsByUser(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
+		return
+	}
+
+	// 构建用户有权限的群组 ID 集合
+	accessibleGroupIDs := make(map[int]bool)
+	for _, m := range members {
+		accessibleGroupIDs[m.GroupID] = true
+	}
+
+	// 获取所有群组统计
+	allStats := udphub.GetAllGroupStats()
+
+	// 只返回用户有权限访问的群组（公开群组 type=1 或用户已验证的私有群组）
+	result := make([]gin.H, 0, len(allStats))
+	for _, s := range allStats {
+		// 公开群组（type=1）对所有用户可见
+		// 私有群组（type=2）只对已验证用户可见
+		if s.Type == 1 || accessibleGroupIDs[s.ID] {
+			result = append(result, gin.H{
+				"id":                s.ID,
+				"name":              s.Name,
+				"type":              s.Type,
+				"online_dev_number": s.OnlineDevNumber,
+				"total_dev_number":  s.TotalDevNumber,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data":    result,
 	})
 }

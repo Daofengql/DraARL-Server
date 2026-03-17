@@ -90,12 +90,23 @@ export class RadioService {
 
   /**
    * 初始化服务
+   * @param token JWT Token
+   * @param username 用户名
+   * @param callsign 呼号
+   * @param lastGroupId 用户上次选中的群组 ID（从登录响应中获取）
    */
-  async init(token: string, username: string, callsign: string): Promise<void> {
+  async init(token: string, username: string, callsign: string, lastGroupId?: number): Promise<void> {
     this.token = token
     this.username = username
     this.callsign = callsign
     this.ssid = this.config.ssid
+
+    // 【核心修复】优先使用服务端返回的 lastGroupId
+    // 这样可以确保跨设备/跨会话的群组偏好一致
+    if (lastGroupId && lastGroupId > 0) {
+      this.currentGroupId = lastGroupId
+      this.config.defaultGroupId = lastGroupId
+    }
 
     // 初始化 WebSocket
     this.ws = getRadioWebSocket()
@@ -104,6 +115,12 @@ export class RadioService {
     this.ws.setOnStateChange((state) => {
       this.connectionState = state
       this.emit('connectionStateChange', state)
+
+      // 【核心修复】WS 重连后自动同步群组到服务端
+      // 无论初次连接还是断线重连，只要状态变为 online，就调用 API 确保服务端群组同步
+      if (state === 'online' && this.currentGroupId > 0) {
+        this.syncGroupToServer(this.currentGroupId)
+      }
     })
 
     this.ws.setOnPacket((packet, rawData) => {
@@ -395,6 +412,15 @@ export class RadioService {
   }
 
   /**
+   * 刷新群组统计（从后端获取最新的在线设备数）
+   * 此方法会更新本地缓存中的 onlineCount
+   */
+  async refreshGroupStats(): Promise<RadioGroup[]> {
+    const groups = await groupManagerService.refreshGroupStats()
+    return groups.map(toRadioGroup)
+  }
+
+  /**
    * 获取历史消息
    */
   async getHistoryMessages(groupId?: number): Promise<RadioMessage[]> {
@@ -404,6 +430,26 @@ export class RadioService {
   }
 
   // ==================== 私有方法 ====================
+
+  /**
+   * 【核心修复】同步群组到服务端
+   * 在 WS 重连后调用，确保后端的游离 WS 实例被拉回到用户期望的群组
+   */
+  private async syncGroupToServer(groupId: number): Promise<void> {
+    try {
+      const response = await apiClient.put<{ code: number; message: string }>(`/api/radio/group`, {
+        group_id: groupId,
+      })
+
+      if (response.code === 200) {
+        console.log(`[RadioService] 重连后成功同步群组: ${groupId}`)
+      } else {
+        console.warn(`[RadioService] 重连后同步群组失败: ${response.message}`)
+      }
+    } catch (error) {
+      console.error('[RadioService] 重连后同步群组异常:', error)
+    }
+  }
 
   /**
    * 处理收到的数据包

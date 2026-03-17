@@ -271,3 +271,15 @@ func (r *UserRepository) GetUserDevicePassword(id int) (string, error) {
 	}
 	return user.DevicePassword, nil
 }
+
+// UpdateLastGroupID 更新用户最后选中的群组ID
+func (r *UserRepository) UpdateLastGroupID(userID int, groupID int) error {
+	return r.db.Model(&User{}).Where("id = ?", userID).Update("last_group_id", groupID).Error
+}
+
+// GetApprovedUserCount 获取已审核通过的用户总数
+func (r *UserRepository) GetApprovedUserCount() (int64, error) {
+	var count int64
+	err := r.db.Model(&User{}).Where("status = 1 AND approval_status = 1").Count(&count).Error
+	return count, err
+}

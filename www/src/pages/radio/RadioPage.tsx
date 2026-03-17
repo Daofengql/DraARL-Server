@@ -237,8 +237,8 @@ export const RadioPage: React.FC = () => {
           setTimeout(() => setError(null), 5000)
         })
 
-        // 初始化服务
-        await radioService.init(token, user!.username, user!.callsign || '')
+        // 初始化服务（传入用户上次选中的群组 ID，确保跨设备同步）
+        await radioService.init(token, user!.username, user!.callsign || '', user!.last_group_id)
 
         // 加载群组
         const groupList = await radioService.getGroups()
@@ -261,6 +261,30 @@ export const RadioPage: React.FC = () => {
       radioService.disconnect()
     }
   }, [user, token])
+
+  // 【自动刷新】定时刷新群组统计（每 5 秒）
+  useEffect(() => {
+    if (connectionState !== 'online') return
+
+    const refreshStats = async () => {
+      try {
+        const updatedGroups = await radioService.refreshGroupStats()
+        setGroups(updatedGroups)
+      } catch (error) {
+        console.error('Failed to refresh group stats:', error)
+      }
+    }
+
+    // 立即刷新一次
+    refreshStats()
+
+    // 每 5 秒刷新一次
+    const interval = setInterval(refreshStats, 5000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [connectionState, radioService])
 
   // PTT 按下
   const handlePTTDown = useCallback(() => {

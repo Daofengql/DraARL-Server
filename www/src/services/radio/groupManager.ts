@@ -226,6 +226,32 @@ class GroupManagerService {
       group.onlineCount = count
     }
   }
+
+  /**
+   * 获取群组实时统计（从 /api/radio/groups/stats 获取，包含 WS 设备）
+   * 此方法会更新本地缓存中的 onlineCount
+   */
+  async refreshGroupStats(): Promise<GroupWithOnline[]> {
+    try {
+      const response = await apiClient.get<any>('/api/radio/groups/stats')
+      const stats = response.data || []
+
+      // 更新本地缓存中的在线设备数
+      for (const stat of stats) {
+        const cached = this.groupCache.get(stat.id)
+        if (cached) {
+          cached.onlineCount = stat.online_dev_number
+          cached.deviceCount = stat.total_dev_number
+        }
+      }
+
+      // 返回更新后的群组列表
+      return Array.from(this.groupCache.values())
+    } catch (error) {
+      console.error('[GroupManager] Failed to refresh group stats:', error)
+      return Array.from(this.groupCache.values())
+    }
+  }
 }
 
 // 导出单例

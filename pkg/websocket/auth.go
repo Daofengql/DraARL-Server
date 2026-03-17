@@ -189,8 +189,18 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 
 		if authResult.Success {
 			device.SSID = preAuth.SSID
-			// 设置默认群组
+			// 【核心修复】使用用户的 LastGroupID 恢复上次选中的群组
+			// 如果用户没有 LastGroupID 或为 0，则使用默认公共群组 999
 			device.GroupID = 999 // 默认公共群组
+			if authResult.UserID > 0 {
+				userRepo := gormdb.NewUserRepository()
+				if user, err := userRepo.GetUserByID(authResult.UserID); err == nil && user != nil {
+					if user.LastGroupID > 0 {
+						device.GroupID = user.LastGroupID
+						log.Printf("[WS-AUTH] 恢复用户 %d 的群组设置: %d", user.ID, user.LastGroupID)
+					}
+				}
+			}
 			manager.RegisterGhostDevice(device, authResult.UserID, authResult.CallSign, authResult.Nickname, preAuth.SSID)
 
 			// 【关键修复】同时创建 GhostDevice 并建立与 WSDevice 的关联

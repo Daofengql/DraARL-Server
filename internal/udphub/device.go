@@ -271,7 +271,7 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 	}
 }
 
-// checkDeviceOnline 检查设备在线状态
+// checkDeviceOnline 检查设备在��状态
 func checkDeviceOnline() {
 	time.Sleep(10 * time.Second)
 
@@ -285,6 +285,14 @@ func checkDeviceOnline() {
 
 	for {
 		time.Sleep(checkInterval)
+
+		// 【新增】查询数据库获取已审核通过的用户总数
+		// 这代表了所有可以随时登录的幽灵设备的理论总数
+		var approvedUserCount int64
+		if db := gormdb.Get(); db != nil {
+			userRepo := gormdb.NewUserRepository()
+			approvedUserCount, _ = userRepo.GetApprovedUserCount()
+		}
 
 		onlineMap := make(map[int]*models.Device, 100)
 		t := time.Now()
@@ -370,7 +378,15 @@ func checkDeviceOnline() {
 				}
 			}
 
-			gp.TotalDevNumber = len(gp.DevMap)
+			// 【修复】更新本群组总设备数 = 实体硬件设备数 + 已审核幽灵设备准入总数
+			gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
+
+			// 【修复】从 WS 管理器中获取本群组的 WS 在线设备，并叠加到在线总数中
+			if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+				wsDevices := GlobalMessageRouter.wsManager.GetDevicesByGroup(gp.ID)
+				gp.OnlineDevNumber += len(wsDevices)
+			}
+
 			totalStats.OnlineDevNumber += gp.OnlineDevNumber
 		}
 
@@ -417,21 +433,29 @@ func checkDeviceOnline() {
 					}
 				}
 
-				gp.TotalDevNumber = len(gp.DevMap)
+				// 【修复】更新私有群组总数 = 实体硬件设备数 + 已审核幽灵设备准入总数
+				gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
+
+				// 【修复】叠加本群组的 WS 在线设备
+				if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+					wsDevices := GlobalMessageRouter.wsManager.GetDevicesByGroup(gp.ID)
+					gp.OnlineDevNumber += len(wsDevices)
+				}
+
 				totalStats.OnlineDevNumber += gp.OnlineDevNumber
 			}
 			return true
 		})
 
 		onlineDevMap = onlineMap
-	}
 
-	// 【关键修复】累加 WebSocket 设备的在线数（包含幽灵设备和普通 WS 设备）
-	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-		wsNormalCount, wsGhostCount := GlobalMessageRouter.wsManager.GetOnlineCount()
-		totalStats.OnlineDevNumber += wsNormalCount + wsGhostCount
-		log.Printf("[ONLINE] WS devices online: normal=%d, ghost=%d, total UDP+WS=%d",
-			wsNormalCount, wsGhostCount, totalStats.OnlineDevNumber)
+		// 【日志】输出在线设备统计信息
+		if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+			wsNormalCount, wsGhostCount := GlobalMessageRouter.wsManager.GetOnlineCount()
+			udpOnlineCount := totalStats.OnlineDevNumber - wsNormalCount - wsGhostCount
+			log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, WS普通=%d, 幽灵=%d, 服务器总在线=%d",
+				udpOnlineCount, wsNormalCount, wsGhostCount, totalStats.OnlineDevNumber)
+		}
 	}
 }
 

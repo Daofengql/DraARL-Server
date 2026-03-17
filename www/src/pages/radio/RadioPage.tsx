@@ -248,7 +248,7 @@ export const RadioPage: React.FC = () => {
         // 【新增】处理连接冲突事件
         radioService.on('conflict', () => {
           setConnectionConflict(true)
-          setError('您的账号已在其他页面建立了电台连接，���先断开其他页面的连接')
+          setError('您的账号已在其他页面建立了电台连接，请先断开其他页面的连接')
         })
 
         // 初始化服务（传入用户上次选中的群组 ID，确保跨设备同步）
@@ -356,7 +356,7 @@ export const RadioPage: React.FC = () => {
     if (!textInput.trim()) return
 
     // 限制文本长度（后端 audio_path 是 varchar(255)，按字节限制 250）
-    // 中文字符占 3 字节，这里��制 80 个字符确保不超过后端限制
+    // 中文字符占 3 字节，这里限制 80 个字符确保不超过后端限制
     const maxLen = 80
     let text = textInput.trim()
     if (text.length > maxLen) {

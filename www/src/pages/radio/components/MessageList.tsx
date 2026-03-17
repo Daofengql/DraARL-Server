@@ -31,6 +31,7 @@ interface MessageListProps {
   currentCallsign: string
   currentSSID: number  // 添加 SSID 用于精确判断
   loading?: boolean
+  currentUser?: any    // 当前登录用户信息
 }
 
 // 样式
@@ -275,7 +276,7 @@ const VoiceMessage: React.FC<{
 }
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, currentCallsign, currentSSID, loading }, ref) => {
+  ({ messages, currentCallsign, currentSSID, loading, currentUser }, ref) => {
     const theme = useTheme()
     const styles = useStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
@@ -284,8 +285,9 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     const [, forceUpdate] = useState({})
 
     // 异步加载用户头像
-    const loadUserAvatar = useCallback(async (senderId: string | number) => {
-      const key = String(senderId)
+    const loadUserAvatar = useCallback(async (username: string | number) => {
+      // 【核心修复】补充 trim() 防止不可见空格绕过��则
+      const key = String(username).trim()
 
       // 已缓存则跳过
       if (userInfoCache.has(key)) {
@@ -294,6 +296,11 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
 
       // 标记为加载中（防止重复请求）
       userInfoCache.set(key, {})
+
+      // 如果是 ghost-xxx 或 callsign-ssid 格式，直接跳过 API 调用
+      if (key.startsWith('ghost-') || /^.+-\d+$/.test(key)) {
+        return
+      }
 
       try {
         const user = await userService.getPublicInfoByName(key)
@@ -304,8 +311,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
         // 触发重渲染
         forceUpdate({})
       } catch (error) {
-        console.warn('Failed to load user info:', key, error)
-        // 缓存空对象，避免重复请求
+        // 静默失败，缓存空对象避免重复请求
         userInfoCache.set(key, {})
       }
     }, [])
@@ -313,10 +319,16 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     // 当消息变化时，加载未缓存的用户头像
     useEffect(() => {
       messages.forEach(msg => {
-        if (!msg.senderAvatar && msg.senderId) {
-          const cached = userInfoCache.get(String(msg.senderId))
-          if (!cached) {
-            loadUserAvatar(msg.senderId)
+        if (!msg.senderAvatar) {
+          // 【核心修复】提取真正的 username
+          // 真实的登录用户名(如 admin)往往被解析到了 senderNickname 或 senderUsername 中
+          // 优先使用这些字段来请求头像，而不是用 BH5UVN-2 (senderId)
+          const usernameToFetch = (msg as any).senderUsername || msg.senderNickname || msg.senderId
+          if (usernameToFetch) {
+            const cached = userInfoCache.get(String(usernameToFetch).trim())
+            if (!cached) {
+              loadUserAvatar(usernameToFetch)
+            }
           }
         }
       })
@@ -394,10 +406,22 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
           const isMatchSSID = String(message.senderSSID) === String(currentSSID)
           const isSelf = (isMatchCallsign && isMatchSSID) || message.isSelf === true
 
+          // --- 【核心修复】替换这里的获取逻辑 ---
           // 获取缓存的用户头像
-          const cachedInfo = userInfoCache.get(String(message.senderId))
-          const avatarUrl = message.senderAvatar || cachedInfo?.avatar
-          const nickname = message.senderNickname || cachedInfo?.nickname
+          const usernameForCache = String((message as any).senderUsername || message.senderNickname || message.senderId).trim()
+          const cachedInfo = userInfoCache.get(usernameForCache)
+
+          // 如果是己方消���，直接从 currentUser 提取头像，否则用缓存
+          const selfAvatar = currentUser?.avatar_thumb || currentUser?.avatar
+          const avatarUrl = isSelf && selfAvatar
+            ? selfAvatar
+            : (message.senderAvatar || cachedInfo?.avatar)
+
+          // 如果是己方消息，直接从 currentUser 提取昵称，否则用缓存
+          const nickname = isSelf && currentUser?.nickname
+            ? currentUser.nickname
+            : (cachedInfo?.nickname || message.senderNickname)
+          // ------------------------------------
 
           return (
             <Box
@@ -444,14 +468,22 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                   </Box>
                 )}
 
-                {/* 自己发的消息也显示呼号（小字） */}
+                {/* --- 【核心修复】自己发的消息也显示昵称 --- */}
                 {isSelf && (
                   <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
-                    <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                      {message.senderCallsign}-{message.senderSSID}
-                    </Typography>
+                    <Box sx={styles.senderInfo}>
+                      {nickname && (
+                        <Typography variant="caption" sx={styles.nickname}>
+                          ({nickname})
+                        </Typography>
+                      )}
+                      <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                        {message.senderCallsign}-{message.senderSSID}
+                      </Typography>
+                    </Box>
                   </Box>
                 )}
+                {/* ------------------------------------------------ */}
 
                 {/* 内容 */}
                 <Box sx={styles.messageContent}>

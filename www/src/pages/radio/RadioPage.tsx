@@ -441,6 +441,7 @@ export const RadioPage: React.FC = () => {
           messages={messages}
           currentCallsign={user?.callsign || ''}
           currentSSID={config.ssid}
+          currentUser={user}
         />
       </Box>
 

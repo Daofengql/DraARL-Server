@@ -37,7 +37,7 @@ type CommSettingsConfig struct {
 	Enabled        bool // 是否启用通信记录
 	RetentionDays  int  // 数据保留天数
 	MinDurationMs  int  // 最小录制阈值（毫秒）
-	MaxDurationSec int  // 最大录制时长（秒），0=不限制
+	MaxDurationSec int  // 最大录制时���（秒），0=不限制
 	BatchUploadSec int  // 批量上传间隔（秒）
 }
 
@@ -75,7 +75,7 @@ func (cb *CommBuffer) AppendPacket(
 	session, exists := cb.sessions[sessionKey]
 	now := time.Now()
 
-	// 判断是否是新会话（间隔超过 200ms 视为新会话，与 PTT 检测逻辑一致）
+	// 判断是否是新会话（间隔超��� 200ms 视为新会话，与 PTT 检测逻辑一致）
 	if !exists || now.Sub(session.LastPacketTime) > 200*time.Millisecond {
 		// 关闭旧会话
 		if exists {
@@ -142,6 +142,11 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 			DeviceSSID:     session.DeviceSSID,
 			GroupID:        session.GroupID,
 			UserID:         session.UserID,
+			// ==========================================
+			// 【致命 Bug 修复】：之前漏掉了 IsGhost 字段！
+			// 导致 Go 语言将其默认初始化为 false，使得幽灵设备的录音在前台被当做损坏的实体设备隐藏。
+			// ==========================================
+			IsGhost:        session.IsGhost,
 			StartTime:      session.StartTime,
 			LastPacketTime: session.LastPacketTime,
 			Buffer:         bytes.NewBuffer(session.Buffer.Bytes()),

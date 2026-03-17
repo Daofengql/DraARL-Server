@@ -176,38 +176,77 @@ func handleHeartbeat(device *WSDevice, packet *WSPacket) {
 }
 
 // handleVoice 处理语音包
+// 负责接收 WebSocket 客户端上行的 Opus 语音数据，进行录制拦截，并向下游广播
 func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
-	// 检查设备是否被禁发
+	// 1. 权限检查：如果设备当前被服务器禁发，则直接丢弃语音包
 	if device.DisableSend {
 		return
 	}
 
-	// 标记正在发送语音
+	// 2. 状态刷新：标记该设备正在发送语音，用于心跳状态维护和前端 UI 展示
 	GlobalManager.MarkVoiceSending(device, true)
 
-	// 【通信录制】录制幽灵设备的语音
+	// ==========================================
+	// 3. 通信录制核心逻辑：拦截并记录 WebSocket 客户端的上行语音数据
+	// 无论设备是通过 UDP 还是 WebSocket 接入，录制系统底层都依赖 DeviceID 来区分连续的语音会话(Session)。
+	// 此处对接入的 WS 设备进行严格的模式分流，确保录音精准归档。
+	// ==========================================
 	if len(packet.DATA) > 0 {
 		var groupID *uint
 		var userID *uint
-		gid := uint(device.GroupID)
-		groupID = &gid
-		uid := uint(device.UserID)
-		userID = &uid
 
-		// 使用负数 ID 表示幽灵设备
-		ghostDeviceID := -device.UserID
-		udphub.RecordCommPacket(ghostDeviceID, device.SSID, groupID, userID, packet.DATA)
+		// 安全提取群组 ID：排除无效的 0 值，防止底层产生空指针或无效的数据库外键
+		if device.GroupID > 0 {
+			gid := uint(device.GroupID)
+			groupID = &gid
+		}
+
+		// 安全提取用户 ID：确保归属人信息准确
+		if device.UserID > 0 {
+			uid := uint(device.UserID)
+			userID = &uid
+		}
+
+		var recordDevID int
+		var recordSSID uint8
+
+		// 严格区分认证模式：JWT 幽灵设备 vs 普通硬件设备
+		if device.DeviceType == DeviceTypeGhost {
+			// 【模式 A】 JWT 认证的幽灵设备（网页端）
+			// 传入负数 UserID 作为录制缓冲池的 Session Key，防止与数据库中真实的 DeviceID 冲突
+			// 底层 syncer 在落库时会自动将其识别为 Ghost 并提取出正确的 UserID
+			recordDevID = -device.UserID
+
+			// 强制锁死 Web 客户端的标准 SSID 为 105 (对应 DraARLDevModelBrowser)
+			// 无视前端传入的 SSID，防止数据包伪造
+			recordSSID = 105
+		} else {
+			// 【模式 B】 非 JWT 认证的普通设备（物理硬件终端）
+			// 享受与 UDP 设���完全相同的待遇，传入其在数据库中映射的真实物理设备 ID
+			recordDevID = device.DeviceID
+
+			// 提取该物理终端自身配置的真实 SSID
+			recordSSID = device.SSID
+		}
+
+		// 将精准构建的身份信息与纯净的 Opus 语音载荷推入全局录制缓冲管理器
+		udphub.RecordCommPacket(recordDevID, recordSSID, groupID, userID, packet.DATA)
 	}
 
-	// 转发语音到 UDP 设备（通过 udphub）
+	// ==========================================
+	// 4. 语音数据路由转发
+	// ==========================================
+
+	// 转发语音到 UDP 设备网络（通过 udphub 的全局消息路由器下发给传统对讲机等设备）
 	routeVoiceToUDP(device, packet)
 
-	// 【修复】：不再传递 rawData，而是传递解析后的 packet
-	// 在 routeVoiceToWS 中使用服务端权威身份重新编码，杜绝盲目透传
+	// 【安全防御】转发语音到同组的其他 WebSocket 设备
+	// 放弃直接传递前端上报的 rawData，强制使用服务端鉴权后的权威身份 (Username, CallSign, SSID)
+	// 对 packet 重新进行编码，杜绝恶意伪造身份透传
 	routeVoiceToWS(device, packet)
 
-	// 更新语音统计
-	device.VoiceTime += 63 // Opus 帧时长
+	// 5. 统计信息更新：每一帧标准的 Opus 16K 数据视为 63ms 的理论时长，累加到该设备的总语音时长中
+	device.VoiceTime += 63
 }
 
 // handleTextMessage 处理文本消息

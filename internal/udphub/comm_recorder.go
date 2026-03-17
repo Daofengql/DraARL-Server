@@ -247,7 +247,7 @@ func GetCommRecorderStats() map[string]interface{} {
 // 文本消息记录（直接写入数据库，不经过上传队列）
 // ==========================================
 
-// RecordTextMessage 记录文���消息到数据库
+// RecordTextMessage 记录文本消息到数据库
 // 文本消息不需要上传 MinIO，直接写入 comm_records 表
 // 使用 "text:" 前缀存储在 AudioPath 字段中
 func RecordTextMessage(

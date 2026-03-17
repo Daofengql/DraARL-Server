@@ -343,8 +343,10 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     return (
       <Box ref={scrollRef} sx={styles.root}>
         {messages.map((message) => {
-          // 【关键修复】同时比较 callsign 和 SSID 来判断是否是自己发送的消息
-          const isSelf = message.senderCallsign === currentCallsign && message.senderSSID === currentSSID
+          // 【核心修复】增强己方消息的判断逻辑，防止类型不匹配（如 "10" === 10 为 false）
+          const isMatchCallsign = String(message.senderCallsign).toUpperCase() === String(currentCallsign).toUpperCase()
+          const isMatchSSID = String(message.senderSSID) === String(currentSSID)
+          const isSelf = (isMatchCallsign && isMatchSSID) || message.isSelf === true
 
           return (
             <Box

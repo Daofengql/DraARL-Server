@@ -49,7 +49,33 @@ func init() {
 
 // HandleWebSocket WebSocket 处理器
 func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// 升级连接
+	// ==========================================
+	// 【互斥检查】在 WebSocket 升级之前进行
+	// 防止同一用户开多个页面导致多个幽灵设备连接
+	// ==========================================
+	preAuth := ParsePreAuthData(r)
+
+	// 如果有 JWT Token，先进行认证和互斥检查
+	if preAuth.Token != "" {
+		authResult := AuthenticateJWT(preAuth.Token)
+		if !authResult.Success {
+			// JWT 无效，返回 401
+			http.Error(w, authResult.Error, http.StatusUnauthorized)
+			return
+		}
+
+		// 【核心】互斥检查：该用户是否已有在线的幽灵设备
+		if GlobalManager.IsGhostDeviceOnline(authResult.UserID) {
+			// 返回 409 Conflict，让前端知道存在竞争
+			log.Printf("[WS] Ghost device conflict: user-%d already has an online connection", authResult.UserID)
+			http.Error(w, "ghost_device_conflict", http.StatusConflict)
+			return
+		}
+	}
+
+	// ==========================================
+	// 互斥检查通过，进行 WebSocket 升级
+	// ==========================================
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] Upgrade failed: %v", err)
@@ -254,6 +280,36 @@ func handleTextMessage(device *WSDevice, packet *WSPacket, rawData []byte) {
 	// 检查设备是否被禁发
 	if device.DisableSend {
 		return
+	}
+
+	// 【文本消息记录】直接写入数据库
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+
+		if device.GroupID > 0 {
+			gid := uint(device.GroupID)
+			groupID = &gid
+		}
+		if device.UserID > 0 {
+			uid := uint(device.UserID)
+			userID = &uid
+		}
+
+		var recordDevID int
+		var recordSSID uint8
+
+		if device.DeviceType == DeviceTypeGhost {
+			// 幽灵设备：使用负数 UserID
+			recordDevID = -device.UserID
+			recordSSID = 105
+		} else {
+			// 普通设备
+			recordDevID = device.DeviceID
+			recordSSID = device.SSID
+		}
+
+		udphub.RecordTextMessage(recordDevID, recordSSID, groupID, userID, string(packet.DATA))
 	}
 
 	// 转发消息到 UDP 设备

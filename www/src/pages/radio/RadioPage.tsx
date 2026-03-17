@@ -205,6 +205,7 @@ export const RadioPage: React.FC = () => {
   const [deviceListOpen, setDeviceListOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isPTTDown, setIsPTTDown] = useState(false)
+  const [connectionConflict, setConnectionConflict] = useState(false) // 【新增】连接冲突状态
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -242,6 +243,12 @@ export const RadioPage: React.FC = () => {
         radioService.on('error', (errorMsg) => {
           setError(errorMsg)
           setTimeout(() => setError(null), 5000)
+        })
+
+        // 【新增】处理连接冲突事件
+        radioService.on('conflict', () => {
+          setConnectionConflict(true)
+          setError('您的账号已在其他页面建立了电台连接，���先断开其他页面的连接')
         })
 
         // 初始化服务（传入用户上次选中的群组 ID，确保跨设备同步）
@@ -348,7 +355,15 @@ export const RadioPage: React.FC = () => {
   const handleSendText = () => {
     if (!textInput.trim()) return
 
-    radioService.sendTextMessage(textInput.trim())
+    // 限制文本长度（后端 audio_path 是 varchar(255)，按字节限制 250）
+    // 中文字符占 3 字节，这里��制 80 个字符确保不超过后端限制
+    const maxLen = 80
+    let text = textInput.trim()
+    if (text.length > maxLen) {
+      text = text.slice(0, maxLen)
+    }
+
+    radioService.sendTextMessage(text)
     setTextInput('')
   }
 
@@ -434,6 +449,21 @@ export const RadioPage: React.FC = () => {
         </Alert>
       )}
 
+      {/* 【新增】连接冲突警告 */}
+      {connectionConflict && (
+        <Alert
+          severity="warning"
+          icon={<HeadsetIcon />}
+          sx={{ alignItems: 'center' }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+            <Typography variant="body2">
+              您的账号已在其他页面建立了电台连接，请先断开其他页面的连接
+            </Typography>
+          </Box>
+        </Alert>
+      )}
+
       {/* 消息列表 */}
       <Box sx={styles.messageArea}>
         <MessageList
@@ -474,9 +504,16 @@ export const RadioPage: React.FC = () => {
                 size="small"
                 placeholder="输入消息..."
                 value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
+                onChange={(e) => {
+                  // 限制输入长度（80个字符，对应后端 250 字节限制）
+                  const value = e.target.value
+                  if (value.length <= 80) {
+                    setTextInput(value)
+                  }
+                }}
                 onKeyPress={(e) => e.key === 'Enter' && handleSendText()}
                 disabled={connectionState !== 'online'}
+                inputProps={{ maxLength: 80 }}
               />
               <IconButton
                 color="primary"

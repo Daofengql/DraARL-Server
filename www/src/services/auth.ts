@@ -163,6 +163,24 @@ export const authService = {
     return user.approval_status === 1
   },
 
+  // 刷新用户信息（从服务器获取最新信息并更新 localStorage）
+  async refreshUserInfo(): Promise<User | null> {
+    try {
+      const user = await this.getMe()
+      const token = this.getToken()
+      if (token && user) {
+        // 保留 token，只更新用户信息
+        localStorage.setItem('user', JSON.stringify(user))
+        // 触发自定义事件，通知其他组件用户信息已更新
+        window.dispatchEvent(new CustomEvent('user-updated'))
+      }
+      return user
+    } catch (error) {
+      console.error('Failed to refresh user info:', error)
+      return null
+    }
+  },
+
   // ========== 设备密码管理 ==========
 
   // 获取设备密码（脱敏显示）

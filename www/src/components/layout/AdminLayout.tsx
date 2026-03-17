@@ -67,6 +67,11 @@ export function AdminLayout() {
   // 同步页面标题
   usePageTitle()
 
+  // 页面加载时刷新用户信息，确保审核状态等是最新的
+  useEffect(() => {
+    authService.refreshUserInfo()
+  }, [])
+
   useEffect(() => {
     const fetchICP = async () => {
       try {

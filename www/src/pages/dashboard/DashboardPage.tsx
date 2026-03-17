@@ -12,6 +12,8 @@ import {
   Chip,
   useTheme,
   useMediaQuery,
+  Button,
+  Snackbar,
 } from '@mui/material'
 import {
   Devices,
@@ -21,6 +23,7 @@ import {
   Dashboard as DashboardIcon,
   RecordVoiceOver,
   Timer,
+  Refresh,
 } from '@mui/icons-material'
 import {
   LineChart,
@@ -141,15 +144,40 @@ export function DashboardPage() {
   const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const user = authService.getStoredUser()
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshSuccess, setRefreshSuccess] = useState(false)
+  const [cachedUser, setCachedUser] = useState(authService.getStoredUser())
   const [systemConfig, setSystemConfig] = useState<any>(null)
+
+  // 监听用户信息更新事件
+  useEffect(() => {
+    const handleUserUpdate = () => {
+      setCachedUser(authService.getStoredUser())
+    }
+    window.addEventListener('user-updated', handleUserUpdate)
+    return () => window.removeEventListener('user-updated', handleUserUpdate)
+  }, [])
+
+  // 刷新用户状态
+  const handleRefreshStatus = async () => {
+    setRefreshing(true)
+    try {
+      const newUser = await authService.refreshUserInfo()
+      if (newUser) {
+        setCachedUser(newUser)
+        setRefreshSuccess(true)
+      }
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const fetchMyStats = async () => {
     try {
       // 获取与用户呼号匹配的设备
       const allDevices = await deviceService.list()
-      const myDevices = user?.callsign
-        ? allDevices.filter(d => d.callsign === user.callsign)
+      const myDevices = cachedUser?.callsign
+        ? allDevices.filter(d => d.callsign === cachedUser.callsign)
         : []
 
       // 获取所有群组和用户统计
@@ -184,17 +212,17 @@ export function DashboardPage() {
     fetchMyStats()
   }, [])
 
-  const displayName = user?.nickname || user?.username || '用户'
+  const displayName = cachedUser?.nickname || cachedUser?.username || '用户'
 
   // 站点名称：欢迎卡片使用配置的站点名称或默认值
   const siteName = systemConfig?.systemInfo?.name || SITE_CONFIG.NAME
 
   // 用户状态判断和卡片颜色
   const getUserStatus = () => {
-    if (!user) return { label: '未登录', color: 'default' as const, cardColor: '#9e9e9e' }
-    if (user.role === 'admin') return { label: '管理员', color: 'secondary' as const, cardColor: '#9c27b0' }
-    if (user.approval_status === 0) return { label: '待审核', color: 'warning' as const, cardColor: '#ff9800' }
-    if (user.approval_status === 2) return { label: '已拒绝', color: 'error' as const, cardColor: '#f44336' }
+    if (!cachedUser) return { label: '未登录', color: 'default' as const, cardColor: '#9e9e9e' }
+    if (cachedUser.role === 'admin') return { label: '管理员', color: 'secondary' as const, cardColor: '#9c27b0' }
+    if (cachedUser.approval_status === 0) return { label: '待审核', color: 'warning' as const, cardColor: '#ff9800' }
+    if (cachedUser.approval_status === 2) return { label: '已拒绝', color: 'error' as const, cardColor: '#f44336' }
     return { label: '普通用户', color: 'primary' as const, cardColor: '#1976d2' }
   }
 
@@ -245,6 +273,37 @@ export function DashboardPage() {
           </Stack>
         </CardContent>
       </Card>
+
+      {/* 待审核提示 */}
+      {cachedUser?.approval_status === 0 && (
+        <Alert
+          severity="warning"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={handleRefreshStatus}
+              disabled={refreshing}
+              startIcon={<Refresh />}
+            >
+              {refreshing ? '刷新中...' : '刷新状态'}
+            </Button>
+          }
+        >
+          <Typography variant="body2">
+            您的账号正在审核中，部分功能暂不可用。审核通过后点击"刷新状态"即可生效。
+          </Typography>
+        </Alert>
+      )}
+
+      {/* 已拒绝提示 */}
+      {cachedUser?.approval_status === 2 && (
+        <Alert severity="error">
+          <Typography variant="body2">
+            您的账号审核未通过。{cachedUser.review_note && `原因：${cachedUser.review_note}`}
+          </Typography>
+        </Alert>
+      )}
 
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>
@@ -463,6 +522,18 @@ export function DashboardPage() {
           </Stack>
         </Paper>
       </Box>
+
+      {/* 刷新成功提示 */}
+      <Snackbar
+        open={refreshSuccess}
+        autoHideDuration={3000}
+        onClose={() => setRefreshSuccess(false)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert severity="success" onClose={() => setRefreshSuccess(false)}>
+          {cachedUser?.approval_status === 1 ? '审核已通过，现在可以使用全部功能！' : '状态已刷新'}
+        </Alert>
+      </Snackbar>
     </Stack>
   )
 }

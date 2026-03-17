@@ -359,3 +359,36 @@ func GetRadioGroupStats(c *gin.Context) {
 		"data":    result,
 	})
 }
+
+// CheckGhostDeviceConflict 检查幽灵设备连接冲突 (API-007)
+// 用于前端在建立 WebSocket 连接前预检查
+// 返回 200 表示可以连接，返回 409 表示存在冲突（该用户已有在线的幽灵设备）
+func CheckGhostDeviceConflict(c *gin.Context) {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	// 检查该用户是否已有在线的幽灵设备
+	if ws.GlobalManager.IsGhostDeviceOnline(userID) {
+		c.JSON(http.StatusConflict, gin.H{
+			"code":    409,
+			"message": "您的账号已在其他页面建立了电台连接，请先断开其他页面的连接",
+			"data": gin.H{
+				"conflict": true,
+			},
+		})
+		return
+	}
+
+	// 没有冲突，可以建立连接
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "可以建立连接",
+		"data": gin.H{
+			"conflict": false,
+		},
+	})
+}

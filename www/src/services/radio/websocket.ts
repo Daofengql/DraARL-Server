@@ -6,6 +6,7 @@
 import { PacketType, DeviceModel } from '../../types/radio'
 import type { DraARLPacket, WSConnectionState, WSConfig } from '../../types/radio'
 import { defaultWSConfig } from '../../types/radio'
+import { apiClient } from '../api'
 
 // 协议常量
 const DRAARL_VERSION = 'DraA'
@@ -27,6 +28,7 @@ export class RadioWebSocket {
   private isReceiving = false
   private isSending = false
   private voiceEndTimer: ReturnType<typeof setTimeout> | null = null
+  private isConnecting = false // 防止 StrictMode 双重连接
 
   // 回调函数
   private onStateChange: ((state: WSConnectionState) => void) | null = null
@@ -34,6 +36,7 @@ export class RadioWebSocket {
   private onError: ((error: string) => void) | null = null
   private onVoiceStart: ((callsign: string, ssid: number, username: string) => void) | null = null
   private onVoiceEnd: (() => void) | null = null
+  private onConflict: (() => void) | null = null // 【新增】连接冲突回调
 
   // 用户信息
   private token: string = ''
@@ -67,6 +70,11 @@ export class RadioWebSocket {
     this.onVoiceEnd = callback
   }
 
+  // 【新增】设置连接冲突回调
+  setOnConflict(callback: () => void) {
+    this.onConflict = callback
+  }
+
   // 设置用户信息
   setUserInfo(token: string, _ssid: number, username: string, callsign: string) {
     this.token = token
@@ -80,15 +88,55 @@ export class RadioWebSocket {
     return this.state
   }
 
+  // Check ghost device connection conflict (call backend API)
+  async checkConflict(): Promise<boolean> {
+    if (!this.token) {
+      return false
+    }
+
+    try {
+      // Use apiClient to request directly to backend (no proxy)
+      await apiClient.get('/api/radio/conflict')
+      return false // 200 response, no conflict
+    } catch (error: any) {
+      // 409 indicates conflict
+      if (error?.response?.status === 409) {
+        return true
+      }
+      console.warn('[WS] Conflict check failed:', error)
+      return false
+    }
+  }
+
+
   // 连接
   async connect(): Promise<void> {
+    // 防止 StrictMode 双重连接
+    if (this.isConnecting) {
+      return
+    }
     if (this.ws && (this.state === 'connecting' || this.state === 'online')) {
       return
     }
 
+    this.isConnecting = true
     this.setState('connecting')
     this.connectionStartTime = Date.now()
     this.pendingReconnect = false
+
+    // 【新增】如果有 token，先进行冲突预检查
+    if (this.token) {
+      const hasConflict = await this.checkConflict()
+      if (hasConflict) {
+        console.warn('[WS] Connection conflict detected')
+        this.isConnecting = false
+        this.setState('disconnected')
+        if (this.onConflict) {
+          this.onConflict()
+        }
+        throw new Error('connection_conflict')
+      }
+    }
 
     return new Promise((resolve, reject) => {
       try {
@@ -103,6 +151,7 @@ export class RadioWebSocket {
 
         this.ws.onopen = () => {
           console.log('[WS] Connected')
+          this.isConnecting = false
           this.reconnectAttempts = 0
           this.setState('authenticating')
 
@@ -126,6 +175,7 @@ export class RadioWebSocket {
 
         this.ws.onerror = (error) => {
           console.error('[WS] Error:', error)
+          this.isConnecting = false
           const errorMsg = 'WebSocket 连接错误'
           if (this.onError) this.onError(errorMsg)
           reject(new Error(errorMsg))
@@ -133,8 +183,18 @@ export class RadioWebSocket {
 
         this.ws.onclose = (event) => {
           console.log('[WS] Closed:', event.code, event.reason)
+          this.isConnecting = false
           this.stopHeartbeat()
           this.setState('disconnected')
+
+          // 【新增】如果是冲突导致的关闭（1008 Policy Violation 或 1013 Try Again Later），不重连
+          if (event.code === 1008 || event.code === 1013 || event.reason === 'ghost_device_conflict') {
+            console.warn('[WS] Connection rejected due to conflict')
+            if (this.onConflict) {
+              this.onConflict()
+            }
+            return
+          }
 
           // 如果不是正常关闭，尝试重连
           if (event.code !== 1000 && event.code !== 1001) {

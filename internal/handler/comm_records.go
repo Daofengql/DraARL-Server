@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	gormdb "nrllink/internal/gormdb"
@@ -15,20 +16,22 @@ import (
 
 // CommRecordResponse 通信记录响应结构（用于前端显示）
 type CommRecordResponse struct {
-	ID         uint   `json:"id"`
-	DeviceID   uint   `json:"device_id"`
-	DeviceName string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
-	GroupID    *uint  `json:"group_id"`
-	GroupName  string `json:"group_name"` // 通过联表查询获取：public_groups.name
-	UserID     *uint  `json:"user_id"`
-	Username   string `json:"username"` // 通过联表查询获取：users.nickname 或 users.name
-	StartTime  string `json:"start_time"`
-	EndTime    string `json:"end_time"`
-	DurationMs int    `json:"duration_ms"`
-	AudioPath  string `json:"audio_path"`
-	AudioURL   string `json:"audio_url"`
-	AudioSize  int64  `json:"audio_size"`
-	Status     int    `json:"status"`
+	ID          uint   `json:"id"`
+	DeviceID    uint   `json:"device_id"`
+	DeviceName  string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
+	GroupID     *uint  `json:"group_id"`
+	GroupName   string `json:"group_name"` // 通过联表查询获取：public_groups.name
+	UserID      *uint  `json:"user_id"`
+	Username    string `json:"username"` // 通过联表查询获取：users.nickname 或 users.name
+	StartTime   string `json:"start_time"`
+	EndTime     string `json:"end_time"`
+	DurationMs  int    `json:"duration_ms"`
+	AudioPath   string `json:"audio_path,omitempty"`
+	AudioURL    string `json:"audio_url,omitempty"`
+	AudioSize   int64  `json:"audio_size"`
+	Status      int    `json:"status"`
+	MsgType     int    `json:"msg_type"`     // 消息类型：0=音频, 1=文本
+	TextContent string `json:"text_content"` // 文本消息内容（仅文本消息有值）
 }
 
 // CommRecordWithDetails 联表查询结果
@@ -54,7 +57,14 @@ type CommRecordWithDetails struct {
 // toCommRecordResponse 将联表查询结果转换为响应结构
 func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	audioURL := ""
-	if r.AudioPath != "" {
+	msgType := 0 // 默认音频
+	textContent := ""
+
+	// 判断消息类型：text: 前缀表示文本消息
+	if strings.HasPrefix(r.AudioPath, "text:") {
+		msgType = 1
+		textContent = strings.TrimPrefix(r.AudioPath, "text:")
+	} else if r.AudioPath != "" {
 		audioURL = minio_local.GetFileURL(r.AudioPath)
 	}
 
@@ -83,26 +93,28 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 
 	return CommRecordResponse{
-		ID:         r.ID,
-		DeviceID:   r.DeviceID,
-		DeviceName: deviceName,
-		GroupID:    r.GroupID,
-		GroupName:  r.GroupName,
-		UserID:     r.UserID,
-		Username:   username,
-		StartTime:  r.StartTime.Format("2006-01-02 15:04:05"),
-		EndTime:    r.EndTime.Format("2006-01-02 15:04:05"),
-		DurationMs: r.DurationMs,
-		AudioPath:  r.AudioPath,
-		AudioURL:   audioURL,
-		AudioSize:  r.AudioSize,
-		Status:     r.Status,
+		ID:          r.ID,
+		DeviceID:    r.DeviceID,
+		DeviceName:  deviceName,
+		GroupID:     r.GroupID,
+		GroupName:   r.GroupName,
+		UserID:      r.UserID,
+		Username:    username,
+		StartTime:   r.StartTime.Format("2006-01-02 15:04:05"),
+		EndTime:     r.EndTime.Format("2006-01-02 15:04:05"),
+		DurationMs:  r.DurationMs,
+		AudioURL:    audioURL,
+		AudioSize:   r.AudioSize,
+		Status:      r.Status,
+		MsgType:     msgType,
+		TextContent: textContent,
 	}
 }
 
 // GetCommRecords 获取通信记录列表（使用联表查询）
 // 权限规则：
-// - 管理员：可查看所有记录
+// - 管理员 + admin_mode=true：可查看所有记录（管理员后台）
+// - 管理员 + admin_mode=false：只能查看自己的记录（管理员前台）
 // - 普通用户：只能查看自己设备的记录
 func GetCommRecords(c *gin.Context) {
 	// 获取分页参数
@@ -116,6 +128,8 @@ func GetCommRecords(c *gin.Context) {
 	deviceIDStr := c.Query("device_id")
 	groupIDStr := c.Query("group_id")
 	userIDStr := c.Query("user_id")
+	// 获取管理员模式参数：只有管理员在后台页面时才为 true
+	adminMode := c.Query("admin_mode") == "true"
 
 	db := gormdb.Get().Table("comm_records cr").
 		Select(`
@@ -138,13 +152,22 @@ func GetCommRecords(c *gin.Context) {
 			isAdmin = true
 		}
 	} else if roles, exists := c.Get("roles"); exists {
-		if rolesStr, ok := roles.(string); ok && rolesStr == "admin" {
-			isAdmin = true
+		// roles 是 []string 类型，需要正确处理
+		if rolesSlice, ok := roles.([]string); ok {
+			for _, role := range rolesSlice {
+				if role == "admin" {
+					isAdmin = true
+					break
+				}
+			}
 		}
 	}
 
-	// 非管理员只能查看自己设备的记录
-	if !isAdmin {
+	// 判断是否可以查看全局记录：必须是管理员且在后台模式
+	canViewGlobal := isAdmin && adminMode
+
+	// 非全局模式只能查看自己设备的记录
+	if !canViewGlobal {
 		// 获取当前用户名
 		username, exists := c.Get("username")
 		if !exists {
@@ -183,8 +206,8 @@ func GetCommRecords(c *gin.Context) {
 			db = db.Where("cr.group_id = ?", groupID)
 		}
 	}
-	// 管理员可以按 user_id 筛选
-	if isAdmin && userIDStr != "" {
+	// 全局模式下可以按 user_id 筛选
+	if canViewGlobal && userIDStr != "" {
 		userIDFilter, err := strconv.ParseUint(userIDStr, 10, 32)
 		if err == nil {
 			db = db.Where("cr.user_id = ?", userIDFilter)

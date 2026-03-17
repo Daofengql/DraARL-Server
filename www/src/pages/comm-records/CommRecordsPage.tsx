@@ -21,8 +21,14 @@ import {
   CircularProgress,
   Snackbar,
   Alert,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
 } from '@mui/material'
-import { PlayArrow, Stop, Devices, Group, Download, Refresh } from '@mui/icons-material'
+import { PlayArrow, Stop, Devices, Group, Download, Refresh, Message } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
 
@@ -41,6 +47,8 @@ interface CommRecord {
   audio_url?: string
   audio_size?: number
   status: number
+  msg_type: number // 0=音频, 1=文本
+  text_content?: string // 文本消息内容
 }
 
 export function CommRecordsPage() {
@@ -56,9 +64,14 @@ export function CommRecordsPage() {
   const [deviceList, setDeviceList] = useState<{ id: number; name: string }[]>([])
   const [userList, setUserList] = useState<{ id: number; username: string }[]>([])
   const [groupList, setGroupList] = useState<{ id: number; name: string }[]>([])
-  const [playingId, setPlayingId] = useState<number | null>(null)
   const [loadingId, setLoadingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 文本消息对话框状态
+  const [selectedText, setSelectedText] = useState<CommRecord | null>(null)
+  const [textDialogOpen, setTextDialogOpen] = useState(false)
+  // 播放状态
+  const [playingId, setPlayingId] = useState<number | null>(null)
+  const [audioPlayer, setAudioPlayer] = useState<HTMLAudioElement | null>(null)
 
   // 判断是否在后台管理页面
   const isAdminPage = location.pathname.startsWith('/admin/')
@@ -90,6 +103,8 @@ export function CommRecordsPage() {
       if (filterUserId) params.user_id = filterUserId
       if (filterDeviceId) params.device_id = filterDeviceId
       if (filterGroupId) params.group_id = filterGroupId
+      // 管理员后台模式：只有管理员在后台页面时才能查询全局记录
+      if (isAdminPage) params.admin_mode = true
 
       const res = await apiClient.get<any>('/api/comm-records', { params })
       if (res.code === 200) {
@@ -325,7 +340,7 @@ export function CommRecordsPage() {
               <TableCell>群组</TableCell>
               {showUserFilter && <TableCell>用户</TableCell>}
               <TableCell>通信时长</TableCell>
-              <TableCell>音频</TableCell>
+              <TableCell>内容</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -361,7 +376,22 @@ export function CommRecordsPage() {
                   {showUserFilter && <TableCell>{record.username || '-'}</TableCell>}
                   <TableCell>{formatDuration(record.duration_ms)}</TableCell>
                   <TableCell>
-                    {(record.audio_url || record.audio_path) ? (
+                    {record.msg_type === 1 ? (
+                      // 文本消息
+                      <Chip
+                        icon={<Message />}
+                        label="文本"
+                        size="small"
+                        color="info"
+                        variant="outlined"
+                        onClick={() => {
+                          setSelectedText(record)
+                          setTextDialogOpen(true)
+                        }}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                    ) : (record.audio_url || record.audio_path) ? (
+                      // 音频消息
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <IconButton
                           size="small"
@@ -414,6 +444,33 @@ export function CommRecordsPage() {
           labelDisplayedRows={({ from, to, count }) => `${from}-${to} 共 ${count}`}
         />
       </TableContainer>
+
+      {/* 文本消息对话框 */}
+      <Dialog
+        open={textDialogOpen}
+        onClose={() => setTextDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          文本消息
+          {selectedText && (
+            <Typography variant="caption" color="text.secondary" sx={{ ml: 2 }}>
+              {selectedText.device_name} · {formatTime(selectedText.start_time)}
+            </Typography>
+          )}
+        </DialogTitle>
+        <DialogContent>
+          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
+            <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
+              {selectedText?.text_content}
+            </Typography>
+          </Paper>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTextDialogOpen(false)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* 错误提示 */}
       <Snackbar

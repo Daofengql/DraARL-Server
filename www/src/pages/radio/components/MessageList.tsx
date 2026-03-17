@@ -18,6 +18,10 @@ import {
 } from '@mui/icons-material'
 import type { RadioMessage } from '../../../types/radio'
 
+// Opus 配置
+const OPUS_SAMPLE_RATE = 16000
+const OPUS_CHANNELS = 1
+
 interface MessageListProps {
   messages: RadioMessage[]
   currentCallsign: string
@@ -44,9 +48,10 @@ const useStyles = () => ({
     flexDirection: 'row-reverse',
   },
   avatar: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     bgcolor: 'primary.main',
+    flexShrink: 0,
   },
   messageBubble: {
     p: 1.5,
@@ -54,11 +59,12 @@ const useStyles = () => ({
     maxWidth: '100%',
   },
   messageBubbleOther: {
-    bgcolor: 'background.paper',
+    bgcolor: 'action.hover',
     borderTopLeftRadius: 0,
   },
   messageBubbleSelf: {
-    bgcolor: 'primary.light',
+    bgcolor: 'primary.main',
+    color: 'primary.contrastText',
     borderTopRightRadius: 0,
   },
   messageHeader: {
@@ -76,6 +82,7 @@ const useStyles = () => ({
     justifyContent: 'flex-end',
     gap: 0.5,
     mt: 0.5,
+    opacity: 0.7,
   },
   voiceMessage: {
     display: 'flex',
@@ -104,27 +111,134 @@ const useStyles = () => ({
     gap: 2,
     color: 'text.secondary',
   },
+  senderInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 0.5,
+  },
+  callsignChip: {
+    fontSize: '0.75rem',
+    fontWeight: 'bold',
+    opacity: 0.9,
+  },
+  nickname: {
+    fontSize: '0.7rem',
+    opacity: 0.7,
+  },
 })
 
-// 语音消息组件
+// 语音消息组件 - 使用 Web Audio API 直接播放
 const VoiceMessage: React.FC<{
   duration: number
   isPlayed: boolean
   isSelf: boolean
-}> = ({ duration, isPlayed, isSelf }) => {
+  audioData?: Blob
+}> = ({ duration, isPlayed, isSelf, audioData }) => {
   const [isPlaying, setIsPlaying] = React.useState(false)
   const [progress, setProgress] = React.useState(0)
+  const audioContextRef = React.useRef<AudioContext | null>(null)
+  const sourceNodeRef = React.useRef<AudioBufferSourceNode | null>(null)
+  const startTimeRef = React.useRef<number>(0)
+  const animationFrameRef = React.useRef<number>(0)
+  const styles = useStyles()
 
-  const handlePlayPause = () => {
-    setIsPlaying(!isPlaying)
-    // TODO: 实际播放逻辑
+  // 播放语音消息
+  const playAudio = async () => {
+    if (!audioData) return
+
+    try {
+      // 读取 Blob 数据
+      const arrayBuffer = await audioData.arrayBuffer()
+
+      // 创建 AudioContext
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext({ sampleRate: OPUS_SAMPLE_RATE })
+      }
+      const ctx = audioContextRef.current
+
+      // 使用 AudioContext 解码音频数据
+      // 注意：这需要数据是浏览器支持的格式（如 WAV、OGG 等）
+      // 如果存储的是原始 Opus 帧，需要先转换为可播放格式
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+
+      // 创建并播放 AudioBufferSourceNode
+      const source = ctx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(ctx.destination)
+
+      sourceNodeRef.current = source
+      startTimeRef.current = ctx.currentTime
+      setIsPlaying(true)
+
+      // 更新进度
+      const updateProgress = () => {
+        if (sourceNodeRef.current && audioContextRef.current) {
+          const elapsed = audioContextRef.current.currentTime - startTimeRef.current
+          const prog = Math.min(elapsed / audioBuffer.duration, 1)
+          setProgress(prog)
+          if (prog < 1) {
+            animationFrameRef.current = requestAnimationFrame(updateProgress)
+          }
+        }
+      }
+      animationFrameRef.current = requestAnimationFrame(updateProgress)
+
+      source.onended = () => {
+        setIsPlaying(false)
+        setProgress(0)
+        sourceNodeRef.current = null
+      }
+
+      source.start()
+
+    } catch (error) {
+      console.error('Failed to play audio:', error)
+      // 如果解码失败，显示提示
+      setIsPlaying(false)
+    }
   }
 
+  const handlePlayPause = async () => {
+    if (!audioData) return
+
+    if (isPlaying) {
+      // 停止播放
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.stop()
+        sourceNodeRef.current = null
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
+      setIsPlaying(false)
+      setProgress(0)
+    } else {
+      await playAudio()
+    }
+  }
+
+  // 清理
+  React.useEffect(() => {
+    return () => {
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.stop()
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current)
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
+      }
+    }
+  }, [])
+
   // 生成随机波形
-  const bars = Array.from({ length: 20 }, () => Math.random() * 16 + 4)
+  const bars = React.useMemo(() =>
+    Array.from({ length: 20 }, () => Math.random() * 16 + 4),
+  [])
 
   return (
-    <Box sx={useStyles().voiceMessage}>
+    <Box sx={styles.voiceMessage}>
       <IconButton
         size="small"
         onClick={handlePlayPause}
@@ -133,20 +247,22 @@ const VoiceMessage: React.FC<{
         {isPlaying ? <PauseIcon /> : <PlayIcon />}
       </IconButton>
 
-      <Box sx={useStyles().voiceWaveform}>
+      <Box sx={styles.voiceWaveform}>
         {bars.map((height, index) => (
           <Box
             key={index}
             sx={{
-              ...useStyles().voiceBar,
+              ...styles.voiceBar,
               height,
               opacity: isPlayed || isPlaying ? 1 : 0.5,
+              transform: index / bars.length < progress ? 'scaleY(1.2)' : 'scaleY(1)',
+              transition: 'transform 0.1s',
             }}
           />
         ))}
       </Box>
 
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="caption" sx={{ opacity: 0.7 }}>
         {(duration / 1000).toFixed(1)}s
       </Typography>
     </Box>
@@ -239,12 +355,13 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               {/* 头像 */}
               {!isSelf && (
                 <Avatar
+                  src={message.senderAvatar}
                   sx={{
                     ...styles.avatar,
-                    bgcolor: getAvatarColor(message.senderCallsign),
+                    bgcolor: message.senderAvatar ? undefined : getAvatarColor(message.senderCallsign),
                   }}
                 >
-                  {message.senderCallsign.charAt(0)}
+                  {!message.senderAvatar && message.senderCallsign.charAt(0)}
                 </Avatar>
               )}
 
@@ -256,17 +373,28 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                   ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
                 }}
               >
-                {/* 头部 */}
+                {/* 头部 - 显示发送方信息 */}
                 {!isSelf && (
                   <Box sx={styles.messageHeader}>
-                    <Typography variant="subtitle2" fontWeight="bold">
+                    <Box sx={styles.senderInfo}>
+                      <Typography variant="subtitle2" sx={styles.callsignChip}>
+                        {message.senderCallsign}-{message.senderSSID}
+                      </Typography>
+                      {message.senderNickname && (
+                        <Typography variant="caption" sx={styles.nickname}>
+                          ({message.senderNickname})
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
+                )}
+
+                {/* 自己发的消息也显示呼号（小字） */}
+                {isSelf && (
+                  <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
+                    <Typography variant="caption" sx={{ opacity: 0.8 }}>
                       {message.senderCallsign}-{message.senderSSID}
                     </Typography>
-                    {message.senderNickname && (
-                      <Typography variant="caption" color="text.secondary">
-                        {message.senderNickname}
-                      </Typography>
-                    )}
                   </Box>
                 )}
 
@@ -279,13 +407,14 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                       duration={message.duration || 0}
                       isPlayed={message.isPlayed || false}
                       isSelf={isSelf}
+                      audioData={message.content as Blob}
                     />
                   )}
                 </Box>
 
                 {/* 底部 */}
                 <Box sx={styles.messageFooter}>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption">
                     {formatTime(message.timestamp)}
                   </Typography>
                 </Box>
@@ -294,12 +423,13 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               {/* 自己的头像 */}
               {isSelf && (
                 <Avatar
+                  src={message.senderAvatar}
                   sx={{
                     ...styles.avatar,
-                    bgcolor: getAvatarColor(message.senderCallsign),
+                    bgcolor: message.senderAvatar ? undefined : getAvatarColor(message.senderCallsign),
                   }}
                 >
-                  {message.senderCallsign.charAt(0)}
+                  {!message.senderAvatar && message.senderCallsign.charAt(0)}
                 </Avatar>
               )}
             </Box>

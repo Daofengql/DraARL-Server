@@ -1,6 +1,6 @@
 /**
  * Radio 服务
- * 整合 WebSocket、音频、消息缓存和群组管理
+ * 整合 WebSocket、音频、消息缓存和群组���理
  */
 
 import { RadioWebSocket, getRadioWebSocket, closeRadioWebSocket } from './radio/websocket'
@@ -18,6 +18,109 @@ import type {
   DraARLPacket,
   OnlineDevice,
 } from '../types/radio'
+import { OpusDecoder } from 'opus-decoder'
+
+// Opus 配置
+const OPUS_SAMPLE_RATE = 16000
+const OPUS_CHANNELS = 1
+
+// 将 Float32 PCM 转换为 WAV Blob
+function pcmToWav(float32Data: Float32Array, sampleRate: number, channels: number): Blob {
+  // 转换为 Int16 PCM
+  const int16Data = new Int16Array(float32Data.length)
+  for (let i = 0; i < float32Data.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Data[i]))
+    int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
+  }
+
+  // 创建 WAV 文件
+  const byteRate = sampleRate * channels * 2
+  const blockAlign = channels * 2
+  const dataSize = int16Data.length * 2
+  const bufferSize = 44 + dataSize
+
+  const buffer = new ArrayBuffer(bufferSize)
+  const view = new DataView(buffer)
+
+  // RIFF header
+  writeString(view, 0, 'RIFF')
+  view.setUint32(4, bufferSize - 8, true)
+  writeString(view, 8, 'WAVE')
+
+  // fmt chunk
+  writeString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true) // chunk size
+  view.setUint16(20, 1, true) // PCM format
+  view.setUint16(22, channels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, 16, true) // bits per sample
+
+  // data chunk
+  writeString(view, 36, 'data')
+  view.setUint32(40, dataSize, true)
+
+  // 写入 PCM 数据
+  const int8Data = new Uint8Array(buffer, 44)
+  for (let i = 0; i < int16Data.length; i++) {
+    int8Data[i * 2] = int16Data[i] & 0xFF
+    int8Data[i * 2 + 1] = (int16Data[i] >> 8) & 0xFF
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' })
+}
+
+function writeString(view: DataView, offset: number, str: string): void {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i))
+  }
+}
+
+// 将 Opus 帧数组解码为 WAV Blob
+async function opusFramesToWav(frames: Uint8Array[]): Promise<Blob> {
+  if (frames.length === 0) {
+    throw new Error('No frames to decode')
+  }
+
+  // 初始化解码器
+  const decoder = new OpusDecoder({
+    sampleRate: OPUS_SAMPLE_RATE,
+    channels: OPUS_CHANNELS,
+  })
+  await decoder.ready
+
+  try {
+    // 解码所有帧
+    const decodedFrames: Float32Array[] = []
+    for (const frame of frames) {
+      try {
+        const decoded = decoder.decodeFrame(frame)
+        decodedFrames.push(decoded.channelData[0])
+      } catch (e) {
+        console.warn('Failed to decode frame:', e)
+      }
+    }
+
+    if (decodedFrames.length === 0) {
+      throw new Error('No frames decoded successfully')
+    }
+
+    // 合并所有解码后的 PCM 数据
+    const totalSamples = decodedFrames.reduce((sum, frame) => sum + frame.length, 0)
+    const mergedPcm = new Float32Array(totalSamples)
+    let offset = 0
+    for (const frame of decodedFrames) {
+      mergedPcm.set(frame, offset)
+      offset += frame.length
+    }
+
+    // 转换为 WAV
+    return pcmToWav(mergedPcm, OPUS_SAMPLE_RATE, OPUS_CHANNELS)
+  } finally {
+    decoder.free()
+  }
+}
 
 // 回调类型
 export type ConnectionStateCallback = (state: WSConnectionState) => void
@@ -82,6 +185,17 @@ export class RadioService {
 
   // 语音结束检测
   private voiceEndTimer: ReturnType<typeof setTimeout> | null = null
+
+  // 语音消息缓存（用于记录接收的语音）
+  private voiceChunks: Uint8Array[] = []
+  private voiceStartTime: number = 0
+  private currentVoiceCallsign: string = ''
+  private currentVoiceSSID: number = 0
+  private currentVoiceUsername: string = '' // 发送方用户名/昵称
+
+  // 发送语音缓存（用于记录自己发送的语音）
+  private sendingVoiceChunks: Uint8Array[] = []
+  private sendingVoiceStartTime: number = 0
 
   constructor() {
     this.config = { ...defaultRadioUserConfig }
@@ -269,6 +383,10 @@ export class RadioService {
     if (this.voiceState !== 'idle') return
     if (!this.audioCapture) return
 
+    // 初始化发送语音缓存
+    this.sendingVoiceChunks = []
+    this.sendingVoiceStartTime = Date.now()
+
     try {
       await this.audioCapture.start()
     } catch (error) {
@@ -289,7 +407,52 @@ export class RadioService {
       this.ws.voiceSendEnd()
     }
 
+    // 保存发送的语音消息
+    this.saveSendingVoiceMessage()
+
     this.setVoiceState('idle')
+  }
+
+  /**
+   * 保存发送的语音消息到缓存
+   */
+  private async saveSendingVoiceMessage(): Promise<void> {
+    // 检查是否有语音数据
+    if (this.sendingVoiceChunks.length === 0) return
+
+    // 计算语音时长
+    const duration = Date.now() - this.sendingVoiceStartTime
+
+    try {
+      // 将 Opus 帧转换为 WAV 格式
+      const voiceBlob = await opusFramesToWav(this.sendingVoiceChunks)
+
+      // 创建消息
+      const radioMessage: RadioMessage = {
+        id: generateMessageId(this.currentGroupId, this.sendingVoiceStartTime, this.callsign),
+        type: 'voice',
+        groupId: this.currentGroupId,
+        senderId: `ghost-${this.ssid}`,
+        senderCallsign: this.callsign,
+        senderSSID: this.ssid,
+        content: voiceBlob,
+        duration: duration,
+        timestamp: this.sendingVoiceStartTime,
+        isSelf: true,
+        isPlayed: true, // 自己发送的语音默���已播放
+      }
+
+      // 添加到缓存
+      messageCache.addMessage(toCachedMessage(radioMessage))
+
+      // 触发事件（通知 UI 更新）
+      this.emit('message', radioMessage)
+    } catch (error) {
+      console.error('[RadioService] Failed to save voice message:', error)
+    }
+
+    // 清空缓存
+    this.sendingVoiceChunks = []
   }
 
   /**
@@ -429,6 +592,30 @@ export class RadioService {
     return cached.map(toRadioMessage)
   }
 
+  /**
+   * 彻底清空当前所有的消息缓存 (包括数据库和内存)
+   * @returns 是否成功
+   */
+  public async clearAllMessageCache(): Promise<boolean> {
+    try {
+      // 1. 清空底层 IndexedDB ���据库
+      await messageCache.clearAllMessages()
+
+      // 2. 清空 Service 内部的语音缓存
+      this.voiceChunks = []
+      this.sendingVoiceChunks = []
+      this.currentVoiceCallsign = ''
+      this.currentVoiceSSID = 0
+      this.currentVoiceUsername = ''
+
+      console.log('[RadioService] 缓存已彻底清空')
+      return true
+    } catch (error) {
+      console.error('[RadioService] 彻底清空缓存失败:', error)
+      return false
+    }
+  }
+
   // ==================== 私有方法 ====================
 
   /**
@@ -500,6 +687,20 @@ export class RadioService {
     // 设置语音状态
     this.setVoiceState('receiving')
 
+    // 收集语音数据用于消息记录
+    if (packet.data && packet.data.length > 0) {
+      // 如果是新说话人，重置缓存
+      if (this.currentVoiceCallsign !== packet.callsign || this.currentVoiceSSID !== packet.ssid) {
+        this.voiceChunks = []
+        this.voiceStartTime = Date.now()
+        this.currentVoiceCallsign = packet.callsign
+        this.currentVoiceSSID = packet.ssid
+        this.currentVoiceUsername = packet.username || ''
+      }
+      // 收集语音数据
+      this.voiceChunks.push(new Uint8Array(packet.data))
+    }
+
     // 播放音频
     if (this.audioPlayer && !this.config.muted) {
       const opusData = packet.data
@@ -524,6 +725,9 @@ export class RadioService {
 
     if (packet.data && packet.data.length >= 68) {
       // 解析原始发送方信息
+      const originalUsername = new TextDecoder()
+        .decode(packet.data.slice(0, 32))
+        .replace(/\0/g, '')
       const originalCallsign = new TextDecoder()
         .decode(packet.data.slice(32, 64))
         .replace(/\0/g, '')
@@ -533,8 +737,22 @@ export class RadioService {
 
       this.setVoiceState('receiving')
 
+      // 收集语音数据用于消息记录
+      const voiceData = packet.data.slice(68)
+      if (voiceData.length > 0) {
+        // 如果是新说话人，重置缓存
+        if (this.currentVoiceCallsign !== originalCallsign || this.currentVoiceSSID !== packet.ssid) {
+          this.voiceChunks = []
+          this.voiceStartTime = Date.now()
+          this.currentVoiceCallsign = originalCallsign
+          this.currentVoiceSSID = packet.ssid
+          this.currentVoiceUsername = originalUsername
+        }
+        // 收集语��数据
+        this.voiceChunks.push(new Uint8Array(voiceData))
+      }
+
       if (this.audioPlayer && !this.config.muted) {
-        const voiceData = packet.data.slice(68)
         if (voiceData.length > 0) {
           this.audioPlayer.play(voiceData)
         }
@@ -576,6 +794,9 @@ export class RadioService {
    */
   private sendVoiceData(opusData: Uint8Array): void {
     if (this.ws && this.connectionState === 'online') {
+      // 收集发送的语音数据
+      this.sendingVoiceChunks.push(new Uint8Array(opusData))
+      // 发送到服务器
       this.ws.sendVoice(opusData)
     }
   }
@@ -626,13 +847,80 @@ export class RadioService {
       clearTimeout(this.voiceEndTimer)
     }
 
-    this.voiceEndTimer = setTimeout(() => {
+    this.voiceEndTimer = setTimeout(async () => {
+      // 保存语音消息到缓存
+      try {
+        await this.saveVoiceMessage()
+      } catch (error) {
+        console.error('[RadioService] Failed to save voice message:', error)
+      }
+
       if (this.currentSpeaker) {
         this.emit('speakingEnd', this.currentSpeaker.callsign, this.currentSpeaker.ssid)
         this.currentSpeaker = null
       }
       this.setVoiceState('idle')
     }, 200)
+  }
+
+  /**
+   * 保存语音消息到缓存（仅保存接收的语音，自己发送的由 saveSendingVoiceMessage 处理）
+   */
+  private async saveVoiceMessage(): Promise<void> {
+    // 检查是否有语音数据
+    if (this.voiceChunks.length === 0) return
+    if (!this.currentVoiceCallsign) return
+
+    // 【关键修复】如果是自己发送的语音，跳过保存
+    // 因为 saveSendingVoiceMessage 已经处理了自己发送的语音
+    // 避免重复保存导致 React key 重复
+    if (this.currentVoiceCallsign === this.callsign && this.currentVoiceSSID === this.ssid) {
+      console.log('[RadioService] 跳过保存自己的语音回声（已由 saveSendingVoiceMessage 处理）')
+      this.voiceChunks = []
+      this.currentVoiceCallsign = ''
+      this.currentVoiceSSID = 0
+      this.currentVoiceUsername = ''
+      return
+    }
+
+    // 计算语音时长
+    const duration = Date.now() - this.voiceStartTime
+
+    try {
+      // 将 Opus 帧转换为 WAV 格式
+      const voiceBlob = await opusFramesToWav(this.voiceChunks)
+
+      // 创建消息
+      const isSelf = this.currentVoiceCallsign === this.callsign && this.currentVoiceSSID === this.ssid
+      const radioMessage: RadioMessage = {
+        id: generateMessageId(this.currentGroupId, this.voiceStartTime, this.currentVoiceCallsign),
+        type: 'voice',
+        groupId: this.currentGroupId,
+        senderId: isSelf ? `ghost-${this.ssid}` : `${this.currentVoiceCallsign}-${this.currentVoiceSSID}`,
+        senderCallsign: this.currentVoiceCallsign,
+        senderSSID: this.currentVoiceSSID,
+        senderNickname: this.currentVoiceUsername || undefined,
+        content: voiceBlob,
+        duration: duration,
+        timestamp: this.voiceStartTime,
+        isSelf: isSelf,
+        isPlayed: true, // 接收的语音默认已播放（实时听到）
+      }
+
+      // 添加到缓存
+      messageCache.addMessage(toCachedMessage(radioMessage))
+
+      // 触发事件（通知 UI 更新）
+      this.emit('message', radioMessage)
+    } catch (error) {
+      console.error('[RadioService] Failed to save voice message:', error)
+    } finally {
+      // 清空缓存
+      this.voiceChunks = []
+      this.currentVoiceCallsign = ''
+      this.currentVoiceSSID = 0
+      this.currentVoiceUsername = ''
+    }
   }
 
   /**

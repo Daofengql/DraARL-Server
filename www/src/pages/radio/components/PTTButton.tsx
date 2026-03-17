@@ -21,6 +21,7 @@ interface PTTButtonProps {
   onTouchStart: () => void
   onTouchEnd: () => void
   disabled?: boolean
+  fullWidth?: boolean
 }
 
 // 脉冲动画
@@ -54,6 +55,7 @@ export const PTTButton: React.FC<PTTButtonProps> = ({
   onTouchStart,
   onTouchEnd,
   disabled = false,
+  fullWidth = false,
 }) => {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
@@ -69,19 +71,20 @@ export const PTTButton: React.FC<PTTButtonProps> = ({
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
       sx={{
-        minWidth: isMobile ? 100 : 140,
+        width: fullWidth ? '100%' : undefined,
+        minWidth: fullWidth ? '100%' : (isMobile ? 100 : 140),
         minHeight: isMobile ? 48 : 56,
         borderRadius: 3,
         bgcolor: isPressed ? 'error.main' : 'primary.main',
         color: 'white',
         transition: 'all 0.15s ease',
-        transform: isPressed ? 'scale(0.95)' : 'scale(1)',
+        transform: isPressed ? 'scale(0.98)' : 'scale(1)',
         animation: isPressed ? `${pulse} 1s infinite` : 'none',
         '&:hover': {
           bgcolor: isPressed ? 'error.dark' : 'primary.dark',
         },
         '&:active': {
-          transform: 'scale(0.95)',
+          transform: 'scale(0.98)',
         },
         '&.Mui-disabled': {
           bgcolor: 'action.disabledBackground',

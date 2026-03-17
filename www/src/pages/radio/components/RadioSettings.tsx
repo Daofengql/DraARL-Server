@@ -38,12 +38,15 @@ interface RadioSettingsProps {
   config: RadioUserConfig
   onConfigChange: (config: RadioUserConfig) => void
   onClose: () => void
+  // 清除缓存的回调函数（由父组件提供，负责同时清理���据库和内存）
+  onRequestClearCache?: () => Promise<void>
 }
 
 export const RadioSettings: React.FC<RadioSettingsProps> = ({
   config,
   onConfigChange,
   onClose,
+  onRequestClearCache,
 }) => {
   const [localConfig, setLocalConfig] = useState<RadioUserConfig>(config)
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([])
@@ -73,10 +76,20 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
 
   // 清除缓存
   const handleClearCache = async () => {
-    if (confirm('确定要清除所有消息缓存吗？')) {
-      // 这里应该调用消息缓存清除方法
-      // messageCache.clearAllMessages()
-      alert('缓存已清除')
+    if (confirm('确定要彻底清除所有聊天记录和语音缓存吗？（此操作不可逆）')) {
+      if (onRequestClearCache) {
+        try {
+          // 等待父组件完成彻底清理（含数据库和内存）
+          await onRequestClearCache()
+          alert('缓存已彻底清除！')
+        } catch (error) {
+          console.error('清除缓存失败:', error)
+          alert('清除缓存时发生错误')
+        }
+      } else {
+        // 兼容��版本：如果没有传入 onRequestClearCache，仅显示提示
+        alert('请在主页面进行缓存清理')
+      }
     }
   }
 

@@ -336,9 +336,13 @@ class MessageCacheDB {
 // 导出单例
 export const messageCache = new MessageCacheDB()
 
+// 消息序列号（用于确保同一毫秒内的消息 ID 唯一）
+let messageSequence = 0
+
 // 辅助函数：生成消息 ID
 export function generateMessageId(groupId: number, timestamp: number, callsign: string): string {
-  return `${groupId}_${timestamp}_${callsign}`
+  const seq = messageSequence++
+  return `${groupId}_${timestamp}_${callsign}_${seq}`
 }
 
 // 辅助函数：将 RadioMessage 转换为 CachedMessage

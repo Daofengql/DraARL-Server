@@ -68,12 +68,16 @@ import { DeviceList } from './components/DeviceList'
 // 样式
 const useStyles = () => ({
   root: {
-    height: '100%',
+    // 使用固定高度计算，突破父容器的 padding 限制
+    height: 'calc(100vh - 64px - 48px)', // 64px header + 24px padding (上下各 12px)
+    margin: { xs: -2, sm: -3 }, // 抵��父容器的 padding
     display: 'flex',
     flexDirection: 'column',
     bgcolor: 'background.default',
+    overflow: 'hidden', // 防止整体滚动
   },
   header: {
+    flexShrink: 0, // 固定高度，不压缩
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -104,11 +108,13 @@ const useStyles = () => ({
   },
   messageArea: {
     flex: 1,
+    minHeight: 0, // 关键：允许 flex 子元素收缩
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
   },
   visualizer: {
+    flexShrink: 0, // 固定高度，不压缩
     height: 48,
     borderBottom: 1,
     borderColor: 'divider',
@@ -118,6 +124,7 @@ const useStyles = () => ({
     gap: 2,
   },
   inputArea: {
+    flexShrink: 0, // 固定高度，不压缩
     p: 2,
     borderTop: 1,
     borderColor: 'divider',
@@ -132,8 +139,8 @@ const useStyles = () => ({
     flex: 1,
   },
   pttButton: {
-    minWidth: 120,
-    minHeight: 48,
+    flex: 1, // 语音模式下 PTT 按钮全宽
+    minHeight: 56,
   },
   settingsDrawer: {
     width: 320,
@@ -478,16 +485,19 @@ export const RadioPage: React.FC = () => {
               </IconButton>
             </>
           ) : (
-            /* PTT 按钮 */
-            <PTTButton
-              isPressed={isPTTDown}
-              onMouseDown={handlePTTDown}
-              onMouseUp={handlePTTUp}
-              onMouseLeave={handlePTTUp}
-              onTouchStart={handlePTTDown}
-              onTouchEnd={handlePTTUp}
-              disabled={connectionState !== 'online' || voiceState === 'receiving'}
-            />
+            /* PTT 按钮 - 全宽 */
+            <Box sx={{ flex: 1, display: 'flex' }}>
+              <PTTButton
+                isPressed={isPTTDown}
+                onMouseDown={handlePTTDown}
+                onMouseUp={handlePTTUp}
+                onMouseLeave={handlePTTUp}
+                onTouchStart={handlePTTDown}
+                onTouchEnd={handlePTTUp}
+                disabled={connectionState !== 'online' || voiceState === 'receiving'}
+                fullWidth
+              />
+            </Box>
           )}
 
           {/* 音量控制 */}
@@ -517,6 +527,18 @@ export const RadioPage: React.FC = () => {
               setConfig(newConfig)
             }}
             onClose={() => setSettingsOpen(false)}
+            // 【核心修复】在这里统筹清理逻辑，实现三端同步清理
+            onRequestClearCache={async () => {
+              // 1. 调用 Service 彻底清空数据库和 Service 的内部内存
+              const success = await radioService.clearAllMessageCache()
+
+              if (success) {
+                // 2. 清空当前屏幕上的 React State，让画面立刻变空白
+                setMessages([])
+              } else {
+                throw new Error('清理失败')
+              }
+            }}
           />
         </Box>
       </Drawer>

@@ -37,6 +37,7 @@ type User struct {
 	DMRID           int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
 	MDCID           string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
 	DevicePassword  string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码(bcrypt哈希)
+	LastGroupID     int        `gorm:"type:int;default:999;column:last_group_id" json:"last_group_id"` // 用户最后选中的群组
 }
 
 // TableName 指定表名
@@ -279,10 +280,11 @@ func (GroupMember) TableName() string {
 // CommRecord 通信记录（精简版，名称通过联表查询获取）
 type CommRecord struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`    // 发送设备ID
+	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`    // 发送设备ID（幽灵设备为 0）
 	DeviceSSID uint8     `gorm:"column:device_ssid" json:"device_ssid"`               // 设备 SSID（冗余，便于查询）
 	GroupID    *uint     `gorm:"index;column:group_id" json:"group_id"`               // 所属群组ID
 	UserID     *uint     `gorm:"index;column:user_id" json:"user_id"`                 // 所属用户ID
+	IsGhost    bool      `gorm:"default:false;column:is_ghost" json:"is_ghost"`       // 是否是幽灵设备（WebSocket 客户端）
 	StartTime  time.Time `gorm:"index;not null;column:start_time" json:"start_time"`  // 通信开始时间
 	EndTime    time.Time `gorm:"column:end_time" json:"end_time"`                     // 通信结束时间
 	DurationMs int       `gorm:"column:duration_ms" json:"duration_ms"`               // 通信时长（毫秒）

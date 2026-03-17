@@ -11,10 +11,11 @@ import (
 // AudioSession 单次通信会话（精简版，只保留 ID）
 type AudioSession struct {
 	SessionID      string        // 会话唯一标识 (DeviceID_Timestamp)
-	DeviceID       uint          // 设备ID
+	DeviceID       int           // 设备ID (负数表示幽灵设备)
 	DeviceSSID     uint8         // 设备 SSID
 	GroupID        *uint         // 群组ID
 	UserID         *uint         // 用户ID
+	IsGhost        bool          // 是否是幽灵设备（WebSocket 客户端）
 	StartTime      time.Time     // 开始时间
 	LastPacketTime time.Time     // 最后一个包的时间（用于判断会话结束）
 	Buffer         *bytes.Buffer // PCM 音频数据缓冲
@@ -36,7 +37,7 @@ type CommSettingsConfig struct {
 	Enabled        bool // 是否启用通信记录
 	RetentionDays  int  // 数据保留天数
 	MinDurationMs  int  // 最小录制阈值（毫秒）
-	MaxDurationSec int  // 最大录制时长（秒），0=不限制
+	MaxDurationSec int  // 最大录制时���（秒），0=不限制
 	BatchUploadSec int  // 批量上传间隔（秒）
 }
 
@@ -49,13 +50,14 @@ func NewCommBuffer(config *CommSettingsConfig) *CommBuffer {
 }
 
 // generateSessionID 生成会话ID
-func generateSessionID(deviceID uint) string {
+func generateSessionID(deviceID int) string {
 	return fmt.Sprintf("%d", deviceID)
 }
 
 // AppendPacket 追加音频数据包（精简版，只记录 ID）
+// deviceID: 设备ID，正数为普通设备，负数为幽灵设备
 func (cb *CommBuffer) AppendPacket(
-	deviceID uint,
+	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,
@@ -73,7 +75,7 @@ func (cb *CommBuffer) AppendPacket(
 	session, exists := cb.sessions[sessionKey]
 	now := time.Now()
 
-	// 判断是否是新会话（间隔超过 200ms 视为新会话，与 PTT 检测逻辑一致）
+	// 判断是否是新会话（间隔超��� 200ms 视为新会话，与 PTT 检测逻辑一致）
 	if !exists || now.Sub(session.LastPacketTime) > 200*time.Millisecond {
 		// 关闭旧会话
 		if exists {
@@ -87,6 +89,7 @@ func (cb *CommBuffer) AppendPacket(
 			DeviceSSID:     deviceSSID,
 			GroupID:        groupID,
 			UserID:         userID,
+			IsGhost:        deviceID < 0, // 负数 ID 表示幽灵设备
 			StartTime:      now,
 			LastPacketTime: now,
 			Buffer:         bytes.NewBuffer(nil),
@@ -139,6 +142,11 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 			DeviceSSID:     session.DeviceSSID,
 			GroupID:        session.GroupID,
 			UserID:         session.UserID,
+			// ==========================================
+			// 【致命 Bug 修复】：之前漏掉了 IsGhost 字段！
+			// 导致 Go 语言将其默认初始化为 false，使得幽灵设备的录音在前台被当做损坏的实体设备隐藏。
+			// ==========================================
+			IsGhost:        session.IsGhost,
 			StartTime:      session.StartTime,
 			LastPacketTime: session.LastPacketTime,
 			Buffer:         bytes.NewBuffer(session.Buffer.Bytes()),

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"sync"
 
+	"nrllink/internal/common"
+
 	"gorm.io/gorm"
 )
 
@@ -191,8 +193,8 @@ func (r *SiteConfigRepository) GetSystemInfoConfig() (*SystemInfoConfig, error) 
 	}
 
 	result := &SystemInfoConfig{
-		Name:          "NRL Link",
-		NameShorthand: "NRL",
+		Name:          common.SiteName,
+		NameShorthand: common.SiteShortName,
 		LogoURL:       "",
 		Language:      "zh",
 	}

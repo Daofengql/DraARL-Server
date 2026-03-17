@@ -75,31 +75,29 @@ func refreshGroupLinkCache() {
 }
 
 // GetLinkGroupsForTarget 获取目标群组所属的所有互联组ID
+// 性能优化：直接返回内部切片引用，避免拷贝
+// 注意：调用方不应该修改返回的切片
 func GetLinkGroupsForTarget(targetGroupID int) []int {
 	globalGroupLinkCache.RLock()
 	defer globalGroupLinkCache.RUnlock()
 
 	if linkGroupIDs, ok := globalGroupLinkCache.targetToLinks[targetGroupID]; ok {
-		// 返回副本以避免外部修改
-		result := make([]int, len(linkGroupIDs))
-		copy(result, linkGroupIDs)
-		return result
+		return linkGroupIDs // 直接返回，不拷贝
 	}
-	return []int{}
+	return nil // 返回 nil 而不是空切片，便于 len() 判断
 }
 
 // GetTargetGroupsForLink 获取互联组关联的所有目标群组ID
+// 性能优化：直接返回内部切片引用，避免拷贝
+// 注意：调用方不应该修改返回的切片
 func GetTargetGroupsForLink(linkGroupID int) []int {
 	globalGroupLinkCache.RLock()
 	defer globalGroupLinkCache.RUnlock()
 
 	if targetGroupIDs, ok := globalGroupLinkCache.linkToTargets[linkGroupID]; ok {
-		// 返回副本以避免外部修改
-		result := make([]int, len(targetGroupIDs))
-		copy(result, targetGroupIDs)
-		return result
+		return targetGroupIDs // 直接返回，不拷贝
 	}
-	return []int{}
+	return nil
 }
 
 // HasGroupLinks 检查群组是否属于某个互联组

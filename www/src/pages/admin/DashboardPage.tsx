@@ -39,11 +39,7 @@ import { platformService } from '../../services/platform'
 import { apiClient } from '../../services'
 import { commStatsService } from '../../services/commStats'
 import type { DailyCommStats } from '../../types'
-
-const DEFAULT_SITE_NAME = 'DraARL 麟云业余无线电链路平台'
-const SYSTEM_NAME = 'DraARL 麟链'
-const SYSTEM_VERSION = 'v1.0.0'
-const PROTOCOL_VERSION = 'DraARLv1'
+import { SITE_CONFIG } from '../../config/site'
 
 interface StatCardProps {
   title: string
@@ -159,7 +155,7 @@ export function AdminDashboardPage() {
   const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [platformInfo, setPlatformInfo] = useState({ name: '', version: SYSTEM_VERSION })
+  const [platformInfo, setPlatformInfo] = useState({ name: '', version: SITE_CONFIG.VERSION })
   const [systemConfig, setSystemConfig] = useState<any>(null)
 
   const fetchSystemStats = async () => {
@@ -199,7 +195,7 @@ export function AdminDashboardPage() {
   }, [])
 
   // 站点名称：欢迎卡片使用配置的站点名称或默认值
-  const siteName = systemConfig?.systemInfo?.name || DEFAULT_SITE_NAME
+  const siteName = systemConfig?.systemInfo?.name || SITE_CONFIG.NAME
 
   if (loading) {
     return <DashboardSkeleton />
@@ -442,7 +438,7 @@ export function AdminDashboardPage() {
                 系统名称
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {SYSTEM_NAME}
+                {SITE_CONFIG.NAME}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -450,7 +446,7 @@ export function AdminDashboardPage() {
                 系统版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {SYSTEM_VERSION}
+                {SITE_CONFIG.VERSION}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -458,7 +454,7 @@ export function AdminDashboardPage() {
                 协议版本
               </Typography>
               <Typography variant="body2" fontWeight={500}>
-                {PROTOCOL_VERSION}
+                {SITE_CONFIG.PROTOCOL_VERSION}
               </Typography>
             </Box>
           </Stack>

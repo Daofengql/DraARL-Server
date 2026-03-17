@@ -158,6 +158,7 @@ func Login(c *gin.Context) {
 		"dmrid":           user.DMRID,
 		"mdcid":           user.MDCID,
 		"alarm_msg":       user.AlarmMsg,
+		"last_group_id":   user.LastGroupID, // 用户最后选中的群组
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
 				return user.LastLoginTime.Format("2006-01-02 15:04:05")
@@ -381,12 +382,13 @@ func GetCurrentUser(c *gin.Context) {
 			"dmrid":           user.DMRID,
 			"mdcid":           user.MDCID,
 			"alarm_msg":       user.AlarmMsg,
+			"last_group_id":   user.LastGroupID,
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
 					return user.LastLoginTime.Format("2006-01-02 15:04:05")
-				}
-				return ""
-			}(),
+			}
+			return ""
+		}(),
 			"last_login_ip":   user.LastLoginIP,
 			"login_err_times": user.LoginErrTimes,
 			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
@@ -1208,6 +1210,65 @@ func GetUserPublicInfo(c *gin.Context) {
 		"data": gin.H{
 			"id":           user.ID,
 			"username":     user.Name,
+			"avatar":       minio.GetAvatarURL(user.Avatar),
+			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
+			"callsign":     user.CallSign,
+			"phone":        user.Phone,
+			"address":      user.Address,
+			"created_at":   user.CreateTime,
+			"status":       user.Status,
+		},
+	})
+}
+
+// GetUserPublicInfoByName 通过用户名获取用户公开信息（任何登录用户���访问）
+func GetUserPublicInfoByName(c *gin.Context) {
+	username := c.Param("username")
+	if username == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的用户名",
+		})
+		return
+	}
+
+	// 检查用户是否已登录
+	_, exists := c.Get("username")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	userCache := cache.GetUserCache()
+
+	var user *gormdb.User
+	var err error
+	if userCache != nil {
+		user, err = userCache.GetUserByName(ctx, username)
+	} else {
+		repo := gormdb.NewUserRepository()
+		user, err = repo.GetUserByName(username)
+	}
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	// 只返回公开信息
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data": gin.H{
+			"id":           user.ID,
+			"username":     user.Name,
+			"nickname":     user.NickName,
 			"avatar":       minio.GetAvatarURL(user.Avatar),
 			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"callsign":     user.CallSign,

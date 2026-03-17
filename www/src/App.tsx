@@ -15,6 +15,7 @@ import { SiteConfigPage } from './pages/settings'
 import { CommRecordsPage } from './pages/comm-records'
 import { NotFoundPage } from './pages/not-found'
 import { DocsPage } from './pages/docs'
+import { RadioPage } from './pages/radio'
 import { AdminLayout } from './components/layout/AdminLayout'
 import { AdminDashboardPage } from './pages/admin/DashboardPage'
 import { AdminDevicePage } from './pages/admin/DevicePage'
@@ -58,6 +59,7 @@ function App() {
           <Route path="groups" element={<GroupsPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="comm-records" element={<CommRecordsPage />} />
+          <Route path="radio" element={<RadioPage />} />
           <Route path="docs" element={<DocsPage />} />
         </Route>
 

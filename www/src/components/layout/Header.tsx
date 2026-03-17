@@ -6,13 +6,13 @@ import {
   IconButton,
   Typography,
   Avatar,
-  Tooltip,
 } from '@mui/material'
 import {
   Menu as MenuIcon,
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 import { authService, apiClient } from '../../services'
+import { SITE_CONFIG } from '../../config/site'
 
 interface HeaderProps {
   onMenuClick: () => void
@@ -27,8 +27,6 @@ interface PublicConfig {
     language: string
   }
 }
-
-const DEFAULT_TITLE = 'DraARL 麟云业余无线电链路平台'
 
 export function Header({ onMenuClick }: HeaderProps) {
   const navigate = useNavigate()
@@ -79,7 +77,7 @@ export function Header({ onMenuClick }: HeaderProps) {
   // 3. 否则，显示默认标题
   const logoUrl = systemConfig?.systemInfo?.logo_url || ''
   const systemName = systemConfig?.systemInfo?.name || ''
-  const displayTitle = logoUrl ? '' : (systemName || DEFAULT_TITLE)
+  const displayTitle = logoUrl ? '' : (systemName || SITE_CONFIG.NAME)
 
   return (
     <AppBar

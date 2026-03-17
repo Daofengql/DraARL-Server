@@ -61,9 +61,18 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	// 设备名称：呼号-SSID
 	deviceName := ""
 	if r.OwnerCallSign != "" {
+		// 物理设备
 		deviceName = r.OwnerCallSign
 		if r.DeviceSSID > 0 {
 			deviceName += "-" + strconv.Itoa(int(r.DeviceSSID))
+		}
+	} else if r.UserCallSign != "" {
+		// 幽灵设备兜底显示：使用直接关联的用户呼号
+		deviceName = r.UserCallSign
+		if r.DeviceSSID > 0 {
+			deviceName += "-" + strconv.Itoa(int(r.DeviceSSID))
+		} else {
+			deviceName += "-Web"
 		}
 	}
 
@@ -157,8 +166,8 @@ func GetCommRecords(c *gin.Context) {
 			return
 		}
 
-		// 通过 owner_id 筛选（设备属于当前用户）
-		db = db.Where("d.owner_id = ?", currentUser.ID)
+		// 通过 owner_id 筛选（物理设备属于当前用户），或者通过 user_id 筛选（Web端幽灵设备直接属于该用户）
+		db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
 	}
 
 	// 筛选条件
@@ -449,14 +458,15 @@ func GetUserCommStats(c *gin.Context) {
 
 	// 查询用户设备的通信统计
 	// 通过 devices 表关联查询，获取用户所有设备的通信记录
+	// 同时包含幽灵设备（device_id=0）的记录，通过 user_id 直接关联
 	err = gormdb.Get().Table("comm_records cr").
 		Select(`
 			COALESCE(COUNT(cr.id), 0) as total_count,
 			COALESCE(SUM(cr.audio_size), 0) as total_size,
 			COALESCE(SUM(cr.duration_ms), 0) as total_duration
 		`).
-		Joins("INNER JOIN devices d ON cr.device_id = d.id").
-		Where("d.owner_id = ?", user.ID).
+		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
+		Where("d.owner_id = ? OR cr.user_id = ?", user.ID, user.ID).
 		Scan(&stats).Error
 
 	if err != nil {
@@ -504,10 +514,11 @@ func GetUserCommTrend(c *gin.Context) {
 
 	// 查询用户设备近30天的通信趋势
 	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
+	// 同时包含幽灵设备（device_id=0）的记录，通过 user_id 直接关联
 	err = gormdb.Get().Table("comm_records cr").
 		Select(`DATE_FORMAT(cr.start_time, '%Y-%m-%d') as date, COUNT(cr.id) as count, COALESCE(SUM(cr.duration_ms), 0) as duration`).
-		Joins("INNER JOIN devices d ON cr.device_id = d.id").
-		Where("d.owner_id = ?", user.ID).
+		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
+		Where("d.owner_id = ? OR cr.user_id = ?", user.ID, user.ID).
 		Where("DATE_FORMAT(cr.start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
 		Group("DATE_FORMAT(cr.start_time, '%Y-%m-%d')").
 		Order("date ASC").

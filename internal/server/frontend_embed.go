@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"nrllink/internal/common"
 	"nrllink/internal/gormdb"
 
 	"github.com/gin-gonic/gin"
@@ -54,33 +55,62 @@ func setupFrontend(engine *gin.Engine) {
 		}
 
 		// 获取站点名称
-		siteName := "麟云链路" // 默认值
+		siteName := common.SiteName // 默认值
 		if repo := gormdb.GetSiteConfigRepo(); repo != nil {
 			if systemConfig, err := repo.GetSystemInfoConfig(); err == nil && systemConfig.Name != "" {
 				siteName = systemConfig.Name
 			}
 		}
 
-		// 根据 path 确定页面标题后缀
+		// 根据 path 确定页面标题后缀（与前端 routeTitleMap 保持一致）
 		path := c.Request.URL.Path
 		titleSuffix := ""
-		switch {
-		case path == "/login":
+		switch path {
+		case "/login":
 			titleSuffix = " - 登录"
-		case path == "/register":
+		case "/register":
 			titleSuffix = " - 注册"
-		case path == "/dashboard" || path == "/admin/dashboard":
+		case "/dashboard":
 			titleSuffix = " - 仪表盘"
-		case strings.HasPrefix(path, "/admin/"):
-			titleSuffix = " - 管理后台"
-		case path == "/devices":
+		case "/devices":
 			titleSuffix = " - 我的设备"
-		case path == "/groups":
+		case "/groups":
 			titleSuffix = " - 我的群组"
-		case path == "/profile":
+		case "/profile":
 			titleSuffix = " - 个人中心"
-		case path == "/comm-records":
+		case "/comm-records":
 			titleSuffix = " - 通信记录"
+		case "/docs":
+			titleSuffix = " - 技术支持"
+		case "/admin/dashboard":
+			titleSuffix = " - 仪表盘"
+		case "/admin/users":
+			titleSuffix = " - 用户管理"
+		case "/admin/approvals":
+			titleSuffix = " - 用户审批"
+		case "/admin/certificate-approvals":
+			titleSuffix = " - 操作证审批"
+		case "/admin/devices":
+			titleSuffix = " - 设备管理"
+		case "/admin/relays":
+			titleSuffix = " - 中继台"
+		case "/admin/servers":
+			titleSuffix = " - 服务器"
+		case "/admin/groups":
+			titleSuffix = " - 群组管理"
+		case "/admin/group-links":
+			titleSuffix = " - 互联管理"
+		case "/admin/comm-records":
+			titleSuffix = " - 通信记录"
+		case "/admin/assets":
+			titleSuffix = " - 资源管理"
+		case "/admin/settings":
+			titleSuffix = " - 站点配置"
+		default:
+			// 其他管理后台路由
+			if strings.HasPrefix(path, "/admin/") {
+				titleSuffix = " - 管理后台"
+			}
 		}
 
 		// 动态替换模板占位符

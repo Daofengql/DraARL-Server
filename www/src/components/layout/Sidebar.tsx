@@ -22,6 +22,7 @@ import {
   ExitToApp,
   Mic,
   MenuBook,
+  Radio,
 } from '@mui/icons-material'
 import { authService, apiClient } from '../../services'
 
@@ -40,6 +41,7 @@ interface MenuItem {
 // 普通用户菜单项（管理员和普通用户均可见）
 const menuItems: MenuItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: <Dashboard /> },
+  { path: '/radio', label: '在线收发', icon: <Radio /> },
   { path: '/devices', label: '设备管理', icon: <Devices /> },
   { path: '/groups', label: '群组管理', icon: <Group /> },
   { path: '/profile', label: '个人中心', icon: <Person /> },

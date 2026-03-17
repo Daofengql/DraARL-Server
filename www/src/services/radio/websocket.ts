@@ -32,6 +32,8 @@ export class RadioWebSocket {
   private onStateChange: ((state: WSConnectionState) => void) | null = null
   private onPacket: ((packet: DraARLPacket, rawData: ArrayBuffer) => void) | null = null
   private onError: ((error: string) => void) | null = null
+  private onVoiceStart: ((callsign: string, ssid: number, username: string) => void) | null = null
+  private onVoiceEnd: (() => void) | null = null
 
   // 用户信息
   private token: string = ''
@@ -54,6 +56,14 @@ export class RadioWebSocket {
 
   setOnError(callback: (error: string) => void) {
     this.onError = callback
+  }
+
+  setOnVoiceStart(callback: (callsign: string, ssid: number, username: string) => void) {
+    this.onVoiceStart = callback
+  }
+
+  setOnVoiceEnd(callback: () => void) {
+    this.onVoiceEnd = callback
   }
 
   // 设置用户信息

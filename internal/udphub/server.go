@@ -523,14 +523,26 @@ func handleDraARLATCommand(packet *protocol.DraARLv1Packet, dev *models.Device) 
 func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, gp *models.Group) {
 	pool := gp.ConnPool.(*CurrentConnPool)
 
+	// 【核心修复】重编码数据包：清空 password，填充 callsign
+	refilledData := protocol.EncodeDraARLv1(
+		dev.Username,
+		"",                // 准入密码转发为空
+		dev.SSID,
+		protocol.DraARLTypeOpus16K,
+		dev.DevModel,
+		dev.DMRID,
+		dev.CallSign,      // 服务器填充呼号
+		packet.DATA,       // 原始语音数据
+	)
+
 	// 1. 在本群组内广播（UDP 设备）
-	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, data)
+	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
 	// 2. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
-	forwardVoiceToLinkedGroups(dev, data, gp.ID)
+	forwardVoiceToLinkedGroups(dev, refilledData, gp.ID)
 
 	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
-	BroadcastVoiceFromUDP(dev, data, gp.ID)
+	BroadcastVoiceFromUDP(dev, refilledData, gp.ID)
 }
 
 // forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
@@ -576,14 +588,26 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 
 // forwardDraARLMessage 转发 DraARLv1 文本消息
 func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
+	// 【核心修复】重编码数据包：清空 password，填充 callsign
+	refilledData := protocol.EncodeDraARLv1(
+		dev.Username,
+		"",                       // 准入密码转发为空
+		dev.SSID,
+		protocol.DraARLTypeTextMessage,
+		dev.DevModel,
+		dev.DMRID,
+		dev.CallSign,             // 服务器填充呼号
+		packet.DATA,              // 原始文本数据
+	)
+
 	// 1. 在本群组内广播（UDP 设备）
-	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, data)
+	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
 	// 2. 跨虚拟组转发文本消息
-	forwardMessageToLinkedGroups(dev, data, gp.ID)
+	forwardMessageToLinkedGroups(dev, refilledData, gp.ID)
 
 	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
-	BroadcastTextFromUDP(dev, data, gp.ID)
+	BroadcastTextFromUDP(dev, refilledData, gp.ID)
 }
 
 // forwardMessageToLinkedGroups 将文本消息转发到互联组关联的其他群组
@@ -625,14 +649,27 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, conn *net.UDPConn, gp *models.Group) {
 	pool := gp.ConnPool.(*CurrentConnPool)
 
+	// 【核心修复】重编码数据包：清空 password，填充 callsign
+	// 服务器互联语音使用 Type 6，保留原始 DATA 区域的扩展头信息
+	refilledData := protocol.EncodeDraARLv1(
+		dev.Username,
+		"",                       // 准入密码转发为空
+		dev.SSID,
+		protocol.DraARLTypeServerVoice,
+		dev.DevModel,
+		dev.DMRID,
+		dev.CallSign,             // 服务器填充呼号
+		packet.DATA,              // 原始语音数据（含扩展头）
+	)
+
 	// 1. 在本群组内广播（UDP 设备）
-	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, data)
+	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
 	// 2. 跨虚拟组转发服务器语音
-	forwardVoiceToLinkedGroups(dev, data, gp.ID)
+	forwardVoiceToLinkedGroups(dev, refilledData, gp.ID)
 
 	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
-	BroadcastVoiceFromUDP(dev, data, gp.ID)
+	BroadcastVoiceFromUDP(dev, refilledData, gp.ID)
 }
 
 // min 返回两个整数中的较小值

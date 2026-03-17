@@ -93,11 +93,13 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 		// 设备已存在，转换为 models.Device 并返回
 		modelDev := existingDev.ToModelDevice()
 
-		// 获取所有者信息填充 Username
+		// 【关键修复】获取所有者信息填充 Username 和 CallSign
+		// 设备表不存储 CallSign，需要从用户表获取
 		if existingDev.OwnerID > 0 {
 			userRepo := gormdb.NewUserRepository()
 			if owner, err := userRepo.GetUserByID(existingDev.OwnerID); err == nil && owner != nil {
 				modelDev.Username = owner.Name
+				modelDev.CallSign = owner.CallSign // 从用户表获取呼号
 			}
 		}
 

@@ -25,6 +25,7 @@ const OPUS_CHANNELS = 1
 interface MessageListProps {
   messages: RadioMessage[]
   currentCallsign: string
+  currentSSID: number  // 添加 SSID 用于精确判断
   loading?: boolean
 }
 
@@ -270,7 +271,7 @@ const VoiceMessage: React.FC<{
 }
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, currentCallsign, loading }, ref) => {
+  ({ messages, currentCallsign, currentSSID, loading }, ref) => {
     const theme = useTheme()
     const styles = useStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
@@ -342,7 +343,8 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     return (
       <Box ref={scrollRef} sx={styles.root}>
         {messages.map((message) => {
-          const isSelf = message.senderCallsign === currentCallsign
+          // 【关键修复】同时比较 callsign 和 SSID 来判断是否是自己发送的消息
+          const isSelf = message.senderCallsign === currentCallsign && message.senderSSID === currentSSID
 
           return (
             <Box

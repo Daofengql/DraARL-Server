@@ -40,7 +40,7 @@ type AuthResult struct {
 type WSPreAuthData struct {
 	Token    string // JWT Token
 	Username string // 用户名（可选，用于设备认证）
-	SSID     byte   // SSID（可选）
+	SSID     byte   // SSID（仅设备认证使用）
 }
 
 // ParsePreAuthData 从请求中解析预认证数据
@@ -188,7 +188,9 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 		authResult := AuthenticateJWT(preAuth.Token)
 
 		if authResult.Success {
-			device.SSID = preAuth.SSID
+			// 【核心修改】JWT 认证的设备 SSID 统一为 105
+			// 与 DevModel=105 (DraARLDevModelBrowser) 保持一致
+			device.SSID = 105
 			// 【核心修复】使用用户的 LastGroupID 恢复上次选中的群组
 			// 如果用户没有 LastGroupID 或为 0，则使用默认公共群组 999
 			device.GroupID = 999 // 默认公共群组
@@ -201,11 +203,11 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 					}
 				}
 			}
-			manager.RegisterGhostDevice(device, authResult.UserID, authResult.CallSign, authResult.Nickname, preAuth.SSID)
+			manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
 
 			// 【关键修复】同时创建 GhostDevice 并建立与 WSDevice 的关联
 			// 这样 GetGhostDevice 才能获取到 GhostDevice，且 GhostDevice.Conn 指向 WSDevice
-			GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.CallSign, authResult.Nickname, preAuth.SSID)
+			GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
 
 			return device, authResult
 		}

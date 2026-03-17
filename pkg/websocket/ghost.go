@@ -53,7 +53,7 @@ func NewGhostDeviceManager() *GhostDeviceManager {
 }
 
 // CreateGhostDevice 创建幽灵设备
-func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, callsign, nickname string, ssid byte) *GhostDevice {
+func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, username, callsign, nickname string, ssid byte) *GhostDevice {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -65,6 +65,7 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, c
 		existing.LastPacketTime = time.Now()
 		existing.CallSign = callsign
 		existing.Nickname = nickname
+		existing.Username = username
 		log.Printf("[GHOST] Updated existing ghost device: user-%d (%s-%d)", userID, callsign, ssid)
 		return existing
 	}
@@ -75,7 +76,7 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, c
 		UserID:         userID,
 		CallSign:       callsign,
 		Nickname:       nickname,
-		Username:       callsign, // 使用呼号作为用户名
+		Username:       username,
 		SSID:           ssid,
 		Conn:           wsDevice,
 		GroupID:        models.GroupIDPublicMin, // 默认公共群组 (999)，与 UDP 和 WSDevice 保持一致

@@ -174,7 +174,8 @@ export class RadioService {
   private token: string = ''
   private username: string = ''
   private callsign: string = ''
-  private ssid: number = 10
+  // JWT 认证设备 SSID 固定为 105（与 DevModel 一致）
+  private readonly ssid: number = 105
 
   // 事件处理器
   private handlers: RadioEventHandlers = {}
@@ -215,7 +216,7 @@ export class RadioService {
     this.token = token
     this.username = username
     this.callsign = callsign
-    this.ssid = this.config.ssid
+    // ssid 固定为 105，不再从 config 读取
 
     // 【核心修复】优先使用服务端返回的 lastGroupId
     // 这样可以确保跨设备/跨会话的群组偏好一致
@@ -551,14 +552,10 @@ export class RadioService {
 
   /**
    * 设置 SSID
+   * @deprecated JWT 认证设备 SSID 固定为 105，此方法不再有效
    */
   setSSID(ssid: number): void {
-    this.ssid = ssid
-    this.config.ssid = ssid
-    if (this.ws) {
-      this.ws.setUserInfo(this.token, ssid, this.username, this.callsign)
-    }
-    this.saveConfig()
+    console.warn('[RadioService] setSSID is deprecated: JWT devices use fixed SSID 105')
   }
 
   /**

@@ -37,7 +37,8 @@ export class RadioWebSocket {
 
   // 用户信息
   private token: string = ''
-  private ssid: number = 10
+  // JWT 认证设备 SSID 固定为 105（与 DevModel 一致）
+  private readonly ssid: number = 105
   private username: string = ''
   private callsign: string = ''
 
@@ -67,9 +68,9 @@ export class RadioWebSocket {
   }
 
   // 设置用户信息
-  setUserInfo(token: string, ssid: number, username: string, callsign: string) {
+  setUserInfo(token: string, _ssid: number, username: string, callsign: string) {
     this.token = token
-    this.ssid = ssid
+    // ssid 参数被忽略，JWT 认证设备固定使用 105
     this.username = username
     this.callsign = callsign
   }
@@ -91,10 +92,10 @@ export class RadioWebSocket {
 
     return new Promise((resolve, reject) => {
       try {
-        // 构建 WebSocket URL
+        // 构建 WebSocket URL（只传 token，SSID 由后端固定为 105）
         let url = this.config.url
         if (this.token) {
-          url += `?token=${encodeURIComponent(this.token)}&ssid=${this.ssid}`
+          url += `?token=${encodeURIComponent(this.token)}`
         }
 
         this.ws = new WebSocket(url)

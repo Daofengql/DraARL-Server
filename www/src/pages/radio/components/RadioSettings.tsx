@@ -105,24 +105,6 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
 
       {/* 内容 */}
       <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
-        {/* 设备配置 */}
-        <Typography variant="subtitle2" color="primary" gutterBottom>
-          设备配置
-        </Typography>
-
-        <FormControl fullWidth margin="normal">
-          <FormLabel>SSID (设备子号)</FormLabel>
-          <TextField
-            type="number"
-            size="small"
-            value={localConfig.ssid}
-            onChange={(e) => updateConfig('ssid', parseInt(e.target.value, 10) || 10)}
-            inputProps={{ min: 1, max: 255 }}
-          />
-        </FormControl>
-
-        <Divider sx={{ my: 2 }} />
-
         {/* 音频设置 */}
         <Typography variant="subtitle2" color="primary" gutterBottom>
           音频设置

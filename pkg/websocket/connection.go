@@ -300,8 +300,8 @@ func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username st
 	log.Printf("[WS] Normal device registered: %s (ID: %d, CallSign: %s)", key, deviceID, callsign)
 }
 
-// RegisterGhostDevice 注册幽灵设备（JWT 认证成功后调用）
-func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, callsign, nickname string, ssid byte) {
+// RegisterGhostDevice 注册幽灵设备（JWT 认���成功后调用）
+func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, username, callsign, nickname string, ssid byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -315,8 +315,8 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 	device.IsOnline = true
 	device.LastPacketTime = time.Now()
 
-	// 幽灵设备的 "Username" 使用用户呼号
-	device.Username = callsign
+	// 使用传入的真实用户名
+	device.Username = username
 
 	m.ghostDevices[userID] = device
 

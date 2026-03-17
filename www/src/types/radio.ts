@@ -152,7 +152,6 @@ export interface RadioStats {
 
 // 用户配置
 export interface RadioUserConfig {
-  ssid: number // 用户可配置的 SSID
   defaultGroupId: number
   inputDeviceId?: string
   outputDeviceId?: string
@@ -162,7 +161,6 @@ export interface RadioUserConfig {
 
 // 默认用户配置
 export const defaultRadioUserConfig: RadioUserConfig = {
-  ssid: 10,
   defaultGroupId: 999, // 公共群组
   volume: 0.8,
   muted: false,

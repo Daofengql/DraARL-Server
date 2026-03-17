@@ -113,7 +113,6 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 获取群组信息
 	group, exists := GetGroupFromCache(groupID)
 	if !exists {
-		// 【核心补充】不再静默失败，暴露出内存中找不到目标群组的问题
 		log.Printf("[ROUTE_ERR] WS -> UDP 转发丢弃: 请求的目标群组 %d 不存在", groupID)
 		return
 	}
@@ -131,7 +130,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 这样下发的就是最标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
 	voicePacket := protocol.EncodeDraARLv1(
 		source.GetUsername(),
-		"", // 准入密码下发为空
+		"", // 准入密码��发为空
 		source.GetSSID(),
 		protocol.DraARLTypeOpus16K, // 【核心修改】使用 Type 5：标准 Opus 16K 语音
 		source.GetDevModel(),
@@ -147,24 +146,10 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	}
 
 	// 遍历 UDP 设备并发送
+	skipSelf := !source.IsGhost()
+	sourceID := source.GetDeviceID()
 	for _, targetDev := range pool.DevConnList {
-		// 不转发给自己（如果是普通设备）
-		if !source.IsGhost() && targetDev.ID == source.GetDeviceID() {
-			continue
-		}
-
-		// 检查目标设备是否禁收
-		if targetDev.DisableRecv {
-			continue
-		}
-
-		// 懒剔除：检查目标设备是否还属于本群组
-		if targetDev.GroupID != groupID {
-			continue
-		}
-
-		// 向在线设备发送标准语音包
-		if targetDev.UDPAddr != nil && targetDev.ISOnline {
+		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
 			conn.WriteToUDP(voicePacket, targetDev.UDPAddr)
 		}
 	}
@@ -202,16 +187,10 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 		return
 	}
 
+	skipSelf := !source.IsGhost()
+	sourceID := source.GetDeviceID()
 	for _, targetDev := range pool.DevConnList {
-		if !source.IsGhost() && targetDev.ID == source.GetDeviceID() {
-			continue
-		}
-
-		if targetDev.DisableRecv || targetDev.GroupID != groupID {
-			continue
-		}
-
-		if targetDev.UDPAddr != nil && targetDev.ISOnline {
+		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
 			conn.WriteToUDP(textPacket, targetDev.UDPAddr)
 		}
 	}
@@ -255,12 +234,9 @@ func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDevic
 				continue
 			}
 
+			// 转发到目标组的 UDP 设备
 			for _, targetDev := range pool.DevConnList {
-				if targetDev.GroupID != targetID || targetDev.DisableRecv {
-					continue
-				}
-
-				if targetDev.UDPAddr != nil && targetDev.ISOnline {
+				if canForwardToDevice(targetDev, 0, targetID, false) {
 					conn.WriteToUDP(data, targetDev.UDPAddr)
 				}
 			}
@@ -269,10 +245,9 @@ func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDevic
 			if r.wsManager != nil {
 				wsDevices := r.wsManager.GetDevicesByGroup(targetID)
 				for _, device := range wsDevices {
-					if device.IsDisabledRecv() {
-						continue
+					if !device.IsDisabledRecv() {
+						r.wsManager.SendToDevice(device, data, 2)
 					}
-					r.wsManager.SendToDevice(device, data, 2)
 				}
 			}
 		}
@@ -313,12 +288,9 @@ func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterf
 				continue
 			}
 
+			// 转发到目标组的 UDP 设备
 			for _, targetDev := range pool.DevConnList {
-				if targetDev.GroupID != targetID || targetDev.DisableRecv {
-					continue
-				}
-
-				if targetDev.UDPAddr != nil && targetDev.ISOnline {
+				if canForwardToDevice(targetDev, 0, targetID, false) {
 					conn.WriteToUDP(data, targetDev.UDPAddr)
 				}
 			}
@@ -327,10 +299,9 @@ func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterf
 			if r.wsManager != nil {
 				wsDevices := r.wsManager.GetDevicesByGroup(targetID)
 				for _, device := range wsDevices {
-					if device.IsDisabledRecv() {
-						continue
+					if !device.IsDisabledRecv() {
+						r.wsManager.SendToDevice(device, data, 2)
 					}
-					r.wsManager.SendToDevice(device, data, 2)
 				}
 			}
 		}

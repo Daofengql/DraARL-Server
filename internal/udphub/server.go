@@ -21,6 +21,16 @@ var (
 	// 全局 UDP 连接
 	globalConn *net.UDPConn
 
+	// ==========================================
+	// 性能优化：sync.Pool 复用 UDP 数据包内存
+	// 避免每次处理数据包时分配 1460 字节的切片
+	// ==========================================
+	packetPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 1460)
+		},
+	}
+
 	// Username 索引的设备映射 (DraARLv1)
 	devUsernameSSIDMap = make(map[string]*models.Device) // key: username-ssid
 
@@ -136,14 +146,23 @@ func StartDraARLServer(port int) error {
 func processDraARLConn(conn *net.UDPConn) {
 	defer func() { <-limitChan }()
 
-	data := make([]byte, 1460)
-
 	for {
+		// 从 sync.Pool 获取缓冲区，避免频繁内存分配
+		data := packetPool.Get().([]byte)
+		// 注意：使用后需要归还，但在异步处理前需要复制数据
+		// 这里我们在处理完成后立即归还
+
 		n, remoteAddr, err := conn.ReadFromUDP(data)
 		if err != nil {
+			packetPool.Put(data) // 出错时归还
 			log.Printf("[ERROR] Read from UDP failed: %v", err)
 			return
 		}
+
+		// 复制有效数据（因为 data 会被归还到池中）
+		packetData := make([]byte, n)
+		copy(packetData, data[:n])
+		packetPool.Put(data) // 立即归还缓冲区
 
 		// Panic recovery
 		func() {
@@ -154,10 +173,10 @@ func processDraARLConn(conn *net.UDPConn) {
 			}()
 
 			// 处理 DraARLv1 数据包
-			if n >= 4 && string(data[0:4]) == "DraA" {
-				processDraARLPacket(data[:n], remoteAddr, conn)
+			if n >= 4 && string(packetData[0:4]) == "DraA" {
+				processDraARLPacket(packetData, remoteAddr, conn)
 			} else {
-				log.Printf("[DECODE] Unknown protocol from %v: %s", remoteAddr, string(data[:min(4, n)]))
+				log.Printf("[DECODE] Unknown protocol from %v: %s", remoteAddr, string(packetData[:min(4, n)]))
 			}
 		}()
 	}
@@ -505,25 +524,7 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 	pool := gp.ConnPool.(*CurrentConnPool)
 
 	// 1. 在本群组内广播（UDP 设备）
-	for _, targetDev := range pool.DevConnList {
-		if targetDev.ID == dev.ID {
-			continue // 不转发给自己
-		}
-
-		// 终极防御：懒剔除拦截
-		if targetDev.GroupID != gp.ID {
-			continue
-		}
-
-		// 检查目标设备是否禁收
-		if targetDev.DisableRecv {
-			continue
-		}
-
-		if targetDev.UDPAddr != nil && targetDev.ISOnline {
-			globalConn.WriteToUDP(data, targetDev.UDPAddr)
-		}
-	}
+	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, data)
 
 	// 2. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
 	forwardVoiceToLinkedGroups(dev, data, gp.ID)
@@ -558,19 +559,9 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 			// 获取目标群组的转发
 			if targetGroup, exists := GetGroupFromCache(targetID); exists {
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
-				// 1. 发送给目标组的 UDP 设备
+				// 1. 发送给目标组的 UDP 设备（跨组不排除自己，因为源设备不在目标组）
 				for _, targetDev := range pool.DevConnList {
-					// 懒剔除拦截
-					if targetDev.GroupID != targetID {
-						continue
-					}
-
-					// 检查目标设备是否禁收
-					if targetDev.DisableRecv {
-						continue
-					}
-
-					if targetDev.UDPAddr != nil && targetDev.ISOnline {
+					if canForwardToDevice(targetDev, 0, targetID, false) {
 						globalConn.WriteToUDP(data, targetDev.UDPAddr)
 					}
 				}
@@ -586,25 +577,7 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 // forwardDraARLMessage 转发 DraARLv1 文本消息
 func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
 	// 1. 在本群组内广播（UDP 设备）
-	for _, targetDev := range pool.DevConnList {
-		if targetDev.ID == dev.ID {
-			continue
-		}
-
-		// 懒剔除拦截：检查目标设备是否还属于本群组
-		if targetDev.GroupID != gp.ID {
-			continue
-		}
-
-		// 检查目标设备是否禁收
-		if targetDev.DisableRecv {
-			continue
-		}
-
-		if targetDev.UDPAddr != nil && targetDev.ISOnline {
-			globalConn.WriteToUDP(data, targetDev.UDPAddr)
-		}
-	}
+	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, data)
 
 	// 2. 跨虚拟组转发文本消息
 	forwardMessageToLinkedGroups(dev, data, gp.ID)
@@ -636,13 +609,7 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
 				// 1. 发送给目标组的 UDP 设备
 				for _, targetDev := range pool.DevConnList {
-					if targetDev.GroupID != targetID {
-						continue
-					}
-					if targetDev.DisableRecv {
-						continue
-					}
-					if targetDev.UDPAddr != nil && targetDev.ISOnline {
+					if canForwardToDevice(targetDev, 0, targetID, false) {
 						globalConn.WriteToUDP(data, targetDev.UDPAddr)
 					}
 				}
@@ -659,25 +626,7 @@ func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Devic
 	pool := gp.ConnPool.(*CurrentConnPool)
 
 	// 1. 在本群组内广播（UDP 设备）
-	for _, targetDev := range pool.DevConnList {
-		if targetDev.ID == dev.ID {
-			continue
-		}
-
-		// 懒剔除拦截：检查目标设备是否还属于本群组
-		if targetDev.GroupID != gp.ID {
-			continue
-		}
-
-		// 检查目标设备是否禁收
-		if targetDev.DisableRecv {
-			continue
-		}
-
-		if targetDev.UDPAddr != nil && targetDev.ISOnline {
-			globalConn.WriteToUDP(data, targetDev.UDPAddr)
-		}
-	}
+	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, data)
 
 	// 2. 跨虚拟组转发服务器语音
 	forwardVoiceToLinkedGroups(dev, data, gp.ID)
@@ -692,6 +641,52 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ==========================================
+// 性能优化：设备转发辅助函数
+// 将多层嵌套 if 简化为组合条件，提高可读性和维护性
+// ==========================================
+
+// canForwardToDevice 检查是否可以转发数据到目标 UDP 设备
+// 参数说明：
+//   - target: 目标��备
+//   - sourceID: 源设备 ID（用于排除自己）
+//   - expectedGroupID: 期望的群组 ID（用于懒剔除）
+//   - skipSelf: 是否排除自己
+func canForwardToDevice(target *models.Device, sourceID int, expectedGroupID int, skipSelf bool) bool {
+	// 组合条件：只要满足任一条件就跳过
+	// 1. 排除自己（如果需要）
+	// 2. 群组不匹配（懒剔除）
+	// 3. 目标设备禁收
+	// 4. 目标设备离线
+	// 5. 目标地址无效
+	if skipSelf && target.ID == sourceID {
+		return false
+	}
+	if target.GroupID != expectedGroupID {
+		return false
+	}
+	if target.DisableRecv {
+		return false
+	}
+	if !target.ISOnline {
+		return false
+	}
+	if target.UDPAddr == nil {
+		return false
+	}
+	return true
+}
+
+// forwardToUDPDevices 统一的 UDP 设备转发逻辑
+// 遍历设备列表，将数据转发给所有有效的目标设备
+func forwardToUDPDevices(devices []*models.Device, sourceID int, expectedGroupID int, skipSelf bool, data []byte) {
+	for _, target := range devices {
+		if canForwardToDevice(target, sourceID, expectedGroupID, skipSelf) {
+			globalConn.WriteToUDP(data, target.UDPAddr)
+		}
+	}
 }
 
 // GetGlobalConn 获取全局 UDP 连接

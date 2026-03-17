@@ -180,6 +180,12 @@ type WSConnectionManager struct {
 	// 连接索引 (key: conn.RemoteAddr().String())
 	connMap map[string]*WSDevice
 
+	// ==========================================
+	// 性能优化：按群组索引的设备列表
+	// 将 GetDevicesByGroup 从 O(n) 优化到 O(1)
+	// ==========================================
+	groupDevices map[int]map[string]*WSDevice // groupID -> deviceKey -> device
+
 	// 读写锁
 	mu sync.RWMutex
 
@@ -197,12 +203,44 @@ func NewWSConnectionManager() *WSConnectionManager {
 		normalDevices:    make(map[string]*WSDevice),
 		ghostDevices:     make(map[int]*WSDevice),
 		connMap:          make(map[string]*WSDevice),
-		AuthTimeout:      30 * time.Second,  // 30 秒认证超时
-		HeartbeatTimeout: 20 * time.Second,  // 20 秒心跳超时
-		ReconnectGrace:   30 * time.Second,  // 30 秒重连宽限期
-		ProxyTimeout:     300 * time.Second, // 300 秒反向代理超时
-		PreReconnectTime: 240 * time.Second, // 240 秒开始准备重连
+		groupDevices:     make(map[int]map[string]*WSDevice), // 初始化群组索引
+		AuthTimeout:      30 * time.Second,                   // 30 秒认证超时
+		HeartbeatTimeout: 20 * time.Second,                   // 20 秒心跳超时
+		ReconnectGrace:   30 * time.Second,                   // 30 秒重连宽限期
+		ProxyTimeout:     300 * time.Second,                  // 300 秒反向代理超时
+		PreReconnectTime: 240 * time.Second,                  // 240 秒开始准备重连
 	}
+}
+
+// ==========================================
+// 性能优化：群组索引辅助方法
+// ==========================================
+
+// addToGroupIndex 将设备添加到群组索引（调用前必须持有锁）
+func (m *WSConnectionManager) addToGroupIndex(groupID int, key string, device *WSDevice) {
+	if m.groupDevices[groupID] == nil {
+		m.groupDevices[groupID] = make(map[string]*WSDevice)
+	}
+	m.groupDevices[groupID][key] = device
+}
+
+// removeFromGroupIndex 从群组索引中移除设备（调用前必须持有锁）
+func (m *WSConnectionManager) removeFromGroupIndex(groupID int, key string) {
+	if devices, ok := m.groupDevices[groupID]; ok {
+		delete(devices, key)
+		// 如果群组为空，清理 map 以节省内存
+		if len(devices) == 0 {
+			delete(m.groupDevices, groupID)
+		}
+	}
+}
+
+// getDeviceKey 获取设备的唯一键
+func getDeviceKey(device *WSDevice) string {
+	if device.DeviceType == DeviceTypeGhost {
+		return fmt.Sprintf("ghost-%d", device.UserID)
+	}
+	return fmt.Sprintf("%s-%d", device.Username, device.SSID)
 }
 
 // RegisterConnection 注册新连接
@@ -256,6 +294,9 @@ func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username st
 	key := fmt.Sprintf("%s-%d", username, ssid)
 	m.normalDevices[key] = device
 
+	// 添加到群组索引
+	m.addToGroupIndex(device.GroupID, key, device)
+
 	log.Printf("[WS] Normal device registered: %s (ID: %d, CallSign: %s)", key, deviceID, callsign)
 }
 
@@ -279,6 +320,10 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 
 	m.ghostDevices[userID] = device
 
+	// 添加到群组索引
+	key := getDeviceKey(device)
+	m.addToGroupIndex(device.GroupID, key, device)
+
 	log.Printf("[WS] Ghost device registered: user-%d (%s-%d)", userID, callsign, ssid)
 }
 
@@ -296,18 +341,25 @@ func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
 		delete(m.connMap, addr)
 	}
 
+	// 获取设备键用于群组索引清理
+	key := getDeviceKey(device)
+
 	if device.DeviceType == DeviceTypeGhost {
 		// 【关键修复：指针比对】防止旧的 Ghost 连接超时清理掉新的 Ghost 连接
 		if existing, ok := m.ghostDevices[device.UserID]; ok && existing == device {
 			delete(m.ghostDevices, device.UserID)
+			// 从群组索引中移除
+			m.removeFromGroupIndex(device.GroupID, key)
 			log.Printf("[WS] Ghost device unregistered: user-%d", device.UserID)
 		}
 	} else if device.Username != "" {
-		key := fmt.Sprintf("%s-%d", device.Username, device.SSID)
+		deviceKey := fmt.Sprintf("%s-%d", device.Username, device.SSID)
 		// 【关键修复：指针比对】
-		if existing, ok := m.normalDevices[key]; ok && existing == device {
-			delete(m.normalDevices, key)
-			log.Printf("[WS] Normal device unregistered: %s", key)
+		if existing, ok := m.normalDevices[deviceKey]; ok && existing == device {
+			delete(m.normalDevices, deviceKey)
+			// 从群组索引中移除
+			m.removeFromGroupIndex(device.GroupID, key)
+			log.Printf("[WS] Normal device unregistered: %s", deviceKey)
 		}
 	}
 
@@ -367,20 +419,20 @@ func (m *WSConnectionManager) GetAllOnlineDevices() []*WSDevice {
 }
 
 // GetDevicesByGroup 获取指定群组的在线设备
+// 性能优化：使用群组索引，从 O(n) 优化到 O(1)
 func (m *WSConnectionManager) GetDevicesByGroup(groupID int) []*WSDevice {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	devices := make([]*WSDevice, 0)
-
-	for _, device := range m.normalDevices {
-		if device.IsOnline && device.GroupID == groupID {
-			devices = append(devices, device)
-		}
+	// 直接从群组索引获取，O(1) 复杂度
+	groupDevs, ok := m.groupDevices[groupID]
+	if !ok {
+		return []*WSDevice{}
 	}
 
-	for _, device := range m.ghostDevices {
-		if device.IsOnline && device.GroupID == groupID {
+	devices := make([]*WSDevice, 0, len(groupDevs))
+	for _, device := range groupDevs {
+		if device.IsOnline {
 			devices = append(devices, device)
 		}
 	}
@@ -426,7 +478,22 @@ func (m *WSConnectionManager) UpdateDeviceActivity(device *WSDevice) {
 func (m *WSConnectionManager) SetDeviceGroup(device *WSDevice, groupID int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 如果群组没有变化，直接返回
+	if device.GroupID == groupID {
+		return
+	}
+
+	// 从旧群组索引中移除
+	key := getDeviceKey(device)
+	m.removeFromGroupIndex(device.GroupID, key)
+
+	// 更���群组 ID
 	device.GroupID = groupID
+
+	// 添加到新群组索引
+	m.addToGroupIndex(groupID, key, device)
+
 	log.Printf("[WS] Device %s changed to group %d", device.GetIdentifier(), groupID)
 }
 

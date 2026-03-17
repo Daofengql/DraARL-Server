@@ -2,7 +2,7 @@
  * 消息列表组件
  */
 
-import React, { useEffect, useRef, forwardRef } from 'react'
+import React, { useEffect, useRef, forwardRef, useState, useCallback } from 'react'
 import {
   Box,
   Typography,
@@ -17,10 +17,14 @@ import {
   Pause as PauseIcon,
 } from '@mui/icons-material'
 import type { RadioMessage } from '../../../types/radio'
+import { userService } from '../../../services'
 
 // Opus 配置
 const OPUS_SAMPLE_RATE = 16000
 const OPUS_CHANNELS = 1
+
+// 用户信息缓存（全局）
+const userInfoCache = new Map<string, { avatar?: string; nickname?: string }>()
 
 interface MessageListProps {
   messages: RadioMessage[]
@@ -276,6 +280,48 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     const styles = useStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
 
+    // 用户头像状态（用于触发重渲染）
+    const [, forceUpdate] = useState({})
+
+    // 异步加载用户头像
+    const loadUserAvatar = useCallback(async (senderId: string | number) => {
+      const key = String(senderId)
+
+      // 已缓存则跳过
+      if (userInfoCache.has(key)) {
+        return
+      }
+
+      // 标记为加载中（防止重复请求）
+      userInfoCache.set(key, {})
+
+      try {
+        const user = await userService.getPublicInfoByName(key)
+        userInfoCache.set(key, {
+          avatar: user.avatar_thumb || user.avatar,
+          nickname: user.nickname,
+        })
+        // 触发重渲染
+        forceUpdate({})
+      } catch (error) {
+        console.warn('Failed to load user info:', key, error)
+        // 缓存空对象，避免重复请求
+        userInfoCache.set(key, {})
+      }
+    }, [])
+
+    // 当消息变化时，加载未缓存的用户头像
+    useEffect(() => {
+      messages.forEach(msg => {
+        if (!msg.senderAvatar && msg.senderId) {
+          const cached = userInfoCache.get(String(msg.senderId))
+          if (!cached) {
+            loadUserAvatar(msg.senderId)
+          }
+        }
+      })
+    }, [messages, loadUserAvatar])
+
     // 自动滚动到底部
     useEffect(() => {
       if (scrollRef.current) {
@@ -348,6 +394,11 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
           const isMatchSSID = String(message.senderSSID) === String(currentSSID)
           const isSelf = (isMatchCallsign && isMatchSSID) || message.isSelf === true
 
+          // 获取缓存的用户头像
+          const cachedInfo = userInfoCache.get(String(message.senderId))
+          const avatarUrl = message.senderAvatar || cachedInfo?.avatar
+          const nickname = message.senderNickname || cachedInfo?.nickname
+
           return (
             <Box
               key={message.id}
@@ -359,13 +410,13 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               {/* 头像 */}
               {!isSelf && (
                 <Avatar
-                  src={message.senderAvatar}
+                  src={avatarUrl}
                   sx={{
                     ...styles.avatar,
-                    bgcolor: message.senderAvatar ? undefined : getAvatarColor(message.senderCallsign),
+                    bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
                   }}
                 >
-                  {!message.senderAvatar && message.senderCallsign.charAt(0)}
+                  {!avatarUrl && message.senderCallsign.charAt(0)}
                 </Avatar>
               )}
 
@@ -384,9 +435,9 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
                       <Typography variant="subtitle2" sx={styles.callsignChip}>
                         {message.senderCallsign}-{message.senderSSID}
                       </Typography>
-                      {message.senderNickname && (
+                      {nickname && (
                         <Typography variant="caption" sx={styles.nickname}>
-                          ({message.senderNickname})
+                          ({nickname})
                         </Typography>
                       )}
                     </Box>
@@ -427,13 +478,13 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
               {/* 自己的头像 */}
               {isSelf && (
                 <Avatar
-                  src={message.senderAvatar}
+                  src={avatarUrl}
                   sx={{
                     ...styles.avatar,
-                    bgcolor: message.senderAvatar ? undefined : getAvatarColor(message.senderCallsign),
+                    bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
                   }}
                 >
-                  {!message.senderAvatar && message.senderCallsign.charAt(0)}
+                  {!avatarUrl && message.senderCallsign.charAt(0)}
                 </Avatar>
               )}
             </Box>

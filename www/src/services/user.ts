@@ -30,6 +30,12 @@ export const userService = {
     return res.data!
   },
 
+  // 通过用户名获取用户公开信息（任何登录用户可访问）
+  async getPublicInfoByName(username: string): Promise<User> {
+    const res = await apiClient.get<{ code: number; message: string; data?: User }>(`/api/users/name/${encodeURIComponent(username)}/public`)
+    return res.data!
+  },
+
   // 获取用户详情
   async get(id: number): Promise<User> {
     const res = await apiClient.get<{ code: number; message: string; data?: User }>(`/api/users/${id}`)

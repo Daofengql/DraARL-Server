@@ -355,7 +355,15 @@ export const RadioPage: React.FC = () => {
   const handleSendText = () => {
     if (!textInput.trim()) return
 
-    radioService.sendTextMessage(textInput.trim())
+    // 限制文本长度（后端 audio_path 是 varchar(255)，按字节限制 250）
+    // 中文字符占 3 字节，这里��制 80 个字符确保不超过后端限制
+    const maxLen = 80
+    let text = textInput.trim()
+    if (text.length > maxLen) {
+      text = text.slice(0, maxLen)
+    }
+
+    radioService.sendTextMessage(text)
     setTextInput('')
   }
 
@@ -496,9 +504,16 @@ export const RadioPage: React.FC = () => {
                 size="small"
                 placeholder="输入消息..."
                 value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
+                onChange={(e) => {
+                  // 限制输入长度（80个字符，对应后端 250 字节限制）
+                  const value = e.target.value
+                  if (value.length <= 80) {
+                    setTextInput(value)
+                  }
+                }}
                 onKeyPress={(e) => e.key === 'Enter' && handleSendText()}
                 disabled={connectionState !== 'online'}
+                inputProps={{ maxLength: 80 }}
               />
               <IconButton
                 color="primary"

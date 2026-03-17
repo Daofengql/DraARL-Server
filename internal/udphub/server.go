@@ -396,7 +396,11 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 			gid := uint(gp.ID)
 			groupID = &gid
 		}
-		// 精简版：只记录 ID，不再记录名称
+		// 从设备所有者获取用户ID（快照当时的归属关系，避免设备转让后历史记录跟着变）
+		if dev.OwnerID > 0 {
+			uid := uint(dev.OwnerID)
+			userID = &uid
+		}
 		// 使用正数 ID 表示普通设备
 		RecordCommPacket(int(dev.ID), uint8(dev.SSID), groupID, userID, packet.DATA)
 	}
@@ -485,6 +489,23 @@ func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
 // handleDraARLTextMessage 处理 DraARLv1 文本消息
 func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool), gp)
+
+	// 【文本消息记录】直接写入数据库
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+		if gp != nil {
+			gid := uint(gp.ID)
+			groupID = &gid
+		}
+		// 从设备所有者获取用户ID（快照当时的归属关系）
+		if dev.OwnerID > 0 {
+			uid := uint(dev.OwnerID)
+			userID = &uid
+		}
+		// 使用正数 ID 表示普通设备
+		RecordTextMessage(int(dev.ID), uint8(dev.SSID), groupID, userID, string(packet.DATA))
+	}
 }
 
 // handleDraARLServerVoice 处理 DraARLv1 服务器互联语音

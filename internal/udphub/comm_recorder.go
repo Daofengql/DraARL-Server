@@ -243,6 +243,60 @@ func GetCommRecorderStats() map[string]interface{} {
 	return nil
 }
 
+// ==========================================
+// 文本消息记录（直接写入数据库，不经过上传队列）
+// ==========================================
+
+// RecordTextMessage 记录文���消息到数据库
+// 文本消息不需要上传 MinIO，直接写入 comm_records 表
+// 使用 "text:" 前缀存储在 AudioPath 字段中
+func RecordTextMessage(
+	deviceID int,
+	deviceSSID uint8,
+	groupID *uint,
+	userID *uint,
+	textContent string,
+) {
+	// 限制文本长度（AudioPath 是 varchar(255)，按字节计算，预留 "text:" 前缀 5 字节）
+	// UTF-8 编码下中文字符占 3 字节，需要按字节长度限制
+	maxBytes := 250 // 255 - 5 ("text:" 前缀)
+	if len(textContent) > maxBytes {
+		// 截断到最大字节长度，同时确保不截断 UTF-8 字符
+		for len(textContent) > maxBytes {
+			textContent = textContent[:len(textContent)-1]
+		}
+	}
+
+	now := time.Now()
+	isGhost := deviceID < 0
+
+	// 解析设备ID（幽灵设备使用负数ID，实际存储为0）
+	var actualDeviceID uint
+	if isGhost {
+		actualDeviceID = 0
+	} else {
+		actualDeviceID = uint(deviceID)
+	}
+
+	record := &gormdb.CommRecord{
+		DeviceID:   actualDeviceID,
+		DeviceSSID: deviceSSID,
+		GroupID:    groupID,
+		UserID:     userID,
+		IsGhost:    isGhost,
+		StartTime:  now,
+		EndTime:    now,
+		DurationMs: 0,
+		AudioPath:  "text:" + textContent, // 使用 text: 前缀标识文本消息
+		AudioSize:  int64(len(textContent)),
+		Status:     2, // 已完成（不需要上传）
+	}
+
+	if err := gormdb.Get().Create(record).Error; err != nil {
+		log.Printf("[COMM_RECORDER] 记录文本消息失败: %v", err)
+	}
+}
+
 // loadCommSettings 从数据库加载通信设置
 func loadCommSettings() *CommSettingsConfig {
 	repo := gormdb.GetSiteConfigRepo()

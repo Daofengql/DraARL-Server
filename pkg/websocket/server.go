@@ -282,6 +282,36 @@ func handleTextMessage(device *WSDevice, packet *WSPacket, rawData []byte) {
 		return
 	}
 
+	// 【文本消息记录】直接写入数据库
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+
+		if device.GroupID > 0 {
+			gid := uint(device.GroupID)
+			groupID = &gid
+		}
+		if device.UserID > 0 {
+			uid := uint(device.UserID)
+			userID = &uid
+		}
+
+		var recordDevID int
+		var recordSSID uint8
+
+		if device.DeviceType == DeviceTypeGhost {
+			// 幽灵设备：使用负数 UserID
+			recordDevID = -device.UserID
+			recordSSID = 105
+		} else {
+			// 普通设备
+			recordDevID = device.DeviceID
+			recordSSID = device.SSID
+		}
+
+		udphub.RecordTextMessage(recordDevID, recordSSID, groupID, userID, string(packet.DATA))
+	}
+
 	// 转发消息到 UDP 设备
 	routeTextToUDP(device, packet)
 

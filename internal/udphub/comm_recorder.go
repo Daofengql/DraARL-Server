@@ -268,11 +268,10 @@ func RecordTextMessage(
 	}
 
 	now := time.Now()
-	isGhost := deviceID < 0
 
 	// 解析设备ID（幽灵设备使用负数ID，实际存储为0）
 	var actualDeviceID uint
-	if isGhost {
+	if deviceID < 0 {
 		actualDeviceID = 0
 	} else {
 		actualDeviceID = uint(deviceID)
@@ -283,11 +282,10 @@ func RecordTextMessage(
 		DeviceSSID: deviceSSID,
 		GroupID:    groupID,
 		UserID:     userID,
-		IsGhost:    isGhost,
 		StartTime:  now,
 		EndTime:    now,
 		DurationMs: 0,
-		AudioPath:  "text:" + textContent, // 使用 text: 前缀标识文本消息
+		AudioPath:  "text:" + textContent, // ���用 text: 前缀标识文本消息
 		AudioSize:  int64(len(textContent)),
 		Status:     2, // 已完成（不需要上传）
 	}

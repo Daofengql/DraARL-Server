@@ -138,7 +138,8 @@ func GetCommRecords(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			d.dev_model, d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
+			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
+			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.callsign as user_call_sign, u.nickname as user_nick_name
 		`).
@@ -264,6 +265,7 @@ func GetCommRecord(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
+			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.callsign as user_call_sign, u.nickname as user_nick_name

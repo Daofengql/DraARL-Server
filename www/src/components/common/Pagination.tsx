@@ -7,12 +7,10 @@ import {
   useTheme,
   useMediaQuery,
 } from '@mui/material'
-import {
-  KeyboardArrowLeft,
-  KeyboardArrowRight,
-  KeyboardDoubleArrowLeft,
-  KeyboardDoubleArrowRight,
-} from '@mui/icons-material'
+import KeyboardArrowLeft from '@mui/icons-material/KeyboardArrowLeft'
+import KeyboardArrowRight from '@mui/icons-material/KeyboardArrowRight'
+import KeyboardDoubleArrowLeft from '@mui/icons-material/KeyboardDoubleArrowLeft'
+import KeyboardDoubleArrowRight from '@mui/icons-material/KeyboardDoubleArrowRight'
 
 interface PaginationProps {
   currentPage: number

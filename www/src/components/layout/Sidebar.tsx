@@ -13,17 +13,15 @@ import {
   type DrawerProps,
 } from '@mui/material'
 import { useNavigate, useLocation } from 'react-router-dom'
-import {
-  Dashboard,
-  Devices,
-  Group,
-  Person,
-  AdminPanelSettings,
-  ExitToApp,
-  Mic,
-  MenuBook,
-  Radio,
-} from '@mui/icons-material'
+import Dashboard from '@mui/icons-material/Dashboard'
+import Devices from '@mui/icons-material/Devices'
+import Group from '@mui/icons-material/Group'
+import Person from '@mui/icons-material/Person'
+import AdminPanelSettings from '@mui/icons-material/AdminPanelSettings'
+import ExitToApp from '@mui/icons-material/ExitToApp'
+import Mic from '@mui/icons-material/Mic'
+import MenuBook from '@mui/icons-material/MenuBook'
+import Radio from '@mui/icons-material/Radio'
 import { authService, apiClient } from '../../services'
 
 const DRAWER_WIDTH = 240

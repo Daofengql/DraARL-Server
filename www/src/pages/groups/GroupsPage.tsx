@@ -29,19 +29,17 @@ import {
   Switch,
   Chip,
 } from '@mui/material'
-import {
-  Add,
-  Search,
-  LockOpen,
-  Lock,
-  CheckCircle,
-  People,
-  Logout,
-  Settings,
-  Person,
-  Edit,
-  Delete,
-} from '@mui/icons-material'
+import Add from '@mui/icons-material/Add'
+import Search from '@mui/icons-material/Search'
+import LockOpen from '@mui/icons-material/LockOpen'
+import Lock from '@mui/icons-material/Lock'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import People from '@mui/icons-material/People'
+import Logout from '@mui/icons-material/Logout'
+import Settings from '@mui/icons-material/Settings'
+import Person from '@mui/icons-material/Person'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
 import { groupService, userService } from '../../services'
 import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'

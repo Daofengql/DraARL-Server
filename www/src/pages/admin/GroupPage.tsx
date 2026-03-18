@@ -27,19 +27,17 @@ import {
   Typography,
   Switch,
 } from '@mui/material'
-import {
-  Add,
-  Edit,
-  Delete,
-  Search,
-  Refresh,
-  ExpandMore,
-  LockOpen,
-  Lock,
-  PersonOff,
-  Person,
-  Circle,
-} from '@mui/icons-material'
+import Add from '@mui/icons-material/Add'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import Refresh from '@mui/icons-material/Refresh'
+import ExpandMore from '@mui/icons-material/ExpandMore'
+import LockOpen from '@mui/icons-material/LockOpen'
+import Lock from '@mui/icons-material/Lock'
+import PersonOff from '@mui/icons-material/PersonOff'
+import Person from '@mui/icons-material/Person'
+import Circle from '@mui/icons-material/Circle'
 import { groupService } from '../../services/group'
 import { userService } from '../../services'
 import type { Group, Device, User } from '../../types'

@@ -10,17 +10,13 @@ import (
 
 // DeviceCache 设备信息缓存管理器
 type DeviceCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // DeviceCacheConfig 设备缓存配置
 type DeviceCacheConfig struct {
-	// L1 本地缓存配置
 	LocalTTL time.Duration // 详情默认 1 分钟，列表 30 秒
 	MaxSize  int           // 默认 10000
-
-	// L2 Redis 缓存配置
-	RedisTTL time.Duration // 详情默认 5 分钟，列表 1 分钟
 }
 
 // NewDeviceCache 创建设备缓存管理器
@@ -29,17 +25,13 @@ func NewDeviceCache(config DeviceCacheConfig) (*DeviceCache, error) {
 	if config.LocalTTL == 0 {
 		config.LocalTTL = time.Minute
 	}
-	if config.RedisTTL == 0 {
-		config.RedisTTL = 5 * time.Minute
-	}
 	if config.MaxSize == 0 {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewThreeLevelCache(CacheConfig{
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
 		MaxSize:  config.MaxSize,
-		RedisTTL: config.RedisTTL,
 	})
 	if err != nil {
 		return nil, err
@@ -172,8 +164,8 @@ func (c *DeviceCache) InvalidateDeviceList(ctx context.Context) error {
 	return nil
 }
 
-// GetDevice 获取底层缓存接口（用于特殊操作）
-func (c *DeviceCache) GetDevice() *ThreeLevelCache {
+// GetCache 获取底层缓存接口（用于特殊操作）
+func (c *DeviceCache) GetCache() *TwoLevelCache {
 	return c.cache
 }
 

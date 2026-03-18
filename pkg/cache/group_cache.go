@@ -10,17 +10,13 @@ import (
 
 // GroupCache 群组信息缓存管理器
 type GroupCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // GroupCacheConfig 群组缓存配置
 type GroupCacheConfig struct {
-	// L1 本地缓存配置
 	LocalTTL time.Duration // 默认 1 分钟
 	MaxSize  int           // 默认 10000
-
-	// L2 Redis 缓存配置
-	RedisTTL time.Duration // 默认 5 分钟
 }
 
 // NewGroupCache 创建群组缓存管理器
@@ -29,17 +25,13 @@ func NewGroupCache(config GroupCacheConfig) (*GroupCache, error) {
 	if config.LocalTTL == 0 {
 		config.LocalTTL = time.Minute
 	}
-	if config.RedisTTL == 0 {
-		config.RedisTTL = 5 * time.Minute
-	}
 	if config.MaxSize == 0 {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewThreeLevelCache(CacheConfig{
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
 		MaxSize:  config.MaxSize,
-		RedisTTL: config.RedisTTL,
 	})
 	if err != nil {
 		return nil, err
@@ -232,8 +224,8 @@ func (c *GroupCache) InvalidateGroupList(ctx context.Context) error {
 	return c.cache.DeletePrefix(ctx, "group:list:page:")
 }
 
-// GetGroup 获取底层缓存接口（用于特殊操作）
-func (c *GroupCache) GetGroup() *ThreeLevelCache {
+// GetCache 获取底层缓存接口（用于特殊操作）
+func (c *GroupCache) GetCache() *TwoLevelCache {
 	return c.cache
 }
 

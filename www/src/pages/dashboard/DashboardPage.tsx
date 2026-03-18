@@ -15,16 +15,14 @@ import {
   Button,
   Snackbar,
 } from '@mui/material'
-import {
-  Devices,
-  CheckCircle,
-  Group,
-  Radio,
-  Dashboard as DashboardIcon,
-  RecordVoiceOver,
-  Timer,
-  Refresh,
-} from '@mui/icons-material'
+import Devices from '@mui/icons-material/Devices'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Group from '@mui/icons-material/Group'
+import Radio from '@mui/icons-material/Radio'
+import DashboardIcon from '@mui/icons-material/Dashboard'
+import RecordVoiceOver from '@mui/icons-material/RecordVoiceOver'
+import Timer from '@mui/icons-material/Timer'
+import Refresh from '@mui/icons-material/Refresh'
 import {
   LineChart,
   Line,

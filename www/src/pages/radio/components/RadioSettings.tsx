@@ -23,15 +23,13 @@ import {
   ListItemText,
   ListItemSecondaryAction,
 } from '@mui/material'
-import {
-  Close as CloseIcon,
-  VolumeUp as VolumeIcon,
-  Mic as MicIcon,
-  SettingsInputComponent as InputIcon,
-  Output as OutputIcon,
-  Badge as BadgeIcon,
-  Delete as DeleteIcon,
-} from '@mui/icons-material'
+import CloseIcon from '@mui/icons-material/Close'
+import VolumeIcon from '@mui/icons-material/VolumeUp'
+import MicIcon from '@mui/icons-material/Mic'
+import InputIcon from '@mui/icons-material/SettingsInputComponent'
+import OutputIcon from '@mui/icons-material/Output'
+import BadgeIcon from '@mui/icons-material/Badge'
+import DeleteIcon from '@mui/icons-material/Delete'
 import type { RadioUserConfig } from '../../../types/radio'
 
 interface RadioSettingsProps {

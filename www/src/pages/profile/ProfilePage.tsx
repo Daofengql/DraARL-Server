@@ -28,26 +28,24 @@ import {
   Radio,
   IconButton,
 } from '@mui/material'
-import {
-  Person,
-  Phone,
-  LocationOn,
-  Edit,
-  Lock,
-  Email,
-  Badge,
-  Save,
-  Upload,
-  CloudUpload,
-  Cake,
-  Wifi,
-  Notifications,
-  AccessTime,
-  CheckCircle,
-  Pending,
-  Cancel,
-  CameraAlt,
-} from '@mui/icons-material'
+import Person from '@mui/icons-material/Person'
+import Phone from '@mui/icons-material/Phone'
+import LocationOn from '@mui/icons-material/LocationOn'
+import Edit from '@mui/icons-material/Edit'
+import Lock from '@mui/icons-material/Lock'
+import Email from '@mui/icons-material/Email'
+import Badge from '@mui/icons-material/Badge'
+import Save from '@mui/icons-material/Save'
+import Upload from '@mui/icons-material/Upload'
+import CloudUpload from '@mui/icons-material/CloudUpload'
+import Cake from '@mui/icons-material/Cake'
+import Wifi from '@mui/icons-material/Wifi'
+import Notifications from '@mui/icons-material/Notifications'
+import AccessTime from '@mui/icons-material/AccessTime'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Pending from '@mui/icons-material/Pending'
+import Cancel from '@mui/icons-material/Cancel'
+import CameraAlt from '@mui/icons-material/CameraAlt'
 import { authService } from '../../services'
 import { AvatarCropDialog } from '../../components/AvatarCropDialog'
 import type { User, CertificateResponse, OperatorCertificate } from '../../types'

@@ -11,7 +11,7 @@ import {
   Alert,
   Link,
 } from '@mui/material'
-import { Radio } from '@mui/icons-material'
+import Radio from '@mui/icons-material/Radio'
 import { authService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'

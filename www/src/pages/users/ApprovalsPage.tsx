@@ -28,15 +28,13 @@ import {
   Tab,
   Tabs,
 } from '@mui/material'
-import {
-  CheckCircle,
-  Cancel,
-  Visibility,
-  Refresh,
-  Description,
-  Person,
-  Close,
-} from '@mui/icons-material'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Cancel from '@mui/icons-material/Cancel'
+import Visibility from '@mui/icons-material/Visibility'
+import Refresh from '@mui/icons-material/Refresh'
+import Description from '@mui/icons-material/Description'
+import Person from '@mui/icons-material/Person'
+import Close from '@mui/icons-material/Close'
 import { approvalService } from '../../services'
 import type { PendingApproval } from '../../types'
 

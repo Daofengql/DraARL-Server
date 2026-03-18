@@ -9,10 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/redis/go-redis/v9"
-
-	redispkg "nrllink/pkg/redis"
 )
 
 // 性能优化：TTL 抖动因子（防止缓存雪崩）
@@ -35,7 +31,7 @@ func jitterTTL(base time.Duration) time.Duration {
 	return base - time.Duration(ttlJitterFactor*float64(base)) + jitter
 }
 
-// Cache 三级缓存接口
+// Cache 两级缓存接口
 type Cache interface {
 	Get(ctx context.Context, key string, dest interface{}) error
 	Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error
@@ -45,13 +41,11 @@ type Cache interface {
 	DeletePrefix(ctx context.Context, prefix string) error
 }
 
-// ThreeLevelCache 三级缓存
+// TwoLevelCache 两级缓存
 // L1: 本地内存缓存
-// L2: Redis缓存
-// L3: 数据库
-type ThreeLevelCache struct {
-	local *localCache
-	redis *redis.Client
+// L2: 数据库
+type TwoLevelCache struct {
+	local  *localCache
 	config CacheConfig
 }
 
@@ -60,48 +54,32 @@ type CacheConfig struct {
 	// 本地缓存配置
 	LocalTTL time.Duration
 	MaxSize  int
-
-	// Redis缓存配置
-	RedisTTL time.Duration
 }
 
-// NewThreeLevelCache 创建三级缓存
-// Redis 是必需的，会自动使用全局 Redis 客户端
-func NewThreeLevelCache(config CacheConfig) (*ThreeLevelCache, error) {
-	cache := &ThreeLevelCache{
+// NewTwoLevelCache 创建两级缓存
+func NewTwoLevelCache(config CacheConfig) (*TwoLevelCache, error) {
+	cache := &TwoLevelCache{
 		config: config,
 		local:  newLocalCache(config.MaxSize),
-		redis:  redispkg.GetClient(),
 	}
 
 	return cache, nil
 }
 
-// Get 获取缓存 (三级缓存查找)
-func (c *ThreeLevelCache) Get(ctx context.Context, key string, dest interface{}) error {
+// Get 获取缓存 (两级缓存查找)
+func (c *TwoLevelCache) Get(ctx context.Context, key string, dest interface{}) error {
 	// L1: 本地缓存
 	if c.local.Get(key, dest) {
 		return nil
 	}
 
-	// L2: Redis缓存
-	val, err := c.redis.Get(ctx, key).Bytes()
-	if err == nil && len(val) > 0 {
-		// 反序列化
-		if err := json.Unmarshal(val, dest); err == nil {
-			// 回写本地缓存
-			c.local.Set(key, val, c.config.LocalTTL)
-			return nil
-		}
-	}
-
-	// L3: 缓存未命中，需要从数据库加载
+	// L2: 缓存未命中，需要从数据库加载
 	return ErrCacheMiss
 }
 
-// Set 设置缓存 (同时写入L1和L2)
+// Set 设置缓存 (写入L1)
 // 性能优化：添加 TTL 抖动防止缓存雪崩，使用缓冲区池减少内存分配
-func (c *ThreeLevelCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+func (c *TwoLevelCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
 	// 性能优化：使用缓冲区池进行 JSON 序列化
 	buf := bufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
@@ -121,67 +99,27 @@ func (c *ThreeLevelCache) Set(ctx context.Context, key string, value interface{}
 	localTTLWithJitter := jitterTTL(localTTL)
 	c.local.Set(key, data, localTTLWithJitter)
 
-	// 写入Redis (L2) - 使用抖动后的 TTL
-	redisTTL := ttl
-	if redisTTL == 0 {
-		redisTTL = c.config.RedisTTL
-	}
-	redisTTLWithJitter := jitterTTL(redisTTL)
-	return c.redis.Set(ctx, key, data, redisTTLWithJitter).Err()
+	return nil
 }
 
-// Delete 删除缓存 (同时删除L1和L2)
-func (c *ThreeLevelCache) Delete(ctx context.Context, keys ...string) error {
+// Delete 删除缓存
+func (c *TwoLevelCache) Delete(ctx context.Context, keys ...string) error {
 	for _, key := range keys {
 		c.local.Delete(key)
-	}
-
-	return c.redis.Del(ctx, keys...).Err()
-}
-
-// Clear 清空所有缓存
-func (c *ThreeLevelCache) Clear(ctx context.Context) error {
-	c.local.Clear()
-	// 注意：这会清除整个Redis DB，慎用
-	return c.redis.FlushDB(ctx).Err()
-}
-
-// DeletePrefix 按前缀删除缓存 (同时清理L1和L2)
-// 使用 Redis SCAN 命令迭代匹配前缀的 Key，避免 KEYS 命令阻塞 Redis
-func (c *ThreeLevelCache) DeletePrefix(ctx context.Context, prefix string) error {
-	// L1: 清理本地缓存
-	c.local.DeletePrefix(prefix)
-
-	// L2: 清理 Redis 缓存
-	// 使用 SCAN 命令迭代，每次获取一批 keys 进行删除
-	var cursor uint64
-	for {
-		var keys []string
-		var err error
-		// 每次扫描 1000 个元素
-		keys, cursor, err = c.redis.Scan(ctx, cursor, prefix+"*", 1000).Result()
-		if err != nil {
-			return err
-		}
-
-		// 如果匹配到 key，则批量删除
-		if len(keys) > 0 {
-			if err := c.redis.Del(ctx, keys...).Err(); err != nil {
-				return err
-			}
-		}
-
-		// 游标返回 0 说明迭代结束
-		if cursor == 0 {
-			break
-		}
 	}
 	return nil
 }
 
-// GetRedis 获取Redis客户端 (用于特殊操作)
-func (c *ThreeLevelCache) GetRedis() *redis.Client {
-	return c.redis
+// Clear 清空所有缓存
+func (c *TwoLevelCache) Clear(ctx context.Context) error {
+	c.local.Clear()
+	return nil
+}
+
+// DeletePrefix 按前缀删除缓存
+func (c *TwoLevelCache) DeletePrefix(ctx context.Context, prefix string) error {
+	c.local.DeletePrefix(prefix)
+	return nil
 }
 
 // localCache 本地内存缓存

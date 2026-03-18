@@ -20,7 +20,6 @@ import (
 	"nrllink/internal/udphub"
 	"nrllink/pkg/cache"
 	"nrllink/pkg/geoip"
-	"nrllink/pkg/redis"
 )
 
 var (
@@ -138,14 +137,7 @@ func main() {
 	oplog.Start()
 	oplog.AddLog("系统启动", "system", 0, "", "", "")
 
-	// 初始化 Redis（必需服务）
-	if err := redis.Init(cfg); err != nil {
-		stdlog.Fatalf("初始化 Redis 失败: %v", err)
-	}
-	defer redis.Close()
-	stdlog.Println("Redis 初始化成功")
-
-	// 初始化缓存管理器（依赖 Redis）
+	// 初始化缓存管理器
 	if err := cache.InitManager(); err != nil {
 		stdlog.Fatalf("初始化缓存管理器失败: %v", err)
 	}

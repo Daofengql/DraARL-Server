@@ -18,7 +18,8 @@ import {
   MenuItem,
   Chip,
 } from '@mui/material'
-import { Search, Description } from '@mui/icons-material'
+import Search from '@mui/icons-material/Search'
+import Description from '@mui/icons-material/Description'
 import { logService } from '../../services'
 import type { OperatorLog } from '../../types'
 

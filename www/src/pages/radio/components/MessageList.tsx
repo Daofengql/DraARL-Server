@@ -12,10 +12,8 @@ import {
   Skeleton,
   useTheme,
 } from '@mui/material'
-import {
-  PlayArrow as PlayIcon,
-  Pause as PauseIcon,
-} from '@mui/icons-material'
+import PlayIcon from '@mui/icons-material/PlayArrow'
+import PauseIcon from '@mui/icons-material/Pause'
 import type { RadioMessage } from '../../../types/radio'
 import { userService } from '../../../services'
 

@@ -10,17 +10,13 @@ import (
 
 // AssetCache 资源缓存管理器
 type AssetCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // AssetCacheConfig 资源缓存配置
 type AssetCacheConfig struct {
-	// L1 本地缓存配置
 	LocalTTL time.Duration // 默认 1 分钟
 	MaxSize  int           // 默认 5000
-
-	// L2 Redis 缓存配置
-	RedisTTL time.Duration // 默认 10 分钟
 }
 
 // NewAssetCache 创建资源缓存管理器
@@ -29,17 +25,13 @@ func NewAssetCache(config AssetCacheConfig) (*AssetCache, error) {
 	if config.LocalTTL == 0 {
 		config.LocalTTL = time.Minute
 	}
-	if config.RedisTTL == 0 {
-		config.RedisTTL = 10 * time.Minute
-	}
 	if config.MaxSize == 0 {
 		config.MaxSize = 5000
 	}
 
-	cache, err := NewThreeLevelCache(CacheConfig{
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
 		MaxSize:  config.MaxSize,
-		RedisTTL: config.RedisTTL,
 	})
 	if err != nil {
 		return nil, err
@@ -193,6 +185,6 @@ func (c *AssetCache) InvalidateAll(ctx context.Context) error {
 }
 
 // GetCache 获取底层缓存接口（用于特殊操作）
-func (c *AssetCache) GetCache() *ThreeLevelCache {
+func (c *AssetCache) GetCache() *TwoLevelCache {
 	return c.cache
 }

@@ -6,11 +6,9 @@ import {
   Button,
   Box,
 } from '@mui/material'
-import {
-  ErrorOutline as ErrorIcon,
-  Warning as WarningIcon,
-  Info as InfoIcon,
-} from '@mui/icons-material'
+import ErrorIcon from '@mui/icons-material/ErrorOutline'
+import WarningIcon from '@mui/icons-material/Warning'
+import InfoIcon from '@mui/icons-material/Info'
 
 interface ConfirmDialogProps {
   isOpen: boolean

@@ -29,19 +29,17 @@ import {
   useMediaQuery,
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
-import {
-  Mic as MicIcon,
-  MicOff as MicOffIcon,
-  VolumeUp as VolumeUpIcon,
-  VolumeOff as VolumeOffIcon,
-  Settings as SettingsIcon,
-  Send as SendIcon,
-  Group as GroupIcon,
-  Headset as HeadsetIcon,
-  Keyboard as KeyboardIcon,
-  FiberManualRecord as RecordIcon,
-  Close as CloseIcon,
-} from '@mui/icons-material'
+import MicIcon from '@mui/icons-material/Mic'
+import MicOffIcon from '@mui/icons-material/MicOff'
+import VolumeUpIcon from '@mui/icons-material/VolumeUp'
+import VolumeOffIcon from '@mui/icons-material/VolumeOff'
+import SettingsIcon from '@mui/icons-material/Settings'
+import SendIcon from '@mui/icons-material/Send'
+import GroupIcon from '@mui/icons-material/Group'
+import HeadsetIcon from '@mui/icons-material/Headset'
+import KeyboardIcon from '@mui/icons-material/Keyboard'
+import RecordIcon from '@mui/icons-material/FiberManualRecord'
+import CloseIcon from '@mui/icons-material/Close'
 
 import { useAuth } from '../../hooks/useAuth'
 import {

@@ -28,7 +28,14 @@ import {
   DialogActions,
   Button,
 } from '@mui/material'
-import { PlayArrow, Stop, Devices, Group, Download, Refresh, Message, Language } from '@mui/icons-material'
+import PlayArrow from '@mui/icons-material/PlayArrow'
+import Stop from '@mui/icons-material/Stop'
+import Devices from '@mui/icons-material/Devices'
+import Group from '@mui/icons-material/Group'
+import Download from '@mui/icons-material/Download'
+import Refresh from '@mui/icons-material/Refresh'
+import Message from '@mui/icons-material/Message'
+import Language from '@mui/icons-material/Language'
 import { apiClient } from '../../services/api'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
 

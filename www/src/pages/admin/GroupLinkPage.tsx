@@ -35,17 +35,15 @@ import {
   CardHeader,
   Avatar,
 } from '@mui/material'
-import {
-  Add,
-  Edit,
-  Delete,
-  Refresh,
-  Link as LinkIcon,
-  LinkOff,
-  Group as GroupIcon,
-  Warning,
-  Info,
-} from '@mui/icons-material'
+import Add from '@mui/icons-material/Add'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Refresh from '@mui/icons-material/Refresh'
+import LinkIcon from '@mui/icons-material/Link'
+import LinkOff from '@mui/icons-material/LinkOff'
+import GroupIcon from '@mui/icons-material/Group'
+import Warning from '@mui/icons-material/Warning'
+import Info from '@mui/icons-material/Info'
 import { groupLinkService, groupService } from '../../services'
 import type { VirtualGroup, Group, GroupLinkTarget } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'

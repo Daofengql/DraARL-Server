@@ -31,7 +31,6 @@ func InitManager() error {
 		// 创建用户缓存
 		userCache, err := NewUserCache(UserCacheConfig{
 			LocalTTL: 2 * time.Minute,
-			RedisTTL: 10 * time.Minute,
 			MaxSize:  10000,
 		})
 		if err != nil {
@@ -43,7 +42,6 @@ func InitManager() error {
 		// 创建设备缓存
 		deviceCache, err := NewDeviceCache(DeviceCacheConfig{
 			LocalTTL: time.Minute,
-			RedisTTL: 5 * time.Minute,
 			MaxSize:  10000,
 		})
 		if err != nil {
@@ -55,7 +53,6 @@ func InitManager() error {
 		// 创建群组缓存
 		groupCache, err := NewGroupCache(GroupCacheConfig{
 			LocalTTL: time.Minute,
-			RedisTTL: 5 * time.Minute,
 			MaxSize:  10000,
 		})
 		if err != nil {
@@ -67,7 +64,6 @@ func InitManager() error {
 		// 创建配置缓存
 		configCache, err := NewConfigCache(ConfigCacheConfig{
 			LocalTTL: 5 * time.Minute,
-			RedisTTL: 30 * time.Minute,
 			MaxSize:  1000,
 		})
 		if err != nil {
@@ -79,7 +75,6 @@ func InitManager() error {
 		// 创建操作证缓存
 		certCache, err := NewCertCache(CertCacheConfig{
 			LocalTTL: 5 * time.Minute,
-			RedisTTL: 30 * time.Minute,
 			MaxSize:  1000,
 		})
 		if err != nil {
@@ -91,7 +86,6 @@ func InitManager() error {
 		// 创建通信记录缓存
 		commRecordCache, err := NewCommRecordCache(CommRecordCacheConfig{
 			LocalTTL: 30 * time.Second, // 列表缓存时间较短
-			RedisTTL: 2 * time.Minute,
 			MaxSize:  5000,
 		})
 		if err != nil {
@@ -103,7 +97,6 @@ func InitManager() error {
 		// 创建资源缓存
 		assetCache, err := NewAssetCache(AssetCacheConfig{
 			LocalTTL: time.Minute,
-			RedisTTL: 10 * time.Minute,
 			MaxSize:  5000,
 		})
 		if err != nil {

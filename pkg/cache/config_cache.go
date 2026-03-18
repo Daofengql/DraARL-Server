@@ -10,17 +10,13 @@ import (
 
 // ConfigCache 系统配置缓存管理器
 type ConfigCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // ConfigCacheConfig 配置缓存配置
 type ConfigCacheConfig struct {
-	// L1 本地缓存配置
 	LocalTTL time.Duration // 默认 5 分钟
 	MaxSize  int           // 默认 1000
-
-	// L2 Redis 缓存配置
-	RedisTTL time.Duration // 默认 30 分钟
 }
 
 // NewConfigCache 创建配置缓存管理器
@@ -29,17 +25,13 @@ func NewConfigCache(config ConfigCacheConfig) (*ConfigCache, error) {
 	if config.LocalTTL == 0 {
 		config.LocalTTL = 5 * time.Minute
 	}
-	if config.RedisTTL == 0 {
-		config.RedisTTL = 30 * time.Minute
-	}
 	if config.MaxSize == 0 {
 		config.MaxSize = 1000
 	}
 
-	cache, err := NewThreeLevelCache(CacheConfig{
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
 		MaxSize:  config.MaxSize,
-		RedisTTL: config.RedisTTL,
 	})
 	if err != nil {
 		return nil, err
@@ -306,6 +298,6 @@ func (c *ConfigCache) InvalidateAll(ctx context.Context) error {
 }
 
 // GetCache 获取底层缓存接口（用于特殊操作）
-func (c *ConfigCache) GetCache() *ThreeLevelCache {
+func (c *ConfigCache) GetCache() *TwoLevelCache {
 	return c.cache
 }

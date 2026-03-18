@@ -23,21 +23,6 @@ Database:
     MaxIdleConns: 5            # 最大空闲连接数
     MaxLifetime: 300           # 连接最大存活时间(秒)
 
-# Redis 配置 (必需，用于三级缓存)
-Redis:
-    Host: "127.0.0.1"
-    Port: 6379
-    Password: ""               # Redis密码
-    DB: 0                      # 数据库编号
-    PoolSize: 100              # 连接池大小
-    MinIdleConn: 10            # 最小空闲连接数
-
-    # 缓存配置
-    Cache:
-        LocalTTL: 60           # 本地缓存TTL(秒)
-        RedisTTL: 3600         # Redis缓存TTL(秒)
-        MaxSize: 10000         # 本地缓存最大条目数
-
 # Web服务配置
 Web:
     Host: ""                   # 监听地址，空则监听所有网卡

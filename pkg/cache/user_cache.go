@@ -10,17 +10,13 @@ import (
 
 // UserCache 用户信息缓存管理器
 type UserCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // UserCacheConfig 用户缓存配置
 type UserCacheConfig struct {
-	// L1 本地缓存配置
 	LocalTTL time.Duration // 默认 2 分钟
 	MaxSize  int           // 默认 10000
-
-	// L2 Redis 缓存配置
-	RedisTTL time.Duration // 默认 10 分钟
 }
 
 // NewUserCache 创建用户缓存管理器
@@ -29,17 +25,13 @@ func NewUserCache(config UserCacheConfig) (*UserCache, error) {
 	if config.LocalTTL == 0 {
 		config.LocalTTL = 2 * time.Minute
 	}
-	if config.RedisTTL == 0 {
-		config.RedisTTL = 10 * time.Minute
-	}
 	if config.MaxSize == 0 {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewThreeLevelCache(CacheConfig{
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
 		MaxSize:  config.MaxSize,
-		RedisTTL: config.RedisTTL,
 	})
 	if err != nil {
 		return nil, err
@@ -133,8 +125,8 @@ func (c *UserCache) InvalidateUserRole(ctx context.Context, userID int) error {
 	return c.cache.Delete(ctx, userRoleKey(userID))
 }
 
-// GetUser 获取底层缓存接口（用于特殊操作）
-func (c *UserCache) GetUser() *ThreeLevelCache {
+// GetCache 获取底层缓存接口（用于特殊操作）
+func (c *UserCache) GetCache() *TwoLevelCache {
 	return c.cache
 }
 

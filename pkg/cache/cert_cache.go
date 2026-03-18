@@ -10,17 +10,13 @@ import (
 
 // CertCache 操作证缓存管理器
 type CertCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // CertCacheConfig 操作证缓存配置
 type CertCacheConfig struct {
-	// L1 本地缓存配置
 	LocalTTL time.Duration // 默认 5 分钟
 	MaxSize  int           // 默认 1000
-
-	// L2 Redis 缓存配置
-	RedisTTL time.Duration // 默认 30 分钟
 }
 
 // NewCertCache 创建操作证缓存管理器
@@ -29,17 +25,13 @@ func NewCertCache(config CertCacheConfig) (*CertCache, error) {
 	if config.LocalTTL == 0 {
 		config.LocalTTL = 5 * time.Minute
 	}
-	if config.RedisTTL == 0 {
-		config.RedisTTL = 30 * time.Minute
-	}
 	if config.MaxSize == 0 {
 		config.MaxSize = 1000
 	}
 
-	cache, err := NewThreeLevelCache(CacheConfig{
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
 		MaxSize:  config.MaxSize,
-		RedisTTL: config.RedisTTL,
 	})
 	if err != nil {
 		return nil, err
@@ -50,7 +42,7 @@ func NewCertCache(config CertCacheConfig) (*CertCache, error) {
 
 // 缓存键生成函数
 
-// certByKey 通过用户ID的操作证缓存键
+// certByUserIDKey 通过用户ID的操作证缓存键
 func certByUserIDKey(userID int) string {
 	return fmt.Sprintf("cert:info:%d", userID)
 }
@@ -223,7 +215,7 @@ func (c *CertCache) InvalidatePendingList(ctx context.Context) error {
 	return c.cache.DeletePrefix(ctx, "cert:pending:page:")
 }
 
-// GetCert 获取底层缓存接口（用于特殊操作）
-func (c *CertCache) GetCert() *ThreeLevelCache {
+// GetCache 获取底层缓存接口（用于特殊操作）
+func (c *CertCache) GetCache() *TwoLevelCache {
 	return c.cache
 }

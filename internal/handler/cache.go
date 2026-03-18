@@ -27,17 +27,12 @@ func (h *CacheMetricsHandler) GetCacheMetrics(c *gin.Context) {
 		"code":    200,
 		"message": "success",
 		"data": gin.H{
-			"l1_hits":          snapshot.L1Hits,
-			"l1_misses":        snapshot.L1Misses,
-			"l1_hit_rate":      snapshot.L1HitRate,
-			"l2_hits":          snapshot.L2Hits,
-			"l2_misses":        snapshot.L2Misses,
-			"l2_hit_rate":      snapshot.L2HitRate,
-			"total_requests":   snapshot.TotalRequests,
-			"total_cache_hits": snapshot.TotalCacheHits,
-			"overall_hit_rate": snapshot.OverallHitRate,
-			"invalidations":    snapshot.Invalidations,
-			"errors":           snapshot.Errors,
+			"l1_hits":        snapshot.L1Hits,
+			"l1_misses":      snapshot.L1Misses,
+			"l1_hit_rate":    snapshot.L1HitRate,
+			"total_requests": snapshot.TotalRequests,
+			"invalidations":  snapshot.Invalidations,
+			"errors":         snapshot.Errors,
 			"latency": gin.H{
 				"get_avg_ns": snapshot.GetLatencyAvg.Nanoseconds(),
 				"set_avg_ns": snapshot.SetLatencyAvg.Nanoseconds(),
@@ -50,7 +45,7 @@ func (h *CacheMetricsHandler) GetCacheMetrics(c *gin.Context) {
 
 // ResetCacheMetrics 重置缓存监控指标（慎用）
 func (h *CacheMetricsHandler) ResetCacheMetrics(c *gin.Context) {
-	h.metricsHandler.GetMetrics().Reset()
+	h.metricsHandler.GetMetricsInstance().Reset()
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

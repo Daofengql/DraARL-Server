@@ -11,20 +11,25 @@ import (
 // CommRecordCacheConfig 通信记录缓存配置
 type CommRecordCacheConfig struct {
 	LocalTTL time.Duration
-	RedisTTL time.Duration
 	MaxSize  int
 }
 
 // CommRecordCache 通信记录缓存
 type CommRecordCache struct {
-	cache *ThreeLevelCache
+	cache *TwoLevelCache
 }
 
 // NewCommRecordCache 创建通信记录缓存
 func NewCommRecordCache(config CommRecordCacheConfig) (*CommRecordCache, error) {
-	cache, err := NewThreeLevelCache(CacheConfig{
+	if config.LocalTTL == 0 {
+		config.LocalTTL = 30 * time.Second
+	}
+	if config.MaxSize == 0 {
+		config.MaxSize = 5000
+	}
+
+	cache, err := NewTwoLevelCache(CacheConfig{
 		LocalTTL: config.LocalTTL,
-		RedisTTL: config.RedisTTL,
 		MaxSize:  config.MaxSize,
 	})
 	if err != nil {

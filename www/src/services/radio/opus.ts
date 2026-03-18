@@ -35,6 +35,12 @@ export class AudioCapture {
   private bufferSize = 0
   private targetBufferSize = OPUS_FRAME_SIZE
 
+  // 【修复爆音方案2】发送节流机制
+  // 确保Opus帧按固定间隔发送，避免突发
+  private sendQueue: Uint8Array[] = []
+  private sendIntervalId: ReturnType<typeof setInterval> | null = null
+  private readonly SEND_INTERVAL = 20 // 每20ms发送一帧，与Opus帧时长匹配
+
   // 【关键修复】保存节点引用，以便后续销毁
   // 防止 ScriptProcessorNode 内存泄漏导致重音和卡顿
   private processor: ScriptProcessorNode | null = null
@@ -168,6 +174,9 @@ export class AudioCapture {
       this.source.connect(this.processor)
       this.processor.connect(this.audioContext!.destination)
 
+      // 【修复爆音方案2】启动发送定时器
+      this.startSendTimer()
+
       this.setState('capturing')
       console.log('[AudioCapture] Started capturing')
 
@@ -186,6 +195,9 @@ export class AudioCapture {
     this.setState('idle')
     this.buffer = []
     this.bufferSize = 0
+
+    // 【修复爆音方案2】停止发送定时器
+    this.stopSendTimer()
 
     // 【关键修复：彻底清理节点】
     // 必须在此处断开并销毁音频处理节点，否则下一次 start() 会产生重复的事件监听，
@@ -262,13 +274,45 @@ export class AudioCapture {
       // 使用 Opus 编码器编码 PCM 数据
       const opusFrame = this.opusEncoder.encodeFrame(pcmData)
 
-      // 回调发送数据（原始 Opus 帧）
-      if (this.onDataCallback && opusFrame.length > 0) {
-        this.onDataCallback(opusFrame)
+      // 【修复爆音方案2】将编码后的帧放入发送队列，而不是直接回调
+      // 定时器会按固定间隔发送，避免突发
+      if (opusFrame.length > 0) {
+        this.sendQueue.push(opusFrame)
       }
     } catch (error) {
       console.error('[AudioCapture] Opus encode failed:', error)
     }
+  }
+
+  /**
+   * 【修复爆音方案2】启动发送定时器
+   * 按固定间隔发送Opus帧，确保UDP端接收平稳
+   */
+  private startSendTimer(): void {
+    if (this.sendIntervalId !== null) {
+      return
+    }
+
+    this.sendIntervalId = setInterval(() => {
+      if (this.sendQueue.length > 0 && this.onDataCallback) {
+        const frame = this.sendQueue.shift()
+        if (frame) {
+          this.onDataCallback(frame)
+        }
+      }
+    }, this.SEND_INTERVAL)
+  }
+
+  /**
+   * 【修复爆音方案2】停止发送定时器
+   */
+  private stopSendTimer(): void {
+    if (this.sendIntervalId !== null) {
+      clearInterval(this.sendIntervalId)
+      this.sendIntervalId = null
+    }
+    // 清空发送队列
+    this.sendQueue = []
   }
 
   /**

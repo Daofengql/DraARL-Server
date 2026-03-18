@@ -278,7 +278,7 @@ func (m *WSConnectionManager) SetDeviceAuthenticating(device *WSDevice) {
 }
 
 // RegisterNormalDevice 注册普通设备（设备密码认证成功后调用）
-func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username string, ssid byte, deviceID int, callsign string) {
+func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username string, ssid byte, deviceID int, callsign string, groupID int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -287,6 +287,10 @@ func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username st
 	device.SSID = ssid
 	device.DeviceID = deviceID
 	device.CallSign = callsign
+	// 【核心修复】使用从数据库读取的群组ID，而不是默认的999
+	if groupID > 0 {
+		device.GroupID = groupID
+	}
 	device.ConnState = StateOnline
 	device.IsOnline = true
 	device.LastPacketTime = time.Now()
@@ -297,7 +301,7 @@ func (m *WSConnectionManager) RegisterNormalDevice(device *WSDevice, username st
 	// 添加到群组索引
 	m.addToGroupIndex(device.GroupID, key, device)
 
-	log.Printf("[WS] Normal device registered: %s (ID: %d, CallSign: %s)", key, deviceID, callsign)
+	log.Printf("[WS] Normal device registered: %s (ID: %d, CallSign: %s, GroupID: %d)", key, deviceID, callsign, device.GroupID)
 }
 
 // RegisterGhostDevice 注册幽灵设备（JWT 认证成功后调用）

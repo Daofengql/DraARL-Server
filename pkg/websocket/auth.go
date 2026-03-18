@@ -33,6 +33,7 @@ type AuthResult struct {
 	Nickname    string
 	DeviceID    int
 	SSID        byte
+	GroupID     int    // 设备所属群组ID（从数据库读取）
 	Error       string
 }
 
@@ -168,10 +169,14 @@ func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
 	if targetDevice != nil {
 		result.DeviceID = targetDevice.ID
 		result.SSID = byte(targetDevice.SSID)
+		// 【核心修复】从数据库读取设备的群组ID，与UDP设备行为保持一致
+		if targetDevice.GroupID > 0 {
+			result.GroupID = targetDevice.GroupID
+		}
 	}
 
-	log.Printf("[WS-AUTH] Device auth success: %s-%d (device-%d)",
-		result.CallSign, result.SSID, result.DeviceID)
+	log.Printf("[WS-AUTH] Device auth success: %s-%d (device-%d, group-%d)",
+		result.CallSign, result.SSID, result.DeviceID, result.GroupID)
 	return result
 }
 
@@ -257,7 +262,12 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 			authResult := AuthenticateDevice(packet.Username, packet.DevicePassword, packet.SSID)
 
 			if authResult.Success {
-				manager.RegisterNormalDevice(device, packet.Username, packet.SSID, authResult.DeviceID, authResult.CallSign)
+				// 【核心修复】传递数据库中的群组ID，如果为0则使用默认值999
+				groupID := authResult.GroupID
+				if groupID <= 0 {
+					groupID = 999 // 默认公共群组
+				}
+				manager.RegisterNormalDevice(device, packet.Username, packet.SSID, authResult.DeviceID, authResult.CallSign, groupID)
 
 				// 发送心跳响应（填充 CallSign）
 				response := EncodeHeartbeatResponse(packet, authResult.CallSign)

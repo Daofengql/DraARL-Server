@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"nrllink/internal/config"
 )
 
 // RegUser 注册用户信息
@@ -192,52 +191,18 @@ func RegisterUser(c *gin.Context) {
 	// 	return
 	// }
 
-	// 创建上传目录（按年月分割）
-	cfg := config.Get()
-	currentMonth := time.Now().Format("2006-01")
-	uploadDir := filepath.Join(cfg.System.CallLogPath, "licenses", currentMonth)
-	if err := os.MkdirAll(uploadDir, os.ModePerm); err != nil {
-		log.Printf("创建上传目录失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "创建上传目录失败",
-		})
-		return
-	}
-
-	var licensePath string
-
-	// 处理上传的电台执照文件
-	licenseHeader, err := c.FormFile("license")
-	if err == nil {
-		licenseFile, err := licenseHeader.Open()
-		if err == nil {
-			defer licenseFile.Close()
-			licensePath = filepath.Join(uploadDir, callsign+"_license"+filepath.Ext(licenseHeader.Filename))
-			if err := saveUploadedFile(licenseFile, licensePath); err != nil {
-				log.Printf("保存执照文件失败: %v", err)
-				c.JSON(http.StatusInternalServerError, Response{
-					Code:    500,
-					Message: "保存执照文件失败",
-				})
-				return
-			}
-		}
-	}
-
-	log.Printf("用户注册: callsign=%s, name=%s, phone=%s, license=%s", callsign, name, phone, licensePath)
+	log.Printf("用户注册: callsign=%s, name=%s, phone=%s", callsign, name, phone)
 
 	_ = RegUser{
-		CallSign:    callsign,
-		Name:        name,
-		Phone:       phone,
-		Address:     address,
-		Mail:        mail,
-		Password:    password,
-		LicensePath: licensePath,
-		CreateTime:  time.Now().Format("2006-01-02 15:04:05"),
-		UpdateTime:  time.Now().Format("2006-01-02 15:04:05"),
-		Status:      0, // 待审核
+		CallSign:   callsign,
+		Name:       name,
+		Phone:      phone,
+		Address:    address,
+		Mail:       mail,
+		Password:   password,
+		CreateTime: time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
+		Status:     0, // 待审核
 	}
 
 	// TODO: 保存到数据库

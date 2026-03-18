@@ -1286,12 +1286,12 @@ type UpdateProfileRequest struct {
 	Phone        string `json:"phone"`
 	Address      string `json:"address"`
 	Introduction string `json:"introduction"`
-	Avatar       string `json:"avatar"`
 	Sex          *int   `json:"sex"` // 使用指针，允许不更新
 	Birthday     string `json:"birthday"`
 	DMRID        *int   `json:"dmrid"`     // 允许更新 DMRID
 	MDCID        string `json:"mdcid"`     // 允许更新 MDCID
 	AlarmMsg     *bool  `json:"alarm_msg"` // 允许更新报警消息设置
+	// 注意：Avatar 字段已移除，头像更新请使用专门的上传接口
 }
 
 // UpdateProfile 更新当前用户个人资料
@@ -1328,9 +1328,6 @@ func UpdateProfile(c *gin.Context) {
 	}
 	if req.Introduction != "" {
 		user.Introduction = req.Introduction
-	}
-	if req.Avatar != "" {
-		user.Avatar = req.Avatar
 	}
 	// 性别字段处理：
 	// - 0 = 保密

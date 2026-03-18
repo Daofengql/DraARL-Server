@@ -8,6 +8,7 @@ import (
 
 	"nrllink/internal/gormdb"
 	"nrllink/internal/udphub"
+	"nrllink/pkg/cache"
 	ws "nrllink/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -297,6 +298,14 @@ func UpdateRadioGroup(c *gin.Context) {
 	if err := userRepo.UpdateLastGroupID(userID, req.GroupID); err != nil {
 		log.Printf("[RADIO] 警告: 更新用户 %d 的 LastGroupID 失败: %v", userID, err)
 		// 不影响响应，群组切换已成功
+	}
+
+	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新��群组设置
+	// 必须传入 username，否则 GetUserByName 使用的 userByNameKey 缓存不会被清除
+	if userCache := cache.GetUserCache(); userCache != nil {
+		if err := userCache.InvalidateUser(c.Request.Context(), userID, ghostDevice.Username); err != nil {
+			log.Printf("[RADIO] 警告: 失效用户 %d 缓存失败: %v", userID, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

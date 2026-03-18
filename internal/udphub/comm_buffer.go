@@ -11,11 +11,10 @@ import (
 // AudioSession 单次通信会话（精简版，只保留 ID）
 type AudioSession struct {
 	SessionID      string        // 会话唯一标识 (DeviceID_Timestamp)
-	DeviceID       int           // 设备ID (负数表示幽灵设备)
+	DeviceID       int           // 设备ID (负数表示幽灵设备，0表示异常)
 	DeviceSSID     uint8         // 设备 SSID
 	GroupID        *uint         // 群组ID
 	UserID         *uint         // 用户ID
-	IsGhost        bool          // 是否是幽灵设备（WebSocket 客户端）
 	StartTime      time.Time     // 开始时间
 	LastPacketTime time.Time     // 最后一个包的时间（用于判断会话结束）
 	Buffer         *bytes.Buffer // PCM 音频数据缓冲
@@ -89,7 +88,6 @@ func (cb *CommBuffer) AppendPacket(
 			DeviceSSID:     deviceSSID,
 			GroupID:        groupID,
 			UserID:         userID,
-			IsGhost:        deviceID < 0, // 负数 ID 表示幽灵设备
 			StartTime:      now,
 			LastPacketTime: now,
 			Buffer:         bytes.NewBuffer(nil),
@@ -137,16 +135,11 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 	if cb.onSessionEnd != nil {
 		// 复制会话数据，避免后续修改影响
 		sessionCopy := &AudioSession{
-			SessionID:  session.SessionID,
-			DeviceID:   session.DeviceID,
-			DeviceSSID: session.DeviceSSID,
-			GroupID:    session.GroupID,
-			UserID:     session.UserID,
-			// ==========================================
-			// 【致命 Bug 修复】：之前漏掉了 IsGhost 字段！
-			// 导致 Go 语言将其默认初始化为 false，使得幽灵设备的录音在前台被当做损坏的实体设备隐藏。
-			// ==========================================
-			IsGhost:        session.IsGhost,
+			SessionID:      session.SessionID,
+			DeviceID:       session.DeviceID,
+			DeviceSSID:     session.DeviceSSID,
+			GroupID:        session.GroupID,
+			UserID:         session.UserID,
 			StartTime:      session.StartTime,
 			LastPacketTime: session.LastPacketTime,
 			Buffer:         bytes.NewBuffer(session.Buffer.Bytes()),

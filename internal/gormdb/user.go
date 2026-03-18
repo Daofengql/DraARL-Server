@@ -283,3 +283,41 @@ func (r *UserRepository) GetApprovedUserCount() (int64, error) {
 	err := r.db.Model(&User{}).Where("status = 1 AND approval_status = 1").Count(&count).Error
 	return count, err
 }
+
+// GetUsersByIDs 批量获取用户信息（用于解决 N+1 查询问题）
+func (r *UserRepository) GetUsersByIDs(ids []int) ([]*User, error) {
+	if len(ids) == 0 {
+		return []*User{}, nil
+	}
+	var users []*User
+	err := r.db.Where("id IN ?", ids).Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// UserBriefInfo 用户简要信息（用于关联查询）
+type UserBriefInfo struct {
+	ID       int    `json:"id"`
+	CallSign string `json:"callsign"`
+	NickName string `json:"nickname"`
+	Name     string `json:"name"`
+}
+
+// GetUserBriefByIDs 批量获取用户简要信息（只查询必要字段）
+func (r *UserRepository) GetUserBriefByIDs(ids []int) (map[int]*UserBriefInfo, error) {
+	if len(ids) == 0 {
+		return make(map[int]*UserBriefInfo), nil
+	}
+	var users []UserBriefInfo
+	err := r.db.Model(&User{}).Select("id, callsign, nickname, name").Where("id IN ?", ids).Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int]*UserBriefInfo, len(users))
+	for i := range users {
+		result[users[i].ID] = &users[i]
+	}
+	return result, nil
+}

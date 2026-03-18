@@ -16,10 +16,10 @@ var once sync.Once
 // Configuration 系统配置
 type Configuration struct {
 	System struct {
-		Port        string `yaml:"Port" json:"port"`
-		LogPath     string `yaml:"LogPath" json:"log_path"`
-		IPFile      string `yaml:"IPfile" json:"ipfile"`
-		CallLogPath string `yaml:"CallLogPath" json:"calllog_path"`
+		Port   string `yaml:"Port" json:"port"`
+		Host   string `yaml:"Host" json:"host"`
+		LogPath string `yaml:"LogPath" json:"log_path"`
+		IPFile  string `yaml:"IPfile" json:"ipfile"`
 	} `yaml:"System" json:"system"`
 
 	Database struct {
@@ -54,9 +54,8 @@ type Configuration struct {
 	} `yaml:"Redis" json:"redis"`
 
 	Web struct {
-		Port   string `yaml:"Port" json:"port"`
-		SSLCrt string `yaml:"SSLCrt" json:"ssl_crt"`
-		SSLKey string `yaml:"SSLKey" json:"ssl_key"`
+		Host string `yaml:"Host" json:"host"`
+		Port string `yaml:"Port" json:"port"`
 	} `yaml:"Web" json:"web"`
 
 	// Keycloak SSO 配置

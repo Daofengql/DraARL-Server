@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nrllink/internal/gormdb"
@@ -54,9 +55,10 @@ var (
 	// ==========================================
 	// 架构重构：全局统一群组缓存
 	// 替代原有的 publicGroupMap 和 userList 的群组路由功能
+	// 性能优化：使用 atomic.Value 实现 RCU 模式，无锁读取
 	// ==========================================
-	globalGroupCache = make(map[int]*models.Group)
-	groupCacheMutex  sync.RWMutex
+	globalGroupCacheAtomic atomic.Value // 存储 map[int]*models.Group
+	groupCacheMutex        sync.RWMutex  // 仅用于写操作保护
 
 	// QTH 映射
 	qthMap    = make(map[string]string)
@@ -795,6 +797,7 @@ func StartGroupCacheSync() {
 
 // refreshGroupCache 执行具体的数据库查询与内存缓存增量合并更新
 // 核心原则：只更新静态配置属性，绝对不碰动态连接池(ConnPool)
+// 性能优化：使用 RCU 模式，构建新 map 后原子替换，避免阻塞读取
 func refreshGroupCache() {
 	repo := gormdb.NewGroupRepository()
 	dbGroups, err := repo.ListGroups()
@@ -803,14 +806,22 @@ func refreshGroupCache() {
 		return
 	}
 
-	// 加写锁，安全更新内存
-	groupCacheMutex.Lock()
-	defer groupCacheMutex.Unlock()
+	// 获取当前缓存（用于合并）
+	oldCache := globalGroupCacheAtomic.Load()
+	var oldGroupCache map[int]*models.Group
+	if oldCache != nil {
+		oldGroupCache = oldCache.(map[int]*models.Group)
+	} else {
+		oldGroupCache = make(map[int]*models.Group)
+	}
 
-	// 记录当前数据库中存在的群组 ID，用于后续清理被删除的群组
-	validGroupIDs := make(map[int]bool)
+	// 性能优化：RCU 模式 - 构建新的 map，不阻塞读取
+	newGroupCache := make(map[int]*models.Group, len(dbGroups)+2)
 
-	// 【关键修复】公共群组 0 和 999 始终有效，即使不在数据库中
+	// 记录当前数据库中存在的群组 ID
+	validGroupIDs := make(map[int]bool, len(dbGroups)+2)
+
+	// 【关键修复】公共群组 0 和 999 始终有效
 	validGroupIDs[0] = true
 	validGroupIDs[models.GroupIDPublicMin] = true
 
@@ -819,8 +830,9 @@ func refreshGroupCache() {
 		validGroupIDs[modelGroup.ID] = true
 
 		// 检查群组是否已经在内存中
-		if existingGroup, exists := globalGroupCache[modelGroup.ID]; exists {
-			// 【关键操作】：如果存在，只更新静态配置，绝对不碰 ConnPool 和 DevMap！
+		if existingGroup, exists := oldGroupCache[modelGroup.ID]; exists {
+			// 【关键操作】：如果存在，复制指针到新 map，并更新静态配置
+			// 注意：这里直接修改 existingGroup 的字段是安全的，因为指针不变
 			existingGroup.Name = modelGroup.Name
 			existingGroup.Type = modelGroup.Type
 			existingGroup.CallSign = modelGroup.CallSign
@@ -830,43 +842,49 @@ func refreshGroupCache() {
 			existingGroup.MasterServer = modelGroup.MasterServer
 			existingGroup.SlaveServer = modelGroup.SlaveServer
 			existingGroup.Status = modelGroup.Status
-			existingGroup.IsVirtual = modelGroup.IsVirtual // 补全：虚拟组属性同步
+			existingGroup.IsVirtual = modelGroup.IsVirtual
 			existingGroup.Note = modelGroup.Note
 			existingGroup.UpdateTime = modelGroup.UpdateTime
-			// 注意：ConnPool 和 DevMap 保持不变，在线设备状态不受影响
+			// 注意：ConnPool 和 DevMap 保持不变
+
+			newGroupCache[modelGroup.ID] = existingGroup
 		} else {
 			// 【关键操作】：如果是不存在的新群组，初始化它的动态连接池
 			newGroup := modelGroup
+			// 性能优化：预分配连接池容量
 			newGroup.ConnPool = &CurrentConnPool{
-				DevConnMap:  make(map[string]*models.Device),
-				DevConnList: make([]*models.Device, 0),
+				DevConnMap:  make(map[string]*models.Device, 32),
+				DevConnList: make([]*models.Device, 0, 32),
 			}
-			newGroup.DevMap = make(map[int]*models.Device)
+			newGroup.DevMap = make(map[int]*models.Device, 32)
 
 			// 如果是会议模式，启动混音
 			if newGroup.Type == models.GroupTypeMeeting {
 				go startMixPCM(newGroup)
 			}
 
-			globalGroupCache[newGroup.ID] = newGroup
+			newGroupCache[newGroup.ID] = newGroup
 			log.Printf("[CACHE] 新群组已加载: %d - %s", newGroup.ID, newGroup.Name)
 		}
 	}
 
-	// 清理内存中存在，但数据库中已经被删除/停用的群组
-	for id := range globalGroupCache {
-		if !validGroupIDs[id] {
-			// 注意：这里只删除 map 中的引用，不影响正在使用该群组的设备
-			// 它们会在下次心跳时重新路由到有效群组
-			delete(globalGroupCache, id)
-			log.Printf("[CACHE] 群组 %d 已从数据库移除，清理缓存", id)
+	// 复制旧缓存中仍有效的群组（数据库中未变更的）
+	for id := range oldGroupCache {
+		if _, valid := validGroupIDs[id]; valid {
+			// 已经在上面处理过，跳过
+			continue
 		}
+		// 数据库中已删除的群组，不复制到新缓存
+		log.Printf("[CACHE] 群组 %d 已从数据库移除，清理缓存", id)
 	}
 
-	// 同时更新 publicGroupMap 以保持向后兼容
-	publicGroupMap = globalGroupCache
+	// 原子替换缓存指针（RCU 模式）
+	globalGroupCacheAtomic.Store(newGroupCache)
 
-	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(globalGroupCache))
+	// 同时更新 publicGroupMap 以保持向后兼容
+	publicGroupMap = newGroupCache
+
+	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(newGroupCache))
 }
 
 // refreshDeviceCache 同步设备状态从数据库到内存
@@ -946,21 +964,28 @@ func refreshDeviceCache() {
 }
 
 // GetGroupFromCache 从缓存中获取群组（线程安全）
+// 性能优化：使用 RCU 模式，无锁读取
 func GetGroupFromCache(groupID int) (*models.Group, bool) {
-	groupCacheMutex.RLock()
-	defer groupCacheMutex.RUnlock()
-	gp, ok := globalGroupCache[groupID]
+	cache := globalGroupCacheAtomic.Load()
+	if cache == nil {
+		return nil, false
+	}
+	groupCache := cache.(map[int]*models.Group)
+	gp, ok := groupCache[groupID]
 	return gp, ok
 }
 
-// GetAllGroupsFromCache 获取所有群组（线程安全）
+// GetAllGroupsFromCache 获取所有群组（���程安全）
 func GetAllGroupsFromCache() map[int]*models.Group {
-	groupCacheMutex.RLock()
-	defer groupCacheMutex.RUnlock()
+	cache := globalGroupCacheAtomic.Load()
+	if cache == nil {
+		return make(map[int]*models.Group)
+	}
+	groupCache := cache.(map[int]*models.Group)
 
 	// 返回副本以避免外部修改
-	result := make(map[int]*models.Group, len(globalGroupCache))
-	for k, v := range globalGroupCache {
+	result := make(map[int]*models.Group, len(groupCache))
+	for k, v := range groupCache {
 		result[k] = v
 	}
 	return result

@@ -158,6 +158,28 @@ func (r *GroupRepository) GetGroupsByIDs(ids []int) ([]*Group, error) {
 	return groups, err
 }
 
+// GetUserVisibleGroups 获取用户可见的所有群组（一次查询解决）
+// 包括：公开群组（type=1）+ 用户已验证的私有群组
+func (r *GroupRepository) GetUserVisibleGroups(userID int) ([]*Group, error) {
+	var groups []*Group
+
+	// 使用 GORM 子查询：获取用户已验证的群组ID
+	subQuery := r.db.Table("group_members").
+		Select("group_id").
+		Where("user_id = ? AND is_verified = ?", userID, true)
+
+	// 主查询：公开群组（非虚拟）或者用户已验证的群组
+	err := r.db.Where("type = ? AND (is_virtual = ? OR is_virtual IS NULL)", 1, false).
+		Or("id IN (?)", subQuery).
+		Order("id DESC").
+		Find(&groups).Error
+
+	if err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
 // AddPublicGroup 添加公共群组（兼容旧接口）
 func (r *GroupRepository) AddPublicGroup(group *Group) error {
 	return r.db.Create(group).Error

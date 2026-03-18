@@ -3,10 +3,10 @@
 
 # 系统配置
 System:
+    Host: ""                   # 监听地址，空则监听所有网卡
     Port: "60050"              # UDP服务端口
     LogPath: ""                # 日志文件路径，空则不输出文件
-    IPfile: ./udphub.ipdb       # IP数据库文件路径
-    CallLogPath: ""            # 通话日志路径
+    IPfile: ./udphub.ipdb      # IP数据库文件路径
 
 # MySQL数据库配置
 Database:
@@ -40,9 +40,8 @@ Redis:
 
 # Web服务配置
 Web:
+    Host: ""                   # 监听地址，空则监听所有网卡
     Port: "9000"               # Web服务端口
-    SSLCrt: ""                 # SSL证书路径
-    SSLKey: ""                 # SSL密钥路径
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:

@@ -1,9 +1,11 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +14,26 @@ import (
 
 	redispkg "nrllink/pkg/redis"
 )
+
+// 性能优化：TTL 抖动因子（防止缓存雪崩）
+const ttlJitterFactor = 0.1 // ±10% 抖动
+
+// 性能优化：JSON 编码缓冲区池，减少内存分配
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+// jitterTTL 为 TTL 添加随机抖动，防止大量缓存同时失效导致雪崩
+func jitterTTL(base time.Duration) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	// 生成 [-jitterFactor, +jitterFactor] 范围内的随机抖动
+	jitter := time.Duration(rand.Float64() * 2 * ttlJitterFactor * float64(base))
+	return base - time.Duration(ttlJitterFactor*float64(base)) + jitter
+}
 
 // Cache 三级缓存接口
 type Cache interface {
@@ -78,26 +100,34 @@ func (c *ThreeLevelCache) Get(ctx context.Context, key string, dest interface{})
 }
 
 // Set 设置缓存 (同时写入L1和L2)
+// 性能优化：添加 TTL 抖动防止缓存雪崩，使用缓冲区池减少内存分配
 func (c *ThreeLevelCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
-	// 序列化
-	data, err := json.Marshal(value)
-	if err != nil {
+	// 性能优化：使用缓冲区池进行 JSON 序列化
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufferPool.Put(buf)
+
+	encoder := json.NewEncoder(buf)
+	if err := encoder.Encode(value); err != nil {
 		return err
 	}
+	data := buf.Bytes()
 
-	// 写入本地缓存 (L1)
+	// 写入本地缓存 (L1) - 使用抖动后的 TTL
 	localTTL := ttl
 	if localTTL == 0 {
 		localTTL = c.config.LocalTTL
 	}
-	c.local.Set(key, data, localTTL)
+	localTTLWithJitter := jitterTTL(localTTL)
+	c.local.Set(key, data, localTTLWithJitter)
 
-	// 写入Redis (L2)
+	// 写入Redis (L2) - 使用抖动后的 TTL
 	redisTTL := ttl
 	if redisTTL == 0 {
 		redisTTL = c.config.RedisTTL
 	}
-	return c.redis.Set(ctx, key, data, redisTTL).Err()
+	redisTTLWithJitter := jitterTTL(redisTTL)
+	return c.redis.Set(ctx, key, data, redisTTLWithJitter).Err()
 }
 
 // Delete 删除缓存 (同时删除L1和L2)

@@ -69,69 +69,76 @@ func GetGroups(c *gin.Context) {
 		// 获取所有可见群组
 		// 公开群组所有人可见，私有群组只对已验证用户可见
 		if currentUser != nil {
-			// 获取用户已验证的群组ID列表（使用缓存）
-			var members []*gormdb.GroupMember
+			// 优化：尝试使用一次查询获取用户可见的所有群组
+			// 如果缓存可用，仍然使用缓存（缓存已经优化过了）
 			if groupCache != nil {
+				// 使用缓存获取用户已认证的群组ID列表
+				var members []*gormdb.GroupMember
 				members, err = groupCache.GetGroupsByUserID(ctx, currentUser.ID)
-			} else {
-				memberRepo := gormdb.NewGroupMemberRepository()
-				members, err = memberRepo.ListGroupsByUser(currentUser.ID)
-			}
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "获取用户群组失败",
-				})
-				return
-			}
-
-			// 获取所有公开群组（使用缓存）
-			var publicGroups []*gormdb.Group
-			if groupCache != nil {
-				publicGroups, err = groupCache.GetPublicGroups(ctx)
-			} else {
-				publicGroups, err = gormdb.NewGroupRepository().ListPublicGroups()
-			}
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "获取公开群组失败",
-				})
-				return
-			}
-
-			// 获取用户已验证的私有群组
-			groupIDs := make([]int, 0, len(members))
-			for _, m := range members {
-				groupIDs = append(groupIDs, m.GroupID)
-			}
-			var privateGroups []*gormdb.Group
-			if len(groupIDs) > 0 {
-				privateGroups, err = gormdb.NewGroupRepository().GetGroupsByIDs(groupIDs)
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{
 						"code":    500,
-						"message": "获取私有群组失败",
+						"message": "获取用户群组失败",
+					})
+					return
+				}
+
+				// 获取所有公开群组
+				var publicGroups []*gormdb.Group
+				publicGroups, err = groupCache.GetPublicGroups(ctx)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "获取公开群组失败",
+					})
+					return
+				}
+
+				// 获取用户已验证的私有群组（先去重）
+				groupIDSet := make(map[int]bool)
+				for _, m := range members {
+					groupIDSet[m.GroupID] = true
+				}
+				groupIDs := make([]int, 0, len(groupIDSet))
+				for id := range groupIDSet {
+					groupIDs = append(groupIDs, id)
+				}
+				var privateGroups []*gormdb.Group
+				if len(groupIDs) > 0 {
+					privateGroups, err = gormdb.NewGroupRepository().GetGroupsByIDs(groupIDs)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{
+							"code":    500,
+							"message": "获取私有群组失败",
+						})
+						return
+					}
+				}
+
+				// 合并公开群组和私有群组，并去重
+				groups = append(publicGroups, privateGroups...)
+				seen := make(map[int]bool)
+				uniqueGroups := make([]*gormdb.Group, 0, len(groups))
+				for _, g := range groups {
+					if !seen[g.ID] {
+						seen[g.ID] = true
+						if !g.IsVirtual {
+							uniqueGroups = append(uniqueGroups, g)
+						}
+					}
+				}
+				groups = uniqueGroups
+			} else {
+				// 无缓存时使用优化的单次查询
+				groups, err = gormdb.NewGroupRepository().GetUserVisibleGroups(currentUser.ID)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "获取群组列表失败",
 					})
 					return
 				}
 			}
-
-			// 合并公开群组和私有群组，并去重
-			groups = append(publicGroups, privateGroups...)
-			// 使用 map 去重
-			seen := make(map[int]bool)
-			uniqueGroups := make([]*gormdb.Group, 0, len(groups))
-			for _, g := range groups {
-				if !seen[g.ID] {
-					seen[g.ID] = true
-					// 过滤掉虚拟互联组（对普通用户不可见）
-					if !g.IsVirtual {
-						uniqueGroups = append(uniqueGroups, g)
-					}
-				}
-			}
-			groups = uniqueGroups
 		} else {
 			// 管理员查看所有群组
 			groups, err = gormdb.NewGroupRepository().ListGroups()
@@ -165,18 +172,23 @@ func GetGroups(c *gin.Context) {
 		allDevices, _, _ = deviceRepo.ListDevices(10000, 1)
 	}
 
+	// 性能优化：使用指针类型避免重复 map 查找
 	type groupStats struct {
 		online int
 		total  int
 	}
-	groupDeviceStats := make(map[int]groupStats)
+	groupDeviceStats := make(map[int]*groupStats)
 	for _, d := range allDevices {
+		// 性能优化：使用指针避免二次查找
 		stat := groupDeviceStats[d.GroupID]
+		if stat == nil {
+			stat = &groupStats{}
+			groupDeviceStats[d.GroupID] = stat
+		}
 		stat.total++
 		if d.ISOnline {
 			stat.online++
 		}
-		groupDeviceStats[d.GroupID] = stat
 	}
 
 	// 获取当前用户已加入的群组ID列表（用于判断is_joined）
@@ -190,18 +202,24 @@ func GetGroups(c *gin.Context) {
 		}
 	}
 
-	// Build ownerID -> callsign mapping
+	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
-	ownerCallSigns := make(map[int]string)
+	ownerIDs := make([]int, 0, len(groups))
 	for _, g := range groups {
 		if g.OwerID > 0 {
-			if _, exists := ownerCallSigns[g.OwerID]; !exists {
-				if owner, err := userRepo.GetUserByID(g.OwerID); err == nil && owner != nil {
-					ownerCallSigns[g.OwerID] = owner.CallSign
-				}
-			}
+			ownerIDs = append(ownerIDs, g.OwerID)
 		}
 	}
+	// 去重
+	ownerIDSet := make(map[int]bool)
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
+	for _, id := range ownerIDs {
+		if !ownerIDSet[id] {
+			ownerIDSet[id] = true
+			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
+		}
+	}
+	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 
 	// Get current user ID for owner check
 	currentUserID := 0
@@ -226,10 +244,18 @@ func GetGroups(c *gin.Context) {
 		// Check if current user is the group owner
 		isOwner := g.OwerID == currentUserID
 
-		stat := groupDeviceStats[g.ID]
+		// 性能优化：指针类型 map 查找
+		var onlineCount, totalCount int
+		if stat := groupDeviceStats[g.ID]; stat != nil {
+			onlineCount = stat.online
+			totalCount = stat.total
+		}
 
 		// Get owner callsign from lookup map
-		ownerCallSign := ownerCallSigns[g.OwerID]
+		var ownerCallSign string
+		if brief, ok := ownerCallSigns[g.OwerID]; ok {
+			ownerCallSign = brief.CallSign
+		}
 
 		resultItems = append(resultItems, gin.H{
 			"id":                  g.ID,
@@ -245,8 +271,8 @@ func GetGroups(c *gin.Context) {
 			"note":                g.Note,
 			"is_joined":           isJoined,
 			"is_owner":            isOwner,
-			"online_count":        stat.online,
-			"total_count":         stat.total,
+			"online_count":        onlineCount,
+			"total_count":         totalCount,
 			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
@@ -636,18 +662,24 @@ func GetGroupDevices(c *gin.Context) {
 		}
 	}
 
-	// 构建 OwnerID 到 CallSign 的映射
+	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
-	ownerCallSigns := make(map[int]string)
+	ownerIDs := make([]int, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
 		if d.OwnerID > 0 {
-			if _, exists := ownerCallSigns[d.OwnerID]; !exists {
-				if owner, err := userRepo.GetUserByID(d.OwnerID); err == nil && owner != nil {
-					ownerCallSigns[d.OwnerID] = owner.CallSign
-				}
-			}
+			ownerIDs = append(ownerIDs, d.OwnerID)
 		}
 	}
+	// 去重
+	ownerIDSet := make(map[int]bool)
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
+	for _, id := range ownerIDs {
+		if !ownerIDSet[id] {
+			ownerIDSet[id] = true
+			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
+		}
+	}
+	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 
 	// 转换为响应格式
 	devices := make([]gin.H, 0, len(devicesRaw))
@@ -656,7 +688,10 @@ func GetGroupDevices(c *gin.Context) {
 		deviceDisableSend := d.DisableSend
 		deviceDisableRecv := d.DisableRecv
 		// 获取所有者呼号
-		callsign := ownerCallSigns[d.OwnerID]
+		var callsign string
+		if brief, ok := ownerCallSigns[d.OwnerID]; ok {
+			callsign = brief.CallSign
+		}
 
 		// 如果有群组成员级别的设置，需要进行合并（设备级别优先）
 		if memberStatus, ok := deviceMemberStatus[d.ID]; ok {
@@ -798,18 +833,24 @@ func SearchGroups(c *gin.Context) {
 
 	memberRepo := gormdb.NewGroupMemberRepository()
 
-	// Build ownerID -> callsign mapping
+	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
-	ownerCallSigns := make(map[int]string)
+	ownerIDs := make([]int, 0, len(groups))
 	for _, g := range groups {
 		if g.OwerID > 0 {
-			if _, exists := ownerCallSigns[g.OwerID]; !exists {
-				if owner, err := userRepo.GetUserByID(g.OwerID); err == nil && owner != nil {
-					ownerCallSigns[g.OwerID] = owner.CallSign
-				}
-			}
+			ownerIDs = append(ownerIDs, g.OwerID)
 		}
 	}
+	// 去重
+	ownerIDSet := make(map[int]bool)
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
+	for _, id := range ownerIDs {
+		if !ownerIDSet[id] {
+			ownerIDSet[id] = true
+			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
+		}
+	}
+	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 
 	// Reassemble response data with user status
 	resultItems := make([]gin.H, 0, len(groups))
@@ -826,6 +867,12 @@ func SearchGroups(c *gin.Context) {
 			}
 		}
 
+		// Get owner callsign
+		var ownerCallSign string
+		if brief, ok := ownerCallSigns[g.OwerID]; ok {
+			ownerCallSign = brief.CallSign
+		}
+
 		resultItems = append(resultItems, gin.H{
 			"id":                  g.ID,
 			"name":                g.Name,
@@ -833,7 +880,7 @@ func SearchGroups(c *gin.Context) {
 			"callsign":            g.CallSign,
 			"allow_callsign_ssid": g.AllowCallSignSSID,
 			"ower_id":             g.OwerID,
-			"ower_callsign":       ownerCallSigns[g.OwerID],
+			"ower_callsign":       ownerCallSign,
 			"master_server":       g.MasterServer,
 			"slave_server":        g.SlaveServer,
 			"status":              g.Status,

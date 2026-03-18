@@ -203,10 +203,16 @@ func InitCommRecorder() {
 	config := loadCommSettings()
 	globalCommRecorder = NewCommRecorder(config)
 	globalCommRecorder.Start()
+
+	// 性能优化：初始化文本消息批量写入缓冲区
+	InitTextMessageBuffer()
 }
 
 // StopCommRecorder 停止全局录制器
 func StopCommRecorder() {
+	// 性能优化：先停止文本消息缓冲区
+	StopTextMessageBuffer()
+
 	if globalCommRecorder != nil {
 		globalCommRecorder.Stop()
 		globalCommRecorder = nil
@@ -268,11 +274,10 @@ func RecordTextMessage(
 	}
 
 	now := time.Now()
-	isGhost := deviceID < 0
 
 	// 解析设备ID（幽灵设备使用负数ID，实际存储为0）
 	var actualDeviceID uint
-	if isGhost {
+	if deviceID < 0 {
 		actualDeviceID = 0
 	} else {
 		actualDeviceID = uint(deviceID)
@@ -283,18 +288,16 @@ func RecordTextMessage(
 		DeviceSSID: deviceSSID,
 		GroupID:    groupID,
 		UserID:     userID,
-		IsGhost:    isGhost,
 		StartTime:  now,
 		EndTime:    now,
 		DurationMs: 0,
-		AudioPath:  "text:" + textContent, // 使用 text: 前缀标识文本消息
+		AudioPath:  "text:" + textContent, // 选用 text: 前缀标识文本消息
 		AudioSize:  int64(len(textContent)),
 		Status:     2, // 已完成（不需要上传）
 	}
 
-	if err := gormdb.Get().Create(record).Error; err != nil {
-		log.Printf("[COMM_RECORDER] 记录文本消息失败: %v", err)
-	}
+	// 性能优化：使用批量写入缓冲区，减少数据库压力
+	BufferTextMessage(record)
 }
 
 // loadCommSettings 从数据库加载通信设置

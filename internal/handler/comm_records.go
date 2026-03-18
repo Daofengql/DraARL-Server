@@ -19,6 +19,7 @@ type CommRecordResponse struct {
 	ID          uint   `json:"id"`
 	DeviceID    uint   `json:"device_id"`
 	DeviceName  string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
+	DevModel    int    `json:"dev_model"`   // 设备型号：105=浏览器
 	GroupID     *uint  `json:"group_id"`
 	GroupName   string `json:"group_name"` // 通过联表查询获取：public_groups.name
 	UserID      *uint  `json:"user_id"`
@@ -39,6 +40,7 @@ type CommRecordWithDetails struct {
 	ID            uint
 	DeviceID      uint
 	DeviceSSID    uint8
+	DevModel      int // 设备型号
 	OwnerCallSign string
 	OwnerNickName string
 	GroupID       *uint
@@ -96,6 +98,7 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 		ID:          r.ID,
 		DeviceID:    r.DeviceID,
 		DeviceName:  deviceName,
+		DevModel:    r.DevModel,
 		GroupID:     r.GroupID,
 		GroupName:   r.GroupName,
 		UserID:      r.UserID,
@@ -135,6 +138,7 @@ func GetCommRecords(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
+			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.callsign as user_call_sign, u.nickname as user_nick_name
@@ -261,6 +265,7 @@ func GetCommRecord(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
+			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.callsign as user_call_sign, u.nickname as user_nick_name

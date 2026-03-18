@@ -94,9 +94,8 @@ func (cs *CommSyncer) SyncToDatabase() {
 		durationMs := int(item.Session.LastPacketTime.Sub(item.Session.StartTime).Milliseconds())
 		endTime := item.Session.StartTime.Add(time.Duration(durationMs) * time.Millisecond)
 
-		// 处理设备ID（幽灵设备使用负数ID）
+		// 处理设备ID（幽灵设备使用负数ID，存储为0）
 		deviceID := uint(0)
-		isGhost := item.Session.IsGhost
 		if item.Session.DeviceID > 0 {
 			deviceID = uint(item.Session.DeviceID)
 		}
@@ -106,7 +105,6 @@ func (cs *CommSyncer) SyncToDatabase() {
 			DeviceSSID: item.Session.DeviceSSID,
 			GroupID:    item.Session.GroupID,
 			UserID:     item.Session.UserID,
-			IsGhost:    isGhost,
 			StartTime:  item.Session.StartTime,
 			EndTime:    endTime,
 			DurationMs: durationMs,

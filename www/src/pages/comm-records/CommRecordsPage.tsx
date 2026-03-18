@@ -28,7 +28,7 @@ import {
   DialogActions,
   Button,
 } from '@mui/material'
-import { PlayArrow, Stop, Devices, Group, Download, Refresh, Message } from '@mui/icons-material'
+import { PlayArrow, Stop, Devices, Group, Download, Refresh, Message, Language } from '@mui/icons-material'
 import { apiClient } from '../../services/api'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
 
@@ -36,6 +36,7 @@ interface CommRecord {
   id: number
   device_id: number
   device_name: string
+  dev_model: number // 设备型号：105=浏览器
   group_id?: number
   group_name?: string
   user_id?: number
@@ -363,7 +364,11 @@ export function CommRecordsPage() {
                   <TableCell>{formatTime(record.start_time)}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Devices color="primary" fontSize="small" />
+                      {record.dev_model === 105 ? (
+                        <Language color="primary" fontSize="small" />
+                      ) : (
+                        <Devices color="primary" fontSize="small" />
+                      )}
                       {record.device_name}
                     </Box>
                   </TableCell>

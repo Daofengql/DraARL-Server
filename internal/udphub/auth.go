@@ -2,11 +2,11 @@ package udphub
 
 import (
 	"log"
-	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
 	gormdb "nrllink/internal/gormdb"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AuthFailure 认证失败记录
@@ -19,17 +19,17 @@ type AuthFailure struct {
 
 // DeviceAuthResult 设备认证结果
 type DeviceAuthResult struct {
-	Success   bool
-	User      *gormdb.User
-	CallSign  string
-	Blocked   bool
-	BlockEnd  time.Time
-	Error     string
+	Success  bool
+	User     *gormdb.User
+	CallSign string
+	Blocked  bool
+	BlockEnd time.Time
+	Error    string
 }
 
 var (
-	authFailures = make(map[string]*AuthFailure) // key: ip:username
-	authMutex    sync.RWMutex
+	// 性能优化：使用分片锁替代全局锁，减少锁竞争
+	authFailures = NewShardedAuthMap() // key: ip:username
 
 	// 阶梯封禁时间
 	blockDurations = []time.Duration{
@@ -47,11 +47,8 @@ func getBlockKey(ip, username string) string {
 
 // isBlocked 检查是否被封禁
 func isBlocked(ip, username string) (bool, time.Time) {
-	authMutex.RLock()
-	defer authMutex.RUnlock()
-
 	key := getBlockKey(ip, username)
-	if failure, exists := authFailures[key]; exists {
+	if failure, exists := authFailures.Get(key); exists {
 		if !failure.BlockedUntil.IsZero() && time.Now().Before(failure.BlockedUntil) {
 			return true, failure.BlockedUntil
 		}
@@ -61,20 +58,20 @@ func isBlocked(ip, username string) (bool, time.Time) {
 
 // recordFailure 记录认证失败
 func recordFailure(ip, username string) time.Duration {
-	authMutex.Lock()
-	defer authMutex.Unlock()
-
 	key := getBlockKey(ip, username)
-	failure, exists := authFailures[key]
-	if !exists {
+
+	var failure *AuthFailure
+	var exists bool
+	if failure, exists = authFailures.Get(key); !exists {
 		failure = &AuthFailure{
 			IP:       ip,
 			Username: username,
 		}
-		authFailures[key] = failure
+		authFailures.Set(key, failure)
+	} else {
+		// 已存在，需要增加计数
+		failure.FailCount++
 	}
-
-	failure.FailCount++
 
 	// 连续失败 3 次后开始封禁
 	var blockDuration time.Duration
@@ -86,6 +83,9 @@ func recordFailure(ip, username string) time.Duration {
 		blockDuration = blockDurations[blockLevel]
 		failure.BlockedUntil = time.Now().Add(blockDuration)
 		log.Printf("[AUTH] 封禁 %s:%s，失败次数: %d，封禁时长: %v", ip, username, failure.FailCount, blockDuration)
+
+		// 更新分片中的记录
+		authFailures.Set(key, failure)
 	}
 
 	return blockDuration
@@ -93,11 +93,8 @@ func recordFailure(ip, username string) time.Duration {
 
 // clearFailure 清除失败记录
 func clearFailure(ip, username string) {
-	authMutex.Lock()
-	defer authMutex.Unlock()
-
 	key := getBlockKey(ip, username)
-	delete(authFailures, key)
+	authFailures.Delete(key)
 }
 
 // AuthenticateDevice 认证设备
@@ -166,11 +163,8 @@ func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
 
 // GetAuthFailureCount 获取认证失败次数
 func GetAuthFailureCount(ip, username string) int {
-	authMutex.RLock()
-	defer authMutex.RUnlock()
-
 	key := getBlockKey(ip, username)
-	if failure, exists := authFailures[key]; exists {
+	if failure, exists := authFailures.Get(key); exists {
 		return failure.FailCount
 	}
 	return 0
@@ -178,16 +172,7 @@ func GetAuthFailureCount(ip, username string) int {
 
 // CleanExpiredAuthFailures 清理过期的认证失败记录
 func CleanExpiredAuthFailures() {
-	authMutex.Lock()
-	defer authMutex.Unlock()
-
-	now := time.Now()
-	for key, failure := range authFailures {
-		// 如果封禁已过期且超过 5 分钟没有新的失败，删除记录
-		if !failure.BlockedUntil.IsZero() && now.After(failure.BlockedUntil.Add(5*time.Minute)) {
-			delete(authFailures, key)
-		}
-	}
+	authFailures.CleanExpired(time.Now())
 }
 
 // StartAuthCleaner 启动认证失败记录清理器

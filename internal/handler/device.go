@@ -80,63 +80,24 @@ func GetDevices(c *gin.Context) {
 	var total int64
 	var err error
 
-	// 根据查询条件选择不同的查询方法
+	repo := gormdb.NewDeviceRepository()
+
+	// 根据查询条件选择不同的查询方法（全部使用数据库分页）
 	if callsign != "" {
-		// 按呼号搜索（搜索功能不缓存）
-		repo := gormdb.NewDeviceRepository()
-		devicesRaw, _ := repo.ListDevicesByCallSign(callsign)
-		// 非管理员只能看到自己的设备
+		// 按呼号搜索（数据库层分页）
+		ownerID := 0
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
-			filtered := make([]*gormdb.Device, 0)
-			for _, d := range devicesRaw {
-				if d.OwnerID == currentUser.ID {
-					filtered = append(filtered, d)
-				}
-			}
-			devicesRaw = filtered
+			ownerID = currentUser.ID // 非管理员只能看到自己的设备
 		}
-		total = int64(len(devicesRaw))
-		// 手动分页
-		start := (page - 1) * limit
-		end := start + limit
-		if start >= len(devicesRaw) {
-			devices = []*gormdb.Device{}
-		} else if end > len(devicesRaw) {
-			devices = devicesRaw[start:]
-		} else {
-			devices = devicesRaw[start:end]
-		}
+		devices, total, _ = repo.ListDevicesByCallSignPaginated(callsign, ownerID, limit, page)
 	} else if groupID != "" {
-		// 按群组过滤（使用缓存）
+		// 按群组过滤（数据库层分页）
 		gid, _ := strconv.Atoi(groupID)
-		var devicesRaw []*gormdb.Device
-		if deviceCache != nil {
-			devicesRaw, _ = deviceCache.GetDevicesByGroupID(ctx, gid)
-		} else {
-			repo := gormdb.NewDeviceRepository()
-			devicesRaw, _ = repo.ListDevicesByGroupID(gid)
-		}
-		// 非管理员只能看到自己的设备
+		ownerID := 0
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
-			filtered := make([]*gormdb.Device, 0)
-			for _, d := range devicesRaw {
-				if d.OwnerID == currentUser.ID {
-					filtered = append(filtered, d)
-				}
-			}
-			devicesRaw = filtered
+			ownerID = currentUser.ID // 非管理员只能看到自己的设备
 		}
-		total = int64(len(devicesRaw))
-		// 手动分页
-		start := (page - 1) * limit
-		end := start + limit
-		if start >= len(devicesRaw) {
-			devices = []*gormdb.Device{}
-		} else if end > len(devicesRaw) {
-			devices = devicesRaw[start:]
-		} else {
-			devices = devicesRaw[start:end]
-		}
+		devices, total, _ = repo.ListDevicesByGroupIDPaginated(gid, ownerID, limit, page)
 	} else {
 		// 普通用户只获取自己的设备，管理员获取所有设备
 		if currentUser != nil && hasRoleGORM(currentUser, "admin") {
@@ -144,24 +105,11 @@ func GetDevices(c *gin.Context) {
 			if deviceCache != nil {
 				devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)
 			} else {
-				repo := gormdb.NewDeviceRepository()
 				devices, total, err = repo.ListDevices(limit, page)
 			}
 		} else {
-			// 普通用户获取自己的设备（按用户查询不缓存）
-			repo := gormdb.NewDeviceRepository()
-			userDevices, _ := repo.ListDevicesByOwnerID(currentUser.ID)
-			total = int64(len(userDevices))
-			// 手动分页
-			start := (page - 1) * limit
-			end := start + limit
-			if start >= len(userDevices) {
-				devices = []*gormdb.Device{}
-			} else if end > len(userDevices) {
-				devices = userDevices[start:]
-			} else {
-				devices = userDevices[start:end]
-			}
+			// 普通用户获取自己的设备（数据库层分页）
+			devices, total, _ = repo.ListDevicesByOwnerIDPaginated(currentUser.ID, limit, page)
 		}
 		if err != nil && (currentUser == nil || hasRoleGORM(currentUser, "admin")) {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -172,9 +120,26 @@ func GetDevices(c *gin.Context) {
 		}
 	}
 
-	// 获取所有用户信息（用于关联所有者）
-	userCache := cache.GetUserCache()
+	// 批量获取所有需要的用户信息（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
+	ownerIDs := make([]int, 0, len(devices))
+	for _, d := range devices {
+		if d.OwnerID > 0 {
+			ownerIDs = append(ownerIDs, d.OwnerID)
+		}
+	}
+	// 去重
+	ownerIDSet := make(map[int]bool)
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
+	for _, id := range ownerIDs {
+		if !ownerIDSet[id] {
+			ownerIDSet[id] = true
+			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
+		}
+	}
+	// 批量查询用户简要信息
+	userCache := cache.GetUserCache()
+	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 
 	// 转换为响应格式
 	items := make([]*DeviceInfo, 0, len(devices))
@@ -196,23 +161,32 @@ func GetDevices(c *gin.Context) {
 			UpdateTime:  d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
 
-		// 获取设备所有者信息（通过 owner_id）
+		// 从批量查询结果中获取设备所有者信息
 		if d.OwnerID > 0 {
+			// 优先从缓存获取
 			var owner *gormdb.User
 			if userCache != nil {
 				owner, _ = userCache.GetUserByID(ctx, d.OwnerID)
 			}
 			if owner == nil {
-				owner, _ = userRepo.GetUserByID(d.OwnerID)
-			}
-			if owner != nil {
+				// 从批量查询结果获取
+				if brief, ok := ownerMap[d.OwnerID]; ok {
+					info.OwnerID = brief.ID
+					info.OwnerName = brief.NickName
+					if info.OwnerName == "" {
+						info.OwnerName = brief.Name
+					}
+					info.OwnerCallSign = brief.CallSign
+					info.CallSign = brief.CallSign
+				}
+			} else {
 				info.OwnerID = owner.ID
 				info.OwnerName = owner.NickName
-				if owner.NickName == "" {
+				if info.OwnerName == "" {
 					info.OwnerName = owner.Name
 				}
 				info.OwnerCallSign = owner.CallSign
-				info.CallSign = owner.CallSign // 从用户获取呼号
+				info.CallSign = owner.CallSign
 			}
 		}
 
@@ -719,15 +693,33 @@ func GetDeviceQTHs(c *gin.Context) {
 		return
 	}
 
-	// 转换为响应格式
+	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
+	ownerIDs := make([]int, 0, len(devicesRaw))
+	for _, d := range devicesRaw {
+		if d.OwnerID > 0 {
+			ownerIDs = append(ownerIDs, d.OwnerID)
+		}
+	}
+	// 去重
+	ownerIDSet := make(map[int]bool)
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
+	for _, id := range ownerIDs {
+		if !ownerIDSet[id] {
+			ownerIDSet[id] = true
+			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
+		}
+	}
+	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+
+	// 转换为响应格式
 	devices := make([]gin.H, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
-		// 从用户表获取呼号
+		// 从批量查询结果中获取呼号
 		var callsign string
 		if d.OwnerID > 0 {
-			if owner, err := userRepo.GetUserByID(d.OwnerID); err == nil && owner != nil {
-				callsign = owner.CallSign
+			if brief, ok := ownerMap[d.OwnerID]; ok {
+				callsign = brief.CallSign
 			}
 		}
 		devices = append(devices, gin.H{

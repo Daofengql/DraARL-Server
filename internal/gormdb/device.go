@@ -178,9 +178,92 @@ func (r *DeviceRepository) ListDevicesByCallSign(callsign string) ([]*Device, er
 	return devices, nil
 }
 
-// ChangeDeviceGroup 修改设备群组（通过 owner_id）
+// ChangeDeviceGroup 修改设备群��（通过 owner_id）
 func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID int) error {
 	return r.db.Model(&Device{}).
 		Where("owner_id = ? AND ssid = ?", ownerID, ssid).
 		Update("group_id", groupID).Error
+}
+
+// ============================================================
+// 以下方法支持数据库层面分页（解决内存分页性能问题）
+// ============================================================
+
+// ListDevicesByCallSignPaginated 按呼号搜索设备并分页（数据库层分页）
+func (r *DeviceRepository) ListDevicesByCallSignPaginated(callsign string, ownerID int, limit, page int) ([]*Device, int64, error) {
+	var devices []*Device
+	var total int64
+
+	offset := (page - 1) * limit
+
+	query := r.db.Model(&Device{}).
+		Select("devices.*").
+		Joins("JOIN users ON devices.owner_id = users.id").
+		Where("users.callsign = ?", callsign)
+
+	// 如果指定了 ownerID，则只查询该用户的设备
+	if ownerID > 0 {
+		query = query.Where("devices.owner_id = ?", ownerID)
+	}
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("devices.id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return devices, total, nil
+}
+
+// ListDevicesByGroupIDPaginated 按群组过滤设备并分页（数据库层分页）
+func (r *DeviceRepository) ListDevicesByGroupIDPaginated(groupID, ownerID int, limit, page int) ([]*Device, int64, error) {
+	var devices []*Device
+	var total int64
+
+	offset := (page - 1) * limit
+
+	query := r.db.Model(&Device{}).Where("group_id = ?", groupID)
+
+	// 如果指定了 ownerID，则只查询该用户的设备
+	if ownerID > 0 {
+		query = query.Where("owner_id = ?", ownerID)
+	}
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return devices, total, nil
+}
+
+// ListDevicesByOwnerIDPaginated 按所有者查询设备并分页（数据库层分页）
+func (r *DeviceRepository) ListDevicesByOwnerIDPaginated(ownerID int, limit, page int) ([]*Device, int64, error) {
+	var devices []*Device
+	var total int64
+
+	offset := (page - 1) * limit
+
+	query := r.db.Model(&Device{}).Where("owner_id = ?", ownerID)
+
+	// 获取总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 获取分页数据
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return devices, total, nil
 }

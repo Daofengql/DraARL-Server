@@ -113,7 +113,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 获取群组信息
 	group, exists := GetGroupFromCache(groupID)
 	if !exists {
-		log.Printf("[ROUTE_ERR] WS -> UDP 转发丢弃: 请求的目标群组 %d 不存在", groupID)
+		log.Printf("[ROUTE_ERR] WS -> UDP ��发丢弃: 请求的目标群组 %d 不存在", groupID)
 		return
 	}
 
@@ -148,9 +148,13 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 遍历 UDP 设备并发送
 	skipSelf := !source.IsGhost()
 	sourceID := source.GetDeviceID()
+
+	// 【修复爆音方案1】使用批量发送器，与UDP→UDP保持一致
+	// 批量发送器会缓冲数据包并按固定间隔发送，减少突发
 	for _, targetDev := range pool.DevConnList {
 		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
-			conn.WriteToUDP(voicePacket, targetDev.UDPAddr)
+			// 使用批量发送器代替直接发送
+			BatchSendUDP(voicePacket, targetDev.UDPAddr)
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"nrllink/internal/gormdb"
 	"nrllink/internal/interfaces"
 	"nrllink/internal/protocol"
 	"nrllink/internal/udphub"
@@ -43,6 +44,8 @@ func init() {
 	// 4. 启动后台维护协程
 	go startHeartbeatChecker()
 	go startStatsReporter()
+	// 【新增】启动WS普通设备群组同步任务（与UDP的refreshDeviceCache类似）
+	go startDeviceGroupSync()
 
 	log.Println("[WS] WebSocket manager adapter initialized and injected into udphub router")
 }
@@ -442,6 +445,62 @@ func reportStats() {
 	if normalCount > 0 || ghostCount > 0 {
 		log.Printf("[WS] Stats: Normal devices=%d, Ghost devices=%d, Total=%d",
 			normalCount, ghostCount, normalCount+ghostCount)
+	}
+}
+
+// startDeviceGroupSync 启动WS普通设备群组同步任务
+// 与UDP的refreshDeviceCache类似，定期从数据库同步设备的群组信息
+func startDeviceGroupSync() {
+	// 启动时等待一段时间，确保系统初始化完成
+	time.Sleep(5 * time.Second)
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	log.Println("[WS] WS普通设备群组同步任务已启动 (间隔: 10s)")
+
+	for range ticker.C {
+		syncDeviceGroups()
+	}
+}
+
+// syncDeviceGroups 同步WS普通设备的群组信息
+func syncDeviceGroups() {
+	devices := GlobalManager.GetAllOnlineDevices()
+	if len(devices) == 0 {
+		return
+	}
+
+	// 获取设备仓库
+	deviceRepo := gormdb.NewDeviceRepository()
+	updatedCount := 0
+
+	for _, device := range devices {
+		// 只同步普通设备（非幽灵设备）
+		if device.DeviceType == DeviceTypeGhost {
+			continue
+		}
+
+		// 从数据库获取设备的最新群组信息
+		if device.DeviceID > 0 {
+			dbDevice, err := deviceRepo.GetDeviceByID(device.DeviceID)
+			if err != nil {
+				continue
+			}
+
+			// 如果群组发生变化，更新设备的群组
+			if dbDevice.GroupID > 0 && dbDevice.GroupID != device.GroupID {
+				oldGroupID := device.GroupID
+				GlobalManager.SetDeviceGroup(device, dbDevice.GroupID)
+				log.Printf("[WS] Device %s group synced: %d -> %d",
+					device.GetIdentifier(), oldGroupID, dbDevice.GroupID)
+				updatedCount++
+			}
+		}
+	}
+
+	if updatedCount > 0 {
+		log.Printf("[WS] WS普通设备群组同步完成，更新了 %d 个设备", updatedCount)
 	}
 }
 

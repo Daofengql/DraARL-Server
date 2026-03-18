@@ -137,6 +137,12 @@ func StartDraARLServer(port int) error {
 	// 初始化通信录制管理器
 	InitCommRecorder()
 
+	// 【修复爆音方案1】初始化批量发送器
+	InitBatchSender(conn)
+
+	// 【修复爆音方案3】初始化语音平滑发送器
+	InitVoiceSmoother(conn)
+
 	// 处理数据包
 	for {
 		limitChan <- true

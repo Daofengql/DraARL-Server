@@ -33,6 +33,7 @@ type AuthResult struct {
 	Nickname    string
 	DeviceID    int
 	SSID        byte
+	GroupID     int    // 设备所属群组ID（从数据库读取）
 	Error       string
 }
 
@@ -137,26 +138,39 @@ func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
 
 	// 查找设备
 	deviceRepo := gormdb.NewDeviceRepository()
-	devices, err := deviceRepo.ListDevicesByOwnerID(authResult.User.ID)
-	if err != nil {
-		result.Error = "device_query_failed"
-		log.Printf("[WS-AUTH] Device query failed: %v", err)
+	existingDev, err := deviceRepo.GetDeviceByCallSignSSID(authResult.CallSign, ssid)
+	if err == nil && existingDev != nil {
+		// 设备已存在，使用现有设备
+		result.Success = true
+		result.UserID = authResult.User.ID
+		result.Username = username
+		result.CallSign = authResult.CallSign
+		result.SSID = ssid
+		result.DeviceID = existingDev.ID
+		if existingDev.GroupID > 0 {
+			result.GroupID = existingDev.GroupID
+		}
+		log.Printf("[WS-AUTH] Device auth success (existing): %s-%d (device-%d, group-%d)",
+			result.CallSign, result.SSID, result.DeviceID, result.GroupID)
 		return result
 	}
 
-	// 查找匹配 SSID 的设备
-	var targetDevice *gormdb.Device
-	for _, dev := range devices {
-		if dev.SSID == ssid {
-			targetDevice = dev
-			break
-		}
+	// 设备不存在，创建新设备（与 udphub 流���一致）
+	newDevice := &gormdb.Device{
+		SSID:        ssid,
+		OwnerID:     authResult.User.ID,
+		DevModel:    0, // 未知设备型号
+		Priority:    100,
+		Status:      0,
+		GroupID:     999, // 默认公共群组
+		CreateTime:  time.Now(),
+		UpdateTime:  time.Now(),
 	}
 
-	// 如果没有找到匹配的设备，使用第一个设备
-	// 或者如果 SSID 为 0，使用第一个设备
-	if targetDevice == nil && len(devices) > 0 {
-		targetDevice = devices[0]
+	if err := deviceRepo.CreateDevice(newDevice); err != nil {
+		result.Error = "device_create_failed"
+		log.Printf("[WS-AUTH] Device create failed: %v", err)
+		return result
 	}
 
 	result.Success = true
@@ -164,14 +178,11 @@ func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
 	result.Username = username
 	result.CallSign = authResult.CallSign
 	result.SSID = ssid
+	result.DeviceID = newDevice.ID
+	result.GroupID = 999 // 默认公共群组
 
-	if targetDevice != nil {
-		result.DeviceID = targetDevice.ID
-		result.SSID = byte(targetDevice.SSID)
-	}
-
-	log.Printf("[WS-AUTH] Device auth success: %s-%d (device-%d)",
-		result.CallSign, result.SSID, result.DeviceID)
+	log.Printf("[WS-AUTH] Device auth success (created): %s-%d (device-%d, group-%d)",
+		result.CallSign, result.SSID, result.DeviceID, result.GroupID)
 	return result
 }
 
@@ -257,7 +268,12 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 			authResult := AuthenticateDevice(packet.Username, packet.DevicePassword, packet.SSID)
 
 			if authResult.Success {
-				manager.RegisterNormalDevice(device, packet.Username, packet.SSID, authResult.DeviceID, authResult.CallSign)
+				// 【核心修复】传递数据库中的群组ID，如果为0则使用默认值999
+				groupID := authResult.GroupID
+				if groupID <= 0 {
+					groupID = 999 // 默认公共群组
+				}
+				manager.RegisterNormalDevice(device, packet.Username, packet.SSID, authResult.DeviceID, authResult.CallSign, groupID)
 
 				// 发送心跳响应（填充 CallSign）
 				response := EncodeHeartbeatResponse(packet, authResult.CallSign)

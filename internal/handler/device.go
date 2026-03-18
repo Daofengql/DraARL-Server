@@ -137,7 +137,7 @@ func GetDevices(c *gin.Context) {
 			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 		}
 	}
-	// 批��查询用户简要信息
+	// 批量查询用户简要信息
 	userCache := cache.GetUserCache()
 	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 

@@ -178,7 +178,7 @@ func (r *DeviceRepository) ListDevicesByCallSign(callsign string) ([]*Device, er
 	return devices, nil
 }
 
-// ChangeDeviceGroup 修改设备群��（通过 owner_id）
+// ChangeDeviceGroup 修改设备群组（通过 owner_id）
 func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID int) error {
 	return r.db.Model(&Device{}).
 		Where("owner_id = ? AND ssid = ?", ownerID, ssid).

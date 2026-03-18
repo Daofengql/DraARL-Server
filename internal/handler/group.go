@@ -72,7 +72,7 @@ func GetGroups(c *gin.Context) {
 			// 优化：尝试使用一次查询获取用户可见的所有群组
 			// 如果缓存可用，仍然使用缓存（缓存已经优化过了）
 			if groupCache != nil {
-				// 使用缓存获取用户已���证的群组ID列表
+				// 使用缓存获取用户已认证的群组ID列表
 				var members []*gormdb.GroupMember
 				members, err = groupCache.GetGroupsByUserID(ctx, currentUser.ID)
 				if err != nil {
@@ -172,18 +172,23 @@ func GetGroups(c *gin.Context) {
 		allDevices, _, _ = deviceRepo.ListDevices(10000, 1)
 	}
 
+	// 性能优化：使用指针类型避免重复 map 查找
 	type groupStats struct {
 		online int
 		total  int
 	}
-	groupDeviceStats := make(map[int]groupStats)
+	groupDeviceStats := make(map[int]*groupStats)
 	for _, d := range allDevices {
+		// 性能优化：使用指针避免二次查找
 		stat := groupDeviceStats[d.GroupID]
+		if stat == nil {
+			stat = &groupStats{}
+			groupDeviceStats[d.GroupID] = stat
+		}
 		stat.total++
 		if d.ISOnline {
 			stat.online++
 		}
-		groupDeviceStats[d.GroupID] = stat
 	}
 
 	// 获取当前用户已加入的群组ID列表（用于判断is_joined）
@@ -239,7 +244,12 @@ func GetGroups(c *gin.Context) {
 		// Check if current user is the group owner
 		isOwner := g.OwerID == currentUserID
 
-		stat := groupDeviceStats[g.ID]
+		// 性能优化：指针类型 map 查找
+		var onlineCount, totalCount int
+		if stat := groupDeviceStats[g.ID]; stat != nil {
+			onlineCount = stat.online
+			totalCount = stat.total
+		}
 
 		// Get owner callsign from lookup map
 		var ownerCallSign string
@@ -261,8 +271,8 @@ func GetGroups(c *gin.Context) {
 			"note":                g.Note,
 			"is_joined":           isJoined,
 			"is_owner":            isOwner,
-			"online_count":        stat.online,
-			"total_count":         stat.total,
+			"online_count":        onlineCount,
+			"total_count":         totalCount,
 			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
 		})

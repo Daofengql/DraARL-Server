@@ -19,7 +19,7 @@ type CommRecordResponse struct {
 	ID          uint   `json:"id"`
 	DeviceID    uint   `json:"device_id"`
 	DeviceName  string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
-	DevModel    int    `json:"dev_model"`   // 设��型号：105=浏览器
+	DevModel    int    `json:"dev_model"`   // 设备型号：105=浏览器
 	GroupID     *uint  `json:"group_id"`
 	GroupName   string `json:"group_name"` // 通过联表查询获取：public_groups.name
 	UserID      *uint  `json:"user_id"`
@@ -40,7 +40,7 @@ type CommRecordWithDetails struct {
 	ID            uint
 	DeviceID      uint
 	DeviceSSID    uint8
-	DevModel      int    // 设备型号
+	DevModel      int // 设备型号
 	OwnerCallSign string
 	OwnerNickName string
 	GroupID       *uint

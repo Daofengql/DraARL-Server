@@ -77,13 +77,13 @@ type Device struct {
 	OwnerID     int       `gorm:"type:int;index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
 	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                                   // 位置信息 (原 gird 字段)
 	DevModel    int       `gorm:"type:int;column:dev_model" json:"dev_model"`
-	GroupID     int       `gorm:"type:int;index;column:group_id" json:"group_id"`
+	GroupID     int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
 	Status      int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
 	IsCerted    bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
 	Priority    int       `gorm:"type:int;default:100;column:priority" json:"priority"`
 	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"` // 设备级禁发
 	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"` // 设备级禁收
-	ISOnline    bool      `gorm:"type:tinyint(1);default:0;column:is_online" json:"is_online"`       // 在线状态（同步到数据库供Web端查询）
+	ISOnline    bool      `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
 	OnlineTime  time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
 	Note        string    `gorm:"type:text;column:note" json:"note"`
 	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
@@ -282,9 +282,9 @@ type CommRecord struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`    // 发送设备ID（0=幽灵设备，>0=普通设备）
 	DeviceSSID uint8     `gorm:"column:device_ssid" json:"device_ssid"`               // 设备 SSID（冗余，便于查询）
-	GroupID    *uint     `gorm:"index;column:group_id" json:"group_id"`               // 所属群组ID
-	UserID     *uint     `gorm:"index;column:user_id" json:"user_id"`                 // 所属用户ID
-	StartTime  time.Time `gorm:"index;not null;column:start_time" json:"start_time"`  // 通信开始时间
+	GroupID    *uint     `gorm:"index;index:idx_group_start,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于按群组查询
+	UserID     *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`   // 性能优化：复合索引用于按用户查询
+	StartTime  time.Time `gorm:"index;index:idx_group_start,priority:2;index:idx_user_start,priority:2;not null;column:start_time" json:"start_time"` // 性能优化：复合索引
 	EndTime    time.Time `gorm:"column:end_time" json:"end_time"`                     // 通信结束时间
 	DurationMs int       `gorm:"column:duration_ms" json:"duration_ms"`               // 通信时长（毫秒）
 	AudioPath  string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"` // MinIO 音频文件路径

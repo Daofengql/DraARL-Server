@@ -224,7 +224,8 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 			if pool != nil {
 				delete(pool.DevConnMap, dev.UDPAddr.String())
 
-				list := make([]*models.Device, 0)
+				// 性能优化：预分配切片容量
+				list := make([]*models.Device, 0, len(pool.DevConnMap))
 				for _, vv := range pool.DevConnMap {
 					list = append(list, vv)
 				}
@@ -242,7 +243,8 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 				if pool != nil {
 					delete(pool.DevConnMap, dev.UDPAddr.String())
 
-					list := make([]*models.Device, 0)
+					// 性能优化：预分配切片容量
+					list := make([]*models.Device, 0, len(pool.DevConnMap))
 					for _, vv := range pool.DevConnMap {
 						list = append(list, vv)
 					}

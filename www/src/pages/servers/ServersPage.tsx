@@ -24,7 +24,11 @@ import {
   Alert,
   Chip,
 } from '@mui/material'
-import { Add, Edit, Delete, Search, Dns } from '@mui/icons-material'
+import Add from '@mui/icons-material/Add'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import Dns from '@mui/icons-material/Dns'
 import { serverService } from '../../services'
 import type { Server } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'

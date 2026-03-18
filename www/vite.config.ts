@@ -5,6 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
+    // 使用 esbuild 激进压缩
+    minify: 'esbuild',
+    cssMinify: true,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -25,6 +28,10 @@ export default defineConfig({
               id.includes('node_modules/opus-decoder/') ||
               id.includes('node_modules/react-easy-crop/')) {
             return 'vendor'
+          }
+          // Recharts 图表库（较大，单独分离）
+          if (id.includes('node_modules/recharts/')) {
+            return 'vendor-recharts'
           }
         },
       },

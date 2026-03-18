@@ -33,20 +33,18 @@ import {
   Avatar,
   Popover,
 } from '@mui/material'
-import {
-  Add,
-  Edit,
-  Delete,
-  Search,
-  Person,
-  Block,
-  CheckCircle,
-  Phone,
-  Cake,
-  LocationOn,
-  Badge,
-  CalendarToday,
-} from '@mui/icons-material'
+import Add from '@mui/icons-material/Add'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import Person from '@mui/icons-material/Person'
+import Block from '@mui/icons-material/Block'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Phone from '@mui/icons-material/Phone'
+import Cake from '@mui/icons-material/Cake'
+import LocationOn from '@mui/icons-material/LocationOn'
+import Badge from '@mui/icons-material/Badge'
+import CalendarToday from '@mui/icons-material/CalendarToday'
 import { userService } from '../../services'
 import { authService } from '../../services'
 import type { User } from '../../types'

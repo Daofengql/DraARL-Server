@@ -11,7 +11,8 @@ import {
   useMediaQuery,
   keyframes,
 } from '@mui/material'
-import { Mic as MicIcon, MicOff as MicOffIcon } from '@mui/icons-material'
+import MicIcon from '@mui/icons-material/Mic'
+import MicOffIcon from '@mui/icons-material/MicOff'
 
 interface PTTButtonProps {
   isPressed: boolean

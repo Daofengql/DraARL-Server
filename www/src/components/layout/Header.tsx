@@ -7,9 +7,7 @@ import {
   Typography,
   Avatar,
 } from '@mui/material'
-import {
-  Menu as MenuIcon,
-} from '@mui/icons-material'
+import MenuIcon from '@mui/icons-material/Menu'
 import { useNavigate } from 'react-router-dom'
 import { authService, apiClient } from '../../services'
 import { SITE_CONFIG } from '../../config/site'

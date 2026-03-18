@@ -26,26 +26,24 @@ import {
   CardContent,
   Grid,
 } from '@mui/material'
-import {
-  Folder as FolderIcon,
-  InsertDriveFile as FileIcon,
-  CreateNewFolder as CreateFolderIcon,
-  Upload as UploadIcon,
-  Delete as DeleteIcon,
-  Edit as EditIcon,
-  MoreVert as MoreIcon,
-  NavigateNext as NavigateNextIcon,
-  Description as DescriptionIcon,
-  Image as ImageIcon,
-  VideoFile as VideoIcon,
-  AudioFile as AudioIcon,
-  PictureAsPdf as PdfIcon,
-  GridOn as GridIcon,
-  ViewList as ListIcon,
-  Download as DownloadIcon,
-  DriveFileMove as MoveIcon,
-  Refresh as RefreshIcon,
-} from '@mui/icons-material'
+import FolderIcon from '@mui/icons-material/Folder'
+import FileIcon from '@mui/icons-material/InsertDriveFile'
+import CreateFolderIcon from '@mui/icons-material/CreateNewFolder'
+import UploadIcon from '@mui/icons-material/Upload'
+import DeleteIcon from '@mui/icons-material/Delete'
+import EditIcon from '@mui/icons-material/Edit'
+import MoreIcon from '@mui/icons-material/MoreVert'
+import NavigateNextIcon from '@mui/icons-material/NavigateNext'
+import DescriptionIcon from '@mui/icons-material/Description'
+import ImageIcon from '@mui/icons-material/Image'
+import VideoIcon from '@mui/icons-material/VideoFile'
+import AudioIcon from '@mui/icons-material/AudioFile'
+import PdfIcon from '@mui/icons-material/PictureAsPdf'
+import GridIcon from '@mui/icons-material/GridOn'
+import ListIcon from '@mui/icons-material/ViewList'
+import DownloadIcon from '@mui/icons-material/Download'
+import MoveIcon from '@mui/icons-material/DriveFileMove'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { ConfirmDialog } from '../../components/common'
 import {
   getAssets,

@@ -11,19 +11,17 @@ import {
   useTheme,
   useMediaQuery,
 } from '@mui/material'
-import {
-  Devices,
-  CheckCircle,
-  Group,
-  People,
-  Radio,
-  Dashboard as DashboardIcon,
-  Person,
-  Public,
-  RecordVoiceOver,
-  Storage,
-  Timer,
-} from '@mui/icons-material'
+import Devices from '@mui/icons-material/Devices'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Group from '@mui/icons-material/Group'
+import People from '@mui/icons-material/People'
+import Radio from '@mui/icons-material/Radio'
+import DashboardIcon from '@mui/icons-material/Dashboard'
+import Person from '@mui/icons-material/Person'
+import Public from '@mui/icons-material/Public'
+import RecordVoiceOver from '@mui/icons-material/RecordVoiceOver'
+import Storage from '@mui/icons-material/Storage'
+import Timer from '@mui/icons-material/Timer'
 import {
   LineChart,
   Line,

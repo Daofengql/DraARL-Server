@@ -15,7 +15,9 @@ import {
   StepLabel,
   IconButton,
 } from '@mui/material'
-import { Radio, CheckCircle, ContentCopy } from '@mui/icons-material'
+import Radio from '@mui/icons-material/Radio'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import ContentCopy from '@mui/icons-material/ContentCopy'
 import { authService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'

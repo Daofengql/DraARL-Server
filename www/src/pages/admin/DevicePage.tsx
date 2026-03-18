@@ -25,15 +25,13 @@ import {
   Stack,
   Tooltip,
 } from '@mui/material'
-import {
-  Edit,
-  Delete,
-  Search,
-  Circle,
-  Lock,
-  Person,
-  Refresh,
-} from '@mui/icons-material'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import Circle from '@mui/icons-material/Circle'
+import Lock from '@mui/icons-material/Lock'
+import Person from '@mui/icons-material/Person'
+import Refresh from '@mui/icons-material/Refresh'
 import { deviceService, groupService, userService } from '../../services'
 import type { Device, Group, User } from '../../types'
 import { SwitchGroupDialog } from '../devices/SwitchGroupDialog'

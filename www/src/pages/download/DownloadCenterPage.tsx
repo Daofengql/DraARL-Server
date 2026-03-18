@@ -26,19 +26,17 @@ import {
   Divider,
   Stack,
 } from '@mui/material'
-import {
-  Folder as FolderIcon,
-  InsertDriveFile as FileIcon,
-  Description as DescriptionIcon,
-  Image as ImageIcon,
-  VideoFile as VideoIcon,
-  AudioFile as AudioIcon,
-  PictureAsPdf as PdfIcon,
-  Download as DownloadIcon,
-  ArrowBack as ArrowBackIcon,
-  Home as HomeIcon,
-  CloudDownload as CloudDownloadIcon,
-} from '@mui/icons-material'
+import FolderIcon from '@mui/icons-material/Folder'
+import FileIcon from '@mui/icons-material/InsertDriveFile'
+import DescriptionIcon from '@mui/icons-material/Description'
+import ImageIcon from '@mui/icons-material/Image'
+import VideoIcon from '@mui/icons-material/VideoFile'
+import AudioIcon from '@mui/icons-material/AudioFile'
+import PdfIcon from '@mui/icons-material/PictureAsPdf'
+import DownloadIcon from '@mui/icons-material/Download'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import HomeIcon from '@mui/icons-material/Home'
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload'
 import {
   getAssetTree,
   getFolderFiles,

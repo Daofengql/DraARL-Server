@@ -13,18 +13,16 @@ import {
   useTheme,
   useMediaQuery,
 } from '@mui/material'
-import {
-  ExpandMore,
-  ExpandLess,
-  SettingsEthernet,
-  AccountTree,
-  Security,
-  Code,
-  CloudSync,
-  MenuBook,
-  Build,
-  CloudDownload,
-} from '@mui/icons-material'
+import ExpandMore from '@mui/icons-material/ExpandMore'
+import ExpandLess from '@mui/icons-material/ExpandLess'
+import SettingsEthernet from '@mui/icons-material/SettingsEthernet'
+import AccountTree from '@mui/icons-material/AccountTree'
+import Security from '@mui/icons-material/Security'
+import Code from '@mui/icons-material/Code'
+import CloudSync from '@mui/icons-material/CloudSync'
+import MenuBook from '@mui/icons-material/MenuBook'
+import Build from '@mui/icons-material/Build'
+import CloudDownload from '@mui/icons-material/CloudDownload'
 
 // 导入 SVG 图像
 import deviceAccessFlow from '../../assets/device-access-flow.svg'

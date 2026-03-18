@@ -15,7 +15,7 @@ import {
   useMediaQuery,
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
-import { Group as GroupIcon } from '@mui/icons-material'
+import GroupIcon from '@mui/icons-material/Group'
 import type { RadioGroup } from '../../../types/radio'
 
 interface GroupSelectorProps {

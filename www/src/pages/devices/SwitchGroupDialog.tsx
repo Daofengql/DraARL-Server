@@ -19,12 +19,10 @@ import {
   Tabs,
   Tab,
 } from '@mui/material'
-import {
-  Lock,
-  LockOpen,
-  CheckCircle,
-  Search,
-} from '@mui/icons-material'
+import Lock from '@mui/icons-material/Lock'
+import LockOpen from '@mui/icons-material/LockOpen'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Search from '@mui/icons-material/Search'
 import type { Device, Group } from '../../types'
 import { groupService } from '../../services/group'
 

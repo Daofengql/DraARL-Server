@@ -12,12 +12,10 @@ import {
   Popover,
 } from '@mui/material'
 import type { PopoverProps } from '@mui/material'
-import {
-  Badge,
-  Phone,
-  LocationOn,
-  CalendarToday,
-} from '@mui/icons-material'
+import Badge from '@mui/icons-material/Badge'
+import Phone from '@mui/icons-material/Phone'
+import LocationOn from '@mui/icons-material/LocationOn'
+import CalendarToday from '@mui/icons-material/CalendarToday'
 import type { User } from '../types'
 
 interface UserDetailPopoverProps {

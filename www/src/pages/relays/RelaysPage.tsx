@@ -19,7 +19,11 @@ import {
   DialogActions,
   Alert,
 } from '@mui/material'
-import { Add, Edit, Delete, Search, SettingsInputAntenna } from '@mui/icons-material'
+import Add from '@mui/icons-material/Add'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import { relayService } from '../../services'
 import type { Relay } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'

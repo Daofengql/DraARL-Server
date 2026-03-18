@@ -26,16 +26,14 @@ import {
   Tooltip,
   Snackbar,
 } from '@mui/material'
-import {
-  Edit,
-  Delete,
-  Search,
-  Circle,
-  Lock,
-  Key,
-  ContentCopy,
-  Refresh,
-} from '@mui/icons-material'
+import Edit from '@mui/icons-material/Edit'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import Circle from '@mui/icons-material/Circle'
+import Lock from '@mui/icons-material/Lock'
+import Key from '@mui/icons-material/Key'
+import ContentCopy from '@mui/icons-material/ContentCopy'
+import Refresh from '@mui/icons-material/Refresh'
 import { deviceService, groupService, authService } from '../../services'
 import type { Device, Group } from '../../types'
 import { SwitchGroupDialog } from './SwitchGroupDialog'

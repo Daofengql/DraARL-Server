@@ -1,5 +1,6 @@
 import { Box, Typography, Button } from '@mui/material'
-import { Home, ArrowBack } from '@mui/icons-material'
+import Home from '@mui/icons-material/Home'
+import ArrowBack from '@mui/icons-material/ArrowBack'
 import { useNavigate } from 'react-router-dom'
 
 export function NotFoundPage() {

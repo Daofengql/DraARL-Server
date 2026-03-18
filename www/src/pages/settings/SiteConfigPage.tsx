@@ -28,17 +28,15 @@ import {
   Switch,
   FormControlLabel,
 } from '@mui/material'
-import {
-  Save,
-  Public,
-  Refresh,
-  Terminal,
-  CloudUpload,
-  Delete,
-  Search,
-  Info,
-  PhoneInTalk,
-} from '@mui/icons-material'
+import Save from '@mui/icons-material/Save'
+import Public from '@mui/icons-material/Public'
+import Refresh from '@mui/icons-material/Refresh'
+import Terminal from '@mui/icons-material/Terminal'
+import CloudUpload from '@mui/icons-material/CloudUpload'
+import Delete from '@mui/icons-material/Delete'
+import Search from '@mui/icons-material/Search'
+import Info from '@mui/icons-material/Info'
+import PhoneInTalk from '@mui/icons-material/PhoneInTalk'
 import { apiClient } from '../../services/api'
 import { logService } from '../../services'
 import type { OperatorLog } from '../../types'

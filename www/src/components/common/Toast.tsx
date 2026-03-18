@@ -5,7 +5,11 @@ import {
   IconButton,
   Collapse,
 } from '@mui/material'
-import { Close, CheckCircle, Error, Warning, Info } from '@mui/icons-material'
+import Close from '@mui/icons-material/Close'
+import CheckCircle from '@mui/icons-material/CheckCircle'
+import Error from '@mui/icons-material/Error'
+import Warning from '@mui/icons-material/Warning'
+import Info from '@mui/icons-material/Info'
 
 interface Toast {
   id: number

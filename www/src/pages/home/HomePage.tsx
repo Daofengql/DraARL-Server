@@ -1,5 +1,6 @@
 import { Box, Typography, Button, Container } from '@mui/material'
-import { Construction, Login } from '@mui/icons-material'
+import Construction from '@mui/icons-material/Construction'
+import Login from '@mui/icons-material/Login'
 import { useNavigate } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
 

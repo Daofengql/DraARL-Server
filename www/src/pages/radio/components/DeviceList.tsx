@@ -17,14 +17,12 @@ import {
   Skeleton,
   useTheme,
 } from '@mui/material'
-import {
-  Close as CloseIcon,
-  Person as PersonIcon,
-  Headset as HeadsetIcon,
-  Computer as ComputerIcon,
-  Phone as PhoneIcon,
-  Tablet as TabletIcon,
-} from '@mui/icons-material'
+import CloseIcon from '@mui/icons-material/Close'
+import PersonIcon from '@mui/icons-material/Person'
+import HeadsetIcon from '@mui/icons-material/Headset'
+import ComputerIcon from '@mui/icons-material/Computer'
+import PhoneIcon from '@mui/icons-material/Phone'
+import TabletIcon from '@mui/icons-material/Tablet'
 import { apiClient } from '../../../services'
 import { DeviceModel } from '../../../types/radio'
 import type { OnlineDevice } from '../../../types/radio'

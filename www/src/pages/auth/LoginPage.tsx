@@ -34,7 +34,25 @@ export function LoginPage() {
   // 处理 URL 中的 sso_error 参数
   useEffect(() => {
     const ssoError = searchParams.get('sso_error')
+
+    // 检查是否在弹出窗口中（SSO 回调失败时后端重定向到此）
+    const isPopup = window.opener && window.opener !== window
+
     if (ssoError) {
+      if (isPopup) {
+        // 在弹出窗口中，通过 postMessage 通知父窗口并关闭自己
+        window.opener.postMessage(
+          {
+            type: 'SSO_LOGIN_ERROR',
+            error: ssoError,
+          },
+          window.location.origin
+        )
+        setTimeout(() => window.close(), 100)
+        return
+      }
+
+      // 不在弹出窗口中，正常显示错误
       setError(ssoError)
       // 清除 URL 中的错误参数
       window.history.replaceState({}, '', '/login')

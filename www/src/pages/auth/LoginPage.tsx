@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Container,
   Box,
@@ -11,6 +11,7 @@ import {
   Alert,
   Link,
   Divider,
+  Snackbar,
 } from '@mui/material'
 import Radio from '@mui/icons-material/Radio'
 import { authService, ssoService } from '../../services'
@@ -19,14 +20,48 @@ import { usePageTitle } from '../../hooks/usePageTitle'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { config } = usePublicConfig()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [ssoMessage, setSsoMessage] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   // 同步页面标题
   usePageTitle()
+
+  // 处理 URL 中的 sso_error 参数
+  useEffect(() => {
+    const ssoError = searchParams.get('sso_error')
+    if (ssoError) {
+      setError(ssoError)
+      // 清除 URL 中的错误参数
+      window.history.replaceState({}, '', '/login')
+    }
+  }, [searchParams])
+
+  // 监听来自 SSO 回调窗口的消息
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      // 安全检查：确保消息来自可信源
+      if (event.origin !== window.location.origin) return
+
+      const { type, token, user, error: ssoError } = event.data || {}
+
+      if (type === 'SSO_LOGIN_SUCCESS' && token && user) {
+        authService.saveAuth(token, user)
+        setSsoMessage({ type: 'success', message: 'SSO 登录成功' })
+        setTimeout(() => navigate('/dashboard'), 500)
+      } else if (type === 'SSO_LOGIN_ERROR' && ssoError) {
+        setError(ssoError)
+        setLoading(false)
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -47,8 +82,19 @@ export function LoginPage() {
   const handleSSOLogin = async () => {
     try {
       setLoading(true)
+      setError('')
       const res = await ssoService.getLoginURL()
-      window.location.href = res.url
+      // 打开新窗口进行 SSO 登录
+      const width = 600
+      const height = 700
+      const left = window.screenX + (window.outerWidth - width) / 2
+      const top = window.screenY + (window.outerHeight - height) / 2
+      window.open(
+        res.url,
+        'SSO Login',
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,resizable=yes`
+      )
+      // 注意：不在这里设置 loading = false，等待 postMessage 回调
     } catch (err: any) {
       setError(err.response?.data?.message || '获取SSO登录地址失败')
       setLoading(false)
@@ -208,6 +254,18 @@ export function LoginPage() {
           </Box>
         )}
       </Container>
+
+      {/* SSO 登录成功提示 */}
+      <Snackbar
+        open={ssoMessage !== null}
+        autoHideDuration={3000}
+        onClose={() => setSsoMessage(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert severity={ssoMessage?.type} onClose={() => setSsoMessage(null)}>
+          {ssoMessage?.message}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }

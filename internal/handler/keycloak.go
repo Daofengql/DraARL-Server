@@ -597,17 +597,9 @@ func handleBindCallbackRedirect(c *gin.Context, userID int, kcUserInfo *Keycloak
 func GetSSOStatus(c *gin.Context) {
 	username, _ := c.Get("username")
 
-	var user *gormdb.User
-	var err error
-
-	// 尝试从缓存获取
-	userCache := cache.GetUserCache()
-	if userCache != nil {
-		user, err = userCache.GetUserByName(c.Request.Context(), username.(string))
-	} else {
-		repo := gormdb.NewUserRepository()
-		user, err = repo.GetUserByName(username.(string))
-	}
+	// SSO状态是关键信息，直接从数据库获取，不使用缓存
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
 
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, Response{
@@ -710,9 +702,9 @@ func SSOUnbind(c *gin.Context) {
 	}
 
 	// 移除绑定
-	user.OpenID = RemoveSSOBinding(user.OpenID, SSOProviderKeycloak)
+	newOpenID := RemoveSSOBinding(user.OpenID, SSOProviderKeycloak)
 
-	if err := repo.UpdateUser(user); err != nil {
+	if err := repo.UpdateUserOpenID(user.ID, newOpenID); err != nil {
 		log.Printf("更新用户OpenID失败: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,

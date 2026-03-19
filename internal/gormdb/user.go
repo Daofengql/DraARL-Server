@@ -136,6 +136,11 @@ func (r *UserRepository) UpdateUser(user *User) error {
 	return r.db.Model(user).Updates(user).Error
 }
 
+// UpdateUserOpenID 更新用户OpenID（解决GORM零值不更新问题）
+func (r *UserRepository) UpdateUserOpenID(id int, openID string) error {
+	return r.db.Model(&User{}).Where("id = ?", id).Update("openid", openID).Error
+}
+
 // UpdateUserPassword 更新用户密码
 func (r *UserRepository) UpdateUserPassword(id int, password string) error {
 	return r.db.Model(&User{}).Where("id = ?", id).Update("password", password).Error

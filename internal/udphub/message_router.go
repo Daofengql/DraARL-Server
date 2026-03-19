@@ -113,7 +113,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 获取群组信息
 	group, exists := GetGroupFromCache(groupID)
 	if !exists {
-		log.Printf("[ROUTE_ERR] WS -> UDP ��发丢弃: 请求的目标群组 %d 不存在", groupID)
+		log.Printf("[ROUTE_ERR] WS -> UDP 转发丢弃: 请求的目标群组 %d 不存在", groupID)
 		return
 	}
 

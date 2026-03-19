@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Container,
@@ -18,11 +18,11 @@ import {
 import Radio from '@mui/icons-material/Radio'
 import CheckCircle from '@mui/icons-material/CheckCircle'
 import ContentCopy from '@mui/icons-material/ContentCopy'
-import { authService } from '../../services'
+import { authService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
 
-const steps = ['基本信息', '联系方式', '设置密码']
+const steps = ['基本信息', '联系方式', '设置密码', '邮箱验证']
 
 interface FormData {
   username: string
@@ -31,6 +31,7 @@ interface FormData {
   password: string
   confirmPassword: string
   nickname: string
+  email: string
 }
 
 interface FormErrors {
@@ -39,6 +40,7 @@ interface FormErrors {
   phone?: string
   password?: string
   confirmPassword?: string
+  email?: string
 }
 
 export function RegisterPage() {
@@ -56,6 +58,7 @@ export function RegisterPage() {
     password: '',
     confirmPassword: '',
     nickname: '',
+    email: '',
   })
   const [errors, setErrors] = useState<FormErrors>({})
   const [error, setError] = useState('')
@@ -63,10 +66,35 @@ export function RegisterPage() {
   const [registerSuccess, setRegisterSuccess] = useState(false)
   const [devicePassword, setDevicePassword] = useState('')
 
+  // 邮箱验证相关状态
+  const [captchaId, setCaptchaId] = useState('')
+  const [captchaCode, setCaptchaCode] = useState('')
+  const [captchaImage, setCaptchaImage] = useState('')
+  const [emailCode, setEmailCode] = useState('')
+  const [sessionId, setSessionId] = useState('')
+  const [countdown, setCountdown] = useState(0)
+  const [emailVerified, setEmailVerified] = useState(false)
+
   const logoUrl = config.systemInfo.logo_url
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
   const icp = config.icp?.icp || ''
+
+  // 自动加载图片验证码
+  useEffect(() => {
+    getCaptcha()
+  }, [])
+
+  // 获取图片验证码
+  const getCaptcha = async () => {
+    try {
+      const res = await captchaService.getCaptcha()
+      setCaptchaId(res.captcha_id)
+      setCaptchaImage(res.captcha_image)
+    } catch (err) {
+      // 静默失败
+    }
+  }
 
   // 验证呼号格式（字母开头，后跟字母数字，3-10个字符）
   const validateCallsign = (callsign: string): boolean => {
@@ -86,6 +114,11 @@ export function RegisterPage() {
   // 验证密码强度
   const validatePassword = (password: string): boolean => {
     return password.length >= 6
+  }
+
+  // 验证邮箱格式
+  const validateEmail = (email: string): boolean => {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   }
 
   const validateStep = (step: number): boolean => {
@@ -135,6 +168,8 @@ export function RegisterPage() {
         newErrors.confirmPassword = '两次输入的密码不一致'
         isValid = false
       }
+    } else if (step === 3) {
+      // 邮箱验证步骤是可选的，不做强制验证
     }
 
     setErrors(newErrors)
@@ -153,10 +188,86 @@ export function RegisterPage() {
     setErrors({})
   }
 
+  // 发送邮箱验证码
+  const handleSendEmailCode = async () => {
+    if (!formData.email) {
+      setError('请输入邮箱地址')
+      return
+    }
+    if (!validateEmail(formData.email)) {
+      setError('邮箱格式不正确')
+      return
+    }
+    if (!captchaCode) {
+      setError('请输入图片验证码')
+      return
+    }
+
+    setLoading(true)
+    setError('')
+    try {
+      const res = await emailAuthService.sendCode({
+        email: formData.email,
+        purpose: 'register',
+        captcha_id: captchaId,
+        captcha_code: captchaCode,
+      })
+      setSessionId(res.session_id)
+      setCountdown(60)
+      const timer = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } catch (err: any) {
+      setError(err.response?.data?.message || '发送验证码失败')
+      getCaptcha()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 验证邮箱
+  const handleVerifyEmail = async () => {
+    if (!sessionId) {
+      setError('请先获取邮箱验证码')
+      return
+    }
+    if (!emailCode) {
+      setError('请输入邮箱验证码')
+      return
+    }
+
+    setLoading(true)
+    setError('')
+    try {
+      await emailAuthService.verifyEmail({
+        session_id: sessionId,
+        code: emailCode,
+      })
+      setEmailVerified(true)
+    } catch (err: any) {
+      setError(err.response?.data?.message || '邮箱验证失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleSubmit = async () => {
     setError('')
 
     if (!validateStep(2)) {
+      return
+    }
+
+    // 如果填写了邮箱但未验证
+    if (formData.email && !emailVerified) {
+      setError('请先验证邮箱或清空邮箱地址')
+      setActiveStep(3)
       return
     }
 
@@ -169,6 +280,9 @@ export function RegisterPage() {
         phone: formData.phone,
         password: formData.password,
         nickname: formData.nickname || formData.username,
+        email: emailVerified ? formData.email : undefined,
+        session_id: emailVerified ? sessionId : undefined,
+        email_code: emailVerified ? emailCode : undefined,
       })
       // 保存设备密码并显示成功页面
       if (result?.device_password) {
@@ -268,6 +382,89 @@ export function RegisterPage() {
               helperText={errors.confirmPassword}
               required
             />
+          </Box>
+        )
+      case 3:
+        return (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <Alert severity="info">
+              <Typography variant="body2">
+                邮箱验证为可选项。验证邮箱后可用于找回密码和验证码登录。
+              </Typography>
+            </Alert>
+            {emailVerified ? (
+              <Alert severity="success">
+                邮箱 {formData.email} 已验证通过
+              </Alert>
+            ) : (
+              <>
+                <TextField
+                  fullWidth
+                  label="邮箱地址（可选）"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => {
+                    setFormData({ ...formData, email: e.target.value })
+                    setEmailVerified(false)
+                    setSessionId('')
+                    setEmailCode('')
+                  }}
+                  error={!!errors.email}
+                  helperText={errors.email}
+                  disabled={loading}
+                />
+                {formData.email && (
+                  <>
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                      <TextField
+                        label="图片验证码"
+                        value={captchaCode}
+                        onChange={(e) => setCaptchaCode(e.target.value)}
+                        sx={{ flex: 1 }}
+                      />
+                      <Box
+                        component="img"
+                        src={captchaImage}
+                        alt="验证码"
+                        onClick={getCaptcha}
+                        sx={{
+                          height: 64,
+                          cursor: 'pointer',
+                          borderRadius: 1,
+                          bgcolor: 'action.hover',
+                        }}
+                      />
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                      <TextField
+                        label="邮箱验证码"
+                        value={emailCode}
+                        onChange={(e) => setEmailCode(e.target.value)}
+                        sx={{ flex: 1 }}
+                      />
+                      <Button
+                        variant="outlined"
+                        onClick={handleSendEmailCode}
+                        disabled={loading || countdown > 0 || !captchaCode}
+                        sx={{ minWidth: 120 }}
+                      >
+                        {countdown > 0 ? `${countdown}s` : '发送验证码'}
+                      </Button>
+                    </Box>
+                    {sessionId && (
+                      <Button
+                        variant="outlined"
+                        onClick={handleVerifyEmail}
+                        disabled={loading || !emailCode}
+                        fullWidth
+                      >
+                        验证邮箱
+                      </Button>
+                    )}
+                  </>
+                )}
+              </>
+            )}
           </Box>
         )
       default:

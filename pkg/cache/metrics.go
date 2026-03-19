@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Metrics 缓存监���指标
+// Metrics 缓存监控指标
 type Metrics struct {
 	// L1 本地缓存统计
 	L1Hits   int64 // L1 命中次数

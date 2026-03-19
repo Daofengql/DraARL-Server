@@ -12,9 +12,11 @@ import {
   Link,
   Divider,
   Snackbar,
+  Tabs,
+  Tab,
 } from '@mui/material'
 import Radio from '@mui/icons-material/Radio'
-import { authService, ssoService } from '../../services'
+import { authService, ssoService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
 
@@ -22,14 +24,32 @@ export function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { config } = usePublicConfig()
+  const [loginMode, setLoginMode] = useState(0) // 0: 密码登录, 1: 验证码登录
+
+  // 密码登录状态
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+
+  // 验证码登录状态
+  const [email, setEmail] = useState('')
+  const [captchaId, setCaptchaId] = useState('')
+  const [captchaCode, setCaptchaCode] = useState('')
+  const [captchaImage, setCaptchaImage] = useState('')
+  const [emailCode, setEmailCode] = useState('')
+  const [sessionId, setSessionId] = useState('')
+  const [countdown, setCountdown] = useState(0)
+
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [ssoMessage, setSsoMessage] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   // 同步页面标题
   usePageTitle()
+
+  // 自动加载图片验证码
+  useEffect(() => {
+    getCaptcha()
+  }, [])
 
   // 处理 URL 中的 sso_error 参数
   useEffect(() => {
@@ -81,7 +101,19 @@ export function LoginPage() {
     return () => window.removeEventListener('message', handleMessage)
   }, [navigate])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // 获取图片验证码
+  const getCaptcha = async () => {
+    try {
+      const res = await captchaService.getCaptcha()
+      setCaptchaId(res.captcha_id)
+      setCaptchaImage(res.captcha_image)
+    } catch (err) {
+      // 静默失败
+    }
+  }
+
+  // 密码登录
+  const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -91,7 +123,75 @@ export function LoginPage() {
       authService.saveAuth(response.token, response.user)
       navigate('/dashboard')
     } catch (err: any) {
-      setError(err.response?.data?.message || '登录失败，���检查用户名和密码')
+      setError(err.response?.data?.message || '登录失败，请检查用户名和密码')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 发送邮箱验证码
+  const handleSendEmailCode = async () => {
+    if (!email) {
+      setError('请输入邮箱地址')
+      return
+    }
+    if (!captchaCode) {
+      setError('请输入图片验证码')
+      return
+    }
+
+    setLoading(true)
+    setError('')
+    try {
+      const res = await emailAuthService.sendCode({
+        email,
+        purpose: 'login',
+        captcha_id: captchaId,
+        captcha_code: captchaCode,
+      })
+      setSessionId(res.session_id)
+      setCountdown(60)
+      const timer = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } catch (err: any) {
+      setError(err.response?.data?.message || '发送验证码失败')
+      getCaptcha()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 邮箱验证码登录
+  const handleEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!sessionId) {
+      setError('请先获取邮箱验证码')
+      return
+    }
+    if (!emailCode) {
+      setError('请输入邮箱验证码')
+      return
+    }
+
+    setError('')
+    setLoading(true)
+
+    try {
+      const response = await emailAuthService.emailLogin({
+        session_id: sessionId,
+        code: emailCode,
+      })
+      authService.saveAuth(response.token, response.user)
+      navigate('/dashboard')
+    } catch (err: any) {
+      setError(err.response?.data?.message || '登录失败')
     } finally {
       setLoading(false)
     }
@@ -176,38 +276,116 @@ export function LoginPage() {
               </Alert>
             )}
 
-            <form onSubmit={handleSubmit}>
-              <TextField
-                fullWidth
-                label="用户名"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                margin="normal"
-                required
-                autoFocus
-              />
-              <TextField
-                fullWidth
-                label="密码"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                margin="normal"
-                required
-              />
-              <Button
-                fullWidth
-                type="submit"
-                variant="contained"
-                size="large"
-                sx={{ mt: 3, mb: 2 }}
-                disabled={loading}
-              >
-                {loading ? '登录中...' : '登录'}
-              </Button>
-            </form>
+            {/* 登录方式切换 */}
+            <Tabs
+              value={loginMode}
+              onChange={(_, v) => setLoginMode(v)}
+              variant="fullWidth"
+              sx={{ mb: 3 }}
+            >
+              <Tab label="密码登录" />
+              <Tab label="验证码登录" />
+            </Tabs>
 
-            <Box sx={{ textAlign: 'center', mt: 2 }}>
+            {/* 密码登录表单 */}
+            {loginMode === 0 && (
+              <form onSubmit={handlePasswordLogin}>
+                <TextField
+                  fullWidth
+                  label="用户名/邮箱"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  margin="normal"
+                  required
+                  autoFocus
+                />
+                <TextField
+                  fullWidth
+                  label="密码"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  margin="normal"
+                  required
+                />
+                <Button
+                  fullWidth
+                  type="submit"
+                  variant="contained"
+                  size="large"
+                  sx={{ mt: 3, mb: 2 }}
+                  disabled={loading}
+                >
+                  {loading ? '登录中...' : '登录'}
+                </Button>
+              </form>
+            )}
+
+            {/* 验证码登录表单 */}
+            {loginMode === 1 && (
+              <form onSubmit={handleEmailLogin}>
+                <TextField
+                  fullWidth
+                  label="邮箱地址"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  margin="normal"
+                  required
+                  autoFocus
+                />
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
+                  <TextField
+                    label="图片验证码"
+                    value={captchaCode}
+                    onChange={(e) => setCaptchaCode(e.target.value)}
+                    required
+                    sx={{ flex: 1 }}
+                  />
+                  <Box
+                    component="img"
+                    src={captchaImage}
+                    alt="验证码"
+                    onClick={getCaptcha}
+                    sx={{
+                      height: 64,
+                      cursor: 'pointer',
+                      borderRadius: 1,
+                      bgcolor: 'action.hover',
+                    }}
+                  />
+                </Box>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
+                  <TextField
+                    label="邮箱验证码"
+                    value={emailCode}
+                    onChange={(e) => setEmailCode(e.target.value)}
+                    required
+                    sx={{ flex: 1 }}
+                  />
+                  <Button
+                    variant="outlined"
+                    onClick={handleSendEmailCode}
+                    disabled={loading || countdown > 0}
+                    sx={{ minWidth: 120 }}
+                  >
+                    {countdown > 0 ? `${countdown}s` : '发送验证码'}
+                  </Button>
+                </Box>
+                <Button
+                  fullWidth
+                  type="submit"
+                  variant="contained"
+                  size="large"
+                  sx={{ mt: 3, mb: 2 }}
+                  disabled={loading}
+                >
+                  {loading ? '登录中...' : '登录'}
+                </Button>
+              </form>
+            )}
+
+            <Box sx={{ textAlign: 'center', mt: 2, display: 'flex', justifyContent: 'center', gap: 2 }}>
               <Link
                 component="button"
                 type="button"
@@ -215,6 +393,14 @@ export function LoginPage() {
                 onClick={() => navigate('/register')}
               >
                 没有账号？立即注册
+              </Link>
+              <Link
+                component="button"
+                type="button"
+                variant="body2"
+                onClick={() => navigate('/forgot-password')}
+              >
+                忘记密码？
               </Link>
             </Box>
 

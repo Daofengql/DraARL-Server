@@ -58,7 +58,7 @@ var (
 	// 性能优化：使用 atomic.Value 实现 RCU 模式，无锁读取
 	// ==========================================
 	globalGroupCacheAtomic atomic.Value // 存储 map[int]*models.Group
-	groupCacheMutex        sync.RWMutex  // 仅用于写操作保护
+	groupCacheMutex        sync.RWMutex // 仅用于写操作保护
 
 	// QTH 映射
 	qthMap    = make(map[string]string)
@@ -555,13 +555,13 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 	// 【核心修复】重编码数据包：清空 password，填充 callsign
 	refilledData := protocol.EncodeDraARLv1(
 		dev.Username,
-		"",                // 准入密码转发为空
+		"", // 准入密码转发为空
 		dev.SSID,
 		protocol.DraARLTypeOpus16K,
 		dev.DevModel,
 		dev.DMRID,
-		dev.CallSign,      // 服务器填充呼号
-		packet.DATA,       // 原始语音数据
+		dev.CallSign, // 服务器填充呼号
+		packet.DATA,  // 原始语音数据
 	)
 
 	// 1. 在本群组内广播（UDP 设备）
@@ -620,13 +620,13 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 	// 【核心修复】重编码数据包：清空 password，填充 callsign
 	refilledData := protocol.EncodeDraARLv1(
 		dev.Username,
-		"",                       // 准入密码转发为空
+		"", // 准入密码转发为空
 		dev.SSID,
 		protocol.DraARLTypeTextMessage,
 		dev.DevModel,
 		dev.DMRID,
-		dev.CallSign,             // 服务器填充呼号
-		packet.DATA,              // 原始文本数据
+		dev.CallSign, // 服务器填充呼号
+		packet.DATA,  // 原始文本数据
 	)
 
 	// 1. 在本群组内广播（UDP 设备）
@@ -682,13 +682,13 @@ func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Devic
 	// 服务器互联语音使用 Type 6，保留原始 DATA 区域的扩展头信息
 	refilledData := protocol.EncodeDraARLv1(
 		dev.Username,
-		"",                       // 准入密码转发为空
+		"", // 准入密码转发为空
 		dev.SSID,
 		protocol.DraARLTypeServerVoice,
 		dev.DevModel,
 		dev.DMRID,
-		dev.CallSign,             // 服务器填充呼号
-		packet.DATA,              // 原始语音数据（含扩展头）
+		dev.CallSign, // 服务器填充呼号
+		packet.DATA,  // 原始语音数据（含扩展头）
 	)
 
 	// 1. 在本群组内广播（UDP 设备）
@@ -981,7 +981,7 @@ func GetGroupFromCache(groupID int) (*models.Group, bool) {
 	return gp, ok
 }
 
-// GetAllGroupsFromCache 获取所有群组（���程安全）
+// GetAllGroupsFromCache 获取所有群组（线程安全）
 func GetAllGroupsFromCache() map[int]*models.Group {
 	cache := globalGroupCacheAtomic.Load()
 	if cache == nil {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"nrllink/internal/email"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
@@ -33,17 +34,22 @@ func generateDevicePassword() string {
 
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username    string `json:"username" binding:"required"`
+	Password    string `json:"password" binding:"required"`
+	CaptchaID   string `json:"captcha_id"`
+	CaptchaCode string `json:"captcha_code"`
 }
 
 // RegisterRequest 注册请求
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	CallSign string `json:"callsign" binding:"required"`
-	Phone    string `json:"phone" binding:"required"`
-	NickName string `json:"nickname"`
+	Username    string `json:"username" binding:"required"`
+	Password    string `json:"password" binding:"required"`
+	CallSign    string `json:"callsign" binding:"required"`
+	Phone       string `json:"phone" binding:"required"`
+	NickName    string `json:"nickname"`
+	Email       string `json:"email"`
+	SessionID   string `json:"session_id"`   // 邮箱验证会话ID
+	EmailCode   string `json:"email_code"`   // 邮箱验证码
 }
 
 // UserResponse 用户响应（用于中间件传递）
@@ -76,9 +82,9 @@ func Login(c *gin.Context) {
 
 	log.Printf("登录请求: username=%s", req.Username)
 
-	// 使用 GORM 查询用户
+	// 使用 GORM 查询用户（支持用户名或邮箱）
 	repo := gormdb.NewUserRepository()
-	user, err := repo.GetUserByName(req.Username)
+	user, err := repo.GetUserByNameOrEmail(req.Username)
 	if err != nil || user == nil {
 		log.Printf("用户不存在: %s", req.Username)
 		// 记录登录失败审计日志（用户不存在）
@@ -280,6 +286,58 @@ func Register(c *gin.Context) {
 		}
 	}
 
+	// 邮箱验证处理
+	var verifiedEmail string
+	emailVerified := false
+	if req.Email != "" && req.SessionID != "" && req.EmailCode != "" {
+		// 验证邮箱验证码
+		mgr := email.GetVerificationManager()
+		session, err := mgr.Verify(req.SessionID, req.EmailCode)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "邮箱验证码错误或已过期",
+			})
+			return
+		}
+		// 验证用途是否正确
+		if session.Purpose != email.PurposeRegister {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "验证码用途不正确",
+			})
+			return
+		}
+		// 验证邮箱是否匹配
+		if session.Email != req.Email {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "邮箱地址不匹配",
+			})
+			return
+		}
+		// 再次检查邮箱是否已被注册（防止竞争条件）
+		existingEmail, _ := repo.GetUserByEmail(req.Email)
+		if existingEmail != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "该邮箱已被注册",
+			})
+			return
+		}
+		verifiedEmail = req.Email
+		emailVerified = true
+		// 删除验证会话
+		mgr.DeleteSession(req.SessionID)
+	} else if req.Email != "" {
+		// 提供了邮箱但没有验证码
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请先验证邮箱",
+		})
+		return
+	}
+
 	// 加密密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -314,6 +372,8 @@ func Register(c *gin.Context) {
 		NickName:       nickname,
 		CallSign:       req.CallSign,
 		Phone:          req.Phone,
+		Email:          verifiedEmail,
+		EmailVerified:  emailVerified,
 		Status:         1,
 		ApprovalStatus: 0, // 待审核状态
 		Roles:          "user",

@@ -76,7 +76,14 @@ func (s *Server) setupRoutes() {
 			auth.POST("/login", handler.Login)
 			auth.POST("/logout", handler.Logout)
 			auth.POST("/register", handler.Register)
+			auth.POST("/email-login", handler.EmailLogin)              // 邮箱验证码登录
+			auth.POST("/send-code", handler.SendVerificationCode)      // 发送邮箱验证码
+			auth.POST("/verify-email", handler.VerifyEmail)            // 验证邮箱（注册用）
+			auth.POST("/reset-password", handler.ResetPassword)        // 重置密码
 		}
+
+		// 验证码路由（无需认证）
+		api.GET("/captcha", handler.GetCaptcha)
 
 		// 平台信息（无需认证）
 		api.GET("/platform/info", handler.GetPlatformInfo)
@@ -264,6 +271,9 @@ func (s *Server) setupRoutes() {
 			admin.GET("/config/aprs", configHandler.GetAPRSConfig)
 			admin.GET("/config/openai", configHandler.GetOpenAIConfig)
 			admin.GET("/config/aprs/logs", configHandler.GetAPRSLogs)
+			// SMTP 配置（需要管理员权限）
+			admin.GET("/config/smtp", configHandler.GetSMTPConfig)
+			admin.PUT("/config/smtp", configHandler.UpdateSMTPConfig)
 
 			// 资源管理（需要管理员权限）
 			assetHandler := handler.NewAssetHandler()
@@ -344,6 +354,21 @@ func initSiteConfigs(cfg *config.Configuration) {
 	}
 
 	log.Println("站点配置初始化完成")
+
+	// 初始化默认 SMTP 配置
+	smtpConfig := gormdb.SMTPConfig{
+		Host:        "smtp.qq.com",
+		Port:        465,
+		UseSSL:      true,
+		SenderName:  "NRL火链",
+		SenderEmail: "",
+		Password:    "",
+	}
+	if err := repo.SetSMTPConfig(smtpConfig); err != nil {
+		log.Printf("初始化 SMTP 配置失败: %v", err)
+	} else {
+		log.Println("SMTP 配置初始化完成")
+	}
 }
 
 func (s *Server) Start() error {

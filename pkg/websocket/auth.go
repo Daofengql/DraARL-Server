@@ -18,23 +18,23 @@ import (
 type AuthType int
 
 const (
-	AuthTypeNone    AuthType = iota // 未认证
-	AuthTypeJWT                     // JWT 认证（幽灵设备）
-	AuthTypeDevice                  // 设备密码认证（普通设备）
+	AuthTypeNone   AuthType = iota // 未认证
+	AuthTypeJWT                    // JWT 认证（幽灵设备）
+	AuthTypeDevice                 // 设备密码认证（普通设备）
 )
 
 // AuthResult 认证结果
 type AuthResult struct {
-	Success     bool
-	AuthType    AuthType
-	UserID      int
-	Username    string
-	CallSign    string
-	Nickname    string
-	DeviceID    int
-	SSID        byte
-	GroupID     int    // 设备所属群组ID（从数据库读取）
-	Error       string
+	Success  bool
+	AuthType AuthType
+	UserID   int
+	Username string
+	CallSign string
+	Nickname string
+	DeviceID int
+	SSID     byte
+	GroupID  int // 设备所属群组ID（从数据库读取）
+	Error    string
 }
 
 // WSPreAuthData 预认证数据（从 URL 参数或 Cookie 中提取）
@@ -155,16 +155,16 @@ func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
 		return result
 	}
 
-	// 设备不存在，创建新设备（与 udphub 流���一致）
+	// 设备不存在，创建新设备（与 udphub 流程一致）
 	newDevice := &gormdb.Device{
-		SSID:        ssid,
-		OwnerID:     authResult.User.ID,
-		DevModel:    0, // 未知设备型号
-		Priority:    100,
-		Status:      0,
-		GroupID:     999, // 默认公共群组
-		CreateTime:  time.Now(),
-		UpdateTime:  time.Now(),
+		SSID:       ssid,
+		OwnerID:    authResult.User.ID,
+		DevModel:   0, // 未知设备型号
+		Priority:   100,
+		Status:     0,
+		GroupID:    999, // 默认公共群组
+		CreateTime: time.Now(),
+		UpdateTime: time.Now(),
 	}
 
 	if err := deviceRepo.CreateDevice(newDevice); err != nil {

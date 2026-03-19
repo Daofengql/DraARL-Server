@@ -7,6 +7,7 @@ import { authService } from './services'
 // 静态导入页面组件
 import { LoginPage } from './pages/auth/LoginPage'
 import { RegisterPage } from './pages/auth/RegisterPage'
+import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage'
 import { SSOCallbackPage } from './pages/auth/SSOCallbackPage'
 import { HomePage } from './pages/home/HomePage'
 import { DashboardPage } from './pages/dashboard/DashboardPage'
@@ -50,6 +51,7 @@ function App() {
           element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/dashboard" replace />}
         />
         <Route path="/sso/callback" element={<SSOCallbackPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
         {/* 普通用户路由（管理员和用户一样可见） */}
         <Route

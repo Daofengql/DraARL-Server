@@ -300,7 +300,7 @@ func UpdateRadioGroup(c *gin.Context) {
 		// 不影响响应，群组切换已成功
 	}
 
-	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新��群组设置
+	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新的群组设置
 	// 必须传入 username，否则 GetUserByName 使用的 userByNameKey 缓存不会被清除
 	if userCache := cache.GetUserCache(); userCache != nil {
 		if err := userCache.InvalidateUser(c.Request.Context(), userID, ghostDevice.Username); err != nil {

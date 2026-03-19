@@ -45,6 +45,9 @@ export interface RegisterRequest {
   callsign: string
   phone: string
   nickname?: string
+  email?: string
+  session_id?: string
+  email_code?: string
 }
 
 // 设备相关类型

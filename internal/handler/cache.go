@@ -3,10 +3,11 @@ package handler
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
+
+	"github.com/gin-gonic/gin"
 )
 
 // CacheMetricsHandler 缓存监控处理器
@@ -70,7 +71,7 @@ func (h *CacheMetricsHandler) ResetCacheMetrics(c *gin.Context) {
 	})
 }
 
-// ClearAllCache 清空所有缓存（慎用，��用于调试）
+// ClearAllCache 清空所有缓存（慎用，仅用于调试）
 func (h *CacheMetricsHandler) ClearAllCache(c *gin.Context) {
 	manager := cache.GetManager()
 	if manager == nil {

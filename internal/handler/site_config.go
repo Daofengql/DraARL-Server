@@ -657,3 +657,111 @@ func (h *SiteConfigHandler) DeleteLogo(c *gin.Context) {
 		Message: "删除成功",
 	})
 }
+
+// GetSMTPConfig 获取SMTP配置（管理员）
+func (h *SiteConfigHandler) GetSMTPConfig(c *gin.Context) {
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "未授权",
+		})
+		return
+	}
+
+	_ = user // 路由已通过 RequireAdmin 中间件验证权限
+
+	config, err := h.repo.GetSMTPConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "获取SMTP配置失败",
+		})
+		return
+	}
+
+	// 密码脱敏处理
+	maskedConfig := *config
+	if len(maskedConfig.Password) > 4 {
+		maskedConfig.Password = maskedConfig.Password[:2] + "****" + maskedConfig.Password[len(maskedConfig.Password)-2:]
+	} else if len(maskedConfig.Password) > 0 {
+		maskedConfig.Password = "****"
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "获取成功",
+		Data:    maskedConfig,
+	})
+}
+
+// UpdateSMTPConfig 更新SMTP配置（管理员）
+func (h *SiteConfigHandler) UpdateSMTPConfig(c *gin.Context) {
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "未授权",
+		})
+		return
+	}
+
+	userModel := user.(*gormdb.User)
+
+	var req gormdb.SMTPConfig
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "请求参数错误",
+		})
+		return
+	}
+
+	// 验证端口范围
+	if req.Port < 1 || req.Port > 65535 {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "端口必须在1-65535之间",
+		})
+		return
+	}
+
+	// 如果密码是脱敏格式（包含*），则不更新密码
+	existingConfig, _ := h.repo.GetSMTPConfig()
+	if existingConfig != nil && len(req.Password) > 0 && containsStars(req.Password) {
+		req.Password = existingConfig.Password
+	}
+
+	if err := h.repo.SetSMTPConfig(req); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "更新SMTP配置失败",
+		})
+		return
+	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新SMTP配置: 服务器=%s:%d, 发件人=%s", req.Host, req.Port, req.SenderEmail),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "更新成功",
+	})
+}
+
+// containsStars 检查字符串是否包含星号（用于判断是否为脱敏密码）
+func containsStars(s string) bool {
+	for _, c := range s {
+		if c == '*' {
+			return true
+		}
+	}
+	return false
+}

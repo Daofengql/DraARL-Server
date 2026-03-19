@@ -39,6 +39,7 @@ const (
 	CategoryAPRS       = "aprs"
 	CategoryOpenAI     = "openai"
 	CategoryCommConfig = "comm_config"
+	CategorySMTP       = "smtp"
 )
 
 // ICPConfig ICP配置
@@ -81,6 +82,16 @@ type CommSettingsConfig struct {
 	MinDurationMs  int  `json:"min_duration_ms"`
 	MaxDurationSec int  `json:"max_duration_sec"`
 	BatchUploadSec int  `json:"batch_upload_sec"`
+}
+
+// SMTPConfig SMTP邮件配置
+type SMTPConfig struct {
+	Host        string `json:"host"`         // SMTP服务器地址
+	Port        int    `json:"port"`         // SMTP端口
+	UseSSL      bool   `json:"use_ssl"`      // 是否使用SSL
+	SenderName  string `json:"sender_name"`  // 发件人昵称
+	SenderEmail string `json:"sender_email"` // 发件人邮箱
+	Password    string `json:"password"`     // 邮箱授权码
 }
 
 // GetAll 获取所有配置
@@ -464,4 +475,59 @@ func ToJSON(v interface{}) (string, error) {
 // FromJSON 辅助函数：从JSON字符串解析到对象
 func FromJSON(data string, v interface{}) error {
 	return json.Unmarshal([]byte(data), v)
+}
+
+// GetSMTPConfig 获取SMTP配置
+func (r *SiteConfigRepository) GetSMTPConfig() (*SMTPConfig, error) {
+	configs, err := r.GetByCategory(CategorySMTP)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &SMTPConfig{
+		Host:        "smtp.qq.com",
+		Port:        465,
+		UseSSL:      true,
+		SenderName:  "NRL火链",
+		SenderEmail: "",
+		Password:    "",
+	}
+
+	for _, config := range configs {
+		switch config.Key {
+		case "smtp.host":
+			result.Host = config.Value
+		case "smtp.port":
+			if val, err := strconv.Atoi(config.Value); err == nil {
+				result.Port = val
+			}
+		case "smtp.use_ssl":
+			result.UseSSL = config.Value == "true"
+		case "smtp.sender_name":
+			result.SenderName = config.Value
+		case "smtp.sender_email":
+			result.SenderEmail = config.Value
+		case "smtp.password":
+			result.Password = config.Value
+		}
+	}
+
+	return result, nil
+}
+
+// SetSMTPConfig 设置SMTP配置
+func (r *SiteConfigRepository) SetSMTPConfig(config SMTPConfig) error {
+	useSSLStr := "false"
+	if config.UseSSL {
+		useSSLStr = "true"
+	}
+	configs := []SiteConfig{
+		{Key: "smtp.host", Value: config.Host, Category: CategorySMTP, Description: "SMTP服务器地址"},
+		{Key: "smtp.port", Value: strconv.Itoa(config.Port), Category: CategorySMTP, Description: "SMTP端口"},
+		{Key: "smtp.use_ssl", Value: useSSLStr, Category: CategorySMTP, Description: "是否使用SSL"},
+		{Key: "smtp.sender_name", Value: config.SenderName, Category: CategorySMTP, Description: "发件人昵称"},
+		{Key: "smtp.sender_email", Value: config.SenderEmail, Category: CategorySMTP, Description: "发件人邮箱"},
+		{Key: "smtp.password", Value: config.Password, Category: CategorySMTP, Description: "邮箱授权码"},
+	}
+	return r.SetBatch(configs)
 }

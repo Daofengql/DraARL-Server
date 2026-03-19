@@ -10,6 +10,8 @@ import (
 type User struct {
 	ID              int        `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name            string     `gorm:"type:varchar(255);uniqueIndex;column:name" json:"name"`
+	Email           string     `gorm:"type:varchar(255);uniqueIndex;column:email" json:"email"`
+	EmailVerified   bool       `gorm:"type:tinyint(1);default:0;column:email_verified" json:"email_verified"`
 	CallSign        string     `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`
 	Gird            string     `gorm:"type:varchar(255);column:gird" json:"gird"`
 	Phone           string     `gorm:"type:varchar(32);index;column:phone" json:"phone"`

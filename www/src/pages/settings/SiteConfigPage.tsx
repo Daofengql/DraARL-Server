@@ -98,6 +98,16 @@ interface CommSettingsConfig {
   batch_upload_sec: number
 }
 
+// SMTP配置
+interface SMTPConfig {
+  host: string
+  port: number
+  use_ssl: boolean
+  sender_name: string
+  sender_email: string
+  password: string
+}
+
 // 操作日志事件类型
 const EVENT_TYPES = [
   { value: '', label: '全部' },
@@ -262,6 +272,16 @@ export function SiteConfigPage() {
     batch_upload_sec: 10,
   })
 
+  // SMTP配置
+  const [smtp, setSMTP] = useState<SMTPConfig>({
+    host: 'smtp.qq.com',
+    port: 465,
+    use_ssl: true,
+    sender_name: '',
+    sender_email: '',
+    password: '',
+  })
+
   // APRS日志
   const [aprsLogs, setAPRSLogs] = useState<APRSLogEntry[]>([])
   const [aprsLogsLoading, setAprsLogsLoading] = useState(false)
@@ -284,12 +304,13 @@ export function SiteConfigPage() {
   const loadConfigs = async () => {
     try {
       // 并行获取所有配置
-      const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes] = await Promise.all([
+      const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes, smtpRes] = await Promise.all([
         apiClient.get<any>('/api/config/category/icp'),
         apiClient.get<any>('/api/config/category/system'),
         apiClient.get<any>('/api/config/aprs'),
         apiClient.get<any>('/api/config/openai'),
         apiClient.get<any>('/api/config/comm-settings'),
+        apiClient.get<any>('/api/config/smtp'),
       ])
 
       // 解析系统信息配置（包含ICP）
@@ -319,6 +340,11 @@ export function SiteConfigPage() {
       // 解析通信设置配置
       if (commSettingsRes.code === 200 && commSettingsRes.data) {
         setCommSettings(commSettingsRes.data)
+      }
+
+      // 解析SMTP配置
+      if (smtpRes.code === 200 && smtpRes.data) {
+        setSMTP(smtpRes.data)
       }
     } catch (err) {
       console.error('Failed to load configs:', err)
@@ -394,6 +420,18 @@ export function SiteConfigPage() {
       showMessage('success', '通信设置保存成功')
     } catch (err) {
       showMessage('error', '保存通信设置失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSaveSMTP = async () => {
+    setLoading(true)
+    try {
+      await apiClient.put('/api/config/smtp', smtp)
+      showMessage('success', 'SMTP配置保存成功')
+    } catch (err) {
+      showMessage('error', '保存SMTP配置失败')
     } finally {
       setLoading(false)
     }
@@ -560,6 +598,7 @@ export function SiteConfigPage() {
           <Tab label="APRS" />
           <Tab label="OpenAI" />
           <Tab label="通信设置" />
+          <Tab label="SMTP配置" />
           <Tab label="操作日志" />
         </Tabs>
 
@@ -1077,8 +1116,96 @@ export function SiteConfigPage() {
           </Box>
         </TabPanel>
 
-        {/* 操作日志标签页 */}
+        {/* SMTP配置标签页 */}
         <TabPanel value={tabValue} index={4}>
+          <Box sx={{ px: 2, maxWidth: 600 }}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  SMTP邮件配置
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  配置SMTP服务器用于发送验证码邮件
+                </Typography>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <TextField
+                    label="SMTP服务器地址"
+                    fullWidth
+                    value={smtp.host}
+                    onChange={(e) => setSMTP({ ...smtp, host: e.target.value })}
+                    placeholder="例如：smtp.qq.com"
+                  />
+
+                  <TextField
+                    label="SMTP端口"
+                    type="number"
+                    fullWidth
+                    value={smtp.port}
+                    onChange={(e) => setSMTP({ ...smtp, port: parseInt(e.target.value) || 465 })}
+                    placeholder="465"
+                    inputProps={{ min: 1, max: 65535 }}
+                  />
+
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={smtp.use_ssl}
+                        onChange={(e) => setSMTP({ ...smtp, use_ssl: e.target.checked })}
+                      />
+                    }
+                    label="使用SSL加密"
+                  />
+
+                  <Divider sx={{ my: 1 }} />
+
+                  <TextField
+                    label="发件人昵称"
+                    fullWidth
+                    value={smtp.sender_name}
+                    onChange={(e) => setSMTP({ ...smtp, sender_name: e.target.value })}
+                    placeholder="例如：NRL火链"
+                  />
+
+                  <TextField
+                    label="发件人邮箱"
+                    fullWidth
+                    type="email"
+                    value={smtp.sender_email}
+                    onChange={(e) => setSMTP({ ...smtp, sender_email: e.target.value })}
+                    placeholder="例如：noreply@example.com"
+                  />
+
+                  <TextField
+                    label="邮箱授权码"
+                    fullWidth
+                    type="password"
+                    value={smtp.password}
+                    onChange={(e) => setSMTP({ ...smtp, password: e.target.value })}
+                    placeholder="邮箱SMTP授权码（非登录密码）"
+                    helperText="请使用邮箱的SMTP授权码，而非登录密码"
+                  />
+                </Box>
+
+                <Divider sx={{ my: 3 }} />
+
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<Save />}
+                    onClick={handleSaveSMTP}
+                    disabled={loading}
+                  >
+                    保存
+                  </Button>
+                </Box>
+              </CardContent>
+            </Card>
+          </Box>
+        </TabPanel>
+
+        {/* 操作日志标签页 */}
+        <TabPanel value={tabValue} index={5}>
           <Box sx={{ px: 2 }}>
             <Card>
               <CardContent>

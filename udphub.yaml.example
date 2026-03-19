@@ -37,7 +37,7 @@ Keycloak:
     Realm: "nrllink"                  # Realm名称
     ClientID: "nrllink-frontend"      # 客户端ID
     ClientSecret: ""                  # 客户端密钥(如需要)
-    RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后���API）
+    RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后端API）
 
 # MinIO 对象存储配置 (可选)
 MinIO:

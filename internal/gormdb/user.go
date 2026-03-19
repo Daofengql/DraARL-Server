@@ -87,6 +87,32 @@ func (r *UserRepository) GetUserByPhone(phone string) (*User, error) {
 	return &user, nil
 }
 
+// GetUserByEmail 通过邮箱获取用户
+func (r *UserRepository) GetUserByEmail(email string) (*User, error) {
+	var user User
+	err := r.db.Where("email = ?", email).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetUserByNameOrEmail 通过用户名或邮箱获取用户
+func (r *UserRepository) GetUserByNameOrEmail(login string) (*User, error) {
+	var user User
+	err := r.db.Where("name = ? OR email = ?", login, login).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
 // GetUserByOpenID 通过OpenID获取用户
 func (r *UserRepository) GetUserByOpenID(openid string) (*User, error) {
 	var user User

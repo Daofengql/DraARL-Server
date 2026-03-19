@@ -262,3 +262,75 @@ export const ssoService = {
     await apiClient.delete('/api/sso/unbind')
   },
 }
+
+// ========== 验证码相关接口 ==========
+
+// 图片验证码响应
+export interface CaptchaResponse {
+  captcha_id: string
+  captcha_image: string
+  expire: number
+}
+
+// 发送验证码响应
+export interface SendCodeResponse {
+  session_id: string
+  expires_in: number
+}
+
+// 邮箱验证码登录请求
+export interface EmailLoginRequest {
+  session_id: string
+  code: string
+}
+
+// 邮箱验证请求（注册用）
+export interface VerifyEmailRequest {
+  session_id: string
+  code: string
+}
+
+// 重置密码请求
+export interface ResetPasswordRequest {
+  session_id: string
+  code: string
+  new_password: string
+}
+
+export const captchaService = {
+  // 获取图片验证码
+  async getCaptcha(): Promise<CaptchaResponse> {
+    const res = await apiClient.get<BackendResponse<CaptchaResponse>>('/api/captcha')
+    return res.data!
+  },
+}
+
+export const emailAuthService = {
+  // 发送邮箱验证码
+  async sendCode(data: {
+    email: string
+    purpose: 'register' | 'login' | 'reset_password'
+    captcha_id: string
+    captcha_code: string
+  }): Promise<SendCodeResponse> {
+    const res = await apiClient.post<BackendResponse<SendCodeResponse>>('/api/auth/send-code', data)
+    return res.data!
+  },
+
+  // 邮箱验证码登录
+  async emailLogin(data: EmailLoginRequest): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>('/api/auth/email-login', data)
+    return res.data!
+  },
+
+  // 验证邮箱（注册流程）
+  async verifyEmail(data: VerifyEmailRequest): Promise<{ email: string; session_id: string }> {
+    const res = await apiClient.post<BackendResponse<{ email: string; session_id: string }>>('/api/auth/verify-email', data)
+    return res.data!
+  },
+
+  // 重置密码
+  async resetPassword(data: ResetPasswordRequest): Promise<void> {
+    await apiClient.post('/api/auth/reset-password', data)
+  },
+}

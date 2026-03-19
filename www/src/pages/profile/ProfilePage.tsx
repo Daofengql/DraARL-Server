@@ -245,7 +245,7 @@ export function ProfilePage() {
         'SSO Bind',
         `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,resizable=yes`
       )
-      // 不在这里设置 loading = false，等待 postMessage 回��
+      // 不在这里设置 loading = false，等待 postMessage 回调
     } catch (err: any) {
       setSsoBindLoading(false)
       showMessage('error', err.response?.data?.message || '获取绑定地址失败')

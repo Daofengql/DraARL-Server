@@ -143,6 +143,12 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 		return
 	}
 
+	// 获取 SSO 显示名称
+	ssoName := config.Get().Keycloak.Name
+	if ssoName == "" {
+		ssoName = "SSO" // 默认值
+	}
+
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "获取成功",
@@ -150,6 +156,7 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 			"icp":         icpConfig,
 			"systemInfo":  systemConfig,
 			"sso_enabled": config.Get().Keycloak.Enabled,
+			"sso_name":    ssoName,
 		},
 	})
 }

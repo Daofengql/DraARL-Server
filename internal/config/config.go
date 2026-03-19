@@ -46,6 +46,7 @@ type Configuration struct {
 	// Keycloak SSO 配置
 	Keycloak struct {
 		Enabled      bool   `yaml:"Enabled" json:"enabled"`
+		Name         string `yaml:"Name" json:"name"`                // 显示名称，如 "企业SSO"、"Keycloak"
 		BaseURL      string `yaml:"BaseURL" json:"base_url"`          // http://localhost:8080
 		Realm        string `yaml:"Realm" json:"realm"`               // nrllink
 		ClientID     string `yaml:"ClientID" json:"client_id"`        // nrllink-frontend

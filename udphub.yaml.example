@@ -32,11 +32,12 @@ Web:
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:
     Enabled: false                    # 是否启用SSO登录
+    Name: "企业SSO"                    # SSO显示名称，用于登录按钮和绑定提示
     BaseURL: "http://localhost:8080"   # Keycloak服务器地址
     Realm: "nrllink"                  # Realm名称
     ClientID: "nrllink-frontend"      # 客户端ID
     ClientSecret: ""                  # 客户端密钥(如需要)
-    RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后端API）
+    RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后���API）
 
 # MinIO 对象存储配置 (可选)
 MinIO:

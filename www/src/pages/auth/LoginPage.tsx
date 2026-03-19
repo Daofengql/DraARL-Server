@@ -173,7 +173,7 @@ export function LoginPage() {
                     },
                   }}
                 >
-                  使用 SSO 登录
+                  使用 {config.sso_name || 'SSO'} 登录
                 </Button>
               </Box>
             )}

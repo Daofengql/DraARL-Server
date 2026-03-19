@@ -758,82 +758,43 @@ export function ProfilePage() {
 
         {/* 账号安全标签页 */}
         <TabPanel value={tabValue} index={1}>
-          <Box sx={{ px: 2, maxWidth: 600 }}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  修改密码
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                  定期修改密码可以保护您的账号安全
-                </Typography>
-                <Button
-                  variant="contained"
-                  startIcon={<Lock />}
-                  onClick={() => setPasswordDialogOpen(true)}
-                >
-                  修改密码
-                </Button>
-
-                {publicConfig.sso_enabled && (
-                  <>
-                    <Divider sx={{ my: 4 }} />
-
-                    <Typography variant="h6" gutterBottom>
-                      SSO 绑定
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                      绑定 Keycloak 账号后可使用 SSO 快速登录
-                    </Typography>
-                    {ssoStatus?.bound ? (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Chip label="已绑定 Keycloak" color="success" />
-                        <Button variant="outlined" color="error" onClick={handleSSOUnbind}>
-                          解除绑定
-                        </Button>
-                      </Box>
-                    ) : (
-                      <Button variant="contained" onClick={handleSSOBind}>
-                        绑定 Keycloak
-                      </Button>
-                    )}
-                  </>
-                )}
-
-                <Divider sx={{ my: 4 }} />
-
-                <Typography variant="h6" gutterBottom>
-                  账号信息
-                </Typography>
-                <List disablePadding>
-                  <ListItem divider>
-                    <Box sx={{ minWidth: 120, color: 'text.secondary' }}>用户ID</Box>
-                    <ListItemText>{user?.id}</ListItemText>
-                  </ListItem>
-                  <ListItem divider>
-                    <Box sx={{ minWidth: 120, color: 'text.secondary' }}>用户名</Box>
-                    <ListItemText>{user?.username}</ListItemText>
-                  </ListItem>
-                  <ListItem divider>
-                    <Box sx={{ minWidth: 120, color: 'text.secondary' }}>角色</Box>
-                    <ListItemText>{user?.role === 'admin' ? '管理员' : '普通用户'}</ListItemText>
-                  </ListItem>
-                  <ListItem divider>
-                    <Box sx={{ minWidth: 120, color: 'text.secondary' }}>状态</Box>
-                    <ListItemText>
-                      <Chip
-                        label={user?.status === 1 ? '正常' : '已禁用'}
-                        size="small"
-                        color={user?.status === 1 ? 'success' : 'error'}
-                      />
-                    </ListItemText>
-                  </ListItem>
-                  <ListItem divider>
-                    <Box sx={{ minWidth: 120, color: 'text.secondary' }}>审核状态</Box>
-                    <ListItemText>
-                      <ApprovalStatusChip status={user?.approval_status} reviewNote={user?.review_note} />
-                    </ListItemText>
-                  </ListItem>
+          <Box sx={{ px: 2 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 3 }}>
+              {/* 左侧：账号信息 */}
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    账号信息
+                  </Typography>
+                  <List disablePadding>
+                    <ListItem divider>
+                      <Box sx={{ minWidth: 120, color: 'text.secondary' }}>用户ID</Box>
+                      <ListItemText>{user?.id}</ListItemText>
+                    </ListItem>
+                    <ListItem divider>
+                      <Box sx={{ minWidth: 120, color: 'text.secondary' }}>用户名</Box>
+                      <ListItemText>{user?.username}</ListItemText>
+                    </ListItem>
+                    <ListItem divider>
+                      <Box sx={{ minWidth: 120, color: 'text.secondary' }}>角色</Box>
+                      <ListItemText>{user?.role === 'admin' ? '管理员' : '普通用户'}</ListItemText>
+                    </ListItem>
+                    <ListItem divider>
+                      <Box sx={{ minWidth: 120, color: 'text.secondary' }}>状态</Box>
+                      <ListItemText>
+                        <Chip
+                          label={user?.status === 1 ? '正常' : '已禁用'}
+                          size="small"
+                          color={user?.status === 1 ? 'success' : 'error'}
+                        />
+                      </ListItemText>
+                    </ListItem>
+                    <ListItem divider>
+                      <Box sx={{ minWidth: 120, color: 'text.secondary' }}>审核状态</Box>
+                      <ListItemText>
+                        <ApprovalStatusChip status={user?.approval_status} reviewNote={user?.review_note} />
+                      </ListItemText>
+                    </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 120, color: 'text.secondary', display: 'flex', alignItems: 'center' }}>
                       <AccessTime fontSize="small" sx={{ mr: 1 }} />
@@ -870,8 +831,60 @@ export function ProfilePage() {
                 </List>
               </CardContent>
             </Card>
+
+            {/* 右侧：账号安全 */}
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  账号安全
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+
+                {/* 修改密码 */}
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  密码管理
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  定期修改密码可以保护您的账号安全
+                </Typography>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<Lock />}
+                  onClick={() => setPasswordDialogOpen(true)}
+                >
+                  修改密码
+                </Button>
+
+                {/* SSO 绑定 */}
+                {publicConfig.sso_enabled && (
+                  <>
+                    <Divider sx={{ my: 3 }} />
+                    <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                      {publicConfig.sso_name || 'SSO'} 绑定
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                      绑定后可使用 {publicConfig.sso_name || 'SSO'} 快速登录
+                    </Typography>
+                    {ssoStatus?.bound ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Chip label={`已绑定`} color="success" size="small" />
+                        <Button variant="outlined" color="error" size="small" onClick={handleSSOUnbind}>
+                          解除绑定
+                        </Button>
+                      </Box>
+                    ) : (
+                      <Button variant="outlined" size="small" onClick={handleSSOBind}>
+                        绑定 {publicConfig.sso_name || 'SSO'}
+                      </Button>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
           </Box>
-        </TabPanel>
+        </Box>
+      </TabPanel>
       </Paper>
 
       {/* 编辑资料对话框 */}

@@ -11,6 +11,7 @@ export interface PublicConfig {
     language: string
   }
   sso_enabled: boolean
+  sso_name: string
 }
 
 const DEFAULT_CONFIG: PublicConfig = {
@@ -22,6 +23,7 @@ const DEFAULT_CONFIG: PublicConfig = {
     language: 'zh',
   },
   sso_enabled: false,
+  sso_name: 'SSO',
 }
 
 export function usePublicConfig() {

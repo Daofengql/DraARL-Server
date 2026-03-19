@@ -10,9 +10,10 @@ import {
   Typography,
   Alert,
   Link,
+  Divider,
 } from '@mui/material'
 import Radio from '@mui/icons-material/Radio'
-import { authService } from '../../services'
+import { authService, ssoService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
 
@@ -37,8 +38,19 @@ export function LoginPage() {
       authService.saveAuth(response.token, response.user)
       navigate('/dashboard')
     } catch (err: any) {
-      setError(err.response?.data?.message || '登录失败，请检查用户名和密码')
+      setError(err.response?.data?.message || '登录失败，���检查用户名和密码')
     } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSSOLogin = async () => {
+    try {
+      setLoading(true)
+      const res = await ssoService.getLoginURL()
+      window.location.href = res.url
+    } catch (err: any) {
+      setError(err.response?.data?.message || '获取SSO登录地址失败')
       setLoading(false)
     }
   }
@@ -141,6 +153,30 @@ export function LoginPage() {
                 没有账号？立即注册
               </Link>
             </Box>
+
+            {config.sso_enabled && (
+              <Box sx={{ mt: 3 }}>
+                <Divider sx={{ my: 2 }}>或</Divider>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  size="large"
+                  onClick={handleSSOLogin}
+                  disabled={loading}
+                  sx={{
+                    background: 'linear-gradient(45deg, #2196f3 30%, #21cbf3 90%)',
+                    color: 'white',
+                    borderColor: 'transparent',
+                    '&:hover': {
+                      background: 'linear-gradient(45deg, #1976d2 30%, #1e88e5 90%)',
+                      borderColor: 'transparent',
+                    },
+                  }}
+                >
+                  使用 SSO 登录
+                </Button>
+              </Box>
+            )}
           </CardContent>
         </Card>
 

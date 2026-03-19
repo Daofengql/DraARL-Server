@@ -227,3 +227,38 @@ export interface RegisterResponse {
   approval_status: number
   device_password: string
 }
+
+// SSO 相关接口
+export interface SSOLoginURLResponse {
+  url: string
+}
+
+export interface SSOStatusResponse {
+  bound: boolean
+  keycloak_id?: string
+}
+
+export const ssoService = {
+  // 获取 SSO 登录 URL
+  async getLoginURL(): Promise<SSOLoginURLResponse> {
+    const res = await apiClient.get<BackendResponse<SSOLoginURLResponse>>('/api/sso/login')
+    return res.data!
+  },
+
+  // 获取当前用户的 SSO 绑定状态
+  async getStatus(): Promise<SSOStatusResponse> {
+    const res = await apiClient.get<BackendResponse<SSOStatusResponse>>('/api/sso/status')
+    return res.data!
+  },
+
+  // 发起 SSO 绑定
+  async bind(): Promise<SSOLoginURLResponse> {
+    const res = await apiClient.post<BackendResponse<SSOLoginURLResponse>>('/api/sso/bind')
+    return res.data!
+  },
+
+  // 解除 SSO 绑定
+  async unbind(): Promise<void> {
+    await apiClient.delete('/api/sso/unbind')
+  },
+}

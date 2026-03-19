@@ -27,6 +27,7 @@ Database:
 Web:
     Host: ""                   # 监听地址，空则监听所有网卡
     Port: "9000"               # Web服务端口
+    FrontendURL: "http://localhost:5173"  # 前端地址，用于SSO回调后重定向
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:
@@ -35,9 +36,7 @@ Keycloak:
     Realm: "nrllink"                  # Realm名称
     ClientID: "nrllink-frontend"      # 客户端ID
     ClientSecret: ""                  # 客户端密钥(如需要)
-    RedirectURI: "http://localhost:9000/callback"  # OAuth回调地址
-    AdminUsername: "admin"            # 管理员用户名(用于同步用户)
-    AdminPassword: "admin"            # 管理员密码(用于同步用户)
+    RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后端API）
 
 # MinIO 对象存储配置 (可选)
 MinIO:

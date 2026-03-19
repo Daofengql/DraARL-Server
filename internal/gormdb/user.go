@@ -100,6 +100,32 @@ func (r *UserRepository) GetUserByOpenID(openid string) (*User, error) {
 	return &user, nil
 }
 
+// FindUserBySSOID 通过SSO提供商和ID查找用户（支持前缀格式 ky:xxx）
+// OpenID字段格式: "ky:abc123" 或 "ky:abc123,wx:def456"
+func (r *UserRepository) FindUserBySSOID(provider, ssoID string) (*User, error) {
+	var user User
+	// 使用 LIKE 查询匹配前缀格式
+	pattern := provider + ":" + ssoID
+	// 需要匹配三种情况：
+	// 1. openid = "ky:abc123" (唯一绑定)
+	// 2. openid LIKE "ky:abc123,%" (开头)
+	// 3. openid LIKE "%,ky:abc123,%" (中间)
+	// 4. openid LIKE "%,ky:abc123" (结尾)
+	err := r.db.Where("openid = ? OR openid LIKE ? OR openid LIKE ? OR openid LIKE ?",
+		pattern,
+		pattern+",%",
+		"%,"+pattern+",%",
+		"%,"+pattern,
+	).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
 // CreateUser 创建用户
 func (r *UserRepository) CreateUser(user *User) error {
 	return r.db.Create(user).Error

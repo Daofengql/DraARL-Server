@@ -85,10 +85,22 @@ func (s *Server) setupRoutes() {
 		// 站点配置（公开配置，无需认证）
 		api.GET("/config/public", handler.NewSiteConfigHandler().GetPublicConfigs)
 
+		// Keycloak SSO 路由（无需认证）
+		sso := api.Group("/sso")
+		{
+			sso.GET("/login", handler.GetSSOLoginURL)
+			sso.GET("/callback", handler.SSOCallback)
+		}
+
 		// 需要认证的路由
 		protected := api.Group("")
 		protected.Use(middleware.AuthMiddleware())
 		{
+			// SSO 绑定相关（需认证）
+			protected.GET("/sso/status", handler.GetSSOStatus)
+			protected.POST("/sso/bind", handler.SSOBind)
+			protected.DELETE("/sso/unbind", handler.SSOUnbind)
+
 			// 当前用户信息（所有认证用户可访问）
 			protected.GET("/me", handler.GetCurrentUser)
 			protected.PUT("/me", handler.UpdateProfile)

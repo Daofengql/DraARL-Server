@@ -38,8 +38,9 @@ type Configuration struct {
 	} `yaml:"Database" json:"database"`
 
 	Web struct {
-		Host string `yaml:"Host" json:"host"`
-		Port string `yaml:"Port" json:"port"`
+		Host        string `yaml:"Host" json:"host"`
+		Port        string `yaml:"Port" json:"port"`
+		FrontendURL string `yaml:"FrontendURL" json:"frontend_url"` // 前端地址，用于SSO回调重定向
 	} `yaml:"Web" json:"web"`
 
 	// Keycloak SSO 配置

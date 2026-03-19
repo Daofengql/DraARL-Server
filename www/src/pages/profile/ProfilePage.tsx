@@ -46,8 +46,9 @@ import CheckCircle from '@mui/icons-material/CheckCircle'
 import Pending from '@mui/icons-material/Pending'
 import Cancel from '@mui/icons-material/Cancel'
 import CameraAlt from '@mui/icons-material/CameraAlt'
-import { authService } from '../../services'
+import { authService, ssoService } from '../../services'
 import { AvatarCropDialog } from '../../components/AvatarCropDialog'
+import { usePublicConfig } from '../../hooks/usePublicConfig'
 import type { User, CertificateResponse, OperatorCertificate } from '../../types'
 
 interface TabPanelProps {
@@ -125,9 +126,14 @@ export function ProfilePage() {
     confirm_password: '',
   })
 
+  // SSO 相关状态
+  const { config: publicConfig } = usePublicConfig()
+  const [ssoStatus, setSSOStatus] = useState<{ bound: boolean; keycloak_id?: string } | null>(null)
+
   useEffect(() => {
     loadUserInfo()
     loadCertificate()
+    loadSSOStatus()
   }, [])
 
   const loadUserInfo = async () => {
@@ -149,6 +155,34 @@ export function ProfilePage() {
       setCertificate(cert)
     } catch (err) {
       console.error('Failed to load certificate:', err)
+    }
+  }
+
+  const loadSSOStatus = async () => {
+    try {
+      const status = await ssoService.getStatus()
+      setSSOStatus(status)
+    } catch (err) {
+      console.error('Failed to load SSO status:', err)
+    }
+  }
+
+  const handleSSOBind = async () => {
+    try {
+      const res = await ssoService.bind()
+      window.location.href = res.url
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '获取绑定地址失败')
+    }
+  }
+
+  const handleSSOUnbind = async () => {
+    try {
+      await ssoService.unbind()
+      setSSOStatus({ bound: false })
+      showMessage('success', '解绑成功')
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '解绑失败')
     }
   }
 
@@ -740,6 +774,31 @@ export function ProfilePage() {
                 >
                   修改密码
                 </Button>
+
+                {publicConfig.sso_enabled && (
+                  <>
+                    <Divider sx={{ my: 4 }} />
+
+                    <Typography variant="h6" gutterBottom>
+                      SSO 绑定
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                      绑定 Keycloak 账号后可使用 SSO 快速登录
+                    </Typography>
+                    {ssoStatus?.bound ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Chip label="已绑定 Keycloak" color="success" />
+                        <Button variant="outlined" color="error" onClick={handleSSOUnbind}>
+                          解除绑定
+                        </Button>
+                      </Box>
+                    ) : (
+                      <Button variant="contained" onClick={handleSSOBind}>
+                        绑定 Keycloak
+                      </Button>
+                    )}
+                  </>
+                )}
 
                 <Divider sx={{ my: 4 }} />
 

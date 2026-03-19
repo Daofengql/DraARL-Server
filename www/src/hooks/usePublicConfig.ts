@@ -10,6 +10,7 @@ export interface PublicConfig {
     logo_url: string
     language: string
   }
+  sso_enabled: boolean
 }
 
 const DEFAULT_CONFIG: PublicConfig = {
@@ -20,6 +21,7 @@ const DEFAULT_CONFIG: PublicConfig = {
     logo_url: '',
     language: 'zh',
   },
+  sso_enabled: false,
 }
 
 export function usePublicConfig() {

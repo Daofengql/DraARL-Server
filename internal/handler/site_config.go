@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"nrllink/internal/aprs"
+	"nrllink/internal/config"
 	"nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
@@ -146,8 +147,9 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 		Code:    200,
 		Message: "获取成功",
 		Data: gin.H{
-			"icp":        icpConfig,
-			"systemInfo": systemConfig,
+			"icp":         icpConfig,
+			"systemInfo":  systemConfig,
+			"sso_enabled": config.Get().Keycloak.Enabled,
 		},
 	})
 }

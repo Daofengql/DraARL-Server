@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { MainLayout } from './components/layout'
-import { ProtectedRoute, AdminRoute, ToastContainer } from './components/common'
+import { ProtectedRoute, AdminRoute, ApprovedRoute, ToastContainer } from './components/common'
 import { AdminLayout } from './components/layout/AdminLayout'
 import { authService } from './services'
 
@@ -62,13 +62,44 @@ function App() {
             </ProtectedRoute>
           }
         >
+          {/* 无需审核即可访问的页面 */}
           <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="devices" element={<DevicesPage />} />
-          <Route path="groups" element={<GroupsPage />} />
           <Route path="profile" element={<ProfilePage />} />
-          <Route path="comm-records" element={<CommRecordsPage />} />
-          <Route path="radio" element={<RadioPage />} />
           <Route path="docs" element={<DocsPage />} />
+
+          {/* 需要审核通过才能访问的页面 */}
+          <Route
+            path="devices"
+            element={
+              <ApprovedRoute>
+                <DevicesPage />
+              </ApprovedRoute>
+            }
+          />
+          <Route
+            path="groups"
+            element={
+              <ApprovedRoute>
+                <GroupsPage />
+              </ApprovedRoute>
+            }
+          />
+          <Route
+            path="comm-records"
+            element={
+              <ApprovedRoute>
+                <CommRecordsPage />
+              </ApprovedRoute>
+            }
+          />
+          <Route
+            path="radio"
+            element={
+              <ApprovedRoute>
+                <RadioPage />
+              </ApprovedRoute>
+            }
+          />
         </Route>
 
         {/* 管理员专用路由 /admin */}

@@ -34,16 +34,18 @@ interface MenuItem {
   path: string
   label: string
   icon: React.ReactNode
+  requireApproved?: boolean // 是否需要审核通过才显示
 }
 
-// 普通用户菜单项（管理员和普通用户均可见）
+// 普通用户菜单项
+// requireApproved: true 表示需要审核通过才显示
 const menuItems: MenuItem[] = [
   { path: '/dashboard', label: '仪表盘', icon: <Dashboard /> },
-  { path: '/radio', label: '在线收发', icon: <Radio /> },
-  { path: '/devices', label: '设备管理', icon: <Devices /> },
-  { path: '/groups', label: '群组管理', icon: <Group /> },
+  { path: '/radio', label: '在线收发', icon: <Radio />, requireApproved: true },
+  { path: '/devices', label: '设备管理', icon: <Devices />, requireApproved: true },
+  { path: '/groups', label: '群组管理', icon: <Group />, requireApproved: true },
   { path: '/profile', label: '个人中心', icon: <Person /> },
-  { path: '/comm-records', label: '通信记录', icon: <Mic /> },
+  { path: '/comm-records', label: '通信记录', icon: <Mic />, requireApproved: true },
   { path: '/docs', label: '技术支持', icon: <MenuBook /> },
 ]
 
@@ -52,6 +54,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = authService.isAdmin()
+  const isApproved = authService.isApproved() // 检查用户是否已审核通过
   const [icp, setIcp] = useState('')
 
   useEffect(() => {
@@ -107,8 +110,10 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
         </Typography>
       </Box>
       <List sx={{ flex: 1, py: 1 }}>
-        {menuItems.map((item) => (
-          <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
+        {menuItems
+          .filter((item) => !item.requireApproved || isApproved)
+          .map((item) => (
+            <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
             <ListItemButton
               selected={isActive(item.path)}
               onClick={() => handleNavigate(item.path)}

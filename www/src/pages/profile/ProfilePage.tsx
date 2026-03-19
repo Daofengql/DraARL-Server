@@ -47,7 +47,7 @@ import CheckCircle from '@mui/icons-material/CheckCircle'
 import Pending from '@mui/icons-material/Pending'
 import Cancel from '@mui/icons-material/Cancel'
 import CameraAlt from '@mui/icons-material/CameraAlt'
-import { authService, ssoService } from '../../services'
+import { authService, ssoService, captchaService, emailAuthService } from '../../services'
 import { AvatarCropDialog } from '../../components/AvatarCropDialog'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import type { User, CertificateResponse, OperatorCertificate } from '../../types'
@@ -171,6 +171,21 @@ export function ProfilePage() {
   const [ssoBindLoading, setSsoBindLoading] = useState(false)
   const [unbindConfirmOpen, setUnbindConfirmOpen] = useState(false)
   const [unbinding, setUnbinding] = useState(false)
+
+  // 修改邮箱对话框状态
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false)
+  const [emailStep, setEmailStep] = useState<'old' | 'new' | 'verify'>('old')
+  const [newEmail, setNewEmail] = useState('')
+  const [emailCaptchaId, setEmailCaptchaId] = useState('')
+  const [emailCaptchaImage, setEmailCaptchaImage] = useState('')
+  const [emailCaptchaCode, setEmailCaptchaCode] = useState('')
+  const [oldEmailCode, setOldEmailCode] = useState('')
+  const [newEmailCode, setNewEmailCode] = useState('')
+  const [oldSessionId, setOldSessionId] = useState('')
+  const [newSessionId, setNewSessionId] = useState('')
+  const [emailCountdown, setEmailCountdown] = useState(0)
+  const [newEmailCountdown, setNewEmailCountdown] = useState(0)
+  const [changingEmail, setChangingEmail] = useState(false)
 
   useEffect(() => {
     loadUserInfo()
@@ -389,6 +404,148 @@ export function ProfilePage() {
       showMessage('success', '密码修改成功')
     } catch (err: any) {
       showMessage('error', err.response?.data?.message || '密码修改失败')
+    }
+  }
+
+  // 修改邮箱相关处理函数
+  const getEmailCaptcha = async () => {
+    try {
+      const res = await captchaService.getCaptcha()
+      setEmailCaptchaId(res.captcha_id)
+      setEmailCaptchaImage(res.captcha_image)
+    } catch {
+      showMessage('error', '获取验证码失败')
+    }
+  }
+
+  const handleOpenEmailDialog = () => {
+    setEmailDialogOpen(true)
+    setEmailStep(user?.email && user?.email_verified ? 'old' : 'new')
+    setNewEmail('')
+    setEmailCaptchaCode('')
+    setOldEmailCode('')
+    setNewEmailCode('')
+    setOldSessionId('')
+    setNewSessionId('')
+    getEmailCaptcha()
+  }
+
+  const handleSendOldEmailCode = async () => {
+    if (!emailCaptchaCode) {
+      showMessage('error', '请输入图片验证码')
+      return
+    }
+    if (!user?.email) {
+      showMessage('error', '当前账号没有绑定邮箱')
+      return
+    }
+    try {
+      const res = await emailAuthService.sendCode({
+        email: user.email,
+        purpose: 'change_email',
+        captcha_id: emailCaptchaId,
+        captcha_code: emailCaptchaCode,
+      })
+      setOldSessionId(res.session_id)
+      setEmailCountdown(60)
+      const timer = setInterval(() => {
+        setEmailCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      showMessage('success', '验证码已发送到当前邮箱')
+      getEmailCaptcha()
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '发送验证码失败')
+      getEmailCaptcha()
+    }
+  }
+
+  const handleVerifyOldEmail = async () => {
+    if (!oldEmailCode || !oldSessionId) {
+      showMessage('error', '请先获取并输入验证码')
+      return
+    }
+    try {
+      // 验证通过后进入新邮箱步骤
+      setEmailStep('new')
+      setEmailCaptchaCode('')
+      getEmailCaptcha()
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '验证失败')
+    }
+  }
+
+  const handleSendNewEmailCode = async () => {
+    if (!emailCaptchaCode) {
+      showMessage('error', '请输入图片验证码')
+      return
+    }
+    if (!newEmail) {
+      showMessage('error', '请输入新邮箱地址')
+      return
+    }
+    if (newEmail === user?.email) {
+      showMessage('error', '新邮箱不能与当前邮箱相同')
+      return
+    }
+    try {
+      const res = await emailAuthService.sendCode({
+        email: newEmail,
+        purpose: 'change_email',
+        captcha_id: emailCaptchaId,
+        captcha_code: emailCaptchaCode,
+      })
+      setNewSessionId(res.session_id)
+      setNewEmailCountdown(60)
+      const timer = setInterval(() => {
+        setNewEmailCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      showMessage('success', '验证码已发送到新邮箱')
+      getEmailCaptcha()
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '发送验证码失败')
+      getEmailCaptcha()
+    }
+  }
+
+  const handleChangeEmail = async () => {
+    if (!newEmailCode || !newSessionId) {
+      showMessage('error', '请先获取并输入新邮箱验证码')
+      return
+    }
+    // 如果有旧邮箱，需要验证旧邮箱
+    if (user?.email && user?.email_verified && (!oldEmailCode || !oldSessionId)) {
+      showMessage('error', '请先验证当前邮箱')
+      setEmailStep('old')
+      return
+    }
+    setChangingEmail(true)
+    try {
+      await emailAuthService.changeEmail({
+        old_session_id: oldSessionId || undefined,
+        old_code: oldEmailCode || undefined,
+        new_session_id: newSessionId,
+        new_code: newEmailCode,
+      })
+      setEmailDialogOpen(false)
+      showMessage('success', '邮箱修改成功')
+      // 重新加载用户信息
+      loadUserInfo()
+    } catch (err: any) {
+      showMessage('error', err.response?.data?.message || '邮箱修改失败')
+    } finally {
+      setChangingEmail(false)
     }
   }
 
@@ -936,6 +1093,31 @@ export function ProfilePage() {
                   修改密码
                 </Button>
 
+                {/* 邮箱管理 */}
+                <Divider sx={{ my: 3 }} />
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  邮箱管理
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    当前邮箱：{user?.email || '未设置'}
+                  </Typography>
+                  {user?.email_verified && (
+                    <Chip label="已验证" color="success" size="small" />
+                  )}
+                </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  {user?.email ? '修改邮箱需要验证当前邮箱和新邮箱' : '设置邮箱用于账号安全和找回密码'}
+                </Typography>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<Email />}
+                  onClick={() => setEmailDialogOpen(true)}
+                >
+                  {user?.email ? '修改邮箱' : '设置邮箱'}
+                </Button>
+
                 {/* SSO 绑定 */}
                 {publicConfig.sso_enabled && (
                   <>
@@ -1213,6 +1395,198 @@ export function ProfilePage() {
           >
             {uploadingCert ? '提交中...' : '提交'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 修改邮箱对话框 */}
+      <Dialog open={emailDialogOpen} onClose={() => setEmailDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {user?.email && user?.email_verified ? '修改邮箱' : '设置邮箱'}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            {/* 步骤1：验证旧邮箱（如果有） */}
+            {emailStep === 'old' && (
+              <>
+                <Alert severity="info">
+                  为确保账号安全，修改邮箱前需要先验证当前邮箱
+                </Alert>
+                <TextField
+                  label="当前邮箱"
+                  value={user?.email || ''}
+                  disabled
+                  fullWidth
+                />
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="图片验证码"
+                    value={emailCaptchaCode}
+                    onChange={(e) => setEmailCaptchaCode(e.target.value)}
+                    sx={{ flex: 1 }}
+                  />
+                  {emailCaptchaImage ? (
+                    <Box
+                      component="img"
+                      src={emailCaptchaImage}
+                      alt="验证码"
+                      onClick={getEmailCaptcha}
+                      sx={{
+                        height: 64,
+                        cursor: 'pointer',
+                        borderRadius: 1,
+                        bgcolor: 'action.hover',
+                      }}
+                    />
+                  ) : (
+                    <Box
+                      onClick={getEmailCaptcha}
+                      sx={{
+                        height: 64,
+                        width: 150,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        borderRadius: 1,
+                        bgcolor: 'action.hover',
+                        color: 'text.secondary',
+                        fontSize: 12,
+                      }}
+                    >
+                      点击加载验证码
+                    </Box>
+                  )}
+                </Box>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="邮箱验证码"
+                    value={oldEmailCode}
+                    onChange={(e) => setOldEmailCode(e.target.value)}
+                    sx={{ flex: 1 }}
+                  />
+                  <Button
+                    variant="outlined"
+                    onClick={handleSendOldEmailCode}
+                    disabled={emailCountdown > 0 || !emailCaptchaCode}
+                    sx={{ minWidth: 120 }}
+                  >
+                    {emailCountdown > 0 ? `${emailCountdown}s` : '发送验证码'}
+                  </Button>
+                </Box>
+              </>
+            )}
+
+            {/* 步骤2：验证新邮箱 */}
+            {emailStep === 'new' && (
+              <>
+                <Alert severity="info">
+                  请输入新邮箱地址并验证
+                </Alert>
+                {user?.email && user?.email_verified && (
+                  <TextField
+                    label="当前邮箱"
+                    value={user.email}
+                    disabled
+                    fullWidth
+                  />
+                )}
+                <TextField
+                  label="新邮箱地址"
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  fullWidth
+                  required
+                />
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="图片验证码"
+                    value={emailCaptchaCode}
+                    onChange={(e) => setEmailCaptchaCode(e.target.value)}
+                    sx={{ flex: 1 }}
+                  />
+                  {emailCaptchaImage ? (
+                    <Box
+                      component="img"
+                      src={emailCaptchaImage}
+                      alt="验证码"
+                      onClick={getEmailCaptcha}
+                      sx={{
+                        height: 64,
+                        cursor: 'pointer',
+                        borderRadius: 1,
+                        bgcolor: 'action.hover',
+                      }}
+                    />
+                  ) : (
+                    <Box
+                      onClick={getEmailCaptcha}
+                      sx={{
+                        height: 64,
+                        width: 150,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        borderRadius: 1,
+                        bgcolor: 'action.hover',
+                        color: 'text.secondary',
+                        fontSize: 12,
+                      }}
+                    >
+                      点击加载验证码
+                    </Box>
+                  )}
+                </Box>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="新邮箱验证码"
+                    value={newEmailCode}
+                    onChange={(e) => setNewEmailCode(e.target.value)}
+                    sx={{ flex: 1 }}
+                  />
+                  <Button
+                    variant="outlined"
+                    onClick={handleSendNewEmailCode}
+                    disabled={newEmailCountdown > 0 || !emailCaptchaCode || !newEmail}
+                    sx={{ minWidth: 120 }}
+                  >
+                    {newEmailCountdown > 0 ? `${newEmailCountdown}s` : '发送验证码'}
+                  </Button>
+                </Box>
+              </>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          {emailStep === 'old' && (
+            <>
+              <Button onClick={() => setEmailDialogOpen(false)}>取消</Button>
+              <Button
+                onClick={handleVerifyOldEmail}
+                variant="contained"
+                disabled={!oldEmailCode}
+              >
+                下一步
+              </Button>
+            </>
+          )}
+          {emailStep === 'new' && (
+            <>
+              {user?.email && user?.email_verified && (
+                <Button onClick={() => setEmailStep('old')}>上一步</Button>
+              )}
+              <Button onClick={() => setEmailDialogOpen(false)}>取消</Button>
+              <Button
+                onClick={handleChangeEmail}
+                variant="contained"
+                disabled={!newEmailCode || !newEmail}
+                startIcon={changingEmail ? undefined : <Email />}
+              >
+                {changingEmail ? '处理中...' : '确认修改'}
+              </Button>
+            </>
+          )}
         </DialogActions>
       </Dialog>
 

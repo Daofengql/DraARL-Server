@@ -378,3 +378,11 @@ func (r *UserRepository) GetUserBriefByIDs(ids []int) (map[int]*UserBriefInfo, e
 	}
 	return result, nil
 }
+
+// UpdateUserEmail 更新用户邮箱
+func (r *UserRepository) UpdateUserEmail(id int, email string) error {
+	return r.db.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"email":         email,
+		"email_verified": true,
+	}).Error
+}

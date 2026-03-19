@@ -144,11 +144,17 @@ export function RegisterPage() {
       }
     } else if (step === 1) {
       // 验证联系方式
-      if (!formData.phone) {
-        newErrors.phone = '请输入手机号'
-        isValid = false
-      } else if (!validatePhone(formData.phone)) {
+      // 手机号可选，但如果填写了需要验证格式
+      if (formData.phone && !validatePhone(formData.phone)) {
         newErrors.phone = '手机号格式不正确'
+        isValid = false
+      }
+      // 邮箱必填
+      if (!formData.email) {
+        newErrors.email = '请输入邮箱地址'
+        isValid = false
+      } else if (!validateEmail(formData.email)) {
+        newErrors.email = '邮箱格式不正确'
         isValid = false
       }
     } else if (step === 2) {
@@ -169,7 +175,11 @@ export function RegisterPage() {
         isValid = false
       }
     } else if (step === 3) {
-      // 邮箱验证步骤是可选的，不做强制验证
+      // 邮箱验证是必填的
+      if (!emailVerified) {
+        setError('请完成邮箱验证')
+        isValid = false
+      }
     }
 
     setErrors(newErrors)
@@ -264,9 +274,9 @@ export function RegisterPage() {
       return
     }
 
-    // 如果填写了邮箱但未验证
-    if (formData.email && !emailVerified) {
-      setError('请先验证邮箱或清空邮箱地址')
+    // 邮箱必须验证通过
+    if (!emailVerified) {
+      setError('请先完成邮箱验证')
       setActiveStep(3)
       return
     }
@@ -280,9 +290,9 @@ export function RegisterPage() {
         phone: formData.phone,
         password: formData.password,
         nickname: formData.nickname || formData.username,
-        email: emailVerified ? formData.email : undefined,
-        session_id: emailVerified ? sessionId : undefined,
-        email_code: emailVerified ? emailCode : undefined,
+        email: formData.email,
+        session_id: sessionId,
+        email_code: emailCode,
       })
       // 保存设备密码并显示成功页面
       if (result?.device_password) {
@@ -344,17 +354,31 @@ export function RegisterPage() {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <TextField
               fullWidth
-              label="手机号"
+              label="邮箱地址"
+              type="email"
+              value={formData.email}
+              onChange={(e) => {
+                setFormData({ ...formData, email: e.target.value })
+                setEmailVerified(false)
+                setSessionId('')
+                setEmailCode('')
+              }}
+              error={!!errors.email}
+              helperText={errors.email || '用于账号验证和找回密码'}
+              required
+            />
+            <TextField
+              fullWidth
+              label="手机号（可选）"
               value={formData.phone}
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
               error={!!errors.phone}
               helperText={errors.phone || '用于身份验证和联系'}
-              required
               inputProps={{ maxLength: 11 }}
             />
             <Alert severity="info">
               <Typography variant="body2">
-                请确保手机号真实有效，我们需要通过操作证来验证您的业余无线电资格。
+                邮箱为必填项，用于账号验证和安全功能。手机号为可选项。
               </Typography>
             </Alert>
           </Box>
@@ -389,7 +413,7 @@ export function RegisterPage() {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <Alert severity="info">
               <Typography variant="body2">
-                邮箱验证为可选项。验证邮箱后可用于找回密码和验证码登录。
+                请验证您的邮箱地址，验证通过后才能完成注册。
               </Typography>
             </Alert>
             {emailVerified ? (
@@ -400,28 +424,19 @@ export function RegisterPage() {
               <>
                 <TextField
                   fullWidth
-                  label="邮箱地址（可选）"
+                  label="邮箱地址"
                   type="email"
                   value={formData.email}
-                  onChange={(e) => {
-                    setFormData({ ...formData, email: e.target.value })
-                    setEmailVerified(false)
-                    setSessionId('')
-                    setEmailCode('')
-                  }}
-                  error={!!errors.email}
-                  helperText={errors.email}
-                  disabled={loading}
+                  disabled
+                  helperText="邮箱地址已在上一步填写"
                 />
-                {formData.email && (
-                  <>
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                      <TextField
-                        label="图片验证码"
-                        value={captchaCode}
-                        onChange={(e) => setCaptchaCode(e.target.value)}
-                        sx={{ flex: 1 }}
-                      />
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="图片验证码"
+                    value={captchaCode}
+                    onChange={(e) => setCaptchaCode(e.target.value)}
+                    sx={{ flex: 1 }}
+                  />
                       <Box
                         component="img"
                         src={captchaImage}
@@ -463,8 +478,6 @@ export function RegisterPage() {
                     )}
                   </>
                 )}
-              </>
-            )}
           </Box>
         )
       default:

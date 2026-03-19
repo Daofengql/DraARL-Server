@@ -112,6 +112,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/me", handler.GetCurrentUser)
 			protected.PUT("/me", handler.UpdateProfile)
 			protected.PUT("/me/password", handler.ChangeOwnPassword)
+			protected.PUT("/me/email", handler.ChangeEmail) // 修改邮箱
 
 			// 设备密码管理（所有认证用户可访问）
 			protected.GET("/user/device-password", handler.GetDevicePassword)

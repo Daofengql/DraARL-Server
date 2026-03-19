@@ -101,6 +101,10 @@ func SendVerificationCode(c *gin.Context) {
 			})
 			return
 		}
+	case "change_email":
+		purpose = email.PurposeChangeEmail
+		// 修改邮箱不需要检查邮箱是否存在，因为可能是新邮箱
+		// 在实际修改时会检查
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
@@ -382,4 +386,155 @@ func buildUserResponse(user *gormdb.User) gin.H {
 		"approval_status": user.ApprovalStatus,
 		"isAdmin":         hasRoleGORM(user, "admin"),
 	}
+}
+
+// ChangeEmailRequest 修改邮箱请求
+type ChangeEmailRequest struct {
+	OldSessionID string `json:"old_session_id"` // 旧邮箱验证会话ID（有邮箱时必填）
+	OldCode      string `json:"old_code"`       // 旧邮箱验证码（有邮箱时必填）
+	NewSessionID string `json:"new_session_id" binding:"required"` // 新邮箱验证会话ID
+	NewCode      string `json:"new_code" binding:"required"`       // 新邮箱验证码
+}
+
+// ChangeEmail 修改用户邮箱（需要登录）
+// 如果用户有已验证的邮箱，需要先验证旧邮箱，再验证新邮箱
+func ChangeEmail(c *gin.Context) {
+	var req ChangeEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	// 获取当前用户
+	username, _ := c.Get("username")
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    404,
+			"message": "用户不存在",
+		})
+		return
+	}
+
+	mgr := email.GetVerificationManager()
+
+	// 如果用户有已验证的邮箱，需要验证旧邮箱
+	if user.Email != "" && user.EmailVerified {
+		if req.OldSessionID == "" || req.OldCode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "请先验证当前邮箱",
+			})
+			return
+		}
+
+		// 验证旧邮箱验证码
+		oldSession, err := mgr.Verify(req.OldSessionID, req.OldCode)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "当前邮箱验证码错误或已过期",
+			})
+			return
+		}
+
+		// 验证用途是否正确
+		if oldSession.Purpose != email.PurposeChangeEmail {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "当前邮箱验证码用途不正确",
+			})
+			return
+		}
+
+		// 验证旧邮箱是否匹配
+		if oldSession.Email != user.Email {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "当前邮箱地址不匹配",
+			})
+			return
+		}
+
+		// 删除旧邮箱验证会话
+		mgr.DeleteSession(req.OldSessionID)
+	}
+
+	// 验证新邮箱验证码
+	newSession, err := mgr.Verify(req.NewSessionID, req.NewCode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "新邮箱验证码错误或已过期",
+		})
+		return
+	}
+
+	// 验证用途是否正确
+	if newSession.Purpose != email.PurposeChangeEmail {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "新邮箱验证码用途不正确",
+		})
+		return
+	}
+
+	// 检查新邮箱是否与旧邮箱相同
+	if user.Email != "" && newSession.Email == user.Email {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "新邮箱不能与当前邮箱相同",
+		})
+		return
+	}
+
+	// 检查新邮箱是否已被其他用户使用
+	existingUser, _ := repo.GetUserByEmail(newSession.Email)
+	if existingUser != nil && existingUser.ID != user.ID {
+		c.JSON(http.StatusConflict, gin.H{
+			"code":    409,
+			"message": "该邮箱已被其他用户使用",
+		})
+		return
+	}
+
+	// 更新邮箱
+	if err := repo.UpdateUserEmail(user.ID, newSession.Email); err != nil {
+		log.Printf("更新邮箱失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "更新邮箱失败",
+		})
+		return
+	}
+
+	// 使用户缓存失效
+	if userCache := cache.GetUserCache(); userCache != nil {
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+	}
+
+	// 删除新邮箱验证会话
+	mgr.DeleteSession(req.NewSessionID)
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("用户 %s (%s) 修改邮箱为 %s，IP: %s", user.Name, user.CallSign, newSession.Email, c.ClientIP()),
+		"email_change",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "邮箱修改成功",
+		"data": gin.H{
+			"email": newSession.Email,
+		},
+	})
 }

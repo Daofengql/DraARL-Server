@@ -45,11 +45,11 @@ type RegisterRequest struct {
 	Username    string `json:"username" binding:"required"`
 	Password    string `json:"password" binding:"required"`
 	CallSign    string `json:"callsign" binding:"required"`
-	Phone       string `json:"phone" binding:"required"`
+	Phone       string `json:"phone"` // 手机号可选
 	NickName    string `json:"nickname"`
-	Email       string `json:"email"`
-	SessionID   string `json:"session_id"`   // 邮箱验证会话ID
-	EmailCode   string `json:"email_code"`   // 邮箱验证码
+	Email       string `json:"email" binding:"required,email"` // 邮箱必填
+	SessionID   string `json:"session_id" binding:"required"` // 邮箱验证会话ID必填
+	EmailCode   string `json:"email_code" binding:"required"` // 邮箱验证码必填
 }
 
 // UserResponse 用户响应（用于中间件传递）
@@ -274,7 +274,7 @@ func Register(c *gin.Context) {
 		}
 	}
 
-	// 检查手机号是否已存在
+	// 检查手机号是否已存在（手机号可选）
 	if req.Phone != "" {
 		existingPhone, _ := repo.GetUserByPhone(req.Phone)
 		if existingPhone != nil {
@@ -286,57 +286,43 @@ func Register(c *gin.Context) {
 		}
 	}
 
-	// 邮箱验证处理
-	var verifiedEmail string
-	emailVerified := false
-	if req.Email != "" && req.SessionID != "" && req.EmailCode != "" {
-		// 验证邮箱验证码
-		mgr := email.GetVerificationManager()
-		session, err := mgr.Verify(req.SessionID, req.EmailCode)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "邮箱验证码错误或已过期",
-			})
-			return
-		}
-		// 验证用途是否正确
-		if session.Purpose != email.PurposeRegister {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "验证码用途不正确",
-			})
-			return
-		}
-		// 验证邮箱是否匹配
-		if session.Email != req.Email {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "邮箱地址不匹配",
-			})
-			return
-		}
-		// 再次检查邮箱是否已被注册（防止竞争条件）
-		existingEmail, _ := repo.GetUserByEmail(req.Email)
-		if existingEmail != nil {
-			c.JSON(http.StatusConflict, gin.H{
-				"code":    409,
-				"message": "该邮箱已被注册",
-			})
-			return
-		}
-		verifiedEmail = req.Email
-		emailVerified = true
-		// 删除验证会话
-		mgr.DeleteSession(req.SessionID)
-	} else if req.Email != "" {
-		// 提供了邮箱但没有验证码
+	// 邮箱验证（必须）
+	mgr := email.GetVerificationManager()
+	session, err := mgr.Verify(req.SessionID, req.EmailCode)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "请先验证邮箱",
+			"message": "邮箱验证码错误或已过期",
 		})
 		return
 	}
+	// 验证用途是否正确
+	if session.Purpose != email.PurposeRegister {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "验证码用途不正确",
+		})
+		return
+	}
+	// 验证邮箱是否匹配
+	if session.Email != req.Email {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "邮箱地址不匹配",
+		})
+		return
+	}
+	// 再次检查邮箱是否已被注册（防止竞争条件）
+	existingEmail, _ := repo.GetUserByEmail(req.Email)
+	if existingEmail != nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"code":    409,
+			"message": "该邮箱已被注册",
+		})
+		return
+	}
+	// 删除验证会话
+	mgr.DeleteSession(req.SessionID)
 
 	// 加密密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -372,8 +358,8 @@ func Register(c *gin.Context) {
 		NickName:       nickname,
 		CallSign:       req.CallSign,
 		Phone:          req.Phone,
-		Email:          verifiedEmail,
-		EmailVerified:  emailVerified,
+		Email:          req.Email,
+		EmailVerified:  true, // 邮箱已验证
 		Status:         1,
 		ApprovalStatus: 0, // 待审核状态
 		Roles:          "user",
@@ -445,6 +431,8 @@ func GetCurrentUser(c *gin.Context) {
 			"nickname":        user.NickName,
 			"callsign":        user.CallSign,
 			"phone":           user.Phone,
+			"email":           user.Email,
+			"email_verified":  user.EmailVerified,
 			"address":         user.Address,
 			"introduction":    user.Introduction,
 			"avatar":          minio.GetAvatarURL(user.Avatar),

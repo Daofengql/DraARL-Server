@@ -309,7 +309,7 @@ export const emailAuthService = {
   // 发送邮箱验证码
   async sendCode(data: {
     email: string
-    purpose: 'register' | 'login' | 'reset_password'
+    purpose: 'register' | 'login' | 'reset_password' | 'change_email'
     captcha_id: string
     captcha_code: string
   }): Promise<SendCodeResponse> {
@@ -332,5 +332,16 @@ export const emailAuthService = {
   // 重置密码
   async resetPassword(data: ResetPasswordRequest): Promise<void> {
     await apiClient.post('/api/auth/reset-password', data)
+  },
+
+  // 修改邮箱（需要双验证）
+  async changeEmail(data: {
+    old_session_id?: string
+    old_code?: string
+    new_session_id: string
+    new_code: string
+  }): Promise<{ email: string }> {
+    const res = await apiClient.put<BackendResponse<{ email: string }>>('/api/me/email', data)
+    return res.data!
   },
 }

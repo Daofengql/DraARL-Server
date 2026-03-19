@@ -15,6 +15,7 @@ const (
 	PurposeRegister     Purpose = "register"      // 注册
 	PurposeLogin        Purpose = "login"         // 登录
 	PurposeResetPassword Purpose = "reset_password" // 重置密码
+	PurposeChangeEmail  Purpose = "change_email"  // 修改邮箱
 )
 
 // VerificationSession 验证会话

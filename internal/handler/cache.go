@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
 )
 
@@ -47,13 +49,28 @@ func (h *CacheMetricsHandler) GetCacheMetrics(c *gin.Context) {
 func (h *CacheMetricsHandler) ResetCacheMetrics(c *gin.Context) {
 	h.metricsHandler.GetMetricsInstance().Reset()
 
+	// 记录审计日志
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser != nil {
+		oplog.AddLog(
+			"重置缓存监控指标",
+			"cache_metrics_reset",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "缓存监控指标已重置",
 	})
 }
 
-// ClearAllCache 清空所有缓存（慎用，仅用于调试）
+// ClearAllCache 清空所有缓存（慎用，��用于调试）
 func (h *CacheMetricsHandler) ClearAllCache(c *gin.Context) {
 	manager := cache.GetManager()
 	if manager == nil {
@@ -70,6 +87,21 @@ func (h *CacheMetricsHandler) ClearAllCache(c *gin.Context) {
 			"message": "清空缓存失败",
 		})
 		return
+	}
+
+	// 记录审计日志
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser != nil {
+		oplog.AddLog(
+			"清空所有缓存",
+			"cache_clear_all",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

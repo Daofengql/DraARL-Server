@@ -109,10 +109,7 @@ func writeBatch(logs []*gormdb.OperatorLog) {
 	if err := repo.BatchCreate(logs); err != nil {
 		log.Printf("Write operator log batch failed: %v", err)
 	}
-
-	for _, logEntry := range logs {
-		log.Printf("[OPERATOR] %s - %s: %s", logEntry.Timestamp.Format("2006-01-02 15:04:05"), logEntry.EventType, logEntry.Content)
-	}
+	// 审计日志只写入数据库，不在命令行打印
 }
 
 // writeLog 写入单条日志到数据库
@@ -128,8 +125,7 @@ func writeLog(logEntry *OperatorLog) {
 	if err := repo.AddOperatorLog(dbLog.Content, dbLog.EventType, dbLog.Operator, dbLog.OperatorID); err != nil {
 		log.Printf("Write operator log failed: %v", err)
 	}
-
-	log.Printf("[OPERATOR] %s - %s: %s", logEntry.CreateTime.Format("2006-01-02 15:04:05"), logEntry.Operation, logEntry.Content)
+	// 审计日志只写入数据库，不在命令行打印
 }
 
 // QueryLogs 查询操作日志

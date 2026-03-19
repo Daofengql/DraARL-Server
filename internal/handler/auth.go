@@ -81,6 +81,15 @@ func Login(c *gin.Context) {
 	user, err := repo.GetUserByName(req.Username)
 	if err != nil || user == nil {
 		log.Printf("用户不存在: %s", req.Username)
+		// 记录登录失败审计日志（用户不存在）
+		oplog.AddLog(
+			fmt.Sprintf("登录失败: 用户名 %s 不存在, IP: %s", req.Username, c.ClientIP()),
+			"login_failed",
+			0,
+			req.Username,
+			"",
+			c.ClientIP(),
+		)
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
@@ -93,6 +102,15 @@ func Login(c *gin.Context) {
 		if err := repo.IncrementLoginError(user.ID); err != nil {
 			log.Printf("增加登录错误次数失败: %v", err)
 		}
+		// 记录登录失败审计日志（密码错误）
+		oplog.AddLog(
+			fmt.Sprintf("登录失败: 用户 %s (%s) 密码错误, IP: %s", user.Name, user.CallSign, c.ClientIP()),
+			"login_failed",
+			user.ID,
+			user.Name,
+			user.CallSign,
+			c.ClientIP(),
+		)
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",

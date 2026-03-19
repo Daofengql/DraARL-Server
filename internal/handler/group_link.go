@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 	"nrllink/internal/udphub"
 	"nrllink/pkg/cache"
 )
@@ -76,12 +78,22 @@ func CreateVirtualGroup(c *gin.Context) {
 	// 通知 udphub 刷新群组缓存
 	udphub.RefreshGroupCache()
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("创建虚拟互联组: %s (ID: %d, 状态: %d)", group.Name, group.ID, group.Status),
+		"virtual_group_create",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "创建成功",
 		"data": gin.H{
-			"id":        group.ID,
-			"name":      group.Name,
+			"id":         group.ID,
+			"name":       group.Name,
 			"is_virtual": group.IsVirtual,
 		},
 	})
@@ -310,6 +322,16 @@ func UpdateVirtualGroup(c *gin.Context) {
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache() // 状态变更后立即刷新互联路由，确保转发立刻生效
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("更新虚拟互联组: %s (ID: %d, 状态: %d)", group.Name, group.ID, group.Status),
+		"virtual_group_update",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -398,6 +420,16 @@ func DeleteVirtualGroup(c *gin.Context) {
 	// 通知 udphub 刷新群组缓存和互联缓存
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("删除虚拟互联组: %s (ID: %d)", group.Name, id),
+		"virtual_group_delete",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -561,6 +593,16 @@ func AddGroupLinkTarget(c *gin.Context) {
 	// 通知 udphub 刷新互联缓存
 	udphub.RefreshGroupLinkCache()
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("添加群组互联: 虚拟组 %s (ID: %d) <- 目标组 %s (ID: %d)", linkGroup.Name, linkGroupID, targetGroup.Name, req.TargetGroupID),
+		"group_link_add",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	// 获取关联数量用于提示
 	count, _ := linkRepo.GetLinkCount(linkGroupID)
 
@@ -637,6 +679,16 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 通知 udphub 刷新互联缓存
 	udphub.RefreshGroupLinkCache()
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("移除群组互联: 虚拟组 ID %d <- 目标组 ID %d", linkGroupID, targetGroupID),
+		"group_link_remove",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

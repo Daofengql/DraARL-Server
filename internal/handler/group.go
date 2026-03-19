@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 	"nrllink/pkg/cache"
 
 	"github.com/gin-gonic/gin"
@@ -451,6 +453,20 @@ func CreateGroup(c *gin.Context) {
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
 
+	// 记录审计日志
+	groupTypeStr := "公开群组"
+	if req.Type == 2 {
+		groupTypeStr = "私有群组"
+	}
+	oplog.AddLog(
+		fmt.Sprintf("创建群组: %s (类型: %s, ID: %d)", req.Name, groupTypeStr, group.ID),
+		"group_create",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "创建成功",
@@ -552,6 +568,21 @@ func UpdateGroup(c *gin.Context) {
 		}
 	}
 
+	// 记录审计日志 - 获取当前用户
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser != nil {
+		oplog.AddLog(
+			fmt.Sprintf("更新群组: %s (ID: %d)", group.Name, group.ID),
+			"group_update",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -586,12 +617,35 @@ func DeleteGroup(c *gin.Context) {
 	}
 
 	repo := gormdb.NewGroupRepository()
+
+	// 先获取群组信息用于审计日志
+	group, _ := repo.GetGroupByID(id)
+	var groupName string
+	if group != nil {
+		groupName = group.Name
+	}
+
 	if err := repo.DeleteGroup(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除群组失败",
 		})
 		return
+	}
+
+	// 记录审计日志
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser != nil {
+		oplog.AddLog(
+			fmt.Sprintf("删除群组: %s (ID: %d)", groupName, id),
+			"group_delete",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
 	}
 
 	// 使群组详情缓存和列表缓存统统失效
@@ -1035,6 +1089,16 @@ func JoinGroup(c *gin.Context) {
 		_ = groupCache.InvalidateUserGroups(ctx, currentUser.ID)
 	}
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("加入群组: %s (ID: %d)", group.Name, id),
+		"group_join",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "加入成功",
@@ -1218,6 +1282,26 @@ func UpdateDeviceStatus(c *gin.Context) {
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 	}
 
+	// 记录审计日志
+	statusDesc := ""
+	if req.DisableSend && req.DisableRecv {
+		statusDesc = "禁发+禁收"
+	} else if req.DisableSend {
+		statusDesc = "禁发"
+	} else if req.DisableRecv {
+		statusDesc = "禁收"
+	} else {
+		statusDesc = "恢复正常"
+	}
+	oplog.AddLog(
+		fmt.Sprintf("设置群组设备状态: 群组 %s (ID: %d) 设备 ID %d -> %s", group.Name, groupID, deviceID, statusDesc),
+		"group_device_status",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -1339,6 +1423,16 @@ func KickDevice(c *gin.Context) {
 		_ = deviceCache.InvalidateDeviceList(ctx)
 	}
 
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("踢出设备: 设备ID %d 从群组 %s (ID: %d) 移出", deviceID, group.Name, groupID),
+		"device_kick",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "踢出成功",
@@ -1458,6 +1552,16 @@ func LeaveGroup(c *gin.Context) {
 		_ = groupCache.InvalidateGroupMembers(ctx, id)
 		_ = groupCache.InvalidateUserGroups(ctx, currentUser.ID)
 	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("离开群组: %s (ID: %d)", group.Name, id),
+		"group_leave",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

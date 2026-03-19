@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	gormdb "nrllink/internal/gormdb"
+	oplog "nrllink/internal/log"
 	"nrllink/internal/udphub"
 	"nrllink/pkg/cache"
 	minio_local "nrllink/pkg/minio"
@@ -304,6 +306,11 @@ func DeleteCommRecord(c *gin.Context) {
 		return
 	}
 
+	// 获取当前用户
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+
 	result := gormdb.Get().Delete(&gormdb.CommRecord{}, id)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -311,6 +318,18 @@ func DeleteCommRecord(c *gin.Context) {
 			"message": "删除失败",
 		})
 		return
+	}
+
+	// 记录审计日志
+	if currentUser != nil {
+		oplog.AddLog(
+			fmt.Sprintf("删除通信记录: ID %d", id),
+			"comm_record_delete",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -419,6 +438,23 @@ func UpdateCommSettings(c *gin.Context) {
 		MaxDurationSec: settings.MaxDurationSec,
 		BatchUploadSec: settings.BatchUploadSec,
 	})
+
+	// 记录审计日志
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser != nil {
+		oplog.AddLog(
+			fmt.Sprintf("更新通信录制配置: 启用=%v, 保留天数=%d, 最小时长=%dms, 最大时长=%ds, 批量间隔=%ds",
+				settings.Enabled, settings.RetentionDays, settings.MinDurationMs,
+				settings.MaxDurationSec, settings.BatchUploadSec),
+			"comm_settings_update",
+			currentUser.ID,
+			currentUser.Name,
+			currentUser.CallSign,
+			c.ClientIP(),
+		)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

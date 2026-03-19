@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nrllink/internal/config"
 	"nrllink/internal/gormdb"
 	"nrllink/internal/models"
 	"nrllink/internal/protocol"
@@ -154,6 +155,9 @@ func StartDraARLServer(port int) error {
 func processDraARLConn(conn *net.UDPConn) {
 	defer func() { <-limitChan }()
 
+	// 获取 PROXY Protocol 配置
+	proxyProtocolEnabled := config.Get().System.ProxyProtocol == "v2"
+
 	for {
 		// 从 sync.Pool 获取缓冲区，避免频繁内存分配
 		data := packetPool.Get().([]byte)
@@ -180,11 +184,23 @@ func processDraARLConn(conn *net.UDPConn) {
 				}
 			}()
 
+			// 解析 PROXY Protocol 头部（如果启用）
+			realAddr := remoteAddr
+			var proxyInfo *ProxyProtocolInfo
+			if proxyProtocolEnabled {
+				var isProxyProtocol bool
+				proxyInfo, packetData, isProxyProtocol = ParseProxyProtocolV2(packetData)
+				if isProxyProtocol && proxyInfo != nil && proxyInfo.IsProxy {
+					realAddr = GetRealAddr(remoteAddr, proxyInfo)
+					log.Printf("[PROXY] PROXY Protocol v2: frp_addr=%s, real_addr=%s", remoteAddr.String(), realAddr.String())
+				}
+			}
+
 			// 处理 DraARLv1 数据包
-			if n >= 4 && string(packetData[0:4]) == "DraA" {
-				processDraARLPacket(packetData, remoteAddr, conn)
+			if len(packetData) >= 4 && string(packetData[0:4]) == "DraA" {
+				processDraARLPacket(packetData, realAddr, conn)
 			} else {
-				log.Printf("[DECODE] Unknown protocol from %v: %s", remoteAddr, string(packetData[:min(4, n)]))
+				log.Printf("[DECODE] Unknown protocol from %v (real: %v): %s", remoteAddr, realAddr, string(packetData[:min(4, len(packetData))]))
 			}
 		}()
 	}

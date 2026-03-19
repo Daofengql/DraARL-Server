@@ -7,6 +7,7 @@ System:
     Port: "60050"              # UDP服务端口
     LogPath: ""                # 日志文件路径，空则不输出文件
     IPfile: ./udphub.ipdb      # IP数据库文件路径
+    ProxyProtocol: ""          # PROXY Protocol 版本: "v2" 启用, 留空禁用。启用后可从 frp 等代理获取真实客户端 IP
 
 # MySQL数据库配置
 Database:

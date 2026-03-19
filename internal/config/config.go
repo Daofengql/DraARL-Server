@@ -13,13 +13,14 @@ import (
 var Config *Configuration
 var once sync.Once
 
-// Configuration 系统配置
+// Configuration 系��配置
 type Configuration struct {
 	System struct {
-		Port    string `yaml:"Port" json:"port"`
-		Host    string `yaml:"Host" json:"host"`
-		LogPath string `yaml:"LogPath" json:"log_path"`
-		IPFile  string `yaml:"IPfile" json:"ipfile"`
+		Port          string `yaml:"Port" json:"port"`
+		Host          string `yaml:"Host" json:"host"`
+		LogPath       string `yaml:"LogPath" json:"log_path"`
+		IPFile        string `yaml:"IPfile" json:"ipfile"`
+		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
 
 	Database struct {

@@ -283,7 +283,7 @@ class DevicePanel(ttk.LabelFrame):
         ttk.Entry(param_frame, textvariable=self.username_var, width=12).grid(row=0, column=1, padx=2)
 
         ttk.Label(param_frame, text="密码:").grid(row=0, column=2, sticky=tk.W, padx=(5,0))
-        self.password_var = tk.StringVar(value="7lYvYLF8")
+        self.password_var = tk.StringVar(value="FdWisUYY")
         ttk.Entry(param_frame, textvariable=self.password_var, width=10).grid(row=0, column=3, padx=2)
 
         ttk.Label(param_frame, text="DMRID:").grid(row=0, column=4, sticky=tk.W, padx=(5,0))
@@ -412,11 +412,11 @@ class DualDeviceApp:
         server_frame.pack(fill=tk.X, padx=10, pady=5)
 
         ttk.Label(server_frame, text="服务器IP:").grid(row=0, column=0, sticky=tk.W)
-        self.server_ip = tk.StringVar(value="127.0.0.1")
+        self.server_ip = tk.StringVar(value="106.14.42.36")
         ttk.Entry(server_frame, textvariable=self.server_ip, width=15).grid(row=0, column=1, padx=5)
 
         ttk.Label(server_frame, text="端口:").grid(row=0, column=2, sticky=tk.W, padx=(10,0))
-        self.server_port = tk.StringVar(value="60050")
+        self.server_port = tk.StringVar(value="20000")
         ttk.Entry(server_frame, textvariable=self.server_port, width=8).grid(row=0, column=3, padx=5)
 
         # 快捷按钮

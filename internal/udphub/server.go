@@ -184,7 +184,7 @@ func processDraARLConn(conn *net.UDPConn) {
 				}
 			}()
 
-			// 解析 PROXY Protocol 头部（如果启用）
+			// 解析 PROXY Protocol 头部（如果启��）
 			realAddr := remoteAddr
 			var proxyInfo *ProxyProtocolInfo
 			if proxyProtocolEnabled {
@@ -192,13 +192,12 @@ func processDraARLConn(conn *net.UDPConn) {
 				proxyInfo, packetData, isProxyProtocol = ParseProxyProtocolV2(packetData)
 				if isProxyProtocol && proxyInfo != nil && proxyInfo.IsProxy {
 					realAddr = GetRealAddr(remoteAddr, proxyInfo)
-					log.Printf("[PROXY] PROXY Protocol v2: frp_addr=%s, real_addr=%s", remoteAddr.String(), realAddr.String())
 				}
 			}
 
 			// 处理 DraARLv1 数据包
 			if len(packetData) >= 4 && string(packetData[0:4]) == "DraA" {
-				processDraARLPacket(packetData, realAddr, conn)
+				processDraARLPacket(packetData, remoteAddr, realAddr, conn)
 			} else {
 				log.Printf("[DECODE] Unknown protocol from %v (real: %v): %s", remoteAddr, realAddr, string(packetData[:min(4, len(packetData))]))
 			}
@@ -207,33 +206,35 @@ func processDraARLConn(conn *net.UDPConn) {
 }
 
 // processDraARLPacket 处理 DraARLv1 数据包
-func processDraARLPacket(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn) {
+// remoteAddr: frp转发地址（用于发送响应）
+// realAddr: 真实客户端地址（用于识别设备）
+func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *net.UDPConn) {
 	packet, err := protocol.NewDraARLv1Packet(remoteAddr, data)
 	if err != nil {
-		log.Printf("[DECODE] DraARLv1 decode error from %v: %v", remoteAddr, err)
+		log.Printf("[DECODE] DraARLv1 decode error from %v: %v", realAddr, err)
 		return
 	}
 
 	totalStats.PacketNumber++
 	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 
-	// 查找已存在的设备
+	// 查���已存在的设备
 	dev, exists := devUsernameSSIDMap[usernameSSID]
 	if !exists {
 		// 新设备，需要先认证
-		handleNewDraARLDevice(packet, data, conn, usernameSSID)
+		handleNewDraARLDevice(packet, realAddr, conn, usernameSSID)
 		return
 	}
 
 	// ==========================================
 	// 修复1：即使设备已在内存中(如从数据库加载)，
-	// 当它发送心跳包上线或更换 IP 端口时，依然需要执行密码鉴权
+	// 当它发送心跳包上线或更换 IP 端��时，依然需要执行密码鉴权
 	// ==========================================
 	if packet.Type == protocol.DraARLTypeHeartbeat {
-		currentAddr := packet.UDPAddr.String()
+		currentAddr := realAddr.String()
 		// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
 		if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
-			authResult := AuthenticateDevice(packet.UDPAddr.IP.String(), packet.Username, packet.DevicePassword)
+			authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
 			if !authResult.Success {
 				log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
 				return // 密码错误，直接丢弃该数据包
@@ -269,7 +270,7 @@ func processDraARLPacket(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn
 			// 群组已禁用，静默丢弃数据包（避免语音包持续发送时刷屏日志）
 			return
 		}
-		parseDraARL(packet, data, dev, conn, gp)
+		parseDraARL(packet, data, dev, conn, gp, realAddr)
 	} else {
 		// 找不到对应的群组实例
 		// 可能是数据库中删除了该群组，或者设备被分配了一个错误的群组 ID
@@ -280,7 +281,8 @@ func processDraARLPacket(data []byte, remoteAddr *net.UDPAddr, conn *net.UDPConn
 }
 
 // handleNewDraARLDevice 处理新 DraARLv1 设备
-func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *net.UDPConn, usernameSSID string) {
+// realAddr: 真实客户端地址（用于识别设备和日志）
+func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, usernameSSID string) {
 	// 心跳包需要进行认证
 	if packet.Type != protocol.DraARLTypeHeartbeat {
 		// 非心跳包，忽略未认证设备
@@ -288,8 +290,8 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 		return
 	}
 
-	// 认证设备
-	authResult := AuthenticateDevice(packet.UDPAddr.IP.String(), packet.Username, packet.DevicePassword)
+	// 认证设备（使用真实 IP）
+	authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
 	if !authResult.Success {
 		// 认证失败，不创建设备
 		log.Printf("[AUTH] Device authentication failed: %s, error: %s", usernameSSID, authResult.Error)
@@ -307,7 +309,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 		DevModel:     packet.DevModel,
 		Priority:     100,
 		Status:       0,
-		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
+		GroupID:      models.GroupIDPublicMin, // 默��加入公共群组
 	}
 
 	// 保存设备到数据库
@@ -318,6 +320,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 	}
 
 	if dev != nil {
+		// UDPAddr 存储 frp 转发地址（用于发送响应）
 		dev.UDPAddr = packet.UDPAddr
 		dev.ISOnline = true
 		dev.LastPacketTime = packet.TimeStamp
@@ -331,7 +334,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 		if gp, ok := publicGroupMap[dev.GroupID]; ok {
 			gp.DevMap[dev.ID] = dev
 
-			// 加入连接池
+			// 加入连接池（使用 frp 转发地址）
 			pool := gp.ConnPool.(*CurrentConnPool)
 			if pool.DevConnMap == nil {
 				pool.DevConnMap = make(map[string]*models.Device)
@@ -339,17 +342,18 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, data []byte, conn *n
 			pool.DevConnMap[packet.UDPAddr.String()] = dev
 			pool.DevConnList = append(pool.DevConnList, dev)
 
-			// 发送心跳响应（填充 CallSign）
+			// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
 			response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
 			conn.WriteToUDP(response, packet.UDPAddr)
 			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, 群组: %d)",
-				packet.Username, dev.Name, packet.UDPAddr, dev.GroupID)
+				packet.Username, dev.Name, realAddr, dev.GroupID)
 		}
 	}
 }
 
 // parseDraARL 解析并处理 DraARLv1 报文
-func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+// realAddr: 真实客户端地址（用于日志和 QTH 查询）
+func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr) {
 	switch packet.Type {
 	case protocol.DraARLTypeControl:
 		// 控制指令
@@ -361,7 +365,7 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 
 	case protocol.DraARLTypeHeartbeat:
 		// 心跳包
-		handleDraARLHeartbeat(packet, data, dev, conn, gp)
+		handleDraARLHeartbeat(packet, data, dev, conn, gp, realAddr)
 
 	case protocol.DraARLTypeConfig:
 		// 设备配置
@@ -433,7 +437,8 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 }
 
 // handleDraARLHeartbeat 处理 DraARLv1 心跳包
-func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+// realAddr: 真实客户端地址（用于日志和 QTH 查询）
+func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr) {
 	wasOnline := dev.ISOnline
 	currentAddr := packet.UDPAddr.String()
 	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
@@ -456,7 +461,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 	}
 
-	// 更新设备地址和时间
+	// 更新设备地址和时间（UDPAddr 存储 frp 转���地址，用于发送响应）
 	dev.UDPAddr = packet.UDPAddr
 	dev.LastPacketTime = packet.TimeStamp
 
@@ -480,14 +485,14 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		dev.Loged = true
 	}
 
-	// 加入连接池
+	// 加入连接池（使用 frp 转发地址）
 	pool := gp.ConnPool.(*CurrentConnPool)
 	if _, exists := pool.DevConnMap[currentAddr]; !exists {
 		pool.DevConnMap[currentAddr] = dev
 		pool.DevConnList = append(pool.DevConnList, dev)
 	}
 
-	// 发送心跳响应（填充 CallSign）
+	// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
 	response := protocol.EncodeHeartbeatResponse(packet, dev.CallSign)
 	conn.WriteToUDP(response, packet.UDPAddr)
 
@@ -497,9 +502,10 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 			dev.DevModel = packet.DevModel
 		}
 
-		dev.QTH = getQTH(dev.UDPAddr.IP.String())
+		// QTH 查询使用真实 IP
+		dev.QTH = getQTH(realAddr.IP.String())
 		log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
-			dev.Username, dev.Name, dev.UDPAddr.String(), dev.QTH, gp.ID, dev.DevModel)
+			dev.Username, dev.Name, realAddr, dev.QTH, gp.ID, dev.DevModel)
 
 		dev.ISOnline = true
 	}

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Box,
   Paper,
@@ -82,10 +83,48 @@ const ApprovalStatusChip = ({ status, reviewNote }: { status?: number; reviewNot
 }
 
 export function ProfilePage() {
+  const [searchParams] = useSearchParams()
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [tabValue, setTabValue] = useState(0)
+
+  // 处理 SSO 绑定回调
+  useEffect(() => {
+    const ssoSuccess = searchParams.get('sso_success')
+    const ssoError = searchParams.get('sso_error')
+
+    // 检查是否在弹出窗口中
+    const isPopup = window.opener && window.opener !== window
+
+    if (ssoSuccess || ssoError) {
+      if (isPopup) {
+        // 在弹出窗口中，通过 postMessage 通知父窗口
+        if (ssoSuccess) {
+          window.opener.postMessage(
+            { type: 'SSO_BIND_SUCCESS', success: true },
+            window.location.origin
+          )
+        } else if (ssoError) {
+          window.opener.postMessage(
+            { type: 'SSO_BIND_ERROR', error: ssoError },
+            window.location.origin
+          )
+        }
+        setTimeout(() => window.close(), 100)
+        return
+      }
+
+      // 不在弹出窗口中，正常显示消息
+      if (ssoSuccess) {
+        showMessage('success', ssoSuccess)
+      } else if (ssoError) {
+        showMessage('error', ssoError)
+      }
+      // 清除 URL 参数
+      window.history.replaceState({}, '', '/profile')
+    }
+  }, [searchParams])
 
   // 操作证相关状态
   const [certificate, setCertificate] = useState<CertificateResponse>({ active_cert: null, pending_cert: null })
@@ -129,11 +168,36 @@ export function ProfilePage() {
   // SSO 相关状态
   const { config: publicConfig } = usePublicConfig()
   const [ssoStatus, setSSOStatus] = useState<{ bound: boolean; keycloak_id?: string } | null>(null)
+  const [ssoBindLoading, setSsoBindLoading] = useState(false)
+  const [unbindConfirmOpen, setUnbindConfirmOpen] = useState(false)
+  const [unbinding, setUnbinding] = useState(false)
 
   useEffect(() => {
     loadUserInfo()
     loadCertificate()
     loadSSOStatus()
+  }, [])
+
+  // 监听来自 SSO 绑定窗口的消息
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      // 安全检查：确保消息来自可信源
+      if (event.origin !== window.location.origin) return
+
+      const { type, success, error } = event.data || {}
+
+      if (type === 'SSO_BIND_SUCCESS') {
+        setSsoBindLoading(false)
+        loadSSOStatus() // 刷新绑定状态
+        showMessage('success', 'SSO 绑定成功')
+      } else if (type === 'SSO_BIND_ERROR' && error) {
+        setSsoBindLoading(false)
+        showMessage('error', error)
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
   }, [])
 
   const loadUserInfo = async () => {
@@ -169,20 +233,36 @@ export function ProfilePage() {
 
   const handleSSOBind = async () => {
     try {
+      setSsoBindLoading(true)
       const res = await ssoService.bind()
-      window.location.href = res.url
+      // 打开新窗口进行 SSO 绑定
+      const width = 600
+      const height = 700
+      const left = window.screenX + (window.outerWidth - width) / 2
+      const top = window.screenY + (window.outerHeight - height) / 2
+      window.open(
+        res.url,
+        'SSO Bind',
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,resizable=yes`
+      )
+      // 不在这里设置 loading = false，等待 postMessage 回��
     } catch (err: any) {
+      setSsoBindLoading(false)
       showMessage('error', err.response?.data?.message || '获取绑定地址失败')
     }
   }
 
   const handleSSOUnbind = async () => {
     try {
+      setUnbinding(true)
       await ssoService.unbind()
       setSSOStatus({ bound: false })
       showMessage('success', '解绑成功')
     } catch (err: any) {
       showMessage('error', err.response?.data?.message || '解绑失败')
+    } finally {
+      setUnbinding(false)
+      setUnbindConfirmOpen(false)
     }
   }
 
@@ -869,13 +949,23 @@ export function ProfilePage() {
                     {ssoStatus?.bound ? (
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <Chip label={`已绑定`} color="success" size="small" />
-                        <Button variant="outlined" color="error" size="small" onClick={handleSSOUnbind}>
+                        <Button
+                          variant="outlined"
+                          color="error"
+                          size="small"
+                          onClick={() => setUnbindConfirmOpen(true)}
+                        >
                           解除绑定
                         </Button>
                       </Box>
                     ) : (
-                      <Button variant="outlined" size="small" onClick={handleSSOBind}>
-                        绑定 {publicConfig.sso_name || 'SSO'}
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={handleSSOBind}
+                        disabled={ssoBindLoading}
+                      >
+                        {ssoBindLoading ? '绑定中...' : `绑定 ${publicConfig.sso_name || 'SSO'}`}
                       </Button>
                     )}
                   </>
@@ -1015,6 +1105,24 @@ export function ProfilePage() {
           <Button onClick={() => setPasswordDialogOpen(false)}>取消</Button>
           <Button onClick={handleChangePassword} variant="contained" startIcon={<Save />}>
             确认修改
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 解绑 SSO 确认对话框 */}
+      <Dialog open={unbindConfirmOpen} onClose={() => setUnbindConfirmOpen(false)} maxWidth="xs">
+        <DialogTitle>解除 SSO 绑定</DialogTitle>
+        <DialogContent>
+          <Typography>
+            确定要解除 {publicConfig.sso_name || 'SSO'} 绑定吗？解除后将无法使用 SSO 快速登录。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setUnbindConfirmOpen(false)} disabled={unbinding}>
+            取消
+          </Button>
+          <Button onClick={handleSSOUnbind} color="error" variant="contained" disabled={unbinding}>
+            {unbinding ? '解绑中...' : '确认解绑'}
           </Button>
         </DialogActions>
       </Dialog>

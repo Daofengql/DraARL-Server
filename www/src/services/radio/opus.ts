@@ -9,8 +9,12 @@ import { OpusDecoder } from 'opus-decoder'
 // Opus 编码器配置
 const OPUS_SAMPLE_RATE = 16000 as const
 const OPUS_CHANNELS = 1
-const OPUS_FRAME_DURATION = 20 // ms
-const OPUS_FRAME_SIZE = OPUS_SAMPLE_RATE * OPUS_FRAME_DURATION / 1000 // 320 samples
+const OPUS_FRAME_DURATION = 60 // ms（优化：从 20ms 改为 60ms，减少发包频率）
+const OPUS_FRAME_SIZE = OPUS_SAMPLE_RATE * OPUS_FRAME_DURATION / 1000 // 960 samples
+
+// 帧合并配置（优化：2 帧合并发送，降低弱网下的丢包影响）
+const OPUS_FRAMES_PER_PACKET = 2 // 每个数据包包含的 Opus 帧数
+const OPUS_SEND_INTERVAL = OPUS_FRAME_DURATION * OPUS_FRAMES_PER_PACKET // 120ms
 
 // 音频状态
 export type AudioState = 'idle' | 'capturing' | 'playing'
@@ -35,11 +39,11 @@ export class AudioCapture {
   private bufferSize = 0
   private targetBufferSize = OPUS_FRAME_SIZE
 
-  // 【修复爆音方案2】发送节流机制
-  // 确保Opus帧按固定间隔发送，避免突发
-  private sendQueue: Uint8Array[] = []
+  // 【优化】帧合并发送机制
+  // 累积 2 个 Opus 帧后合并发送，降低发包频率，改善弱网性能
+  private frameAccumulator: Uint8Array[] = [] // 累积的 Opus 帧队列
   private sendIntervalId: ReturnType<typeof setInterval> | null = null
-  private readonly SEND_INTERVAL = 20 // 每20ms发送一帧，与Opus帧时长匹配
+  private readonly SEND_INTERVAL = OPUS_SEND_INTERVAL // 120ms
 
   // 【关键修复】保存节点引用，以便后续销毁
   // 防止 ScriptProcessorNode 内存泄漏导致重音和卡顿
@@ -263,6 +267,7 @@ export class AudioCapture {
   /**
    * 编码为 Opus
    * 使用真正的 Opus 编码器生成原始 Opus 帧
+   * 【优化】累积 2 帧后合并发送
    */
   private encodeOpus(pcmData: Float32Array): void {
     if (!this.opusEncoder || !this.encoderReady) {
@@ -274,10 +279,14 @@ export class AudioCapture {
       // 使用 Opus 编码器编码 PCM 数据
       const opusFrame = this.opusEncoder.encodeFrame(pcmData)
 
-      // 【修复爆音方案2】将编码后的帧放入发送队列，而不是直接回调
-      // 定时器会按固定间隔发送，避免突发
       if (opusFrame.length > 0) {
-        this.sendQueue.push(opusFrame)
+        // 累积帧
+        this.frameAccumulator.push(opusFrame)
+
+        // 当累积够 2 帧时，合并发送
+        if (this.frameAccumulator.length >= OPUS_FRAMES_PER_PACKET) {
+          this.sendMergedFrames()
+        }
       }
     } catch (error) {
       console.error('[AudioCapture] Opus encode failed:', error)
@@ -285,34 +294,76 @@ export class AudioCapture {
   }
 
   /**
-   * 【修复爆音方案2】启动发送定时器
-   * 按固定间隔发送Opus帧，确保UDP端接收平稳
+   * 【优化的合并发送累积的 Opus 帧
+   * 将 2 个 60ms 帧合并为一个 120ms 的数据包发送
+   */
+  private sendMergedFrames(): void {
+    if (this.frameAccumulator.length === 0 || !this.onDataCallback) {
+      return
+    }
+
+    // 取出累积的帧（最多取 2 帧）
+    const framesToSend = this.frameAccumulator.splice(0, OPUS_FRAMES_PER_PACKET)
+
+    if (framesToSend.length === 0) {
+      return
+    }
+
+    // 计算合并后的总长度
+    // 每帧前面加 2 字节的长度前缀
+    const headerSize = 2 * framesToSend.length
+    const dataLength = framesToSend.reduce((sum, frame) => sum + frame.length, 0)
+    const totalLength = headerSize + dataLength
+
+    // 合并帧数据
+    const mergedData = new Uint8Array(totalLength)
+    let offset = 0
+    for (const frame of framesToSend) {
+      // 写入帧长度（大端序，2 字节）
+      mergedData[offset] = (frame.length >> 8) & 0xFF
+      mergedData[offset + 1] = frame.length & 0xFF
+      offset += 2
+      // 写入帧数据
+      mergedData.set(frame, offset)
+      offset += frame.length
+    }
+
+    // 发送合并后的数据
+    this.onDataCallback(mergedData)
+  }
+
+  /**
+   * 【优化】启动发送定时器
+   * 用于在停止录音时刷新剩余未发送的帧
    */
   private startSendTimer(): void {
     if (this.sendIntervalId !== null) {
       return
     }
 
+    // 定期检查是否有需要刷新的剩余帧
     this.sendIntervalId = setInterval(() => {
-      if (this.sendQueue.length > 0 && this.onDataCallback) {
-        const frame = this.sendQueue.shift()
-        if (frame) {
-          this.onDataCallback(frame)
-        }
+      // 如果有累积的帧超过一定时间，强制发送
+      if (this.frameAccumulator.length > 0 && this.onDataCallback) {
+        this.sendMergedFrames()
       }
     }, this.SEND_INTERVAL)
   }
 
   /**
-   * 【修复爆音方案2】停止发送定时器
+   * 【优化】停止发送定时器
    */
   private stopSendTimer(): void {
     if (this.sendIntervalId !== null) {
       clearInterval(this.sendIntervalId)
       this.sendIntervalId = null
     }
-    // 清空发送队列
-    this.sendQueue = []
+    // 停止前发送剩余的帧
+    if (this.frameAccumulator.length > 0 && this.onDataCallback) {
+      this.sendMergedFrames()
+    }
+    // 清空累积队列
+    this.frameAccumulator = []
   }
 
   /**
@@ -367,8 +418,9 @@ export class AudioPlayer {
   private nextStartTime = 0
 
   // --- 抖动缓冲配置 ---
-  private maxQueueLength = 15 // 适当扩大最大队列，允许应对更极端的 UDP 突发抖动
-  private minBufferFrames = 3 // 【核心参数】预缓冲帧数：发生饥饿时，至少攒够 3 帧（约60ms）再连续播放，对抗卡顿
+  // 注意：现在每个数据包包含 2 个 60ms Opus 帧（共 120ms），参数已针对合并帧优化
+  private maxQueueLength = 8 // 最大队列长度：8 × 120ms ≈ 1 秒，平衡延迟与抗抖动
+  private minBufferFrames = 2 // 预缓冲帧数：2 × 120ms = 240ms，对抗网络抖动的初始缓冲
   private isBuffering = true  // 标记当前是否处于"等待缓冲积攒"的状态
 
   // 音量控制
@@ -433,13 +485,39 @@ export class AudioPlayer {
 
   /**
    * 播放 Opus 数据
+   * 【优化】支持解析合并帧格式：[Frame1 Length(2B)][Frame1 Data][Frame2 Length(2B)][Frame2 Data]
    */
   async play(opusData: Uint8Array): Promise<void> {
     await this.init()
 
     try {
-      // 解码 Opus 数据为 PCM
-      const audioBuffer = await this.decodeToAudioBuffer(opusData)
+      // 解析合并帧格式
+      const frames = this.parseMergedFrames(opusData)
+
+      // 解码所有帧并合并 PCM 数据
+      const pcmBuffers: Float32Array[] = []
+      let totalSamples = 0
+
+      for (const frame of frames) {
+        const pcmData = await this.decodeFrameToPCM(frame)
+        if (pcmData) {
+          pcmBuffers.push(pcmData)
+          totalSamples += pcmData.length
+        }
+      }
+
+      if (totalSamples === 0) return
+
+      // 合并所有 PCM 数据
+      const combinedPCM = new Float32Array(totalSamples)
+      let offset = 0
+      for (const buffer of pcmBuffers) {
+        combinedPCM.set(buffer, offset)
+        offset += buffer.length
+      }
+
+      // 创建 AudioBuffer
+      const audioBuffer = this.createAudioBufferFromPCM(combinedPCM)
       if (audioBuffer) {
         this.queueAudio(audioBuffer)
       }
@@ -449,41 +527,80 @@ export class AudioPlayer {
   }
 
   /**
-   * 解码为 AudioBuffer
+   * 【优化】解析合并帧格式
+   * 格式：[Frame1 Length(2B)][Frame1 Data][Frame2 Length(2B)][Frame2 Data]
+   * 兼容单帧格式（无长度前缀）
    */
-  private async decodeToAudioBuffer(data: Uint8Array): Promise<AudioBuffer | null> {
+  private parseMergedFrames(data: Uint8Array): Uint8Array[] {
+    const frames: Uint8Array[] = []
+    let offset = 0
+
+    // 检查是否是合并帧格式
+    // 如果第一个字节的值小于 0x80，很可能是长度前缀（Opus 帧通常以 0x80+ 开头）
+    while (offset + 2 <= data.length) {
+      const frameLength = (data[offset] << 8) | data[offset + 1]
+
+      // 安全检查：帧长度必须合理
+      if (frameLength === 0 || frameLength > 1000 || offset + 2 + frameLength > data.length) {
+        // 不是合并帧格式，当作单帧处理
+        if (offset === 0) {
+          return [data]
+        }
+        break
+      }
+
+      // 提取帧数据
+      frames.push(data.slice(offset + 2, offset + 2 + frameLength))
+      offset += 2 + frameLength
+    }
+
+    // 如果没有解析出任何帧，返回原始数据作为单帧
+    if (frames.length === 0) {
+      return [data]
+    }
+
+    return frames
+  }
+
+  /**
+   * 编码单个 Opus 帧为 PCM 数据
+   */
+  private async decodeFrameToPCM(data: Uint8Array): Promise<Float32Array | null> {
     if (!this.audioContext) return null
 
     try {
-      let float32Data: Float32Array
-
       // 优先使用 Opus 解码器
       if (this.decoderReady && this.opusDecoder) {
         const decoded = this.opusDecoder.decodeFrame(data)
-        // decoded.channelData 是一个数组，单声道取第一个元素
-        float32Data = decoded.channelData[0]
+        return decoded.channelData[0]
       } else {
         // 回退：假设数据是 Int16 PCM（兼容旧格式）
         const int16Data = new Int16Array(data.buffer, data.byteOffset, data.byteLength / 2)
-        float32Data = new Float32Array(int16Data.length)
+        const float32Data = new Float32Array(int16Data.length)
         for (let i = 0; i < int16Data.length; i++) {
           float32Data[i] = int16Data[i] / (int16Data[i] < 0 ? 0x8000 : 0x7FFF)
         }
+        return float32Data
       }
-
-      // 创建 AudioBuffer
-      const audioBuffer = this.audioContext.createBuffer(
-        OPUS_CHANNELS,
-        float32Data.length,
-        OPUS_SAMPLE_RATE
-      )
-      audioBuffer.getChannelData(0).set(float32Data)
-
-      return audioBuffer
     } catch (error) {
-      console.error('[AudioPlayer] Decode failed:', error)
+      console.error('[AudioPlayer] Decode frame failed:', error)
       return null
     }
+  }
+
+  /**
+   * 从 PCM 数据创建 AudioBuffer
+   */
+  private createAudioBufferFromPCM(pcmData: Float32Array): AudioBuffer | null {
+    if (!this.audioContext) return null
+
+    const audioBuffer = this.audioContext.createBuffer(
+      OPUS_CHANNELS,
+      pcmData.length,
+      OPUS_SAMPLE_RATE
+    )
+    audioBuffer.getChannelData(0).set(pcmData)
+    return audioBuffer
   }
 
   /**

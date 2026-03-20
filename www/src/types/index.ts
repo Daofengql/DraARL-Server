@@ -28,7 +28,7 @@ export interface User {
   last_login_time?: string
   last_login_ip?: string
   login_err_times?: number
-  last_group_id?: number  // 用户上次选中的群组 ID（用于跨设备/跨���话同步）
+  last_group_id?: number  // 用户上次选中的群组 ID（用于跨设备/跨会话同步）
 }
 
 export interface LoginRequest {

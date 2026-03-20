@@ -13,7 +13,7 @@ import (
 var Config *Configuration
 var once sync.Once
 
-// Configuration 系��配置
+// Configuration 系统配置
 type Configuration struct {
 	System struct {
 		Port          string `yaml:"Port" json:"port"`
@@ -47,17 +47,17 @@ type Configuration struct {
 	// Keycloak SSO 配置
 	Keycloak struct {
 		Enabled      bool   `yaml:"Enabled" json:"enabled"`
-		Name         string `yaml:"Name" json:"name"`                // 显示名称，如 "企业SSO"、"Keycloak"
-		BaseURL      string `yaml:"BaseURL" json:"base_url"`          // http://localhost:8080
-		Realm        string `yaml:"Realm" json:"realm"`               // nrllink
-		ClientID     string `yaml:"ClientID" json:"client_id"`        // nrllink-frontend
+		Name         string `yaml:"Name" json:"name"`                  // 显示名称，如 "企业SSO"、"Keycloak"
+		BaseURL      string `yaml:"BaseURL" json:"base_url"`           // http://localhost:8080
+		Realm        string `yaml:"Realm" json:"realm"`                // nrllink
+		ClientID     string `yaml:"ClientID" json:"client_id"`         // nrllink-frontend
 		ClientSecret string `yaml:"ClientSecret" json:"client_secret"` // 客户端密钥
-		RedirectURI  string `yaml:"RedirectURI" json:"redirect_uri"`  // http://localhost:9000/callback
+		RedirectURI  string `yaml:"RedirectURI" json:"redirect_uri"`   // http://localhost:9000/callback
 	} `yaml:"Keycloak" json:"keycloak"`
 
 	// MinIO 对象存储配置
 	MinIO struct {
-		Endpoint  string `yaml:"Endpoint" json:"endpoint"`   // localhost:9000
+		Endpoint  string `yaml:"Endpoint" json:"endpoint"`    // localhost:9000
 		AccessKey string `yaml:"AccessKey" json:"access_key"` // minioadmin
 		SecretKey string `yaml:"SecretKey" json:"secret_key"` // minioadmin
 		UseSSL    bool   `yaml:"UseSSL" json:"use_ssl"`       // 是否使用HTTPS

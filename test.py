@@ -100,10 +100,16 @@ class DraARLv1Client:
         self.audio_format = pyaudio.paInt16
         self.channels = 1
         self.rate = 16000
-        self.chunk_size = 320
+
+        # 【优化】60ms 帧时长 + 2 帧合并发送
+        self.frame_duration_ms = 60  # 每帧 60ms
+        self.chunk_size = int(self.rate * self.frame_duration_ms / 1000)  # 960 samples
+        self.frames_per_packet = 2  # 每包 2 帧
+        self.frame_accumulator = []  # 帧累积队列
+
         self.opus_encoder = opuslib.Encoder(self.rate, self.channels, opuslib.APPLICATION_VOIP)
         self.opus_decoder = opuslib.Decoder(self.rate, self.channels)
-        self._log(f"[SSID-{self.ssid}] 音频引擎: Opus 16kHz (Type 5)")
+        self._log(f"[SSID-{self.ssid}] 音频引擎: Opus 16kHz, 60ms帧, 2帧合并 (Type 5)")
 
     def _log(self, message):
         """带颜色标签的日志输出"""
@@ -193,8 +199,11 @@ class DraARLv1Client:
 
                     try:
                         if pkt_type == DRAARL_TYPE_OPUS_16K:
-                            pcm_data = self.opus_decoder.decode(payload, self.chunk_size)
-                            stream_out.write(pcm_data)
+                            # 【优化】支持合并帧格式解析
+                            opus_frames = self._parse_merged_frames(payload)
+                            for opus_frame in opus_frames:
+                                pcm_data = self.opus_decoder.decode(opus_frame, self.chunk_size)
+                                stream_out.write(pcm_data)
                     except Exception as e:
                         self._log(f"[音频解码失败] {e}")
 
@@ -222,7 +231,7 @@ class DraARLv1Client:
                 format=self.audio_format, channels=self.channels,
                 rate=self.rate, input=True, frames_per_buffer=self.chunk_size
             )
-            self._log(f"[麦克风] 已就绪")
+            self._log(f"[麦克风] 已就绪 (60ms帧, 2帧合并)")
         except Exception as e:
             self._log(f"[严重错误] 麦克风初始化失败: {e}")
             return
@@ -232,8 +241,13 @@ class DraARLv1Client:
                 pcm_data = stream_in.read(self.chunk_size, exception_on_overflow=False)
 
                 if self.is_transmitting:
+                    # 编码为 Opus 帧
                     encoded_data = self.opus_encoder.encode(pcm_data, self.chunk_size)
-                    self.send_packet(pkt_type=DRAARL_TYPE_OPUS_16K, payload=encoded_data)
+                    self.frame_accumulator.append(encoded_data)
+
+                    # 累积够 2 帧后合并发送
+                    if len(self.frame_accumulator) >= self.frames_per_packet:
+                        self._send_merged_frames()
 
             except Exception as e:
                 self._log(f"[音频采集异常] {e}")
@@ -241,6 +255,55 @@ class DraARLv1Client:
 
         stream_in.stop_stream()
         stream_in.close()
+
+    def _send_merged_frames(self):
+        """合并发送累积的 Opus 帧（带长度前缀）"""
+        if not self.frame_accumulator:
+            return
+
+        # 取出累积的帧（最多 2 帧）
+        frames_to_send = self.frame_accumulator[:self.frames_per_packet]
+        self.frame_accumulator = self.frame_accumulator[self.frames_per_packet:]
+
+        # 构建合并数据：[Len1(2B)][Data1][Len2(2B)][Data2]
+        merged_payload = b''
+        for frame in frames_to_send:
+            frame_len = len(frame)
+            merged_payload += struct.pack('>H', frame_len)  # 大端序 2 字节长度
+            merged_payload += frame
+
+        self.send_packet(pkt_type=DRAARL_TYPE_OPUS_16K, payload=merged_payload)
+
+    def _parse_merged_frames(self, data):
+        """
+        解析合并帧格式
+        格式：[Len1(2B)][Data1][Len2(2B)][Data2]...
+        兼容单帧格式（无长度前缀）
+        """
+        frames = []
+        offset = 0
+
+        # 检查是否是合并帧格式
+        # 如果第一个字节的值小于 0x80，很可能是长度前缀
+        while offset + 2 <= len(data):
+            frame_length = struct.unpack('>H', data[offset:offset+2])[0]
+
+            # 安全检查：帧长度必须合理
+            if frame_length == 0 or frame_length > 1000 or offset + 2 + frame_length > len(data):
+                # 不是合并帧格式，当作单帧处理
+                if offset == 0:
+                    return [data]
+                break
+
+            # 提取帧数据
+            frames.append(data[offset+2:offset+2+frame_length])
+            offset += 2 + frame_length
+
+        # 如果没有解析出任何帧，返回原始数据作为单帧
+        if not frames:
+            return [data]
+
+        return frames
 
     def start(self):
         self.running = True
@@ -412,11 +475,11 @@ class DualDeviceApp:
         server_frame.pack(fill=tk.X, padx=10, pady=5)
 
         ttk.Label(server_frame, text="服务器IP:").grid(row=0, column=0, sticky=tk.W)
-        self.server_ip = tk.StringVar(value="106.14.42.36")
+        self.server_ip = tk.StringVar(value="127.0.0.1")
         ttk.Entry(server_frame, textvariable=self.server_ip, width=15).grid(row=0, column=1, padx=5)
 
         ttk.Label(server_frame, text="端口:").grid(row=0, column=2, sticky=tk.W, padx=(10,0))
-        self.server_port = tk.StringVar(value="20000")
+        self.server_port = tk.StringVar(value="60050")
         ttk.Entry(server_frame, textvariable=self.server_port, width=8).grid(row=0, column=3, padx=5)
 
         # 快捷按钮

@@ -184,7 +184,7 @@ func processDraARLConn(conn *net.UDPConn) {
 				}
 			}()
 
-			// 解析 PROXY Protocol 头部（如果启��）
+			// 解析 PROXY Protocol 头部（如果启用）
 			realAddr := remoteAddr
 			var proxyInfo *ProxyProtocolInfo
 			if proxyProtocolEnabled {
@@ -218,7 +218,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	totalStats.PacketNumber++
 	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 
-	// 查���已存在的设备
+	// 查找已存在的设备
 	dev, exists := devUsernameSSIDMap[usernameSSID]
 	if !exists {
 		// 新设备，需要先认证
@@ -228,7 +228,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 
 	// ==========================================
 	// 修复1：即使设备已在内存中(如从数据库加载)，
-	// 当它发送心跳包上线或更换 IP 端��时，依然需要执行密码鉴权
+	// 当它发送心跳包上线或更换 IP 端口时，依然需要执行密码鉴权
 	// ==========================================
 	if packet.Type == protocol.DraARLTypeHeartbeat {
 		currentAddr := realAddr.String()
@@ -309,7 +309,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		DevModel:     packet.DevModel,
 		Priority:     100,
 		Status:       0,
-		GroupID:      models.GroupIDPublicMin, // 默��加入公共群组
+		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
 	}
 
 	// 保存设备到数据库
@@ -461,7 +461,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 	}
 
-	// 更新设备地址和时间（UDPAddr 存储 frp 转���地址，用于发送响应）
+	// 更新设备地址和时间（UDPAddr 存储 frp 转发地址，用于发送响应）
 	dev.UDPAddr = packet.UDPAddr
 	dev.LastPacketTime = packet.TimeStamp
 

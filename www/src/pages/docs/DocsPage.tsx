@@ -472,6 +472,84 @@ function DeviceProtocolContent() {
         </Stack>
       </CollapsibleSection>
 
+      {/* Opus 语音格式 */}
+      <CollapsibleSection title="Opus 语音格式" icon={<SettingsEthernet color="primary" />}>
+        <Stack spacing={2}>
+          <AlertBox type="info">
+            <Typography variant="body2">
+              <strong>TypeOpus16K (Type=5)</strong> 是平台的标准语音编码格式，采用 Opus 编解码器，专为业余无线电通信优化。
+            </Typography>
+          </AlertBox>
+
+          <Typography variant="subtitle1" fontWeight={600}>
+            编码参数
+          </Typography>
+          <Box sx={{ overflowX: 'auto' }}>
+            <InfoTable
+              headers={['参数', '值', '说明']}
+              rows={[
+                ['采样率', '16000 Hz', '16kHz 宽带语音'],
+                ['声道数', '1', '单声道'],
+                ['帧时长', '60 ms', '每个 Opus 帧 60ms'],
+                ['每帧采样数', '960', '16000 × 0.06'],
+                ['比特率', '16-32 kbps', 'VOIP 模式'],
+              ]}
+            />
+          </Box>
+
+          <Typography variant="subtitle1" fontWeight={600} sx={{ mt: 2 }}>
+            WebSocket 客户端合并帧格式
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            为优化弱网性能，WebSocket 客户端采用 <strong>2 帧合并发送</strong> 策略：
+            每 120ms 发送一个数据包，每个数据包包含 2 个 60ms 的 Opus 帧。
+          </Typography>
+
+          <CodeBlock title="DATA 区域格式">
+{`+-------------+-------------+-------------+-------------+
+| Frame1 Len  | Frame1 Data | Frame2 Len  | Frame2 Data |
+| 2B          | N bytes     | 2B          | M bytes     |
++-------------+-------------+-------------+-------------+
+
+Frame Len: 帧长度（大端序 uint16）
+Frame Data: Opus 帧数据（60ms）`}
+          </CodeBlock>
+
+          <Typography variant="subtitle1" fontWeight={600} sx={{ mt: 2 }}>
+            性能优化效果
+          </Typography>
+          <Box sx={{ overflowX: 'auto' }}>
+            <InfoTable
+              headers={['项目', '优化前', '优化后']}
+              rows={[
+                ['帧时长', '20ms', '60ms'],
+                ['发送间隔', '20ms', '120ms'],
+                ['每秒发包数', '50', '~8.3'],
+                ['单包大小', '110-170B', '330-570B'],
+                ['头部开销占比', '50-80%', '~25-35%'],
+                ['额外延迟', '-', '+100ms'],
+              ]}
+            />
+          </Box>
+
+          <AlertBox type="warning">
+            <Typography variant="subtitle2" gutterBottom>
+              解码兼容性
+            </Typography>
+            <Typography variant="body2">
+              接收端应同时支持：
+            </Typography>
+            <Box component="ul" sx={{ m: 0, pl: 2, mt: 1 }}>
+              <li><strong>合并帧格式</strong>：按长度前缀解析多个 Opus 帧</li>
+              <li><strong>单帧格式</strong>：兼容无长度前缀的单帧数据（用于 UDP 设备直发）</li>
+            </Box>
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              判断逻辑：若首字节值 &lt; 0x80，视为合并帧格式（长度前缀）；否则视为单帧格式。
+            </Typography>
+          </AlertBox>
+        </Stack>
+      </CollapsibleSection>
+
       {/* 设备型号 */}
       <CollapsibleSection title="设备型号" icon={<SettingsEthernet color="primary" />}>
         <Stack spacing={2}>
@@ -615,6 +693,7 @@ function DeviceProtocolContent() {
                 ['v1.0', '2026-03', '初始版本，替代 NRL2 协议'],
                 ['v1.1', '2026-03', '移除 G.711 编解码支持，统一使用 Opus 16K 格式'],
                 ['v1.2', '2026-03', '简化协议头，移除 Status 和 SeqNum 字段，头部从 93 字节简化为 90 字节'],
+                ['v1.3', '2026-03', '优化弱网性能：Opus 帧时长从 20ms 改为 60ms，WebSocket 客户端采用 2 帧合并发送（120ms 间隔）'],
               ]}
             />
           </Box>

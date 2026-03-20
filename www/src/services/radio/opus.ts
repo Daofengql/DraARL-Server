@@ -661,14 +661,16 @@ export class AudioPlayer {
       const nodeEndTime = this.nextStartTime + audioBuffer.duration
       this.nextStartTime = nodeEndTime
 
-      // onended 仅用于检测播放队列是否彻底干涸（饥饿），绝不参与调度
+      // onended 用于检测播放是否结束
+      // 只有当队列空且时间已过时才标记结束，但不切换 isBuffering
+      // 这样新数据到达时可以快速恢复播放，避免 360ms 的等待
       source.onended = () => {
-        // 检查当前时间是否达到了我们计划排期的最后时间
-        // 减去 0.01 秒容差，如果达到了，说明底层缓冲已经被彻底播光了
-        if (this.audioContext && this.audioContext.currentTime >= this.nextStartTime - 0.01) {
-          this.isPlaying = false
-          this.isBuffering = true
-          this.setState('idle')
+        if (this.audioQueue.length === 0 && this.audioContext) {
+          // 放宽检测条件，使用 50ms 容差
+          if (this.audioContext.currentTime >= this.nextStartTime - 0.05) {
+            this.isPlaying = false
+            this.setState('idle')
+          }
         }
       }
     }

@@ -48,6 +48,7 @@ import {
   getRadioService,
   destroyRadioService,
 } from '../../services/radioService'
+import { messageSyncService } from '../../services/radio/messageSync'
 import type {
   WSConnectionState,
   VoiceState,
@@ -205,6 +206,7 @@ export const RadioPage: React.FC = () => {
   const [isPTTDown, setIsPTTDown] = useState(false)
   const [connectionConflict, setConnectionConflict] = useState(false) // 【新增】连接冲突状态
   const [audioPermissionNeeded, setAudioPermissionNeeded] = useState(false) // 音频权限提示
+  const [isLoadingMore, setIsLoadingMore] = useState(false) // 加载更多状态
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -322,6 +324,62 @@ export const RadioPage: React.FC = () => {
     }
   }, [connectionState, radioService])
 
+  // 【消息同步】每 15 秒从后端同步消息（斩杀线策略）
+  useEffect(() => {
+    if (connectionState !== 'online') return
+
+    const syncMessages = async () => {
+      try {
+        // 传递当前用户信息，用于判断 isSelf
+        const currentUser = user?.callsign ? {
+          callsign: user.callsign,
+          ssid: 105  // 网页设备固定 SSID=105
+        } : undefined
+
+        const merged = await messageSyncService.syncMessages(currentGroupId, messages, currentUser)
+        // 只有当消息有变化时才更新（避免不必要的重渲染）
+        if (merged.length !== messages.length || JSON.stringify(merged) !== JSON.stringify(messages)) {
+          setMessages(merged)
+        }
+      } catch (error) {
+        console.error('[RadioPage] Failed to sync messages:', error)
+      }
+    }
+
+    // 首次立即同步
+    syncMessages()
+
+    // 每 15 秒同步一次
+    const interval = setInterval(syncMessages, 15000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [connectionState, currentGroupId, radioService, user])
+
+  // 【加载更多历史消息】
+  const handleLoadMore = useCallback(async () => {
+    if (isLoadingMore || !messageSyncService.hasMore(currentGroupId)) return
+
+    setIsLoadingMore(true)
+    try {
+      const currentUser = user?.callsign ? {
+        callsign: user.callsign,
+        ssid: 105
+      } : undefined
+
+      const olderMessages = await messageSyncService.loadMoreMessages(currentGroupId, currentUser)
+      if (olderMessages.length > 0) {
+        // 将旧消息插入到前面
+        setMessages(prev => [...olderMessages, ...prev])
+      }
+    } catch (error) {
+      console.error('[RadioPage] Failed to load more messages:', error)
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }, [currentGroupId, isLoadingMore, user])
+
   // PTT 按下
   const handlePTTDown = useCallback(() => {
     if (connectionState !== 'online') return
@@ -370,6 +428,8 @@ export const RadioPage: React.FC = () => {
     if (success) {
       setCurrentGroupId(groupId)
       setMessages([])
+      // 重置新群组的分页状态
+      messageSyncService.resetGroupState(groupId)
     }
   }
 
@@ -505,6 +565,9 @@ export const RadioPage: React.FC = () => {
           currentCallsign={user?.callsign || ''}
           currentSSID={105}
           currentUser={user}
+          hasMore={messageSyncService.hasMore(currentGroupId)}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={handleLoadMore}
         />
       </Box>
 

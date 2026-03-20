@@ -5,7 +5,6 @@
 
 import { RadioWebSocket, getRadioWebSocket, closeRadioWebSocket } from './radio/websocket'
 import { AudioCapture, AudioPlayer, getAudioCapture, getAudioPlayer, destroyAudioInstances } from './radio/opus'
-import { messageCache, toCachedMessage, toRadioMessage, generateMessageId } from './radio/messageCache'
 import { groupManagerService, toRadioGroup } from './radio/groupManager'
 import { apiClient } from './api'
 import { PacketType, defaultRadioUserConfig } from '../types/radio'
@@ -19,6 +18,15 @@ import type {
   OnlineDevice,
 } from '../types/radio'
 import { OpusDecoder } from 'opus-decoder'
+
+// 消息��列号（用于确保同一毫秒内的消息 ID 唯一）
+let messageSequence = 0
+
+// 辅助函数：生成消息 ID（本地使用，不再存储到 IndexedDB）
+function generateMessageId(groupId: number, timestamp: number, callsign: string): string {
+  const seq = messageSequence++
+  return `${groupId}_${timestamp}_${callsign}_${seq}`
+}
 
 // Opus 配置
 const OPUS_SAMPLE_RATE = 16000
@@ -488,10 +496,7 @@ export class RadioService {
         isPlayed: true, // 自己发送的语音默认已播放
       }
 
-      // 添加到缓存
-      messageCache.addMessage(toCachedMessage(radioMessage))
-
-      // 触发事件（通知 UI 更新）
+      // 触发事件（通知 UI 更新）- 不再存储到 IndexedDB
       this.emit('message', radioMessage)
     } catch (error) {
       console.error('[RadioService] Failed to save voice message:', error)
@@ -512,7 +517,7 @@ export class RadioService {
 
     this.ws.sendTextMessage(message)
 
-    // 添加到本地缓存
+    // 直接触发事件，不再存储到 IndexedDB
     const radioMessage: RadioMessage = {
       id: generateMessageId(this.currentGroupId, Date.now(), this.callsign),
       type: 'text',
@@ -525,7 +530,6 @@ export class RadioService {
       isSelf: true,
     }
 
-    messageCache.addMessage(toCachedMessage(radioMessage))
     this.emit('message', radioMessage)
   }
 
@@ -627,23 +631,21 @@ export class RadioService {
 
   /**
    * 获取历史消息
+   * @deprecated 不再从本地缓存获取，改由页面组件调用 messageSyncService
    */
   async getHistoryMessages(groupId?: number): Promise<RadioMessage[]> {
-    const targetGroupId = groupId || this.currentGroupId
-    const cached = await messageCache.getMessagesByGroup(targetGroupId)
-    return cached.map(toRadioMessage)
+    // 不再从 IndexedDB 获取，返回空数组
+    // 历史消息由页面组件通过 messageSyncService 获取
+    return []
   }
 
   /**
-   * 彻底清空当前所有的消息缓存 (包括数据库和内存)
+   * 清空当前会话的内存缓存
    * @returns 是否成功
    */
   public async clearAllMessageCache(): Promise<boolean> {
     try {
-      // 1. 清空底层 IndexedDB 数据库
-      await messageCache.clearAllMessages()
-
-      // 2. 清空 Service 内部的语音缓存
+      // 清空 Service 内部的语音缓存
       this.voiceChunks = []
       this.sendingVoiceChunks = []
       this.currentVoiceCallsign = ''
@@ -817,10 +819,7 @@ export class RadioService {
       isSelf: false,
     }
 
-    // 添加到缓存
-    messageCache.addMessage(toCachedMessage(radioMessage))
-
-    // 触发事件
+    // 直接触发事件，不再存储到 IndexedDB
     this.emit('message', radioMessage)
   }
 
@@ -900,6 +899,7 @@ export class RadioService {
 
   /**
    * 保存语音消息到缓存（仅保存接收的语音，自己发送的由 saveSendingVoiceMessage 处理）
+   * 不再存储到 IndexedDB，只触发事件通知 UI
    */
   private async saveVoiceMessage(): Promise<void> {
     // 检查是否有语音数据
@@ -943,10 +943,7 @@ export class RadioService {
         isPlayed: true, // 接收的语音默认已播放（实时听到）
       }
 
-      // 添加到缓存
-      messageCache.addMessage(toCachedMessage(radioMessage))
-
-      // 触发事件（通知 UI 更新）
+      // 直接触发事件，不再存储到 IndexedDB
       this.emit('message', radioMessage)
     } catch (error) {
       console.error('[RadioService] Failed to save voice message:', error)
@@ -1010,16 +1007,12 @@ export class RadioService {
 
   /**
    * 加载历史消息
+   * @deprecated 不再从 IndexedDB 加载，改由页面组件调用 messageSyncService
    */
   private async loadHistoryMessages(): Promise<void> {
-    try {
-      const messages = await messageCache.getMessagesByGroup(this.currentGroupId)
-      messages.forEach(msg => {
-        this.emit('message', toRadioMessage(msg))
-      })
-    } catch (error) {
-      console.error('[RadioService] Failed to load history messages:', error)
-    }
+    // 不再从 IndexedDB 加载历史消息
+    // 历史消息由页面组件通过 messageSyncService 获取
+    return Promise.resolve()
   }
 }
 

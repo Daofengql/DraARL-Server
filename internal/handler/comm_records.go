@@ -23,9 +23,10 @@ type CommRecordResponse struct {
 	DeviceName  string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
 	DevModel    int    `json:"dev_model"`   // 设备型号：105=浏览器
 	GroupID     *uint  `json:"group_id"`
-	GroupName   string `json:"group_name"` // 通过联表查询获取：public_groups.name
+	GroupName   string `json:"group_name"`  // 通过联表查询获取：public_groups.name
 	UserID      *uint  `json:"user_id"`
-	Username    string `json:"username"` // 通过联表查询获取：users.nickname 或 users.name
+	Username    string `json:"username"`    // 登录用户名（用于前端查询头像）
+	Nickname    string `json:"nickname"`    // 用户昵称（用于显示）
 	StartTime   string `json:"start_time"`
 	EndTime     string `json:"end_time"`
 	DurationMs  int    `json:"duration_ms"`
@@ -34,28 +35,29 @@ type CommRecordResponse struct {
 	AudioSize   int64  `json:"audio_size"`
 	Status      int    `json:"status"`
 	MsgType     int    `json:"msg_type"`     // 消息类型：0=音频, 1=文本
-	TextContent string `json:"text_content"` // 文本消息内容（仅文本消息有值）
+	TextContent string `json:"text_content"` // 文本消息内容（仅文本消息有值)
 }
 
 // CommRecordWithDetails 联表查询结果
 type CommRecordWithDetails struct {
-	ID            uint
-	DeviceID      uint
-	DeviceSSID    uint8
-	DevModel      int // 设备型号
-	OwnerCallSign string
-	OwnerNickName string
-	GroupID       *uint
-	GroupName     string
-	UserID        *uint
-	UserCallSign  string
-	UserNickName  string
-	StartTime     time.Time
-	EndTime       time.Time
-	DurationMs    int
-	AudioPath     string
-	AudioSize     int64
-	Status        int
+	ID            uint      `gorm:"column:id"`
+	DeviceID      uint      `gorm:"column:device_id"`
+	DeviceSSID    uint8     `gorm:"column:device_ssid"`
+	DevModel      int       `gorm:"column:dev_model"`
+	OwnerCallSign string    `gorm:"column:owner_call_sign"`
+	OwnerNickName string    `gorm:"column:owner_nick_name"`
+	GroupID       *uint     `gorm:"column:group_id"`
+	GroupName     string    `gorm:"column:group_name"`
+	UserID        *uint     `gorm:"column:user_id"`
+	UserName      string    `gorm:"column:user_name"`
+	UserCallSign  string    `gorm:"column:user_call_sign"`
+	UserNickName  string    `gorm:"column:user_nick_name"`
+	StartTime     time.Time `gorm:"column:start_time"`
+	EndTime       time.Time `gorm:"column:end_time"`
+	DurationMs    int       `gorm:"column:duration_ms"`
+	AudioPath     string    `gorm:"column:audio_path"`
+	AudioSize     int64     `gorm:"column:audio_size"`
+	Status        int       `gorm:"column:status"`
 }
 
 // toCommRecordResponse 将联表查询结果转换为响应结构
@@ -90,10 +92,12 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 		}
 	}
 
-	// 用户名：优先显示昵称
-	username := r.UserNickName
-	if username == "" {
-		username = r.UserCallSign
+	// 用户名：登录用户名（用于前端查询头像）
+	username := r.UserName
+	// 昵称：用于显示
+	nickname := r.UserNickName
+	if nickname == "" {
+		nickname = r.UserCallSign
 	}
 
 	return CommRecordResponse{
@@ -105,6 +109,7 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 		GroupName:   r.GroupName,
 		UserID:      r.UserID,
 		Username:    username,
+		Nickname:    nickname,
 		StartTime:   r.StartTime.Format("2006-01-02 15:04:05"),
 		EndTime:     r.EndTime.Format("2006-01-02 15:04:05"),
 		DurationMs:  r.DurationMs,
@@ -138,12 +143,12 @@ func GetCommRecords(c *gin.Context) {
 
 	db := gormdb.Get().Table("comm_records cr").
 		Select(`
-			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
+			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
 			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
-			u.callsign as user_call_sign, u.nickname as user_nick_name
+			u.name as user_name, u.callsign as user_call_sign, u.nickname as user_nick_name
 		`).
 		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
 		Joins("LEFT JOIN users d_owner ON d.owner_id = d_owner.id").
@@ -209,7 +214,21 @@ func GetCommRecords(c *gin.Context) {
 	if groupIDStr != "" {
 		groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
 		if err == nil {
-			db = db.Where("cr.group_id = ?", groupID)
+			// 【互联组支持】使用 SQL 子查询获取所有相关群组的消息
+			// 逻辑：
+			// 1. 当前群组本身
+			// 2. 通过 group_links 找到当前群组所属的互联组 (link_group_id)
+			// 3. 找到这些互联组关联的所有目标群组 (target_group_id)
+			db = db.Where(`
+				cr.group_id IN (
+					SELECT ? as group_id
+					UNION
+					SELECT gl2.target_group_id
+					FROM group_links gl1
+					INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id
+					WHERE gl1.target_group_id = ?
+				)
+			`, groupID, groupID)
 		}
 	}
 	// 全局模式下可以按 user_id 筛选

@@ -67,6 +67,7 @@ export interface RadioMessage {
   senderId: number | string
   senderCallsign: string
   senderSSID: number
+  senderUsername?: string  // 登录用户名（用于查询头像）
   senderNickname?: string
   senderAvatar?: string
 
@@ -121,7 +122,7 @@ export const defaultWSConfig: WSConfig = {
   maxReconnectAttempts: 5,
   heartbeatInterval: 10000, // 10秒
   preReconnectTime: 240000, // 240秒
-  voiceEndTimeout: 200, // 200ms
+  voiceEndTimeout: 600, // 600ms - 放宽超时以应对移动端 JS 主线程卡顿
 }
 
 // DraARLv1 数据包
@@ -164,20 +165,4 @@ export const defaultRadioUserConfig: RadioUserConfig = {
   defaultGroupId: 999, // 公共群组
   volume: 0.8,
   muted: false,
-}
-
-// IndexedDB 消息缓存结构
-export interface CachedMessage {
-  id: string
-  groupId: number
-  callsign: string
-  ssid: number
-  nickname?: string
-  avatar?: string
-  type: 'voice' | 'text'
-  content: Blob | string
-  duration?: number
-  timestamp: number
-  isSelf: boolean
-  isPlayed: boolean
 }

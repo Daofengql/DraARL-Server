@@ -16,10 +16,7 @@ import PlayIcon from '@mui/icons-material/PlayArrow'
 import PauseIcon from '@mui/icons-material/Pause'
 import type { RadioMessage } from '../../../types/radio'
 import { userService } from '../../../services'
-
-// Opus 配置
-const OPUS_SAMPLE_RATE = 16000
-const OPUS_CHANNELS = 1
+import { opusPlayer } from '../../../utils/opusDecoder'
 
 // 用户信息缓存（全局）
 const userInfoCache = new Map<string, { avatar?: string; nickname?: string }>()
@@ -30,6 +27,9 @@ interface MessageListProps {
   currentSSID: number  // 添加 SSID 用于精确判断
   loading?: boolean
   currentUser?: any    // 当前登录用户信息
+  hasMore?: boolean    // 是否还有更多历史消息
+  isLoadingMore?: boolean  // 是否正在加载更多
+  onLoadMore?: () => void  // 加载更多回调
 }
 
 // 样式
@@ -131,12 +131,12 @@ const useStyles = () => ({
   },
 })
 
-// 语音消息组件 - 使用 Web Audio API 直接播放
+// 语音消息组件 - 使用 Web Audio API 播放（支持 Blob 和 URL）
 const VoiceMessage: React.FC<{
   duration: number
   isPlayed: boolean
   isSelf: boolean
-  audioData?: Blob
+  audioData?: Blob | string  // 支持 Blob (WAV) 或 URL (Raw Opus)
 }> = ({ duration, isPlayed, isSelf, audioData }) => {
   const [isPlaying, setIsPlaying] = React.useState(false)
   const [progress, setProgress] = React.useState(0)
@@ -146,60 +146,75 @@ const VoiceMessage: React.FC<{
   const animationFrameRef = React.useRef<number>(0)
   const styles = useStyles()
 
-  // 播放语音消息
-  const playAudio = async () => {
-    if (!audioData) return
+  // 播放 Blob 格式音频（WAV，来自实时语音）
+  const playBlobAudio = async (blob: Blob) => {
+    const arrayBuffer = await blob.arrayBuffer()
 
-    try {
-      // 读取 Blob 数据
-      const arrayBuffer = await audioData.arrayBuffer()
+    // 创建 AudioContext
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+      audioContextRef.current = new AudioContext()
+    }
+    const ctx = audioContextRef.current
 
-      // 创建 AudioContext
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext({ sampleRate: OPUS_SAMPLE_RATE })
-      }
-      const ctx = audioContextRef.current
+    // 使用 AudioContext 解码 WAV 数据
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
 
-      // 使用 AudioContext 解码音频数据
-      // 注意：这需要数据是浏览器支持的格式（如 WAV、OGG 等）
-      // 如果存储的是原始 Opus 帧，需要先转换为可播放格式
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+    // 创建并播放 AudioBufferSourceNode
+    const source = ctx.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(ctx.destination)
 
-      // 创建并播放 AudioBufferSourceNode
-      const source = ctx.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(ctx.destination)
+    sourceNodeRef.current = source
+    startTimeRef.current = ctx.currentTime
+    setIsPlaying(true)
 
-      sourceNodeRef.current = source
-      startTimeRef.current = ctx.currentTime
-      setIsPlaying(true)
-
-      // 更新进度
-      const updateProgress = () => {
-        if (sourceNodeRef.current && audioContextRef.current) {
-          const elapsed = audioContextRef.current.currentTime - startTimeRef.current
-          const prog = Math.min(elapsed / audioBuffer.duration, 1)
-          setProgress(prog)
-          if (prog < 1) {
-            animationFrameRef.current = requestAnimationFrame(updateProgress)
-          }
+    // 更新进度
+    const updateProgress = () => {
+      if (sourceNodeRef.current && audioContextRef.current) {
+        const elapsed = audioContextRef.current.currentTime - startTimeRef.current
+        const prog = Math.min(elapsed / audioBuffer.duration, 1)
+        setProgress(prog)
+        if (prog < 1) {
+          animationFrameRef.current = requestAnimationFrame(updateProgress)
         }
       }
-      animationFrameRef.current = requestAnimationFrame(updateProgress)
-
-      source.onended = () => {
-        setIsPlaying(false)
-        setProgress(0)
-        sourceNodeRef.current = null
-      }
-
-      source.start()
-
-    } catch (error) {
-      console.error('Failed to play audio:', error)
-      // 如果解码失败，显示提示
-      setIsPlaying(false)
     }
+    animationFrameRef.current = requestAnimationFrame(updateProgress)
+
+    source.onended = () => {
+      setIsPlaying(false)
+      setProgress(0)
+      sourceNodeRef.current = null
+    }
+
+    source.start()
+  }
+
+  // 播放 URL 格式音频（Raw Opus，来自数据库）
+  const playUrlAudio = async (url: string) => {
+    // 确保 URL 是完整路径
+    const audioUrl = url.startsWith('http') ? url : `/api/minio/${url}`
+
+    await opusPlayer.play(audioUrl, () => {
+      setIsPlaying(false)
+      setProgress(0)
+    })
+    setIsPlaying(true)
+
+    // 模拟进度更新（opusPlayer 不提供进度回调）
+    const durationSec = duration / 1000
+    const startTime = Date.now()
+    const updateProgress = () => {
+      if (opusPlayer.getIsPlaying()) {
+        const elapsed = (Date.now() - startTime) / 1000
+        const prog = Math.min(elapsed / durationSec, 1)
+        setProgress(prog)
+        if (prog < 1) {
+          animationFrameRef.current = requestAnimationFrame(updateProgress)
+        }
+      }
+    }
+    animationFrameRef.current = requestAnimationFrame(updateProgress)
   }
 
   const handlePlayPause = async () => {
@@ -207,7 +222,9 @@ const VoiceMessage: React.FC<{
 
     if (isPlaying) {
       // 停止播放
-      if (sourceNodeRef.current) {
+      if (typeof audioData === 'string') {
+        opusPlayer.stop()
+      } else if (sourceNodeRef.current) {
         sourceNodeRef.current.stop()
         sourceNodeRef.current = null
       }
@@ -217,21 +234,43 @@ const VoiceMessage: React.FC<{
       setIsPlaying(false)
       setProgress(0)
     } else {
-      await playAudio()
+      try {
+        if (typeof audioData === 'string') {
+          // URL 格式：使用 opusPlayer 播放 Raw Opus
+          await playUrlAudio(audioData)
+        } else {
+          // Blob 格式：使用 AudioContext 播放 WAV
+          await playBlobAudio(audioData)
+        }
+      } catch (error) {
+        console.error('Failed to play audio:', error)
+        setIsPlaying(false)
+      }
     }
   }
 
   // 清理
   React.useEffect(() => {
     return () => {
+      // 停止 opusPlayer
+      opusPlayer.stop()
+      // 停止 AudioContext
       if (sourceNodeRef.current) {
-        sourceNodeRef.current.stop()
+        try {
+          sourceNodeRef.current.stop()
+        } catch (e) {
+          // 忽略
+        }
       }
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
       }
       if (audioContextRef.current) {
-        audioContextRef.current.close()
+        try {
+          audioContextRef.current.close()
+        } catch (e) {
+          // 忽略
+        }
       }
     }
   }, [])
@@ -274,13 +313,38 @@ const VoiceMessage: React.FC<{
 }
 
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, currentCallsign, currentSSID, loading, currentUser }, ref) => {
+  ({ messages, currentCallsign, currentSSID, loading, currentUser, hasMore, isLoadingMore, onLoadMore }, ref) => {
     const theme = useTheme()
     const styles = useStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
 
     // 用户头像状态（用于触发重渲染）
     const [, forceUpdate] = useState({})
+
+    // 记录滚动位置，用于加载更多后恢复
+    const prevScrollHeightRef = useRef<number>(0)
+
+    // 滚动检测：当滚动到顶部时加载更多
+    const handleScroll = useCallback(() => {
+      if (!scrollRef.current || !onLoadMore || isLoadingMore || !hasMore) return
+
+      // 当滚动到顶部附近（距离顶部小于 100px）时触发加载
+      if (scrollRef.current.scrollTop < 100) {
+        // 记录当前滚动高度，用于加载后恢复位置
+        prevScrollHeightRef.current = scrollRef.current.scrollHeight
+        onLoadMore()
+      }
+    }, [onLoadMore, isLoadingMore, hasMore])
+
+    // 加载更多后恢复滚动位置（防止跳动）
+    useEffect(() => {
+      if (scrollRef.current && prevScrollHeightRef.current > 0) {
+        const newScrollHeight = scrollRef.current.scrollHeight
+        const scrollDiff = newScrollHeight - prevScrollHeightRef.current
+        scrollRef.current.scrollTop = scrollDiff
+        prevScrollHeightRef.current = 0
+      }
+    }, [messages.length])
 
     // 异步加载用户头像
     const loadUserAvatar = useCallback(async (username: string | number) => {
@@ -332,10 +396,15 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       })
     }, [messages, loadUserAvatar])
 
-    // 自动滚动到底部
+    // 自动滚动到底部（仅当新消息到达时）
     useEffect(() => {
       if (scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+        // 只在滚动位置接近底部时才自动滚动
+        const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
+        const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
+        if (isNearBottom) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+        }
       }
     }, [messages])
 
@@ -397,7 +466,31 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     }
 
     return (
-      <Box ref={scrollRef} sx={styles.root}>
+      <Box ref={scrollRef} sx={styles.root} onScroll={handleScroll}>
+        {/* 加载更多指示器 */}
+        {hasMore && (
+          <Box sx={{ textAlign: 'center', py: 1 }}>
+            {isLoadingMore ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  加载中...
+                </Typography>
+              </Box>
+            ) : (
+              <Typography variant="caption" color="text.secondary" sx={{ cursor: 'pointer' }} onClick={onLoadMore}>
+                向上滚动加载更多
+              </Typography>
+            )}
+          </Box>
+        )}
+        {/* 没有更多消息提示 */}
+        {!hasMore && messages.length > 0 && (
+          <Box sx={{ textAlign: 'center', py: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              没有更多消息了
+            </Typography>
+          </Box>
+        )}
         {messages.map((message) => {
           // 【核心修复】增强己方消息的判断逻辑，防止类型不匹配（如 "10" === 10 为 false）
           const isMatchCallsign = String(message.senderCallsign).toUpperCase() === String(currentCallsign).toUpperCase()

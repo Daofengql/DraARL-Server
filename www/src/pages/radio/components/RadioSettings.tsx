@@ -2,20 +2,12 @@
  * 设置面板组件
  */
 
-import React, { useState, useEffect } from 'react'
+import React from 'react'
 import {
   Box,
   Typography,
   IconButton,
   Divider,
-  Slider,
-  FormControl,
-  FormLabel,
-  Select,
-  MenuItem,
-  Switch,
-  FormControlLabel,
-  TextField,
   Button,
   List,
   ListItem,
@@ -24,10 +16,6 @@ import {
   ListItemSecondaryAction,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
-import VolumeIcon from '@mui/icons-material/VolumeUp'
-import MicIcon from '@mui/icons-material/Mic'
-import InputIcon from '@mui/icons-material/SettingsInputComponent'
-import OutputIcon from '@mui/icons-material/Output'
 import BadgeIcon from '@mui/icons-material/Badge'
 import DeleteIcon from '@mui/icons-material/Delete'
 import type { RadioUserConfig } from '../../../types/radio'
@@ -41,37 +29,9 @@ interface RadioSettingsProps {
 }
 
 export const RadioSettings: React.FC<RadioSettingsProps> = ({
-  config,
-  onConfigChange,
   onClose,
   onRequestClearCache,
 }) => {
-  const [localConfig, setLocalConfig] = useState<RadioUserConfig>(config)
-  const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([])
-  const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([])
-
-  // 加载设备列表
-  useEffect(() => {
-    const loadDevices = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        setInputDevices(devices.filter(d => d.kind === 'audioinput'))
-        setOutputDevices(devices.filter(d => d.kind === 'audiooutput'))
-      } catch (error) {
-        console.error('Failed to enumerate devices:', error)
-      }
-    }
-
-    loadDevices()
-  }, [])
-
-  // 更新配置
-  const updateConfig = (key: keyof RadioUserConfig, value: any) => {
-    const newConfig = { ...localConfig, [key]: value }
-    setLocalConfig(newConfig)
-    onConfigChange(newConfig)
-  }
-
   // 清除缓存
   const handleClearCache = async () => {
     if (confirm('确定要彻底清除所有聊天记录和语音缓存吗？（此操作不可逆）')) {
@@ -103,68 +63,6 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
 
       {/* 内容 */}
       <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
-        {/* 音频设置 */}
-        <Typography variant="subtitle2" color="primary" gutterBottom>
-          音频设置
-        </Typography>
-
-        <FormControl fullWidth margin="normal">
-          <FormLabel>输入设备</FormLabel>
-          <Select
-            size="small"
-            value={localConfig.inputDeviceId || ''}
-            onChange={(e) => updateConfig('inputDeviceId', e.target.value)}
-            displayEmpty
-          >
-            <MenuItem value="">默认设备</MenuItem>
-            {inputDevices.map((device) => (
-              <MenuItem key={device.deviceId} value={device.deviceId}>
-                {device.label || `麦克风 ${device.deviceId.slice(0, 8)}`}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-
-        <FormControl fullWidth margin="normal">
-          <FormLabel>输出设备</FormLabel>
-          <Select
-            size="small"
-            value={localConfig.outputDeviceId || ''}
-            onChange={(e) => updateConfig('outputDeviceId', e.target.value)}
-            displayEmpty
-          >
-            <MenuItem value="">默认设备</MenuItem>
-            {outputDevices.map((device) => (
-              <MenuItem key={device.deviceId} value={device.deviceId}>
-                {device.label || `扬声器 ${device.deviceId.slice(0, 8)}`}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-
-        <FormControl fullWidth margin="normal">
-          <FormLabel>音量: {Math.round(localConfig.volume * 100)}%</FormLabel>
-          <Slider
-            value={localConfig.volume}
-            onChange={(_, value) => updateConfig('volume', value)}
-            min={0}
-            max={1}
-            step={0.01}
-          />
-        </FormControl>
-
-        <FormControlLabel
-          control={
-            <Switch
-              checked={localConfig.muted}
-              onChange={(e) => updateConfig('muted', e.target.checked)}
-            />
-          }
-          label="静音"
-        />
-
-        <Divider sx={{ my: 2 }} />
-
         {/* 数据管理 */}
         <Typography variant="subtitle2" color="primary" gutterBottom>
           数据管理

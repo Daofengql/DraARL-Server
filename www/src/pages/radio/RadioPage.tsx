@@ -25,6 +25,7 @@ import {
   Divider,
   CircularProgress,
   Alert,
+  Button,
   useTheme,
   useMediaQuery,
 } from '@mui/material'
@@ -47,6 +48,7 @@ import {
   getRadioService,
   destroyRadioService,
 } from '../../services/radioService'
+import { messageSyncService } from '../../services/radio/messageSync'
 import type {
   WSConnectionState,
   VoiceState,
@@ -58,7 +60,6 @@ import type {
 // 子组件
 import { MessageList } from './components/MessageList'
 import { PTTButton } from './components/PTTButton'
-import { AudioVisualizer } from './components/AudioVisualizer'
 import { GroupSelector } from './components/GroupSelector'
 import { RadioSettings } from './components/RadioSettings'
 import { DeviceList } from './components/DeviceList'
@@ -66,8 +67,8 @@ import { DeviceList } from './components/DeviceList'
 // 样式
 const useStyles = () => ({
   root: {
-    // 使用固定高度计算，突破父容器的 padding 限制
-    height: 'calc(100vh - 64px - 48px)', // 64px header + 24px padding (上下各 12px)
+    // 使用固定高度填满视口，减去顶部导航栏 64px
+    height: 'calc(100vh - 64px)',
     margin: { xs: -2, sm: -3 }, // 抵消父容器的 padding
     display: 'flex',
     flexDirection: 'column',
@@ -204,6 +205,8 @@ export const RadioPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [isPTTDown, setIsPTTDown] = useState(false)
   const [connectionConflict, setConnectionConflict] = useState(false) // 【新增】连接冲突状态
+  const [audioPermissionNeeded, setAudioPermissionNeeded] = useState(false) // 音频权限提示
+  const [isLoadingMore, setIsLoadingMore] = useState(false) // 加载更多状态
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -268,11 +271,34 @@ export const RadioPage: React.FC = () => {
 
     initRadio()
 
+    // 检查音频权限状态（浏览器自动博放策略）
+    const checkAudioPermission = () => {
+      // 创建临时 AudioContext 检查状态
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      if (audioContext.state === 'suspended') {
+        setAudioPermissionNeeded(true)
+      }
+      audioContext.close()
+    }
+    checkAudioPermission()
+
     return () => {
       // 清理
       radioService.disconnect()
     }
   }, [user, token])
+
+  // 激活音频权限
+  const handleActivateAudio = useCallback(async () => {
+    try {
+      // 请求麦克风权限并激活 AudioContext
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      setAudioPermissionNeeded(false)
+    } catch (error) {
+      console.error('Failed to activate audio:', error)
+      setError('无法获取音频权限，请检查浏览器设置')
+    }
+  }, [])
 
   // 【自动刷新】定时刷新群组统计（每 5 秒）
   useEffect(() => {
@@ -297,6 +323,62 @@ export const RadioPage: React.FC = () => {
       clearInterval(interval)
     }
   }, [connectionState, radioService])
+
+  // 【消息同步】每 15 秒从后端同步消息（斩杀线策略）
+  useEffect(() => {
+    if (connectionState !== 'online') return
+
+    const syncMessages = async () => {
+      try {
+        // 传递当前用户信息，用于判断 isSelf
+        const currentUser = user?.callsign ? {
+          callsign: user.callsign,
+          ssid: 105  // 网页设备固定 SSID=105
+        } : undefined
+
+        const merged = await messageSyncService.syncMessages(currentGroupId, messages, currentUser)
+        // 只有当消息有变化时才更新（避免不必要的重渲染）
+        if (merged.length !== messages.length || JSON.stringify(merged) !== JSON.stringify(messages)) {
+          setMessages(merged)
+        }
+      } catch (error) {
+        console.error('[RadioPage] Failed to sync messages:', error)
+      }
+    }
+
+    // 首次立即同步
+    syncMessages()
+
+    // 每 15 秒同步一次
+    const interval = setInterval(syncMessages, 15000)
+
+    return () => {
+      clearInterval(interval)
+    }
+  }, [connectionState, currentGroupId, radioService, user])
+
+  // 【加载更多历史消息】
+  const handleLoadMore = useCallback(async () => {
+    if (isLoadingMore || !messageSyncService.hasMore(currentGroupId)) return
+
+    setIsLoadingMore(true)
+    try {
+      const currentUser = user?.callsign ? {
+        callsign: user.callsign,
+        ssid: 105
+      } : undefined
+
+      const olderMessages = await messageSyncService.loadMoreMessages(currentGroupId, currentUser)
+      if (olderMessages.length > 0) {
+        // 将旧消息插入到前面
+        setMessages(prev => [...olderMessages, ...prev])
+      }
+    } catch (error) {
+      console.error('[RadioPage] Failed to load more messages:', error)
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }, [currentGroupId, isLoadingMore, user])
 
   // PTT 按下
   const handlePTTDown = useCallback(() => {
@@ -346,6 +428,8 @@ export const RadioPage: React.FC = () => {
     if (success) {
       setCurrentGroupId(groupId)
       setMessages([])
+      // 重置新群组的分页状态
+      messageSyncService.resetGroupState(groupId)
     }
   }
 
@@ -427,18 +511,29 @@ export const RadioPage: React.FC = () => {
         </Box>
 
         <Box sx={styles.headerRight}>
-          <Chip
-            icon={<HeadsetIcon />}
-            label={onlineDevices.length}
-            size="small"
-            onClick={() => setDeviceListOpen(true)}
-          />
           {renderConnectionStatus()}
           <IconButton onClick={() => setSettingsOpen(true)}>
             <SettingsIcon />
           </IconButton>
         </Box>
       </Box>
+
+      {/* 音频权限提示 */}
+      {audioPermissionNeeded && (
+        <Alert
+          severity="info"
+          sx={{ alignItems: 'center' }}
+          action={
+            <Button color="inherit" size="small" onClick={handleActivateAudio}>
+              点击激活
+            </Button>
+          }
+        >
+          <Typography variant="body2">
+            🔊 点击"激活"以启用音频功能
+          </Typography>
+        </Alert>
+      )}
 
       {/* 错误提示 */}
       {error && (
@@ -470,21 +565,20 @@ export const RadioPage: React.FC = () => {
           currentCallsign={user?.callsign || ''}
           currentSSID={105}
           currentUser={user}
+          hasMore={messageSyncService.hasMore(currentGroupId)}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={handleLoadMore}
         />
       </Box>
 
-      {/* 音频可视化 */}
-      <Box sx={styles.visualizer}>
-        <AudioVisualizer
-          isActive={voiceState !== 'idle'}
-          isSending={voiceState === 'sending'}
-        />
-        {voiceState === 'receiving' && currentSpeaker && (
+      {/* 接收状态显示 */}
+      {voiceState === 'receiving' && currentSpeaker && (
+        <Box sx={styles.visualizer}>
           <Typography variant="body2" color="primary">
             🔴 {currentSpeaker.callsign}-{currentSpeaker.ssid}
           </Typography>
-        )}
-      </Box>
+        </Box>
+      )}
 
       {/* 输入区域 */}
       <Box sx={styles.inputArea}>

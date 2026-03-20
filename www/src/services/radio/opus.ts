@@ -423,6 +423,12 @@ export class AudioPlayer {
   private minBufferFrames = 3 // 预缓冲帧数：3 × 120ms = 360ms，公网环境下更稳健
   private isBuffering = true  // 标记当前是否处于"等待缓冲积攒"的状态
 
+  // --- 防抖容忍期配置（修复移动端卡顿导致语音被切断的问题）---
+  // 当音频队列空时，不立即判定结束，而是等待一段容忍期
+  // 这样可以应对移动端 JS 主线程拥堵导致的"假中断"
+  private idleTimeoutId: ReturnType<typeof setTimeout> | null = null
+  private readonly IDLE_GRACE_PERIOD = 400 // 容忍时间 400ms，移动端建议 300-500ms
+
   // 音量控制
   private gainNode: GainNode | null = null
   private volume = 0.8
@@ -489,6 +495,12 @@ export class AudioPlayer {
    */
   async play(opusData: Uint8Array): Promise<void> {
     await this.init()
+
+    // 检查 AudioContext 是否已激活（浏览器自动播放策略）
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      console.warn('[AudioPlayer] AudioContext 未激活，跳过播放')
+      return
+    }
 
     try {
       // 解析合并帧格式
@@ -572,6 +584,11 @@ export class AudioPlayer {
       // 优先使用 Opus 解码器
       if (this.decoderReady && this.opusDecoder) {
         const decoded = this.opusDecoder.decodeFrame(data)
+        // 添加空值检查，防止解码失败导致的 undefined 错误
+        if (!decoded || !decoded.channelData || !decoded.channelData[0]) {
+          console.warn('[AudioPlayer] Opus decode returned empty result')
+          return null
+        }
         return decoded.channelData[0]
       } else {
         // 回退：假设数据是 Int16 PCM（兼容旧格式）
@@ -608,6 +625,14 @@ export class AudioPlayer {
    * 重构缓冲调度机制，实现预缓冲状态机
    */
   private queueAudio(audioBuffer: AudioBuffer): void {
+    // 【核心修复】如果在新数据包到达时有等待中的"宣告结束"定时器，立刻取消！
+    // 这挽救了因为移动端主线程卡顿导致的"假中断"问题
+    if (this.idleTimeoutId) {
+      clearTimeout(this.idleTimeoutId)
+      this.idleTimeoutId = null
+      console.log('[AudioPlayer] 新数据到达，取消防抖定时器')
+    }
+
     // 1. 防止内存和延迟无限增长
     if (this.audioQueue.length >= this.maxQueueLength) {
       console.warn('[AudioPlayer] 队列溢出，丢弃最旧的音频帧以追赶实时进度')
@@ -662,14 +687,23 @@ export class AudioPlayer {
       this.nextStartTime = nodeEndTime
 
       // onended 用于检测播放是否结束
-      // 只有当队列空且时间已过时才标记结束，但不切换 isBuffering
-      // 这样新数据到达时可以快速恢复播放，避免 360ms 的等待
+      // 【核心修复】移动端防抖容忍期：不要在队列刚空就立刻判定结束
+      // 移动端 JS 主线程容易拥堵，可能导致 WebSocket 包积压在底层未被处理
+      // 等待 400ms，如果期间有新数据到达，会被 queueAudio 取消这个定时器
       source.onended = () => {
         if (this.audioQueue.length === 0 && this.audioContext) {
           // 放宽检测条件，使用 50ms 容差
           if (this.audioContext.currentTime >= this.nextStartTime - 0.05) {
-            this.isPlaying = false
-            this.setState('idle')
+            // 不再立刻设置 idle，而是开启容忍期防抖
+            if (!this.idleTimeoutId) {
+              this.idleTimeoutId = setTimeout(() => {
+                this.isPlaying = false
+                this.isBuffering = true // 必须重置回缓冲状态，为下一段语音做准备
+                this.setState('idle')
+                this.idleTimeoutId = null
+                console.log('[AudioPlayer] 容忍期结束，进入 idle 状态')
+              }, this.IDLE_GRACE_PERIOD)
+            }
           }
         }
       }
@@ -715,6 +749,11 @@ export class AudioPlayer {
    * 停止播放
    */
   stop(): void {
+    // 清理防抖定时器
+    if (this.idleTimeoutId) {
+      clearTimeout(this.idleTimeoutId)
+      this.idleTimeoutId = null
+    }
     this.audioQueue = []
     this.isPlaying = false
     this.nextStartTime = 0

@@ -72,7 +72,7 @@ func parseMergedFrames(data []byte) [][]byte {
 		// 安全检查：帧长度必须合理
 		// Opus 帧通常不超过 1000 字节
 		if frameLength == 0 || frameLength > 1000 || offset+2+frameLength > len(data) {
-			// 不是���并帧格式，当作单帧处理
+			// 不是合并帧格式，当作单帧处理
 			if offset == 0 {
 				return [][]byte{data}
 			}

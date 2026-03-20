@@ -121,7 +121,7 @@ export const defaultWSConfig: WSConfig = {
   maxReconnectAttempts: 5,
   heartbeatInterval: 10000, // 10秒
   preReconnectTime: 240000, // 240秒
-  voiceEndTimeout: 200, // 200ms
+  voiceEndTimeout: 600, // 600ms - 放宽超时以应对移动端 JS 主线程卡顿
 }
 
 // DraARLv1 数据包

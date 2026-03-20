@@ -25,6 +25,7 @@ import {
   Divider,
   CircularProgress,
   Alert,
+  Button,
   useTheme,
   useMediaQuery,
 } from '@mui/material'
@@ -58,7 +59,6 @@ import type {
 // 子组件
 import { MessageList } from './components/MessageList'
 import { PTTButton } from './components/PTTButton'
-import { AudioVisualizer } from './components/AudioVisualizer'
 import { GroupSelector } from './components/GroupSelector'
 import { RadioSettings } from './components/RadioSettings'
 import { DeviceList } from './components/DeviceList'
@@ -66,8 +66,8 @@ import { DeviceList } from './components/DeviceList'
 // 样式
 const useStyles = () => ({
   root: {
-    // 使用固定高度计算，突破父容器的 padding 限制
-    height: 'calc(100vh - 64px - 48px)', // 64px header + 24px padding (上下各 12px)
+    // 使用固定高度填满视口，减去顶部导航栏 64px
+    height: 'calc(100vh - 64px)',
     margin: { xs: -2, sm: -3 }, // 抵消父容器的 padding
     display: 'flex',
     flexDirection: 'column',
@@ -204,6 +204,7 @@ export const RadioPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [isPTTDown, setIsPTTDown] = useState(false)
   const [connectionConflict, setConnectionConflict] = useState(false) // 【新增】连接冲突状态
+  const [audioPermissionNeeded, setAudioPermissionNeeded] = useState(false) // 音频权限提示
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -268,11 +269,34 @@ export const RadioPage: React.FC = () => {
 
     initRadio()
 
+    // 检查音频权限状态（浏览器自动��放策略）
+    const checkAudioPermission = () => {
+      // 创建临时 AudioContext 检查状态
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      if (audioContext.state === 'suspended') {
+        setAudioPermissionNeeded(true)
+      }
+      audioContext.close()
+    }
+    checkAudioPermission()
+
     return () => {
       // 清理
       radioService.disconnect()
     }
   }, [user, token])
+
+  // 激活音频权限
+  const handleActivateAudio = useCallback(async () => {
+    try {
+      // 请求麦克风权限并激活 AudioContext
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      setAudioPermissionNeeded(false)
+    } catch (error) {
+      console.error('Failed to activate audio:', error)
+      setError('无法获取音频权限，请检查浏览器设置')
+    }
+  }, [])
 
   // 【自动刷新】定时刷新群组统计（每 5 秒）
   useEffect(() => {
@@ -427,18 +451,29 @@ export const RadioPage: React.FC = () => {
         </Box>
 
         <Box sx={styles.headerRight}>
-          <Chip
-            icon={<HeadsetIcon />}
-            label={onlineDevices.length}
-            size="small"
-            onClick={() => setDeviceListOpen(true)}
-          />
           {renderConnectionStatus()}
           <IconButton onClick={() => setSettingsOpen(true)}>
             <SettingsIcon />
           </IconButton>
         </Box>
       </Box>
+
+      {/* 音频权限提示 */}
+      {audioPermissionNeeded && (
+        <Alert
+          severity="info"
+          sx={{ alignItems: 'center' }}
+          action={
+            <Button color="inherit" size="small" onClick={handleActivateAudio}>
+              点击激活
+            </Button>
+          }
+        >
+          <Typography variant="body2">
+            🔊 点击"激活"以启用音频功能
+          </Typography>
+        </Alert>
+      )}
 
       {/* 错误提示 */}
       {error && (
@@ -473,18 +508,14 @@ export const RadioPage: React.FC = () => {
         />
       </Box>
 
-      {/* 音频可视化 */}
-      <Box sx={styles.visualizer}>
-        <AudioVisualizer
-          isActive={voiceState !== 'idle'}
-          isSending={voiceState === 'sending'}
-        />
-        {voiceState === 'receiving' && currentSpeaker && (
+      {/* 接收状态显示 */}
+      {voiceState === 'receiving' && currentSpeaker && (
+        <Box sx={styles.visualizer}>
           <Typography variant="body2" color="primary">
             🔴 {currentSpeaker.callsign}-{currentSpeaker.ssid}
           </Typography>
-        )}
-      </Box>
+        </Box>
+      )}
 
       {/* 输入区域 */}
       <Box sx={styles.inputArea}>

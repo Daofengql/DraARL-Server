@@ -10,6 +10,28 @@ export default defineConfig({
     cssMinify: true,
     rollupOptions: {
       output: {
+        // 入口 JS 文件
+        entryFileNames: 'assets/js/[name]-[hash].js',
+        // 代码分割的 chunk 文件
+        chunkFileNames: 'assets/js/[name]-[hash].js',
+        // 静态资源文件（CSS、字体、图片等）
+        assetFileNames: (assetInfo) => {
+          const name = assetInfo.name || ''
+          // CSS 文件
+          if (name.endsWith('.css')) {
+            return 'assets/css/[name]-[hash][extname]'
+          }
+          // 字体文件
+          if (/\.(woff2?|ttf|eot|otf)$/i.test(name)) {
+            return 'assets/fonts/[name]-[hash][extname]'
+          }
+          // 图片文件
+          if (/\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name)) {
+            return 'assets/img/[name]-[hash][extname]'
+          }
+          // 其他资源
+          return 'assets/[name]-[hash][extname]'
+        },
         manualChunks(id) {
           // React 核心库和 emotion（emotion 依赖 react，必须放在一起）
           if (id.includes('node_modules/react/') ||

@@ -15,6 +15,10 @@ const DraARLVersion = "DraA"
 // 固定头部大小
 const DraARLv1HeaderSize = 90
 
+// 最大包体大小（含头部）
+// 计算：90B 头部 + 3帧×(2B长度+~200B Opus) ≈ 700B，取整 800B
+const DraARLv1MaxPacketSize = 800
+
 // DraARLv1 数据包类型常量
 const (
 	DraARLTypeControl       byte = 0 // 控制指令

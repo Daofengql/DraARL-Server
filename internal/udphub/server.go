@@ -33,6 +33,14 @@ var (
 		},
 	}
 
+	// ==========================================
+	// 限速器：IP+Port 维度的包速率限制
+	// 最大 25 包/秒，超过则静默丢弃
+	// ==========================================
+	rateLimiter     = make(map[string]*rateLimitEntry)
+	rateLimiterMu   sync.Mutex
+	rateLimitMaxPps = 25 // 每秒最大包数
+
 	// Username 索引的设备映射 (DraARLv1)
 	devUsernameSSIDMap = make(map[string]*models.Device) // key: username-ssid
 
@@ -95,6 +103,50 @@ type CurrentConnPool struct {
 	LastPriority  int
 }
 
+// rateLimitEntry 限速器条目
+type rateLimitEntry struct {
+	count     int
+	timestamp int64 // Unix 秒
+}
+
+// checkRateLimit 检查 IP+Port 的包速率
+// 返回 true 表示允许通过，false 表示超限应丢弃
+func checkRateLimit(addr string) bool {
+	now := time.Now().Unix()
+
+	rateLimiterMu.Lock()
+	defer rateLimiterMu.Unlock()
+
+	entry, exists := rateLimiter[addr]
+	if !exists || entry.timestamp != now {
+		// 新条目或新的一秒，重置计数
+		rateLimiter[addr] = &rateLimitEntry{count: 1, timestamp: now}
+		return true
+	}
+
+	// 同一秒内，检查是否超限
+	if entry.count >= rateLimitMaxPps {
+		return false
+	}
+
+	entry.count++
+	return true
+}
+
+// cleanupRateLimiter 定期清理过期的限速器条目（由调用方在适当时机调用）
+func cleanupRateLimiter() {
+	now := time.Now().Unix()
+
+	rateLimiterMu.Lock()
+	defer rateLimiterMu.Unlock()
+
+	for addr, entry := range rateLimiter {
+		if now-entry.timestamp > 5 { // 清理 5 秒前的条目
+			delete(rateLimiter, addr)
+		}
+	}
+}
+
 // StartUDPServer 启动 UDP 服务器（DraARLv1 协议）
 func StartUDPServer(port int) error {
 	return StartDraARLServer(port)
@@ -117,6 +169,15 @@ func StartDraARLServer(port int) error {
 
 	// 启动认证失败记录清理器
 	StartAuthCleaner()
+
+	// 启动限速器定期清理（每 10 秒清理一次过期条目）
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanupRateLimiter()
+		}
+	}()
 
 	// 初始化公共群组
 	initPublicGroups()
@@ -209,6 +270,16 @@ func processDraARLConn(conn *net.UDPConn) {
 // remoteAddr: frp转发地址（用于发送响应）
 // realAddr: 真实客户端地址（用于识别设备）
 func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *net.UDPConn) {
+	// 【安全校验】数据包大小限制，静默丢弃（避免日志开销）
+	if len(data) > protocol.DraARLv1MaxPacketSize {
+		return
+	}
+
+	// 【限速策略】IP+Port 维度，25 包/秒上限，静默丢弃
+	if !checkRateLimit(realAddr.String()) {
+		return
+	}
+
 	packet, err := protocol.NewDraARLv1Packet(remoteAddr, data)
 	if err != nil {
 		log.Printf("[DECODE] DraARLv1 decode error from %v: %v", realAddr, err)

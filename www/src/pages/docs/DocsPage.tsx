@@ -421,7 +421,8 @@ function DeviceProtocolContent() {
 +--------+--------+--------+-----------------------------------------+
 
 固定头部：90 字节
-最小报文：90 字节`}
+最小报文：90 字节
+最大报文：800 字节（UDP 限制）`}
           </CodeBlock>
 
           <Typography variant="subtitle1" fontWeight={600} sx={{ mt: 2 }}>
@@ -545,6 +546,29 @@ Frame Data: Opus 帧数据（60ms）`}
             </Box>
             <Typography variant="body2" sx={{ mt: 1 }}>
               判断逻辑：若首字节值 &lt; 0x80，视为合并帧格式（长度前缀）；否则视为单帧格式。
+            </Typography>
+          </AlertBox>
+        </Stack>
+      </CollapsibleSection>
+
+      {/* 安全限制 */}
+      <CollapsibleSection title="安全限制" icon={<Security color="primary" />}>
+        <Stack spacing={2}>
+          <Typography variant="body1">
+            UDP 服务端实施以下安全策略，超出限制的数据包将被静默丢弃：
+          </Typography>
+          <Box sx={{ overflowX: 'auto' }}>
+            <InfoTable
+              headers={['限制项', '阈值', '说明']}
+              rows={[
+                ['最大包体', '800 字节', '含 90 字节头部，防止异常大包攻击'],
+                ['包速率', '25 包/秒', '按 IP+Port 维度限速，防止 DDoS 攻击'],
+              ]}
+            />
+          </Box>
+          <AlertBox type="info">
+            <Typography variant="body2">
+              正常语音通信（合并帧 ~8.3 包/秒，单帧 ~16.7 包/秒）远低于限速阈值，不会受到影响。
             </Typography>
           </AlertBox>
         </Stack>

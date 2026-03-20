@@ -47,6 +47,14 @@ func setupFrontend(engine *gin.Engine) {
 		c.FileFromFS("assets/"+c.Param("filepath"), http.FS(webStaticFS))
 	})
 
+	// 其他静态资源目录
+	for _, dir := range []string{"css", "js", "fonts", "img", "docs"} {
+		d := dir // 捕获循环变量
+		engine.GET("/"+d+"/*filepath", func(c *gin.Context) {
+			c.FileFromFS(d+c.Param("filepath"), http.FS(webStaticFS))
+		})
+	}
+
 	// 渲染 index.html 并动态替换 title
 	renderIndex := func(c *gin.Context) {
 		if indexHTMLTemplate == "" {

@@ -77,7 +77,42 @@ function writeString(view: DataView, offset: number, str: string): void {
   }
 }
 
+// 解析合并帧格式
+// 格式：[Frame1 Length(2B, 大端序)][Frame1 Data][Frame2 Length(2B)][Frame2 Data]
+// 兼容单帧格式（无长度前缀）
+function parseMergedFrames(data: Uint8Array): Uint8Array[] {
+  const frames: Uint8Array[] = []
+  let offset = 0
+
+  // 检查是否是合并帧格式
+  // 如果第一个字节的值小于 0x80，很可能是长度前缀（Opus 帧通常以 0x80+ 开头）
+  while (offset + 2 <= data.length) {
+    const frameLength = (data[offset] << 8) | data[offset + 1]
+
+    // 安全检查：帧长度必须合理
+    if (frameLength === 0 || frameLength > 1000 || offset + 2 + frameLength > data.length) {
+      // 不是合并帧格式，当作单帧处理
+      if (offset === 0) {
+        return [data]
+      }
+      break
+    }
+
+    // 提取帧数据
+    frames.push(data.slice(offset + 2, offset + 2 + frameLength))
+    offset += 2 + frameLength
+  }
+
+  // 如果没有解析出任何帧，返回原始数据作为单帧
+  if (frames.length === 0) {
+    return [data]
+  }
+
+  return frames
+}
+
 // 将 Opus 帧数组解码为 WAV Blob
+// 支持合并帧格式：自动解析并解码
 async function opusFramesToWav(frames: Uint8Array[]): Promise<Blob> {
   if (frames.length === 0) {
     throw new Error('No frames to decode')
@@ -91,14 +126,18 @@ async function opusFramesToWav(frames: Uint8Array[]): Promise<Blob> {
   await decoder.ready
 
   try {
-    // 解码所有帧
+    // 解码所有帧（先解析合并帧格式，再解码子帧）
     const decodedFrames: Float32Array[] = []
-    for (const frame of frames) {
-      try {
-        const decoded = decoder.decodeFrame(frame)
-        decodedFrames.push(decoded.channelData[0])
-      } catch (e) {
-        // 静默忽略解码失败的帧
+    for (const frameOrMerged of frames) {
+      // 解析合并帧格式（兼容单帧）
+      const subFrames = parseMergedFrames(frameOrMerged)
+      for (const frame of subFrames) {
+        try {
+          const decoded = decoder.decodeFrame(frame)
+          decodedFrames.push(decoded.channelData[0])
+        } catch (e) {
+          // 静默忽略解码失败的帧
+        }
       }
     }
     if (decodedFrames.length === 0) {

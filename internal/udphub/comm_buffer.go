@@ -53,7 +53,47 @@ func generateSessionID(deviceID int) string {
 	return fmt.Sprintf("%d", deviceID)
 }
 
+// parseMergedFrames 解析合并帧格式
+// 格式：[Frame1 Length(2B, 大端序)][Frame1 Data][Frame2 Length(2B)][Frame2 Data]
+// 兼容单帧格式（无长度前缀，直接返回原始数据）
+func parseMergedFrames(data []byte) [][]byte {
+	// 如果数据太短，不可能是合并帧格式
+	if len(data) < 3 {
+		return [][]byte{data}
+	}
+
+	var frames [][]byte
+	offset := 0
+
+	for offset+2 <= len(data) {
+		// 读取帧长度（大端序）
+		frameLength := int(data[offset])<<8 | int(data[offset+1])
+
+		// 安全检查：帧长度必须合理
+		// Opus 帧通常不超过 1000 字节
+		if frameLength == 0 || frameLength > 1000 || offset+2+frameLength > len(data) {
+			// 不是���并帧格式，当作单帧处理
+			if offset == 0 {
+				return [][]byte{data}
+			}
+			break
+		}
+
+		// 提取帧数据
+		frames = append(frames, data[offset+2:offset+2+frameLength])
+		offset += 2 + frameLength
+	}
+
+	// 如果没有解析出任何帧，返回原始数据作为单帧
+	if len(frames) == 0 {
+		return [][]byte{data}
+	}
+
+	return frames
+}
+
 // AppendPacket 追加音频数据包（精简版，只记录 ID）
+// pcmData 可能是合并帧格式（包含多个 Opus 子帧），需要先解析再存储
 // deviceID: 设备ID，正数为普通设备，负数为幽灵设备
 func (cb *CommBuffer) AppendPacket(
 	deviceID int,
@@ -95,16 +135,21 @@ func (cb *CommBuffer) AppendPacket(
 		cb.sessions[sessionKey] = session
 	}
 
-	// 追加数据（带帧长度前缀：2字节 little-endian + Opus 数据）
+	// 解析合并帧格式，提取所有子帧
+	subFrames := parseMergedFrames(pcmData)
+
+	// 逐个写入子帧（带帧长度前缀：2字节 little-endian + Opus 数据）
 	session.mu.Lock()
-	// 写入帧长度前缀（2字节，little-endian）
-	lenBuf := make([]byte, 2)
-	binary.LittleEndian.PutUint16(lenBuf, uint16(len(pcmData)))
-	session.Buffer.Write(lenBuf)
-	// 写入 Opus 帧数据
-	session.Buffer.Write(pcmData)
-	session.PacketCount++
-	session.TotalBytes += len(pcmData) + 2 // 包含长度前缀
+	for _, frame := range subFrames {
+		// 写入帧长度前缀（2字节，little-endian）
+		lenBuf := make([]byte, 2)
+		binary.LittleEndian.PutUint16(lenBuf, uint16(len(frame)))
+		session.Buffer.Write(lenBuf)
+		// 写入 Opus 帧数据
+		session.Buffer.Write(frame)
+		session.PacketCount++
+		session.TotalBytes += len(frame) + 2 // 包含长度前缀
+	}
 	session.LastPacketTime = now
 	session.mu.Unlock()
 

@@ -420,7 +420,7 @@ export class AudioPlayer {
   // --- 抖动缓冲配置 ---
   // 注意：现在每个数据包包含 2 个 60ms Opus 帧（共 120ms），参数已针对合并帧优化
   private maxQueueLength = 8 // 最大队列长度：8 × 120ms ≈ 1 秒，平衡延迟与抗抖动
-  private minBufferFrames = 2 // 预缓冲帧数：2 × 120ms = 240ms，对抗网络抖动的初始缓冲
+  private minBufferFrames = 3 // 预缓冲帧数：3 × 120ms = 360ms，公网环境下更稳健
   private isBuffering = true  // 标记当前是否处于"等待缓冲积攒"的状态
 
   // 音量控制
@@ -641,9 +641,9 @@ export class AudioPlayer {
     const currentTime = this.audioContext.currentTime
 
     // 如果 nextStartTime 落后于当前时间，说明发生了音频饥饿（或者刚起播）
-    // 需要重新对齐时间轴，并增加 50ms (0.05秒) 的初始安全缓冲，对抗网络抖动
+    // 需要重新对齐时间轴，并增加 100ms (0.1秒) 的初始安全缓冲，对抗公网抖动
     if (this.nextStartTime < currentTime) {
-      this.nextStartTime = currentTime + 0.05
+      this.nextStartTime = currentTime + 0.1
     }
 
     // 将队列中所有的帧立刻全部推入 Web Audio API 的调度队列
@@ -661,14 +661,16 @@ export class AudioPlayer {
       const nodeEndTime = this.nextStartTime + audioBuffer.duration
       this.nextStartTime = nodeEndTime
 
-      // onended 仅用于检测播放队列是否彻底干涸（饥饿），绝不参与调度
+      // onended 用于检测播放是否结束
+      // 只有当队列空且时间已过时才标记结束，但不切换 isBuffering
+      // 这样新数据到达时可以快速恢复播放，避免 360ms 的等待
       source.onended = () => {
-        // 检查当前时间是否达到了我们计划排期的最后时间
-        // 减去 0.01 秒容差，如果达到了，说明底层缓冲已经被彻底播光了
-        if (this.audioContext && this.audioContext.currentTime >= this.nextStartTime - 0.01) {
-          this.isPlaying = false
-          this.isBuffering = true
-          this.setState('idle')
+        if (this.audioQueue.length === 0 && this.audioContext) {
+          // 放宽检测条件，使用 50ms 容差
+          if (this.audioContext.currentTime >= this.nextStartTime - 0.05) {
+            this.isPlaying = false
+            this.setState('idle')
+          }
         }
       }
     }

@@ -29,7 +29,7 @@ interface MessageListProps {
   currentUser?: any    // 当前登录用户信息
   hasMore?: boolean    // 是否还有更多历史消息
   isLoadingMore?: boolean  // 是否正在加载更多
-  onLoadMore?: () => void  // 加载��多回调
+  onLoadMore?: () => void  // 加载更多回调
 }
 
 // 样式

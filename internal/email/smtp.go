@@ -97,7 +97,7 @@ func (s *SMTPService) SendMail(to, subject, body string) error {
 	}
 
 	m := gomail.NewMessage()
-	m.SetHeader("From", fmt.Sprintf("%s <%s>", s.config.SenderName, s.config.SenderEmail))
+	m.SetAddressHeader("From", s.config.SenderEmail, s.config.SenderName)
 	m.SetHeader("To", to)
 	m.SetHeader("Subject", subject)
 	m.SetBody("text/html", body)

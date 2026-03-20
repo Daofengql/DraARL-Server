@@ -625,12 +625,12 @@ export class AudioPlayer {
    * 重构缓冲调度机制，实现预缓冲状态机
    */
   private queueAudio(audioBuffer: AudioBuffer): void {
-    // 【核心修复】如���在新数据包到达时有等待中的"宣告结束"定时器，立刻取消！
+    // 【核心修复】如果在新数据包到达时有等待中的"宣告结束"定时器，立刻取消！
     // 这挽救了因为移动端主线程卡顿导致的"假中断"问题
     if (this.idleTimeoutId) {
       clearTimeout(this.idleTimeoutId)
       this.idleTimeoutId = null
-      console.log('[AudioPlayer] 新��据到达，取消防抖定时器')
+      console.log('[AudioPlayer] 新数据到达，取消防抖定时器')
     }
 
     // 1. 防止内存和延迟无限增长

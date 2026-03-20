@@ -271,7 +271,7 @@ export const RadioPage: React.FC = () => {
 
     initRadio()
 
-    // 检查音频权限状态（浏览器自动��放策略）
+    // 检查音频权限状态（浏览器自动博放策略）
     const checkAudioPermission = () => {
       // 创建临时 AudioContext 检查状态
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()

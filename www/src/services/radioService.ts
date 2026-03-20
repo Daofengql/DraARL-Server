@@ -19,7 +19,7 @@ import type {
 } from '../types/radio'
 import { OpusDecoder } from 'opus-decoder'
 
-// 消息��列号（用于确保同一毫秒内的消息 ID 唯一）
+// 消息序列号（用于确保同一毫秒内的消息 ID 唯一）
 let messageSequence = 0
 
 // 辅助函数：生成消息 ID（本地使用，不再存储到 IndexedDB）

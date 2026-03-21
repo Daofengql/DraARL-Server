@@ -129,6 +129,20 @@ const useStyles = () => ({
     fontSize: '0.7rem',
     opacity: 0.7,
   },
+  // 时间分割线样式
+  timeDivider: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    py: 2,
+  },
+  timeDividerText: {
+    fontSize: '0.75rem',
+    color: 'text.secondary',
+    bgcolor: 'background.default',
+    px: 2,
+    borderRadius: 1,
+  },
 })
 
 // 语音消息组件 - 使用 Web Audio API 播放（支持 Blob 和 URL）
@@ -403,8 +417,12 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     useEffect(() => {
       if (messages.length === 0) {
         isInitialLoadRef.current = true
+        prevLastMsgTimeRef.current = 0
       }
     }, [messages.length])
+
+    // 记录上一次最新消息的时间戳，用于判断是否是新消息
+    const prevLastMsgTimeRef = useRef(0)
 
     // 自动滚动到底部
     useEffect(() => {
@@ -413,15 +431,30 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
         if (isInitialLoadRef.current) {
           scrollRef.current.scrollTop = scrollRef.current.scrollHeight
           isInitialLoadRef.current = false
+          // 记录最新消息时间
+          if (messages.length > 0) {
+            prevLastMsgTimeRef.current = messages[messages.length - 1].timestamp
+          }
           return
         }
 
-        // 后续：只在滚动位置接近底部时才自动滚动（不打扰用户查看历史）
-        const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-        const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
-        if (isNearBottom) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+        // 检查是否有新消息（最新消息时间戳更新）
+        const lastMsgTime = messages.length > 0 ? messages[messages.length - 1].timestamp : 0
+        const hasNewMessage = lastMsgTime > prevLastMsgTimeRef.current
+        prevLastMsgTimeRef.current = lastMsgTime
+
+        // 新消息到达时，只有用户在底部附近才自动滚动
+        if (hasNewMessage) {
+          const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
+          const isNearBottom = scrollHeight - scrollTop - clientHeight < 150
+          if (isNearBottom) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+          }
+          return
         }
+
+        // 其他情况（如消息同步更新、加载历史消息）：保持当前位置
+        // 加载历史消息时，滚动位置由 handleScroll 和 useEffect 恢复逻辑处理
       }
     }, [messages])
 
@@ -432,6 +465,24 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
         hour: '2-digit',
         minute: '2-digit',
       })
+    }
+
+    // 格式化时间分割显示（年月日 时:分）
+    const formatTimeDivider = (timestamp: number) => {
+      const date = new Date(timestamp)
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      const hour = String(date.getHours()).padStart(2, '0')
+      const minute = String(date.getMinutes()).padStart(2, '0')
+      return `${year}-${month}-${day}  ${hour}:${minute}`
+    }
+
+    // 判断是否需要时间分割（10分钟间隔）
+    const needsTimeDivider = (currentMsg: RadioMessage, prevMsg?: RadioMessage): boolean => {
+      if (!prevMsg) return true // 第一条消息总是显示时间分割
+      const diff = currentMsg.timestamp - prevMsg.timestamp
+      return diff >= 10 * 60 * 1000 // 10分钟，单位毫秒
     }
 
     // 获取头像颜色
@@ -508,7 +559,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
             </Typography>
           </Box>
         )}
-        {messages.map((message) => {
+        {messages.map((message, index) => {
           // 【核心修复】增强己方消息的判断逻辑，防止类型不匹配（如 "10" === 10 为 false）
           const isMatchCallsign = String(message.senderCallsign).toUpperCase() === String(currentCallsign).toUpperCase()
           const isMatchSSID = String(message.senderSSID) === String(currentSSID)
@@ -531,103 +582,118 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
             : (cachedInfo?.nickname || message.senderNickname)
           // ------------------------------------
 
+          // 判断是否需要显示时间分割线
+          const prevMessage = index > 0 ? messages[index - 1] : undefined
+          const showTimeDivider = needsTimeDivider(message, prevMessage)
+
           return (
-            <Box
-              key={message.id}
-              sx={{
-                ...styles.messageWrapper,
-                ...(isSelf && styles.messageWrapperSelf),
-              }}
-            >
-              {/* 头像 */}
-              {!isSelf && (
-                <Avatar
-                  src={avatarUrl}
-                  sx={{
-                    ...styles.avatar,
-                    bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
-                  }}
-                >
-                  {!avatarUrl && message.senderCallsign.charAt(0)}
-                </Avatar>
-              )}
-
-              {/* 消息气泡 */}
-              <Paper
-                elevation={0}
-                sx={{
-                  ...styles.messageBubble,
-                  ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
-                }}
-              >
-                {/* 头部 - 显示发送方信息 */}
-                {!isSelf && (
-                  <Box sx={styles.messageHeader}>
-                    <Box sx={styles.senderInfo}>
-                      <Typography variant="subtitle2" sx={styles.callsignChip}>
-                        {message.senderCallsign}-{message.senderSSID}
-                      </Typography>
-                      {nickname && (
-                        <Typography variant="caption" sx={styles.nickname}>
-                          ({nickname})
-                        </Typography>
-                      )}
-                    </Box>
-                  </Box>
-                )}
-
-                {/* --- 【核心修复】自己发的消息也显示昵称 --- */}
-                {isSelf && (
-                  <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
-                    <Box sx={styles.senderInfo}>
-                      {nickname && (
-                        <Typography variant="caption" sx={styles.nickname}>
-                          ({nickname})
-                        </Typography>
-                      )}
-                      <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                        {message.senderCallsign}-{message.senderSSID}
-                      </Typography>
-                    </Box>
-                  </Box>
-                )}
-                {/* ------------------------------------------------ */}
-
-                {/* 内容 */}
-                <Box sx={styles.messageContent}>
-                  {message.type === 'text' ? (
-                    <Typography variant="body2">{message.content as string}</Typography>
-                  ) : (
-                    <VoiceMessage
-                      duration={message.duration || 0}
-                      isPlayed={message.isPlayed || false}
-                      isSelf={isSelf}
-                      audioData={message.content as Blob}
-                    />
-                  )}
-                </Box>
-
-                {/* 底部 */}
-                <Box sx={styles.messageFooter}>
-                  <Typography variant="caption">
-                    {formatTime(message.timestamp)}
+            <React.Fragment key={message.id}>
+              {/* 时间分割线 */}
+              {showTimeDivider && (
+                <Box sx={styles.timeDivider}>
+                  <Typography sx={styles.timeDividerText}>
+                    {formatTimeDivider(message.timestamp)}
                   </Typography>
                 </Box>
-              </Paper>
+              )}
 
-              {/* 自己的头像 */}
-              {isSelf && (
-                <Avatar
-                  src={avatarUrl}
+              {/* 消息 */}
+              <Box
+                sx={{
+                  ...styles.messageWrapper,
+                  ...(isSelf && styles.messageWrapperSelf),
+                }}
+              >
+                {/* 头像 */}
+                {!isSelf && (
+                  <Avatar
+                    src={avatarUrl}
+                    sx={{
+                      ...styles.avatar,
+                      bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
+                    }}
+                  >
+                    {!avatarUrl && message.senderCallsign.charAt(0)}
+                  </Avatar>
+                )}
+
+                {/* 消息气泡 */}
+                <Paper
+                  elevation={0}
                   sx={{
-                    ...styles.avatar,
-                    bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
+                    ...styles.messageBubble,
+                    ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
                   }}
                 >
-                  {!avatarUrl && message.senderCallsign.charAt(0)}
-                </Avatar>
-              )}
-            </Box>
+                  {/* 头部 - 显示发送方信息 */}
+                  {!isSelf && (
+                    <Box sx={styles.messageHeader}>
+                      <Box sx={styles.senderInfo}>
+                        <Typography variant="subtitle2" sx={styles.callsignChip}>
+                          {message.senderCallsign}-{message.senderSSID}
+                        </Typography>
+                        {nickname && (
+                          <Typography variant="caption" sx={styles.nickname}>
+                            ({nickname})
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* --- 【核心修复】自己发的消息也显示昵称 --- */}
+                  {isSelf && (
+                    <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
+                      <Box sx={styles.senderInfo}>
+                        {nickname && (
+                          <Typography variant="caption" sx={styles.nickname}>
+                            ({nickname})
+                          </Typography>
+                        )}
+                        <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                          {message.senderCallsign}-{message.senderSSID}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  )}
+                  {/* ------------------------------------------------ */}
+
+                  {/* 内容 */}
+                  <Box sx={styles.messageContent}>
+                    {message.type === 'text' ? (
+                      <Typography variant="body2">{message.content as string}</Typography>
+                    ) : (
+                      <VoiceMessage
+                        duration={message.duration || 0}
+                        isPlayed={message.isPlayed || false}
+                        isSelf={isSelf}
+                        audioData={message.content as Blob}
+                      />
+                    )}
+                  </Box>
+
+                  {/* 底部 */}
+                  <Box sx={styles.messageFooter}>
+                    <Typography variant="caption">
+                      {formatTime(message.timestamp)}
+                    </Typography>
+                  </Box>
+                </Paper>
+
+                {/* 自己的头像 */}
+                {isSelf && (
+                  <Avatar
+                    src={avatarUrl}
+                    sx={{
+                      ...styles.avatar,
+                      bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
+                    }}
+                  >
+                    {!avatarUrl && message.senderCallsign.charAt(0)}
+                  </Avatar>
+                )}
+              </Box>
+            </React.Fragment>
           )
         })}
       </Box>

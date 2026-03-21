@@ -330,6 +330,22 @@ func (a *Asset) IsFile() bool {
 	return a.Type == "file"
 }
 
+// UserDevicePreference 用户设备偏好设置
+// 用于存储各平台（Android/iOS/Windows/macOS/Web）的独立偏好设置
+type UserDevicePreference struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      uint      `gorm:"not null;uniqueIndex:uk_user_devmodel;column:user_id" json:"user_id"`     // 用户ID，外键关联 users表
+	DevModel    uint8     `gorm:"not null;uniqueIndex:uk_user_devmodel;column:dev_model" json:"dev_model"` // 设备型号: 101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web
+	LastGroupID uint      `gorm:"default:0;column:last_group_id" json:"last_group_id"`                     // 该平台最后使用的群组ID
+	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (UserDevicePreference) TableName() string {
+	return "user_device_preferences"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -345,5 +361,6 @@ func AutoMigrate() error {
 		&GroupMember{},
 		&CommRecord{},
 		&Asset{},
+		&UserDevicePreference{},
 	)
 }

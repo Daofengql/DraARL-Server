@@ -237,11 +237,12 @@ func GetRadioGroupDevices(c *gin.Context) {
 
 // UpdateRadioGroupRequest 更新幽灵设备群组请求
 type UpdateRadioGroupRequest struct {
-	GroupID int `json:"group_id" binding:"required"`
+	GroupID  int `json:"group_id" binding:"required"`
+	DevModel int `json:"dev_model"` // 设备型号（101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web）
 }
 
 // UpdateRadioGroup 更新幽灵设备群组 (API-005)
-// 【核心修复】同时更新 WSDevice 和 GhostDevice 的 GroupID，确保跨协议路由正确
+// 【核心修复】支持分平台群组偏好，同时更新 WSDevice 和 GhostDevice 的 GroupID
 func UpdateRadioGroup(c *gin.Context) {
 	var req UpdateRadioGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -264,46 +265,76 @@ func UpdateRadioGroup(c *gin.Context) {
 	}
 	_ = group // 避免未使用变量警告
 
-	// 获取幽灵设备
-	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
-	if !ok || ghostDevice == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code":    200,
-			"message": "幽灵设备未连接，群组设置将在下次连接时生效",
-			"data": gin.H{
-				"group_id": req.GroupID,
-			},
-		})
-		return
+	// 如果未指定 dev_model，默认为 Web (105)
+	devModel := byte(req.DevModel)
+	if devModel == 0 {
+		devModel = 105 // 默认 Web 端
 	}
 
-	oldGroupID := ghostDevice.GroupID
+	oldGroupID := 0
 
-	// 【关键修复】同时更新两个管理器中的 GroupID
-	// 1. 更新 GhostDeviceManager 中的 GroupID
-	if err := ws.GlobalGhostManager.SetGhostDeviceGroup(userID, req.GroupID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新群组失败"})
-		return
+	// 【分平台处理】根据 dev_model 更新对应的设备群组
+	if devModel == 105 {
+		// Web 端 (WebSocket 幽灵设备)
+		ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
+		if ok && ghostDevice != nil {
+			oldGroupID = ghostDevice.GroupID
+
+			// 1. 更新 GhostDeviceManager 中的 GroupID
+			if err := ws.GlobalGhostManager.SetGhostDeviceGroup(userID, req.GroupID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新群组失败"})
+				return
+			}
+
+			// 2. 更新 WSConnectionManager 中的 WSDevice.GroupID
+			if ghostDevice.Conn != nil {
+				ws.GlobalManager.SetDeviceGroup(ghostDevice.Conn, req.GroupID)
+			}
+		}
+	} else {
+		// UDP 幽灵设备 (101-104)
+		// 需要从 JWT 中获取 username 来查找设备
+		username, _ := c.Get("username")
+		if usernameStr, ok := username.(string); ok && usernameStr != "" {
+			// SSID 等于 DevModel（幽灵设备的 SSID 规则）
+			ssid := devModel
+			if ghostDev := udphub.GlobalUDPGhostManager.Get(usernameStr, ssid); ghostDev != nil {
+				oldGroupID = ghostDev.GroupID
+				// 更新 UDP 幽灵设备的群组
+				if err := udphub.GlobalUDPGhostManager.SetDeviceGroup(usernameStr, ssid, req.GroupID); err != nil {
+					log.Printf("[RADIO] 警告: 更新 UDP 幽灵设备群组失败: %v", err)
+				}
+			}
+		}
 	}
 
-	// 2. 更新 WSConnectionManager 中的 WSDevice.GroupID（路由时使用这个）
-	if ghostDevice.Conn != nil {
-		ws.GlobalManager.SetDeviceGroup(ghostDevice.Conn, req.GroupID)
-	}
-
-	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 从群组 %d 切换到群组 %d", userID, oldGroupID, req.GroupID)
-
-	// 【持久化】将用户的群组偏好保存到数据库，以便下次登录时恢复
+	// 【持久化】保存分平台群组偏好到 user_device_preferences 表
 	userRepo := gormdb.NewUserRepository()
-	if err := userRepo.UpdateLastGroupID(userID, req.GroupID); err != nil {
-		log.Printf("[RADIO] 警告: 更新用户 %d 的 LastGroupID 失败: %v", userID, err)
+	if err := userRepo.UpsertUserDevicePreference(uint(userID), devModel, uint(req.GroupID)); err != nil {
+		log.Printf("[RADIO] 警告: 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
 		// 不影响响应，群组切换已成功
+	}
+
+	// 【向后兼容】同时更新 users.last_group_id（Web 端）
+	if devModel == 105 {
+		if err := userRepo.UpdateLastGroupID(userID, req.GroupID); err != nil {
+			log.Printf("[RADIO] 警告: 更新用户 %d 的 LastGroupID 失败: %v", userID, err)
+		}
+	}
+
+	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 设备 %d 从群组 %d 切换到群组 %d", userID, devModel, oldGroupID, req.GroupID)
+
+	// 获取用户名用于缓存失效
+	username, _ := c.Get("username")
+	usernameStr := ""
+	if username != nil {
+		usernameStr = username.(string)
 	}
 
 	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新的群组设置
 	// 必须传入 username，否则 GetUserByName 使用的 userByNameKey 缓存不会被清除
-	if userCache := cache.GetUserCache(); userCache != nil {
-		if err := userCache.InvalidateUser(c.Request.Context(), userID, ghostDevice.Username); err != nil {
+	if userCache := cache.GetUserCache(); userCache != nil && usernameStr != "" {
+		if err := userCache.InvalidateUser(c.Request.Context(), userID, usernameStr); err != nil {
 			log.Printf("[RADIO] 警告: 失效用户 %d 缓存失败: %v", userID, err)
 		}
 	}

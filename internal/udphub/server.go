@@ -289,30 +289,60 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	totalStats.PacketNumber++
 	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 
-	// 查找已存在的设备
-	dev, exists := devUsernameSSIDMap[usernameSSID]
-	if !exists {
+	// ==========================================
+	// 【新增】JWT 认证包处理 (Type=1)
+	// 幽灵设备 (DevModel 101-104) 通过 JWT Token 认证
+	// ==========================================
+	if packet.Type == protocol.DraARLTypeJWTAuth {
+		HandleJWTAuthPacket(packet, realAddr, conn)
+		return
+	}
+
+	// ==========================================
+	// 【新增】SSID 合法性检查
+	// 普通设备不能使用保留 SSID 范围 (100-105 和 236-255)
+	// ==========================================
+	// 先查找设备（包括幽灵设备），避免误拦截已认证的幽灵设备
+	dev, isGhost := getDeviceFromMemory(packet.Username, packet.SSID, packet.UDPAddr)
+
+	// 只有当设备不存在（未认证的新设备）且 SSID 为保留范围时才拒绝
+	if dev == nil && protocol.IsReservedSSID(packet.SSID) {
+		// 幽灵设备 SSID 只能通过 JWT 认证获得，不能通过设备密码认证
+		log.Printf("[AUTH] SSID %d is reserved, device: %s (use JWT auth instead)", packet.SSID, usernameSSID)
+		return
+	}
+
+	if dev == nil {
 		// 新设备，需要先认证
 		handleNewDraARLDevice(packet, realAddr, conn, usernameSSID)
 		return
 	}
 
 	// ==========================================
-	// 修复1：即使设备已在内存中(如从数据库加载)，
-	// 当它发送心跳包上线或更换 IP 端口时，依然需要执行密码鉴权
+	// 已存在设备的处理
 	// ==========================================
 	if packet.Type == protocol.DraARLTypeHeartbeat {
 		currentAddr := realAddr.String()
-		// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
-		if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
-			authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
-			if !authResult.Success {
-				log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
-				return // 密码错误，直接丢弃该数据包
+
+		// 幽灵设备心跳处理：不验证密码，只更新状态
+		if isGhost {
+			// 幽灵设备已在 JWT 认证时验证过，心跳只更新活动状态
+			dev.LastPacketTime = packet.TimeStamp
+			dev.UDPAddr = packet.UDPAddr
+			// 继续后续处理
+		} else {
+			// 普通设备心跳：可能需要重新鉴权
+			// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
+			if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
+				authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
+				if !authResult.Success {
+					log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
+					return // 密码错误，直接丢弃该数据包
+				}
+				// 鉴权成功后，补全由于直接从 DB 加载可能缺失的呼号字段
+				dev.CallSign = authResult.CallSign
+				log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 			}
-			// 鉴权成功后，补全由于直接从 DB 加载可能缺失的呼号字段
-			dev.CallSign = authResult.CallSign
-			log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 		}
 	}
 
@@ -341,7 +371,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 			// 群组已禁用，静默丢弃数据包（避免语音包持续发送时刷屏日志）
 			return
 		}
-		parseDraARL(packet, data, dev, conn, gp, realAddr)
+		parseDraARL(packet, data, dev, conn, gp, realAddr, isGhost)
 	} else {
 		// 找不到对应的群组实例
 		// 可能是数据库中删除了该群组，或者设备被分配了一个错误的群组 ID
@@ -349,6 +379,44 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 			log.Printf("[ROUTING] 路由丢弃: 设备 %s 请求的群组 ID: %d 不存在", dev.Username, targetGroupID)
 		}
 	}
+}
+
+// getDeviceFromMemory 获取设备 (先查普通设备，再查 UDP 幽灵设备)
+// 返回: device, isGhost (是否为 UDP 幽灵设备)
+// 参数: username - 用户名（可能为空，幽灵设备发送时不带用户名）
+// 参数: ssid - 设备 SSID
+// 参数: udpAddr - UDP 地址（用于在 username 为空时查找幽灵设备）
+func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*models.Device, bool) {
+	// 1. 如果 username 不为空，直接按 username-ssid 查找
+	if username != "" {
+		// 查普通设备
+		usernameSSID := protocol.GetUsernameSSID(username, ssid)
+		if dev, exists := devUsernameSSIDMap[usernameSSID]; exists {
+			return dev, false
+		}
+
+		// 查 UDP 幽灵设备
+		if ghost := GlobalUDPGhostManager.Get(username, ssid); ghost != nil {
+			return ghost, true
+		}
+
+		return nil, false
+	}
+
+	// 2. username 为空时，通过 SSID + UDP 地址查找幽灵设备
+	// 幽灵设备发送数据包时 username 为空，需要通过地址匹配
+	if protocol.IsGhostSSID(ssid) && udpAddr != nil {
+		// 遍历幽灵设备，匹配 SSID 和 UDP 地址
+		ghosts := GlobalUDPGhostManager.GetAll()
+		addrStr := udpAddr.String()
+		for _, ghost := range ghosts {
+			if ghost.SSID == ssid && ghost.UDPAddr != nil && ghost.UDPAddr.String() == addrStr {
+				return ghost, true
+			}
+		}
+	}
+
+	return nil, false
 }
 
 // handleNewDraARLDevice 处理新 DraARLv1 设备
@@ -361,10 +429,10 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		return
 	}
 
-	// 【安全校验】SSID=105 保留给 Ghost 设备（Web 端 JWT 认证）使用
-	// 普通设备不允许使用此 SSID
-	if packet.SSID == protocol.ReservedSSIDForGhost {
-		log.Printf("[AUTH] Device rejected: SSID %d is reserved for web client, device: %s", packet.SSID, usernameSSID)
+	// 【安全校验】幽灵设备保留 SSID (100-105) 只能通过 JWT 认证
+	// 普通设备不允许使用这些 SSID
+	if protocol.IsGhostSSID(packet.SSID) {
+		log.Printf("[AUTH] Device rejected: SSID %d is reserved for ghost devices (use JWT auth), device: %s", packet.SSID, usernameSSID)
 		return
 	}
 
@@ -431,7 +499,8 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 
 // parseDraARL 解析并处理 DraARLv1 报文
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
-func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr) {
+// isGhost: 是否为 UDP 幽灵设备
+func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
 	switch packet.Type {
 	case protocol.DraARLTypeControl:
 		// 控制指令
@@ -443,7 +512,7 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 
 	case protocol.DraARLTypeHeartbeat:
 		// 心跳包
-		handleDraARLHeartbeat(packet, data, dev, conn, gp, realAddr)
+		handleDraARLHeartbeat(packet, data, dev, conn, gp, realAddr, isGhost)
 
 	case protocol.DraARLTypeConfig:
 		// 设备配置
@@ -516,7 +585,8 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 
 // handleDraARLHeartbeat 处理 DraARLv1 心跳包
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
-func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr) {
+// isGhost: 是否为 UDP 幽灵设备
+func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
 	wasOnline := dev.ISOnline
 	currentAddr := packet.UDPAddr.String()
 	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
@@ -557,8 +627,8 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		dev.IsReconnecting = false
 	}
 
-	// 记录日志
-	if !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
+	// 记录日志（非幽灵设备才记录）
+	if !isGhost && !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
 		logBuffer <- dev
 		dev.Loged = true
 	}
@@ -582,8 +652,15 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 
 		// QTH 查询使用真实 IP
 		dev.QTH = getQTH(realAddr.IP.String())
-		log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
-			dev.Username, dev.Name, realAddr, dev.QTH, gp.ID, dev.DevModel)
+
+		// 日志区分幽灵设备和普通设备
+		if isGhost {
+			log.Printf("[ONLINE] UDP幽灵设备 %s-%d 已上线 (地址: %v, 群组: %d, 型号: %d)",
+				dev.Username, dev.SSID, realAddr, gp.ID, dev.DevModel)
+		} else {
+			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
+				dev.Username, dev.Name, realAddr, dev.QTH, gp.ID, dev.DevModel)
+		}
 
 		dev.ISOnline = true
 	}
@@ -664,14 +741,39 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 		packet.DATA,  // 原始语音数据
 	)
 
-	// 1. 在本群组内广播（UDP 设备）
+	// 1. 在本群组内广播（UDP 普通设备）
 	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
-	// 2. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
+	// 2. 【新增】转发给本群组的 UDP 幽灵设备
+	forwardToGhostDevices(dev.Username, dev.SSID, gp.ID, refilledData)
+
+	// 3. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
 	forwardVoiceToLinkedGroups(dev, refilledData, gp.ID)
 
-	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	// 4. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
 	BroadcastVoiceFromUDP(dev, refilledData, gp.ID)
+}
+
+// forwardToGhostDevices 转发数据包给 UDP 幽灵设备
+// sourceUsername: 源设备用户名
+// sourceSSID: 源设备 SSID
+// groupID: 目标群组 ID
+// data: 要转发的数据
+func forwardToGhostDevices(sourceUsername string, sourceSSID byte, groupID int, data []byte) {
+	ghosts := GlobalUDPGhostManager.GetByGroup(groupID)
+	for _, ghost := range ghosts {
+		// 跳过发送者自己
+		if ghost.Username == sourceUsername && ghost.SSID == sourceSSID {
+			continue
+		}
+		// 检查设备状态
+		if !ghost.ISOnline || ghost.UDPAddr == nil || ghost.DisableRecv {
+			continue
+		}
+		// 【性能优化】使用批量发送器，减少系统调用开销
+		// 避免在循环中直接调用 WriteToUDP 造成系统调用风暴
+		BatchSendUDP(data, ghost.UDPAddr)
+	}
 }
 
 // forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
@@ -700,14 +802,17 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 			// 获取目标群组的转发
 			if targetGroup, exists := GetGroupFromCache(targetID); exists {
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
-				// 1. 发送给目标组的 UDP 设备（跨组不排除自己，因为源设备不在目标组）
+				// 1. 发送给目标组的 UDP 普通设备（跨组不排除自己，因为源设备不在目标组）
 				for _, targetDev := range pool.DevConnList {
 					if canForwardToDevice(targetDev, 0, targetID, false) {
 						globalConn.WriteToUDP(data, targetDev.UDPAddr)
 					}
 				}
 
-				// 2. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
+				// 2. 【新增】转发给目标组的 UDP 幽灵设备
+				forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
+
+				// 3. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
 				// 否则 WS 客户端永远听不到其他实体组传来的 UDP 声音
 				BroadcastVoiceFromUDP(dev, data, targetID)
 			}
@@ -732,10 +837,13 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 	// 1. 在本群组内广播（UDP 设备）
 	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
-	// 2. 跨虚拟组转发文本消息
+	// 2. 【新增】转发给本群组的 UDP 幽灵设备
+	forwardToGhostDevices(dev.Username, dev.SSID, gp.ID, refilledData)
+
+	// 3. 跨虚拟组转发文本消息
 	forwardMessageToLinkedGroups(dev, refilledData, gp.ID)
 
-	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	// 4. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
 	BroadcastTextFromUDP(dev, refilledData, gp.ID)
 }
 
@@ -767,7 +875,10 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 					}
 				}
 
-				// 2. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
+				// 2. 【新增】转发给目标组的 UDP 幽灵设备
+				forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
+
+				// 3. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
 				BroadcastTextFromUDP(dev, data, targetID)
 			}
 		}

@@ -399,7 +399,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       })
     }, [messages, loadUserAvatar])
 
-    // 当消息被清空时（如切换群组），重置首次加载��记
+    // 当消息被清空时（如切换群组），重置首次加载标记
     useEffect(() => {
       if (messages.length === 0) {
         isInitialLoadRef.current = true

@@ -453,12 +453,19 @@ func checkDeviceOnline() {
 
 		onlineDevMap = onlineMap
 
+		// 【新增】UDP 幽灵设备超时检测
+		GlobalUDPGhostManager.CheckTimeout(offlineTimeout)
+
+		// 【新增】统计 UDP 幽灵设备在线数
+		udpGhostTotal, udpGhostOnline := GlobalUDPGhostManager.GetStats()
+		_ = udpGhostTotal // 避免未使用警告
+
 		// 【日志】输出在线设备统计信息
 		if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 			wsNormalCount, wsGhostCount := GlobalMessageRouter.wsManager.GetOnlineCount()
 			udpOnlineCount := totalStats.OnlineDevNumber - wsNormalCount - wsGhostCount
-			log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, WS普通=%d, 幽灵=%d, 服务器总在线=%d",
-				udpOnlineCount, wsNormalCount, wsGhostCount, totalStats.OnlineDevNumber)
+			log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 服务器总在线=%d",
+				udpOnlineCount, udpGhostOnline, wsNormalCount, wsGhostCount, totalStats.OnlineDevNumber+udpGhostOnline)
 		}
 	}
 }

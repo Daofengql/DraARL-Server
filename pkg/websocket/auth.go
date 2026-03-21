@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"nrllink/internal/gormdb"
+	"nrllink/internal/models"
 	"nrllink/internal/protocol"
 	"nrllink/internal/udphub"
 	"nrllink/pkg/jwt"
@@ -117,7 +118,16 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	result.CallSign = user.CallSign
 	result.Nickname = user.NickName
 
-	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s)", user.ID, user.CallSign)
+	// 【核心修复】使用分平台群组偏好 (user_device_preferences 表)
+	// DevModel=105 为 Web 浏览器端
+	lastGroupID, err := repo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+	if err != nil {
+		log.Printf("[WS-AUTH] 获取用户 %d 的群组偏好失败: %v，使用默认群组", user.ID, err)
+		lastGroupID = uint(models.GroupIDPublicMin)
+	}
+	result.GroupID = int(lastGroupID)
+
+	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s) group-%d", user.ID, user.CallSign, result.GroupID)
 	return result
 }
 
@@ -127,11 +137,11 @@ func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
 		AuthType: AuthTypeDevice,
 	}
 
-	// 【安全校验】SSID=105 保留给 Ghost 设备（Web 端 JWT 认证）使用
-	// 普通设备不允许使用此 SSID
-	if ssid == protocol.ReservedSSIDForGhost {
-		result.Error = "ssid_reserved_for_web"
-		log.Printf("[WS-AUTH] Device auth rejected: SSID %d is reserved for web client", ssid)
+	// 【安全校验】幽灵设备保留 SSID (100-105) 只能通过 JWT 认证
+	// 普通设备不允许使用这些 SSID
+	if protocol.IsGhostSSID(ssid) {
+		result.Error = "ssid_reserved_for_ghost"
+		log.Printf("[WS-AUTH] Device auth rejected: SSID %d is reserved for ghost devices (use JWT auth)", ssid)
 		return result
 	}
 
@@ -210,18 +220,10 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 			// 【核心修改】JWT 认证的设备 SSID 统一为 105
 			// 与 DevModel=105 (DraARLDevModelBrowser) 保持一致
 			device.SSID = 105
-			// 【核心修复】使用用户的 LastGroupID 恢复上次选中的群组
-			// 如果用户没有 LastGroupID 或为 0，则使用默认公共群组 999
-			device.GroupID = 999 // 默认公共群组
-			if authResult.UserID > 0 {
-				userRepo := gormdb.NewUserRepository()
-				if user, err := userRepo.GetUserByID(authResult.UserID); err == nil && user != nil {
-					if user.LastGroupID > 0 {
-						device.GroupID = user.LastGroupID
-						log.Printf("[WS-AUTH] 恢复用户 %d 的群组设置: %d", user.ID, user.LastGroupID)
-					}
-				}
-			}
+			// 【核心修复】使用 authResult.GroupID（已在 AuthenticateJWT 中通过分平台偏好获取）
+			device.GroupID = authResult.GroupID
+			log.Printf("[WS-AUTH] JWT 认证成功: 用户 %d, 群组 %d", authResult.UserID, authResult.GroupID)
+
 			manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
 
 			// 【关键修复】同时创建 GhostDevice 并建立与 WSDevice 的关联

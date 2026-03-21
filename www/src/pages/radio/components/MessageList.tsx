@@ -1,8 +1,13 @@
 /**
- * 消息列表组件
+ * 消息列表组件 - 性能优化版
+ * 优化点：
+ * 1. 使用 React.memo 避免不必要的重渲染
+ * 2. 使用 useMemo/useCallback 缓存计算结果
+ * 3. 移除 forceUpdate 反模式，使用状态管理
+ * 4. 限制缓存大小防止内存泄漏
  */
 
-import React, { useEffect, useRef, forwardRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, forwardRef, useState, useCallback, useMemo, memo } from 'react'
 import {
   Box,
   Typography,
@@ -18,162 +23,214 @@ import type { RadioMessage } from '../../../types/radio'
 import { userService } from '../../../services'
 import { opusPlayer } from '../../../utils/opusDecoder'
 
-// 用户信息缓存（全局）
-const userInfoCache = new Map<string, { avatar?: string; nickname?: string }>()
+// 缓存配置
+const MAX_CACHE_SIZE = 500 // 最大缓存用户数
 
 interface MessageListProps {
   messages: RadioMessage[]
   currentCallsign: string
-  currentSSID: number  // 添加 SSID 用于精确判断
+  currentSSID: number
   loading?: boolean
-  currentUser?: any    // 当前登录用户信息
-  hasMore?: boolean    // 是否还有更多历史消息
-  isLoadingMore?: boolean  // 是否正在加载更多
-  onLoadMore?: () => void  // 加载更多回调
+  currentUser?: any
+  hasMore?: boolean
+  isLoadingMore?: boolean
+  onLoadMore?: () => void
 }
 
-// 样式
-const useStyles = () => ({
-  root: {
-    flex: 1,
-    overflow: 'auto',
-    p: 2,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 1.5,
-  },
-  messageWrapper: {
-    display: 'flex',
-    gap: 1,
-    maxWidth: '80%',
-  },
-  messageWrapperSelf: {
-    marginLeft: 'auto',
-    flexDirection: 'row-reverse',
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    bgcolor: 'primary.main',
-    flexShrink: 0,
-  },
-  messageBubble: {
-    p: 1.5,
-    borderRadius: 2,
-    maxWidth: '100%',
-  },
-  messageBubbleOther: {
-    bgcolor: 'action.hover',
-    borderTopLeftRadius: 0,
-  },
-  messageBubbleSelf: {
-    bgcolor: 'primary.main',
-    color: 'primary.contrastText',
-    borderTopRightRadius: 0,
-  },
-  messageHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 1,
-    mb: 0.5,
-  },
-  messageContent: {
-    wordBreak: 'break-word',
-  },
-  messageFooter: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 0.5,
-    mt: 0.5,
-    opacity: 0.7,
-  },
-  voiceMessage: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 1,
-    minWidth: 150,
-  },
-  voiceWaveform: {
-    flex: 1,
-    height: 24,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 0.25,
-  },
-  voiceBar: {
-    width: 3,
-    bgcolor: 'currentColor',
-    borderRadius: 1,
-  },
-  emptyState: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-    color: 'text.secondary',
-  },
-  senderInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 0.5,
-  },
-  callsignChip: {
-    fontSize: '0.75rem',
-    fontWeight: 'bold',
-    opacity: 0.9,
-  },
-  nickname: {
-    fontSize: '0.7rem',
-    opacity: 0.7,
-  },
-  // 时间分割线样式
-  timeDivider: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    py: 2,
-  },
-  timeDividerText: {
-    fontSize: '0.75rem',
-    color: 'text.secondary',
-    bgcolor: 'background.default',
-    px: 2,
-    borderRadius: 1,
-  },
-})
+// ==========================================
+// 性能优化：带大小限制的用户信息缓存
+// ==========================================
+class UserInfoCache {
+  private cache = new Map<string, { avatar?: string; nickname?: string }>()
+  private loading = new Set<string>()
 
-// 语音消息组件 - 使用 Web Audio API 播放（支持 Blob 和 URL）
-const VoiceMessage: React.FC<{
+  get(key: string) {
+    return this.cache.get(key)
+  }
+
+  has(key: string) {
+    return this.cache.has(key)
+  }
+
+  isLoading(key: string) {
+    return this.loading.has(key)
+  }
+
+  setLoading(key: string) {
+    this.loading.add(key)
+  }
+
+  set(key: string, value: { avatar?: string; nickname?: string }) {
+    // LRU 淘汰策略：如果超过最大缓存数，删除最早的条目
+    if (this.cache.size >= MAX_CACHE_SIZE) {
+      const firstKey = this.cache.keys().next().value
+      if (firstKey) {
+        this.cache.delete(firstKey)
+      }
+    }
+    this.cache.set(key, value)
+    this.loading.delete(key)
+  }
+
+  clear() {
+    this.cache.clear()
+    this.loading.clear()
+  }
+}
+
+// 全局缓存实例（限制大小防止内存泄漏）
+const userInfoCache = new UserInfoCache()
+
+// ==========================================
+// 样式定义（提取到组件外部避免重复创建）
+// ==========================================
+const useStaticStyles = () => {
+  const theme = useTheme()
+  return useMemo(() => ({
+    root: {
+      flex: 1,
+      overflow: 'auto',
+      p: 2,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 1.5,
+    },
+    messageWrapper: {
+      display: 'flex',
+      gap: 1,
+      maxWidth: '80%',
+    },
+    messageWrapperSelf: {
+      marginLeft: 'auto',
+      flexDirection: 'row-reverse',
+    },
+    avatar: {
+      width: 40,
+      height: 40,
+      bgcolor: theme.palette.primary.main,
+      flexShrink: 0,
+    },
+    messageBubble: {
+      p: 1.5,
+      borderRadius: 2,
+      maxWidth: '100%',
+    },
+    messageBubbleOther: {
+      bgcolor: theme.palette.action.hover,
+      borderTopLeftRadius: 0,
+    },
+    messageBubbleSelf: {
+      bgcolor: theme.palette.primary.main,
+      color: theme.palette.primary.contrastText,
+      borderTopRightRadius: 0,
+    },
+    messageHeader: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 1,
+      mb: 0.5,
+    },
+    messageContent: {
+      wordBreak: 'break-word',
+    },
+    messageFooter: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 0.5,
+      mt: 0.5,
+      opacity: 0.7,
+    },
+    voiceMessage: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 1,
+      minWidth: 150,
+    },
+    voiceWaveform: {
+      flex: 1,
+      height: 24,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 0.25,
+    },
+    voiceBar: {
+      width: 3,
+      bgcolor: 'currentColor',
+      borderRadius: 1,
+    },
+    emptyState: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 2,
+      color: 'text.secondary',
+    },
+    senderInfo: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 0.5,
+    },
+    callsignChip: {
+      fontSize: '0.75rem',
+      fontWeight: 'bold',
+      opacity: 0.9,
+    },
+    nickname: {
+      fontSize: '0.7rem',
+      opacity: 0.7,
+    },
+    timeDivider: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      py: 2,
+    },
+    timeDividerText: {
+      fontSize: '0.75rem',
+      color: 'text.secondary',
+      bgcolor: 'background.default',
+      px: 2,
+      borderRadius: 1,
+    },
+  }), [theme])
+}
+
+// ==========================================
+// 语音消息组件（使用 memo 优化）
+// ==========================================
+interface VoiceMessageProps {
   duration: number
   isPlayed: boolean
   isSelf: boolean
-  audioData?: Blob | string  // 支持 Blob (WAV) 或 URL (Raw Opus)
-}> = ({ duration, isPlayed, isSelf, audioData }) => {
-  const [isPlaying, setIsPlaying] = React.useState(false)
-  const [progress, setProgress] = React.useState(0)
-  const audioContextRef = React.useRef<AudioContext | null>(null)
-  const sourceNodeRef = React.useRef<AudioBufferSourceNode | null>(null)
-  const startTimeRef = React.useRef<number>(0)
-  const animationFrameRef = React.useRef<number>(0)
-  const styles = useStyles()
+  audioData?: Blob | string
+}
 
-  // 播放 Blob 格式音频（WAV，来自实时语音）
-  const playBlobAudio = async (blob: Blob) => {
+const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, audioData }: VoiceMessageProps) {
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null)
+  const startTimeRef = useRef<number>(0)
+  const animationFrameRef = useRef<number>(0)
+  const styles = useStaticStyles()
+
+  // 生成随机波形（使用 useMemo 缓存）
+  const bars = useMemo(() =>
+    Array.from({ length: 20 }, () => Math.random() * 16 + 4),
+  [])
+
+  const playBlobAudio = useCallback(async (blob: Blob) => {
     const arrayBuffer = await blob.arrayBuffer()
 
-    // 创建 AudioContext
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
       audioContextRef.current = new AudioContext()
     }
     const ctx = audioContextRef.current
 
-    // 使用 AudioContext 解码 WAV 数据
     const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
-
-    // 创建并播放 AudioBufferSourceNode
     const source = ctx.createBufferSource()
     source.buffer = audioBuffer
     source.connect(ctx.destination)
@@ -182,7 +239,6 @@ const VoiceMessage: React.FC<{
     startTimeRef.current = ctx.currentTime
     setIsPlaying(true)
 
-    // 更新进度
     const updateProgress = () => {
       if (sourceNodeRef.current && audioContextRef.current) {
         const elapsed = audioContextRef.current.currentTime - startTimeRef.current
@@ -202,11 +258,9 @@ const VoiceMessage: React.FC<{
     }
 
     source.start()
-  }
+  }, [])
 
-  // 播放 URL 格式音频（Raw Opus，来自数据库）
-  const playUrlAudio = async (url: string) => {
-    // 确保 URL 是完整路径
+  const playUrlAudio = useCallback(async (url: string) => {
     const audioUrl = url.startsWith('http') ? url : `/api/minio/${url}`
 
     await opusPlayer.play(audioUrl, () => {
@@ -215,7 +269,6 @@ const VoiceMessage: React.FC<{
     })
     setIsPlaying(true)
 
-    // 模拟进度更新（opusPlayer 不提供进度回调）
     const durationSec = duration / 1000
     const startTime = Date.now()
     const updateProgress = () => {
@@ -229,13 +282,12 @@ const VoiceMessage: React.FC<{
       }
     }
     animationFrameRef.current = requestAnimationFrame(updateProgress)
-  }
+  }, [duration])
 
-  const handlePlayPause = async () => {
+  const handlePlayPause = useCallback(async () => {
     if (!audioData) return
 
     if (isPlaying) {
-      // 停止播放
       if (typeof audioData === 'string') {
         opusPlayer.stop()
       } else if (sourceNodeRef.current) {
@@ -250,10 +302,8 @@ const VoiceMessage: React.FC<{
     } else {
       try {
         if (typeof audioData === 'string') {
-          // URL 格式：使用 opusPlayer 播放 Raw Opus
           await playUrlAudio(audioData)
         } else {
-          // Blob 格式：使用 AudioContext 播放 WAV
           await playBlobAudio(audioData)
         }
       } catch (error) {
@@ -261,14 +311,12 @@ const VoiceMessage: React.FC<{
         setIsPlaying(false)
       }
     }
-  }
+  }, [audioData, isPlaying, playBlobAudio, playUrlAudio])
 
   // 清理
-  React.useEffect(() => {
+  useEffect(() => {
     return () => {
-      // 停止 opusPlayer
       opusPlayer.stop()
-      // 停止 AudioContext
       if (sourceNodeRef.current) {
         try {
           sourceNodeRef.current.stop()
@@ -288,11 +336,6 @@ const VoiceMessage: React.FC<{
       }
     }
   }, [])
-
-  // 生成随机波形
-  const bars = React.useMemo(() =>
-    Array.from({ length: 20 }, () => Math.random() * 16 + 4),
-  [])
 
   return (
     <Box sx={styles.voiceMessage}>
@@ -324,36 +367,172 @@ const VoiceMessage: React.FC<{
       </Typography>
     </Box>
   )
+})
+
+// ==========================================
+// 单条消息组件（使用 memo 优化）
+// ==========================================
+interface MessageItemProps {
+  message: RadioMessage
+  isSelf: boolean
+  avatarUrl?: string
+  nickname?: string
+  showTimeDivider: boolean
+  prevMessage?: RadioMessage
+  getAvatarColor: (callsign: string) => string
+  formatTime: (timestamp: number) => string
+  formatTimeDivider: (timestamp: number) => string
+  needsTimeDivider: (currentMsg: RadioMessage, prevMsg?: RadioMessage) => boolean
+  styles: ReturnType<typeof useStaticStyles>
 }
 
+const MessageItem = memo(function MessageItem({
+  message,
+  isSelf,
+  avatarUrl,
+  nickname,
+  showTimeDivider,
+  formatTime,
+  formatTimeDivider,
+  styles,
+  getAvatarColor,
+}: MessageItemProps) {
+  return (
+    <>
+      {/* 时间分割线 */}
+      {showTimeDivider && (
+        <Box sx={styles.timeDivider}>
+          <Typography sx={styles.timeDividerText}>
+            {formatTimeDivider(message.timestamp)}
+          </Typography>
+        </Box>
+      )}
+
+      {/* 消息 */}
+      <Box
+        sx={{
+          ...styles.messageWrapper,
+          ...(isSelf && styles.messageWrapperSelf),
+        }}
+      >
+        {/* 头像 */}
+        {!isSelf && (
+          <Avatar
+            src={avatarUrl}
+            sx={{
+              ...styles.avatar,
+              bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
+            }}
+          >
+            {!avatarUrl && message.senderCallsign.charAt(0)}
+          </Avatar>
+        )}
+
+        {/* 消息气泡 */}
+        <Paper
+          elevation={0}
+          sx={{
+            ...styles.messageBubble,
+            ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
+          }}
+        >
+          {/* 头部 - 显示发送方信息 */}
+          {!isSelf && (
+            <Box sx={styles.messageHeader}>
+              <Box sx={styles.senderInfo}>
+                <Typography variant="subtitle2" sx={styles.callsignChip}>
+                  {message.senderCallsign}-{message.senderSSID}
+                </Typography>
+                {nickname && (
+                  <Typography variant="caption" sx={styles.nickname}>
+                    ({nickname})
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          )}
+
+          {/* 自己发的消息也显示昵称 */}
+          {isSelf && (
+            <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
+              <Box sx={styles.senderInfo}>
+                {nickname && (
+                  <Typography variant="caption" sx={styles.nickname}>
+                    ({nickname})
+                  </Typography>
+                )}
+                <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                  {message.senderCallsign}-{message.senderSSID}
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
+          {/* 内容 */}
+          <Box sx={styles.messageContent}>
+            {message.type === 'text' ? (
+              <Typography variant="body2">{message.content as string}</Typography>
+            ) : (
+              <VoiceMessage
+                duration={message.duration || 0}
+                isPlayed={message.isPlayed || false}
+                isSelf={isSelf}
+                audioData={message.content as Blob}
+              />
+            )}
+          </Box>
+
+          {/* 底部 */}
+          <Box sx={styles.messageFooter}>
+            <Typography variant="caption">
+              {formatTime(message.timestamp)}
+            </Typography>
+          </Box>
+        </Paper>
+
+        {/* 自己的头像 */}
+        {isSelf && (
+          <Avatar
+            src={avatarUrl}
+            sx={{
+              ...styles.avatar,
+              bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
+            }}
+          >
+            {!avatarUrl && message.senderCallsign.charAt(0)}
+          </Avatar>
+        )}
+      </Box>
+    </>
+  )
+})
+
+// ==========================================
+// 主组件
+// ==========================================
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
   ({ messages, currentCallsign, currentSSID, loading, currentUser, hasMore, isLoadingMore, onLoadMore }, ref) => {
-    const theme = useTheme()
-    const styles = useStyles()
+    const styles = useStaticStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
 
-    // 用户头像状态（用于触发重渲染）
-    const [, forceUpdate] = useState({})
+    // 使用状态触发重渲染（替代 forceUpdate）
+    const [cacheVersion, setCacheVersion] = useState(0)
 
-    // 记录滚动位置，用于加载更多后恢复
     const prevScrollHeightRef = useRef<number>(0)
-
-    // 标记是否是首次加载（用于区分"首次加载"和"新消息到达"）
     const isInitialLoadRef = useRef(true)
+    const prevLastMsgTimeRef = useRef(0)
 
-    // 滚动检测：当滚动到顶部时加载更多
+    // 滚动检测
     const handleScroll = useCallback(() => {
       if (!scrollRef.current || !onLoadMore || isLoadingMore || !hasMore) return
 
-      // 当滚动到顶部附近（距离顶部小于 100px）时触发加载
       if (scrollRef.current.scrollTop < 100) {
-        // 记录当前滚动高度，用于加载后恢复位置
         prevScrollHeightRef.current = scrollRef.current.scrollHeight
         onLoadMore()
       }
     }, [onLoadMore, isLoadingMore, hasMore])
 
-    // 加载更多后恢复滚动位置（防止跳动）
+    // 加载更多后恢复滚动位置
     useEffect(() => {
       if (scrollRef.current && prevScrollHeightRef.current > 0) {
         const newScrollHeight = scrollRef.current.scrollHeight
@@ -363,21 +542,18 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       }
     }, [messages.length])
 
-    // 异步加载用户头像
+    // 异步加载用户头像（使用缓存版本触发重渲染）
     const loadUserAvatar = useCallback(async (username: string | number) => {
-      // 【核心修复】补充 trim() 防止不可见空格绕过规则
       const key = String(username).trim()
 
-      // 已缓存则跳过
-      if (userInfoCache.has(key)) {
+      if (userInfoCache.has(key) || userInfoCache.isLoading(key)) {
         return
       }
 
-      // 标记为加载中（防止重复请求）
-      userInfoCache.set(key, {})
+      userInfoCache.setLoading(key)
 
-      // 如果是 ghost-xxx 或 callsign-ssid 格式，直接跳过 API 调用
       if (key.startsWith('ghost-') || /^.+-\d+$/.test(key)) {
+        userInfoCache.set(key, {})
         return
       }
 
@@ -387,10 +563,9 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
           avatar: user.avatar_thumb || user.avatar,
           nickname: user.nickname,
         })
-        // 触发重渲染
-        forceUpdate({})
+        // 使用状态更新触发重渲染
+        setCacheVersion(v => v + 1)
       } catch (error) {
-        // 静默失败，缓存空对象避免重复请求
         userInfoCache.set(key, {})
       }
     }, [])
@@ -399,13 +574,10 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     useEffect(() => {
       messages.forEach(msg => {
         if (!msg.senderAvatar) {
-          // 【核心修复】提取真正的 username
-          // 真实的登录用户名(如 admin)往往被解析到了 senderNickname 或 senderUsername 中
-          // 优先使用这些字段来请求头像，而不是用 BH5UVN-2 (senderId)
           const usernameToFetch = (msg as any).senderUsername || msg.senderNickname || msg.senderId
           if (usernameToFetch) {
-            const cached = userInfoCache.get(String(usernameToFetch).trim())
-            if (!cached) {
+            const key = String(usernameToFetch).trim()
+            if (!userInfoCache.has(key) && !userInfoCache.isLoading(key)) {
               loadUserAvatar(usernameToFetch)
             }
           }
@@ -413,7 +585,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       })
     }, [messages, loadUserAvatar])
 
-    // 当消息被清空时（如切换群组），重置首次加载标记
+    // 当消息被清空时，重置标记
     useEffect(() => {
       if (messages.length === 0) {
         isInitialLoadRef.current = true
@@ -421,54 +593,42 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       }
     }, [messages.length])
 
-    // 记录上一次最新消息的时间戳，用于判断是否是新消息
-    const prevLastMsgTimeRef = useRef(0)
-
     // 自动滚动到底部
     useEffect(() => {
       if (scrollRef.current) {
-        // 首次加载时，始终滚动到底部
         if (isInitialLoadRef.current) {
           scrollRef.current.scrollTop = scrollRef.current.scrollHeight
           isInitialLoadRef.current = false
-          // 记录最新消息时间
           if (messages.length > 0) {
             prevLastMsgTimeRef.current = messages[messages.length - 1].timestamp
           }
           return
         }
 
-        // 检查是否有新消息（最新消息时间戳更新）
         const lastMsgTime = messages.length > 0 ? messages[messages.length - 1].timestamp : 0
         const hasNewMessage = lastMsgTime > prevLastMsgTimeRef.current
         prevLastMsgTimeRef.current = lastMsgTime
 
-        // 新消息到达时，只有用户在底部附近才自动滚动
         if (hasNewMessage) {
           const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
           const isNearBottom = scrollHeight - scrollTop - clientHeight < 150
           if (isNearBottom) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight
           }
-          return
         }
-
-        // 其他情况（如消息同步更新、加载历史消息）：保持当前位置
-        // 加载历史消息时，滚动位置由 handleScroll 和 useEffect 恢复逻辑处理
       }
     }, [messages])
 
-    // 格式化时间
-    const formatTime = (timestamp: number) => {
+    // 格式化时间（使用 useCallback 缓存）
+    const formatTime = useCallback((timestamp: number) => {
       const date = new Date(timestamp)
       return date.toLocaleTimeString('zh-CN', {
         hour: '2-digit',
         minute: '2-digit',
       })
-    }
+    }, [])
 
-    // 格式化时间分割显示（年月日 时:分）
-    const formatTimeDivider = (timestamp: number) => {
+    const formatTimeDivider = useCallback((timestamp: number) => {
       const date = new Date(timestamp)
       const year = date.getFullYear()
       const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -476,33 +636,66 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       const hour = String(date.getHours()).padStart(2, '0')
       const minute = String(date.getMinutes()).padStart(2, '0')
       return `${year}-${month}-${day}  ${hour}:${minute}`
-    }
+    }, [])
 
-    // 判断是否需要时间分割（10分钟间隔）
-    const needsTimeDivider = (currentMsg: RadioMessage, prevMsg?: RadioMessage): boolean => {
-      if (!prevMsg) return true // 第一条消息总是显示时间分割
+    // 判断是否需要时间分割
+    const needsTimeDivider = useCallback((currentMsg: RadioMessage, prevMsg?: RadioMessage): boolean => {
+      if (!prevMsg) return true
       const diff = currentMsg.timestamp - prevMsg.timestamp
-      return diff >= 10 * 60 * 1000 // 10分钟，单位毫秒
-    }
+      return diff >= 10 * 60 * 1000
+    }, [])
 
-    // 获取头像颜色
-    const getAvatarColor = (callsign: string) => {
+    // 获取头像颜色（使用 useCallback 缓存）
+    const getAvatarColor = useCallback((callsign: string) => {
       const colors = [
-        theme.palette.primary.main,
-        theme.palette.secondary.main,
-        '#f44336',
+        '#1976d2',
         '#9c27b0',
+        '#f44336',
         '#673ab7',
         '#3f51b5',
         '#009688',
         '#ff5722',
+        '#795548',
       ]
       let hash = 0
       for (let i = 0; i < callsign.length; i++) {
         hash = callsign.charCodeAt(i) + ((hash << 5) - hash)
       }
       return colors[Math.abs(hash) % colors.length]
-    }
+    }, [])
+
+    // 预计算消息项数据（使用 useMemo 优化，包含 cacheVersion 触发更新）
+    const messageItems = useMemo(() => {
+      return messages.map((message, index) => {
+        const isMatchCallsign = String(message.senderCallsign).toUpperCase() === String(currentCallsign).toUpperCase()
+        const isMatchSSID = String(message.senderSSID) === String(currentSSID)
+        const isSelf = (isMatchCallsign && isMatchSSID) || message.isSelf === true
+
+        const usernameForCache = String((message as any).senderUsername || message.senderNickname || message.senderId).trim()
+        const cachedInfo = userInfoCache.get(usernameForCache)
+
+        const selfAvatar = currentUser?.avatar_thumb || currentUser?.avatar
+        const avatarUrl = isSelf && selfAvatar
+          ? selfAvatar
+          : (message.senderAvatar || cachedInfo?.avatar)
+
+        const nickname = isSelf && currentUser?.nickname
+          ? currentUser.nickname
+          : (cachedInfo?.nickname || message.senderNickname)
+
+        const prevMessage = index > 0 ? messages[index - 1] : undefined
+        const showTimeDivider = needsTimeDivider(message, prevMessage)
+
+        return {
+          message,
+          isSelf,
+          avatarUrl,
+          nickname,
+          showTimeDivider,
+          prevMessage,
+        }
+      })
+    }, [messages, currentCallsign, currentSSID, currentUser, needsTimeDivider, cacheVersion])
 
     // 加载骨架屏
     if (loading) {
@@ -559,143 +752,22 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
             </Typography>
           </Box>
         )}
-        {messages.map((message, index) => {
-          // 【核心修复】增强己方消息的判断逻辑，防止类型不匹配（如 "10" === 10 为 false）
-          const isMatchCallsign = String(message.senderCallsign).toUpperCase() === String(currentCallsign).toUpperCase()
-          const isMatchSSID = String(message.senderSSID) === String(currentSSID)
-          const isSelf = (isMatchCallsign && isMatchSSID) || message.isSelf === true
-
-          // --- 【核心修复】替换这里的获取逻辑 ---
-          // 获取缓存的用户头像
-          const usernameForCache = String((message as any).senderUsername || message.senderNickname || message.senderId).trim()
-          const cachedInfo = userInfoCache.get(usernameForCache)
-
-          // 如果是己方消息，直接从 currentUser 提取头像，否则用缓存
-          const selfAvatar = currentUser?.avatar_thumb || currentUser?.avatar
-          const avatarUrl = isSelf && selfAvatar
-            ? selfAvatar
-            : (message.senderAvatar || cachedInfo?.avatar)
-
-          // 如果是己方消息，直接从 currentUser 提取昵称，否则用缓存
-          const nickname = isSelf && currentUser?.nickname
-            ? currentUser.nickname
-            : (cachedInfo?.nickname || message.senderNickname)
-          // ------------------------------------
-
-          // 判断是否需要显示时间分割线
-          const prevMessage = index > 0 ? messages[index - 1] : undefined
-          const showTimeDivider = needsTimeDivider(message, prevMessage)
-
-          return (
-            <React.Fragment key={message.id}>
-              {/* 时间分割线 */}
-              {showTimeDivider && (
-                <Box sx={styles.timeDivider}>
-                  <Typography sx={styles.timeDividerText}>
-                    {formatTimeDivider(message.timestamp)}
-                  </Typography>
-                </Box>
-              )}
-
-              {/* 消息 */}
-              <Box
-                sx={{
-                  ...styles.messageWrapper,
-                  ...(isSelf && styles.messageWrapperSelf),
-                }}
-              >
-                {/* 头像 */}
-                {!isSelf && (
-                  <Avatar
-                    src={avatarUrl}
-                    sx={{
-                      ...styles.avatar,
-                      bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
-                    }}
-                  >
-                    {!avatarUrl && message.senderCallsign.charAt(0)}
-                  </Avatar>
-                )}
-
-                {/* 消息气泡 */}
-                <Paper
-                  elevation={0}
-                  sx={{
-                    ...styles.messageBubble,
-                    ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
-                  }}
-                >
-                  {/* 头部 - 显示发送方信息 */}
-                  {!isSelf && (
-                    <Box sx={styles.messageHeader}>
-                      <Box sx={styles.senderInfo}>
-                        <Typography variant="subtitle2" sx={styles.callsignChip}>
-                          {message.senderCallsign}-{message.senderSSID}
-                        </Typography>
-                        {nickname && (
-                          <Typography variant="caption" sx={styles.nickname}>
-                            ({nickname})
-                          </Typography>
-                        )}
-                      </Box>
-                    </Box>
-                  )}
-
-                  {/* --- 【核心修复】自己发的消息也显示昵称 --- */}
-                  {isSelf && (
-                    <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
-                      <Box sx={styles.senderInfo}>
-                        {nickname && (
-                          <Typography variant="caption" sx={styles.nickname}>
-                            ({nickname})
-                          </Typography>
-                        )}
-                        <Typography variant="caption" sx={{ opacity: 0.8 }}>
-                          {message.senderCallsign}-{message.senderSSID}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  )}
-                  {/* ------------------------------------------------ */}
-
-                  {/* 内容 */}
-                  <Box sx={styles.messageContent}>
-                    {message.type === 'text' ? (
-                      <Typography variant="body2">{message.content as string}</Typography>
-                    ) : (
-                      <VoiceMessage
-                        duration={message.duration || 0}
-                        isPlayed={message.isPlayed || false}
-                        isSelf={isSelf}
-                        audioData={message.content as Blob}
-                      />
-                    )}
-                  </Box>
-
-                  {/* 底部 */}
-                  <Box sx={styles.messageFooter}>
-                    <Typography variant="caption">
-                      {formatTime(message.timestamp)}
-                    </Typography>
-                  </Box>
-                </Paper>
-
-                {/* 自己的头像 */}
-                {isSelf && (
-                  <Avatar
-                    src={avatarUrl}
-                    sx={{
-                      ...styles.avatar,
-                      bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
-                    }}
-                  >
-                    {!avatarUrl && message.senderCallsign.charAt(0)}
-                  </Avatar>
-                )}
-              </Box>
-            </React.Fragment>
-          )
-        })}
+        {messageItems.map((item, index) => (
+          <MessageItem
+            key={item.message.id || `${item.message.timestamp}-${index}`}
+            message={item.message}
+            isSelf={item.isSelf}
+            avatarUrl={item.avatarUrl}
+            nickname={item.nickname}
+            showTimeDivider={item.showTimeDivider}
+            prevMessage={item.prevMessage}
+            getAvatarColor={getAvatarColor}
+            formatTime={formatTime}
+            formatTimeDivider={formatTimeDivider}
+            needsTimeDivider={needsTimeDivider}
+            styles={styles}
+          />
+        ))}
       </Box>
     )
   }

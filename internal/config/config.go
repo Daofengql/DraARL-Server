@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 
 // Config 全局配置
 var Config *Configuration
+var configFilePath string
 var once sync.Once
 
 // Configuration 系统配置
@@ -64,6 +67,11 @@ type Configuration struct {
 		Bucket    string `yaml:"Bucket" json:"bucket"`        // 默认存储桶
 		BasePath  string `yaml:"BasePath" json:"base_path"`   // URL基础路径
 	} `yaml:"MinIO" json:"minio"`
+
+	// JWT 配置
+	JWT struct {
+		Secret string `yaml:"Secret" json:"secret"` // JWT 签名密钥，最少32字符
+	} `yaml:"JWT" json:"jwt"`
 }
 
 // GetDSN 获取MySQL连接字符串
@@ -99,6 +107,7 @@ func Load(configPath string) (*Configuration, error) {
 			}
 			configPath = filepath.Join(dir, "udphub.yaml")
 		}
+		configFilePath = configPath
 
 		yamlFile, err := os.ReadFile(configPath)
 		if err != nil {
@@ -144,6 +153,35 @@ func (c *Configuration) SetDefaults() {
 	}
 }
 
+// JWTSecretMinLength JWT密钥最小长度
+const JWTSecretMinLength = 32
+
+// ValidateJWTSecret 验证JWT密钥是否符合要求
+func (c *Configuration) ValidateJWTSecret() error {
+	if len(c.JWT.Secret) < JWTSecretMinLength {
+		return fmt.Errorf("JWT密钥长度不足，当前%d字符，最少需要%d字符", len(c.JWT.Secret), JWTSecretMinLength)
+	}
+	return nil
+}
+
+// GenerateJWTSecret 生成安全的随机JWT密钥
+func GenerateJWTSecret() (string, error) {
+	bytes := make([]byte, 32) // 生成64字符的十六进制字符串
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("生成随机密钥失败: %w", err)
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+// SaveToFile 保存配置到文件
+func (c *Configuration) SaveToFile(configPath string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("序列化配置失败: %w", err)
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
 // MustLoad 加载配置文件，失败则panic
 func MustLoad(configPath string) *Configuration {
 	cfg, err := Load(configPath)
@@ -159,4 +197,9 @@ func Get() *Configuration {
 		panic("config not loaded, call Load() first")
 	}
 	return Config
+}
+
+// GetConfigPath 获取配置文件路径
+func GetConfigPath() string {
+	return configFilePath
 }

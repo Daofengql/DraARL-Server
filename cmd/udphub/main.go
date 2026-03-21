@@ -20,6 +20,7 @@ import (
 	"nrllink/internal/udphub"
 	"nrllink/pkg/cache"
 	"nrllink/pkg/geoip"
+	"nrllink/pkg/jwt"
 )
 
 var (
@@ -63,6 +64,11 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		stdlog.Fatalf("加载配置文件失败: %v", err)
+	}
+
+	// 初始化 JWT 密钥
+	if err := initJWTSecret(cfg); err != nil {
+		stdlog.Fatalf("初始化JWT密钥失败: %v", err)
 	}
 
 	// 打印配置信息
@@ -266,4 +272,39 @@ func resetAdminPassword(newPassword, configPath string) {
 	fmt.Printf("用户名: %s\n", adminUser.Name)
 	fmt.Printf("新密码: %s\n", newPassword)
 	fmt.Println("========================================")
+}
+
+// initJWTSecret 初始化JWT密钥，如果不符合要求则自动生成并保存
+func initJWTSecret(cfg *config.Configuration) error {
+	// 尝试设置JWT密钥
+	err := jwt.SetSecret(cfg.JWT.Secret)
+	if err == nil {
+		stdlog.Println("JWT密钥验证通过")
+		return nil
+	}
+
+	// 密钥不符合要求，生成新密钥
+	stdlog.Printf("JWT密钥不符合要求: %v", err)
+	stdlog.Println("正在生成新的JWT密钥...")
+
+	newSecret, genErr := config.GenerateJWTSecret()
+	if genErr != nil {
+		return fmt.Errorf("生成JWT密钥失败: %w", genErr)
+	}
+
+	// 更新配置并保存
+	cfg.JWT.Secret = newSecret
+	configPath := config.GetConfigPath()
+	if saveErr := cfg.SaveToFile(configPath); saveErr != nil {
+		return fmt.Errorf("保存配置文件失败: %w", saveErr)
+	}
+
+	stdlog.Printf("已生成新的JWT密钥并保存到配置文件: %s", configPath)
+
+	// 使用新密钥
+	if setErr := jwt.SetSecret(newSecret); setErr != nil {
+		return fmt.Errorf("设置JWT密钥失败: %w", setErr)
+	}
+
+	return nil
 }

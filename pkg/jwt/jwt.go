@@ -8,6 +8,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// SecretMinLength 密钥最小长度
+const SecretMinLength = 32
+
 var jwtSecret = []byte("nrl1234")
 
 // Claims JWT声明
@@ -17,11 +20,13 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// SetSecret 设置JWT密钥
-func SetSecret(secret string) {
-	if secret != "" {
-		jwtSecret = []byte(secret)
+// SetSecret 设置JWT密钥，密钥长度必须至少32字符
+func SetSecret(secret string) error {
+	if len(secret) < SecretMinLength {
+		return fmt.Errorf("JWT密钥长度不足，当前%d字符，最少需要%d字符", len(secret), SecretMinLength)
 	}
+	jwtSecret = []byte(secret)
+	return nil
 }
 
 // GenerateToken 生成JWT令牌

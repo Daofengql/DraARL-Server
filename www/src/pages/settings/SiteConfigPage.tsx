@@ -37,6 +37,7 @@ import Delete from '@mui/icons-material/Delete'
 import Search from '@mui/icons-material/Search'
 import Info from '@mui/icons-material/Info'
 import PhoneInTalk from '@mui/icons-material/PhoneInTalk'
+import MyLocation from '@mui/icons-material/MyLocation'
 import { apiClient } from '../../services/api'
 import { logService } from '../../services'
 import type { OperatorLog } from '../../types'
@@ -399,6 +400,46 @@ export function SiteConfigPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // 获取浏览器位置
+  const [locating, setLocating] = useState(false)
+  const handleGetLocation = () => {
+    if (!navigator.geolocation) {
+      showMessage('error', '浏览器不支持地理位置功能')
+      return
+    }
+
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setAPRS({
+          ...aprs,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          altitude: position.coords.altitude?.toFixed(1) || aprs.altitude,
+        })
+        showMessage('success', '位置获取成功')
+        setLocating(false)
+      },
+      (error) => {
+        let msg = '获取位置失败'
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            msg = '位置权限被拒绝，请在浏览器设置中允许'
+            break
+          case error.POSITION_UNAVAILABLE:
+            msg = '位置信息不可用'
+            break
+          case error.TIMEOUT:
+            msg = '获取位置超时'
+            break
+        }
+        showMessage('error', msg)
+        setLocating(false)
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
   }
 
   const handleSaveOpenAI = async () => {
@@ -830,7 +871,7 @@ export function SiteConfigPage() {
                       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
                         <TextField
                           label="经度"
-                          fullWidth
+                          sx={{ width: { xs: '100%', sm: '150px' } }}
                           type="number"
                           inputProps={{ step: 0.000001, min: -180, max: 180 }}
                           value={aprs.longitude || ''}
@@ -842,7 +883,7 @@ export function SiteConfigPage() {
                         <Typography sx={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'text.secondary', display: { xs: 'none', sm: 'block' }, minWidth: '20px', textAlign: 'center' }}>,</Typography>
                         <TextField
                           label="纬度"
-                          fullWidth
+                          sx={{ width: { xs: '100%', sm: '150px' } }}
                           type="number"
                           inputProps={{ step: 0.000001, min: -90, max: 90 }}
                           value={aprs.latitude || ''}
@@ -858,7 +899,17 @@ export function SiteConfigPage() {
                           value={aprs.altitude}
                           onChange={(e) => setAPRS({ ...aprs, altitude: e.target.value })}
                           placeholder="000000"
+                          helperText=" "
                         />
+                        <Button
+                          variant="outlined"
+                          startIcon={<MyLocation />}
+                          onClick={handleGetLocation}
+                          disabled={locating}
+                          sx={{ minWidth: 'auto', whiteSpace: 'nowrap', mt: '6px' }}
+                        >
+                          {locating ? '定位中...' : '获取位置'}
+                        </Button>
                       </Box>
                     </Box>
 

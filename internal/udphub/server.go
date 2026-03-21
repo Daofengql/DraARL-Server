@@ -308,7 +308,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	// 先查找设备（包括幽灵设备），避免误拦截已认证的幽灵设备
 	dev, isGhost := getDeviceFromMemory(packet.Username, packet.SSID, packet.UDPAddr)
 
-	// 只有当设备不存在（未��证的新设备）且 SSID 为保留范围时才拒绝
+	// 只有当设备不存在（未认证的新设备）且 SSID 为保留范围时才拒绝
 	if dev == nil && protocol.IsReservedSSID(packet.SSID) {
 		// 幽灵设备 SSID 只能通过 JWT 认证获得，不能通过设备密码认证
 		// 静默拒绝，避免日志刷屏

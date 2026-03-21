@@ -10,6 +10,7 @@ import (
 	"nrllink/internal/email"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
+	"nrllink/internal/protocol"
 	"nrllink/pkg/cache"
 	"nrllink/pkg/jwt"
 	"nrllink/pkg/minio"
@@ -161,6 +162,10 @@ func Login(c *gin.Context) {
 		c.ClientIP(),
 	)
 
+	// 获取用户 Web 端的群组偏好
+	userRepo := gormdb.NewUserRepository()
+	lastGroupID, _ := userRepo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+
 	// 构建用户数据
 	userData := gin.H{
 		"id":              user.ID,
@@ -182,7 +187,7 @@ func Login(c *gin.Context) {
 		"dmrid":           user.DMRID,
 		"mdcid":           user.MDCID,
 		"alarm_msg":       user.AlarmMsg,
-		"last_group_id":   user.LastGroupID, // 用户最后选中的群组
+		"last_group_id":   lastGroupID, // 用户最后选中的群组（从设备偏好表获取）
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
 				return user.LastLoginTime.Format("2006-01-02 15:04:05")
@@ -422,6 +427,10 @@ func GetCurrentUser(c *gin.Context) {
 		return
 	}
 
+	// 获取用户 Web 端的群组偏好
+	userRepo := gormdb.NewUserRepository()
+	lastGroupID, _ := userRepo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
@@ -448,7 +457,7 @@ func GetCurrentUser(c *gin.Context) {
 			"dmrid":           user.DMRID,
 			"mdcid":           user.MDCID,
 			"alarm_msg":       user.AlarmMsg,
-			"last_group_id":   user.LastGroupID,
+			"last_group_id":   lastGroupID, // 从设备偏好表获取
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
 					return user.LastLoginTime.Format("2006-01-02 15:04:05")

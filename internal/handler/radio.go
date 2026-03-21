@@ -315,13 +315,6 @@ func UpdateRadioGroup(c *gin.Context) {
 		// 不影响响应，群组切换已成功
 	}
 
-	// 【向后兼容】同时更新 users.last_group_id（Web 端）
-	if devModel == 105 {
-		if err := userRepo.UpdateLastGroupID(userID, req.GroupID); err != nil {
-			log.Printf("[RADIO] 警告: 更新用户 %d 的 LastGroupID 失败: %v", userID, err)
-		}
-	}
-
 	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 设备 %d 从群组 %d 切换到群组 %d", userID, devModel, oldGroupID, req.GroupID)
 
 	// 获取用户名用于缓存失效

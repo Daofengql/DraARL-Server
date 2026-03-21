@@ -39,7 +39,6 @@ type User struct {
 	DMRID           int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
 	MDCID           string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
 	DevicePassword  string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码(bcrypt哈希)
-	LastGroupID     int        `gorm:"type:int;default:999;column:last_group_id" json:"last_group_id"` // 用户最后选中的群组
 }
 
 // TableName 指定表名

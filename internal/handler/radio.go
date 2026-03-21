@@ -160,8 +160,8 @@ func GetRadioStatus(c *gin.Context) {
 			OnlineSince:  ghostDevice.Conn.ConnectTime.Format("2006-01-02 15:04:05"),
 			CallSign:     ghostDevice.CallSign,
 			SSID:         int(ghostDevice.SSID),
-			IsSpeaking:   ghostDevice.Conn.IsReceivingVoice,
-			VoiceSending: ghostDevice.Conn.IsSendingVoice,
+			IsSpeaking:   false, // 语音状态通过 WebSocket 实时推送，API 不再提供
+			VoiceSending: false, // 语音状态通过 WebSocket 实时推送，API 不再提供
 		},
 	})
 }
@@ -219,11 +219,11 @@ func GetRadioGroupDevices(c *gin.Context) {
 			SSID:         int(device.GetSSID()),
 			GroupID:      device.GetGroupID(),
 			IsGhost:      device.IsGhost(),
-			DisableSend:  device.DisableSend,
+			DisableSend:  device.IsDisabledSend(),
 			DisableRecv:  device.IsDisabledRecv(),
 			DevModel:     int(device.GetDevModel()),
-			ConnectTime:  device.ConnectTime.Format("2006-01-02 15:04:05"),
-			LastActivity: device.LastPacketTime.Format("2006-01-02 15:04:05"),
+			ConnectTime:  device.GetConnectTime().Format("2006-01-02 15:04:05"),
+			LastActivity: device.GetLastPacketTime().Format("2006-01-02 15:04:05"),
 		}
 
 		devices = append(devices, dev)

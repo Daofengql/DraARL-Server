@@ -1,7 +1,9 @@
 package interfaces
 
+import "time"
+
 // WSDeviceInterface WebSocket 设备接口
-// 用于解耦 udphub 和 websocket 包
+// 用于解耦 udphub �� websocket 包
 type WSDeviceInterface interface {
 	GetIdentifier() string
 	GetCallSignSSID() string
@@ -14,6 +16,9 @@ type WSDeviceInterface interface {
 	GetSSID() byte
 	GetDevModel() byte
 	IsDisabledRecv() bool
+	IsDisabledSend() bool
+	GetConnectTime() time.Time
+	GetLastPacketTime() time.Time
 }
 
 // WSManagerInterface WebSocket 连接管理器接口

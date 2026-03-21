@@ -1,6 +1,6 @@
 """
-Nrllink 多功能调试客户端
-支持 UDP普通设备、UDP JWT、WebSocket普通设备、WebSocket JWT 四种连接方式
+Nrllink 调试客户端
+支持 UDP普通设备、UDP JWT 两种连接方式
 """
 
 import tkinter as tk
@@ -14,8 +14,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from client.udp_device import UDPDeviceClient
 from client.udp_jwt import UDPJWTClient
-from client.ws_device import WSDeviceClient
-from client.ws_jwt import WSJWTClient
 from protocol import DevModel, get_dev_model_name
 from utils.jwt_gen import generate_jwt
 from utils.http_client import HTTPClient
@@ -46,10 +44,6 @@ class ClientPanel(ttk.LabelFrame):
             self._build_udp_device_params(param_frame)
         elif self.client_type == "udp_jwt":
             self._build_udp_jwt_params(param_frame)
-        elif self.client_type == "ws_device":
-            self._build_ws_device_params(param_frame)
-        elif self.client_type == "ws_jwt":
-            self._build_ws_jwt_params(param_frame)
 
         # 日志区域
         log_frame = ttk.Frame(self)
@@ -87,7 +81,7 @@ class ClientPanel(ttk.LabelFrame):
         ttk.Button(text_frame, text="发送", command=self.send_text).pack(side=tk.LEFT, padx=2)
 
         # 群组切换（仅 JWT 客户端）
-        if self.client_type in ["udp_jwt", "ws_jwt"]:
+        if self.client_type == "udp_jwt":
             group_frame = ttk.Frame(self)
             group_frame.pack(fill=tk.X, padx=5, pady=2)
 
@@ -111,9 +105,9 @@ class ClientPanel(ttk.LabelFrame):
         ttk.Entry(parent, textvariable=self.ssid_var, width=5).grid(row=1, column=1, padx=2, sticky=tk.W)
 
         ttk.Label(parent, text="型号:").grid(row=1, column=2, sticky=tk.W, padx=(5,0))
-        self.devmodel_var = tk.StringVar(value="103")
+        self.devmodel_var = tk.StringVar(value="107")
         devmodel_combo = ttk.Combobox(parent, textvariable=self.devmodel_var, width=10,
-                                       values=["100", "101", "102", "103", "104", "105", "106"])
+                                       values=["100", "106", "107"])
         devmodel_combo.grid(row=1, column=3, padx=2)
 
     def _build_udp_jwt_params(self, parent):
@@ -131,30 +125,6 @@ class ClientPanel(ttk.LabelFrame):
         ttk.Entry(parent, textvariable=self.token_var, width=30).grid(row=1, column=1, columnspan=2, padx=2, sticky=tk.W)
 
         ttk.Button(parent, text="生成", command=self._generate_token).grid(row=1, column=3, padx=2)
-
-    def _build_ws_device_params(self, parent):
-        """WebSocket 普通设备参数"""
-        ttk.Label(parent, text="用户:").grid(row=0, column=0, sticky=tk.W)
-        self.username_var = tk.StringVar(value="admin")
-        ttk.Entry(parent, textvariable=self.username_var, width=10).grid(row=0, column=1, padx=2)
-
-        ttk.Label(parent, text="密码:").grid(row=0, column=2, sticky=tk.W, padx=(5,0))
-        self.password_var = tk.StringVar(value="FdWisUYY")
-        ttk.Entry(parent, textvariable=self.password_var, width=10).grid(row=0, column=3, padx=2)
-
-        ttk.Label(parent, text="SSID:").grid(row=1, column=0, sticky=tk.W)
-        self.ssid_var = tk.StringVar(value="10")
-        ttk.Entry(parent, textvariable=self.ssid_var, width=5).grid(row=1, column=1, padx=2, sticky=tk.W)
-
-    def _build_ws_jwt_params(self, parent):
-        """WebSocket JWT 参数"""
-        ttk.Label(parent, text="Token:").grid(row=0, column=0, sticky=tk.W)
-        self.token_var = tk.StringVar(value="")
-        ttk.Entry(parent, textvariable=self.token_var, width=40).grid(row=0, column=1, columnspan=2, padx=2, sticky=tk.W)
-
-        ttk.Button(parent, text="生成", command=self._generate_token).grid(row=0, column=3, padx=2)
-
-        ttk.Label(parent, text="(SSID=105, 型号=105)").grid(row=1, column=0, columnspan=2, sticky=tk.W)
 
     def _generate_token(self):
         """生成 JWT Token"""
@@ -187,12 +157,7 @@ class ClientPanel(ttk.LabelFrame):
         """建立连接"""
         try:
             server_ip = self.app.server_ip.get()
-
-            # UDP 客户端使用 UDP 端口，WebSocket 客户端使用 HTTP 端口
-            if self.client_type in ["udp_device", "udp_jwt"]:
-                server_port = int(self.app.udp_port.get())
-            else:
-                server_port = int(self.app.http_port.get())
+            server_port = int(self.app.udp_port.get())
 
             if self.client_type == "udp_device":
                 self.client = UDPDeviceClient(
@@ -216,31 +181,6 @@ class ClientPanel(ttk.LabelFrame):
                     server_port=server_port,
                     jwt_token=token,
                     dev_model=int(self.devmodel_var.get()),
-                    log_callback=self.log,
-                    enable_audio=True
-                )
-
-            elif self.client_type == "ws_device":
-                ws_url = f"ws://{server_ip}:{server_port}/ws"
-                self.client = WSDeviceClient(
-                    server_url=ws_url,
-                    username=self.username_var.get(),
-                    device_password=self.password_var.get(),
-                    ssid=int(self.ssid_var.get()),
-                    dev_model=DevModel.BROWSER,
-                    log_callback=self.log,
-                    enable_audio=True
-                )
-
-            elif self.client_type == "ws_jwt":
-                token = self.token_var.get()
-                if not token:
-                    self.log("[错误] 请先生成或输入 JWT Token")
-                    return
-                ws_url = f"ws://{server_ip}:{server_port}/ws"
-                self.client = WSJWTClient(
-                    server_url=ws_url,
-                    jwt_token=token,
                     log_callback=self.log,
                     enable_audio=True
                 )
@@ -319,7 +259,7 @@ class ClientPanel(ttk.LabelFrame):
         http.set_token(token)
 
         # 调用切换群组 API
-        dev_model = 105  # Web
+        dev_model = 103  # Windows
         if hasattr(self, 'devmodel_var'):
             try:
                 dev_model = int(self.devmodel_var.get())
@@ -340,8 +280,8 @@ class DebugClientApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Nrllink 调试客户端")
-        self.root.geometry("1200x700")
-        self.root.minsize(1000, 600)
+        self.root.geometry("900x500")
+        self.root.minsize(800, 400)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.panels = []
@@ -361,7 +301,7 @@ class DebugClientApp:
         self.udp_port = tk.StringVar(value="60050")
         ttk.Entry(server_frame, textvariable=self.udp_port, width=6).grid(row=0, column=3, padx=5)
 
-        ttk.Label(server_frame, text="HTTP/WS端口:").grid(row=0, column=4, sticky=tk.W, padx=(10,0))
+        ttk.Label(server_frame, text="HTTP端口:").grid(row=0, column=4, sticky=tk.W, padx=(10,0))
         self.http_port = tk.StringVar(value="9002")
         ttk.Entry(server_frame, textvariable=self.http_port, width=6).grid(row=0, column=5, padx=5)
 
@@ -379,55 +319,34 @@ class DebugClientApp:
         # HTTP 客户端（用于群组切换等 API 调用）
         self.http_client = None
 
-        # 中部：四个客户端面板（2x2 布局）
+        # 中部：两个客户端面板
         panels_frame = ttk.Frame(self.root)
         panels_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # 上排
-        top_frame = ttk.Frame(panels_frame)
-        top_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
-
-        self.udp_device_panel = ClientPanel(top_frame, "UDP 普通设备", "udp_device", self)
+        self.udp_device_panel = ClientPanel(panels_frame, "UDP 普通设备", "udp_device", self)
         self.udp_device_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
 
-        self.udp_jwt_panel = ClientPanel(top_frame, "UDP JWT", "udp_jwt", self)
+        self.udp_jwt_panel = ClientPanel(panels_frame, "UDP JWT", "udp_jwt", self)
         self.udp_jwt_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
-
-        # 下排
-        bottom_frame = ttk.Frame(panels_frame)
-        bottom_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
-
-        self.ws_device_panel = ClientPanel(bottom_frame, "WebSocket 普通设备", "ws_device", self)
-        self.ws_device_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-
-        self.ws_jwt_panel = ClientPanel(bottom_frame, "WebSocket JWT", "ws_jwt", self)
-        self.ws_jwt_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
         self.panels = [
             self.udp_device_panel,
             self.udp_jwt_panel,
-            self.ws_device_panel,
-            self.ws_jwt_panel,
         ]
 
         # 底部：快捷键说明
         help_frame = ttk.LabelFrame(self.root, text="说明", padding=(10, 5))
         help_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(help_frame, text="UDP普通设备: SSID 1-99/106-235, 使用设备密码认证").pack(anchor=tk.W)
-        ttk.Label(help_frame, text="UDP JWT: DevModel 101-104, SSID=DevModel, 使用Token认证").pack(anchor=tk.W)
-        ttk.Label(help_frame, text="WebSocket普通设备: SSID 1-99/106-235, 使用设备密码认证").pack(anchor=tk.W)
-        ttk.Label(help_frame, text="WebSocket JWT: SSID=105, DevModel=105, 使用Token认证").pack(anchor=tk.W)
+        ttk.Label(help_frame, text="UDP普通设备: SSID 1-99/106-235, 使用设备密码认证 (快捷键: 1)").pack(anchor=tk.W)
+        ttk.Label(help_frame, text="UDP JWT: DevModel 101-104, SSID=DevModel, 使用Token认证 (快捷键: 2)").pack(anchor=tk.W)
+        ttk.Label(help_frame, text="WebSocket JWT: 请通过前端浏览器测试").pack(anchor=tk.W)
 
         # 绑定快捷键
         self.root.bind("<KeyPress-1>", lambda e: self.udp_device_panel.on_ptt_press())
         self.root.bind("<KeyRelease-1>", lambda e: self.udp_device_panel.on_ptt_release())
         self.root.bind("<KeyPress-2>", lambda e: self.udp_jwt_panel.on_ptt_press())
         self.root.bind("<KeyRelease-2>", lambda e: self.udp_jwt_panel.on_ptt_release())
-        self.root.bind("<KeyPress-3>", lambda e: self.ws_device_panel.on_ptt_press())
-        self.root.bind("<KeyRelease-3>", lambda e: self.ws_device_panel.on_ptt_release())
-        self.root.bind("<KeyPress-4>", lambda e: self.ws_jwt_panel.on_ptt_press())
-        self.root.bind("<KeyRelease-4>", lambda e: self.ws_jwt_panel.on_ptt_release())
 
     def connect_all(self):
         """连接所有"""
@@ -462,8 +381,8 @@ class DebugClientApp:
         # 需要先登录或设置 Token
         # 尝试从 JWT 面板获取 Token
         token = None
-        if self.ws_jwt_panel.is_connected and self.ws_jwt_panel.client:
-            token = getattr(self.ws_jwt_panel.client, 'jwt_token', None)
+        if self.udp_jwt_panel.is_connected and self.udp_jwt_panel.client:
+            token = getattr(self.udp_jwt_panel.client, 'jwt_token', None)
 
         if not token:
             # 使用默认 Token
@@ -472,7 +391,7 @@ class DebugClientApp:
         client.set_token(token)
 
         # 调用切换群组 API
-        success = client.update_radio_group(group_id, dev_model=105)
+        success = client.update_radio_group(group_id, dev_model=103)
         if success:
             messagebox.showinfo("成功", f"已切换到群组 {group_id}")
         else:

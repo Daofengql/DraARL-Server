@@ -35,11 +35,14 @@ var (
 
 	// ==========================================
 	// 限速器：IP+Port 维度的包速率限制
-	// 最大 25 包/秒，超过则静默丢弃
+	// 【前置逻辑说明】
+	// 原 25 包/秒 对抗恶意攻击很好，但如果是 FRP 隧道转发（所有设备共用一个 IP），
+	// 或者客户端网络卡顿后执行了"追赶发送"（瞬间连发3-4个包），极易被静默丢弃。
+	// 大包架构下丢包体验极差，放宽至 150，兼顾防 DDoS 与业务容错。
 	// ==========================================
 	rateLimiter     = make(map[string]*rateLimitEntry)
 	rateLimiterMu   sync.Mutex
-	rateLimitMaxPps = 25 // 每秒最大包数
+	rateLimitMaxPps = 150 // 每秒最大包数 (25 → 150)
 
 	// Username 索引的设备映射 (DraARLv1)
 	devUsernameSSIDMap = make(map[string]*models.Device) // key: username-ssid
@@ -542,12 +545,16 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 		return
 	}
 
-	// 计算距离上次收到语音包的时间间隔
+	// 【前置逻辑说明】
+	// 针对 60ms/帧 (动态1-3帧) 架构的优化：
+	// 一个数据包最大承载 180ms 音频，自然发包间隔可达 180ms。
+	// 原 200ms 阈值容错率极低（仅20ms）。现将判定阈值提升至 600ms。
+	// 意味着只有当超过 600ms 没收到语音包，才判定该设备本次 PTT 发言结束。
 	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
 
-	// td > 200 表示距离上次语音已经超过 200ms，说明这是一次"新"的按键发言(PTT)
+	// td > 600 表示距离上次语音已经超过 600ms，说明这是一次"新"的按键发言(PTT)
 	// 此时仅记录起始时间，推迟到心跳包机制检测到语音彻底结束时，再投递最终包含时长的日志
-	if td > 200 {
+	if td > 600 {
 		dev.LastVoiceBeginTime = packet.TimeStamp
 		// 将标记位置为 false，交由 handleDraARLHeartbeat 在松开 PTT 时接管日志生成
 		dev.Loged = false
@@ -557,8 +564,18 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 	dev.LastVoiceDuration = int(packet.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
 	dev.LastVoiceEndTime = packet.TimeStamp
 
-	dev.VoiceTime += 63
-	totalStats.VoiceTime += 63
+	// 【前置逻辑说明】时长统计优化
+	// 原 63ms 硬编码不适用于 60ms/帧 (动态1-3帧) 架构。
+	// 使用时间差 (td) 作为增量更准确，但首次帧时 td 可能为 0 或负数。
+	// 采用保守策略：取 min(td, 180) 并确保至少 60ms（单帧最小值）
+	voiceIncrement := td
+	if voiceIncrement <= 0 {
+		voiceIncrement = 60 // 首帧默认 60ms
+	} else if voiceIncrement > 180 {
+		voiceIncrement = 180 // 最大不超过 180ms（3帧）
+	}
+	dev.VoiceTime += voiceIncrement
+	totalStats.VoiceTime += voiceIncrement
 
 	dev.LastCtlEndTime = packet.TimeStamp
 
@@ -700,8 +717,9 @@ func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *
 		return
 	}
 
+	// 【前置逻辑说明】同上，服务器互联语音也使用 600ms 阈值
 	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
-	if td > 200 {
+	if td > 600 {
 		dev.LastVoiceBeginTime = packet.TimeStamp
 		logBuffer <- dev
 		dev.Loged = true
@@ -770,9 +788,11 @@ func forwardToGhostDevices(sourceUsername string, sourceSSID byte, groupID int, 
 		if !ghost.ISOnline || ghost.UDPAddr == nil || ghost.DisableRecv {
 			continue
 		}
-		// 【性能优化】使用批量发送器，减少系统调用开销
-		// 避免在循环中直接调用 WriteToUDP 造成系统调用风暴
-		BatchSendUDP(data, ghost.UDPAddr)
+		// 【前置逻辑说明：剥离批量/平滑缓冲，保障大包实时性】
+		// 在 60ms-180ms 巨型音频帧架构下，平滑器 (VoiceSmoother) 和批量器 (BatchSender)
+		// 反而会破坏原有的音频时间戳结构，造成瞬时大量吐包或无端延迟。
+		// 放弃排队，直接使用原生 UDP 发送，将 Jitter 交给接收端的 Opus 解码器处理。
+		globalConn.WriteToUDP(data, ghost.UDPAddr)
 	}
 }
 

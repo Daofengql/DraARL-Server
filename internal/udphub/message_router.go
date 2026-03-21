@@ -127,7 +127,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 这里是解决 UDP 客户端收不到声音的最关键一步。
 	// 我们必须放弃使用 EncodeServerVoice (会打包成 Type 6)，因为普通硬件终端不解析互联包扩展头。
 	// 改为调用 EncodeDraARLv1 并指定 Type 为 protocol.DraARLTypeOpus16K (即协议中的 Type 5)，
-	// 这样下发的就是最标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
+	// 这样下发的就是��标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
 	voicePacket := protocol.EncodeDraARLv1(
 		source.GetUsername(),
 		"", // 准入密码转发为空
@@ -145,20 +145,28 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		return
 	}
 
-	// 遍历 UDP 设备并发送
-	skipSelf := !source.IsGhost()
-	sourceID := source.GetDeviceID()
+	// 【前置逻辑说明：WS → UDP 转发不跳过"自己"】
+	// WS 设备和 UDP 设备是不同的协议栈，不存在"回声"问题。
+	// 即使同一个用户通过 WS 和 UDP 同时在线，也应该正常转发。
+	// 只有当 WS 幽灵设备和 UDP 幽灵设备同用户时才需要跳过（已在 forwardToGhostDevices 中处理）
+	skipSelf := false
+	sourceID := 0 // 不再需要排除自己
 
-	// 【修复爆音方案1】使用批量发送器，与UDP→UDP保持一致
-	// 批量发送器会缓冲数据包并按固定间隔发送，减少突发
+	// 1. 发送给普通 UDP 设备
+	// 【前置逻辑说明：剥离批量缓冲，保障大包实时性】
+	// 在 60ms-180ms 巨型音频帧架构下，批量发送器反而会造成延迟。
+	// 直接使用原生 UDP 发送，将 Jitter 交给接收端的 Opus 解码器处理。
 	for _, targetDev := range pool.DevConnList {
 		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
-			// 使用批量发送器代替直接发送
-			BatchSendUDP(voicePacket, targetDev.UDPAddr)
+			conn.WriteToUDP(voicePacket, targetDev.UDPAddr)
 		}
 	}
 
-	// 转发到互联组 (复用这个标准语音包)
+	// 2. 【核心修复：补全 WS 到 UDP Ghost 的桥接】
+	// 前置逻辑说明：之前的代码由于缺少这行，导致 WS 网页端说话，UDP JWT 幽灵客户端永远听不见。
+	forwardToGhostDevices(source.GetUsername(), source.GetSSID(), groupID, voicePacket)
+
+	// 3. 转发到互联组 (复用这个标准语音包)
 	r.routeServerVoiceToLinkedGroups(source, voicePacket, groupID)
 }
 
@@ -191,13 +199,18 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 		return
 	}
 
-	skipSelf := !source.IsGhost()
-	sourceID := source.GetDeviceID()
+	// 【前置逻辑说明：WS → UDP 转发不跳过"自己"】
+	// 同 RouteVoiceToUDP，WS 和 UDP 是不同协议栈，不需要跳过
+	skipSelf := false
+	sourceID := 0
 	for _, targetDev := range pool.DevConnList {
 		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
 			conn.WriteToUDP(textPacket, targetDev.UDPAddr)
 		}
 	}
+
+	// 【核心修复：补全 WS 到 UDP Ghost 的文本消息桥接】
+	forwardToGhostDevices(source.GetUsername(), source.GetSSID(), groupID, textPacket)
 
 	// 转发到互联组
 	r.routeTextToLinkedGroups(source, textPacket, groupID)

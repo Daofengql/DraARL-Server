@@ -624,6 +624,58 @@ func SetDeviceOnline(dev *models.Device, online bool) {
 	}
 }
 
+// GetDevice 根据 CallSign 和 SSID 获取设备（公开函数，供 websocket 包���用）
+func GetDevice(callsign string, ssid byte) *models.Device {
+	return getDevice(callsign, ssid)
+}
+
+// GetDeviceByID 根据 DeviceID 获取设备（公开函数，供 websocket 包调用）
+// 注意：由于呼号字段不唯一，此方法比 GetDevice 更可靠
+func GetDeviceByID(deviceID int) *models.Device {
+	// 先从 username 索引查找
+	for _, d := range devUsernameSSIDMap {
+		if d.ID == deviceID {
+			return d
+		}
+	}
+
+	// 如果没找到，从 callsign 索引查找
+	for _, d := range devCallsignSSIDMap {
+		if d.ID == deviceID {
+			return d
+		}
+	}
+
+	// ==========================================
+	// 【新增修复】: 内存中找不到时，从数据库加载设备
+	// 解决 WS 普通设备认证后不在 UDP Hub 内存中的问题
+	// ==========================================
+	repo := gormdb.NewDeviceRepository()
+	gormDev, err := repo.GetDeviceByID(deviceID)
+	if err != nil || gormDev == nil {
+		return nil
+	}
+
+	dev := gormDev.ToModelDevice()
+	callsignSSID := protocol.GetCallSignSSID(dev.CallSign, dev.SSID)
+	dev.CallSignSSID = callsignSSID
+
+	// 获取所有者信息填充 Username 和 CallSign
+	if gormDev.OwnerID > 0 {
+		userRepo := gormdb.NewUserRepository()
+		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
+			dev.Username = owner.Name
+			dev.CallSign = owner.CallSign
+		}
+	}
+
+	// 添加到内存缓存
+	devCallsignSSIDMap[callsignSSID] = dev
+	log.Printf("[UDP] Device ID:%d loaded from database into memory cache", deviceID)
+
+	return dev
+}
+
 // GetDeviceCount 获取设备总数
 func GetDeviceCount() int {
 	return len(devCallsignSSIDMap)

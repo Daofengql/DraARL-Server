@@ -48,6 +48,7 @@ interface CommRecordsApiResponse {
 interface CurrentUser {
   callsign: string
   ssid: number
+  username: string  // 添加 username 用于精确匹配
 }
 
 /**
@@ -62,16 +63,13 @@ function toRadioMessage(record: CommRecordResponse, currentUser?: CurrentUser): 
   const isText = record.msg_type === 1
 
   // 判断是否是自己发送的消息
+  // 三重匹配：username + callsign + ssid(105) 都匹配才是自己
   let isSelf = false
-  if (currentUser?.callsign) {
+  if (currentUser?.username && currentUser?.callsign) {
+    const usernameMatch = record.username?.toLowerCase() === currentUser.username.toLowerCase()
     const callsignMatch = callsign.toUpperCase() === currentUser.callsign.toUpperCase()
-    if (record.dev_model === 105) {
-      // 网页设备：只要呼号匹配就是自己
-      isSelf = callsignMatch
-    } else {
-      // 其他设备：呼号+SSID都要匹配
-      isSelf = callsignMatch && ssid === currentUser.ssid
-    }
+    const ssidMatch = ssid === 105  // 网页客户端固定 SSID=105
+    isSelf = usernameMatch && callsignMatch && ssidMatch
   }
 
   return {

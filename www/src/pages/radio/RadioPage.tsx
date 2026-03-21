@@ -335,6 +335,7 @@ export const RadioPage: React.FC = () => {
       try {
         // 传递当前用户信息，用于判断 isSelf
         const currentUser = user?.callsign ? {
+          username: user.username,
           callsign: user.callsign,
           ssid: 105  // 网页设备固定 SSID=105
         } : undefined
@@ -369,6 +370,7 @@ export const RadioPage: React.FC = () => {
     setIsLoadingMore(true)
     try {
       const currentUser = user?.callsign ? {
+        username: user.username,
         callsign: user.callsign,
         ssid: 105
       } : undefined

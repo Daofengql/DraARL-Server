@@ -22,6 +22,7 @@ const DraARLv1MaxPacketSize = 800
 // DraARLv1 数据包类型常量
 const (
 	DraARLTypeControl       byte = 0 // 控制指令
+	DraARLTypeJWTAuth       byte = 1 // JWT 认证包
 	DraARLTypeHeartbeat     byte = 2 // 心跳包
 	DraARLTypeConfig        byte = 3 // 设备配置
 	DraARLTypeTextMessage   byte = 4 // 文本消息
@@ -37,8 +38,46 @@ const (
 	DraARLDevModelAndroid      byte = 101 // Android 客户端
 	DraARLDevModelIOS          byte = 102 // iOS 客户端
 	DraARLDevModelWindows      byte = 103 // Windows 客户端
+	DraARLDevModelMacOS        byte = 104 // macOS 客户端 (预留)
 	DraARLDevModelBrowser      byte = 105 // 浏览器客户端
 	DraARLDevModelInterconnect byte = 106 // 互联设备
+)
+
+// ==========================================
+// SSID 范围常量（双轨制认证）
+// ==========================================
+
+const (
+	// 普通设备 SSID 范围（两段）
+	SSIDRangeNormal1Min byte = 1   // 普通设备第一段最小 SSID
+	SSIDRangeNormal1Max byte = 99  // 普通设备第一段最大 SSID
+	SSIDRangeNormal2Min byte = 106 // 普通设备第二段最小 SSID
+	SSIDRangeNormal2Max byte = 235 // 普通设备第二段最大 SSID
+
+	// 幽灵设备保留 SSID 范围
+	SSIDRangeGhostMin byte = 100 // 幽灵设备保留最小
+	SSIDRangeGhostMax byte = 105 // 幽灵设备保留最大 (含 Web)
+
+	// 服务器互联保留 SSID 范围
+	SSIDRangeInterconnectMin byte = 236 // 服务器互联最小
+	SSIDRangeInterconnectMax byte = 255 // 服务器互联最大
+
+	// 幽灵设备 SSID（等于 DevModel）
+	SSIDGhostAndroid byte = 101 // Android App
+	SSIDGhostIOS     byte = 102 // iOS App
+	SSIDGhostWindows byte = 103 // Windows PC
+	SSIDGhostMacOS   byte = 104 // macOS (预留)
+	SSIDGhostWeb     byte = 105 // Web 浏览器
+)
+
+// JWT 认证响应状态码
+const (
+	JWTAuthSuccess         byte = 0 // 认证成功
+	JWTAuthInvalidToken    byte = 1 // Token 无效或过期
+	JWTAuthUserNotFound    byte = 2 // 用户不存在
+	JWTAuthUserDisabled    byte = 3 // 用户已禁用
+	JWTAuthUserNotApproved byte = 4 // 用户未审核
+	JWTAuthInvalidDevModel byte = 5 // 无效的设备型号 (非 101-104)
 )
 
 // DraARLv1Packet DraARLv1协议数据包
@@ -341,4 +380,81 @@ func MaskDevicePassword(password string) string {
 		return "***"
 	}
 	return string(password[0]) + "****" + string(password[length-1])
+}
+
+// ==========================================
+// 幽灵设备辅助函数
+// ==========================================
+
+// IsGhostDevModel 判断是否为 UDP 幽灵设备型号
+// UDP 幽灵设备: 101 (Android), 102 (iOS), 103 (Windows), 104 (macOS)
+// 注意: 105 (Web) 使用 WebSocket，不在此范围内
+func IsGhostDevModel(devModel byte) bool {
+	return devModel >= DraARLDevModelAndroid && devModel <= DraARLDevModelMacOS
+}
+
+// IsGhostDevModelOrWeb 判断是否为幽灵设备型号（包括 Web）
+// 用于 JWT 认证的所有幽灵设备: 101-105
+func IsGhostDevModelOrWeb(devModel byte) bool {
+	return devModel >= DraARLDevModelAndroid && devModel <= DraARLDevModelBrowser
+}
+
+// GetGhostSSID 获取幽灵设备的 SSID (等于 DevModel)
+// 如果不是有效的幽灵设备型号，返回 0
+func GetGhostSSID(devModel byte) byte {
+	if IsGhostDevModelOrWeb(devModel) {
+		return devModel
+	}
+	return 0
+}
+
+// ==========================================
+// SSID 验证函数
+// ==========================================
+
+// IsValidNormalSSID 检查是否为有效的普通设备 SSID
+// 普通设备可用: 1-99 或 106-235
+func IsValidNormalSSID(ssid byte) bool {
+	return (ssid >= SSIDRangeNormal1Min && ssid <= SSIDRangeNormal1Max) ||
+		(ssid >= SSIDRangeNormal2Min && ssid <= SSIDRangeNormal2Max)
+}
+
+// IsGhostSSID 检查是否为幽灵设备保留 SSID (100-105)
+func IsGhostSSID(ssid byte) bool {
+	return ssid >= SSIDRangeGhostMin && ssid <= SSIDRangeGhostMax
+}
+
+// IsInterconnectSSID 检查是否为服务器互联保留 SSID (236-255)
+func IsInterconnectSSID(ssid byte) bool {
+	return ssid >= SSIDRangeInterconnectMin && ssid <= SSIDRangeInterconnectMax
+}
+
+// IsReservedSSID 检查是否为保留 SSID (用户不可分配)
+// 保留范围: 100-105 (幽灵设备) 和 236-255 (服务器互联)
+func IsReservedSSID(ssid byte) bool {
+	return IsGhostSSID(ssid) || IsInterconnectSSID(ssid)
+}
+
+// GetDevModelName 获取设备型号名称
+func GetDevModelName(devModel byte) string {
+	switch devModel {
+	case DraARLDevModelUnknown:
+		return "Unknown"
+	case DraARLDevModelWeChatMini:
+		return "WeChat Mini"
+	case DraARLDevModelAndroid:
+		return "Android"
+	case DraARLDevModelIOS:
+		return "iOS"
+	case DraARLDevModelWindows:
+		return "Windows"
+	case DraARLDevModelMacOS:
+		return "macOS"
+	case DraARLDevModelBrowser:
+		return "Web Browser"
+	case DraARLDevModelInterconnect:
+		return "Interconnect"
+	default:
+		return fmt.Sprintf("Unknown(%d)", devModel)
+	}
 }

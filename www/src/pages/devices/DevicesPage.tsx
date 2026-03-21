@@ -45,8 +45,8 @@ const DEVICE_MODELS = [
   { value: 101, label: 'Android 客户端' },
   { value: 102, label: 'iOS 客户端' },
   { value: 103, label: 'Windows 客户端' },
+  { value: 104, label: 'macOS 客户端' },
   { value: 105, label: '浏览器客户端' },
-  { value: 106, label: '互联设备' },
 ]
 
 const GROUP_TYPE_PUBLIC = 1

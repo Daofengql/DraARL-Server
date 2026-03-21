@@ -1,14 +1,12 @@
 package websocket
 
 import (
-	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"nrllink/internal/gormdb"
+	"nrllink/internal/models"
 	"nrllink/internal/protocol"
-	"nrllink/internal/udphub"
 	"nrllink/pkg/jwt"
 
 	"github.com/gorilla/websocket"
@@ -18,9 +16,8 @@ import (
 type AuthType int
 
 const (
-	AuthTypeNone   AuthType = iota // 未认证
-	AuthTypeJWT                    // JWT 认证（幽灵设备）
-	AuthTypeDevice                 // 设备密码认证（普通设备）
+	AuthTypeNone AuthType = iota // 未认证
+	AuthTypeJWT                  // JWT 认证（幽灵设备）
 )
 
 // AuthResult 认证结果
@@ -31,17 +28,13 @@ type AuthResult struct {
 	Username string
 	CallSign string
 	Nickname string
-	DeviceID int
-	SSID     byte
 	GroupID  int // 设备所属群组ID（从数据库读取）
 	Error    string
 }
 
 // WSPreAuthData 预认证数据（从 URL 参数或 Cookie 中提取）
 type WSPreAuthData struct {
-	Token    string // JWT Token
-	Username string // 用户名（可选，用于设备认证）
-	SSID     byte   // SSID（仅设备认证使用）
+	Token string // JWT Token
 }
 
 // ParsePreAuthData 从请求中解析预认证数据
@@ -51,27 +44,56 @@ func ParsePreAuthData(r *http.Request) *WSPreAuthData {
 	// 1. 尝试从 URL 参数获取 token
 	data.Token = r.URL.Query().Get("token")
 
-	// 2. 尝试从 URL 参数获取 ssid
-	if ssidStr := r.URL.Query().Get("ssid"); ssidStr != "" {
-		var ssid int
-		if _, err := fmt.Sscanf(ssidStr, "%d", &ssid); err == nil {
-			data.SSID = byte(ssid)
-		}
-	}
-
-	// 3. 如果 URL 参数中没有 token，尝试从 Cookie 获取
+	// 2. 如果 URL 参数中没有 token，尝试从 Cookie 获取
 	if data.Token == "" {
 		if cookie, err := r.Cookie("token"); err == nil {
 			data.Token = cookie.Value
 		}
 	}
 
-	// 4. 设置默认 SSID
-	if data.SSID == 0 {
-		data.SSID = 10 // 默认 SSID
+	return data
+}
+
+// HandleAuthentication 处理 WebSocket 认证流程（仅支持 JWT 认证）
+func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConnectionManager) (*WSDevice, *AuthResult) {
+	preAuth := ParsePreAuthData(r)
+
+	// 注册连接
+	device := manager.RegisterConnection(conn)
+
+	// 必须提供 JWT Token
+	if preAuth.Token == "" {
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token_required"))
+		manager.UnregisterDevice(device)
+		return nil, &AuthResult{Error: "token_required"}
 	}
 
-	return data
+	// JWT 认证
+	device.ConnState = StateAuthenticating
+	authResult := AuthenticateJWT(preAuth.Token)
+
+	if authResult.Success {
+		// JWT 认证的设备 SSID 和 DevModel 统一为 105（Web 浏览器）
+		// 注意：不同平台客户端（100-104）应通过心跳包更新 DevModel
+		device.SSID = 105
+		device.DevModel = 105
+		device.GroupID = authResult.GroupID
+		log.Printf("[WS-AUTH] JWT 认证成功: 用户 %d (%s), 群组 %d", authResult.UserID, authResult.CallSign, authResult.GroupID)
+
+		manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
+
+		// 同时创建 GhostDevice 并建立与 WSDevice 的关联
+		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
+
+		return device, authResult
+	}
+
+	// JWT 认证失败，关闭连接
+	conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, authResult.Error))
+	manager.UnregisterDevice(device)
+	return nil, authResult
 }
 
 // AuthenticateJWT 进行 JWT 认证（幽灵设备）
@@ -117,176 +139,15 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	result.CallSign = user.CallSign
 	result.Nickname = user.NickName
 
-	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s)", user.ID, user.CallSign)
+	// 使用分平台群组偏好 (user_device_preferences 表)
+	// DevModel=105 为 Web 浏览器端
+	lastGroupID, err := repo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+	if err != nil {
+		log.Printf("[WS-AUTH] 获取用户 %d 的群组偏好失败: %v，使用默认群组", user.ID, err)
+		lastGroupID = uint(models.GroupIDPublicMin)
+	}
+	result.GroupID = int(lastGroupID)
+
+	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s) group-%d", user.ID, user.CallSign, result.GroupID)
 	return result
-}
-
-// AuthenticateDevice 进行设备密码认证（普通设备）
-func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
-	result := &AuthResult{
-		AuthType: AuthTypeDevice,
-	}
-
-	// 使用 udphub 包的认证逻辑
-	// 注意：这里直接调用 udphub.AuthenticateDevice，它会处理密码验证
-	authResult := udphub.AuthenticateDevice("", username, password)
-	if !authResult.Success {
-		result.Error = authResult.Error
-		log.Printf("[WS-AUTH] Device auth failed: %s, error: %s", username, authResult.Error)
-		return result
-	}
-
-	// 查找设备
-	deviceRepo := gormdb.NewDeviceRepository()
-	existingDev, err := deviceRepo.GetDeviceByCallSignSSID(authResult.CallSign, ssid)
-	if err == nil && existingDev != nil {
-		// 设备已存在，使用现有设备
-		result.Success = true
-		result.UserID = authResult.User.ID
-		result.Username = username
-		result.CallSign = authResult.CallSign
-		result.SSID = ssid
-		result.DeviceID = existingDev.ID
-		if existingDev.GroupID > 0 {
-			result.GroupID = existingDev.GroupID
-		}
-		log.Printf("[WS-AUTH] Device auth success (existing): %s-%d (device-%d, group-%d)",
-			result.CallSign, result.SSID, result.DeviceID, result.GroupID)
-		return result
-	}
-
-	// 设备不存在，创建新设备（与 udphub 流程一致）
-	newDevice := &gormdb.Device{
-		SSID:       ssid,
-		OwnerID:    authResult.User.ID,
-		DevModel:   0, // 未知设备型号
-		Priority:   100,
-		Status:     0,
-		GroupID:    999, // 默认公共群组
-		CreateTime: time.Now(),
-		UpdateTime: time.Now(),
-	}
-
-	if err := deviceRepo.CreateDevice(newDevice); err != nil {
-		result.Error = "device_create_failed"
-		log.Printf("[WS-AUTH] Device create failed: %v", err)
-		return result
-	}
-
-	result.Success = true
-	result.UserID = authResult.User.ID
-	result.Username = username
-	result.CallSign = authResult.CallSign
-	result.SSID = ssid
-	result.DeviceID = newDevice.ID
-	result.GroupID = 999 // 默认公共群组
-
-	log.Printf("[WS-AUTH] Device auth success (created): %s-%d (device-%d, group-%d)",
-		result.CallSign, result.SSID, result.DeviceID, result.GroupID)
-	return result
-}
-
-// HandleAuthentication 处理 WebSocket 认证流程
-func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConnectionManager) (*WSDevice, *AuthResult) {
-	preAuth := ParsePreAuthData(r)
-
-	// 注册连接
-	device := manager.RegisterConnection(conn)
-
-	// 如果有 JWT Token，尝试 JWT 认证
-	if preAuth.Token != "" {
-		device.ConnState = StateAuthenticating
-		authResult := AuthenticateJWT(preAuth.Token)
-
-		if authResult.Success {
-			// 【核心修改】JWT 认证的设备 SSID 统一为 105
-			// 与 DevModel=105 (DraARLDevModelBrowser) 保持一致
-			device.SSID = 105
-			// 【核心修复】使用用户的 LastGroupID 恢复上次选中的群组
-			// 如果用户没有 LastGroupID 或为 0，则使用默认公共群组 999
-			device.GroupID = 999 // 默认公共群组
-			if authResult.UserID > 0 {
-				userRepo := gormdb.NewUserRepository()
-				if user, err := userRepo.GetUserByID(authResult.UserID); err == nil && user != nil {
-					if user.LastGroupID > 0 {
-						device.GroupID = user.LastGroupID
-						log.Printf("[WS-AUTH] 恢复用户 %d 的群组设置: %d", user.ID, user.LastGroupID)
-					}
-				}
-			}
-			manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
-
-			// 【关键修复】同时创建 GhostDevice 并建立与 WSDevice 的关联
-			// 这样 GetGhostDevice 才能获取到 GhostDevice，且 GhostDevice.Conn 指向 WSDevice
-			GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
-
-			return device, authResult
-		}
-
-		// JWT 认证失败，关闭连接
-		conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, authResult.Error))
-		manager.UnregisterDevice(device)
-		return nil, authResult
-	}
-
-	// 没有 JWT Token，等待心跳包进行设备密码认证
-	device.ConnState = StateAuthenticating
-	device.SSID = preAuth.SSID
-
-	// 设置读取超时
-	conn.SetReadDeadline(time.Now().Add(manager.AuthTimeout))
-
-	// 等待心跳包
-	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("[WS-AUTH] Read error during auth: %v", err)
-			manager.UnregisterDevice(device)
-			return nil, &AuthResult{Error: "read_error"}
-		}
-
-		// 只处理二进制消息
-		if messageType != websocket.BinaryMessage {
-			continue
-		}
-
-		// 解析数据包
-		packet, err := DecodeWSPacket(data)
-		if err != nil {
-			log.Printf("[WS-AUTH] Packet decode error: %v", err)
-			continue
-		}
-
-		// 心跳包触发设备认证
-		if packet.Type == protocol.DraARLTypeHeartbeat {
-			device.Username = packet.Username
-			device.DevicePassword = packet.DevicePassword
-			device.SSID = packet.SSID
-			device.DevModel = packet.DevModel
-
-			authResult := AuthenticateDevice(packet.Username, packet.DevicePassword, packet.SSID)
-
-			if authResult.Success {
-				// 【核心修复】传递数据库中的群组ID，如果为0则使用默认值999
-				groupID := authResult.GroupID
-				if groupID <= 0 {
-					groupID = 999 // 默认公共群组
-				}
-				manager.RegisterNormalDevice(device, packet.Username, packet.SSID, authResult.DeviceID, authResult.CallSign, groupID)
-
-				// 发送心跳响应（填充 CallSign）
-				response := EncodeHeartbeatResponse(packet, authResult.CallSign)
-				conn.WriteMessage(websocket.BinaryMessage, response)
-
-				return device, authResult
-			}
-
-			// 认证失败，关闭连接
-			conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, authResult.Error))
-			manager.UnregisterDevice(device)
-			return nil, authResult
-		}
-	}
 }

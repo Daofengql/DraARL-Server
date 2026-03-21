@@ -1,0 +1,11 @@
+# Nrllink 调试客户端依赖
+
+# WebSocket 客户端
+websocket-client>=1.6.0
+
+# 音频处理
+pyaudio>=0.2.13
+opuslib>=3.0.0
+
+# 可选：用于更好的 UI（如果需要）
+# pillow>=10.0.0

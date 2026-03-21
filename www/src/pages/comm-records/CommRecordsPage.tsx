@@ -36,8 +36,68 @@ import Download from '@mui/icons-material/Download'
 import Refresh from '@mui/icons-material/Refresh'
 import Message from '@mui/icons-material/Message'
 import Language from '@mui/icons-material/Language'
+import ChatBubble from '@mui/icons-material/ChatBubble'
+import Android from '@mui/icons-material/Android'
+import PhoneIphone from '@mui/icons-material/PhoneIphone'
+import DesktopWindows from '@mui/icons-material/DesktopWindows'
+import LaptopMac from '@mui/icons-material/LaptopMac'
+import LaptopMacOutlined from '@mui/icons-material/LaptopMacOutlined'
 import { apiClient } from '../../services/api'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
+
+// 设备型号图标映射
+const getDevModelIcon = (devModel: number) => {
+  switch (devModel) {
+    case 100: // 微信小程序
+      return <ChatBubble fontSize="small" />
+    case 101: // Android
+      return <Android fontSize="small" />
+    case 102: // iOS
+      return <PhoneIphone fontSize="small" />
+    case 103: // Windows
+      return <DesktopWindows fontSize="small" />
+    case 104: // macOS
+      return <LaptopMac fontSize="small" />
+    case 105: // 浏览器
+      return <Language fontSize="small" />
+    default:
+      return <Devices fontSize="small" />
+  }
+}
+
+// 设备型号名称映射
+const getDevModelName = (devModel: number) => {
+  switch (devModel) {
+    case 100:
+      return '微信小程序'
+    case 101:
+      return '安卓客户端'
+    case 102:
+      return 'iOS客户端'
+    case 103:
+      return 'Windows客户端'
+    case 104:
+      return 'macOS客户端'
+    case 105:
+      return 'Web浏览器'
+    default:
+      return null
+  }
+}
+
+// 格式化设备显示名称
+// 幽灵设备（100-105）：呼号-设备名称（如 BH5UVN-安卓客户端）
+// 普通设备：呼号-SSID（如 BH5UVN-1）
+const formatDeviceDisplayName = (deviceName: string, devModel: number) => {
+  const devModelName = getDevModelName(devModel)
+  if (devModelName) {
+    // 幽灵设备：替换 SSID 为设备名称
+    const [callsign] = deviceName.split('-')
+    return `${callsign}-${devModelName}`
+  }
+  // 普通设备：保持原样
+  return deviceName
+}
 
 interface CommRecord {
   id: number
@@ -371,12 +431,8 @@ export function CommRecordsPage() {
                   <TableCell>{formatTime(record.start_time)}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {record.dev_model === 105 ? (
-                        <Language color="primary" fontSize="small" />
-                      ) : (
-                        <Devices color="primary" fontSize="small" />
-                      )}
-                      {record.device_name}
+                      {getDevModelIcon(record.dev_model)}
+                      {formatDeviceDisplayName(record.device_name, record.dev_model)}
                     </Box>
                   </TableCell>
                   <TableCell>

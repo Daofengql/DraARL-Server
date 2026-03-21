@@ -386,3 +386,44 @@ func (r *UserRepository) UpdateUserEmail(id int, email string) error {
 		"email_verified": true,
 	}).Error
 }
+
+// ==========================================
+// 用户设备偏好设置相关方法
+// ==========================================
+
+// GetUserDevicePreference 获取用户指定平台的设备偏好设置
+func (r *UserRepository) GetUserDevicePreference(userID uint, devModel uint8) (*UserDevicePreference, error) {
+	var pref UserDevicePreference
+	err := r.db.Where("user_id = ? AND dev_model = ?", userID, devModel).First(&pref).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &pref, nil
+}
+
+// UpsertUserDevicePreference 创建或更新用户设备偏好设置
+func (r *UserRepository) UpsertUserDevicePreference(userID uint, devModel uint8, groupID uint) error {
+	return r.db.Assign(map[string]interface{}{
+		"last_group_id": groupID,
+		"updated_at":    gorm.Expr("NOW()"),
+	}).FirstOrCreate(&UserDevicePreference{}, map[string]interface{}{
+		"user_id":   userID,
+		"dev_model": devModel,
+	}).Error
+}
+
+// GetUserLastGroupID 获取用户指定平台的最后群组ID
+// 如果没有记录或群组ID为0，返回默认值 999
+func (r *UserRepository) GetUserLastGroupID(userID uint, devModel uint8) (uint, error) {
+	pref, err := r.GetUserDevicePreference(userID, devModel)
+	if err != nil {
+		return 999, err
+	}
+	if pref == nil || pref.LastGroupID == 0 {
+		return 999, nil
+	}
+	return pref.LastGroupID, nil
+}

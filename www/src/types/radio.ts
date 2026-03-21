@@ -37,8 +37,8 @@ export const DeviceModel = {
   ANDROID: 101,
   IOS: 102,
   WINDOWS: 103,
+  MACOS: 104,
   BROWSER: 105, // 幽灵设备使用
-  INTERCONNECT: 106,
 } as const
 
 // 在线设备信息

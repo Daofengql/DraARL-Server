@@ -35,11 +35,14 @@ var (
 
 	// ==========================================
 	// 限速器：IP+Port 维度的包速率限制
-	// 最大 25 包/秒，超过则静默丢弃
+	// 【前置逻辑说明】
+	// 原 25 包/秒 对抗恶意攻击很好，但如果是 FRP 隧道转发（所有设备共用一个 IP），
+	// 或者客户端网络卡顿后执行了"追赶发送"（瞬间连发3-4个包），极易被静默丢弃。
+	// 大包架构下丢包体验极差，放宽至 150，兼顾防 DDoS 与业务容错。
 	// ==========================================
 	rateLimiter     = make(map[string]*rateLimitEntry)
 	rateLimiterMu   sync.Mutex
-	rateLimitMaxPps = 25 // 每秒最大包数
+	rateLimitMaxPps = 150 // 每秒最大包数 (25 → 150)
 
 	// Username 索引的设备映射 (DraARLv1)
 	devUsernameSSIDMap = make(map[string]*models.Device) // key: username-ssid
@@ -289,30 +292,60 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	totalStats.PacketNumber++
 	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 
-	// 查找已存在的设备
-	dev, exists := devUsernameSSIDMap[usernameSSID]
-	if !exists {
+	// ==========================================
+	// 【新增】JWT 认证包处理 (Type=1)
+	// 幽灵设备 (DevModel 101-104) 通过 JWT Token 认证
+	// ==========================================
+	if packet.Type == protocol.DraARLTypeJWTAuth {
+		HandleJWTAuthPacket(packet, realAddr, conn)
+		return
+	}
+
+	// ==========================================
+	// 【新增】SSID 合法性检查
+	// 普通设备不能使用保留 SSID 范围 (100-105 和 236-255)
+	// ==========================================
+	// 先查找设备（包括幽灵设备），避免误拦截已认证的幽灵设备
+	dev, isGhost := getDeviceFromMemory(packet.Username, packet.SSID, packet.UDPAddr)
+
+	// 只有当设备不存在（未��证的新设备）且 SSID 为保留范围时才拒绝
+	if dev == nil && protocol.IsReservedSSID(packet.SSID) {
+		// 幽灵设备 SSID 只能通过 JWT 认证获得，不能通过设备密码认证
+		// 静默拒绝，避免日志刷屏
+		return
+	}
+
+	if dev == nil {
 		// 新设备，需要先认证
 		handleNewDraARLDevice(packet, realAddr, conn, usernameSSID)
 		return
 	}
 
 	// ==========================================
-	// 修复1：即使设备已在内存中(如从数据库加载)，
-	// 当它发送心跳包上线或更换 IP 端口时，依然需要执行密码鉴权
+	// 已存在设备的处理
 	// ==========================================
 	if packet.Type == protocol.DraARLTypeHeartbeat {
 		currentAddr := realAddr.String()
-		// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
-		if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
-			authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
-			if !authResult.Success {
-				log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
-				return // 密码错误，直接丢弃该数据包
+
+		// 幽灵设备心跳处理：不验证密码，只更新状态
+		if isGhost {
+			// 幽灵设备已在 JWT 认证时验证过，心跳只更新活动状态
+			dev.LastPacketTime = packet.TimeStamp
+			dev.UDPAddr = packet.UDPAddr
+			// 继续后续处理
+		} else {
+			// 普通设备心跳：可能需要重新鉴权
+			// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
+			if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
+				authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
+				if !authResult.Success {
+					log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
+					return // 密码错误，直接丢弃该数据包
+				}
+				// 鉴权成功后，补全由于直接从 DB 加载可能缺失的呼号字段
+				dev.CallSign = authResult.CallSign
+				log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 			}
-			// 鉴权成功后，补全由于直接从 DB 加载可能缺失的呼号字段
-			dev.CallSign = authResult.CallSign
-			log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 		}
 	}
 
@@ -341,7 +374,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 			// 群组已禁用，静默丢弃数据包（避免语音包持续发送时刷屏日志）
 			return
 		}
-		parseDraARL(packet, data, dev, conn, gp, realAddr)
+		parseDraARL(packet, data, dev, conn, gp, realAddr, isGhost)
 	} else {
 		// 找不到对应的群组实例
 		// 可能是数据库中删除了该群组，或者设备被分配了一个错误的群组 ID
@@ -351,6 +384,44 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	}
 }
 
+// getDeviceFromMemory 获取设备 (先查普通设备，再查 UDP 幽灵设备)
+// 返回: device, isGhost (是否为 UDP 幽灵设备)
+// 参数: username - 用户名（可能为空，幽灵设备发送时不带用户名）
+// 参数: ssid - 设备 SSID
+// 参数: udpAddr - UDP 地址（用于在 username 为空时查找幽灵设备）
+func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*models.Device, bool) {
+	// 1. 如果 username 不为空，直接按 username-ssid 查找
+	if username != "" {
+		// 查普通设备
+		usernameSSID := protocol.GetUsernameSSID(username, ssid)
+		if dev, exists := devUsernameSSIDMap[usernameSSID]; exists {
+			return dev, false
+		}
+
+		// 查 UDP 幽灵设备
+		if ghost := GlobalUDPGhostManager.Get(username, ssid); ghost != nil {
+			return ghost, true
+		}
+
+		return nil, false
+	}
+
+	// 2. username 为空时，通过 SSID + UDP 地址查找幽灵设备
+	// 幽灵设备发送数据包时 username 为空，需要通过地址匹配
+	if protocol.IsGhostSSID(ssid) && udpAddr != nil {
+		// 遍历幽灵设备，匹配 SSID 和 UDP 地址
+		ghosts := GlobalUDPGhostManager.GetAll()
+		addrStr := udpAddr.String()
+		for _, ghost := range ghosts {
+			if ghost.SSID == ssid && ghost.UDPAddr != nil && ghost.UDPAddr.String() == addrStr {
+				return ghost, true
+			}
+		}
+	}
+
+	return nil, false
+}
+
 // handleNewDraARLDevice 处理新 DraARLv1 设备
 // realAddr: 真实客户端地址（用于识别设备和日志）
 func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, usernameSSID string) {
@@ -358,6 +429,13 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 	if packet.Type != protocol.DraARLTypeHeartbeat {
 		// 非心跳包，忽略未认证设备
 		log.Printf("[AUTH] Ignoring packet from unauthenticated device: %s, type: %d", usernameSSID, packet.Type)
+		return
+	}
+
+	// 【安全校验】幽灵设备保留 SSID (100-105) 只能通过 JWT 认证
+	// 普通设备不允许使用这些 SSID
+	if protocol.IsGhostSSID(packet.SSID) {
+		log.Printf("[AUTH] Device rejected: SSID %d is reserved for ghost devices (use JWT auth), device: %s", packet.SSID, usernameSSID)
 		return
 	}
 
@@ -424,7 +502,8 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 
 // parseDraARL 解析并处理 DraARLv1 报文
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
-func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr) {
+// isGhost: 是否为 UDP 幽灵设备
+func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
 	switch packet.Type {
 	case protocol.DraARLTypeControl:
 		// 控制指令
@@ -436,7 +515,7 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 
 	case protocol.DraARLTypeHeartbeat:
 		// 心跳包
-		handleDraARLHeartbeat(packet, data, dev, conn, gp, realAddr)
+		handleDraARLHeartbeat(packet, data, dev, conn, gp, realAddr, isGhost)
 
 	case protocol.DraARLTypeConfig:
 		// 设备配置
@@ -466,12 +545,16 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 		return
 	}
 
-	// 计算距离上次收到语音包的时间间隔
+	// 【前置逻辑说明】
+	// 针对 60ms/帧 (动态1-3帧) 架构的优化：
+	// 一个数据包最大承载 180ms 音频，自然发包间隔可达 180ms。
+	// 原 200ms 阈值容错率极低（仅20ms）。现将判定阈值提升至 600ms。
+	// 意味着只有当超过 600ms 没收到语音包，才判定该设备本次 PTT 发言结束。
 	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
 
-	// td > 200 表示距离上次语音已经超过 200ms，说明这是一次"新"的按键发言(PTT)
+	// td > 600 表示距离上次语音已经超过 600ms，说明这是一次"新"的按键发言(PTT)
 	// 此时仅记录起始时间，推迟到心跳包机制检测到语音彻底结束时，再投递最终包含时长的日志
-	if td > 200 {
+	if td > 600 {
 		dev.LastVoiceBeginTime = packet.TimeStamp
 		// 将标记位置为 false，交由 handleDraARLHeartbeat 在松开 PTT 时接管日志生成
 		dev.Loged = false
@@ -481,8 +564,18 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 	dev.LastVoiceDuration = int(packet.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
 	dev.LastVoiceEndTime = packet.TimeStamp
 
-	dev.VoiceTime += 63
-	totalStats.VoiceTime += 63
+	// 【前置逻辑说明】时长统计优化
+	// 原 63ms 硬编码不适用于 60ms/帧 (动态1-3帧) 架构。
+	// 使用时间差 (td) 作为增量更准确，但首次帧时 td 可能为 0 或负数。
+	// 采用保守策略：取 min(td, 180) 并确保至少 60ms（单帧最小值）
+	voiceIncrement := td
+	if voiceIncrement <= 0 {
+		voiceIncrement = 60 // 首帧默认 60ms
+	} else if voiceIncrement > 180 {
+		voiceIncrement = 180 // 最大不超过 180ms（3帧）
+	}
+	dev.VoiceTime += voiceIncrement
+	totalStats.VoiceTime += voiceIncrement
 
 	dev.LastCtlEndTime = packet.TimeStamp
 
@@ -509,7 +602,8 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 
 // handleDraARLHeartbeat 处理 DraARLv1 心跳包
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
-func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr) {
+// isGhost: 是否为 UDP 幽灵设备
+func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
 	wasOnline := dev.ISOnline
 	currentAddr := packet.UDPAddr.String()
 	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
@@ -550,8 +644,8 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		dev.IsReconnecting = false
 	}
 
-	// 记录日志
-	if !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
+	// 记录日志（非幽灵设备才记录）
+	if !isGhost && !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
 		logBuffer <- dev
 		dev.Loged = true
 	}
@@ -575,8 +669,15 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 
 		// QTH 查询使用真实 IP
 		dev.QTH = getQTH(realAddr.IP.String())
-		log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
-			dev.Username, dev.Name, realAddr, dev.QTH, gp.ID, dev.DevModel)
+
+		// 日志区分幽灵设备和普通设备
+		if isGhost {
+			log.Printf("[ONLINE] UDP幽灵设备 %s-%d 已上线 (地址: %v, 群组: %d, 型号: %d)",
+				dev.Username, dev.SSID, realAddr, gp.ID, dev.DevModel)
+		} else {
+			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
+				dev.Username, dev.Name, realAddr, dev.QTH, gp.ID, dev.DevModel)
+		}
 
 		dev.ISOnline = true
 	}
@@ -616,8 +717,9 @@ func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *
 		return
 	}
 
+	// 【前置逻辑说明】同上，服务器互联语音也使用 600ms 阈值
 	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
-	if td > 200 {
+	if td > 600 {
 		dev.LastVoiceBeginTime = packet.TimeStamp
 		logBuffer <- dev
 		dev.Loged = true
@@ -657,14 +759,41 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 		packet.DATA,  // 原始语音数据
 	)
 
-	// 1. 在本群组内广播（UDP 设备）
+	// 1. 在本群组内广播（UDP 普通设备）
 	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
-	// 2. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
+	// 2. 【新增】转发给本群组的 UDP 幽灵设备
+	forwardToGhostDevices(dev.Username, dev.SSID, gp.ID, refilledData)
+
+	// 3. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
 	forwardVoiceToLinkedGroups(dev, refilledData, gp.ID)
 
-	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	// 4. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
 	BroadcastVoiceFromUDP(dev, refilledData, gp.ID)
+}
+
+// forwardToGhostDevices 转发数据包给 UDP 幽灵设备
+// sourceUsername: 源设备用户名
+// sourceSSID: 源设备 SSID
+// groupID: 目标群组 ID
+// data: 要转发的数据
+func forwardToGhostDevices(sourceUsername string, sourceSSID byte, groupID int, data []byte) {
+	ghosts := GlobalUDPGhostManager.GetByGroup(groupID)
+	for _, ghost := range ghosts {
+		// 跳过发送者自己
+		if ghost.Username == sourceUsername && ghost.SSID == sourceSSID {
+			continue
+		}
+		// 检查设备状态
+		if !ghost.ISOnline || ghost.UDPAddr == nil || ghost.DisableRecv {
+			continue
+		}
+		// 【前置逻辑说明：剥离批量/平滑缓冲，保障大包实时性】
+		// 在 60ms-180ms 巨型音频帧架构下，平滑器 (VoiceSmoother) 和批量器 (BatchSender)
+		// 反而会破坏原有的音频时间戳结构，造成瞬时大量吐包或无端延迟。
+		// 放弃排队，直接使用原生 UDP 发送，将 Jitter 交给接收端的 Opus 解码器处理。
+		globalConn.WriteToUDP(data, ghost.UDPAddr)
+	}
 }
 
 // forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
@@ -693,14 +822,17 @@ func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID i
 			// 获取目标群组的转发
 			if targetGroup, exists := GetGroupFromCache(targetID); exists {
 				pool := targetGroup.ConnPool.(*CurrentConnPool)
-				// 1. 发送给目标组的 UDP 设备（跨组不排除自己，因为源设备不在目标组）
+				// 1. 发送给目标组的 UDP 普通设备（跨组不排除自己，因为源设备不在目标组）
 				for _, targetDev := range pool.DevConnList {
 					if canForwardToDevice(targetDev, 0, targetID, false) {
 						globalConn.WriteToUDP(data, targetDev.UDPAddr)
 					}
 				}
 
-				// 2. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
+				// 2. 【新增】转发给目标组的 UDP 幽灵设备
+				forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
+
+				// 3. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
 				// 否则 WS 客户端永远听不到其他实体组传来的 UDP 声音
 				BroadcastVoiceFromUDP(dev, data, targetID)
 			}
@@ -725,10 +857,13 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 	// 1. 在本群组内广播（UDP 设备）
 	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
 
-	// 2. 跨虚拟组转发文本消息
+	// 2. 【新增】转发给本群组的 UDP 幽灵设备
+	forwardToGhostDevices(dev.Username, dev.SSID, gp.ID, refilledData)
+
+	// 3. 跨虚拟组转发文本消息
 	forwardMessageToLinkedGroups(dev, refilledData, gp.ID)
 
-	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
+	// 4. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
 	BroadcastTextFromUDP(dev, refilledData, gp.ID)
 }
 
@@ -760,7 +895,10 @@ func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID
 					}
 				}
 
-				// 2. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
+				// 2. 【新增】转发给目标组的 UDP 幽灵设备
+				forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
+
+				// 3. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
 				BroadcastTextFromUDP(dev, data, targetID)
 			}
 		}

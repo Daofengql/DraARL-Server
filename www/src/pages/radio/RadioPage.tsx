@@ -34,7 +34,6 @@ import MicIcon from '@mui/icons-material/Mic'
 import MicOffIcon from '@mui/icons-material/MicOff'
 import VolumeUpIcon from '@mui/icons-material/VolumeUp'
 import VolumeOffIcon from '@mui/icons-material/VolumeOff'
-import SettingsIcon from '@mui/icons-material/Settings'
 import SendIcon from '@mui/icons-material/Send'
 import GroupIcon from '@mui/icons-material/Group'
 import HeadsetIcon from '@mui/icons-material/Headset'
@@ -61,7 +60,6 @@ import type {
 import { MessageList } from './components/MessageList'
 import { PTTButton } from './components/PTTButton'
 import { GroupSelector } from './components/GroupSelector'
-import { RadioSettings } from './components/RadioSettings'
 import { DeviceList } from './components/DeviceList'
 
 // 样式
@@ -200,7 +198,6 @@ export const RadioPage: React.FC = () => {
   // UI 状态
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('voice')
   const [textInput, setTextInput] = useState('')
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [deviceListOpen, setDeviceListOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isPTTDown, setIsPTTDown] = useState(false)
@@ -213,6 +210,12 @@ export const RadioPage: React.FC = () => {
 
   // Refs
   const messageListRef = useRef<HTMLDivElement>(null)
+  const messagesRef = useRef<RadioMessage[]>(messages)
+
+  // 保持 messagesRef 与 messages 同步
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   // 初始化
   useEffect(() => {
@@ -332,13 +335,16 @@ export const RadioPage: React.FC = () => {
       try {
         // 传递当前用户信息，用于判断 isSelf
         const currentUser = user?.callsign ? {
+          username: user.username,
           callsign: user.callsign,
           ssid: 105  // 网页设备固定 SSID=105
         } : undefined
 
-        const merged = await messageSyncService.syncMessages(currentGroupId, messages, currentUser)
+        // 使用 ref 获取最新的消息列表（避免闭包捕获过期值）
+        const currentMessages = messagesRef.current
+        const merged = await messageSyncService.syncMessages(currentGroupId, currentMessages, currentUser)
         // 只有当消息有变化时才更新（避免不必要的重渲染）
-        if (merged.length !== messages.length || JSON.stringify(merged) !== JSON.stringify(messages)) {
+        if (merged.length !== currentMessages.length || JSON.stringify(merged) !== JSON.stringify(currentMessages)) {
           setMessages(merged)
         }
       } catch (error) {
@@ -364,6 +370,7 @@ export const RadioPage: React.FC = () => {
     setIsLoadingMore(true)
     try {
       const currentUser = user?.callsign ? {
+        username: user.username,
         callsign: user.callsign,
         ssid: 105
       } : undefined
@@ -512,9 +519,6 @@ export const RadioPage: React.FC = () => {
 
         <Box sx={styles.headerRight}>
           {renderConnectionStatus()}
-          <IconButton onClick={() => setSettingsOpen(true)}>
-            <SettingsIcon />
-          </IconButton>
         </Box>
       </Box>
 
@@ -644,35 +648,6 @@ export const RadioPage: React.FC = () => {
           </Typography>
         )}
       </Box>
-
-      {/* 设置抽屉 */}
-      <Drawer
-        anchor="right"
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-      >
-        <Box sx={styles.settingsDrawer}>
-          <RadioSettings
-            config={config}
-            onConfigChange={(newConfig) => {
-              setConfig(newConfig)
-            }}
-            onClose={() => setSettingsOpen(false)}
-            // 【核心修复】在这里统筹清理逻辑，实现三端同步清理
-            onRequestClearCache={async () => {
-              // 1. 调用 Service 彻底清空数据库和 Service 的内部内存
-              const success = await radioService.clearAllMessageCache()
-
-              if (success) {
-                // 2. 清空当前屏幕上的 React State，让画面立刻变空白
-                setMessages([])
-              } else {
-                throw new Error('清理失败')
-              }
-            }}
-          />
-        </Box>
-      </Drawer>
 
       {/* 设备列表抽屉 */}
       <Drawer

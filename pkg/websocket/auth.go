@@ -74,9 +74,10 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 	authResult := AuthenticateJWT(preAuth.Token)
 
 	if authResult.Success {
-		// JWT 认证的设备 SSID 统一为 105
-		// 与 DevModel=105 (DraARLDevModelBrowser) 保持一致
+		// JWT 认证的设备 SSID 和 DevModel 统一为 105（Web 浏览器）
+		// 注意：不同平台客户端（100-104）应通过心跳包更新 DevModel
 		device.SSID = 105
+		device.DevModel = 105
 		device.GroupID = authResult.GroupID
 		log.Printf("[WS-AUTH] JWT 认证成功: 用户 %d (%s), 群组 %d", authResult.UserID, authResult.CallSign, authResult.GroupID)
 

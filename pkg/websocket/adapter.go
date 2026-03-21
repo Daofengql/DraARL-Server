@@ -105,6 +105,16 @@ func handlePacket(device *WSDevice, packet *WSPacket, rawData []byte) {
 
 // handleHeartbeat 处理心跳包
 func handleHeartbeat(device *WSDevice, packet *WSPacket) {
+	// 更新设备型号（100-104 为各平台客户端，105 为 Web 浏览器）
+	// 客户端通过心跳包告知服务器自己的设备类型
+	if packet.DevModel >= 100 && packet.DevModel <= 105 {
+		if device.DevModel != packet.DevModel {
+			log.Printf("[WS] Device model updated: %s %d -> %d", device.GetIdentifier(), device.DevModel, packet.DevModel)
+			device.DevModel = packet.DevModel
+			device.SSID = packet.DevModel // 幽灵设备的 SSID 与 DevModel 一致
+		}
+	}
+
 	// 回填呼号
 	response := EncodeHeartbeatResponse(packet, device.CallSign)
 	if err := device.Conn.WriteMessage(websocket.BinaryMessage, response); err != nil {
@@ -138,8 +148,8 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 
 		// 幽灵设备：使用负数 UserID 作为录制缓冲池的 Session Key
 		recordDevID := -device.UserID
-		// 强制锁死 Web 客户端的标准 SSID 为 105
-		recordSSID := uint8(105)
+		// 使用实际的设备型号（100-105）作为 SSID
+		recordSSID := device.DevModel
 
 		udphub.RecordCommPacket(recordDevID, recordSSID, groupID, userID, packet.DATA)
 	}
@@ -172,9 +182,10 @@ func handleTextMessage(device *WSDevice, packet *WSPacket) {
 			userID = &uid
 		}
 
-		// 幽灵设备：使用负数 UserID
+		// 幽灵设备是使用负数 UserID
 		recordDevID := -device.UserID
-		recordSSID := uint8(105)
+		// 使用实际的设备型号（100-105）作为 SSID
+		recordSSID := device.DevModel
 
 		udphub.RecordTextMessage(recordDevID, recordSSID, groupID, userID, string(packet.DATA))
 	}

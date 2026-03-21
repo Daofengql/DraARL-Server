@@ -23,6 +23,12 @@ import HeadsetIcon from '@mui/icons-material/Headset'
 import ComputerIcon from '@mui/icons-material/Computer'
 import PhoneIcon from '@mui/icons-material/Phone'
 import TabletIcon from '@mui/icons-material/Tablet'
+import ChatBubbleIcon from '@mui/icons-material/ChatBubble'
+import AndroidIcon from '@mui/icons-material/Android'
+import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone'
+import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows'
+import LaptopMacIcon from '@mui/icons-material/LaptopMac'
+import LanguageIcon from '@mui/icons-material/Language'
 import { apiClient } from '../../../services'
 import { DeviceModel } from '../../../types/radio'
 import type { OnlineDevice } from '../../../types/radio'
@@ -36,15 +42,17 @@ interface DeviceListProps {
 const getDeviceIcon = (devModel: number) => {
   switch (devModel) {
     case 100: // 微信小程序
-      return <PhoneIcon />
+      return <ChatBubbleIcon />
     case 101: // Android
-      return <PhoneIcon />
+      return <AndroidIcon />
     case 102: // iOS
-      return <PhoneIcon />
+      return <PhoneIphoneIcon />
     case 103: // Windows
-      return <ComputerIcon />
+      return <DesktopWindowsIcon />
+    case 104: // macOS
+      return <LaptopMacIcon />
     case 105: // 浏览器
-      return <ComputerIcon />
+      return <LanguageIcon />
     default:
       return <HeadsetIcon />
   }
@@ -61,10 +69,10 @@ const getDeviceModelName = (devModel: number) => {
       return 'iOS'
     case 103:
       return 'Windows'
+    case 104:
+      return 'macOS'
     case 105:
       return '浏览器'
-    case 106:
-      return '互联设备'
     default:
       return '未知设备'
   }

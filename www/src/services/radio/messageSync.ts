@@ -55,9 +55,21 @@ interface CurrentUser {
  * 将后端通信记录转换为前端 RadioMessage 格式
  */
 function toRadioMessage(record: CommRecordResponse, currentUser?: CurrentUser): RadioMessage {
-  // 解析设备名称（格式：BH5UVN-0 或 BH5UVN-105）
-  const [callsign, ssidStr] = record.device_name.split('-')
-  const ssid = parseInt(ssidStr) || 0
+  // 解析设备名称（格式：BH5UVN-安卓客户端 或 BH5UVN-105）
+  const [callsign] = record.device_name.split('-')
+
+  // 对于幽灵设备（device_id=0），SSID 直接使用 dev_model（100-105）
+  // 对于物理设备，需要从 device_name 解析
+  let ssid = 0
+  if (record.device_id === 0 && record.dev_model >= 100 && record.dev_model <= 105) {
+    ssid = record.dev_model
+  } else {
+    // 物理设备：从 device_name 解析 SSID
+    const parts = record.device_name.split('-')
+    if (parts.length > 1) {
+      ssid = parseInt(parts[1]) || 0
+    }
+  }
 
   // 判断消息类型
   const isText = record.msg_type === 1

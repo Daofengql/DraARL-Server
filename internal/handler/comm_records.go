@@ -23,10 +23,10 @@ type CommRecordResponse struct {
 	DeviceName  string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
 	DevModel    int    `json:"dev_model"`   // 设备型号：105=浏览器
 	GroupID     *uint  `json:"group_id"`
-	GroupName   string `json:"group_name"`  // 通过联表查询获取：public_groups.name
+	GroupName   string `json:"group_name"` // 通过联表查询获取：public_groups.name
 	UserID      *uint  `json:"user_id"`
-	Username    string `json:"username"`    // 登录用户名（用于前端查询头像）
-	Nickname    string `json:"nickname"`    // 用户昵称（用于显示）
+	Username    string `json:"username"` // 登录用户名（用于前端查询头像）
+	Nickname    string `json:"nickname"` // 用户昵称（用于显示）
 	StartTime   string `json:"start_time"`
 	EndTime     string `json:"end_time"`
 	DurationMs  int    `json:"duration_ms"`
@@ -60,6 +60,26 @@ type CommRecordWithDetails struct {
 	Status        int       `gorm:"column:status"`
 }
 
+// getDevModelName 获取设备型号名称（100-105）
+func getDevModelName(devModel int) string {
+	switch devModel {
+	case 100:
+		return "微信小程序"
+	case 101:
+		return "安卓客户端"
+	case 102:
+		return "iOS客户端"
+	case 103:
+		return "Windows客户端"
+	case 104:
+		return "macOS客户端"
+	case 105:
+		return "浏览器"
+	default:
+		return ""
+	}
+}
+
 // toCommRecordResponse 将联表查询结果转换为响应结构
 func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	audioURL := ""
@@ -74,21 +94,24 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 		audioURL = minio_local.GetFileURL(r.AudioPath)
 	}
 
-	// 设备名称：呼号-SSID
+	// 设备名称：呼号 + 设备标识
 	deviceName := ""
-	if r.OwnerCallSign != "" {
-		// 物理设备
+	if r.DeviceID == 0 {
+		// 幽灵设备：呼号-DevModel（100-105），前端根据 dev_model 判断设备类型
+		if r.UserCallSign != "" {
+			deviceName = r.UserCallSign + "-" + strconv.Itoa(r.DevModel)
+		}
+	} else if r.OwnerCallSign != "" {
+		// 物理设备：呼号-SSID
 		deviceName = r.OwnerCallSign
 		if r.DeviceSSID > 0 {
 			deviceName += "-" + strconv.Itoa(int(r.DeviceSSID))
 		}
 	} else if r.UserCallSign != "" {
-		// 幽灵设备兜底显示：使用直接关联的用户呼号
+		// 兜底显示
 		deviceName = r.UserCallSign
 		if r.DeviceSSID > 0 {
 			deviceName += "-" + strconv.Itoa(int(r.DeviceSSID))
-		} else {
-			deviceName += "-Web"
 		}
 	}
 
@@ -145,7 +168,7 @@ func GetCommRecords(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
+			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE d.dev_model END as dev_model,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.name as user_name, u.callsign as user_call_sign, u.nickname as user_nick_name
@@ -282,7 +305,7 @@ func GetCommRecord(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			CASE WHEN cr.device_id = 0 THEN 105 ELSE d.dev_model END as dev_model,
+			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE d.dev_model END as dev_model,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.callsign as user_call_sign, u.nickname as user_nick_name

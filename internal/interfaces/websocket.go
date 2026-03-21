@@ -3,7 +3,7 @@ package interfaces
 import "time"
 
 // WSDeviceInterface WebSocket 设备接口
-// 用于解耦 udphub �� websocket 包
+// 用于解耦 udphub 和 websocket 包
 type WSDeviceInterface interface {
 	GetIdentifier() string
 	GetCallSignSSID() string

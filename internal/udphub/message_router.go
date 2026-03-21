@@ -127,7 +127,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 这里是解决 UDP 客户端收不到声音的最关键一步。
 	// 我们必须放弃使用 EncodeServerVoice (会打包成 Type 6)，因为普通硬件终端不解析互联包扩展头。
 	// 改为调用 EncodeDraARLv1 并指定 Type 为 protocol.DraARLTypeOpus16K (即协议中的 Type 5)，
-	// 这样下发的就是��标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
+	// 这样下发的就是 标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
 	voicePacket := protocol.EncodeDraARLv1(
 		source.GetUsername(),
 		"", // 准入密码转发为空

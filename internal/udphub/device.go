@@ -624,7 +624,7 @@ func SetDeviceOnline(dev *models.Device, online bool) {
 	}
 }
 
-// GetDevice 根据 CallSign 和 SSID 获取设备（公开函数，供 websocket 包���用）
+// GetDevice 根据 CallSign 和 SSID 获取设备（公开函数，供 websocket 包使用）
 func GetDevice(callsign string, ssid byte) *models.Device {
 	return getDevice(callsign, ssid)
 }

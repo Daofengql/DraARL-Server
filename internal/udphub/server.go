@@ -361,6 +361,13 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		return
 	}
 
+	// 【安全校验】SSID=105 保留给 Ghost 设备（Web 端 JWT 认证）使用
+	// 普通设备不允许使用此 SSID
+	if packet.SSID == protocol.ReservedSSIDForGhost {
+		log.Printf("[AUTH] Device rejected: SSID %d is reserved for web client, device: %s", packet.SSID, usernameSSID)
+		return
+	}
+
 	// 认证设备（使用真实 IP）
 	authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
 	if !authResult.Success {

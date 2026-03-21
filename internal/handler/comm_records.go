@@ -214,21 +214,17 @@ func GetCommRecords(c *gin.Context) {
 	if groupIDStr != "" {
 		groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
 		if err == nil {
-			// 【互联组支持】使用 SQL 子查询获取所有相关群组的消息
+			// 【互联组支持】使用子查询获取所有相关群组的消息
 			// 逻辑：
 			// 1. 当前群组本身
 			// 2. 通过 group_links 找到当前群组所属的互联组 (link_group_id)
 			// 3. 找到这些互联组关联的所有目标群组 (target_group_id)
-			db = db.Where(`
-				cr.group_id IN (
-					SELECT ? as group_id
-					UNION
-					SELECT gl2.target_group_id
-					FROM group_links gl1
-					INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id
-					WHERE gl1.target_group_id = ?
-				)
-			`, groupID, groupID)
+			// 使用 GORM 的子查询构建方式，避免参数绑定问题
+			subQuery := gormdb.Get().Table("group_links gl1").
+				Select("gl2.target_group_id").
+				Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
+				Where("gl1.target_group_id = ?", groupID)
+			db = db.Where("cr.group_id = ? OR cr.group_id IN (?)", groupID, subQuery)
 		}
 	}
 	// 全局模式下可以按 user_id 筛选

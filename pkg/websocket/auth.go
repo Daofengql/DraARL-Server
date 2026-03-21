@@ -127,6 +127,14 @@ func AuthenticateDevice(username, password string, ssid byte) *AuthResult {
 		AuthType: AuthTypeDevice,
 	}
 
+	// 【安全校验】SSID=105 保留给 Ghost 设备（Web 端 JWT 认证）使用
+	// 普通设备不允许使用此 SSID
+	if ssid == protocol.ReservedSSIDForGhost {
+		result.Error = "ssid_reserved_for_web"
+		log.Printf("[WS-AUTH] Device auth rejected: SSID %d is reserved for web client", ssid)
+		return result
+	}
+
 	// 使用 udphub 包的认证逻辑
 	// 注意：这里直接调用 udphub.AuthenticateDevice，它会处理密码验证
 	authResult := udphub.AuthenticateDevice("", username, password)

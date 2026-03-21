@@ -324,6 +324,9 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     // 记录滚动位置，用于加载更多后恢复
     const prevScrollHeightRef = useRef<number>(0)
 
+    // 标记是否是首次加载（用于区分"首次加载"和"新消息到达"）
+    const isInitialLoadRef = useRef(true)
+
     // 滚动检测：当滚动到顶部时加载更多
     const handleScroll = useCallback(() => {
       if (!scrollRef.current || !onLoadMore || isLoadingMore || !hasMore) return
@@ -396,10 +399,24 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
       })
     }, [messages, loadUserAvatar])
 
-    // 自动滚动到底部（仅当新消息到达时）
+    // 当消息被清空时（如切换群组），重置首次加载��记
+    useEffect(() => {
+      if (messages.length === 0) {
+        isInitialLoadRef.current = true
+      }
+    }, [messages.length])
+
+    // 自动滚动到底部
     useEffect(() => {
       if (scrollRef.current) {
-        // 只在滚动位置接近底部时才自动滚动
+        // 首次加载时，始终滚动到底部
+        if (isInitialLoadRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+          isInitialLoadRef.current = false
+          return
+        }
+
+        // 后续：只在滚动位置接近底部时才自动滚动（不打扰用户查看历史）
         const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
         const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
         if (isNearBottom) {

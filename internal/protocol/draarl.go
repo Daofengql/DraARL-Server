@@ -41,6 +41,10 @@ const (
 	DraARLDevModelInterconnect byte = 106 // 互联设备
 )
 
+// ReservedSSIDForGhost 保留给 Ghost 设备（Web 端 JWT 认证）的 SSID
+// 普通设备准入时不允许使用此 SSID
+const ReservedSSIDForGhost byte = 105
+
 // DraARLv1Packet DraARLv1协议数据包
 type DraARLv1Packet struct {
 	TimeStamp       time.Time

@@ -213,6 +213,12 @@ export const RadioPage: React.FC = () => {
 
   // Refs
   const messageListRef = useRef<HTMLDivElement>(null)
+  const messagesRef = useRef<RadioMessage[]>(messages)
+
+  // 保持 messagesRef 与 messages 同步
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   // 初始化
   useEffect(() => {
@@ -336,9 +342,11 @@ export const RadioPage: React.FC = () => {
           ssid: 105  // 网页设备固定 SSID=105
         } : undefined
 
-        const merged = await messageSyncService.syncMessages(currentGroupId, messages, currentUser)
+        // 使用 ref 获取最新的消息列表（避免闭包捕获过期值）
+        const currentMessages = messagesRef.current
+        const merged = await messageSyncService.syncMessages(currentGroupId, currentMessages, currentUser)
         // 只有当消息有变化时才更新（避免不必要的重渲染）
-        if (merged.length !== messages.length || JSON.stringify(merged) !== JSON.stringify(messages)) {
+        if (merged.length !== currentMessages.length || JSON.stringify(merged) !== JSON.stringify(currentMessages)) {
           setMessages(merged)
         }
       } catch (error) {

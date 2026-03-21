@@ -17,6 +17,7 @@ import (
 	"nrllink/internal/config"
 	gormdb "nrllink/internal/gormdb"
 	oplog "nrllink/internal/log"
+	"nrllink/internal/protocol"
 	"nrllink/pkg/cache"
 	"nrllink/pkg/jwt"
 
@@ -736,6 +737,10 @@ func SSOUnbind(c *gin.Context) {
 
 // buildUserData 构建用户数据响应
 func buildUserData(user *gormdb.User) gin.H {
+	// 获取用户 Web 端的群组偏好
+	userRepo := gormdb.NewUserRepository()
+	lastGroupID, _ := userRepo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+
 	return gin.H{
 		"id":              user.ID,
 		"username":        user.Name,
@@ -755,7 +760,7 @@ func buildUserData(user *gormdb.User) gin.H {
 		"dmrid":           user.DMRID,
 		"mdcid":           user.MDCID,
 		"alarm_msg":       user.AlarmMsg,
-		"last_group_id":   user.LastGroupID,
+		"last_group_id":   lastGroupID, // 从设备偏好表获取
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
 				return user.LastLoginTime.Format("2006-01-02 15:04:05")

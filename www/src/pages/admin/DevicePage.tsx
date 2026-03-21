@@ -32,10 +32,12 @@ import Circle from '@mui/icons-material/Circle'
 import Lock from '@mui/icons-material/Lock'
 import Person from '@mui/icons-material/Person'
 import Refresh from '@mui/icons-material/Refresh'
+import Settings from '@mui/icons-material/Settings'
 import { deviceService, groupService, userService } from '../../services'
 import type { Device, Group, User } from '../../types'
 import { SwitchGroupDialog } from '../devices/SwitchGroupDialog'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
+import { ParamConfigDialog } from '../../components/devices/ParamConfigDialog'
 
 const DEVICE_MODELS = [
   { value: 0, label: '未知设备' },
@@ -71,6 +73,10 @@ export function AdminDevicePage() {
 
   // 自动刷新状态
   const [autoRefresh, setAutoRefresh] = useState(0) // 0=关闭, 10/30/60=秒数
+
+  // 参数下发弹窗状态
+  const [paramDialogOpen, setParamDialogOpen] = useState(false)
+  const [paramDevice, setParamDevice] = useState<Device | null>(null)
 
   const [formData, setFormData] = useState({
     name: '',
@@ -229,6 +235,12 @@ export function AdminDevicePage() {
     }
   }
 
+  // 打开参数下发对话框
+  const handleOpenParamDialog = (device: Device) => {
+    setParamDevice(device)
+    setParamDialogOpen(true)
+  }
+
   const handleOpenSwitchDialog = (device: Device) => {
     setSwitchingDevice(device)
     setSwitchDialogOpen(true)
@@ -382,17 +394,17 @@ export function AdminDevicePage() {
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 900 }}>
+        <Table sx={{ minWidth: 900, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
-              <TableCell width={80}>在线</TableCell>
-              <TableCell>名称</TableCell>
-              <TableCell>设备类型</TableCell>
-              <TableCell>呼号SSID</TableCell>
-              <TableCell>所有者</TableCell>
-              <TableCell>所在群组</TableCell>
-              <TableCell width={130}>收发控制</TableCell>
-              <TableCell align="right">操作</TableCell>
+              <TableCell align="center" sx={{ width: 70 }}>在线状态</TableCell>
+              <TableCell align="center">名称</TableCell>
+              <TableCell align="center">设备类型</TableCell>
+              <TableCell align="center">呼号及SSID</TableCell>
+              <TableCell align="center">所有者</TableCell>
+              <TableCell align="center">所在群组</TableCell>
+              <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
+              <TableCell align="center" sx={{ width: 120 }}>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -407,25 +419,26 @@ export function AdminDevicePage() {
                 return (
                   <TableRow key={device.id} hover>
                     {/* 在线状态使用绿圆点或灰圆圈 */}
-                    <TableCell>
+                    <TableCell align="center">
                       {device.online || device.is_online ?
                         <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :
                         <Circle sx={{ fontSize: 16, color: 'text.disabled' }} />
                       }
                     </TableCell>
-                    <TableCell sx={{ fontWeight: 500 }}>{device.name}</TableCell>
-                    <TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 500 }}>{device.name}</TableCell>
+                    <TableCell align="center">
                       <Typography variant="body2" color="text.secondary">
                         {DEVICE_MODELS.find(m => m.value === (device.model ?? device.dev_model))?.label || '未知设备'}
                       </Typography>
                     </TableCell>
-                    <TableCell>{device.callsign}-{device.ssid}</TableCell>
-                    <TableCell>
+                    <TableCell align="center">{device.callsign}-{device.ssid}</TableCell>
+                    <TableCell align="center">
                       {owner ? (
                         <Box
                           sx={{
                             display: 'flex',
                             alignItems: 'center',
+                            justifyContent: 'center',
                             gap: 1,
                             cursor: 'pointer',
                             '&:hover': {
@@ -448,45 +461,55 @@ export function AdminDevicePage() {
                         </Typography>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell align="center">
                       {group ? (
-                        <Stack direction="row" alignItems="center" spacing={1}>
-                          <Typography variant="body2">{group.name}</Typography>
-                          {group.type === GROUP_TYPE_PRIVATE && (
-                            <Tooltip title="私有群组">
-                              <Lock fontSize="small" color="secondary" sx={{ fontSize: 16 }}/>
-                            </Tooltip>
-                          )}
-                        </Stack>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => handleOpenSwitchDialog(device)}
+                          endIcon={group.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
+                        >
+                          {group.name}
+                        </Button>
                       ) : (
-                        <Typography variant="body2" color="text.disabled">无群组或群组已解散</Typography>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="inherit"
+                          onClick={() => handleOpenSwitchDialog(device)}
+                        >
+                          无群组
+                        </Button>
                       )}
                     </TableCell>
 
                     {/* 按需求渲染状态按钮: 左绿发, 右绿收，可点击切换 */}
-                    <TableCell>
+                    <TableCell align="center">
                       {renderStatusDots(device)}
                     </TableCell>
 
-                    <TableCell align="right">
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        sx={{ mr: 1 }}
-                        onClick={() => handleOpenSwitchDialog(device)}
-                      >
-                        切换群组
-                      </Button>
-                      <Tooltip title="编辑设备">
-                        <IconButton size="small" onClick={() => handleOpenDialog(device)}>
-                          <Edit fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="删除设备">
-                        <IconButton size="small" color="error" onClick={() => handleOpenDelete(device)}>
-                          <Delete fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                    <TableCell align="center">
+                      <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
+                        <Tooltip title="参数下发">
+                          <IconButton
+                            size="small"
+                            color="secondary"
+                            onClick={() => handleOpenParamDialog(device)}
+                          >
+                            <Settings fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="编辑设备">
+                          <IconButton size="small" onClick={() => handleOpenDialog(device)}>
+                            <Edit fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="删除设备">
+                          <IconButton size="small" color="error" onClick={() => handleOpenDelete(device)}>
+                            <Delete fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 )
@@ -610,6 +633,18 @@ export function AdminDevicePage() {
         onClose={handleCloseUserDetail}
         user={selectedUser}
       />
+
+      {/* 参数下发弹窗 */}
+      {paramDevice && (
+        <ParamConfigDialog
+          open={paramDialogOpen}
+          deviceName={paramDevice.name}
+          onClose={() => {
+            setParamDialogOpen(false)
+            setParamDevice(null)
+          }}
+        />
+      )}
     </Box>
   )
 }

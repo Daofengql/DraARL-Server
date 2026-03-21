@@ -114,13 +114,72 @@ func handleHeartbeat(device *WSDevice, packet *WSPacket) {
 
 // handleVoice 处理语音包
 func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
-	// 路由语音到 UDP 设备
+	// 1. 权限检查：如果设备当前被服务器禁发，则直接丢弃语音包
+	if device.DisableSend {
+		return
+	}
+
+	// 2. 通信录制：记录 WebSocket 客户端的上行语音数据
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+
+		// 安全提取群组 ID
+		if device.GroupID > 0 {
+			gid := uint(device.GroupID)
+			groupID = &gid
+		}
+
+		// 安全提取用户 ID
+		if device.UserID > 0 {
+			uid := uint(device.UserID)
+			userID = &uid
+		}
+
+		// 幽灵设备：使用负数 UserID 作为录制缓冲池的 Session Key
+		recordDevID := -device.UserID
+		// 强制锁死 Web 客户端的标准 SSID 为 105
+		recordSSID := uint8(105)
+
+		udphub.RecordCommPacket(recordDevID, recordSSID, groupID, userID, packet.DATA)
+	}
+
+	// 3. 路由语音到 UDP 设备
 	udphub.BroadcastVoiceToUDP(device, packet.DATA, device.GroupID)
+
+	// 4. 统计信息更新：每一帧标准的 Opus 16K 数据视为 63ms 的理论时长
+	device.VoiceTime += 63
 }
 
 // handleTextMessage 处理文本消息
 func handleTextMessage(device *WSDevice, packet *WSPacket) {
-	// 路由文本消息到 UDP 设备
+	// 1. 权限检查
+	if device.DisableSend {
+		return
+	}
+
+	// 2. 文本消息记录：直接写入数据库
+	if len(packet.DATA) > 0 {
+		var groupID *uint
+		var userID *uint
+
+		if device.GroupID > 0 {
+			gid := uint(device.GroupID)
+			groupID = &gid
+		}
+		if device.UserID > 0 {
+			uid := uint(device.UserID)
+			userID = &uid
+		}
+
+		// 幽灵设备：使用负数 UserID
+		recordDevID := -device.UserID
+		recordSSID := uint8(105)
+
+		udphub.RecordTextMessage(recordDevID, recordSSID, groupID, userID, string(packet.DATA))
+	}
+
+	// 3. 路由文本消息到 UDP 设备
 	udphub.BroadcastTextToUDP(device, packet.DATA, device.GroupID)
 }
 

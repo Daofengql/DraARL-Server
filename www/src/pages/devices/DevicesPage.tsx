@@ -395,11 +395,6 @@ export function DevicesPage() {
                             <Settings fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title="编辑设备">
-                          <IconButton size="small" onClick={() => handleOpenDialog(device)}>
-                            <Edit fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
                         <Tooltip title="删除设备">
                           <IconButton size="small" color="error" onClick={() => handleDelete(device.id)}>
                             <Delete fontSize="small" />
@@ -498,8 +493,10 @@ export function DevicesPage() {
         open={paramDialogOpen}
         deviceId={paramDevice?.id || 0}
         deviceName={paramDevice?.name || ''}
+        deviceModel={paramDevice?.model ?? paramDevice?.dev_model ?? 1}
         isOnline={paramDevice?.is_online || false}
         onClose={() => setParamDialogOpen(false)}
+        onDeviceUpdated={loadDevices}
       />
 
       {/* 提示消息 */}

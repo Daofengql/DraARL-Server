@@ -24,6 +24,7 @@ import {
   Snackbar,
 } from '@mui/material'
 import { deviceService, type DeviceConfig } from '../../services/device'
+import { DEVICE_MODELS } from '../../utils/deviceModel'
 
 // 预设频率类型
 interface FreqPreset {
@@ -45,8 +46,10 @@ interface ParamConfigDialogProps {
   open: boolean
   deviceId: number | undefined
   deviceName: string
+  deviceModel: number
   isOnline: boolean
   onClose: () => void
+  onDeviceUpdated?: () => void
 }
 
 // 内部使用的频率参数（MHz 单位）
@@ -105,7 +108,7 @@ const levelToBandwidth = (level: string): 'wide' | 'narrow' => {
   return level === '1' ? 'narrow' : 'wide'
 }
 
-export function ParamConfigDialog({ open, deviceId, deviceName, isOnline, onClose }: ParamConfigDialogProps) {
+export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isOnline, onClose, onDeviceUpdated }: ParamConfigDialogProps) {
   const [tabValue, setTabValue] = useState(0)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -121,12 +124,23 @@ export function ParamConfigDialog({ open, deviceId, deviceName, isOnline, onClos
     bandwidth: 'wide',
   })
 
+  // 平台设置 - 设备编辑
+  const [platformFormData, setPlatformFormData] = useState({
+    name: '',
+    model: 1,
+  })
+
   // 加载设备配置
   useEffect(() => {
     if (open && deviceId) {
       loadConfig()
+      // 初始化平台设置表单
+      setPlatformFormData({
+        name: deviceName,
+        model: deviceModel,
+      })
     }
-  }, [open, deviceId])
+  }, [open, deviceId, deviceName, deviceModel])
 
   const loadConfig = async () => {
     setLoading(true)
@@ -187,8 +201,42 @@ export function ParamConfigDialog({ open, deviceId, deviceName, isOnline, onClos
     }
   }
 
+  // 保存平台设置（设备名称和型号）
+  const handleSavePlatform = async () => {
+    if (!platformFormData.name.trim()) {
+      setSnackbar({ open: true, message: '请输入设备名称', severity: 'error' })
+      return
+    }
+
+    setSaving(true)
+    try {
+      await deviceService.update(deviceId, {
+        name: platformFormData.name,
+        model: platformFormData.model,
+      })
+      setSnackbar({ open: true, message: '设备信息保存成功', severity: 'success' })
+      onDeviceUpdated?.()
+      onClose()
+    } catch (error: any) {
+      console.error('保存设备信息失败:', error)
+      setSnackbar({ open: true, message: error.response?.data?.message || '保存失败', severity: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleClose = () => {
     onClose()
+  }
+
+  // 根据 tab 获取标题
+  const getTabTitle = () => {
+    switch (tabValue) {
+      case 0: return '频率设置'
+      case 1: return '系统设置'
+      case 2: return '平台设置'
+      default: return '参数配置'
+    }
   }
 
   return (
@@ -200,7 +248,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, isOnline, onClos
     >
       <DialogTitle sx={{ pb: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>参数配置 - {deviceName}</span>
+          <span>{getTabTitle()} - {deviceName}</span>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             {loading && <CircularProgress size={20} />}
             {isOnline ? (
@@ -215,6 +263,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, isOnline, onClos
         <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}>
           <Tab label="频率设置" />
           <Tab label="系统设置" />
+          <Tab label="平台设置" />
         </Tabs>
       </Box>
       <DialogContent>
@@ -376,18 +425,60 @@ export function ParamConfigDialog({ open, deviceId, deviceName, isOnline, onClos
               系统设置功能开发中，敬请期待...
             </Typography>
           )}
+          {tabValue === 2 && (
+            <Grid container spacing={3}>
+              <Grid size={12}>
+                <TextField
+                  fullWidth
+                  label="设备名称"
+                  value={platformFormData.name}
+                  onChange={(e) => setPlatformFormData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="请输入设备名称"
+                />
+              </Grid>
+              <Grid size={12}>
+                <FormControl fullWidth>
+                  <InputLabel>设备型号</InputLabel>
+                  <Select
+                    value={platformFormData.model}
+                    label="设备型号"
+                    onChange={(e) => setPlatformFormData(prev => ({ ...prev, model: e.target.value as number }))}
+                  >
+                    {DEVICE_MODELS.map((model) => (
+                      <MenuItem key={model.value} value={model.value}>
+                        {model.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+          )}
         </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose}>取消</Button>
-        <Button
-          variant="contained"
-          onClick={handleSaveAndSync}
-          disabled={saving || loading}
-          startIcon={saving ? <CircularProgress size={20} /> : null}
-        >
-          {saving ? '保存中...' : (isOnline ? '保存并同步' : '保存配置')}
-        </Button>
+        {tabValue === 2 ? (
+          // 平台设置的保存按钮
+          <Button
+            variant="contained"
+            onClick={handleSavePlatform}
+            disabled={saving || loading}
+            startIcon={saving ? <CircularProgress size={20} /> : null}
+          >
+            {saving ? '保存中...' : '保存'}
+          </Button>
+        ) : (
+          // 频率设置/系统设置的保存按钮
+          <Button
+            variant="contained"
+            onClick={handleSaveAndSync}
+            disabled={saving || loading}
+            startIcon={saving ? <CircularProgress size={20} /> : null}
+          >
+            {saving ? '保存中...' : (isOnline ? '保存并同步' : '保存配置')}
+          </Button>
+        )}
       </DialogActions>
 
       <Snackbar

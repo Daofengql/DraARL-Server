@@ -96,8 +96,6 @@ func handlePacket(device *WSDevice, packet *WSPacket, rawData []byte) {
 		handleVoice(device, packet, rawData)
 	case protocol.DraARLTypeTextMessage:
 		handleTextMessage(device, packet)
-	case protocol.DraARLTypeConfig:
-		handleConfig(device, packet)
 	default:
 		log.Printf("[WS] Unknown packet type %d from %s", packet.Type, device.GetIdentifier())
 	}
@@ -192,22 +190,4 @@ func handleTextMessage(device *WSDevice, packet *WSPacket) {
 
 	// 3. 路由文本消息到 UDP 设备
 	udphub.BroadcastTextToUDP(device, packet.DATA, device.GroupID)
-}
-
-// handleConfig 处理配置包（群组切换）
-func handleConfig(device *WSDevice, packet *WSPacket) {
-	if len(packet.DATA) >= 4 {
-		newGroupID := int(uint32(packet.DATA[0])<<24 | uint32(packet.DATA[1])<<16 | uint32(packet.DATA[2])<<8 | uint32(packet.DATA[3]))
-
-		oldGroupID := device.GroupID
-		if oldGroupID != newGroupID {
-			// 更新 WSDevice 的群组
-			GlobalManager.SetDeviceGroup(device, newGroupID)
-
-			// 同步更新 GhostDevice 的群组
-			GlobalGhostManager.SetGhostDeviceGroup(device.UserID, newGroupID)
-
-			log.Printf("[WS] Ghost device %s switched group: %d -> %d", device.GetIdentifier(), oldGroupID, newGroupID)
-		}
-	}
 }

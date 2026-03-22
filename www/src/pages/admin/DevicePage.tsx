@@ -11,21 +11,11 @@ import {
   TablePagination,
   Button,
   Typography,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  TextField,
   Alert,
   Stack,
   Tooltip,
   IconButton,
 } from '@mui/material'
-import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import Lock from '@mui/icons-material/Lock'
 import Person from '@mui/icons-material/Person'
@@ -41,7 +31,7 @@ import { AutoRefresh } from '../../components/common/AutoRefresh'
 import { OnlineIndicator } from '../../components/common/OnlineIndicator'
 import { SendRecvControl } from '../../components/common/SendRecvControl'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
-import { DEVICE_MODELS, getDevModelName } from '../../utils/deviceModel'
+import { getDevModelName } from '../../utils/deviceModel'
 
 const GROUP_TYPE_PRIVATE = 2
 
@@ -55,9 +45,7 @@ export function AdminDevicePage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 对话框状态
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingDevice, setEditingDevice] = useState<Device | null>(null)
+  // 切换群组对话框状态
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
   const [switchingDevice, setSwitchingDevice] = useState<Device | null>(null)
 
@@ -75,16 +63,6 @@ export function AdminDevicePage() {
   // 参数下发弹窗状态
   const [paramDialogOpen, setParamDialogOpen] = useState(false)
   const [paramDevice, setParamDevice] = useState<Device | null>(null)
-
-  const [formData, setFormData] = useState({
-    name: '',
-    callsign: '',
-    ssid: 0,
-    model: 1,
-    group_id: 0,
-    disable_send: false,
-    disable_recv: false,
-  })
 
   useEffect(() => {
     loadDevices()
@@ -202,55 +180,6 @@ export function AdminDevicePage() {
       loadDevices()
     } catch (err: any) {
       setError(err.response?.data?.message || '切换群组失败')
-    }
-  }
-
-  const handleOpenDialog = (device?: Device) => {
-    if (device) {
-      setEditingDevice(device)
-      setFormData({
-        name: device.name,
-        callsign: device.callsign,
-        ssid: device.ssid,
-        model: device.model ?? device.dev_model ?? 1,
-        group_id: device.group_id,
-        disable_send: device.disable_send ?? false,
-        disable_recv: device.disable_recv ?? false,
-      })
-    } else {
-      setEditingDevice(null)
-      setFormData({
-        name: '',
-        callsign: '',
-        ssid: 0,
-        model: 1,
-        group_id: 0,
-        disable_send: false,
-        disable_recv: false,
-      })
-    }
-    setDialogOpen(true)
-    setError('')
-  }
-
-  const handleCloseDialog = () => {
-    setDialogOpen(false)
-    setEditingDevice(null)
-  }
-
-  const handleSave = async () => {
-    if (!formData.name.trim()) {
-      setError('请输入设备名称')
-      return
-    }
-    if (!editingDevice) return
-
-    try {
-      await deviceService.update(editingDevice.id, formData)
-      handleCloseDialog()
-      loadDevices()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
     }
   }
 
@@ -392,7 +321,7 @@ export function AdminDevicePage() {
                     </TableCell>
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                        <Tooltip title="参数下发">
+                        <Tooltip title="设置">
                           <IconButton
                             size="small"
                             color="secondary"
@@ -402,11 +331,6 @@ export function AdminDevicePage() {
                             }}
                           >
                             <Settings fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="编辑设备">
-                          <IconButton size="small" onClick={() => handleOpenDialog(device)}>
-                            <Edit fontSize="small" />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="删除设备">
@@ -436,74 +360,6 @@ export function AdminDevicePage() {
           labelDisplayedRows={({ from, to }) => `${from}-${to}`}
         />
       </TableContainer>
-
-      {/* 编辑设备对话框 */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>编辑设备</DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-            <FormControl fullWidth>
-              <InputLabel>设备名称</InputLabel>
-              <TextField
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                autoFocus
-                slotProps={{ input: { label: '设备名称' } }}
-              />
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>呼号</InputLabel>
-              <TextField
-                value={formData.callsign}
-                onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
-                slotProps={{ input: { label: '呼号' } }}
-              />
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>SSID</InputLabel>
-              <TextField
-                type="number"
-                value={formData.ssid}
-                onChange={(e) => setFormData({ ...formData, ssid: parseInt(e.target.value) || 0 })}
-                slotProps={{ input: { label: 'SSID' } }}
-              />
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>设备型号</InputLabel>
-              <Select
-                value={formData.model}
-                label="设备型号"
-                onChange={(e) => setFormData({ ...formData, model: e.target.value as number })}
-              >
-                {DEVICE_MODELS.map((model) => (
-                  <MenuItem key={model.value} value={model.value}>
-                    {model.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>所属群组</InputLabel>
-              <Select
-                value={formData.group_id}
-                label="所属群组"
-                onChange={(e) => setFormData({ ...formData, group_id: e.target.value as number })}
-              >
-                <MenuItem value={0}>无群组</MenuItem>
-                {groups.map((g) => (
-                  <MenuItem key={g.id} value={g.id}>
-                    {g.name}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDialog}>取消</Button>
-          <Button onClick={handleSave} variant="contained">保存</Button>
-        </DialogActions>
-      </Dialog>
 
       {/* 删除确认对话框 */}
       <ConfirmDialog
@@ -545,11 +401,15 @@ export function AdminDevicePage() {
       {paramDevice && (
         <ParamConfigDialog
           open={paramDialogOpen}
+          deviceId={paramDevice.id}
           deviceName={paramDevice.name}
+          deviceModel={paramDevice.model ?? paramDevice.dev_model ?? 1}
+          isOnline={paramDevice.is_online}
           onClose={() => {
             setParamDialogOpen(false)
             setParamDevice(null)
           }}
+          onDeviceUpdated={loadDevices}
         />
       )}
     </Box>

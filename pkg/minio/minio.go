@@ -500,3 +500,60 @@ func UploadLogo(imageData []byte, ext string) (string, int64, error) {
 
 	return objectName, size, nil
 }
+
+// UploadFavicon 上传站点favicon（直接上传，不做处理）
+func UploadFavicon(fileHeader *multipart.FileHeader) (string, int64, error) {
+	if Client == nil {
+		return "", 0, fmt.Errorf("MinIO客户端未初始化")
+	}
+
+	cfg := config.Get()
+	bucket := cfg.MinIO.Bucket
+	if bucket == "" {
+		bucket = "nrllink"
+	}
+
+	// 打开文件
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", 0, fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer file.Close()
+
+	// 读取文件内容
+	fileData, err := io.ReadAll(file)
+	if err != nil {
+		return "", 0, fmt.Errorf("读取文件失败: %w", err)
+	}
+
+	// 确定Content-Type和扩展名
+	contentType := fileHeader.Header.Get("Content-Type")
+	ext := ".ico"
+	switch contentType {
+	case "image/png":
+		ext = ".png"
+	case "image/svg+xml":
+		ext = ".svg"
+	case "image/x-icon", "image/vnd.microsoft.icon":
+		ext = ".ico"
+	}
+
+	// 生成文件路径
+	now := time.Now()
+	fileUUID := uuid.New().String()
+	objectName := fmt.Sprintf("uploads/favicon/%d/%02d/%s%s", now.Year(), int(now.Month()), fileUUID, ext)
+
+	// 上传文件
+	ctx := context.Background()
+	reader := bytes.NewReader(fileData)
+	size := int64(len(fileData))
+
+	_, err = Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("上传文件失败: %w", err)
+	}
+
+	return objectName, size, nil
+}

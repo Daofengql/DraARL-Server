@@ -74,7 +74,7 @@ export default defineConfig({
     port: 9001, // 避免与 Windows NAT 保留端口冲突
     proxy: {
       '/api': {
-        target: 'http://localhost:9000',
+        target: 'http://localhost:9002',
         changeOrigin: true,
       },
     },

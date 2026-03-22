@@ -533,9 +533,10 @@ func UploadLogo(c *gin.Context) {
 		// 配置更新失败不影响文件上传
 	}
 
-	// 使系统信息配置缓存失效
+	// 使系统信息配置缓存和分类缓存失效
 	if configCache := cache.GetConfigCache(); configCache != nil {
 		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
+		_ = configCache.InvalidateCategory(c.Request.Context(), "system")
 	}
 
 	// 记录审计日志
@@ -555,6 +556,104 @@ func UploadLogo(c *gin.Context) {
 			"file_name": fileHeader.Filename,
 			"file_size": finalFileSize,
 			"file_type": "logo",
+			"file_url":  fileURL,
+		},
+	})
+}
+
+// UploadFavicon 上传站点配置 favicon（权限由 RequireAdmin 中间件检查）
+func UploadFavicon(c *gin.Context) {
+	// 获取当前用户
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "未授权",
+		})
+		return
+	}
+
+	userModel := user.(*gormdb.User)
+
+	// 获取上传的文件
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "获取文件失败",
+		})
+		return
+	}
+
+	// 检查文件大小（限制1MB，favicon通常很小）
+	if fileHeader.Size > 1*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "Favicon文件大小不能超过1MB",
+		})
+		return
+	}
+
+	// 检查文件类型（支持 ico, png, svg）
+	allowedTypes := map[string]bool{
+		"image/x-icon":        true,
+		"image/vnd.microsoft.icon": true,
+		"image/png":           true,
+		"image/svg+xml":       true,
+	}
+	contentType := fileHeader.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "非法的文件类型，只支持 .ico, .png, .svg 格式",
+		})
+		return
+	}
+
+	// 上传 favicon（不做处理，直接上传）
+	objectName, finalFileSize, err := minio.UploadFavicon(fileHeader)
+	if err != nil {
+		log.Printf("上传favicon失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "上传favicon失败",
+		})
+		return
+	}
+
+	// 生成访问URL
+	fileURL := minio.GetFileURL(objectName)
+
+	// 更新站点配置中的 favicon URL
+	siteConfigRepo := gormdb.GetSiteConfigRepo()
+	if err := siteConfigRepo.Set("system.favicon_url", fileURL, "system", "站点Favicon URL"); err != nil {
+		log.Printf("更新Favicon配置失败: %v", err)
+		// 配置更新失败不影响文件上传
+	}
+
+	// 使系统信息配置缓存和分类缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
+		_ = configCache.InvalidateCategory(c.Request.Context(), "system")
+	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		fmt.Sprintf("上传站点Favicon: %s (文件: %s)", fileURL, fileHeader.Filename),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "上传成功",
+		"data": gin.H{
+			"file_name": fileHeader.Filename,
+			"file_size": finalFileSize,
+			"file_type": "favicon",
 			"file_url":  fileURL,
 		},
 	})

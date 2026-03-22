@@ -261,12 +261,6 @@ export class RadioWebSocket {
     return this.send(packet)
   }
 
-  // 发送群组切换
-  sendGroupChange(groupId: number): boolean {
-    const packet = this.buildConfigPacket(groupId)
-    return this.send(packet)
-  }
-
   // 语音发送结束
   voiceSendEnd() {
     this.isSending = false
@@ -490,28 +484,6 @@ export class RadioWebSocket {
 
     // Data
     bytes.set(messageBytes, HEADER_SIZE)
-
-    return buffer
-  }
-
-  // 构建配置包（群组切换）
-  private buildConfigPacket(groupId: number): ArrayBuffer {
-    const buffer = new ArrayBuffer(HEADER_SIZE + 4)
-    const view = new DataView(buffer)
-    const bytes = new Uint8Array(buffer)
-
-    // Header
-    const versionBytes = new TextEncoder().encode(DRAARL_VERSION)
-    bytes.set(versionBytes, 0)
-    view.setUint16(4, HEADER_SIZE + 4, false)
-    bytes.set(this.encodeString(this.username, 32), 6)
-    bytes[48] = PacketType.CONFIG
-    bytes[49] = DeviceModel.BROWSER
-    bytes[50] = this.ssid
-    bytes.set(this.encodeString(this.callsign, 32), 54)
-
-    // Data (Group ID - 4 bytes big-endian)
-    view.setUint32(90, groupId, false)
 
     return buffer
   }

@@ -345,6 +345,21 @@ func (UserDevicePreference) TableName() string {
 	return "user_device_preferences"
 }
 
+// DeviceConfig 设备配置模型
+// 用于存储 UDP 普通设备的参数配置，支持双向同步
+type DeviceConfig struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	DeviceID    uint      `gorm:"not null;uniqueIndex:uk_device_key;index;column:device_id" json:"device_id"` // 关联 devices.id
+	ConfigKey   string    `gorm:"type:varchar(64);not null;uniqueIndex:uk_device_key;column:config_key" json:"config_key"`
+	ConfigValue string    `gorm:"type:text;column:config_value" json:"config_value"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (DeviceConfig) TableName() string {
+	return "device_configs"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -361,5 +376,6 @@ func AutoMigrate() error {
 		&CommRecord{},
 		&Asset{},
 		&UserDevicePreference{},
+		&DeviceConfig{},
 	)
 }

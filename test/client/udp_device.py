@@ -23,7 +23,9 @@ except ImportError:
 from .base import BaseClient, ClientState
 from protocol import (
     PacketType, DevModel, encode_packet, DraARLv1Packet,
-    parse_merged_opus_frames, build_merged_opus_frames
+    parse_merged_opus_frames, build_merged_opus_frames,
+    ConfigType, TLVType, KEY_TO_TLV_TYPE, encode_tlv, decode_tlv,
+    build_config_set_packet, build_config_query_packet, parse_config_packet
 )
 
 
@@ -70,6 +72,20 @@ class UDPDeviceClient(BaseClient):
             self.pyaudio_inst = None
             self.opus_encoder = None
             self.opus_decoder = None
+
+        # 设备配置（模拟设备参数）
+        self.device_config = {
+            TLVType.RX_FREQ: "439500000",      # 接收频率 Hz
+            TLVType.TX_FREQ: "439500000",      # 发射频率 Hz
+            TLVType.RX_CTCSS: "0",             # 接收亚音
+            TLVType.TX_CTCSS: "0",             # 发射亚音
+            TLVType.SQL_LEVEL: "3",            # 静噪等级
+            TLVType.POWER_LEVEL: "3",          # 功率等级（高）
+            TLVType.TX_BANDWIDTH: "2",         # 发射带宽（宽带）
+        }
+
+        # 配置更新回调
+        self.config_update_callback: Optional[Callable[[dict], None]] = None
 
     def _init_audio(self):
         """初始化音频引擎"""
@@ -126,15 +142,34 @@ class UDPDeviceClient(BaseClient):
 
     def disconnect(self):
         """断开连接"""
+        if not self.running:
+            return  # 防止重复断开
+
         self.running = False
+        self.authenticated = False
         self._set_state(ClientState.DISCONNECTED)
 
+        # 先关闭 socket，解除 recvfrom 阻塞
         if self.sock:
-            self.sock.close()
+            try:
+                self.sock.close()
+            except:
+                pass
             self.sock = None
 
+        # 等待线程结束（最多等待 2 秒）
+        for t in self._threads[:]:
+            if t.is_alive():
+                t.join(timeout=0.5)
+        self._threads.clear()
+
+        # 最后关闭音频
         if self.pyaudio_inst:
-            self.pyaudio_inst.terminate()
+            try:
+                self.pyaudio_inst.terminate()
+            except:
+                pass
+            self.pyaudio_inst = None
 
     def _send_heartbeat(self):
         """发送心跳包"""
@@ -221,8 +256,15 @@ class UDPDeviceClient(BaseClient):
                 elif packet.packet_type in [PacketType.CONTROL, PacketType.HEARTBEAT]:
                     last_sender = None
 
+                # Config 配置包
+                elif packet.packet_type == PacketType.CONFIG and packet.data:
+                    self._handle_config_packet(packet.data)
+
             except socket.timeout:
                 continue
+            except OSError:
+                # socket 被关闭时会发生此错误
+                break
             except Exception as e:
                 if self.running:
                     self.log(f"[接收错误] {e}")
@@ -317,3 +359,111 @@ class UDPDeviceClient(BaseClient):
         self.gps_lat = lat
         self.gps_lon = lon
         self.gps_alt = alt
+
+    # ============================================================
+    # Config 配置包处理
+    # ============================================================
+
+    def _handle_config_packet(self, data: bytes):
+        """处理收到的 Config 包"""
+        try:
+            result = parse_config_packet(data)
+            config_type = result.get("type")
+
+            if config_type == "query":
+                # 服务器查询配置，回复当前配置
+                self.log(f"[Config] 收到配置查询，回复当前配置")
+                self._send_config_report()
+
+            elif config_type == "set":
+                # 服务器下发配置，更新本地配置
+                configs = result.get("configs", {})
+                self.log(f"[Config] 收到配置下发: {configs}")
+                for key, value in configs.items():
+                    tlv_type = KEY_TO_TLV_TYPE.get(key)
+                    if tlv_type and tlv_type in self.device_config:
+                        self.device_config[tlv_type] = value
+                self.log(f"[Config] 配置已更新")
+                # 触发配置更新回调
+                if self.config_update_callback:
+                    self.config_update_callback(self.get_device_config())
+
+            elif config_type == "time_sync":
+                # 时间同步（ACK）- 解析时间戳
+                timestamp = result.get("timestamp", 0)
+                if timestamp:
+                    from datetime import datetime
+                    dt = datetime.fromtimestamp(timestamp / 1000)
+                    self.log(f"[Config] 收到时间同步(ACK): {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        except Exception as e:
+            self.log(f"[Config] 解析错误: {e}")
+
+    def _send_config_report(self):
+        """发送配置上报包（响应查询）"""
+        if not self.sock:
+            return
+
+        # 将 device_config (TLVType -> value) 转换为字符串 key 格式
+        config_for_packet = self.get_device_config()
+
+        packet = encode_packet(
+            username=self.username,
+            device_password=self.device_password,
+            ssid=self.ssid,
+            packet_type=PacketType.CONFIG,
+            dev_model=self.dev_model,
+            dmrid=self.dmrid,
+            data=build_config_set_packet(config_for_packet)
+        )
+
+        self.sock.sendto(packet, self.server_addr)
+        self.log(f"[Config] 已上报配置")
+
+    def send_config_query(self):
+        """发送配置查询请求"""
+        if not self.sock or not self.authenticated:
+            self.log("[错误] 未连接")
+            return
+
+        packet = encode_packet(
+            username=self.username,
+            device_password=self.device_password,
+            ssid=self.ssid,
+            packet_type=PacketType.CONFIG,
+            dev_model=self.dev_model,
+            dmrid=self.dmrid,
+            data=build_config_query_packet()
+        )
+
+        self.sock.sendto(packet, self.server_addr)
+        self.log("[Config] 已发送配置查询")
+
+    def get_device_config(self) -> dict:
+        """获取当前设备配置（人类可读格式）"""
+        result = {}
+        for tlv_type, value in self.device_config.items():
+            name = {
+                TLVType.RX_FREQ: "rx_freq",
+                TLVType.TX_FREQ: "tx_freq",
+                TLVType.RX_CTCSS: "rx_ctcss",
+                TLVType.TX_CTCSS: "tx_ctcss",
+                TLVType.SQL_LEVEL: "sql_level",
+                TLVType.POWER_LEVEL: "power_level",
+                TLVType.TX_BANDWIDTH: "tx_bandwidth",
+            }.get(tlv_type, str(tlv_type))
+            result[name] = value
+        return result
+
+    def _get_tlv_type(self, key: str) -> int:
+        """根据配置键名获取 TLV Type"""
+        mapping = {
+            "rx_freq": TLVType.RX_FREQ,
+            "tx_freq": TLVType.TX_FREQ,
+            "rx_ctcss": TLVType.RX_CTCSS,
+            "tx_ctcss": TLVType.TX_CTCSS,
+            "sql_level": TLVType.SQL_LEVEL,
+            "power_level": TLVType.POWER_LEVEL,
+            "tx_bandwidth": TLVType.TX_BANDWIDTH,
+        }
+        return mapping.get(key, 0)

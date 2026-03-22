@@ -54,6 +54,7 @@ interface SystemInfoConfig {
   name: string
   nameshorthand: string
   logo_url: string
+  favicon_url: string
   language: string
   icp: string
 }
@@ -222,12 +223,14 @@ export function SiteConfigPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [uploadingFavicon, setUploadingFavicon] = useState(false)
 
   // 系统信息配置
   const [systemInfo, setSystemInfo] = useState<SystemInfoConfig>({
     name: '',
     nameshorthand: '',
     logo_url: '',
+    favicon_url: '',
     language: 'zh',
     icp: '',
   })
@@ -308,6 +311,7 @@ export function SiteConfigPage() {
           name: systemRes.data.find((c: any) => c.key === 'system.name')?.value || '',
           nameshorthand: systemRes.data.find((c: any) => c.key === 'system.nameshorthand')?.value || '',
           logo_url: systemRes.data.find((c: any) => c.key === 'system.logo_url')?.value || '',
+          favicon_url: systemRes.data.find((c: any) => c.key === 'system.favicon_url')?.value || '',
           language: systemRes.data.find((c: any) => c.key === 'system.language')?.value || 'zh',
           icp: icpRes.code === 200 && icpRes.data && icpRes.data.length > 0
             ? icpRes.data.find((c: any) => c.key === 'web.icp')?.value || ''
@@ -545,6 +549,72 @@ export function SiteConfigPage() {
     }
   }
 
+  // Favicon上传处理
+  const faviconInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFaviconUploadClick = () => {
+    faviconInputRef.current?.click()
+  }
+
+  const handleFaviconFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // 验证文件大小 (限制1MB)
+    const maxSize = 1 * 1024 * 1024
+    if (file.size > maxSize) {
+      showMessage('error', 'Favicon文件大小不能超过1MB')
+      return
+    }
+
+    // 验证文件类型（支持 ico, png, svg）
+    const allowedTypes = ['image/x-icon', 'image/vnd.microsoft.icon', 'image/png', 'image/svg+xml']
+    if (!allowedTypes.includes(file.type)) {
+      showMessage('error', '请选择 .ico, .png 或 .svg 格式的文件')
+      return
+    }
+
+    setUploadingFavicon(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const res = await apiClient.post<any>('/api/upload/favicon', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+
+      if (res.code === 200 && res.data?.file_url) {
+        // 重新加载配置以获取最新的 favicon URL
+        await loadConfigs()
+        showMessage('success', 'Favicon上传成功')
+        // 通知Header刷新
+        window.dispatchEvent(new CustomEvent('config-updated'))
+      }
+    } catch (err) {
+      console.error('Failed to upload favicon:', err)
+      showMessage('error', 'Favicon上传失败')
+    } finally {
+      setUploadingFavicon(false)
+      // 重置input
+      if (faviconInputRef.current) {
+        faviconInputRef.current.value = ''
+      }
+    }
+  }
+
+  const handleFaviconDelete = async () => {
+    try {
+      await apiClient.delete('/api/config/favicon')
+      await loadConfigs()
+      showMessage('success', 'Favicon删除成功')
+      // 通知Header刷新
+      window.dispatchEvent(new CustomEvent('config-updated'))
+    } catch (err) {
+      console.error('Failed to delete favicon:', err)
+      showMessage('error', 'Favicon删除失败')
+    }
+  }
+
   // 加载APRS日志当切换到APRS标签页时
   useEffect(() => {
     if (tabValue === 1) {
@@ -726,6 +796,78 @@ export function SiteConfigPage() {
                           </Typography>
                           <Typography variant="caption" color="text.disabled">
                             支持PNG、JPG、GIF格式，最大5MB
+                          </Typography>
+                        </Box>
+                      )}
+                    </Box>
+                  </Box>
+
+                  {/* Favicon上传组件 */}
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1, color: 'text.secondary' }}>
+                      站点Favicon
+                    </Typography>
+                    <Box
+                      sx={{
+                        border: '1px dashed',
+                        borderColor: 'divider',
+                        borderRadius: 2,
+                        p: 2,
+                        textAlign: 'center',
+                        bgcolor: 'background.paper',
+                        cursor: 'pointer',
+                        '&:hover': { bgcolor: 'action.hover' },
+                      }}
+                      onClick={handleFaviconUploadClick}
+                    >
+                      <input
+                        ref={faviconInputRef}
+                        type="file"
+                        accept=".ico,.png,.svg,image/x-icon,image/png,image/svg+xml"
+                        onChange={handleFaviconFileChange}
+                        style={{ display: 'none' }}
+                      />
+                      {systemInfo.favicon_url ? (
+                        <Box sx={{ position: 'relative', display: 'inline-block' }}>
+                          <Box
+                            component="img"
+                            src={systemInfo.favicon_url}
+                            alt="Favicon预览"
+                            sx={{
+                              maxWidth: 64,
+                              maxHeight: 64,
+                              objectFit: 'contain',
+                            }}
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = ''
+                              setSystemInfo({ ...systemInfo, favicon_url: '' })
+                            }}
+                          />
+                          <IconButton
+                            size="small"
+                            sx={{
+                              position: 'absolute',
+                              top: -8,
+                              right: -8,
+                              bgcolor: 'background.paper',
+                              '&:hover': { bgcolor: 'error.light' },
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleFaviconDelete()
+                            }}
+                          >
+                            <Delete fontSize="small" color="error" />
+                          </IconButton>
+                        </Box>
+                      ) : (
+                        <Box sx={{ py: 2 }}>
+                          <CloudUpload sx={{ fontSize: 32, color: 'text.secondary', mb: 1 }} />
+                          <Typography variant="body2" color="text.secondary">
+                            点击上传Favicon
+                          </Typography>
+                          <Typography variant="caption" color="text.disabled">
+                            支持 .ico, .png, .svg 格式，最大1MB
                           </Typography>
                         </Box>
                       )}

@@ -55,18 +55,24 @@ func setupFrontend(engine *gin.Engine) {
 		})
 	}
 
-	// 渲染 index.html 并动态替换 title
+	// 渲染 index.html 并动态替换 title 和 favicon
 	renderIndex := func(c *gin.Context) {
 		if indexHTMLTemplate == "" {
 			c.String(500, "index.html not found")
 			return
 		}
 
-		// 获取站点名称
+		// 获取站点名称和 favicon URL
 		siteName := common.SiteName // 默认值
+		faviconURL := "/vite.svg"   // 默认 favicon
 		if repo := gormdb.GetSiteConfigRepo(); repo != nil {
-			if systemConfig, err := repo.GetSystemInfoConfig(); err == nil && systemConfig.Name != "" {
-				siteName = systemConfig.Name
+			if systemConfig, err := repo.GetSystemInfoConfig(); err == nil {
+				if systemConfig.Name != "" {
+					siteName = systemConfig.Name
+				}
+				if systemConfig.FaviconURL != "" {
+					faviconURL = systemConfig.FaviconURL
+				}
 			}
 		}
 
@@ -124,6 +130,7 @@ func setupFrontend(engine *gin.Engine) {
 		// 动态替换模板占位符
 		html := strings.Replace(indexHTMLTemplate, "{{siteName}}", siteName, -1)
 		html = strings.Replace(html, "{{titleSuffix}}", titleSuffix, -1)
+		html = strings.Replace(html, "{{faviconURL}}", faviconURL, -1)
 
 		c.Data(200, "text/html; charset=utf-8", []byte(html))
 	}

@@ -144,6 +144,116 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 }
 
+// userHasGroupAccess 检查用户是否有权限访问指定群组的记录
+// 权限判断规则：
+// 1. 用户拥有属于该群组的设备
+// 2. 用户曾在该群组发送过消息（幽灵设备记录）
+// 3. 用户拥有属于该群组互联组的设备（互联组权限传递）
+func userHasGroupAccess(userID int, groupID int) bool {
+	// 1. 检查用户是否有设备属于该群组
+	var deviceCount int64
+	gormdb.Get().Table("devices d").
+		Joins("INNER JOIN group_devices gd ON d.id = gd.device_id").
+		Where("d.owner_id = ? AND gd.group_id = ?", userID, groupID).
+		Count(&deviceCount)
+	if deviceCount > 0 {
+		return true
+	}
+
+	// 2. 检查用户是否在该群组有过通信记录（幽灵设备）
+	var recordCount int64
+	gormdb.Get().Table("comm_records").
+		Where("user_id = ? AND group_id = ?", userID, groupID).
+		Count(&recordCount)
+	if recordCount > 0 {
+		return true
+	}
+
+	// 3. 检查互联组：用户是否有设备属于互联组中的其他群组
+	// 获取该群组所属的所有互联组
+	var linkGroupIDs []int
+	gormdb.Get().Table("group_links").
+		Select("link_group_id").
+		Where("target_group_id = ?", groupID).
+		Pluck("link_group_id", &linkGroupIDs)
+
+	if len(linkGroupIDs) > 0 {
+		// 获取所有互联组关联的目标群组
+		var targetGroupIDs []int
+		gormdb.Get().Table("group_links").
+			Where("link_group_id IN ?", linkGroupIDs).
+			Pluck("target_group_id", &targetGroupIDs)
+
+		// 排除当前群组
+		for _, targetID := range targetGroupIDs {
+			if targetID != groupID {
+				// 检查用户是否有设备属于互联���中的其他群组
+				gormdb.Get().Table("devices d").
+					Joins("INNER JOIN group_devices gd ON d.id = gd.device_id").
+					Where("d.owner_id = ? AND gd.group_id = ?", userID, targetID).
+					Count(&deviceCount)
+				if deviceCount > 0 {
+					return true
+				}
+
+				// 检查用户是否在互联组的其他群组有过通信记录
+				gormdb.Get().Table("comm_records").
+					Where("user_id = ? AND group_id = ?", userID, targetID).
+					Count(&recordCount)
+				if recordCount > 0 {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
+// 只有互联组状态开启(status=1)时才包含互联组内的其他群组
+func getRelatedGroupIDs(groupID int) []int {
+	groupIDs := []int{groupID}
+
+	// 查询该群组所属的所有互联组
+	var linkGroupIDs []int
+	gormdb.Get().Table("group_links").
+		Select("link_group_id").
+		Where("target_group_id = ?", groupID).
+		Pluck("link_group_id", &linkGroupIDs)
+
+	if len(linkGroupIDs) == 0 {
+		return groupIDs
+	}
+
+	// 检查每个互联组的状态，只保留状态开启的
+	for _, linkGroupID := range linkGroupIDs {
+		var linkGroupStatus int
+		err := gormdb.Get().Table("public_groups").
+			Select("status").
+			Where("id = ?", linkGroupID).
+			Scan(&linkGroupStatus).Error
+
+		if err != nil || linkGroupStatus != 1 {
+			continue // 互联组不存在或已禁用，跳过
+		}
+
+		// 获取该互联组关联的所有目标群组
+		var targetGroupIDs []int
+		gormdb.Get().Table("group_links").
+			Where("link_group_id = ?", linkGroupID).
+			Pluck("target_group_id", &targetGroupIDs)
+
+		for _, targetID := range targetGroupIDs {
+			if targetID != groupID {
+				groupIDs = append(groupIDs, targetID)
+			}
+		}
+	}
+
+	return groupIDs
+}
+
 // GetCommRecords 获取通信记录列表（使用联表查询）
 // 权限规则：
 // - 管理员 + admin_mode=true：可查看所有记录（管理员后台）
@@ -197,34 +307,59 @@ func GetCommRecords(c *gin.Context) {
 		}
 	}
 
-	// 判断是否可以查看全局记录：必须是管理员且在后台模式
+	// 判断是否可以查看���局记录：必须是管理员且在后台模式
 	canViewGlobal := isAdmin && adminMode
 
-	// 非全局模式只能查看自己设备的记录
-	if !canViewGlobal {
-		// 获取当前用户名
-		username, exists := c.Get("username")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "未授权",
-			})
-			return
-		}
-
-		// 通过用户名获取用户ID
+	// 获取当前用户信息（用于权限过滤）
+	var currentUser *gormdb.User
+	username, hasUsername := c.Get("username")
+	if hasUsername {
 		userRepo := gormdb.NewUserRepository()
-		currentUser, err := userRepo.GetUserByName(username.(string))
-		if err != nil || currentUser == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "用户不存在",
-			})
-			return
-		}
+		currentUser, _ = userRepo.GetUserByName(username.(string))
+	}
 
-		// 通过 owner_id 筛选（物理设备属于当前用户），或者通过 user_id 筛选（Web端幽灵设备直接属于该用户）
-		db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
+	// 权限过滤逻辑：
+	// 1. 管理员后台模式：可查看所有记录
+	// 2. 指定了群组筛选：可查看该群组（及互联组）内的所有记录
+	// 3. 其他情况：只能查看自己设备的记录
+	if !canViewGlobal {
+		// 检查是否指定了群组筛选
+		if groupIDStr != "" {
+			// 指定了群组：验证用户是否有权限访问该群组
+			groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
+			if err == nil && currentUser != nil {
+				// 验证用户是否有权限访问该群组（通过设备所属群组或群组成员关系）
+				if userHasGroupAccess(currentUser.ID, int(groupID)) {
+					// 用户有权限访问该群组，不添加 owner_id/user_id 过滤
+					// 但仍然通过群组筛选来限制可见范围
+				} else {
+					// 用户无权访问该群组，只能看自己的记录
+					db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
+				}
+			} else {
+				// 参数错误或用户信息缺失，只能看自己的记录
+				if currentUser != nil {
+					db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
+				} else {
+					c.JSON(http.StatusUnauthorized, gin.H{
+						"code":    401,
+						"message": "未授权",
+					})
+					return
+				}
+			}
+		} else {
+			// 未指定群组：只能查看自己设备的记录
+			if currentUser != nil {
+				db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
+			} else {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"code":    401,
+					"message": "未授权",
+				})
+				return
+			}
+		}
 	}
 
 	// 筛选条件
@@ -237,17 +372,16 @@ func GetCommRecords(c *gin.Context) {
 	if groupIDStr != "" {
 		groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
 		if err == nil {
-			// 【互联组支持】使用子查询获取所有相关群组的消息
+			// 【互联组支持】获取所有相关群组的消息
 			// 逻辑：
 			// 1. 当前群组本身
-			// 2. 通过 group_links 找到当前群组所属的互联组 (link_group_id)
-			// 3. 找到这些互联组关联的所有目标群组 (target_group_id)
-			// 使用 GORM 的子查询构建方式，避免参数绑定问题
-			subQuery := gormdb.Get().Table("group_links gl1").
-				Select("gl2.target_group_id").
-				Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
-				Where("gl1.target_group_id = ?", groupID)
-			db = db.Where("cr.group_id = ? OR cr.group_id IN (?)", groupID, subQuery)
+			// 2. 如果互联组状态开启(status=1)，则包含互联组内其他群组的记录
+			relatedGroupIDs := getRelatedGroupIDs(int(groupID))
+			if len(relatedGroupIDs) > 1 {
+				db = db.Where("cr.group_id IN ?", relatedGroupIDs)
+			} else {
+				db = db.Where("cr.group_id = ?", groupID)
+			}
 		}
 	}
 	// 全局模式下可以按 user_id 筛选

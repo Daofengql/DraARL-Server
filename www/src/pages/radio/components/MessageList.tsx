@@ -438,7 +438,7 @@ const MessageItem = memo(function MessageItem({
         >
           {/* 头部 - 显示发送方信息 */}
           {!isSelf && (
-            <Box sx={styles.messageHeader}>
+            <Box sx={{ ...styles.messageHeader, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
               <Box sx={styles.senderInfo}>
                 <Typography variant="subtitle2" sx={styles.callsignChip}>
                   {message.senderCallsign}-{message.senderSSID}
@@ -449,6 +449,12 @@ const MessageItem = memo(function MessageItem({
                   </Typography>
                 )}
               </Box>
+              {/* 群组名称 - 用于跨组消息识别 */}
+              {message.groupName && (
+                <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.6 }}>
+                  #{message.groupName}
+                </Typography>
+              )}
             </Box>
           )}
 

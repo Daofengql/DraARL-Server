@@ -168,6 +168,9 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 
 	// 3. 转发到互联组 (复用这个标准语音包)
 	r.routeServerVoiceToLinkedGroups(source, voicePacket, groupID)
+
+	// 4. 【新增】转发到同组和互联组的其他 WS 客户端
+	r.RouteVoiceToWSClients(source, voicePacket, groupID)
 }
 
 // RouteTextToUDP 转发 WebSocket 文本消息到 UDP 设备
@@ -214,6 +217,9 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 
 	// 转发到互联组
 	r.routeTextToLinkedGroups(source, textPacket, groupID)
+
+	// 【新增】转发到同组和互联组的其他 WS 客户端
+	r.RouteTextToWSClients(source, textPacket, groupID)
 }
 
 // routeServerVoiceToLinkedGroups 转发服务器互联语音到关联群组
@@ -376,5 +382,113 @@ func BroadcastVoiceFromUDP(source *models.Device, data []byte, groupID int) {
 func BroadcastTextFromUDP(source *models.Device, data []byte, groupID int) {
 	if GlobalMessageRouter != nil {
 		GlobalMessageRouter.RouteTextFromUDP(source, data, groupID)
+	}
+}
+
+// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客户端
+// 【新增】解决 WS JWT 客户端之间无法互相转发的问题
+func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
+	if r.wsManager == nil {
+		return
+	}
+
+	// 1. 转发到同组的其他 WS 客户端
+	wsDevices := r.wsManager.GetDevicesByGroup(sourceGroupID)
+	for _, device := range wsDevices {
+		// 跳过发送者自己（通过 UserID 判断，因为 WS 客户端都是幽灵设备）
+		if device.IsGhost() && device.GetUserID() == source.GetUserID() {
+			continue
+		}
+
+		// 检查目标设备是否禁收
+		if device.IsDisabledRecv() {
+			continue
+		}
+
+		if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
+			log.Printf("[ROUTE] Failed to send voice to WS client: %v", err)
+		}
+	}
+
+	// 2. 转发到互联组的 WS 客户端
+	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
+	for _, linkGroupID := range linkGroupIDs {
+		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
+		for _, targetID := range targetGroupIDs {
+			// 跳过源组
+			if targetID == sourceGroupID {
+				continue
+			}
+
+			// 检查目标群组状态
+			targetGroup, exists := GetGroupFromCache(targetID)
+			if !exists || targetGroup.Status != 1 {
+				continue
+			}
+
+			// 转发到目标组的 WS 客户端
+			wsDevices := r.wsManager.GetDevicesByGroup(targetID)
+			for _, device := range wsDevices {
+				if device.IsDisabledRecv() {
+					continue
+				}
+
+				if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
+					log.Printf("[ROUTE] Failed to send voice to linked WS client: %v", err)
+				}
+			}
+		}
+	}
+}
+
+// RouteTextToWSClients 转发 WebSocket 文本消息到同组和互联组的其他 WS 客户端
+// 【新增】解决 WS JWT 客户端之间无法互相转发的问题
+func (r *MessageRouter) RouteTextToWSClients(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
+	if r.wsManager == nil {
+		return
+	}
+
+	// 1. 转发到同组的其他 WS 客户端
+	wsDevices := r.wsManager.GetDevicesByGroup(sourceGroupID)
+	for _, device := range wsDevices {
+		// 跳过发送者自己
+		if device.IsGhost() && device.GetUserID() == source.GetUserID() {
+			continue
+		}
+
+		if device.IsDisabledRecv() {
+			continue
+		}
+
+		if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
+			log.Printf("[ROUTE] Failed to send text to WS client: %v", err)
+		}
+	}
+
+	// 2. 转发到互联组的 WS 客户端
+	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
+	for _, linkGroupID := range linkGroupIDs {
+		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
+		for _, targetID := range targetGroupIDs {
+			if targetID == sourceGroupID {
+				continue
+			}
+
+			targetGroup, exists := GetGroupFromCache(targetID)
+			if !exists || targetGroup.Status != 1 {
+				continue
+			}
+
+			wsDevices := r.wsManager.GetDevicesByGroup(targetID)
+			for _, device := range wsDevices {
+				if device.IsDisabledRecv() {
+					continue
+				}
+
+				if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
+					log.Printf("[ROUTE] Failed to send text to linked WS client: %v", err)
+				}
+			}
+		}
 	}
 }

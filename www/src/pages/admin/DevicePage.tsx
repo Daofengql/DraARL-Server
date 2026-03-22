@@ -9,9 +9,7 @@ import {
   TableHead,
   TableRow,
   TablePagination,
-  TextField,
   Button,
-  IconButton,
   Typography,
   Dialog,
   DialogTitle,
@@ -21,33 +19,29 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  TextField,
   Alert,
   Stack,
   Tooltip,
+  IconButton,
 } from '@mui/material'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
-import Search from '@mui/icons-material/Search'
-import Circle from '@mui/icons-material/Circle'
 import Lock from '@mui/icons-material/Lock'
 import Person from '@mui/icons-material/Person'
-import Refresh from '@mui/icons-material/Refresh'
 import Settings from '@mui/icons-material/Settings'
 import { deviceService, groupService, userService } from '../../services'
 import type { Device, Group, User } from '../../types'
-import { SwitchGroupDialog } from '../devices/SwitchGroupDialog'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ParamConfigDialog } from '../../components/devices/ParamConfigDialog'
-
-const DEVICE_MODELS = [
-  { value: 0, label: '未知设备' },
-  { value: 100, label: '微信小程序' },
-  { value: 101, label: 'Android 客户端' },
-  { value: 102, label: 'iOS 客户端' },
-  { value: 103, label: 'Windows 客户端' },
-  { value: 104, label: 'macOS 客户端' },
-  { value: 105, label: '浏览器客户端' },
-]
+import { GroupPickerDialog } from '../../components/groups/GroupPicker'
+import { PageHeader } from '../../components/common/PageHeader'
+import { SearchBar } from '../../components/common/SearchBar'
+import { AutoRefresh } from '../../components/common/AutoRefresh'
+import { OnlineIndicator } from '../../components/common/OnlineIndicator'
+import { SendRecvControl } from '../../components/common/SendRecvControl'
+import { ConfirmDialog } from '../../components/common/ConfirmDialog'
+import { DEVICE_MODELS, getDevModelName } from '../../utils/deviceModel'
 
 const GROUP_TYPE_PRIVATE = 2
 
@@ -60,11 +54,15 @@ export function AdminDevicePage() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // 对话框状态
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [editingDevice, setEditingDevice] = useState<Device | null>(null)
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
   const [switchingDevice, setSwitchingDevice] = useState<Device | null>(null)
-  const [editingDevice, setEditingDevice] = useState<Device | null>(null)
+
+  // 删除确认
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deletingDevice, setDeletingDevice] = useState<Device | null>(null)
 
   // 用户详情弹窗状态
@@ -72,7 +70,7 @@ export function AdminDevicePage() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
 
   // 自动刷新状态
-  const [autoRefresh, setAutoRefresh] = useState(0) // 0=关闭, 10/30/60=秒数
+  const [autoRefresh, setAutoRefresh] = useState(0)
 
   // 参数下发弹窗状态
   const [paramDialogOpen, setParamDialogOpen] = useState(false)
@@ -93,17 +91,6 @@ export function AdminDevicePage() {
     loadGroups()
     loadUsers()
   }, [])
-
-  // 自动刷新逻辑
-  useEffect(() => {
-    if (autoRefresh === 0) return
-
-    const timer = setInterval(() => {
-      loadDevices()
-    }, autoRefresh * 1000)
-
-    return () => clearInterval(timer)
-  }, [autoRefresh, page, rowsPerPage, searchKeyword])
 
   const loadDevices = async () => {
     setLoading(true)
@@ -148,20 +135,17 @@ export function AdminDevicePage() {
 
   // 打开用户详情
   const handleOpenUserDetail = async (event: React.MouseEvent<HTMLElement>, userIdOrUser: number | User) => {
-    // 如果传入的是 User 对象，直接使用
     if (typeof userIdOrUser === 'object') {
       setSelectedUser(userIdOrUser)
       setUserDetailAnchorEl(event.currentTarget)
       return
     }
 
-    // 如果传入的是 userId，先在本地列表中查找，找不到则调用 API
     const localUser = getUserInfo(userIdOrUser)
     if (localUser) {
       setSelectedUser(localUser)
       setUserDetailAnchorEl(event.currentTarget)
     } else {
-      // 调用公开接口获取用户信息
       try {
         const user = await userService.getPublicInfo(userIdOrUser)
         setSelectedUser(user)
@@ -177,37 +161,6 @@ export function AdminDevicePage() {
     setUserDetailAnchorEl(null)
     setSelectedUser(null)
   }
-
-  // 对设备禁发/禁收状态进行直观的渲染（绿灯正常，红灯禁用）
-  const renderStatusDots = (device: Device) => (
-    <Stack direction="row" spacing={1} alignItems="center">
-      {/* 发送控制 */}
-      <Tooltip title={device.disable_send ? '点击启用发送' : '点击禁用发送'}>
-        <Button
-          size="small"
-          variant={device.disable_send ? 'outlined' : 'contained'}
-          color={device.disable_send ? 'error' : 'success'}
-          onClick={() => handleToggleSend(device)}
-          sx={{ minWidth: 56, fontSize: '0.75rem' }}
-        >
-          发送
-        </Button>
-      </Tooltip>
-
-      {/* 接收控制 */}
-      <Tooltip title={device.disable_recv ? '点击启用接收' : '点击禁用接收'}>
-        <Button
-          size="small"
-          variant={device.disable_recv ? 'outlined' : 'contained'}
-          color={device.disable_recv ? 'error' : 'success'}
-          onClick={() => handleToggleRecv(device)}
-          sx={{ minWidth: 56, fontSize: '0.75rem' }}
-        >
-          接收
-        </Button>
-      </Tooltip>
-    </Stack>
-  )
 
   // 快捷切换禁发状态
   const handleToggleSend = async (device: Device) => {
@@ -235,12 +188,6 @@ export function AdminDevicePage() {
     }
   }
 
-  // 打开参数下发对话框
-  const handleOpenParamDialog = (device: Device) => {
-    setParamDevice(device)
-    setParamDialogOpen(true)
-  }
-
   const handleOpenSwitchDialog = (device: Device) => {
     setSwitchingDevice(device)
     setSwitchDialogOpen(true)
@@ -261,7 +208,6 @@ export function AdminDevicePage() {
   const handleOpenDialog = (device?: Device) => {
     if (device) {
       setEditingDevice(device)
-      setDeletingDevice(null)
       setFormData({
         name: device.name,
         callsign: device.callsign,
@@ -273,7 +219,6 @@ export function AdminDevicePage() {
       })
     } else {
       setEditingDevice(null)
-      setDeletingDevice(null)
       setFormData({
         name: '',
         callsign: '',
@@ -298,9 +243,8 @@ export function AdminDevicePage() {
       setError('请输入设备名称')
       return
     }
-    if (!editingDevice) {
-      return
-    }
+    if (!editingDevice) return
+
     try {
       await deviceService.update(editingDevice.id, formData)
       handleCloseDialog()
@@ -327,80 +271,51 @@ export function AdminDevicePage() {
     }
   }
 
-  const filteredDevices = devices.filter(
-    (d) =>
-      !searchKeyword ||
-      d.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-      d.callsign.toLowerCase().includes(searchKeyword.toLowerCase())
-  )
+  const handleSearch = () => {
+    setPage(0)
+    loadDevices()
+  }
 
   // 获取群组信息
   const getGroupInfo = (groupId: number) => {
     return groups.find((g) => g.id === groupId)
   }
 
-  const handleSearch = () => {
-    setPage(0)
-    loadDevices()
-  }
-
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">设备管理</Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
-          {/* 自动刷新控制 */}
-          <FormControl size="small" sx={{ minWidth: 120 }}>
-            <InputLabel>自动刷新</InputLabel>
-            <Select
-              value={autoRefresh}
-              label="自动刷新"
-              onChange={(e) => setAutoRefresh(e.target.value as number)}
-            >
-              <MenuItem value={0}>关闭</MenuItem>
-              <MenuItem value={10}>10秒</MenuItem>
-              <MenuItem value={30}>30秒</MenuItem>
-              <MenuItem value={60}>60秒</MenuItem>
-            </Select>
-          </FormControl>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Refresh />}
-            onClick={loadDevices}
-            disabled={loading}
-          >
-            刷新
-          </Button>
-        </Stack>
-      </Box>
+      <PageHeader
+        title="设备管理"
+        actions={
+          <AutoRefresh
+            value={autoRefresh}
+            onChange={setAutoRefresh}
+            onRefresh={loadDevices}
+            loading={loading}
+          />
+        }
+      />
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
 
-      <Paper sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
-          <TextField
-            placeholder="搜索设备名称或呼号"
-            value={searchKeyword}
-            onChange={(e) => setSearchKeyword(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            size="small"
-            sx={{ flexGrow: 1 }}
-          />
-          <Button variant="outlined" startIcon={<Search />} onClick={handleSearch}>
-            搜索
-          </Button>
-        </Box>
+      <Paper sx={{ mb: 2, p: 2 }}>
+        <SearchBar
+          value={searchKeyword}
+          onChange={setSearchKeyword}
+          onSearch={handleSearch}
+          placeholder="搜索设备名称或呼号"
+          loading={loading}
+          fullWidth
+        />
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
         <Table sx={{ minWidth: 900, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
-              <TableCell align="center" sx={{ width: 70 }}>在线状态</TableCell>
+              <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
               <TableCell align="center">名称</TableCell>
               <TableCell align="center">设备类型</TableCell>
-              <TableCell align="center">呼号及SSID</TableCell>
+              <TableCell align="center">呼号-SSID</TableCell>
               <TableCell align="center">所有者</TableCell>
               <TableCell align="center">所在群组</TableCell>
               <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
@@ -410,25 +325,21 @@ export function AdminDevicePage() {
           <TableBody>
             {loading ? (
               <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
-            ) : filteredDevices.length === 0 ? (
+            ) : devices.length === 0 ? (
               <TableRow><TableCell colSpan={8} align="center">暂无设备数据</TableCell></TableRow>
             ) : (
-              filteredDevices.map((device) => {
+              devices.map((device) => {
                 const group = getGroupInfo(device.group_id)
                 const owner = getUserInfo(device.owner_id)
                 return (
                   <TableRow key={device.id} hover>
-                    {/* 在线状态使用绿圆点或灰圆圈 */}
                     <TableCell align="center">
-                      {device.online || device.is_online ?
-                        <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :
-                        <Circle sx={{ fontSize: 16, color: 'text.disabled' }} />
-                      }
+                      <OnlineIndicator online={device.online || device.is_online || false} />
                     </TableCell>
                     <TableCell align="center" sx={{ fontWeight: 500 }}>{device.name}</TableCell>
                     <TableCell align="center">
                       <Typography variant="body2" color="text.secondary">
-                        {DEVICE_MODELS.find(m => m.value === (device.model ?? device.dev_model))?.label || '未知设备'}
+                        {getDevModelName(device.model ?? device.dev_model ?? 0)}
                       </Typography>
                     </TableCell>
                     <TableCell align="center">{device.callsign}-{device.ssid}</TableCell>
@@ -442,7 +353,7 @@ export function AdminDevicePage() {
                             gap: 1,
                             cursor: 'pointer',
                             '&:hover': {
-                            '& .owner-text': {
+                              '& .owner-text': {
                                 color: 'primary.main',
                                 textDecoration: 'underline',
                               },
@@ -462,39 +373,33 @@ export function AdminDevicePage() {
                       )}
                     </TableCell>
                     <TableCell align="center">
-                      {group ? (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => handleOpenSwitchDialog(device)}
-                          endIcon={group.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
-                        >
-                          {group.name}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          color="inherit"
-                          onClick={() => handleOpenSwitchDialog(device)}
-                        >
-                          无群组
-                        </Button>
-                      )}
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleOpenSwitchDialog(device)}
+                        endIcon={group?.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
+                      >
+                        {group?.name || '无群组'}
+                      </Button>
                     </TableCell>
-
-                    {/* 按需求渲染状态按钮: 左绿发, 右绿收，可点击切换 */}
                     <TableCell align="center">
-                      {renderStatusDots(device)}
+                      <SendRecvControl
+                        disableSend={device.disable_send ?? false}
+                        disableRecv={device.disable_recv ?? false}
+                        onToggleSend={() => handleToggleSend(device)}
+                        onToggleRecv={() => handleToggleRecv(device)}
+                      />
                     </TableCell>
-
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                         <Tooltip title="参数下发">
                           <IconButton
                             size="small"
                             color="secondary"
-                            onClick={() => handleOpenParamDialog(device)}
+                            onClick={() => {
+                              setParamDevice(device)
+                              setParamDialogOpen(true)
+                            }}
                           >
                             <Settings fontSize="small" />
                           </IconButton>
@@ -519,7 +424,7 @@ export function AdminDevicePage() {
         </Table>
         <TablePagination
           component="div"
-          count={-1} // 后台分页，前端不确定总数
+          count={-1}
           page={page}
           onPageChange={(_, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
@@ -528,7 +433,7 @@ export function AdminDevicePage() {
             setPage(0)
           }}
           labelRowsPerPage="每页行数"
-          labelDisplayedRows={({ from, to, count }) => `${from}-${to} ${count !== -1 ? `共 ${count}` : ''}`}
+          labelDisplayedRows={({ from, to }) => `${from}-${to}`}
         />
       </TableContainer>
 
@@ -537,26 +442,32 @@ export function AdminDevicePage() {
         <DialogTitle>编辑设备</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-            <TextField
-              label="设备名称"
-              fullWidth
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              autoFocus
-            />
-            <TextField
-              label="呼号"
-              fullWidth
-              value={formData.callsign}
-              onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
-            />
-            <TextField
-              label="SSID"
-              type="number"
-              fullWidth
-              value={formData.ssid}
-              onChange={(e) => setFormData({ ...formData, ssid: parseInt(e.target.value) || 0 })}
-            />
+            <FormControl fullWidth>
+              <InputLabel>设备名称</InputLabel>
+              <TextField
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                autoFocus
+                slotProps={{ input: { label: '设备名称' } }}
+              />
+            </FormControl>
+            <FormControl fullWidth>
+              <InputLabel>呼号</InputLabel>
+              <TextField
+                value={formData.callsign}
+                onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
+                slotProps={{ input: { label: '呼号' } }}
+              />
+            </FormControl>
+            <FormControl fullWidth>
+              <InputLabel>SSID</InputLabel>
+              <TextField
+                type="number"
+                value={formData.ssid}
+                onChange={(e) => setFormData({ ...formData, ssid: parseInt(e.target.value) || 0 })}
+                slotProps={{ input: { label: 'SSID' } }}
+              />
+            </FormControl>
             <FormControl fullWidth>
               <InputLabel>设备型号</InputLabel>
               <Select
@@ -590,31 +501,25 @@ export function AdminDevicePage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDialog}>取消</Button>
-          <Button onClick={handleSave} variant="contained">
-            保存
-          </Button>
+          <Button onClick={handleSave} variant="contained">保存</Button>
         </DialogActions>
       </Dialog>
 
       {/* 删除确认对话框 */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>确认删除</DialogTitle>
-        <DialogContent>
-          <Typography>
-            确定要删除设备 <strong>{deletingDevice?.name}</strong> 吗？此操作不可撤销。
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>取消</Button>
-          <Button onClick={handleDelete} color="error" variant="contained">
-            删除
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDialog
+        isOpen={deleteDialogOpen}
+        title="确认删除"
+        message={`确定要删除设备 ${deletingDevice?.name} 吗？此操作不可撤销。`}
+        confirmText="删除"
+        cancelText="取消"
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteDialogOpen(false)}
+        type="danger"
+      />
 
       {/* 切换群组对话框 */}
       {switchingDevice && (
-        <SwitchGroupDialog
+        <GroupPickerDialog
           open={switchDialogOpen}
           onClose={() => {
             setSwitchDialogOpen(false)
@@ -622,7 +527,9 @@ export function AdminDevicePage() {
           }}
           device={switchingDevice}
           groups={groups}
-          onSwitch={handleSwitchGroup}
+          currentGroupId={switchingDevice.group_id}
+          onSelect={handleSwitchGroup}
+          title="切换设备群组"
         />
       )}
 

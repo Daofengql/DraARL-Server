@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Box,
   Paper,
@@ -9,9 +9,7 @@ import {
   TableHead,
   TableRow,
   TablePagination,
-  TextField,
   Button,
-  IconButton,
   Typography,
   Dialog,
   DialogTitle,
@@ -24,51 +22,29 @@ import {
   Alert,
   Stack,
   Tooltip,
+  IconButton,
   Snackbar,
+  TextField,
 } from '@mui/material'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
-import Search from '@mui/icons-material/Search'
-import Circle from '@mui/icons-material/Circle'
 import Lock from '@mui/icons-material/Lock'
 import Key from '@mui/icons-material/Key'
 import ContentCopy from '@mui/icons-material/ContentCopy'
-import Refresh from '@mui/icons-material/Refresh'
 import Settings from '@mui/icons-material/Settings'
 import { deviceService, groupService, authService } from '../../services'
 import type { Device, Group } from '../../types'
-import { SwitchGroupDialog } from './SwitchGroupDialog'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { ParamConfigDialog } from '../../components/devices/ParamConfigDialog'
+import { GroupPickerDialog } from '../../components/groups/GroupPicker'
+import { PageHeader } from '../../components/common/PageHeader'
+import { SearchBar } from '../../components/common/SearchBar'
+import { AutoRefresh } from '../../components/common/AutoRefresh'
+import { OnlineIndicator } from '../../components/common/OnlineIndicator'
+import { SendRecvControl } from '../../components/common/SendRecvControl'
+import { DEVICE_MODELS, getDevModelName } from '../../utils/deviceModel'
 
-const DEVICE_MODELS = [
-  { value: 0, label: '未知设备' },
-  { value: 100, label: '微信小程序' },
-  { value: 101, label: 'Android 客户端' },
-  { value: 102, label: 'iOS 客户端' },
-  { value: 103, label: 'Windows 客户端' },
-  { value: 104, label: 'macOS 客户端' },
-  { value: 105, label: '浏览器客户端' },
-]
-
-const GROUP_TYPE_PUBLIC = 1
 const GROUP_TYPE_PRIVATE = 2
-
-// 预设频率类型
-interface FreqPreset {
-  name: string
-  txFreq?: string
-  rxFreq?: string
-  txCtcss?: string
-  rxCtcss?: string
-  squelch?: number
-  sameFreq?: boolean
-  power?: 'high' | 'low'
-  bandwidth?: 'wide' | 'narrow'
-}
-
-// 预设频率列表（后续从API获取）
-const FREQ_PRESETS: FreqPreset[] = []
 
 export function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([])
@@ -78,19 +54,12 @@ export function DevicesPage() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // 对话框状态
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingDevice, setEditingDevice] = useState<Device | null>(null)
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
   const [switchingDevice, setSwitchingDevice] = useState<Device | null>(null)
-  const [editingDevice, setEditingDevice] = useState<Device | null>(null)
-  const [formData, setFormData] = useState({
-    name: '',
-    callsign: '',
-    ssid: 0,
-    model: 1,
-    group_id: 0,
-    disable_send: false,
-    disable_recv: false,
-  })
 
   // 确认对话框状态
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -112,27 +81,21 @@ export function DevicesPage() {
   })
 
   // 自动刷新状态
-  const [autoRefresh, setAutoRefresh] = useState(0) // 0=关闭, 10/30/60=秒数
+  const [autoRefresh, setAutoRefresh] = useState(0)
 
   // 参数下发对话框状态
   const [paramDialogOpen, setParamDialogOpen] = useState(false)
   const [paramDevice, setParamDevice] = useState<Device | null>(null)
 
+  const [formData, setFormData] = useState({
+    name: '',
+    model: 1,
+  })
+
   useEffect(() => {
     loadDevices()
     loadGroups()
   }, [])
-
-  // 自动刷新逻辑
-  useEffect(() => {
-    if (autoRefresh === 0) return
-
-    const timer = setInterval(() => {
-      loadDevices()
-    }, autoRefresh * 1000)
-
-    return () => clearInterval(timer)
-  }, [autoRefresh])
 
   const loadDevices = async () => {
     setLoading(true)
@@ -177,37 +140,6 @@ export function DevicesPage() {
       setSnackbar({ open: true, message: '已复制到剪贴板', severity: 'success' })
     }
   }
-
-  // 对设备禁发/禁收状态进行直观的圆渲染（绿灯正常，红灯禁用）
-  const renderStatusDots = (device: Device) => (
-    <Stack direction="row" spacing={1} alignItems="center" justifyContent="center">
-      {/* 发送控制 */}
-      <Tooltip title={device.disable_send ? '点击启用发送' : '点击禁用发送'}>
-        <Button
-          size="small"
-          variant={device.disable_send ? 'outlined' : 'contained'}
-          color={device.disable_send ? 'error' : 'success'}
-          onClick={() => handleToggleSend(device)}
-          sx={{ minWidth: 56, fontSize: '0.75rem' }}
-        >
-          发送
-        </Button>
-      </Tooltip>
-
-      {/* 接收控制 */}
-      <Tooltip title={device.disable_recv ? '点击启用接收' : '点击禁用接收'}>
-        <Button
-          size="small"
-          variant={device.disable_recv ? 'outlined' : 'contained'}
-          color={device.disable_recv ? 'error' : 'success'}
-          onClick={() => handleToggleRecv(device)}
-          sx={{ minWidth: 56, fontSize: '0.75rem' }}
-        >
-          接收
-        </Button>
-      </Tooltip>
-    </Stack>
-  )
 
   // 快捷切换禁发状态
   const handleToggleSend = async (device: Device) => {
@@ -257,23 +189,13 @@ export function DevicesPage() {
       setEditingDevice(device)
       setFormData({
         name: device.name,
-        callsign: '',
-        ssid: 0,
-        model: device.model,
-        group_id: 0,
-        disable_send: false,
-        disable_recv: false,
+        model: device.model ?? device.dev_model ?? 1,
       })
     } else {
       setEditingDevice(null)
       setFormData({
         name: '',
-        callsign: '',
-        ssid: 0,
         model: 1,
-        group_id: 0,
-        disable_send: false,
-        disable_recv: false,
       })
     }
     setDialogOpen(true)
@@ -291,6 +213,7 @@ export function DevicesPage() {
       return
     }
     if (!editingDevice) return
+
     try {
       await deviceService.update(editingDevice.id, { name: formData.name, model: formData.model })
       handleCloseDialog()
@@ -301,7 +224,7 @@ export function DevicesPage() {
   }
 
   const handleDelete = async (id: number) => {
-    const device = devices.find(d => d.id === id)
+    const device = devices.find((d) => d.id === id)
     setConfirmDialog({
       open: true,
       title: '删除设备',
@@ -318,12 +241,6 @@ export function DevicesPage() {
     })
   }
 
-  // 打开参数下发对话框
-  const handleOpenParamDialog = (device: Device) => {
-    setParamDevice(device)
-    setParamDialogOpen(true)
-  }
-
   const filteredDevices = devices.filter(
     (d) =>
       !searchKeyword ||
@@ -331,10 +248,7 @@ export function DevicesPage() {
       d.callsign.toLowerCase().includes(searchKeyword.toLowerCase())
   )
 
-  const paginatedDevices = filteredDevices.slice(
-    page * rowsPerPage,
-    page * rowsPerPage + rowsPerPage
-  )
+  const paginatedDevices = filteredDevices.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
 
   // 获取群组信息
   const getGroupInfo = (groupId: number) => {
@@ -343,54 +257,35 @@ export function DevicesPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
-        <Typography variant="h5" fontWeight={600}>设备管理</Typography>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          {/* 自动刷新控制 */}
-          <FormControl size="small" sx={{ minWidth: 100 }}>
-            <InputLabel>自动刷新</InputLabel>
-            <Select
+      <PageHeader
+        title="设备管理"
+        actions={
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <AutoRefresh
               value={autoRefresh}
-              label="自动刷新"
-              onChange={(e) => setAutoRefresh(e.target.value as number)}
+              onChange={setAutoRefresh}
+              onRefresh={loadDevices}
+              loading={loading}
+            />
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<Key />}
+              onClick={handleRegenerateDevicePassword}
+              disabled={generatingDevicePassword}
+              color="primary"
             >
-              <MenuItem value={0}>关闭</MenuItem>
-              <MenuItem value={10}>10秒</MenuItem>
-              <MenuItem value={30}>30秒</MenuItem>
-              <MenuItem value={60}>60秒</MenuItem>
-            </Select>
-          </FormControl>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Refresh />}
-            onClick={loadDevices}
-            disabled={loading}
-          >
-            刷新
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<Key />}
-            onClick={handleRegenerateDevicePassword}
-            disabled={generatingDevicePassword}
-            color="primary"
-          >
-            <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>
-              {generatingDevicePassword ? '生成中...' : '重新生成设备密码'}
-            </Box>
-            <Box sx={{ display: { xs: 'inline', sm: 'none' } }}>
               {generatingDevicePassword ? '生成中...' : '设备密码'}
-            </Box>
-          </Button>
-        </Stack>
-      </Box>
+            </Button>
+          </Stack>
+        }
+      />
 
       {showDevicePassword && regeneratedPassword && (
         <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setShowDevicePassword(false)}>
           <Typography variant="body2">
-            新设备密码: <strong style={{ fontSize: '1.1em', letterSpacing: '0.5px' }}>{regeneratedPassword}</strong>
+            新设备密码:{' '}
+            <strong style={{ fontSize: '1.1em', letterSpacing: '0.5px' }}>{regeneratedPassword}</strong>
           </Typography>
           <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
             请立即保存，此密码仅显示一次！
@@ -406,94 +301,96 @@ export function DevicesPage() {
         </Alert>
       )}
 
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
+          {error}
+        </Alert>
+      )}
 
-      <Paper sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
-          <TextField
-            placeholder="搜索设备名称或呼号"
-            value={searchKeyword}
-            onChange={(e) => setSearchKeyword(e.target.value)}
-            size="small"
-            sx={{ flexGrow: 1 }}
-          />
-          <Button variant="outlined" startIcon={<Search />}>
-            搜索
-          </Button>
-        </Box>
+      <Paper sx={{ mb: 2, p: 2 }}>
+        <SearchBar
+          value={searchKeyword}
+          onChange={setSearchKeyword}
+          onSearch={() => setPage(0)}
+          placeholder="搜索设备名称或呼号"
+          loading={loading}
+          fullWidth
+        />
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
         <Table sx={{ minWidth: 800, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
-              <TableCell align="center" sx={{ width: 70 }}>在线状态</TableCell>
+              <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
               <TableCell align="center">名称</TableCell>
               <TableCell align="center">设备类型</TableCell>
-              <TableCell align="center">呼号及SSID</TableCell>
+              <TableCell align="center">呼号-SSID</TableCell>
               <TableCell align="center">所在群组</TableCell>
-              <TableCell align="center">收发控制</TableCell>
+              <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
               <TableCell align="center" sx={{ width: 120 }}>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  加载中...
+                </TableCell>
+              </TableRow>
             ) : paginatedDevices.length === 0 ? (
-              <TableRow><TableCell colSpan={7} align="center">暂无设备数据</TableCell></TableRow>
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  暂无设备数据
+                </TableCell>
+              </TableRow>
             ) : (
               paginatedDevices.map((device) => {
                 const group = getGroupInfo(device.group_id)
                 return (
                   <TableRow key={device.id} hover>
-                    {/* 在线状态使用绿圆点或灰圆圈 */}
                     <TableCell align="center">
-                      {device.online || device.is_online ?
-                        <Circle sx={{ fontSize: 16, color: 'success.main' }} /> :
-                        <Circle sx={{ fontSize: 16, color: 'text.disabled' }} />
-                      }
+                      <OnlineIndicator online={device.online || device.is_online || false} />
                     </TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 500 }}>{device.name}</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 500 }}>
+                      {device.name}
+                    </TableCell>
                     <TableCell align="center">
                       <Typography variant="body2" color="text.secondary">
-                        {DEVICE_MODELS.find(m => m.value === (device.model ?? device.dev_model))?.label || '未知设备'}
+                        {getDevModelName(device.model ?? device.dev_model ?? 0)}
                       </Typography>
                     </TableCell>
-                    <TableCell align="center">{device.callsign}-{device.ssid}</TableCell>
                     <TableCell align="center">
-                      {group ? (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => handleOpenSwitchDialog(device)}
-                          endIcon={group.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
-                        >
-                          {group.name}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          color="inherit"
-                          onClick={() => handleOpenSwitchDialog(device)}
-                        >
-                          无群组
-                        </Button>
-                      )}
+                      {device.callsign}-{device.ssid}
                     </TableCell>
-
-                    {/* 按需求渲染状态圆点: 左绿发, 右绿收，可点击切换 */}
                     <TableCell align="center">
-                      {renderStatusDots(device)}
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => handleOpenSwitchDialog(device)}
+                        endIcon={group?.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
+                      >
+                        {group?.name || '无群组'}
+                      </Button>
                     </TableCell>
-
+                    <TableCell align="center">
+                      <SendRecvControl
+                        disableSend={device.disable_send ?? false}
+                        disableRecv={device.disable_recv ?? false}
+                        onToggleSend={() => handleToggleSend(device)}
+                        onToggleRecv={() => handleToggleRecv(device)}
+                      />
+                    </TableCell>
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                         <Tooltip title="参数下发">
                           <IconButton
                             size="small"
                             color="secondary"
-                            onClick={() => handleOpenParamDialog(device)}
+                            onClick={() => {
+                              setParamDevice(device)
+                              setParamDialogOpen(true)
+                            }}
                           >
                             <Settings fontSize="small" />
                           </IconButton>
@@ -569,7 +466,7 @@ export function DevicesPage() {
 
       {/* 切换群组对话框 */}
       {switchingDevice && (
-        <SwitchGroupDialog
+        <GroupPickerDialog
           open={switchDialogOpen}
           onClose={() => {
             setSwitchDialogOpen(false)
@@ -577,7 +474,9 @@ export function DevicesPage() {
           }}
           device={switchingDevice}
           groups={groups}
-          onSwitch={handleSwitchGroup}
+          currentGroupId={switchingDevice.group_id}
+          onSelect={handleSwitchGroup}
+          title="切换设备群组"
         />
       )}
 
@@ -589,9 +488,9 @@ export function DevicesPage() {
         type={confirmDialog.type}
         onConfirm={() => {
           confirmDialog.onConfirm()
-          setConfirmDialog(prev => ({ ...prev, open: false }))
+          setConfirmDialog((prev) => ({ ...prev, open: false }))
         }}
-        onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
+        onCancel={() => setConfirmDialog((prev) => ({ ...prev, open: false }))}
       />
 
       {/* 参数下发对话框 */}
@@ -612,8 +511,6 @@ export function DevicesPage() {
           {snackbar.message}
         </Alert>
       </Snackbar>
-
     </Box>
-
   )
 }

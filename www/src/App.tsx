@@ -33,7 +33,6 @@ import { AssetPage } from './pages/admin/AssetPage'
 function App() {
   // 检查是否已登录
   const isAuthenticated = authService.isAuthenticated()
-  const isAdmin = authService.isAdmin()
 
   return (
     <BrowserRouter>

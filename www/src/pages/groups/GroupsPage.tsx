@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-// import { useNavigate } from 'react-router-dom' // 移除了冗余的路由跳转
 import {
   Box,
   Paper,
@@ -25,18 +24,14 @@ import {
   Stack,
   InputAdornment,
   Tooltip,
-  FormControlLabel,
   Switch,
   Chip,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Search from '@mui/icons-material/Search'
-import LockOpen from '@mui/icons-material/LockOpen'
-import Lock from '@mui/icons-material/Lock'
 import CheckCircle from '@mui/icons-material/CheckCircle'
 import People from '@mui/icons-material/People'
 import Logout from '@mui/icons-material/Logout'
-import Settings from '@mui/icons-material/Settings'
 import Person from '@mui/icons-material/Person'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
@@ -44,9 +39,8 @@ import { groupService, userService } from '../../services'
 import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
-
-const GROUP_TYPE_PUBLIC = 1
-const GROUP_TYPE_PRIVATE = 2
+import { PageHeader } from '../../components/common/PageHeader'
+import { GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function GroupsPage() {
   // const navigate = useNavigate() // 移除了冗余的路由跳转
@@ -63,7 +57,6 @@ export function GroupsPage() {
   // 用户详情弹窗状态
   const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
-  const [loadingUser, setLoadingUser] = useState(false)
 
   // 选中的群组与表单状态
   const [editingGroup, setEditingGroup] = useState<Group | null>(null) // 新增：当前正在编辑的群组
@@ -113,7 +106,6 @@ export function GroupsPage() {
     event.stopPropagation()
     // 先保存 currentTarget，因为异步操作后 event 对象会被重用
     const target = event.currentTarget
-    setLoadingUser(true)
     try {
       const user = await userService.getPublicInfo(userId)
       console.log('User info loaded:', user)
@@ -124,7 +116,7 @@ export function GroupsPage() {
       console.error('Failed to load user info:', err)
       setError('获取用户信息失败')
     } finally {
-      setLoadingUser(false)
+      setLoading(false)
     }
   }
 
@@ -305,7 +297,7 @@ export function GroupsPage() {
       <TableCell width={60}>{group.id}</TableCell>
       <TableCell>
         <Stack direction="row" alignItems="center" spacing={1}>
-          {group.type === GROUP_TYPE_PRIVATE ? <Lock color="secondary" fontSize="small" /> : <LockOpen color="primary" fontSize="small" />}
+          <GroupTypeIcon type={group.type} />
           <Typography fontWeight={500}>{group.name}</Typography>
           {group.status === 0 && (
             <Chip label="已禁用" size="small" color="error" sx={{ fontSize: '0.7rem', height: 20 }} />
@@ -388,22 +380,24 @@ export function GroupsPage() {
 
   return (
     <Box sx={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 2, flexShrink: 0 }}>
-        <Typography variant="h5" fontWeight={600}>我的群组</Typography>
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Search />}
-            onClick={() => setSearchDialogOpen(true)}
-          >
-            搜索
-          </Button>
-          <Button variant="contained" size="small" startIcon={<Add />} onClick={handleOpenAdd}>
-            新建
-          </Button>
-        </Stack>
-      </Box>
+      <PageHeader
+        title="我的群组"
+        actions={
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Search />}
+              onClick={() => setSearchDialogOpen(true)}
+            >
+              搜索
+            </Button>
+            <Button variant="contained" size="small" startIcon={<Add />} onClick={handleOpenAdd}>
+              新建
+            </Button>
+          </Stack>
+        }
+      />
 
       {error && <Alert severity="error" sx={{ mb: 2, flexShrink: 0 }} onClose={() => setError('')}>{error}</Alert>}
 
@@ -411,7 +405,7 @@ export function GroupsPage() {
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', mb: 1, overflow: 'hidden' }}>
         <Box sx={{ bgcolor: 'primary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <LockOpen color="primary" fontSize="small" />
+            <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
             <Typography variant="subtitle1" fontWeight={600}>公开群组</Typography>
             <Typography variant="body2" color="text.secondary">({publicGroups.length} 个)</Typography>
           </Stack>
@@ -447,7 +441,7 @@ export function GroupsPage() {
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Box sx={{ bgcolor: 'secondary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <Lock color="secondary" fontSize="small" />
+            <GroupTypeIcon type={GROUP_TYPE_PRIVATE} />
             <Typography variant="subtitle1" fontWeight={600}>已加入的私有群组</Typography>
             <Typography variant="body2" color="text.secondary">({privateGroups.length} 个)</Typography>
           </Stack>
@@ -507,7 +501,7 @@ export function GroupsPage() {
                     <Stack direction="row" justifyContent="space-between" alignItems="center">
                       <Stack>
                         <Stack direction="row" alignItems="center" spacing={1}>
-                          {group.type === GROUP_TYPE_PRIVATE ? <Lock color="secondary" fontSize="small"/> : <LockOpen color="primary" fontSize="small"/>}
+                          <GroupTypeIcon type={group.type} />
                           <Typography fontWeight={500}>{group.name}</Typography>
                         </Stack>
                         <Typography variant="body2" color="text.secondary">
@@ -525,7 +519,7 @@ export function GroupsPage() {
                         </Stack>
                       ) : (
                         <Stack direction="row" spacing={0.5} alignItems="center" sx={{ color: 'primary.main' }}>
-                          <LockOpen fontSize="small" />
+                          <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
                           <span>公开</span>
                         </Stack>
                       )}
@@ -571,8 +565,18 @@ export function GroupsPage() {
             <FormControl fullWidth>
               <InputLabel>可见性与验证方式</InputLabel>
               <Select value={formData.type} label="可见性与验证方式" onChange={(e) => setFormData({ ...formData, type: e.target.value as number })}>
-                <MenuItem value={1}><Stack direction="row" spacing={1}><LockOpen fontSize="small" /><span>公开群组 (所有人可见且无需密码)</span></Stack></MenuItem>
-                <MenuItem value={2}><Stack direction="row" spacing={1}><Lock fontSize="small" /><span>私有群组 (需搜索并验证密码)</span></Stack></MenuItem>
+                <MenuItem value={GROUP_TYPE_PUBLIC}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
+                    <span>公开群组 (所有人可见且无需密码)</span>
+                  </Stack>
+                </MenuItem>
+                <MenuItem value={GROUP_TYPE_PRIVATE}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <GroupTypeIcon type={GROUP_TYPE_PRIVATE} />
+                    <span>私有群组 (需搜索并验证密码)</span>
+                  </Stack>
+                </MenuItem>
               </Select>
             </FormControl>
             <TextField label="呼号标识（可选）" fullWidth value={formData.callsign} onChange={(e) => setFormData({ ...formData, callsign: e.target.value })} />

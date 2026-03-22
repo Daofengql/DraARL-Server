@@ -7,3 +7,13 @@ export { ProtectedRoute } from './ProtectedRoute'
 export { AdminRoute } from './AdminRoute'
 export { ApprovedRoute } from './ApprovedRoute'
 export { PageLoader, withSuspense } from './PageLoader'
+
+// 通用 UI 组件
+export { TabPanel } from './TabPanel'
+export { ImagePreviewDialog } from './ImagePreviewDialog'
+export { SendRecvControl } from './SendRecvControl'
+export { OnlineIndicator } from './OnlineIndicator'
+export { SearchBar } from './SearchBar'
+export { AutoRefresh } from './AutoRefresh'
+export { PageHeader } from './PageHeader'
+export { PageContainer } from './PageContainer'

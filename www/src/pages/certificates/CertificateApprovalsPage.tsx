@@ -18,7 +18,6 @@ import {
   Chip,
   Alert,
   TextField,
-  IconButton,
   Tab,
   Tabs,
 } from '@mui/material'
@@ -26,23 +25,11 @@ import CheckCircle from '@mui/icons-material/CheckCircle'
 import Cancel from '@mui/icons-material/Cancel'
 import Refresh from '@mui/icons-material/Refresh'
 import Person from '@mui/icons-material/Person'
-import Close from '@mui/icons-material/Close'
 import { approvalService } from '../../services'
 import type { CertificateApproval } from '../../types'
-
-interface TabPanelProps {
-  children?: React.ReactNode
-  index: number
-  value: number
-}
-
-function TabPanel({ children, value, index }: TabPanelProps) {
-  return (
-    <div role="tabpanel" hidden={value !== index}>
-      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
-    </div>
-  )
-}
+import { TabPanel } from '../../components/common/TabPanel'
+import { ImagePreviewDialog } from '../../components/common/ImagePreviewDialog'
+import { PageHeader } from '../../components/common/PageHeader'
 
 export function CertificateApprovalsPage() {
   const [tabValue, setTabValue] = useState(0)
@@ -66,7 +53,6 @@ export function CertificateApprovalsPage() {
   // 图片预览对话框
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null)
-  const [imageScale, setImageScale] = useState(1)
 
   useEffect(() => {
     loadAllTabData()
@@ -179,17 +165,19 @@ export function CertificateApprovalsPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">操作证审批</Typography>
-        <Button
-          variant="outlined"
-          startIcon={<Refresh />}
-          onClick={loadCertificateApprovals}
-          disabled={loading}
-        >
-          刷新
-        </Button>
-      </Box>
+      <PageHeader
+        title="操作证审批"
+        actions={
+          <Button
+            variant="outlined"
+            startIcon={<Refresh />}
+            onClick={loadCertificateApprovals}
+            disabled={loading}
+          >
+            刷新
+          </Button>
+        }
+      />
 
       {message && (
         <Alert
@@ -276,7 +264,6 @@ export function CertificateApprovalsPage() {
                             alt="操作证"
                             onClick={() => {
                               setPreviewImageUrl(cert.file_url!)
-                              setImageScale(1)
                               setImagePreviewOpen(true)
                             }}
                             sx={{
@@ -506,7 +493,6 @@ export function CertificateApprovalsPage() {
                     alt="操作证"
                     onClick={() => {
                       setPreviewImageUrl(selectedCert.file_url!)
-                      setImageScale(1)
                       setImagePreviewOpen(true)
                     }}
                     sx={{
@@ -568,100 +554,12 @@ export function CertificateApprovalsPage() {
       </Dialog>
 
       {/* 图片预览对话框 */}
-      <Dialog
+      <ImagePreviewDialog
         open={imagePreviewOpen}
-        onClose={() => {
-          setImagePreviewOpen(false)
-          setImageScale(1)
-        }}
-        maxWidth="lg"
-        fullWidth
-        PaperProps={{
-          sx: {
-            bgcolor: 'rgba(0, 0, 0, 0.9)',
-          },
-        }}
-      >
-        <DialogTitle
-          sx={{
-            color: 'white',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <Typography>操作证预览</Typography>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Typography variant="caption" sx={{ color: 'grey.400' }}>
-              滚轮缩放 • {Math.round(imageScale * 100)}%
-            </Typography>
-            <IconButton
-              size="small"
-              onClick={() => setImagePreviewOpen(false)}
-              sx={{ color: 'white' }}
-            >
-              <Close />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent
-          sx={{
-            bgcolor: 'transparent',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            overflow: 'hidden',
-          }}
-        >
-          <Box
-            component="img"
-            src={previewImageUrl || ''}
-            alt="操作证预览"
-            onWheel={(e) => {
-              e.preventDefault()
-              const delta = e.deltaY > 0 ? -0.1 : 0.1
-              setImageScale((prev) => Math.max(0.1, Math.min(5, prev + delta)))
-            }}
-            sx={{
-              maxWidth: '100%',
-              maxHeight: '70vh',
-              objectFit: 'contain',
-              transform: `scale(${imageScale})`,
-              transition: 'transform 0.1s',
-              cursor: 'zoom-in',
-            }}
-          />
-          <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ color: 'white', borderColor: 'white' }}
-              onClick={() => setImageScale((prev) => Math.max(0.1, prev - 0.2))}
-              disabled={imageScale <= 0.1}
-            >
-              缩小
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ color: 'white', borderColor: 'white' }}
-              onClick={() => setImageScale(1)}
-            >
-              重置
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ color: 'white', borderColor: 'white' }}
-              onClick={() => setImageScale((prev) => Math.min(5, prev + 0.2))}
-              disabled={imageScale >= 5}
-            >
-              放大
-            </Button>
-          </Box>
-        </DialogContent>
-      </Dialog>
+        onClose={() => setImagePreviewOpen(false)}
+        imageUrl={previewImageUrl}
+        title="操作证预览"
+      />
     </Box>
   )
 }

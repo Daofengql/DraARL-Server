@@ -27,7 +27,6 @@ import {
   Grid,
 } from '@mui/material'
 import FolderIcon from '@mui/icons-material/Folder'
-import FileIcon from '@mui/icons-material/InsertDriveFile'
 import CreateFolderIcon from '@mui/icons-material/CreateNewFolder'
 import UploadIcon from '@mui/icons-material/Upload'
 import DeleteIcon from '@mui/icons-material/Delete'

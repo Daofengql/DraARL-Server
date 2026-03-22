@@ -50,21 +50,8 @@ import CameraAlt from '@mui/icons-material/CameraAlt'
 import { authService, ssoService, captchaService, emailAuthService } from '../../services'
 import { AvatarCropDialog } from '../../components/AvatarCropDialog'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
+import { TabPanel } from '../../components/common/TabPanel'
 import type { User, CertificateResponse, OperatorCertificate } from '../../types'
-
-interface TabPanelProps {
-  children?: React.ReactNode
-  index: number
-  value: number
-}
-
-function TabPanel({ children, value, index }: TabPanelProps) {
-  return (
-    <div role="tabpanel" hidden={value !== index}>
-      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
-    </div>
-  )
-}
 
 // 审核状态组件
 const ApprovalStatusChip = ({ status, reviewNote }: { status?: number; reviewNote?: string }) => {

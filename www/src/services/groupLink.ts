@@ -1,5 +1,5 @@
 import { apiClient } from './api'
-import type { VirtualGroup, GroupLinkTarget, Group, ListResponse } from '../types'
+import type { VirtualGroup, GroupLinkTarget, Group } from '../types'
 
 interface BackendResponse<T> {
   code: number
@@ -20,11 +20,6 @@ interface UpdateVirtualGroupRequest {
   name?: string
   note?: string
   status?: number
-}
-
-// 添加关联群组请求
-interface AddGroupLinkTargetRequest {
-  target_group_id: number
 }
 
 export const groupLinkService = {

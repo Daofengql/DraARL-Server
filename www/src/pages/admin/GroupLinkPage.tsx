@@ -28,12 +28,9 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  ListItemSecondaryAction,
   Divider,
   Card,
-  CardContent,
   CardHeader,
-  Avatar,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
@@ -42,9 +39,7 @@ import Refresh from '@mui/icons-material/Refresh'
 import LinkIcon from '@mui/icons-material/Link'
 import LinkOff from '@mui/icons-material/LinkOff'
 import GroupIcon from '@mui/icons-material/Group'
-import Warning from '@mui/icons-material/Warning'
-import Info from '@mui/icons-material/Info'
-import { groupLinkService, groupService } from '../../services'
+import { groupLinkService } from '../../services'
 import type { VirtualGroup, Group, GroupLinkTarget } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 

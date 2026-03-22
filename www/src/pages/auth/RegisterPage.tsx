@@ -91,7 +91,7 @@ export function RegisterPage() {
       const res = await captchaService.getCaptcha()
       setCaptchaId(res.captcha_id)
       setCaptchaImage(res.captcha_image)
-    } catch (err) {
+    } catch {
       // 静默失败
     }
   }

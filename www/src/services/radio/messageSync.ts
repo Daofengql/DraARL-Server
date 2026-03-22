@@ -88,6 +88,7 @@ function toRadioMessage(record: CommRecordResponse, currentUser?: CurrentUser): 
     id: `db-${record.id}`,
     type: isText ? 'text' : 'voice',
     groupId: record.group_id || 0,
+    groupName: record.group_name || undefined,
     senderId: record.device_id || `db-${record.id}`,
     senderCallsign: callsign || 'Unknown',
     senderSSID: ssid,

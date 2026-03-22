@@ -62,6 +62,7 @@ export interface RadioMessage {
   id: string
   type: MessageType
   groupId: number
+  groupName?: string // 群组名称（用于跨组消息显示）
 
   // 发送者信息
   senderId: number | string

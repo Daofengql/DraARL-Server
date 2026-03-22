@@ -145,9 +145,11 @@ func (s *Server) setupRoutes() {
 				admin.GET("/certificate-approvals", handler.GetCertificateApprovals)
 				admin.PUT("/operator-certificates/:id/approve", handler.ApproveOperatorCertificate)
 
-				// Logo管理（管理员专用）
+				// Logo和Favicon管理（管理员专用）
 				admin.POST("/upload/logo", handler.UploadLogo)
 				admin.DELETE("/config/logo", handler.NewSiteConfigHandler().DeleteLogo)
+				admin.POST("/upload/favicon", handler.UploadFavicon)
+				admin.DELETE("/config/favicon", handler.NewSiteConfigHandler().DeleteFavicon)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）

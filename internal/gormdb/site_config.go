@@ -51,7 +51,8 @@ type ICPConfig struct {
 type SystemInfoConfig struct {
 	Name          string  `json:"name"`
 	NameShorthand string  `json:"nameshorthand"`
-	LogoURL       string `json:"logo_url"`
+	LogoURL       string  `json:"logo_url"`
+	FaviconURL    string  `json:"favicon_url"`
 	Language      string  `json:"language"`
 }
 
@@ -138,7 +139,7 @@ func (r *SiteConfigRepository) Set(key, value, category, description string) err
 	// 使用 map 来确保零值（空字符串）也能被更新
 	// 注意：必须使用数据库列名，而不是结构体字段名
 	updateData := map[string]interface{}{
-		"config_key":  key,
+		"config_key":   key,
 		"config_value": value,
 		"category":     category,
 		"description":  description,
@@ -207,6 +208,7 @@ func (r *SiteConfigRepository) GetSystemInfoConfig() (*SystemInfoConfig, error) 
 		Name:          common.SiteName,
 		NameShorthand: common.SiteShortName,
 		LogoURL:       "",
+		FaviconURL:    "",
 		Language:      "zh",
 	}
 
@@ -218,6 +220,8 @@ func (r *SiteConfigRepository) GetSystemInfoConfig() (*SystemInfoConfig, error) 
 			result.NameShorthand = config.Value
 		case "system.logo_url":
 			result.LogoURL = config.Value
+		case "system.favicon_url":
+			result.FaviconURL = config.Value
 		case "system.language":
 			result.Language = config.Value
 		}
@@ -232,6 +236,7 @@ func (r *SiteConfigRepository) SetSystemInfoConfig(config SystemInfoConfig) erro
 		{Key: "system.name", Value: config.Name, Category: CategorySystem, Description: "站点名称"},
 		{Key: "system.nameshorthand", Value: config.NameShorthand, Category: CategorySystem, Description: "站点简称"},
 		{Key: "system.logo_url", Value: config.LogoURL, Category: CategorySystem, Description: "站点Logo URL"},
+		{Key: "system.favicon_url", Value: config.FaviconURL, Category: CategorySystem, Description: "站点Favicon URL"},
 		{Key: "system.language", Value: config.Language, Category: CategorySystem, Description: "站点语言"},
 	}
 	return r.SetBatch(configs)

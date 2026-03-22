@@ -637,14 +637,60 @@ func (h *SiteConfigHandler) DeleteLogo(c *gin.Context) {
 		return
 	}
 
-	// 使系统信息配置缓存失效
+	// 使系统信息配置缓存和分类缓存失效
 	if configCache := cache.GetConfigCache(); configCache != nil {
 		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
+		_ = configCache.InvalidateCategory(c.Request.Context(), "system")
 	}
 
 	// 记录审计日志
 	oplog.AddLog(
 		"删除站点Logo",
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "删除成功",
+	})
+}
+
+// DeleteFavicon 删除站点Favicon（管理员）
+func (h *SiteConfigHandler) DeleteFavicon(c *gin.Context) {
+	// 路由已通过 RequireAdmin 中间件验证权限
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "未授权",
+		})
+		return
+	}
+
+	userModel := user.(*gormdb.User)
+
+	// 清空 Favicon URL 配置（将值设置为空字符串）
+	if err := h.repo.Set("system.favicon_url", "", "system", "站点Favicon URL"); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "删除Favicon配置失败",
+		})
+		return
+	}
+
+	// 使系统信息配置缓存和分类缓存失效
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
+		_ = configCache.InvalidateCategory(c.Request.Context(), "system")
+	}
+
+	// 记录审计日志
+	oplog.AddLog(
+		"删除站点Favicon",
 		"config_update",
 		userModel.ID,
 		userModel.Name,

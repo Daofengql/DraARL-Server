@@ -31,6 +31,7 @@ class ClientPanel(ttk.LabelFrame):
         self.app = app
         self.client = None
         self.is_connected = False
+        self.root = parent  # 保存 parent 用于创建子窗口
 
         self._build_ui()
 
@@ -79,6 +80,10 @@ class ClientPanel(ttk.LabelFrame):
         self.text_entry.bind("<Return>", self.send_text)
 
         ttk.Button(text_frame, text="发送", command=self.send_text).pack(side=tk.LEFT, padx=2)
+
+        # Config 按钮（仅 UDP 普通设备）
+        if self.client_type == "udp_device":
+            ttk.Button(text_frame, text="Config", command=self.show_config).pack(side=tk.LEFT, padx=5)
 
         # 群组切换（仅 JWT 客户端）
         if self.client_type == "udp_jwt":
@@ -268,10 +273,198 @@ class ClientPanel(ttk.LabelFrame):
 
         http.update_radio_group(group_id, dev_model)
 
+    def show_config(self):
+        """显示 Config 配置窗口"""
+        if not self.is_connected or not self.client:
+            self.log("[错误] 请先连接")
+            return
+
+        # 创建配置窗口
+        config_window = tk.Toplevel(self.root)
+        config_window.title(f"Config - {self.panel_name}")
+        config_window.geometry("400x550")
+        config_window.resizable(False, False)
+
+        # 主区域
+        frame = ttk.Frame(config_window, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # === 当前配置显示区 ===
+        display_frame = ttk.LabelFrame(frame, text="当前配置（服务器下发）", padding=10)
+        display_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 获取当前配置
+        config = self.client.get_device_config()
+
+        # 配置项显示
+        self.config_labels = {}
+        display_items = [
+            ("rx_freq", "接收频率", lambda v: f"{int(v)/1e6:.4f} MHz" if v else "-"),
+            ("tx_freq", "发射频率", lambda v: f"{int(v)/1e6:.4f} MHz" if v else "-"),
+            ("rx_ctcss", "接收亚音", lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭"),
+            ("tx_ctcss", "发射亚音", lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭"),
+            ("sql_level", "静噪等级", lambda v: f"{v}"),
+            ("power_level", "功率等级", lambda v: {"1": "低", "2": "中", "3": "高"}.get(v, v)),
+            ("tx_bandwidth", "发射带宽", lambda v: "窄带" if v == "1" else "宽带"),
+        ]
+
+        for key, label, formatter in display_items:
+            row = ttk.Frame(display_frame)
+            row.pack(fill=tk.X, pady=1)
+
+            ttk.Label(row, text=f"{label}:", width=12, anchor=tk.W).pack(side=tk.LEFT)
+            value = config.get(key, "-")
+            value_label = ttk.Label(row, text=formatter(value), font=("Consolas", 10), foreground="blue")
+            value_label.pack(side=tk.LEFT, padx=5)
+            self.config_labels[key] = value_label
+
+        # === 编辑区 ===
+        edit_frame = ttk.LabelFrame(frame, text="修改配置（本地上报）", padding=10)
+        edit_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        # 编辑控件
+        self.config_vars = {}
+
+        # 频率输入（显示和输入都用 MHz，内部转换）
+        freq_row = ttk.Frame(edit_frame)
+        freq_row.pack(fill=tk.X, pady=2)
+        ttk.Label(freq_row, text="发射频率(MHz):", width=14, anchor=tk.W).pack(side=tk.LEFT)
+
+        # Hz -> MHz 转换用于显示
+        tx_freq_mhz = int(config.get('tx_freq', '439500000')) / 1e6
+        rx_freq_mhz = int(config.get('rx_freq', '439500000')) / 1e6
+
+        self.config_vars['tx_freq'] = tk.StringVar(value=f"{tx_freq_mhz:.4f}")
+        tx_freq_entry = ttk.Entry(freq_row, textvariable=self.config_vars['tx_freq'], width=12)
+        tx_freq_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Label(freq_row, text="接收(MHz):").pack(side=tk.LEFT, padx=(10, 0))
+        self.config_vars['rx_freq'] = tk.StringVar(value=f"{rx_freq_mhz:.4f}")
+        ttk.Entry(freq_row, textvariable=self.config_vars['rx_freq'], width=12).pack(side=tk.LEFT, padx=5)
+
+        # 亚音输入
+        ctcss_row = ttk.Frame(edit_frame)
+        ctcss_row.pack(fill=tk.X, pady=2)
+        ttk.Label(ctcss_row, text="发射亚音(Hz):", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self.config_vars['tx_ctcss'] = tk.StringVar(value=config.get('tx_ctcss', '0'))
+        ttk.Entry(ctcss_row, textvariable=self.config_vars['tx_ctcss'], width=8).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ctcss_row, text="接收(Hz):").pack(side=tk.LEFT, padx=(10, 0))
+        self.config_vars['rx_ctcss'] = tk.StringVar(value=config.get('rx_ctcss', '0'))
+        ttk.Entry(ctcss_row, textvariable=self.config_vars['rx_ctcss'], width=8).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ctcss_row, text="0=关闭", foreground="gray").pack(side=tk.LEFT, padx=5)
+
+        # 静噪等级
+        sql_row = ttk.Frame(edit_frame)
+        sql_row.pack(fill=tk.X, pady=2)
+        ttk.Label(sql_row, text="静噪等级:", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self.config_vars['sql_level'] = tk.StringVar(value=config.get('sql_level', '3'))
+        sql_scale = ttk.Scale(sql_row, from_=0, to=9, orient=tk.HORIZONTAL, length=100)
+        sql_scale.set(int(config.get('sql_level', '3')))
+        sql_scale.pack(side=tk.LEFT, padx=5)
+        sql_label = ttk.Label(sql_row, text=config.get('sql_level', '3'), width=2)
+        sql_label.pack(side=tk.LEFT)
+        sql_scale.config(command=lambda v: sql_label.config(text=str(int(float(v)))))
+
+        # 功率等级
+        power_row = ttk.Frame(edit_frame)
+        power_row.pack(fill=tk.X, pady=2)
+        ttk.Label(power_row, text="功率等级:", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self.config_vars['power_level'] = tk.StringVar(value=config.get('power_level', '3'))
+        power_combo = ttk.Combobox(power_row, textvariable=self.config_vars['power_level'],
+                                    values=["1", "2", "3"], width=5, state="readonly")
+        power_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(power_row, text="(1=低, 2=中, 3=高)", foreground="gray").pack(side=tk.LEFT)
+
+        # 带宽
+        bw_row = ttk.Frame(edit_frame)
+        bw_row.pack(fill=tk.X, pady=2)
+        ttk.Label(bw_row, text="发射带宽:", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self.config_vars['tx_bandwidth'] = tk.StringVar(value=config.get('tx_bandwidth', '2'))
+        bw_combo = ttk.Combobox(bw_row, textvariable=self.config_vars['tx_bandwidth'],
+                                 values=["1", "2"], width=5, state="readonly")
+        bw_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(bw_row, text="(1=窄带, 2=宽带)", foreground="gray").pack(side=tk.LEFT)
+
+        # === 按钮区 ===
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X)
+
+        def refresh_display():
+            """刷新显示"""
+            if self.client and hasattr(self, 'config_labels'):
+                c = self.client.get_device_config()
+                formatters = {
+                    "rx_freq": lambda v: f"{int(v)/1e6:.4f} MHz" if v else "-",
+                    "tx_freq": lambda v: f"{int(v)/1e6:.4f} MHz" if v else "-",
+                    "rx_ctcss": lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭",
+                    "tx_ctcss": lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭",
+                    "sql_level": lambda v: f"{v}",
+                    "power_level": lambda v: {"1": "低", "2": "中", "3": "高"}.get(v, v),
+                    "tx_bandwidth": lambda v: "窄带" if v == "1" else "宽带",
+                }
+                for key, label in self.config_labels.items():
+                    if key in c:
+                        try:
+                            label.config(text=formatters.get(key, str)(c[key]))
+                        except (ValueError, TypeError):
+                            label.config(text=str(c[key]))
+                self.log("[Config] 显示已刷新")
+
+        def apply_local():
+            """应用本地配置（更新本地存储，不上报）"""
+            try:
+                # 更新本地配置
+                self.client.device_config = {
+                    self.client._get_tlv_type('rx_freq'): str(int(float(self.config_vars['rx_freq'].get()) * 1e6)),
+                    self.client._get_tlv_type('tx_freq'): str(int(float(self.config_vars['tx_freq'].get()) * 1e6)),
+                    self.client._get_tlv_type('rx_ctcss'): self.config_vars['rx_ctcss'].get(),
+                    self.client._get_tlv_type('tx_ctcss'): self.config_vars['tx_ctcss'].get(),
+                    self.client._get_tlv_type('sql_level'): str(int(float(sql_scale.get()))),
+                    self.client._get_tlv_type('power_level'): self.config_vars['power_level'].get(),
+                    self.client._get_tlv_type('tx_bandwidth'): self.config_vars['tx_bandwidth'].get(),
+                }
+                self.log("[Config] 本地配置已更新")
+                refresh_display()
+            except Exception as e:
+                self.log(f"[Config] 应用失败: {e}")
+
+        def report_to_server():
+            """上报配置到服务器"""
+            try:
+                # 先更新本地配置
+                apply_local()
+                # 发送配置上报包
+                self.client._send_config_report()
+                self.log("[Config] 已上报到服务器")
+            except Exception as e:
+                self.log(f"[Config] 上报失败: {e}")
+
+        ttk.Button(btn_frame, text="刷新显示", command=refresh_display).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="应用本地", command=apply_local).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="上报服务器", command=report_to_server).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="关闭", command=config_window.destroy).pack(side=tk.RIGHT, padx=5)
+
+        # 设置配置更新回调
+        def on_config_update(new_config):
+            self.app.root.after(0, refresh_display)
+
+        self.client.config_update_callback = on_config_update
+
+        # 窗口关闭时清除回调
+        def on_close():
+            if self.client:
+                self.client.config_update_callback = None
+            config_window.destroy()
+
+        config_window.protocol("WM_DELETE_WINDOW", on_close)
+
     def stop(self):
         """停止客户端"""
-        if self.client:
-            self.client.disconnect()
+        try:
+            if self.client:
+                self.client.disconnect()
+        except Exception as e:
+            print(f"[Stop] 断开连接异常: {e}")
+        self.client = None
 
 
 class DebugClientApp:

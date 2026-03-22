@@ -108,7 +108,7 @@ export function LoginPage() {
       setCaptchaId(res.captcha_id)
       setCaptchaImage(res.captcha_image)
     } catch {
-      // ���默失败
+      // 静默失败
     }
   }
 

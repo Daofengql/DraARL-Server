@@ -184,24 +184,6 @@ func BuildTextMessagePacket(username string, ssid byte, devModel byte, message s
 	)
 }
 
-// BuildConfigPacket 构建配置包（用于群组切换）
-func BuildConfigPacket(username string, ssid byte, devModel byte, groupID int) []byte {
-	// DATA 区域存储群组 ID (4 字节)
-	data := make([]byte, 4)
-	binary.BigEndian.PutUint32(data, uint32(groupID))
-
-	return protocol.EncodeDraARLv1(
-		username,
-		"",
-		ssid,
-		protocol.DraARLTypeConfig,
-		devModel,
-		0,
-		"",
-		data,
-	)
-}
-
 // bytesToUint24 将 3 字节转换为 uint32 (big-endian)
 func bytesToUint24(b []byte) uint32 {
 	if len(b) < 3 {

@@ -545,7 +545,9 @@ export function AdminDevicePage() {
       {paramDevice && (
         <ParamConfigDialog
           open={paramDialogOpen}
+          deviceId={paramDevice.id}
           deviceName={paramDevice.name}
+          isOnline={paramDevice.is_online}
           onClose={() => {
             setParamDialogOpen(false)
             setParamDevice(null)

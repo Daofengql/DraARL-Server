@@ -496,7 +496,9 @@ export function DevicesPage() {
       {/* 参数下发对话框 */}
       <ParamConfigDialog
         open={paramDialogOpen}
+        deviceId={paramDevice?.id || 0}
         deviceName={paramDevice?.name || ''}
+        isOnline={paramDevice?.is_online || false}
         onClose={() => setParamDialogOpen(false)}
       />
 

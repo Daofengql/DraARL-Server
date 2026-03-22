@@ -240,3 +240,239 @@ def get_dev_model_name(dev_model: int) -> str:
         DevModel.INTERCONNECT: "Interconnect",
     }
     return names.get(dev_model, f"Unknown({dev_model})")
+
+
+# ==========================================
+# Config 包协议常量 (Type=0x03)
+# 仅用于 UDP 普通设备的配置同步
+# ==========================================
+
+# Config 包 DATA 区域操作类型
+class ConfigType:
+    QUERY = 0x01      # 查询配置请求
+    SET = 0x02        # 配置下发/上报
+    TIME_SYNC = 0x03  # 时间同步
+
+# TLV 配置项 Type 定义
+class TLVType:
+    RX_FREQ = 0x01      # 接收频率 (8 bytes, big-endian uint64 Hz)
+    TX_FREQ = 0x02      # 发射频率 (8 bytes, big-endian uint64 Hz)
+    RX_CTCSS = 0x03     # 接收亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
+    TX_CTCSS = 0x04     # 发射亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
+    SQL_LEVEL = 0x05    # 静噪等级 (1 byte, uint8 0-9)
+    POWER_LEVEL = 0x06  # 功率等级 (1 byte, uint8 1=低, 2=中, 3=高)
+    TX_BANDWIDTH = 0x07 # 发射带宽 (1 byte, uint8 1=窄带, 2=宽带)
+    TIMESTAMP = 0x10    # 时间戳 (8 bytes, big-endian int64 Unix毫秒)
+
+# TLV Type 到配置键名的映射
+TLV_TYPE_TO_KEY = {
+    TLVType.RX_FREQ: "rx_freq",
+    TLVType.TX_FREQ: "tx_freq",
+    TLVType.RX_CTCSS: "rx_ctcss",
+    TLVType.TX_CTCSS: "tx_ctcss",
+    TLVType.SQL_LEVEL: "sql_level",
+    TLVType.POWER_LEVEL: "power_level",
+    TLVType.TX_BANDWIDTH: "tx_bandwidth",
+    TLVType.TIMESTAMP: "timestamp",
+}
+
+# 配置键名到 TLV Type 的映射
+KEY_TO_TLV_TYPE = {v: k for k, v in TLV_TYPE_TO_KEY.items()}
+
+# TLV 长度定义
+TLV_LENGTH = {
+    TLVType.RX_FREQ: 8,
+    TLVType.TX_FREQ: 8,
+    TLVType.RX_CTCSS: 4,
+    TLVType.TX_CTCSS: 4,
+    TLVType.SQL_LEVEL: 1,
+    TLVType.POWER_LEVEL: 1,
+    TLVType.TX_BANDWIDTH: 1,
+    TLVType.TIMESTAMP: 8,
+}
+
+
+def encode_tlv(configs: dict) -> bytes:
+    """
+    将配置 dict 编码为 TLV 格式
+    返回: 完整的 TLV 列表（不含 DATA[0] 和 DATA[1]）
+    """
+    result = bytearray()
+    for key, value in configs.items():
+        tlv_type = KEY_TO_TLV_TYPE.get(key)
+        if tlv_type is None:
+            continue
+        length = TLV_LENGTH.get(tlv_type)
+        if length is None:
+            continue
+
+        # Type (1 byte)
+        result.append(tlv_type)
+        # Length (1 byte)
+        result.append(length)
+        # Value (N bytes)
+        result.extend(_encode_tlv_value(tlv_type, str(value)))
+
+    return bytes(result)
+
+
+def _encode_tlv_value(tlv_type: int, value: str) -> bytes:
+    """编码单个 TLV 值"""
+    if tlv_type in (TLVType.RX_FREQ, TLVType.TX_FREQ):
+        # 8 bytes, big-endian uint64
+        try:
+            freq = int(value)
+        except ValueError:
+            freq = 0
+        return struct.pack('>Q', freq)
+
+    elif tlv_type in (TLVType.RX_CTCSS, TLVType.TX_CTCSS):
+        # 4 bytes, big-endian float32
+        try:
+            ctcss = float(value)
+        except ValueError:
+            ctcss = 0.0
+        return struct.pack('>f', ctcss)
+
+    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH):
+        # 1 byte, uint8
+        try:
+            val = int(value)
+        except ValueError:
+            val = 0
+        return bytes([val & 0xFF])
+
+    elif tlv_type == TLVType.TIMESTAMP:
+        # 8 bytes, big-endian int64 (Unix毫秒)
+        try:
+            ts = int(value)
+        except ValueError:
+            ts = int(time.time() * 1000)
+        return struct.pack('>q', ts)
+
+    return bytes(TLV_LENGTH.get(tlv_type, 0))
+
+
+def decode_tlv(data: bytes) -> dict:
+    """
+    将 TLV 格式的 bytes 解码为配置 dict
+    输入: DATA[2:] 开始的 TLV 列表（跳过 DATA[0] 和 DATA[1]）
+    """
+    result = {}
+    offset = 0
+
+    while offset < len(data):
+        if offset + 2 > len(data):
+            break
+
+        tlv_type = data[offset]
+        length = data[offset + 1]
+        offset += 2
+
+        if offset + length > len(data):
+            break
+
+        value_bytes = data[offset:offset + length]
+        offset += length
+
+        key = TLV_TYPE_TO_KEY.get(tlv_type)
+        if key is None:
+            continue
+
+        value = _decode_tlv_value(tlv_type, value_bytes)
+        result[key] = value
+
+    return result
+
+
+def _decode_tlv_value(tlv_type: int, data: bytes) -> str:
+    """解码单个 TLV 值"""
+    if tlv_type in (TLVType.RX_FREQ, TLVType.TX_FREQ):
+        if len(data) < 8:
+            return "0"
+        freq = struct.unpack('>Q', data[:8])[0]
+        return str(freq)
+
+    elif tlv_type in (TLVType.RX_CTCSS, TLVType.TX_CTCSS):
+        if len(data) < 4:
+            return "0"
+        ctcss = struct.unpack('>f', data[:4])[0]
+        return f"{ctcss:.1f}"
+
+    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH):
+        if len(data) < 1:
+            return "0"
+        return str(data[0])
+
+    elif tlv_type == TLVType.TIMESTAMP:
+        if len(data) < 8:
+            return "0"
+        ts = struct.unpack('>q', data[:8])[0]
+        return str(ts)
+
+    return ""
+
+
+def build_config_query_packet() -> bytes:
+    """构建配置查询包 (DATA[0] = 0x01)"""
+    return bytes([ConfigType.QUERY])
+
+
+def build_config_set_packet(configs: dict) -> bytes:
+    """
+    构建配置下发/上报包 (DATA[0] = 0x02)
+    configs: 要下发/上报的配置项 dict
+    """
+    if not configs:
+        return bytes([ConfigType.SET, 0x00])
+
+    tlv_data = encode_tlv(configs)
+    result = bytearray()
+    result.append(ConfigType.SET)
+    result.append(len(configs))  # 配置项数量
+    result.extend(tlv_data)
+
+    return bytes(result)
+
+
+def build_time_sync_packet() -> bytes:
+    """构建时间同步包 (DATA[0] = 0x03)"""
+    result = bytearray()
+    result.append(ConfigType.TIME_SYNC)
+    result.append(0x00)  # 保留字节
+    timestamp = int(time.time() * 1000)
+    result.extend(struct.pack('>q', timestamp))
+    return bytes(result)
+
+
+def parse_config_packet(data: bytes) -> dict:
+    """
+    解析 Config 包
+    返回: {"type": "query"/"set"/"time_sync", "configs": {...}, "timestamp": ...}
+    """
+    if len(data) < 1:
+        return {"type": "unknown"}
+
+    packet_type = data[0]
+
+    if packet_type == ConfigType.QUERY:
+        return {"type": "query"}
+
+    elif packet_type == ConfigType.SET:
+        if len(data) < 2:
+            return {"type": "set", "configs": {}}
+        # data[1] = 配置项数量
+        configs = decode_tlv(data[2:])
+        return {"type": "set", "configs": configs}
+
+    elif packet_type == ConfigType.TIME_SYNC:
+        if len(data) < 10:
+            return {"type": "time_sync", "timestamp": 0}
+        timestamp = struct.unpack('>q', data[2:10])[0]
+        return {"type": "time_sync", "timestamp": timestamp}
+
+    return {"type": "unknown"}
+
+
+# 导入 time 模块（用于时间戳）
+import time

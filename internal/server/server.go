@@ -178,6 +178,11 @@ func (s *Server) setupRoutes() {
 				approved.POST("/device/change2w", handler.Change2W)
 				approved.GET("/device/qth", handler.GetDevice) // 兼容旧接口
 
+				// 设备配置同步 API（UDP 普通设备）
+				approved.GET("/devices/:id/config", handler.GetDeviceConfig)
+				approved.PUT("/devices/:id/config", handler.UpdateDeviceConfig)
+				approved.POST("/devices/:id/config/sync", handler.SyncDeviceConfig)
+
 				// 群组相关
 				approved.GET("/groups", handler.GetGroups)
 				approved.GET("/group/list", handler.GetGroups) // 兼容旧接口
@@ -230,6 +235,11 @@ func (s *Server) setupRoutes() {
 			admin.POST("/server/create", handler.CreateServer)
 			admin.POST("/server/update", handler.UpdateServer)
 			admin.POST("/server/delete", handler.DeleteServer)
+
+			// 设备配置管理（管理员权限，可操作任意设备）
+			admin.GET("/admin/devices/:id/config", handler.AdminGetDeviceConfig)
+			admin.PUT("/admin/devices/:id/config", handler.AdminUpdateDeviceConfig)
+			admin.POST("/admin/devices/:id/config/sync", handler.AdminSyncDeviceConfig)
 
 			// 操作日志（需要管理员权限）
 			admin.GET("/operatorlog/list", handler.GetOperatorLogs)

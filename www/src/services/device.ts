@@ -179,4 +179,37 @@ export const deviceService = {
       password: password || ''
     })
   },
+
+  // ============================================================
+  // 设备配置同步 API（UDP 普通设备）
+  // ============================================================
+
+  // 获取设备配置
+  async getConfig(deviceId: number): Promise<Record<string, string>> {
+    const res = await apiClient.get<BackendResponse<Record<string, string>>>(`/api/devices/${deviceId}/config`)
+    return res.data || {}
+  },
+
+  // 更新设备配置
+  async updateConfig(deviceId: number, config: Partial<DeviceConfig>): Promise<Record<string, string>> {
+    const res = await apiClient.put<BackendResponse<Record<string, string>>>(`/api/devices/${deviceId}/config`, config)
+    return res.data || {}
+  },
+
+  // 立即同步配置到设备
+  async syncConfig(deviceId: number): Promise<{ message: string }> {
+    const res = await apiClient.post<BackendResponse<{ message: string }>>(`/api/devices/${deviceId}/config/sync`)
+    return res.data || { message: '同步请求已发送' }
+  },
+}
+
+// 设备配置类型定义
+export interface DeviceConfig {
+  rx_freq?: string     // 接收频率 (Hz)
+  tx_freq?: string     // 发射频率 (Hz)
+  rx_ctcss?: string    // 接收亚音 (Hz, 0=关闭)
+  tx_ctcss?: string    // 发射亚音 (Hz, 0=关闭)
+  sql_level?: string   // 静噪等级 (0-9)
+  power_level?: string // 功率等级 (1=低, 2=中, 3=高)
+  tx_bandwidth?: string // 发射带宽 (1=窄带, 2=宽带)
 }

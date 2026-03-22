@@ -20,10 +20,8 @@ import {
   Chip,
   Alert,
   TextField,
-  IconButton,
   List,
   ListItem,
-  ListItemText,
   Divider,
   Tab,
   Tabs,
@@ -34,23 +32,11 @@ import Visibility from '@mui/icons-material/Visibility'
 import Refresh from '@mui/icons-material/Refresh'
 import Description from '@mui/icons-material/Description'
 import Person from '@mui/icons-material/Person'
-import Close from '@mui/icons-material/Close'
 import { approvalService } from '../../services'
 import type { PendingApproval } from '../../types'
-
-interface TabPanelProps {
-  children?: React.ReactNode
-  index: number
-  value: number
-}
-
-function TabPanel({ children, value, index }: TabPanelProps) {
-  return (
-    <div role="tabpanel" hidden={value !== index}>
-      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
-    </div>
-  )
-}
+import { TabPanel } from '../../components/common/TabPanel'
+import { ImagePreviewDialog } from '../../components/common/ImagePreviewDialog'
+import { PageHeader } from '../../components/common/PageHeader'
 
 // 审核状态组件
 const ApprovalStatusBadge = ({ status }: { status: number }) => {
@@ -90,7 +76,6 @@ export function ApprovalsPage() {
   // 图片预览对话框
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null)
-  const [imageScale, setImageScale] = useState(1)
 
   useEffect(() => {
     // 初始化时一次性加载所有状态的数据
@@ -230,17 +215,19 @@ export function ApprovalsPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">用户审批</Typography>
-        <Button
-          variant="outlined"
-          startIcon={<Refresh />}
-          onClick={loadPendingApprovals}
-          disabled={loading}
-        >
-          刷新
-        </Button>
-      </Box>
+      <PageHeader
+        title="用户审批"
+        actions={
+          <Button
+            variant="outlined"
+            startIcon={<Refresh />}
+            onClick={loadPendingApprovals}
+            disabled={loading}
+          >
+            刷新
+          </Button>
+        }
+      />
 
       {message && (
         <Alert
@@ -544,41 +531,41 @@ export function ApprovalsPage() {
                 <List disablePadding>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>用户ID</Box>
-                    <ListItemText>{selectedUser.id}</ListItemText>
+                    <Box>{selectedUser.id}</Box>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>用户名</Box>
-                    <ListItemText>{selectedUser.username}</ListItemText>
+                    <Box>{selectedUser.username}</Box>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>昵称</Box>
-                    <ListItemText>{selectedUser.nickname || '-'}</ListItemText>
+                    <Box>{selectedUser.nickname || '-'}</Box>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>呼号</Box>
-                    <ListItemText>{selectedUser.callsign || '-'}</ListItemText>
+                    <Box>{selectedUser.callsign || '-'}</Box>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>手机号</Box>
-                    <ListItemText>{selectedUser.phone || '-'}</ListItemText>
+                    <Box>{selectedUser.phone || '-'}</Box>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>地址</Box>
-                    <ListItemText>{selectedUser.address || '-'}</ListItemText>
+                    <Box>{selectedUser.address || '-'}</Box>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>注册时间</Box>
-                    <ListItemText>
+                    <Box>
                       {selectedUser.created_at
                         ? new Date(selectedUser.created_at).toLocaleString('zh-CN')
                         : '-'}
-                    </ListItemText>
+                    </Box>
                   </ListItem>
                   <ListItem>
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>审核状态</Box>
-                    <ListItemText>
+                    <Box>
                       <ApprovalStatusBadge status={selectedUser.approval_status} />
-                    </ListItemText>
+                    </Box>
                   </ListItem>
                 </List>
                 {selectedUser.review_note && (
@@ -637,7 +624,6 @@ export function ApprovalsPage() {
                                 alt="操作证"
                                 onClick={() => {
                                   setPreviewImageUrl(approvedCert.file_url!)
-                                  setImageScale(1)
                                   setImagePreviewOpen(true)
                                 }}
                                 sx={{
@@ -769,100 +755,12 @@ export function ApprovalsPage() {
       </Dialog>
 
       {/* 图片预览对话框 */}
-      <Dialog
+      <ImagePreviewDialog
         open={imagePreviewOpen}
-        onClose={() => {
-          setImagePreviewOpen(false)
-          setImageScale(1)
-        }}
-        maxWidth="lg"
-        fullWidth
-        PaperProps={{
-          sx: {
-            bgcolor: 'rgba(0, 0, 0, 0.9)',
-          },
-        }}
-      >
-        <DialogTitle
-          sx={{
-            color: 'white',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}
-        >
-          <Typography>操作证预览</Typography>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Typography variant="caption" sx={{ color: 'grey.400' }}>
-              滚轮缩放 • {Math.round(imageScale * 100)}%
-            </Typography>
-            <IconButton
-              size="small"
-              onClick={() => setImagePreviewOpen(false)}
-              sx={{ color: 'white' }}
-            >
-              <Close />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent
-          sx={{
-            bgcolor: 'transparent',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            overflow: 'hidden',
-          }}
-        >
-          <Box
-            component="img"
-            src={previewImageUrl || ''}
-            alt="操作证预览"
-            onWheel={(e) => {
-              e.preventDefault()
-              const delta = e.deltaY > 0 ? -0.1 : 0.1
-              setImageScale((prev) => Math.max(0.1, Math.min(5, prev + delta)))
-            }}
-            sx={{
-              maxWidth: '100%',
-              maxHeight: '70vh',
-              objectFit: 'contain',
-              transform: `scale(${imageScale})`,
-              transition: 'transform 0.1s',
-              cursor: 'zoom-in',
-            }}
-          />
-          <Box sx={{ display: 'flex', gap: 2, mt: 2 }}>
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ color: 'white', borderColor: 'white' }}
-              onClick={() => setImageScale((prev) => Math.max(0.1, prev - 0.2))}
-              disabled={imageScale <= 0.1}
-            >
-              缩小
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ color: 'white', borderColor: 'white' }}
-              onClick={() => setImageScale(1)}
-            >
-              重置
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ color: 'white', borderColor: 'white' }}
-              onClick={() => setImageScale((prev) => Math.min(5, prev + 0.2))}
-              disabled={imageScale >= 5}
-            >
-              放大
-            </Button>
-          </Box>
-        </DialogContent>
-      </Dialog>
+        onClose={() => setImagePreviewOpen(false)}
+        imageUrl={previewImageUrl}
+        title="操作证预览"
+      />
     </Box>
   )
 }

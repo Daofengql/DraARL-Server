@@ -30,74 +30,14 @@ import {
 } from '@mui/material'
 import PlayArrow from '@mui/icons-material/PlayArrow'
 import Stop from '@mui/icons-material/Stop'
-import Devices from '@mui/icons-material/Devices'
 import Group from '@mui/icons-material/Group'
 import Download from '@mui/icons-material/Download'
 import Refresh from '@mui/icons-material/Refresh'
 import Message from '@mui/icons-material/Message'
-import Language from '@mui/icons-material/Language'
-import ChatBubble from '@mui/icons-material/ChatBubble'
-import Android from '@mui/icons-material/Android'
-import PhoneIphone from '@mui/icons-material/PhoneIphone'
-import DesktopWindows from '@mui/icons-material/DesktopWindows'
-import LaptopMac from '@mui/icons-material/LaptopMac'
-import LaptopMacOutlined from '@mui/icons-material/LaptopMacOutlined'
 import { apiClient } from '../../services/api'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
-
-// 设备型号图标映射
-const getDevModelIcon = (devModel: number) => {
-  switch (devModel) {
-    case 100: // 微信小程序
-      return <ChatBubble fontSize="small" />
-    case 101: // Android
-      return <Android fontSize="small" />
-    case 102: // iOS
-      return <PhoneIphone fontSize="small" />
-    case 103: // Windows
-      return <DesktopWindows fontSize="small" />
-    case 104: // macOS
-      return <LaptopMac fontSize="small" />
-    case 105: // 浏览器
-      return <Language fontSize="small" />
-    default:
-      return <Devices fontSize="small" />
-  }
-}
-
-// 设备型号名称映射
-const getDevModelName = (devModel: number) => {
-  switch (devModel) {
-    case 100:
-      return '微信小程序'
-    case 101:
-      return '安卓客户端'
-    case 102:
-      return 'iOS客户端'
-    case 103:
-      return 'Windows客户端'
-    case 104:
-      return 'macOS客户端'
-    case 105:
-      return 'Web浏览器'
-    default:
-      return null
-  }
-}
-
-// 格式化设备显示名称
-// 幽灵设备（100-105）：呼号-设备名称（如 BH5UVN-安卓客户端）
-// 普通设备：呼号-SSID（如 BH5UVN-1）
-const formatDeviceDisplayName = (deviceName: string, devModel: number) => {
-  const devModelName = getDevModelName(devModel)
-  if (devModelName) {
-    // 幽灵设备：替换 SSID 为设备名称
-    const [callsign] = deviceName.split('-')
-    return `${callsign}-${devModelName}`
-  }
-  // 普通设备：保持原样
-  return deviceName
-}
+import { PageHeader } from '../../components/common/PageHeader'
+import { getDevModelIcon, formatDeviceDisplayName } from '../../utils/deviceModel'
 
 interface CommRecord {
   id: number
@@ -139,7 +79,6 @@ export function CommRecordsPage() {
   const [textDialogOpen, setTextDialogOpen] = useState(false)
   // 播放状态
   const [playingId, setPlayingId] = useState<number | null>(null)
-  const [audioPlayer, setAudioPlayer] = useState<HTMLAudioElement | null>(null)
 
   // 判断是否在后台管理页面
   const isAdminPage = location.pathname.startsWith('/admin/')
@@ -317,19 +256,19 @@ export function CommRecordsPage() {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
-        <Typography variant="h4" sx={{ fontWeight: 600 }}>
-          通信记录
-        </Typography>
-        <IconButton
-          onClick={() => loadRecords()}
-          disabled={loading}
-          title="刷新"
-          color="primary"
-        >
-          <Refresh />
-        </IconButton>
-      </Box>
+      <PageHeader
+        title="通信记录"
+        actions={
+          <IconButton
+            onClick={() => loadRecords()}
+            disabled={loading}
+            title="刷新"
+            color="primary"
+          >
+            <Refresh />
+          </IconButton>
+        }
+      />
 
       {/* 筛选栏 */}
       <Card sx={{ mb: 2 }}>

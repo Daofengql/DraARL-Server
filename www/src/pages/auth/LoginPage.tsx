@@ -107,8 +107,8 @@ export function LoginPage() {
       const res = await captchaService.getCaptcha()
       setCaptchaId(res.captcha_id)
       setCaptchaImage(res.captcha_image)
-    } catch (err) {
-      // 静默失败
+    } catch {
+      // ���默失败
     }
   }
 

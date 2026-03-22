@@ -8,7 +8,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Chip,
   IconButton,
   Dialog,
   DialogTitle,
@@ -23,29 +22,25 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  TablePagination,
   Typography,
   Switch,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
-import Search from '@mui/icons-material/Search'
-import Refresh from '@mui/icons-material/Refresh'
 import ExpandMore from '@mui/icons-material/ExpandMore'
-import LockOpen from '@mui/icons-material/LockOpen'
-import Lock from '@mui/icons-material/Lock'
 import PersonOff from '@mui/icons-material/PersonOff'
 import Person from '@mui/icons-material/Person'
-import Circle from '@mui/icons-material/Circle'
 import { groupService } from '../../services/group'
 import { userService } from '../../services'
 import type { Group, Device, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
-
-const GROUP_TYPE_PUBLIC = 1
-const GROUP_TYPE_PRIVATE = 2
+import { PageHeader } from '../../components/common/PageHeader'
+import { SearchBar } from '../../components/common/SearchBar'
+import { OnlineIndicator } from '../../components/common/OnlineIndicator'
+import { SendRecvControl } from '../../components/common/SendRecvControl'
+import { GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function AdminGroupPage() {
   const [groups, setGroups] = useState<Group[]>([])
@@ -53,8 +48,7 @@ export function AdminGroupPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(0)
-  const [rowsPerPage, setRowsPerPage] = useState(10)
-  const [total, setTotal] = useState(0)
+  const [rowsPerPage] = useState(10)
   const [searchKeyword, setSearchKeyword] = useState('')
 
   // 群组设备缓存
@@ -100,8 +94,7 @@ export function AdminGroupPage() {
         keyword: searchKeyword || undefined,
       })
       setGroups(result.items)
-      setTotal(result.total)
-    } catch (err) {
+    } catch {
       setError('获取群组列表失败')
     } finally {
       setLoading(false)
@@ -113,8 +106,8 @@ export function AdminGroupPage() {
     try {
       const devices = await groupService.getDevices(groupId)
       setGroupDevices((prev) => ({ ...prev, [groupId]: devices }))
-    } catch (err) {
-      console.error('获取群组设备失败', err)
+    } catch (error) {
+      console.error('获取群组设备失败', error)
     }
   }
 
@@ -144,8 +137,8 @@ export function AdminGroupPage() {
         const user = await userService.getPublicInfo(userIdOrUser)
         setSelectedUser(user)
         setUserDetailAnchorEl(event.currentTarget)
-      } catch (err) {
-        console.error('Failed to load user info:', err)
+      } catch (error) {
+        console.error('Failed to load user info:', error)
       }
     }
   }
@@ -165,8 +158,8 @@ export function AdminGroupPage() {
     try {
       const data = await userService.getList()
       setUsers(data.items || data)
-    } catch (err) {
-      console.error('Failed to load users:', err)
+    } catch (error) {
+      console.error('Failed to load users:', error)
     }
   }
 
@@ -228,7 +221,7 @@ export function AdminGroupPage() {
       }
       setDialogOpen(false)
       fetchGroups()
-    } catch (err) {
+    } catch {
       setError(editingGroup ? '更新群组失败' : '创建群组失败')
     }
   }
@@ -245,19 +238,8 @@ export function AdminGroupPage() {
         return newCache
       })
       fetchGroups()
-    } catch (err) {
+    } catch {
       setError('删除群组失败')
-    }
-  }
-
-  const getStatusLabel = (status?: number) => {
-    switch (status) {
-      case 1:
-        return <Chip label="启用" color="success" size="small" />
-      case 0:
-        return <Chip label="禁用" color="default" size="small" />
-      default:
-        return <Chip label="未知" color="default" size="small" />
     }
   }
 
@@ -274,7 +256,7 @@ export function AdminGroupPage() {
         try {
           await groupService.update(group.id, { status: newStatus })
           fetchGroups()
-        } catch (err) {
+        } catch {
           setError(`${actionText}失败`)
         }
       },
@@ -306,7 +288,7 @@ export function AdminGroupPage() {
         return newCache
       })
       fetchGroupDevices(groupId)
-    } catch (err) {
+    } catch {
       setError('更新设备状态失败')
     }
   }
@@ -328,7 +310,7 @@ export function AdminGroupPage() {
             return newCache
           })
           fetchGroupDevices(groupId)
-        } catch (err) {
+        } catch {
           setError('踢出设备失败')
         }
       },
@@ -340,7 +322,6 @@ export function AdminGroupPage() {
     const devices = groupDevices[group.id] || []
     const devCount = group.total_count || (group.devlist ? group.devlist.split(',').filter(Boolean).length : 0)
     const isExpanded = expandedGroupId === group.id
-    const isPrivate = group.type === GROUP_TYPE_PRIVATE
 
     return (
       <React.Fragment key={group.id}>
@@ -348,11 +329,7 @@ export function AdminGroupPage() {
           <TableCell width={60}>{group.id}</TableCell>
           <TableCell>
             <Stack direction="row" alignItems="center" spacing={1}>
-              {isPrivate ? (
-                <Lock color="secondary" fontSize="small" sx={{ fontSize: 16 }} />
-              ) : (
-                <LockOpen color="primary" fontSize="small" sx={{ fontSize: 16 }} />
-              )}
+              <GroupTypeIcon type={group.type} />
               <Typography fontWeight={500}>{group.name}</Typography>
             </Stack>
           </TableCell>
@@ -461,13 +438,7 @@ export function AdminGroupPage() {
                       }}
                     >
                       <Stack direction="row" alignItems="center" spacing={2}>
-                        {/* 在线状态圆点 */}
-                        <Circle
-                          sx={{
-                            fontSize: 12,
-                            color: device.is_online ? 'success.main' : 'text.disabled',
-                          }}
-                        />
+                        <OnlineIndicator online={device.is_online || device.online || false} />
                         <Typography variant="body2" fontWeight={500}>
                           {device.name}
                         </Typography>
@@ -476,38 +447,17 @@ export function AdminGroupPage() {
                         </Typography>
                       </Stack>
                       <Stack direction="row" alignItems="center" spacing={1}>
-                        {/* 发送控制按钮 */}
-                        <Tooltip title={device.disable_send ? '点击启用发送' : '点击禁用发送'}>
-                          <Button
-                            size="small"
-                            variant={device.disable_send ? 'outlined' : 'contained'}
-                            color={device.disable_send ? 'error' : 'success'}
-                            onClick={() => handleUpdateDeviceStatus(group.id, device.id!, !(device.disable_send ?? false), device.disable_recv ?? false)}
-                            sx={{ minWidth: 56, fontSize: '0.75rem' }}
-                          >
-                            发送
-                          </Button>
-                        </Tooltip>
-
-                        {/* 接收控制按钮 */}
-                        <Tooltip title={device.disable_recv ? '点击启用接收' : '点击禁用接收'}>
-                          <Button
-                            size="small"
-                            variant={device.disable_recv ? 'outlined' : 'contained'}
-                            color={device.disable_recv ? 'error' : 'success'}
-                            onClick={() => handleUpdateDeviceStatus(group.id, device.id!, device.disable_send ?? false, !(device.disable_recv ?? false))}
-                            sx={{ minWidth: 56, fontSize: '0.75rem' }}
-                          >
-                            接收
-                          </Button>
-                        </Tooltip>
-
-                        {/* 踢出设备按钮 */}
+                        <SendRecvControl
+                          disableSend={device.disable_send ?? false}
+                          disableRecv={device.disable_recv ?? false}
+                          onToggleSend={() => handleUpdateDeviceStatus(group.id, device.id!, !(device.disable_send ?? false), device.disable_recv ?? false)}
+                          onToggleRecv={() => handleUpdateDeviceStatus(group.id, device.id!, device.disable_send ?? false, !(device.disable_recv ?? false))}
+                        />
                         <Tooltip title="踢出设备">
                           <IconButton
                             size="small"
                             color="error"
-                            onClick={() => handleKickDevice(group.id, device.id, device.name)}
+                            onClick={() => handleKickDevice(group.id, device.id!, device.name)}
                           >
                             <PersonOff fontSize="small" />
                           </IconButton>
@@ -530,25 +480,21 @@ export function AdminGroupPage() {
 
   return (
     <Box sx={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexShrink: 0 }}>
-        <Typography variant="h4">群组管理</Typography>
-        <Stack direction="row" spacing={2}>
-          <Button
-            startIcon={<Refresh />}
-            onClick={fetchGroups}
-            variant="outlined"
-          >
-            刷新
-          </Button>
-          <Button
-            startIcon={<Add />}
-            onClick={handleOpenAdd}
-            variant="contained"
-          >
-            添加群组
-          </Button>
-        </Stack>
-      </Box>
+      <PageHeader
+        title="群组管理"
+        actions={
+          <Stack direction="row" spacing={1}>
+            <Button
+              startIcon={<Add />}
+              onClick={handleOpenAdd}
+              variant="contained"
+              size="small"
+            >
+              添加群组
+            </Button>
+          </Stack>
+        }
+      />
 
       {error && (
         <Alert severity="error" sx={{ mb: 2, flexShrink: 0 }} onClose={() => setError(null)}>
@@ -557,27 +503,22 @@ export function AdminGroupPage() {
       )}
 
       {/* 搜索栏 */}
-      <Paper sx={{ mb: 2, flexShrink: 0 }}>
-        <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
-          <TextField
-            placeholder="搜索群组名称、呼号..."
-            value={searchKeyword}
-            onChange={(e) => setSearchKeyword(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            size="small"
-            sx={{ flexGrow: 1 }}
-          />
-          <Button variant="outlined" startIcon={<Search />} onClick={handleSearch}>
-            搜索
-          </Button>
-        </Box>
+      <Paper sx={{ mb: 2, flexShrink: 0, p: 2 }}>
+        <SearchBar
+          value={searchKeyword}
+          onChange={setSearchKeyword}
+          onSearch={handleSearch}
+          placeholder="搜索群组名称、呼号..."
+          loading={loading}
+          fullWidth
+        />
       </Paper>
 
       {/* 公开群组表格 - 占 2/3 */}
       <Paper variant="outlined" sx={{ flex: 2, display: 'flex', flexDirection: 'column', mb: 1, overflow: 'hidden' }}>
         <Box sx={{ bgcolor: 'primary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <LockOpen color="primary" fontSize="small" />
+            <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
             <Typography variant="subtitle1" fontWeight={600}>公开群组</Typography>
             <Typography variant="body2" color="text.secondary">({publicGroups.length} 个)</Typography>
           </Stack>
@@ -613,7 +554,7 @@ export function AdminGroupPage() {
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Box sx={{ bgcolor: 'secondary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <Lock color="secondary" fontSize="small" />
+            <GroupTypeIcon type={GROUP_TYPE_PRIVATE} />
             <Typography variant="subtitle1" fontWeight={600}>私有群组</Typography>
             <Typography variant="body2" color="text.secondary">({privateGroups.length} 个)</Typography>
           </Stack>
@@ -663,15 +604,15 @@ export function AdminGroupPage() {
                 label="群组类型"
                 onChange={(e) => setFormData({ ...formData, type: e.target.value as number })}
               >
-                <MenuItem value={1}>
+                <MenuItem value={GROUP_TYPE_PUBLIC}>
                   <Stack direction="row" alignItems="center" spacing={1}>
-                    <LockOpen fontSize="small" />
+                    <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
                     <span>公开群组</span>
                   </Stack>
                 </MenuItem>
-                <MenuItem value={2}>
+                <MenuItem value={GROUP_TYPE_PRIVATE}>
                   <Stack direction="row" alignItems="center" spacing={1}>
-                    <Lock fontSize="small" />
+                    <GroupTypeIcon type={GROUP_TYPE_PRIVATE} />
                     <span>私有群组</span>
                   </Stack>
                 </MenuItem>

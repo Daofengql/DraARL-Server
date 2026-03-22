@@ -50,7 +50,7 @@ export function ForgotPasswordPage() {
       const res = await captchaService.getCaptcha()
       setCaptchaId(res.captcha_id)
       setCaptchaImage(res.captcha_image)
-    } catch (err) {
+    } catch {
       setError('获取验证码失败')
     }
   }

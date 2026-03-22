@@ -17,8 +17,6 @@ import Group from '@mui/icons-material/Group'
 import People from '@mui/icons-material/People'
 import Radio from '@mui/icons-material/Radio'
 import DashboardIcon from '@mui/icons-material/Dashboard'
-import Person from '@mui/icons-material/Person'
-import Public from '@mui/icons-material/Public'
 import RecordVoiceOver from '@mui/icons-material/RecordVoiceOver'
 import Storage from '@mui/icons-material/Storage'
 import Timer from '@mui/icons-material/Timer'
@@ -32,7 +30,6 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import { authService } from '../../services'
 import { platformService } from '../../services/platform'
 import { apiClient } from '../../services'
 import { commStatsService } from '../../services/commStats'
@@ -153,12 +150,11 @@ export function AdminDashboardPage() {
   const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [platformInfo, setPlatformInfo] = useState({ name: '', version: SITE_CONFIG.VERSION })
   const [systemConfig, setSystemConfig] = useState<any>(null)
 
   const fetchSystemStats = async () => {
     try {
-      const [statsData, infoData, publicConfig, commStatsData, commTrendData] = await Promise.all([
+      const [statsData, , publicConfig, commStatsData, commTrendData] = await Promise.all([
         platformService.getTotalStats(),
         platformService.getInfo(),
         apiClient.get<any>('/api/config/public'),
@@ -177,11 +173,10 @@ export function AdminDashboardPage() {
         total_duration: commStatsData.total_duration || 0,
       })
       setCommTrend(commTrendData)
-      setPlatformInfo(infoData)
       if (publicConfig.code === 200 && publicConfig.data) {
         setSystemConfig(publicConfig.data)
       }
-    } catch (err) {
+    } catch {
       setError('获取统计数据失败')
     } finally {
       setLoading(false)
@@ -204,7 +199,7 @@ export function AdminDashboardPage() {
       {/* 欢迎信息卡片 */}
       <Card
         sx={{
-          background: (theme) => `linear-gradient(135deg, #1565C0 0%, #0D47A1 100%)`,
+          background: 'linear-gradient(135deg, #1565C0 0%, #0D47A1 100%)',
           color: 'white',
           border: 'none',
           boxShadow: 3,

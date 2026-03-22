@@ -41,24 +41,12 @@ import MyLocation from '@mui/icons-material/MyLocation'
 import { apiClient } from '../../services/api'
 import { logService } from '../../services'
 import type { OperatorLog } from '../../types'
+import { TabPanel } from '../../components/common/TabPanel'
 
+// APRS日志条目
 interface APRSLogEntry {
   timestamp: string
   message: string
-}
-
-interface TabPanelProps {
-  children?: React.ReactNode
-  index: number
-  value: number
-}
-
-function TabPanel({ children, value, index }: TabPanelProps) {
-  return (
-    <div role="tabpanel" hidden={value !== index}>
-      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
-    </div>
-  )
 }
 
 // 系统信息配置

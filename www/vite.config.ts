@@ -45,15 +45,26 @@ export default defineConfig({
           if (id.includes('node_modules/@mui/')) {
             return 'vendor-mui'
           }
-          // 其他第三方库
-          if (id.includes('node_modules/axios/') ||
-              id.includes('node_modules/opus-decoder/') ||
-              id.includes('node_modules/react-easy-crop/')) {
-            return 'vendor'
-          }
           // Recharts 图表库（较大，单独分离）
           if (id.includes('node_modules/recharts/')) {
             return 'vendor-recharts'
+          }
+          // Markdown 渲染库
+          if (id.includes('node_modules/react-markdown/') ||
+              id.includes('node_modules/remark-gfm/') ||
+              id.includes('node_modules/unified/') ||
+              id.includes('node_modules/remark-') ||
+              id.includes('node_modules/mdast-') ||
+              id.includes('node_modules/micromark/') ||
+              id.includes('node_modules/unist-')) {
+            return 'vendor-markdown'
+          }
+          // 其他第三方库
+          if (id.includes('node_modules/axios/') ||
+              id.includes('node_modules/opus-decoder/') ||
+              id.includes('node_modules/react-easy-crop/') ||
+              id.includes('node_modules/@minceraftmc/')) {
+            return 'vendor'
           }
         },
       },

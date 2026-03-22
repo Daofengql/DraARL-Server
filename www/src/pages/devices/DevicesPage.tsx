@@ -11,22 +11,12 @@ import {
   TablePagination,
   Button,
   Typography,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Alert,
   Stack,
   Tooltip,
   IconButton,
   Snackbar,
-  TextField,
 } from '@mui/material'
-import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import Lock from '@mui/icons-material/Lock'
 import Key from '@mui/icons-material/Key'
@@ -42,7 +32,7 @@ import { SearchBar } from '../../components/common/SearchBar'
 import { AutoRefresh } from '../../components/common/AutoRefresh'
 import { OnlineIndicator } from '../../components/common/OnlineIndicator'
 import { SendRecvControl } from '../../components/common/SendRecvControl'
-import { DEVICE_MODELS, getDevModelName } from '../../utils/deviceModel'
+import { getDevModelName } from '../../utils/deviceModel'
 
 const GROUP_TYPE_PRIVATE = 2
 
@@ -55,9 +45,7 @@ export function DevicesPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 对话框状态
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingDevice, setEditingDevice] = useState<Device | null>(null)
+  // 切换群组对话框状态
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
   const [switchingDevice, setSwitchingDevice] = useState<Device | null>(null)
 
@@ -86,11 +74,6 @@ export function DevicesPage() {
   // 参数下发对话框状态
   const [paramDialogOpen, setParamDialogOpen] = useState(false)
   const [paramDevice, setParamDevice] = useState<Device | null>(null)
-
-  const [formData, setFormData] = useState({
-    name: '',
-    model: 1,
-  })
 
   useEffect(() => {
     loadDevices()
@@ -181,45 +164,6 @@ export function DevicesPage() {
       loadDevices()
     } catch (err: any) {
       setError(err.response?.data?.message || '切换群组失败')
-    }
-  }
-
-  const handleOpenDialog = (device?: Device) => {
-    if (device) {
-      setEditingDevice(device)
-      setFormData({
-        name: device.name,
-        model: device.model ?? device.dev_model ?? 1,
-      })
-    } else {
-      setEditingDevice(null)
-      setFormData({
-        name: '',
-        model: 1,
-      })
-    }
-    setDialogOpen(true)
-    setError('')
-  }
-
-  const handleCloseDialog = () => {
-    setDialogOpen(false)
-    setEditingDevice(null)
-  }
-
-  const handleSave = async () => {
-    if (!formData.name.trim()) {
-      setError('请输入设备名称')
-      return
-    }
-    if (!editingDevice) return
-
-    try {
-      await deviceService.update(editingDevice.id, { name: formData.name, model: formData.model })
-      handleCloseDialog()
-      loadDevices()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
     }
   }
 
@@ -423,43 +367,7 @@ export function DevicesPage() {
         />
       </TableContainer>
 
-      {/* 编辑设备对话框 */}
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>编辑设备</DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-            <TextField
-              label="设备名称"
-              fullWidth
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              autoFocus
-            />
-            <FormControl fullWidth>
-              <InputLabel>设备型号</InputLabel>
-              <Select
-                value={formData.model}
-                label="设备型号"
-                onChange={(e) => setFormData({ ...formData, model: e.target.value as number })}
-              >
-                {DEVICE_MODELS.map((model) => (
-                  <MenuItem key={model.value} value={model.value}>
-                    {model.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDialog}>取消</Button>
-          <Button onClick={handleSave} variant="contained">
-            保存
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 切换群组对话框 */}
+      {/* 切换群���对话框 */}
       {switchingDevice && (
         <GroupPickerDialog
           open={switchDialogOpen}

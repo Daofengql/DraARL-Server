@@ -383,7 +383,7 @@ export function DevicesPage() {
                     </TableCell>
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                        <Tooltip title="参数下发">
+                        <Tooltip title="设置">
                           <IconButton
                             size="small"
                             color="secondary"

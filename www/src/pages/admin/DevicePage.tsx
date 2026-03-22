@@ -25,7 +25,6 @@ import {
   Tooltip,
   IconButton,
 } from '@mui/material'
-import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import Lock from '@mui/icons-material/Lock'
 import Person from '@mui/icons-material/Person'
@@ -392,7 +391,7 @@ export function AdminDevicePage() {
                     </TableCell>
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                        <Tooltip title="参数下发">
+                        <Tooltip title="设置">
                           <IconButton
                             size="small"
                             color="secondary"
@@ -402,11 +401,6 @@ export function AdminDevicePage() {
                             }}
                           >
                             <Settings fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="编辑设备">
-                          <IconButton size="small" onClick={() => handleOpenDialog(device)}>
-                            <Edit fontSize="small" />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="删除设备">
@@ -547,11 +541,13 @@ export function AdminDevicePage() {
           open={paramDialogOpen}
           deviceId={paramDevice.id}
           deviceName={paramDevice.name}
+          deviceModel={paramDevice.model ?? paramDevice.dev_model ?? 1}
           isOnline={paramDevice.is_online}
           onClose={() => {
             setParamDialogOpen(false)
             setParamDevice(null)
           }}
+          onDeviceUpdated={loadDevices}
         />
       )}
     </Box>

@@ -143,6 +143,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
   }, [open, deviceId, deviceName, deviceModel])
 
   const loadConfig = async () => {
+    if (!deviceId) return
     setLoading(true)
     try {
       const config = await deviceService.getConfig(deviceId)
@@ -168,6 +169,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
   }
 
   const handleSaveAndSync = async () => {
+    if (!deviceId) return
     setSaving(true)
     try {
       // 构建配置对象（使用 Hz 单位）
@@ -203,6 +205,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
 
   // 保存平台设置（设备名称和型号）
   const handleSavePlatform = async () => {
+    if (!deviceId) return
     if (!platformFormData.name.trim()) {
       setSnackbar({ open: true, message: '请输入设备名称', severity: 'error' })
       return

@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"nrllink/internal/gormdb"
+	"draarl/internal/gormdb"
 
 	"github.com/gin-gonic/gin"
 )
@@ -128,7 +128,7 @@ func DeviceAT(c *gin.Context) {
 			"items": gin.H{
 				"callsign": req.CallSign,
 				"ssid":     req.SSID,
-				"version":  "NRL AT V1.0",
+				"version":  "DraARL AT V1.0",
 			},
 		},
 	})

@@ -367,7 +367,7 @@ export function DevicesPage() {
         />
       </TableContainer>
 
-      {/* 切换群���对话框 */}
+      {/* 切换群组对话框 */}
       {switchingDevice && (
         <GroupPickerDialog
           open={switchDialogOpen}

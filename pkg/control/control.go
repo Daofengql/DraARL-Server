@@ -87,7 +87,7 @@ func DecodeATPacket(callsign string, ssid byte, data []byte) *ATCommand {
 
 	if len(data) < 2 {
 		log.Println("AT command error:", callsign, ssid, data)
-		c.Version = "NRL AT ERROR"
+		c.Version = "DraARL AT ERROR"
 		return c
 	}
 
@@ -96,7 +96,7 @@ func DecodeATPacket(callsign string, ssid byte, data []byte) *ATCommand {
 	if c.Type == 0x02 {
 		c.ATMap = make(map[string]string)
 		for v := range strings.SplitSeq(string(data[1:]), "\r\n") {
-			if strings.HasPrefix(v, "NRL") {
+			if strings.HasPrefix(v, "DraARL") {
 				c.Version = v
 				continue
 			}

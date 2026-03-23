@@ -11,16 +11,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"nrllink/internal/aprs"
-	"nrllink/internal/config"
-	"nrllink/internal/db"
-	gormdb "nrllink/internal/gormdb"
-	oplog "nrllink/internal/log"
-	"nrllink/internal/server"
-	"nrllink/internal/udphub"
-	"nrllink/pkg/cache"
-	"nrllink/pkg/geoip"
-	"nrllink/pkg/jwt"
+	"draarl/internal/aprs"
+	"draarl/internal/config"
+	"draarl/internal/db"
+	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
+	"draarl/internal/server"
+	"draarl/internal/udphub"
+	"draarl/pkg/cache"
+	"draarl/pkg/geoip"
+	"draarl/pkg/jwt"
 )
 
 var (

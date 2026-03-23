@@ -31,10 +31,10 @@ import {
   Legend,
 } from 'recharts'
 import { platformService } from '../../services/platform'
-import { apiClient } from '../../services'
 import { commStatsService } from '../../services/commStats'
 import type { DailyCommStats } from '../../types'
 import { SITE_CONFIG } from '../../config/site'
+import { useConfig } from '../../contexts/ConfigContext'
 
 interface StatCardProps {
   title: string
@@ -136,6 +136,7 @@ function DashboardSkeleton() {
 export function AdminDashboardPage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const { config: systemConfig } = useConfig()
   const [stats, setStats] = useState({
     total_devices: 0,
     online_devices: 0,
@@ -150,14 +151,11 @@ export function AdminDashboardPage() {
   const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [systemConfig, setSystemConfig] = useState<any>(null)
 
   const fetchSystemStats = async () => {
     try {
-      const [statsData, , publicConfig, commStatsData, commTrendData] = await Promise.all([
+      const [statsData, commStatsData, commTrendData] = await Promise.all([
         platformService.getTotalStats(),
-        platformService.getInfo(),
-        apiClient.get<any>('/api/config/public'),
         commStatsService.getSystemStats(),
         commStatsService.getSystemTrend(),
       ])
@@ -173,9 +171,6 @@ export function AdminDashboardPage() {
         total_duration: commStatsData.total_duration || 0,
       })
       setCommTrend(commTrendData)
-      if (publicConfig.code === 200 && publicConfig.data) {
-        setSystemConfig(publicConfig.data)
-      }
     } catch {
       setError('获取统计数据失败')
     } finally {

@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"nrllink/internal/email"
-	gormdb "nrllink/internal/gormdb"
-	oplog "nrllink/internal/log"
-	"nrllink/internal/protocol"
-	"nrllink/pkg/cache"
-	"nrllink/pkg/jwt"
-	"nrllink/pkg/minio"
+	"draarl/internal/email"
+	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
+	"draarl/internal/protocol"
+	"draarl/pkg/cache"
+	"draarl/pkg/jwt"
+	"draarl/pkg/minio"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -43,14 +43,14 @@ type LoginRequest struct {
 
 // RegisterRequest 注册请求
 type RegisterRequest struct {
-	Username    string `json:"username" binding:"required"`
-	Password    string `json:"password" binding:"required"`
-	CallSign    string `json:"callsign" binding:"required"`
-	Phone       string `json:"phone"` // 手机号可选
-	NickName    string `json:"nickname"`
-	Email       string `json:"email" binding:"required,email"` // 邮箱必填
-	SessionID   string `json:"session_id" binding:"required"` // 邮箱验证会话ID必填
-	EmailCode   string `json:"email_code" binding:"required"` // 邮箱验证码必填
+	Username  string `json:"username" binding:"required"`
+	Password  string `json:"password" binding:"required"`
+	CallSign  string `json:"callsign" binding:"required"`
+	Phone     string `json:"phone"` // 手机号可选
+	NickName  string `json:"nickname"`
+	Email     string `json:"email" binding:"required,email"` // 邮箱必填
+	SessionID string `json:"session_id" binding:"required"`  // 邮箱验证会话ID必填
+	EmailCode string `json:"email_code" binding:"required"`  // 邮箱验证码必填
 }
 
 // UserResponse 用户响应（用于中间件传递）
@@ -1013,7 +1013,7 @@ func GetPlatformInfo(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"name":     "NRL 火链",
+			"name":     "DraARL 麟链",
 			"logourl":  "",
 			"language": "zh-CN",
 			"version":  "v2.0.0",

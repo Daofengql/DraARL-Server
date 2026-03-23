@@ -14,7 +14,7 @@ export const SITE_CONFIG = {
 } as const
 
 /** 缓存键：站点配置 */
-export const CACHE_KEY_SITE_CONFIG = 'nrllink_site_config'
+export const CACHE_KEY_SITE_CONFIG = 'draarl_site_config'
 
 /**
  * 从 localStorage 获取缓存的站点名称

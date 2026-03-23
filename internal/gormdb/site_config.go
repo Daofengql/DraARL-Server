@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"nrllink/internal/common"
+	"draarl/internal/common"
 
 	"gorm.io/gorm"
 )
@@ -493,7 +493,7 @@ func (r *SiteConfigRepository) GetSMTPConfig() (*SMTPConfig, error) {
 		Host:        "smtp.qq.com",
 		Port:        465,
 		UseSSL:      true,
-		SenderName:  "NRL火链",
+		SenderName:  "DraARL麟链",
 		SenderEmail: "",
 		Password:    "",
 	}

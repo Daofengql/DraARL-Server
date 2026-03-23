@@ -4,7 +4,7 @@ import (
 	"log"
 	"sync"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 )
 
 // ==========================================

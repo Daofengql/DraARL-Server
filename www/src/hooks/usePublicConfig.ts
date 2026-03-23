@@ -1,6 +1,4 @@
-import { useState, useEffect } from 'react'
-import { apiClient } from '../services'
-import { SITE_CONFIG } from '../config/site'
+import { useConfig } from '../contexts/ConfigContext'
 
 export interface PublicConfig {
   icp: { icp: string }
@@ -14,46 +12,11 @@ export interface PublicConfig {
   sso_name: string
 }
 
-const DEFAULT_CONFIG: PublicConfig = {
-  icp: { icp: '' },
-  systemInfo: {
-    name: SITE_CONFIG.NAME,
-    nameshorthand: SITE_CONFIG.SHORT_NAME,
-    logo_url: '',
-    language: 'zh',
-  },
-  sso_enabled: false,
-  sso_name: 'SSO',
-}
-
+/**
+ * usePublicConfig - 获取公开配置的 Hook
+ * 现在是对 ConfigContext 的简单封装，保持向后兼容
+ */
 export function usePublicConfig() {
-  const [config, setConfig] = useState<PublicConfig>(DEFAULT_CONFIG)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const fetchConfig = async () => {
-      try {
-        const res = await apiClient.get<any>('/api/config/public')
-        if (res.code === 200 && res.data) {
-          setConfig(res.data)
-        }
-      } catch (err) {
-        console.error('Failed to fetch public config:', err)
-      } finally {
-        setLoading(false)
-      }
-    }
-    fetchConfig()
-
-    // 监听配置更新事件
-    const handleConfigUpdate = () => {
-      fetchConfig()
-    }
-    window.addEventListener('config-updated', handleConfigUpdate)
-    return () => {
-      window.removeEventListener('config-updated', handleConfigUpdate)
-    }
-  }, [])
-
+  const { config, loading } = useConfig()
   return { config, loading }
 }

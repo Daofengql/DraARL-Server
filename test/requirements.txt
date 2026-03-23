@@ -1,4 +1,4 @@
-# Nrllink 调试客户端依赖
+# DraARL 调试客户端依赖
 
 # WebSocket 客户端
 websocket-client>=1.6.0

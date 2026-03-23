@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"nrllink/internal/common"
-	"nrllink/internal/config"
-	"nrllink/internal/gormdb"
-	"nrllink/internal/handler"
-	"nrllink/internal/middleware"
-	"nrllink/pkg/minio"
-	ws "nrllink/pkg/websocket"
+	"draarl/internal/common"
+	"draarl/internal/config"
+	"draarl/internal/gormdb"
+	"draarl/internal/handler"
+	"draarl/internal/middleware"
+	"draarl/pkg/minio"
+	ws "draarl/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
 )
@@ -373,7 +373,7 @@ func initSiteConfigs(cfg *config.Configuration) {
 		Host:        "smtp.qq.com",
 		Port:        465,
 		UseSSL:      true,
-		SenderName:  "NRL火链",
+		SenderName:  "DraARL麟链",
 		SenderEmail: "",
 		Password:    "",
 	}

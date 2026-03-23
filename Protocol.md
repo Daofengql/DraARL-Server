@@ -2,7 +2,7 @@
 
 ## 协议概述
 
-DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 nrllink 平台的设备通信协议，用于设备与服务器之间的实时通信。
+DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 DraARL 平台的设备通信协议，用于设备与服务器之间的实时通信。
 
 ## 报文结构
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 )
 
 // GroupCache 群组信息缓存管理器

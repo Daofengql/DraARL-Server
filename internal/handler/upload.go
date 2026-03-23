@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	gormdb "nrllink/internal/gormdb"
-	"nrllink/internal/config"
-	oplog "nrllink/internal/log"
-	"nrllink/pkg/cache"
-	"nrllink/pkg/minio"
+	gormdb "draarl/internal/gormdb"
+	"draarl/internal/config"
+	oplog "draarl/internal/log"
+	"draarl/pkg/cache"
+	"draarl/pkg/minio"
 )
 
 // UploadResponse 文件上传响应
@@ -294,7 +294,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	var cert *gormdb.OperatorCert

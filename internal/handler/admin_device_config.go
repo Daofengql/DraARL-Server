@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"nrllink/internal/udphub"
+	"draarl/internal/udphub"
 
 	"github.com/gin-gonic/gin"
 )

@@ -4,9 +4,9 @@ import (
 	"log"
 	"time"
 
-	"nrllink/internal/interfaces"
-	"nrllink/internal/protocol"
-	"nrllink/internal/udphub"
+	"draarl/internal/interfaces"
+	"draarl/internal/protocol"
+	"draarl/internal/udphub"
 
 	"github.com/gorilla/websocket"
 )

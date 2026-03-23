@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	"nrllink/internal/common"
-	"nrllink/internal/gormdb"
+	"draarl/internal/common"
+	"draarl/internal/gormdb"
 
 	"github.com/gin-gonic/gin"
 )

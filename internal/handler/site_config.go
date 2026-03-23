@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"time"
 
-	"nrllink/internal/aprs"
-	"nrllink/internal/config"
-	"nrllink/internal/gormdb"
-	oplog "nrllink/internal/log"
-	"nrllink/pkg/cache"
+	"draarl/internal/aprs"
+	"draarl/internal/config"
+	"draarl/internal/gormdb"
+	oplog "draarl/internal/log"
+	"draarl/pkg/cache"
 
 	"github.com/gin-gonic/gin"
 )

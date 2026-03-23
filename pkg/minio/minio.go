@@ -18,7 +18,7 @@ import (
 	"image/png"
 	_ "image/png" // 注册 PNG 解码器
 
-	"nrllink/internal/config"
+	"draarl/internal/config"
 
 	"github.com/disintegration/imaging"
 	"github.com/google/uuid"
@@ -47,7 +47,7 @@ func InitMinIO() error {
 	ctx := context.Background()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	exists, err := Client.BucketExists(ctx, bucket)
@@ -90,7 +90,7 @@ func UploadMultipartFile(fileHeader *multipart.FileHeader, userID int, fileType 
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	// 打开文件
@@ -179,7 +179,7 @@ func DeleteFile(ctx context.Context, objectName string) error {
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	return Client.RemoveObject(ctx, bucket, objectName, minio.RemoveObjectOptions{})
@@ -194,7 +194,7 @@ func PresignedURL(ctx context.Context, objectName string, expiry time.Duration) 
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	url, err := Client.PresignedGetObject(ctx, bucket, objectName, expiry, nil)
@@ -220,7 +220,7 @@ func GenerateThumbnail(originalObject string, width, height int, ext string) (st
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	ctx := context.Background()
@@ -337,7 +337,7 @@ func UploadAvatar(userID int, imageData []byte, ext string) (string, int64, erro
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	// 生成文件路径
@@ -365,7 +365,7 @@ func UploadThumbnail(objectName string, data []byte, contentType string) error {
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	ctx := context.Background()
@@ -478,7 +478,7 @@ func UploadLogo(imageData []byte, ext string) (string, int64, error) {
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	// 生成文件路径
@@ -510,7 +510,7 @@ func UploadFavicon(fileHeader *multipart.FileHeader) (string, int64, error) {
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	// 打开文件

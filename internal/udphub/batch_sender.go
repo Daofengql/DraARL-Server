@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nrllink/internal/models"
+	"draarl/internal/models"
 )
 
 // ==========================================

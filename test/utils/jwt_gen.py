@@ -63,7 +63,7 @@ def generate_jwt(
         "roles": roles,
         "exp": expire,
         "iat": now,
-        "iss": "nrllink"
+        "iss": "draarl"
     }
 
     # 编码 Header 和 Payload

@@ -52,8 +52,8 @@ type Configuration struct {
 		Enabled      bool   `yaml:"Enabled" json:"enabled"`
 		Name         string `yaml:"Name" json:"name"`                  // 显示名称，如 "企业SSO"、"Keycloak"
 		BaseURL      string `yaml:"BaseURL" json:"base_url"`           // http://localhost:8080
-		Realm        string `yaml:"Realm" json:"realm"`                // nrllink
-		ClientID     string `yaml:"ClientID" json:"client_id"`         // nrllink-frontend
+		Realm        string `yaml:"Realm" json:"realm"`                // draarl
+		ClientID     string `yaml:"ClientID" json:"client_id"`         // draarl-frontend
 		ClientSecret string `yaml:"ClientSecret" json:"client_secret"` // 客户端密钥
 		RedirectURI  string `yaml:"RedirectURI" json:"redirect_uri"`   // http://localhost:9000/callback
 	} `yaml:"Keycloak" json:"keycloak"`

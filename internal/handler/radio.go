@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"nrllink/internal/gormdb"
-	"nrllink/internal/udphub"
-	"nrllink/pkg/cache"
-	ws "nrllink/pkg/websocket"
+	"draarl/internal/gormdb"
+	"draarl/internal/udphub"
+	"draarl/pkg/cache"
+	ws "draarl/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
 )

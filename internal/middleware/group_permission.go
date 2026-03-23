@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 )
 
 // RequireGroupOwner 要求群组创建者权限的中间件

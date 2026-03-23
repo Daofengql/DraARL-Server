@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"nrllink/internal/captcha"
+	"draarl/internal/captcha"
 
 	"github.com/gin-gonic/gin"
 )

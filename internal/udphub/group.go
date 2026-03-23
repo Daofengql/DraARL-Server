@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"nrllink/internal/gormdb"
-	"nrllink/internal/models"
+	"draarl/internal/gormdb"
+	"draarl/internal/models"
 )
 
 // initPublicGroups 初始化公共群组

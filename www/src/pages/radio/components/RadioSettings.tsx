@@ -97,7 +97,7 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
           关于
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          NRL Link 在线收发 v1.0
+          DraARL Link 在线收发 v1.0
         </Typography>
         <Typography variant="caption" color="text.secondary">
           使用 WebSocket 和 Opus 音频编解码

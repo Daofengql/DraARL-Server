@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	gormdb "nrllink/internal/gormdb"
-	oplog "nrllink/internal/log"
-	"nrllink/internal/udphub"
-	"nrllink/pkg/cache"
-	minio_local "nrllink/pkg/minio"
+	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
+	"draarl/internal/udphub"
+	"draarl/pkg/cache"
+	minio_local "draarl/pkg/minio"
 
 	"github.com/gin-gonic/gin"
 )
@@ -170,44 +170,33 @@ func userHasGroupAccess(userID int, groupID int) bool {
 	}
 
 	// 3. 检查互联组：用户是否有设备属于互联组中的其他群组
-	// 获取该群组所属的所有互联组
-	var linkGroupIDs []int
-	gormdb.Get().Table("group_links").
-		Select("link_group_id").
-		Where("target_group_id = ?", groupID).
-		Pluck("link_group_id", &linkGroupIDs)
+	// 使用单次 JOIN 查询获取所有活跃互联组关联的目标群组
+	var targetGroupIDs []int
+	gormdb.Get().Table("group_links gl1").
+		Select("DISTINCT gl2.target_group_id").
+		Joins("INNER JOIN public_groups pg ON gl1.link_group_id = pg.id AND pg.status = 1").
+		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
+		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", groupID, groupID).
+		Pluck("target_group_id", &targetGroupIDs)
 
-	if len(linkGroupIDs) > 0 {
-		// 获取所有互联组关联的目标群组
-		var targetGroupIDs []int
-		gormdb.Get().Table("group_links").
-			Where("link_group_id IN ?", linkGroupIDs).
-			Pluck("target_group_id", &targetGroupIDs)
-
-		// 排除当前群组
-		for _, targetID := range targetGroupIDs {
-			if targetID != groupID {
-				// 检查用户是否有设备属于互联���中的其他群组
-				gormdb.Get().Table("devices d").
-					Joins("INNER JOIN group_devices gd ON d.id = gd.device_id").
-					Where("d.owner_id = ? AND gd.group_id = ?", userID, targetID).
-					Count(&deviceCount)
-				if deviceCount > 0 {
-					return true
-				}
-
-				// 检查用户是否在互联组的其他群组有过通信记录
-				gormdb.Get().Table("comm_records").
-					Where("user_id = ? AND group_id = ?", userID, targetID).
-					Count(&recordCount)
-				if recordCount > 0 {
-					return true
-				}
-			}
-		}
+	if len(targetGroupIDs) == 0 {
+		return false
 	}
 
-	return false
+	// 4. 批量检查用户是否有设备属于互联组中的任何群组
+	gormdb.Get().Table("devices d").
+		Joins("INNER JOIN group_devices gd ON d.id = gd.device_id").
+		Where("d.owner_id = ? AND gd.group_id IN ?", userID, targetGroupIDs).
+		Count(&deviceCount)
+	if deviceCount > 0 {
+		return true
+	}
+
+	// 5. 批量检查用户是否在互联组的任何群组有过通信记录
+	gormdb.Get().Table("comm_records").
+		Where("user_id = ? AND group_id IN ?", userID, targetGroupIDs).
+		Count(&recordCount)
+	return recordCount > 0
 }
 
 // getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
@@ -215,42 +204,20 @@ func userHasGroupAccess(userID int, groupID int) bool {
 func getRelatedGroupIDs(groupID int) []int {
 	groupIDs := []int{groupID}
 
-	// 查询该群组所属的所有互联组
-	var linkGroupIDs []int
-	gormdb.Get().Table("group_links").
-		Select("link_group_id").
-		Where("target_group_id = ?", groupID).
-		Pluck("link_group_id", &linkGroupIDs)
+	// 使用单次 JOIN 查询获取所有活跃互联组的目标群组
+	// 查询逻辑：
+	// 1. 找到该群组所属的所有互联组（通过 group_links 表）
+	// 2. 只保留状态开启(status=1)的互联组（通过 public_groups 表）
+	// 3. 获取这些互联组关联的所有目标群组
+	var targetGroupIDs []int
+	gormdb.Get().Table("group_links gl1").
+		Select("DISTINCT gl2.target_group_id").
+		Joins("INNER JOIN public_groups pg ON gl1.link_group_id = pg.id AND pg.status = 1").
+		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
+		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", groupID, groupID).
+		Pluck("target_group_id", &targetGroupIDs)
 
-	if len(linkGroupIDs) == 0 {
-		return groupIDs
-	}
-
-	// 检查每个互联组的状态，只保留状态开启的
-	for _, linkGroupID := range linkGroupIDs {
-		var linkGroupStatus int
-		err := gormdb.Get().Table("public_groups").
-			Select("status").
-			Where("id = ?", linkGroupID).
-			Scan(&linkGroupStatus).Error
-
-		if err != nil || linkGroupStatus != 1 {
-			continue // 互联组不存在或已禁用，跳过
-		}
-
-		// 获取该互联组关联的所有目标群组
-		var targetGroupIDs []int
-		gormdb.Get().Table("group_links").
-			Where("link_group_id = ?", linkGroupID).
-			Pluck("target_group_id", &targetGroupIDs)
-
-		for _, targetID := range targetGroupIDs {
-			if targetID != groupID {
-				groupIDs = append(groupIDs, targetID)
-			}
-		}
-	}
-
+	groupIDs = append(groupIDs, targetGroupIDs...)
 	return groupIDs
 }
 
@@ -307,7 +274,7 @@ func GetCommRecords(c *gin.Context) {
 		}
 	}
 
-	// 判断是否可以查看���局记录：必须是管理员且在后台模式
+	// 判断是否可以查看全局记录：必须是管理员且在后台模式
 	canViewGlobal := isAdmin && adminMode
 
 	// 获取当前用户信息（用于权限过滤）

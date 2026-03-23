@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 )
 
 // AssetCache 资源缓存管理器

@@ -9,52 +9,19 @@ import {
 } from '@mui/material'
 import MenuIcon from '@mui/icons-material/Menu'
 import { useNavigate } from 'react-router-dom'
-import { authService, apiClient } from '../../services'
+import { authService } from '../../services'
 import { SITE_CONFIG } from '../../config/site'
+import { useConfig } from '../../contexts/ConfigContext'
 
 interface HeaderProps {
   onMenuClick: () => void
 }
 
-interface PublicConfig {
-  icp: { icp: string }
-  systemInfo: {
-    name: string
-    nameshorthand: string
-    logo_url: string
-    language: string
-  }
-}
-
 export function Header({ onMenuClick }: HeaderProps) {
   const navigate = useNavigate()
   const [user, setUser] = useState(authService.getStoredUser())
-  const [systemConfig, setSystemConfig] = useState<PublicConfig | null>(null)
+  const { config: systemConfig } = useConfig()
   const [logoError, setLogoError] = useState(false)
-
-  // 获取公开配置（无需认证）
-  useEffect(() => {
-    const fetchPublicConfig = async () => {
-      try {
-        const res = await apiClient.get<any>('/api/config/public')
-        if (res.code === 200 && res.data) {
-          setSystemConfig(res.data)
-        }
-      } catch (err) {
-        console.error('Failed to fetch public config:', err)
-      }
-    }
-    fetchPublicConfig()
-
-    // 监听配置更新事件
-    const handleConfigUpdate = () => {
-      fetchPublicConfig()
-    }
-    window.addEventListener('config-updated', handleConfigUpdate)
-    return () => {
-      window.removeEventListener('config-updated', handleConfigUpdate)
-    }
-  }, [])
 
   // 监听用户信息变化
   useEffect(() => {

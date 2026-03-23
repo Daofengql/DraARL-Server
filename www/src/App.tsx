@@ -4,6 +4,7 @@ import { MainLayout } from './components/layout'
 import { ProtectedRoute, AdminRoute, ApprovedRoute, ToastContainer, PageLoader } from './components/common'
 import { AdminLayout } from './components/layout/AdminLayout'
 import { authService } from './services'
+import { ConfigProvider } from './contexts/ConfigContext'
 
 // 路由懒加载 - 按页面分割代码
 const LoginPage = lazy(() => import('./pages/auth/LoginPage').then(m => ({ default: m.LoginPage })))
@@ -42,7 +43,8 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
+      <ConfigProvider>
+        <Routes>
         {/* 公开路由 - 首页 */}
         <Route path="/" element={<PageSuspense><HomePage /></PageSuspense>} />
 
@@ -150,6 +152,7 @@ function App() {
 
       {/* 全局 Toast 通知 */}
       <ToastContainer />
+      </ConfigProvider>
     </BrowserRouter>
   )
 }

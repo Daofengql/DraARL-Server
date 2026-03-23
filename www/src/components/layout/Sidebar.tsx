@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
   List,
   ListItem,
@@ -22,7 +22,8 @@ import ExitToApp from '@mui/icons-material/ExitToApp'
 import Mic from '@mui/icons-material/Mic'
 import MenuBook from '@mui/icons-material/MenuBook'
 import Radio from '@mui/icons-material/Radio'
-import { authService, apiClient } from '../../services'
+import { authService } from '../../services'
+import { useConfig } from '../../contexts/ConfigContext'
 
 const DRAWER_WIDTH = 240
 
@@ -55,29 +56,8 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
   const location = useLocation()
   const isAdmin = authService.isAdmin()
   const isApproved = authService.isApproved() // 检查用户是否已审核通过
-  const [icp, setIcp] = useState('')
-
-  useEffect(() => {
-    const fetchICP = async () => {
-      try {
-        const res = await apiClient.get<any>('/api/config/public')
-        if (res.code === 200 && res.data?.icp?.icp) {
-          setIcp(res.data.icp.icp)
-        }
-      } catch (err) {
-        console.error('Failed to fetch ICP config:', err)
-      }
-    }
-    fetchICP()
-
-    const handleConfigUpdate = () => {
-      fetchICP()
-    }
-    window.addEventListener('config-updated', handleConfigUpdate)
-    return () => {
-      window.removeEventListener('config-updated', handleConfigUpdate)
-    }
-  }, [])
+  const { config } = useConfig()
+  const icp = config.icp?.icp || ''
 
   const handleNavigate = (path: string) => {
     navigate(path)

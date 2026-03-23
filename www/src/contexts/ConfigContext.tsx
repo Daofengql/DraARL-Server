@@ -34,18 +34,20 @@ interface ConfigContextValue {
 
 const ConfigContext = createContext<ConfigContextValue | null>(null)
 
-// 全局请求状态，用于防止 StrictMode 双重请求
+// 全局配置缓存（用于跨组件共享）
+let globalConfig: PublicConfig | null = null
 let pendingRequest: Promise<void> | null = null
-let configFetched = false
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
-  const [config, setConfig] = useState<PublicConfig>(DEFAULT_CONFIG)
-  const [loading, setLoading] = useState(true)
+  const [config, setConfig] = useState<PublicConfig>(() => globalConfig || DEFAULT_CONFIG)
+  const [loading, setLoading] = useState(() => !globalConfig)
   const mounted = useRef(true)
 
   const fetchConfig = async () => {
-    // 如果已经有缓存数据，直接返回
-    if (configFetched) {
+    // 如果已有全局缓存，直接使用
+    if (globalConfig) {
+      setConfig(globalConfig)
+      setLoading(false)
       return
     }
 
@@ -57,9 +59,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     pendingRequest = (async () => {
       try {
         const res = await apiClient.get<{ code: number; data?: PublicConfig }>('/api/config/public')
-        if (res.code === 200 && res.data && mounted.current) {
-          setConfig(res.data)
-          configFetched = true
+        if (res.code === 200 && res.data) {
+          globalConfig = res.data
+          if (mounted.current) {
+            setConfig(res.data)
+          }
         }
       } catch (err) {
         console.error('Failed to fetch public config:', err)
@@ -75,7 +79,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   }
 
   const refresh = async () => {
-    configFetched = false
+    globalConfig = null
     pendingRequest = null
     setLoading(true)
     await fetchConfig()

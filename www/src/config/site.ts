@@ -8,7 +8,7 @@ export const SITE_CONFIG = {
   /** 站点短名称/简称 */
   SHORT_NAME: 'DraARL',
   /** 系统版本 */
-  VERSION: 'v1.0.0' as string,
+  VERSION: 'v1.1.1' as string,
   /** 协议版本 */
   PROTOCOL_VERSION: 'DraARLv1',
 } as const

@@ -415,105 +415,98 @@ const MessageItem = memo(function MessageItem({
           ...(isSelf && styles.messageWrapperSelf),
         }}
       >
-        {/* 头像 */}
-        {!isSelf && (
-          <Avatar
-            src={avatarUrl}
-            sx={{
-              ...styles.avatar,
-              bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
-            }}
-          >
-            {!avatarUrl && message.senderCallsign.charAt(0)}
-          </Avatar>
-        )}
-
-        {/* 消息气泡 */}
-        <Paper
-          elevation={0}
+        {/* 头像 - 己方在视觉右侧，他方在视觉左侧 */}
+        <Avatar
+          src={avatarUrl}
           sx={{
-            ...styles.messageBubble,
-            ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
+            ...styles.avatar,
+            bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
           }}
         >
-          {/* 头部 - 显示发送方信息 */}
-          {!isSelf && (
-            <Box sx={{ ...styles.messageHeader, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
-              <Box sx={styles.senderInfo}>
-                <Typography variant="subtitle2" sx={styles.callsignChip}>
-                  {message.senderCallsign}-{message.senderSSID}
-                </Typography>
+          {!avatarUrl && message.senderCallsign.charAt(0)}
+        </Avatar>
+
+        {/* 消息内容区域 */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxWidth: '100%' }}>
+          {/* 发送者信息 - 放在气泡外面 */}
+          <Box sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5,
+            px: 0.5,
+            ...(isSelf && { justifyContent: 'flex-end' }),
+          }}>
+            {isSelf ? (
+              <>
+                {message.groupName && (
+                  <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.6 }}>
+                    #{message.groupName}
+                  </Typography>
+                )}
                 {nickname && (
-                  <Typography variant="caption" sx={styles.nickname}>
+                  <Typography variant="caption" sx={{ fontSize: '0.7rem', opacity: 0.7 }}>
                     ({nickname})
                   </Typography>
                 )}
-              </Box>
-              {/* 群组名称 - 用于跨组消息识别 */}
-              {message.groupName && (
-                <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.6 }}>
-                  #{message.groupName}
-                </Typography>
-              )}
-            </Box>
-          )}
-
-          {/* 自己发的消息也显示昵称和群组名称 */}
-          {isSelf && (
-            <Box sx={{ ...styles.messageHeader, flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
-              <Box sx={styles.senderInfo}>
-                {nickname && (
-                  <Typography variant="caption" sx={styles.nickname}>
-                    ({nickname})
-                  </Typography>
-                )}
-                <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                <Typography variant="caption" sx={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>
                   {message.senderCallsign}-{message.senderSSID}
                 </Typography>
-              </Box>
-              {/* 群组名称 - 用于跨组消息识别 */}
-              {message.groupName && (
-                <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.6 }}>
-                  #{message.groupName}
-                </Typography>
-              )}
-            </Box>
-          )}
-
-          {/* 内容 */}
-          <Box sx={styles.messageContent}>
-            {message.type === 'text' ? (
-              <Typography variant="body2">{message.content as string}</Typography>
+              </>
             ) : (
-              <VoiceMessage
-                duration={message.duration || 0}
-                isPlayed={message.isPlayed || false}
-                isSelf={isSelf}
-                audioData={message.content as Blob}
-              />
+              <>
+                <Typography variant="caption" sx={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>
+                  {message.senderCallsign}-{message.senderSSID}
+                </Typography>
+                {nickname && (
+                  <Typography variant="caption" sx={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                    ({nickname})
+                  </Typography>
+                )}
+                {message.groupName && (
+                  <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.6 }}>
+                    #{message.groupName}
+                  </Typography>
+                )}
+              </>
             )}
           </Box>
 
-          {/* 底部 */}
-          <Box sx={styles.messageFooter}>
-            <Typography variant="caption">
-              {formatTime(message.timestamp)}
-            </Typography>
-          </Box>
-        </Paper>
-
-        {/* 自己的头像 */}
-        {isSelf && (
-          <Avatar
-            src={avatarUrl}
+          {/* 消息气泡 */}
+          <Paper
+            elevation={0}
             sx={{
-              ...styles.avatar,
-              bgcolor: avatarUrl ? undefined : getAvatarColor(message.senderCallsign),
+              ...styles.messageBubble,
+              ...(isSelf ? styles.messageBubbleSelf : styles.messageBubbleOther),
             }}
           >
-            {!avatarUrl && message.senderCallsign.charAt(0)}
-          </Avatar>
-        )}
+            {/* 内容 */}
+            <Box sx={styles.messageContent}>
+              {message.type === 'text' ? (
+                <Typography variant="body2">{message.content as string}</Typography>
+              ) : (
+                <VoiceMessage
+                  duration={message.duration || 0}
+                  isPlayed={message.isPlayed || false}
+                  isSelf={isSelf}
+                  audioData={message.content as Blob}
+                />
+              )}
+            </Box>
+          </Paper>
+
+          {/* 时间 - 放在气泡外面 */}
+          <Typography
+            variant="caption"
+            sx={{
+              fontSize: '0.65rem',
+              opacity: 0.6,
+              px: 0.5,
+              ...(isSelf ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }),
+            }}
+          >
+            {formatTime(message.timestamp)}
+          </Typography>
+        </Box>
       </Box>
     </>
   )
@@ -634,10 +627,12 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     // 格式化时间（使用 useCallback 缓存）
     const formatTime = useCallback((timestamp: number) => {
       const date = new Date(timestamp)
-      return date.toLocaleTimeString('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      const hour = String(date.getHours()).padStart(2, '0')
+      const minute = String(date.getMinutes()).padStart(2, '0')
+      const second = String(date.getSeconds()).padStart(2, '0')
+      return `${month}-${day} ${hour}:${minute}:${second}`
     }, [])
 
     const formatTimeDivider = useCallback((timestamp: number) => {

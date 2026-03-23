@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   Box,
   Card,
@@ -37,9 +37,9 @@ import { authService } from '../../services'
 import { platformService } from '../../services/platform'
 import { deviceService } from '../../services/device'
 import { commStatsService } from '../../services/commStats'
-import { apiClient } from '../../services'
 import type { DailyCommStats } from '../../types'
 import { SITE_CONFIG } from '../../config/site'
+import { useConfig } from '../../contexts/ConfigContext'
 
 interface StatCardProps {
   title: string
@@ -132,6 +132,7 @@ function DashboardSkeleton() {
 export function DashboardPage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const { config: systemConfig } = useConfig()
   const [stats, setStats] = useState({
     my_devices: 0,
     online_devices: 0,
@@ -145,7 +146,7 @@ export function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshSuccess, setRefreshSuccess] = useState(false)
   const [cachedUser, setCachedUser] = useState(authService.getStoredUser())
-  const [systemConfig, setSystemConfig] = useState<any>(null)
+  const fetchingRef = useRef(false) // 防止 StrictMode 双重请求
 
   // 监听用户信息更新事件
   useEffect(() => {
@@ -179,17 +180,11 @@ export function DashboardPage() {
         : []
 
       // 获取所有群组和用户统计
-      const [statsData, publicConfig, commStatsData, commTrendData] = await Promise.all([
+      const [statsData, commStatsData, commTrendData] = await Promise.all([
         platformService.getTotalStats(),
-        apiClient.get<any>('/api/config/public'),
         commStatsService.getUserStats(),
         commStatsService.getUserTrend(),
       ])
-
-      // 处理公开配置
-      if (publicConfig.code === 200 && publicConfig.data) {
-        setSystemConfig(publicConfig.data)
-      }
 
       setStats({
         my_devices: myDevices.length,
@@ -207,6 +202,10 @@ export function DashboardPage() {
   }
 
   useEffect(() => {
+    // 防止 StrictMode 双重请求
+    if (fetchingRef.current) return
+    fetchingRef.current = true
+
     fetchMyStats()
   }, [])
 

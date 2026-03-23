@@ -17,9 +17,10 @@ import ExpandLess from '@mui/icons-material/ExpandLess'
 import LinkIcon from '@mui/icons-material/Link'
 import Folder from '@mui/icons-material/Folder'
 import { useState, useEffect } from 'react'
-import { authService, apiClient } from '../../services'
+import { authService } from '../../services'
 import { Header } from './Header'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { useConfig } from '../../contexts/ConfigContext'
 
 const DRAWER_WIDTH = 240
 
@@ -77,7 +78,8 @@ export function AdminLayout() {
   const [deviceMenuExpanded, setDeviceMenuExpanded] = useState(false)
   // 群组管理菜单的展开/折叠状态
   const [groupMenuExpanded, setGroupMenuExpanded] = useState(false)
-  const [icp, setIcp] = useState('')
+  const { config } = useConfig()
+  const icp = config.icp?.icp || ''
 
   // 同步页面标题
   usePageTitle()
@@ -85,28 +87,6 @@ export function AdminLayout() {
   // 页面加载时刷新用户信息，确保审核状态等是最新的
   useEffect(() => {
     authService.refreshUserInfo()
-  }, [])
-
-  useEffect(() => {
-    const fetchICP = async () => {
-      try {
-        const res = await apiClient.get<any>('/api/config/public')
-        if (res.code === 200 && res.data?.icp?.icp) {
-          setIcp(res.data.icp.icp)
-        }
-      } catch (err) {
-        console.error('Failed to fetch ICP config:', err)
-      }
-    }
-    fetchICP()
-
-    const handleConfigUpdate = () => {
-      fetchICP()
-    }
-    window.addEventListener('config-updated', handleConfigUpdate)
-    return () => {
-      window.removeEventListener('config-updated', handleConfigUpdate)
-    }
   }, [])
 
   // 当路由变化时，如果焦点不在子菜单上，自动折叠

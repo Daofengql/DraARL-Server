@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/gomail.v2"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 )
 
 // SMTPService SMTP邮件服务

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/models"
-	"nrllink/internal/protocol"
+	"draarl/internal/models"
+	"draarl/internal/protocol"
 )
 
 // ==========================================

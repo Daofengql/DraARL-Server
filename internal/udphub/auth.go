@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 
 	"golang.org/x/crypto/bcrypt"
 )

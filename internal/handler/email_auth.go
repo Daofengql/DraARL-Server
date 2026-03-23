@@ -5,11 +5,11 @@ import (
 	"log"
 	"net/http"
 
-	"nrllink/internal/email"
-	"nrllink/internal/gormdb"
-	oplog "nrllink/internal/log"
-	"nrllink/pkg/cache"
-	"nrllink/pkg/jwt"
+	"draarl/internal/email"
+	"draarl/internal/gormdb"
+	oplog "draarl/internal/log"
+	"draarl/pkg/cache"
+	"draarl/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"

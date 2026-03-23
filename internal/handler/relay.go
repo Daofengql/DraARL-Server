@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	gormdb "nrllink/internal/gormdb"
-	oplog "nrllink/internal/log"
+	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 )
 
 // CreateRelay 创建中继台

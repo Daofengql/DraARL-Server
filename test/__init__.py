@@ -1,5 +1,5 @@
 """
-Nrllink 调试客户端
+DraARL 调试客户端
 """
 
 from .protocol import *

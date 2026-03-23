@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/gormdb"
+	"draarl/internal/gormdb"
 )
 
 // CommRecorder 通信录制管理器（整合所有组件）

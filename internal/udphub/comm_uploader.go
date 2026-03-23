@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/config"
-	minio_local "nrllink/pkg/minio"
+	"draarl/internal/config"
+	minio_local "draarl/pkg/minio"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -139,7 +139,7 @@ func (cu *CommUploader) uploadAudio(session *AudioSession) (string, int64, error
 	cfg := config.Get()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
-		bucket = "nrllink"
+		bucket = "draarl"
 	}
 
 	// 获取音频数据

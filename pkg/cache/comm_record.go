@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"nrllink/internal/gormdb"
+	"draarl/internal/gormdb"
 )
 
 // CommRecordCacheConfig 通信记录缓存配置

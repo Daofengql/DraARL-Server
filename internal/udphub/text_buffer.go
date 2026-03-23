@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/gormdb"
+	"draarl/internal/gormdb"
 )
 
 // ==========================================

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"nrllink/internal/gormdb"
+	"draarl/internal/gormdb"
 )
 
 // DBRecord 待写入数据库的记录

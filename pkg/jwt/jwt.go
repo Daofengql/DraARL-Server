@@ -41,7 +41,7 @@ func GenerateToken(username string, roles []string) (string, error) {
 		jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireTime),
 			IssuedAt:  jwt.NewNumericDate(now),
-			Issuer:    "nrllink",
+			Issuer:    "draarl",
 		},
 	}
 

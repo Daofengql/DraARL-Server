@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"nrllink/internal/common"
+	"draarl/internal/common"
 
 	"gorm.io/gorm"
 )

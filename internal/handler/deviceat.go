@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"nrllink/internal/gormdb"
+	"draarl/internal/gormdb"
 
 	"github.com/gin-gonic/gin"
 )

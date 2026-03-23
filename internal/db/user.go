@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"time"
 
-	"nrllink/internal/models"
+	"draarl/internal/models"
 
 	"golang.org/x/crypto/bcrypt"
 )

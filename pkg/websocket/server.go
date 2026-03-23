@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"nrllink/internal/udphub"
+	"draarl/internal/udphub"
 
 	"github.com/gorilla/websocket"
 )

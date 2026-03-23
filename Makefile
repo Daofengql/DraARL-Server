@@ -1,6 +1,6 @@
-# Makefile for nrllink
+# Makefile for draarl
 
-BINARY_NAME=nrllink
+BINARY_NAME=draarl
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
@@ -50,7 +50,7 @@ build-arm64:
 clean:
 	$(GOCLEAN)
 	rm -f $(BINARY_NAME)*
-	rm -f nrllink*
+	rm -f draarl*
 
 ## test: Run tests
 test:

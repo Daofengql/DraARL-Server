@@ -7,9 +7,9 @@ import (
 	"math"
 	"time"
 
-	"nrllink/internal/gormdb"
-	"nrllink/internal/models"
-	"nrllink/internal/protocol"
+	"draarl/internal/gormdb"
+	"draarl/internal/models"
+	"draarl/internal/protocol"
 )
 
 // ==========================================

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"log"
 
-	"nrllink/internal/models"
+	"draarl/internal/models"
 )
 
 // GroupRepository 群组数据访问层

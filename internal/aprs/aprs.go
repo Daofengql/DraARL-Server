@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"nrllink/internal/gormdb"
-	"nrllink/internal/udphub"
-	"nrllink/pkg/tcp"
+	"draarl/internal/gormdb"
+	"draarl/internal/udphub"
+	"draarl/pkg/tcp"
 )
 
 var (

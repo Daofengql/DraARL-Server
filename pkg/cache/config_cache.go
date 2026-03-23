@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 )
 
 // ConfigCache 系统配置缓存管理器

@@ -1,7 +1,7 @@
 package gormdb
 
 import (
-	"nrllink/internal/models"
+	"draarl/internal/models"
 )
 
 // ToModelDevice 将 GORM Device 转换为 models.Device

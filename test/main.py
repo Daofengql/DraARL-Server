@@ -1,5 +1,5 @@
 """
-Nrllink 调试客户端
+DraARL 调试客户端
 支持 UDP普通设备、UDP JWT 两种连接方式
 """
 
@@ -472,7 +472,7 @@ class DebugClientApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Nrllink 调试客户端")
+        self.root.title("DraARL 调试客户端")
         self.root.geometry("900x500")
         self.root.minsize(800, 400)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	gormdb "nrllink/internal/gormdb"
+	gormdb "draarl/internal/gormdb"
 
 	"github.com/gin-gonic/gin"
 )

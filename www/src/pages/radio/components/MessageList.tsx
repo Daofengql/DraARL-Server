@@ -458,9 +458,9 @@ const MessageItem = memo(function MessageItem({
             </Box>
           )}
 
-          {/* 自己发的消息也显示昵称 */}
+          {/* 自己发的消息也显示昵称和群组名称 */}
           {isSelf && (
-            <Box sx={{ ...styles.messageHeader, justifyContent: 'flex-end' }}>
+            <Box sx={{ ...styles.messageHeader, flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
               <Box sx={styles.senderInfo}>
                 {nickname && (
                   <Typography variant="caption" sx={styles.nickname}>
@@ -471,6 +471,12 @@ const MessageItem = memo(function MessageItem({
                   {message.senderCallsign}-{message.senderSSID}
                 </Typography>
               </Box>
+              {/* 群组名称 - 用于跨组消息识别 */}
+              {message.groupName && (
+                <Typography variant="caption" sx={{ fontSize: '0.65rem', opacity: 0.6 }}>
+                  #{message.groupName}
+                </Typography>
+              )}
             </Box>
           )}
 

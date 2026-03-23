@@ -86,6 +86,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    mounted.current = true // StrictMode 重新执行时重置
     fetchConfig()
     return () => {
       mounted.current = false

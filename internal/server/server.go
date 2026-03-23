@@ -373,7 +373,7 @@ func initSiteConfigs(cfg *config.Configuration) {
 		Host:        "smtp.qq.com",
 		Port:        465,
 		UseSSL:      true,
-		SenderName:  "NRL火链",
+		SenderName:  "DraARL麟链",
 		SenderEmail: "",
 		Password:    "",
 	}

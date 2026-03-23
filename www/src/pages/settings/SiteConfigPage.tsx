@@ -1345,7 +1345,7 @@ export function SiteConfigPage() {
                     fullWidth
                     value={smtp.sender_name}
                     onChange={(e) => setSMTP({ ...smtp, sender_name: e.target.value })}
-                    placeholder="例如：NRL火链"
+                    placeholder="例如：DraARL麟链"
                   />
 
                   <TextField

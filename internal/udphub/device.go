@@ -570,7 +570,7 @@ func decodeATPacket(callsign string, ssid byte, data []byte) *models.ATCommand {
 		// 解析多条 AT 命令响应
 		lines := strings.Split(string(data[1:]), "\r\n")
 		for _, line := range lines {
-			if strings.HasPrefix(line, "NRL") {
+			if strings.HasPrefix(line, "DraARL") {
 				at.Data = line
 				continue
 			}

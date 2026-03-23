@@ -105,7 +105,7 @@ type APRSTVResponse struct {
 	} `json:"data"`
 }
 
-// NRLStatsResponse NRL 统计响应
+// NRLStatsResponse APRS.TV DraARL 统计响应 (第三方 API 响应结构)
 type NRLStatsResponse struct {
 	Code string `json:"code"`
 	Msg  string `json:"msg"`
@@ -476,7 +476,7 @@ func startAPRSTVService() {
 	}
 }
 
-// getNRLFromAPRSTV 从 APRS.TV 获取 NRL 服务器列表
+// getNRLFromAPRSTV 从 APRS.TV 获取 DraARL 服务器列表 (第三方 API)
 func getNRLFromAPRSTV() {
 	apiURL := "https://aprs.tv/api/findnrl"
 
@@ -570,7 +570,7 @@ func decodeStateFromAPRS(str string) (online, total int, name string, err error)
 	return
 }
 
-// getNRLStatsFromAPRSTV 从 APRS.TV 获取 NRL 统计信息
+// getNRLStatsFromAPRSTV 从 APRS.TV 获取 DraARL 统计信息 (第三方 API)
 func getNRLStatsFromAPRSTV() map[string]int {
 	apiURL := "https://aprs.tv/api/findnrltotal"
 

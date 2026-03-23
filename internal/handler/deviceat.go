@@ -128,7 +128,7 @@ func DeviceAT(c *gin.Context) {
 			"items": gin.H{
 				"callsign": req.CallSign,
 				"ssid":     req.SSID,
-				"version":  "NRL AT V1.0",
+				"version":  "DraARL AT V1.0",
 			},
 		},
 	})

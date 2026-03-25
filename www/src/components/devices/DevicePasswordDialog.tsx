@@ -25,23 +25,29 @@ interface DevicePasswordDialogProps {
 }
 
 export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProps) {
-  const [password, setPassword] = useState<string | null>(null)
+  const [maskedPassword, setMaskedPassword] = useState<string>('')
+  const [plainPassword, setPlainPassword] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [confirmRefresh, setConfirmRefresh] = useState(false)
 
   // 获取当前用户信息（包含账号）
   const currentUser = authService.getStoredUser()
 
-  // 加载设备密码
-  const loadPassword = async () => {
+  // 加载当前密码状态（不刷新）
+  const loadPasswordStatus = async () => {
     setLoading(true)
     setError('')
     try {
-      const result = await authService.regenerateDevicePassword()
-      setPassword(result.device_password)
-      setShowPassword(true) // 刷新后直接显示密码
+      const result = await authService.getDevicePassword()
+      setMaskedPassword(result.masked_password)
+      // 如果是新密码，显示明文
+      if (result.is_new && result.masked_password !== '********') {
+        setPlainPassword(result.masked_password)
+        setShowPassword(true)
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || '获取密码失败')
     } finally {
@@ -49,17 +55,21 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
     }
   }
 
-  // 对话框打开时加载密码
+  // 对话框打开时加载密码状态
   useEffect(() => {
     if (open) {
-      loadPassword()
+      setPlainPassword(null)
+      setShowPassword(false)
+      setConfirmRefresh(false)
+      loadPasswordStatus()
     }
   }, [open])
 
   // 复制密码
   const handleCopy = () => {
-    if (password) {
-      navigator.clipboard.writeText(password)
+    const textToCopy = plainPassword || maskedPassword
+    if (textToCopy) {
+      navigator.clipboard.writeText(textToCopy)
     }
   }
 
@@ -71,7 +81,18 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
   // 确认刷新密码
   const handleConfirmRefresh = async () => {
     setConfirmRefresh(false)
-    await loadPassword()
+    setRefreshing(true)
+    setError('')
+    try {
+      const result = await authService.regenerateDevicePassword()
+      setPlainPassword(result.device_password)
+      setMaskedPassword(result.device_password)
+      setShowPassword(true) // 刷新后直接显示新密码
+    } catch (err: any) {
+      setError(err.response?.data?.message || '刷新密码失败')
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   // 取消刷新
@@ -81,7 +102,8 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
 
   // 关闭时重置
   const handleClose = () => {
-    setPassword(null)
+    setMaskedPassword('')
+    setPlainPassword(null)
     setShowPassword(false)
     setError('')
     setConfirmRefresh(false)
@@ -131,12 +153,12 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
                       letterSpacing: showPassword ? '0.5px' : '0.2em',
                     }}
                   >
-                    {showPassword ? password : '••••••••'}
+                    {showPassword ? (plainPassword || maskedPassword) : '••••••••'}
                   </Typography>
                   <IconButton size="small" onClick={() => setShowPassword(!showPassword)}>
                     {showPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
                   </IconButton>
-                  <IconButton size="small" onClick={handleCopy} disabled={!password}>
+                  <IconButton size="small" onClick={handleCopy} disabled={!plainPassword && !maskedPassword}>
                     <ContentCopy fontSize="small" />
                   </IconButton>
                 </Box>
@@ -174,9 +196,9 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
           <Button
             variant="outlined"
             color="warning"
-            startIcon={loading ? <CircularProgress size={16} /> : <Refresh />}
+            startIcon={refreshing ? <CircularProgress size={16} /> : <Refresh />}
             onClick={handleRefreshClick}
-            disabled={loading || confirmRefresh}
+            disabled={loading || refreshing || confirmRefresh}
           >
             刷新
           </Button>

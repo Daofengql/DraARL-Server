@@ -206,7 +206,7 @@ export const authService = {
 
 // 设备密码响应类型
 export interface DevicePasswordResponse {
-  masked_password: string
+  device_password: string
   has_password: boolean
   is_new: boolean
   created_at: string

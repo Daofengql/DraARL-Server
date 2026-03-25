@@ -25,8 +25,7 @@ interface DevicePasswordDialogProps {
 }
 
 export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProps) {
-  const [maskedPassword, setMaskedPassword] = useState<string>('')
-  const [plainPassword, setPlainPassword] = useState<string | null>(null)
+  const [password, setPassword] = useState<string>('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -36,18 +35,14 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
   // 获取当前用户信息（包含账号）
   const currentUser = authService.getStoredUser()
 
-  // 加载当前密码状态（不刷新）
-  const loadPasswordStatus = async () => {
+  // 加载当前密码
+  const loadPassword = async () => {
     setLoading(true)
     setError('')
     try {
       const result = await authService.getDevicePassword()
-      setMaskedPassword(result.masked_password)
-      // 如果是新密码，显示明文
-      if (result.is_new && result.masked_password !== '********') {
-        setPlainPassword(result.masked_password)
-        setShowPassword(true)
-      }
+      setPassword(result.device_password)
+      setShowPassword(false) // 默认隐藏密码
     } catch (err: any) {
       setError(err.response?.data?.message || '获取密码失败')
     } finally {
@@ -55,21 +50,19 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
     }
   }
 
-  // 对话框打开时加载密码状态
+  // 对话框打开时加载密码
   useEffect(() => {
     if (open) {
-      setPlainPassword(null)
       setShowPassword(false)
       setConfirmRefresh(false)
-      loadPasswordStatus()
+      loadPassword()
     }
   }, [open])
 
   // 复制密码
   const handleCopy = () => {
-    const textToCopy = plainPassword || maskedPassword
-    if (textToCopy) {
-      navigator.clipboard.writeText(textToCopy)
+    if (password) {
+      navigator.clipboard.writeText(password)
     }
   }
 
@@ -85,8 +78,7 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
     setError('')
     try {
       const result = await authService.regenerateDevicePassword()
-      setPlainPassword(result.device_password)
-      setMaskedPassword(result.device_password)
+      setPassword(result.device_password)
       setShowPassword(true) // 刷新后直接显示新密码
     } catch (err: any) {
       setError(err.response?.data?.message || '刷新密码失败')
@@ -102,8 +94,7 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
 
   // 关闭时重置
   const handleClose = () => {
-    setMaskedPassword('')
-    setPlainPassword(null)
+    setPassword('')
     setShowPassword(false)
     setError('')
     setConfirmRefresh(false)
@@ -153,12 +144,12 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
                       letterSpacing: showPassword ? '0.5px' : '0.2em',
                     }}
                   >
-                    {showPassword ? (plainPassword || maskedPassword) : '••••••••'}
+                    {showPassword ? password : '••••••••'}
                   </Typography>
                   <IconButton size="small" onClick={() => setShowPassword(!showPassword)}>
                     {showPassword ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
                   </IconButton>
-                  <IconButton size="small" onClick={handleCopy} disabled={!plainPassword && !maskedPassword}>
+                  <IconButton size="small" onClick={handleCopy} disabled={!password}>
                     <ContentCopy fontSize="small" />
                   </IconButton>
                 </Box>

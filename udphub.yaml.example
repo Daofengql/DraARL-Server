@@ -48,3 +48,9 @@ MinIO:
     UseSSL: false                     # 是否使用HTTPS
     Bucket: "draarl"                 # 默认存储桶
     BasePath: "/minio"                # URL访问基础路径
+
+# 设备认证配置
+DeviceAuth:
+    AESKey: ""                        # AES 加密密钥，用于设备密码加密存储
+                                      # 必须为 16、24 或 32 字节（对应 AES-128/192/256）
+                                      # 留空则自动生成 32 字节密钥并写入配置文件

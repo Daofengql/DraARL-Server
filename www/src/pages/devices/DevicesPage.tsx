@@ -15,17 +15,18 @@ import {
   Stack,
   Tooltip,
   IconButton,
-  Snackbar,
 } from '@mui/material'
 import Delete from '@mui/icons-material/Delete'
 import Lock from '@mui/icons-material/Lock'
 import Key from '@mui/icons-material/Key'
-import ContentCopy from '@mui/icons-material/ContentCopy'
 import Settings from '@mui/icons-material/Settings'
-import { deviceService, groupService, authService } from '../../services'
+import AddLink from '@mui/icons-material/AddLink'
+import { deviceService, groupService } from '../../services'
 import type { Device, Group } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { ParamConfigDialog } from '../../components/devices/ParamConfigDialog'
+import { DynamicCodeBindDialog } from '../../components/devices/DynamicCodeBindDialog'
+import { DevicePasswordDialog } from '../../components/devices/DevicePasswordDialog'
 import { GroupPickerDialog } from '../../components/groups/GroupPicker'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SearchBar } from '../../components/common/SearchBar'
@@ -58,22 +59,18 @@ export function DevicesPage() {
     onConfirm: () => void
   }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
-  // 设备密码相关状态
-  const [regeneratedPassword, setRegeneratedPassword] = useState<string | null>(null)
-  const [showDevicePassword, setShowDevicePassword] = useState(false)
-  const [generatingDevicePassword, setGeneratingDevicePassword] = useState(false)
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
-    open: false,
-    message: '',
-    severity: 'success',
-  })
-
   // 自动刷新状态
   const [autoRefresh, setAutoRefresh] = useState(0)
 
   // 参数下发对话框状态
   const [paramDialogOpen, setParamDialogOpen] = useState(false)
   const [paramDevice, setParamDevice] = useState<Device | null>(null)
+
+  // 动态码绑定对话框状态
+  const [dynamicBindDialogOpen, setDynamicBindDialogOpen] = useState(false)
+
+  // 设备密码对话框状态
+  const [devicePasswordDialogOpen, setDevicePasswordDialogOpen] = useState(false)
 
   useEffect(() => {
     loadDevices()
@@ -98,29 +95,6 @@ export function DevicesPage() {
       setGroups(data)
     } catch (err) {
       console.error('Failed to load groups:', err)
-    }
-  }
-
-  // 生成/重新生成设备密码
-  const handleRegenerateDevicePassword = async () => {
-    setGeneratingDevicePassword(true)
-    try {
-      const result = await authService.regenerateDevicePassword()
-      setRegeneratedPassword(result.device_password)
-      setShowDevicePassword(true)
-      setSnackbar({ open: true, message: '设备密码已生成', severity: 'success' })
-    } catch (err: any) {
-      setSnackbar({ open: true, message: err.response?.data?.message || '生成失败', severity: 'error' })
-    } finally {
-      setGeneratingDevicePassword(false)
-    }
-  }
-
-  // 复制设备密码
-  const handleCopyDevicePassword = () => {
-    if (regeneratedPassword) {
-      navigator.clipboard.writeText(regeneratedPassword)
-      setSnackbar({ open: true, message: '已复制到剪贴板', severity: 'success' })
     }
   }
 
@@ -212,38 +186,26 @@ export function DevicesPage() {
               loading={loading}
             />
             <Button
+              variant="outlined"
+              size="small"
+              startIcon={<AddLink />}
+              onClick={() => setDynamicBindDialogOpen(true)}
+              color="secondary"
+            >
+              动态码绑定
+            </Button>
+            <Button
               variant="contained"
               size="small"
               startIcon={<Key />}
-              onClick={handleRegenerateDevicePassword}
-              disabled={generatingDevicePassword}
+              onClick={() => setDevicePasswordDialogOpen(true)}
               color="primary"
             >
-              {generatingDevicePassword ? '生成中...' : '设备密码'}
+              设备密码
             </Button>
           </Stack>
         }
       />
-
-      {showDevicePassword && regeneratedPassword && (
-        <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setShowDevicePassword(false)}>
-          <Typography variant="body2">
-            新设备密码:{' '}
-            <strong style={{ fontSize: '1.1em', letterSpacing: '0.5px' }}>{regeneratedPassword}</strong>
-          </Typography>
-          <Typography variant="caption" display="block" sx={{ mt: 0.5 }}>
-            请立即保存，此密码仅显示一次！
-          </Typography>
-          <Button
-            size="small"
-            startIcon={<ContentCopy />}
-            onClick={handleCopyDevicePassword}
-            sx={{ mt: 1 }}
-          >
-            复制密码
-          </Button>
-        </Alert>
-      )}
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
@@ -407,17 +369,17 @@ export function DevicesPage() {
         onDeviceUpdated={loadDevices}
       />
 
-      {/* 提示消息 */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+      {/* 动态码绑定对话框 */}
+      <DynamicCodeBindDialog
+        open={dynamicBindDialogOpen}
+        onClose={() => setDynamicBindDialogOpen(false)}
+      />
+
+      {/* 设备密码对话框 */}
+      <DevicePasswordDialog
+        open={devicePasswordDialogOpen}
+        onClose={() => setDevicePasswordDialogOpen(false)}
+      />
     </Box>
   )
 }

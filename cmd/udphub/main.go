@@ -16,9 +16,11 @@ import (
 	"draarl/internal/db"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/middleware"
 	"draarl/internal/server"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
+	"draarl/pkg/crypto"
 	"draarl/pkg/geoip"
 	"draarl/pkg/jwt"
 )
@@ -70,6 +72,20 @@ func main() {
 	if err := initJWTSecret(cfg); err != nil {
 		stdlog.Fatalf("初始化JWT密钥失败: %v", err)
 	}
+
+	// 初始化 AES 加密器（用于设备密码加密）
+	if err := crypto.InitAES(cfg.DeviceAuth.AESKey); err != nil {
+		stdlog.Fatalf("初始化AES加密器失败: %v", err)
+	}
+	stdlog.Println("AES 加密器初始化成功")
+
+	// 初始化设备接口限速器
+	middleware.InitDeviceRateLimiter()
+	stdlog.Println("设备接口限速器初始化成功")
+
+	// 初始化待绑定设备管理器
+	udphub.InitPendingDeviceManager()
+	stdlog.Println("待绑定设备管理器初始化成功")
 
 	// 打印配置信息
 	if *printConfig != "" {

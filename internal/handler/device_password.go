@@ -6,10 +6,10 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
+	"draarl/pkg/crypto"
 )
 
 // GetDevicePassword 获取设备密码（脱敏显示）
@@ -29,7 +29,7 @@ func GetDevicePassword(c *gin.Context) {
 	// 如果设备密码为空，生成一个新的
 	if user.DevicePassword == "" {
 		devicePassword := generateDevicePassword()
-		hashedDevicePassword, err := bcrypt.GenerateFromPassword([]byte(devicePassword), bcrypt.DefaultCost)
+		encryptedPassword, err := crypto.Encrypt(devicePassword)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -38,7 +38,7 @@ func GetDevicePassword(c *gin.Context) {
 			return
 		}
 
-		if err := repo.UpdateUserDevicePassword(user.ID, string(hashedDevicePassword)); err != nil {
+		if err := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); err != nil {
 			log.Printf("更新设备密码失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -108,8 +108,8 @@ func UpdateDevicePassword(c *gin.Context) {
 		return
 	}
 
-	// 加密新密码
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	// AES 加密新密码
+	encryptedPassword, err := crypto.Encrypt(req.NewPassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -119,7 +119,7 @@ func UpdateDevicePassword(c *gin.Context) {
 	}
 
 	// 更新密码
-	if err := repo.UpdateUserDevicePassword(user.ID, string(hashedPassword)); err != nil {
+	if err := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); err != nil {
 		log.Printf("更新设备密码失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -163,7 +163,7 @@ func RegenerateDevicePassword(c *gin.Context) {
 
 	// 生成新的设备密码
 	devicePassword := generateDevicePassword()
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(devicePassword), bcrypt.DefaultCost)
+	encryptedPassword, err := crypto.Encrypt(devicePassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -173,7 +173,7 @@ func RegenerateDevicePassword(c *gin.Context) {
 	}
 
 	// 更新密码
-	if err := repo.UpdateUserDevicePassword(user.ID, string(hashedPassword)); err != nil {
+	if err := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); err != nil {
 		log.Printf("更新设备密码失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

@@ -12,7 +12,7 @@ import (
 	"draarl/pkg/crypto"
 )
 
-// GetDevicePassword 获取设备密码（脱敏显示）
+// GetDevicePassword 获取设备密码
 func GetDevicePassword(c *gin.Context) {
 	username, _ := c.Get("username")
 
@@ -51,7 +51,7 @@ func GetDevicePassword(c *gin.Context) {
 			"code":    200,
 			"message": "成功",
 			"data": gin.H{
-				"masked_password": protocol.MaskDevicePassword(devicePassword),
+				"device_password": devicePassword,
 				"has_password":    true,
 				"is_new":          true,
 				"created_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
@@ -60,11 +60,21 @@ func GetDevicePassword(c *gin.Context) {
 		return
 	}
 
+	// 解密已存在的密码
+	devicePassword, err := crypto.Decrypt(user.DevicePassword)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "密码解密失败",
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"masked_password": "********", // 已设置的密码不显示任何信息
+			"device_password": devicePassword,
 			"has_password":    true,
 			"is_new":          false,
 			"created_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),

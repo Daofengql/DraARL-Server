@@ -20,6 +20,7 @@ import remarkGfm from 'remark-gfm'
 // 导入图片
 import deviceAccessFlowImg from '../../assets/device-access-flow.svg'
 import authSequenceImg from '../../assets/auth-sequence.svg'
+import dynamicBindSequenceImg from '../../assets/dynamic-bind-sequence.svg'
 // 导入下载中心组件
 import { DownloadCenterPage } from '../download/DownloadCenterPage'
 
@@ -151,6 +152,7 @@ function parseMarkdownSections(md: string) {
 const imageMap: Record<string, string> = {
   '../../assets/device-access-flow.svg': deviceAccessFlowImg,
   '../../assets/auth-sequence.svg': authSequenceImg,
+  '../../assets/dynamic-bind-sequence.svg': dynamicBindSequenceImg,
 }
 
 // 文档分区类型
@@ -285,7 +287,7 @@ function DeviceProtocolContent() {
 
         // 有标题的部分，使用折叠卡片
         return (
-          <CollapsibleSection key={index} title={section.title} defaultOpen={index === 1}>
+          <CollapsibleSection key={index} title={section.title} defaultOpen={false}>
             <MarkdownRenderer content={section.content} />
           </CollapsibleSection>
         )

@@ -76,10 +76,10 @@ func (s *Server) setupRoutes() {
 			auth.POST("/login", handler.Login)
 			auth.POST("/logout", handler.Logout)
 			auth.POST("/register", handler.Register)
-			auth.POST("/email-login", handler.EmailLogin)              // 邮箱验证码登录
-			auth.POST("/send-code", handler.SendVerificationCode)      // 发送邮箱验证码
-			auth.POST("/verify-email", handler.VerifyEmail)            // 验证邮箱（注册用）
-			auth.POST("/reset-password", handler.ResetPassword)        // 重置密码
+			auth.POST("/email-login", handler.EmailLogin)         // 邮箱验证码登录
+			auth.POST("/send-code", handler.SendVerificationCode) // 发送邮箱验证码
+			auth.POST("/verify-email", handler.VerifyEmail)       // 验证邮箱（注册用）
+			auth.POST("/reset-password", handler.ResetPassword)   // 重置密码
 		}
 
 		// 验证码路由（无需认证）
@@ -97,6 +97,14 @@ func (s *Server) setupRoutes() {
 		{
 			sso.GET("/login", handler.GetSSOLoginURL)
 			sso.GET("/callback", handler.SSOCallback)
+		}
+
+		// 设备动态码绑定接口（设备端，无需 JWT）
+		device := api.Group("/device")
+		{
+			device.POST("/pre-check", middleware.PreCheckRateLimit(), handler.PreCheck)
+			device.POST("/request-code", middleware.RequestCodeRateLimit(), handler.RequestCode)
+			device.POST("/confirm-bind", middleware.ConfirmBindRateLimit(), handler.ConfirmBind)
 		}
 
 		// 需要认证的路由
@@ -118,6 +126,10 @@ func (s *Server) setupRoutes() {
 			protected.GET("/user/device-password", handler.GetDevicePassword)
 			protected.PUT("/user/device-password", handler.UpdateDevicePassword)
 			protected.POST("/user/device-password/regenerate", handler.RegenerateDevicePassword)
+
+			// 设备动态码绑定（Web 端，需要审核通过）
+			protected.POST("/device/bind", middleware.BindRateLimit(), handler.BindDevice)
+			protected.POST("/device/submit-config", middleware.SubmitConfigRateLimit(), handler.SubmitDeviceConfig)
 
 			// 文件上传（所有认证用户可访问，用于头像上传）
 			protected.POST("/upload/file", handler.UploadFile)

@@ -1,6 +1,6 @@
 // 导出所有服务
 export { apiClient } from './api'
-export { authService, ssoService, captchaService, emailAuthService } from './auth'
+export { authService, ssoService, captchaService, emailAuthService, deviceBindService } from './auth'
 export { approvalService } from './approval'
 export { deviceService } from './device'
 export { groupService } from './group'

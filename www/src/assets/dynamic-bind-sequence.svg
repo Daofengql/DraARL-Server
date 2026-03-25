@@ -1,0 +1,121 @@
+<svg width="100%" viewBox="0 0 700 520" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="deviceGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#42a5f5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1976d2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="serverGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#66bb6a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#388e3c;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="userGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ab47bc;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7b1fa2;stop-opacity:1" />
+    </linearGradient>
+    <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#1976d2"/>
+    </marker>
+    <marker id="greenArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#388e3c"/>
+    </marker>
+    <marker id="purpleArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#7b1fa2"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="700" height="520" fill="#fafafa"/>
+
+  <!-- Device Actor -->
+  <g transform="translate(80, 30)">
+    <rect x="-30" y="0" width="60" height="60" rx="8" fill="url(#deviceGradient)"/>
+    <rect x="-20" y="10" width="40" height="30" rx="4" fill="white"/>
+    <circle cx="0" cy="50" r="5" fill="white"/>
+    <text x="0" y="85" text-anchor="middle" fill="#1976d2" font-size="14" font-weight="600">新设备</text>
+  </g>
+
+  <!-- Device Lifeline -->
+  <line x1="80" y1="120" x2="80" y2="500" stroke="#1976d2" stroke-width="2" stroke-dasharray="8,4"/>
+
+  <!-- Server Actor -->
+  <g transform="translate(350, 30)">
+    <rect x="-30" y="0" width="60" height="60" rx="8" fill="url(#serverGradient)"/>
+    <rect x="-18" y="8" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-4" y="8" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-18" y="22" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-4" y="22" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-18" y="36" width="10" height="10" rx="1" fill="white"/>
+    <rect x="-4" y="36" width="10" height="10" rx="1" fill="white"/>
+    <text x="0" y="85" text-anchor="middle" fill="#388e3c" font-size="14" font-weight="600">服务器</text>
+  </g>
+
+  <!-- Server Lifeline -->
+  <line x1="350" y1="120" x2="350" y2="500" stroke="#388e3c" stroke-width="2" stroke-dasharray="8,4"/>
+
+  <!-- Web User Actor -->
+  <g transform="translate(620, 30)">
+    <rect x="-30" y="0" width="60" height="60" rx="8" fill="url(#userGradient)"/>
+    <circle cx="0" cy="20" r="12" fill="white"/>
+    <rect x="-15" y="35" width="30" height="20" rx="4" fill="white"/>
+    <text x="0" y="85" text-anchor="middle" fill="#7b1fa2" font-size="14" font-weight="600">Web用户</text>
+  </g>
+
+  <!-- Web User Lifeline -->
+  <line x1="620" y1="120" x2="620" y2="500" stroke="#7b1fa2" stroke-width="2" stroke-dasharray="8,4"/>
+
+  <!-- Step 1: Pre-check -->
+  <g>
+    <line x1="85" y1="150" x2="345" y2="150" stroke="#1976d2" stroke-width="2" marker-end="url(#blueArrow)"/>
+    <rect x="100" y="130" width="220" height="35" rx="6" fill="white" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="210" y="152" text-anchor="middle" fill="#1976d2" font-size="12" font-weight="600">POST /api/device/pre-check</text>
+  </g>
+
+  <!-- Step 2: Response need_bind -->
+  <g>
+    <line x1="345" y1="200" x2="85" y2="200" stroke="#388e3c" stroke-width="2" marker-end="url(#greenArrow)"/>
+    <rect x="100" y="180" width="220" height="35" rx="6" fill="white" stroke="#388e3c" stroke-width="1.5"/>
+    <text x="210" y="202" text-anchor="middle" fill="#388e3c" font-size="12" font-weight="600">{ status: "need_bind" }</text>
+  </g>
+
+  <!-- Step 3: Request code -->
+  <g>
+    <line x1="85" y1="250" x2="345" y2="250" stroke="#1976d2" stroke-width="2" marker-end="url(#blueArrow)"/>
+    <rect x="100" y="230" width="220" height="35" rx="6" fill="white" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="210" y="252" text-anchor="middle" fill="#1976d2" font-size="12" font-weight="600">POST /api/device/request-code</text>
+  </g>
+
+  <!-- Step 4: Return dynamic code -->
+  <g>
+    <line x1="345" y1="300" x2="85" y2="300" stroke="#388e3c" stroke-width="2" marker-end="url(#greenArrow)"/>
+    <rect x="100" y="280" width="220" height="35" rx="6" fill="white" stroke="#388e3c" stroke-width="1.5"/>
+    <text x="210" y="302" text-anchor="middle" fill="#388e3c" font-size="12" font-weight="600">{ dynamic_code: "123456" }</text>
+  </g>
+
+  <!-- Device Display Note -->
+  <g transform="translate(20, 335)">
+    <rect x="0" y="0" width="120" height="30" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="60" y="20" text-anchor="middle" fill="#1976d2" font-size="11" font-weight="600">设备显示: 123456</text>
+  </g>
+
+  <!-- Step 5: User binds device -->
+  <g>
+    <line x1="615" y1="380" x2="355" y2="380" stroke="#7b1fa2" stroke-width="2" marker-end="url(#purpleArrow)"/>
+    <rect x="370" y="360" width="235" height="35" rx="6" fill="white" stroke="#7b1fa2" stroke-width="1.5"/>
+    <text x="487" y="382" text-anchor="middle" fill="#7b1fa2" font-size="12" font-weight="600">输入动态码 + 配置 SSID</text>
+  </g>
+
+  <!-- Step 6: Confirm bind (poll) -->
+  <g>
+    <line x1="85" y1="430" x2="345" y2="430" stroke="#1976d2" stroke-width="2" marker-end="url(#blueArrow)"/>
+    <rect x="100" y="410" width="220" height="35" rx="6" fill="white" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="210" y="432" text-anchor="middle" fill="#1976d2" font-size="12" font-weight="600">POST /api/device/confirm-bind</text>
+  </g>
+
+  <!-- Step 7: Return config -->
+  <g>
+    <line x1="345" y1="480" x2="85" y2="480" stroke="#388e3c" stroke-width="2" marker-end="url(#greenArrow)"/>
+    <rect x="90" y="460" width="250" height="35" rx="6" fill="white" stroke="#388e3c" stroke-width="1.5"/>
+    <text x="215" y="482" text-anchor="middle" fill="#388e3c" font-size="12" font-weight="600">{ username, password, ssid }</text>
+  </g>
+
+</svg>

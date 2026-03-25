@@ -72,6 +72,11 @@ type Configuration struct {
 	JWT struct {
 		Secret string `yaml:"Secret" json:"secret"` // JWT 签名密钥，最少32字符
 	} `yaml:"JWT" json:"jwt"`
+
+	// 设备认证配置
+	DeviceAuth struct {
+		AESKey string `yaml:"AESKey" json:"aes_key"` // AES 加密密钥，用于设备密码加密存储，必须为 16、24 或 32 字节
+	} `yaml:"DeviceAuth" json:"device_auth"`
 }
 
 // GetDSN 获取MySQL连接字符串
@@ -151,6 +156,19 @@ func (c *Configuration) SetDefaults() {
 	if c.Database.MaxLifetime == 0 {
 		c.Database.MaxLifetime = 300 // 5分钟
 	}
+
+	// AES 密钥默认值：如果不符合要求则自动生成并写入配置文件
+	if c.ValidateAESKey() != nil {
+		aesKey, err := GenerateAESKey(32) // 默认使用 AES-256
+		if err != nil {
+			panic(fmt.Sprintf("生成 AES 密钥失败: %v", err))
+		}
+		c.DeviceAuth.AESKey = aesKey
+		// 保存到配置文件
+		if err := c.SaveToFile(configFilePath); err != nil {
+			panic(fmt.Sprintf("保存配置文件失败: %v", err))
+		}
+	}
 }
 
 // JWTSecretMinLength JWT密钥最小长度
@@ -197,6 +215,39 @@ func Get() *Configuration {
 		panic("config not loaded, call Load() first")
 	}
 	return Config
+}
+
+// AESKeyLengths AES 密钥有效长度
+var AESKeyLengths = []int{16, 24, 32}
+
+// ValidateAESKey 验证 AES 密钥是否符合要求
+func (c *Configuration) ValidateAESKey() error {
+	keyLen := len(c.DeviceAuth.AESKey)
+	for _, validLen := range AESKeyLengths {
+		if keyLen == validLen {
+			return nil
+		}
+	}
+	return fmt.Errorf("AES 密钥长度无效，当前 %d 字节，必须为 16、24 或 32 字节", keyLen)
+}
+
+// GenerateAESKey 生成安全的随机 AES 密钥
+func GenerateAESKey(keyLen int) (string, error) {
+	valid := false
+	for _, validLen := range AESKeyLengths {
+		if keyLen == validLen {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return "", fmt.Errorf("AES 密钥长度必须为 16、24 或 32 字节")
+	}
+	bytes := make([]byte, keyLen)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("生成随机密钥失败: %w", err)
+	}
+	return hex.EncodeToString(bytes)[:keyLen], nil
 }
 
 // GetConfigPath 获取配置文件路径

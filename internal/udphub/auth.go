@@ -5,8 +5,7 @@ import (
 	"time"
 
 	gormdb "draarl/internal/gormdb"
-
-	"golang.org/x/crypto/bcrypt"
+	"draarl/pkg/crypto"
 )
 
 // AuthFailure 认证失败记录
@@ -143,8 +142,17 @@ func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
 		return result
 	}
 
-	// 验证设备密码
-	if err := bcrypt.CompareHashAndPassword([]byte(user.DevicePassword), []byte(password)); err != nil {
+	// AES 解密存储的密码并验证
+	storedPassword, err := crypto.Decrypt(user.DevicePassword)
+	if err != nil {
+		recordFailure(ip, username)
+		result.Error = "invalid_password"
+		log.Printf("[AUTH] 设备认证失败（密码解密失败）: %s:%s, err: %v", ip, username, err)
+		return result
+	}
+
+	// 验证密码
+	if storedPassword != password {
 		recordFailure(ip, username)
 		result.Error = "invalid_password"
 		log.Printf("[AUTH] 设备认证失败（密码错误）: %s:%s", ip, username)

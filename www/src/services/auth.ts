@@ -220,6 +220,52 @@ export interface RegenerateDevicePasswordResponse {
   device_password: string
 }
 
+// ========== 设备动态码绑定相关接口 ==========
+
+// 绑定设备请求
+export interface BindDeviceRequest {
+  dynamic_code: string
+}
+
+// 绑定设备响应
+export interface BindDeviceResponse {
+  device_mac: string
+  call_sign: string
+  message: string
+}
+
+// 提交设备配置请求
+export interface SubmitDeviceConfigRequest {
+  device_mac: string
+  ssid: number
+}
+
+// 提交设备配置响应
+export interface SubmitDeviceConfigResponse {
+  message: string
+  udp_auth_info: {
+    username: string
+    device_password: string
+  }
+  dmr_id: number
+}
+
+export const deviceBindService = {
+  // 通过动态码绑定设备
+  async bindDevice(dynamicCode: string): Promise<BindDeviceResponse> {
+    const res = await apiClient.post<BackendResponse<BindDeviceResponse>>('/api/device/bind', {
+      dynamic_code: dynamicCode,
+    })
+    return res.data!
+  },
+
+  // 提交设备配置
+  async submitDeviceConfig(data: SubmitDeviceConfigRequest): Promise<SubmitDeviceConfigResponse> {
+    const res = await apiClient.post<BackendResponse<SubmitDeviceConfigResponse>>('/api/device/submit-config', data)
+    return res.data!
+  },
+}
+
 export interface RegisterResponse {
   id: number
   username: string

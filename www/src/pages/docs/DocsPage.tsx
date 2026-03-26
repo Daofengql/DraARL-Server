@@ -313,8 +313,13 @@ function DevGuideContent() {
   )
 }
 
-// 主页面组件
+// 主页面组件（用于 MainLayout 内部）
 export function DocsPage() {
+  return <DocsContent />
+}
+
+// 文档内容组件（可复用）
+export function DocsContent() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const [currentSection, setCurrentSection] = useState(0)

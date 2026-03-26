@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Container,
   Box,
   Card,
   CardContent,
@@ -19,6 +18,7 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff'
 import { captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { PublicPageLayout } from '../../components/layout'
 
 export function ForgotPasswordPage() {
   const navigate = useNavigate()
@@ -147,23 +147,11 @@ export function ForgotPasswordPage() {
   const logoUrl = config.systemInfo.logo_url
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
-  const icp = config.icp?.icp || ''
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: (theme) => theme.palette.background.default,
-        py: 4,
-      }}
-    >
-      <Container maxWidth="sm">
-        <Card elevation={3}>
-          <CardContent sx={{ p: 4 }}>
+    <PublicPageLayout>
+      <Card elevation={3}>
+        <CardContent sx={{ p: 4 }}>
             <Box sx={{ textAlign: 'center', mb: 4 }}>
               {logoUrl ? (
                 <Box
@@ -340,35 +328,6 @@ export function ForgotPasswordPage() {
             </Box>
           </CardContent>
         </Card>
-
-        {icp && (
-          <Box sx={{ textAlign: 'center', mt: 2 }}>
-            <MuiLink
-              href="http://beian.miit.gov.cn/"
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 0.5,
-                color: 'text.secondary',
-                textDecoration: 'none',
-                fontSize: '0.875rem',
-                '&:hover': { color: 'text.primary' },
-              }}
-            >
-              <Box
-                component="img"
-                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
-                alt="备案图标"
-                sx={{ height: 18, width: 18 }}
-              />
-              {icp}
-            </MuiLink>
-          </Box>
-        )}
-      </Container>
-    </Box>
+    </PublicPageLayout>
   )
 }

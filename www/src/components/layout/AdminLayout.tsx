@@ -18,7 +18,7 @@ import LinkIcon from '@mui/icons-material/Link'
 import Folder from '@mui/icons-material/Folder'
 import { useState, useEffect } from 'react'
 import { authService } from '../../services'
-import { Header } from './Header'
+import { PublicHeader } from './PublicHeader'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useConfig } from '../../contexts/ConfigContext'
 
@@ -323,8 +323,8 @@ export function AdminLayout() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'grey.50' }}>
-      {/* 顶部导航栏 - 复用前台 Header */}
-      <Header onMenuClick={handleDrawerToggle} />
+      {/* 顶部导航栏 - 复用公共 Header */}
+      <PublicHeader onMenuClick={handleDrawerToggle} />
 
       {/* 中间核心区域 */}
       <Box sx={{ display: 'flex', flex: 1, mt: 8 }}>

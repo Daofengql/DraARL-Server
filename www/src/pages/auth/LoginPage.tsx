@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Container,
   Box,
   Card,
   CardContent,
@@ -19,6 +18,7 @@ import Radio from '@mui/icons-material/Radio'
 import { authService, ssoService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { PublicPageLayout } from '../../components/layout'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -222,242 +222,201 @@ export function LoginPage() {
   const logoUrl = config.systemInfo.logo_url
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
-  const icp = config.icp?.icp || ''
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: (theme) => theme.palette.background.default,
-        py: 4,
-      }}
-    >
-      <Container maxWidth="sm">
-        <Card elevation={3}>
-          <CardContent sx={{ p: 4 }}>
-            <Box sx={{ textAlign: 'center', mb: 4 }}>
-              {logoUrl ? (
-                <Box
-                  component="img"
-                  src={logoUrl}
-                  alt={siteName}
-                  onClick={() => navigate('/')}
-                  sx={{
-                    height: 80,
-                    mb: 1.5,
-                    objectFit: 'contain',
-                    cursor: 'pointer',
-                  }}
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none'
-                  }}
-                />
-              ) : (
-                <Radio
-                  sx={{ fontSize: 64, color: 'primary.main', mb: 1, cursor: 'pointer' }}
-                  onClick={() => navigate('/')}
-                />
-              )}
-              <Typography variant="h6" component="h1" gutterBottom sx={{ fontWeight: 500 }}>
-                {siteShorthand}
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                {siteName}
-              </Typography>
-            </Box>
-
-            {error && (
-              <Alert severity="error" sx={{ mb: 3 }}>
-                {error}
-              </Alert>
-            )}
-
-            {/* 登录方式切换 */}
-            <Tabs
-              value={loginMode}
-              onChange={(_, v) => setLoginMode(v)}
-              variant="fullWidth"
-              sx={{ mb: 3 }}
-            >
-              <Tab label="密码登录" />
-              <Tab label="验证码登录" />
-            </Tabs>
-
-            {/* 密码登录表单 */}
-            {loginMode === 0 && (
-              <form onSubmit={handlePasswordLogin}>
-                <TextField
-                  fullWidth
-                  label="用户名/邮箱"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  margin="normal"
-                  required
-                  autoFocus
-                />
-                <TextField
-                  fullWidth
-                  label="密码"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  margin="normal"
-                  required
-                />
-                <Button
-                  fullWidth
-                  type="submit"
-                  variant="contained"
-                  size="large"
-                  sx={{ mt: 3, mb: 2 }}
-                  disabled={loading}
-                >
-                  {loading ? '登录中...' : '登录'}
-                </Button>
-              </form>
-            )}
-
-            {/* 验证码登录表单 */}
-            {loginMode === 1 && (
-              <form onSubmit={handleEmailLogin}>
-                <TextField
-                  fullWidth
-                  label="邮箱地址"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  margin="normal"
-                  required
-                  autoFocus
-                />
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
-                  <TextField
-                    label="图片验证码"
-                    value={captchaCode}
-                    onChange={(e) => setCaptchaCode(e.target.value)}
-                    required
-                    sx={{ flex: 1 }}
-                  />
-                  <Box
-                    component="img"
-                    src={captchaImage}
-                    alt="验证码"
-                    onClick={getCaptcha}
-                    sx={{
-                      height: 64,
-                      cursor: 'pointer',
-                      borderRadius: 1,
-                      bgcolor: 'action.hover',
-                    }}
-                  />
-                </Box>
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
-                  <TextField
-                    label="邮箱验证码"
-                    value={emailCode}
-                    onChange={(e) => setEmailCode(e.target.value)}
-                    required
-                    sx={{ flex: 1 }}
-                  />
-                  <Button
-                    variant="outlined"
-                    onClick={handleSendEmailCode}
-                    disabled={loading || countdown > 0}
-                    sx={{ minWidth: 120 }}
-                  >
-                    {countdown > 0 ? `${countdown}s` : '发送验证码'}
-                  </Button>
-                </Box>
-                <Button
-                  fullWidth
-                  type="submit"
-                  variant="contained"
-                  size="large"
-                  sx={{ mt: 3, mb: 2 }}
-                  disabled={loading}
-                >
-                  {loading ? '登录中...' : '登录'}
-                </Button>
-              </form>
-            )}
-
-            <Box sx={{ textAlign: 'center', mt: 2, display: 'flex', justifyContent: 'center', gap: 2 }}>
-              <Link
-                component="button"
-                type="button"
-                variant="body2"
-                onClick={() => navigate('/register')}
-              >
-                没有账号？立即注册
-              </Link>
-              <Link
-                component="button"
-                type="button"
-                variant="body2"
-                onClick={() => navigate('/forgot-password')}
-              >
-                忘记密码？
-              </Link>
-            </Box>
-
-            {config.sso_enabled && (
-              <Box sx={{ mt: 3 }}>
-                <Divider sx={{ my: 2 }}>或</Divider>
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  size="large"
-                  onClick={handleSSOLogin}
-                  disabled={loading}
-                  sx={{
-                    background: 'linear-gradient(45deg, #2196f3 30%, #21cbf3 90%)',
-                    color: 'white',
-                    borderColor: 'transparent',
-                    '&:hover': {
-                      background: 'linear-gradient(45deg, #1976d2 30%, #1e88e5 90%)',
-                      borderColor: 'transparent',
-                    },
-                  }}
-                >
-                  使用 {config.sso_name || 'SSO'} 登录
-                </Button>
-              </Box>
-            )}
-          </CardContent>
-        </Card>
-
-        {icp && (
-          <Box sx={{ textAlign: 'center', mt: 2 }}>
-            <Link
-              href="http://beian.miit.gov.cn/"
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 0.5,
-                color: 'text.secondary',
-                textDecoration: 'none',
-                fontSize: '0.875rem',
-                '&:hover': { color: 'text.primary' },
-              }}
-            >
+    <PublicPageLayout>
+      <Card elevation={3}>
+        <CardContent sx={{ p: 4 }}>
+          <Box sx={{ textAlign: 'center', mb: 4 }}>
+            {logoUrl ? (
               <Box
                 component="img"
-                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
-                alt="备案图标"
-                sx={{ height: 18, width: 18 }}
+                src={logoUrl}
+                alt={siteName}
+                onClick={() => navigate('/')}
+                sx={{
+                  height: 80,
+                  mb: 1.5,
+                  objectFit: 'contain',
+                  cursor: 'pointer',
+                }}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none'
+                }}
               />
-              {icp}
+            ) : (
+              <Radio
+                sx={{ fontSize: 64, color: 'primary.main', mb: 1, cursor: 'pointer' }}
+                onClick={() => navigate('/')}
+              />
+            )}
+            <Typography variant="h6" component="h1" gutterBottom sx={{ fontWeight: 500 }}>
+              {siteShorthand}
+            </Typography>
+            <Typography variant="body1" color="text.secondary">
+              {siteName}
+            </Typography>
+          </Box>
+
+          {error && (
+            <Alert severity="error" sx={{ mb: 3 }}>
+              {error}
+            </Alert>
+          )}
+
+          {/* 登录方式切换 */}
+          <Tabs
+            value={loginMode}
+            onChange={(_, v) => setLoginMode(v)}
+            variant="fullWidth"
+            sx={{ mb: 3 }}
+          >
+            <Tab label="密码登录" />
+            <Tab label="验证码登录" />
+          </Tabs>
+
+          {/* 密码登录表单 */}
+          {loginMode === 0 && (
+            <form onSubmit={handlePasswordLogin}>
+              <TextField
+                fullWidth
+                label="用户名/邮箱"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                margin="normal"
+                required
+                autoFocus
+              />
+              <TextField
+                fullWidth
+                label="密码"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                margin="normal"
+                required
+              />
+              <Button
+                fullWidth
+                type="submit"
+                variant="contained"
+                size="large"
+                sx={{ mt: 3, mb: 2 }}
+                disabled={loading}
+              >
+                {loading ? '登录中...' : '登录'}
+              </Button>
+            </form>
+          )}
+
+          {/* 验证码登录表单 */}
+          {loginMode === 1 && (
+            <form onSubmit={handleEmailLogin}>
+              <TextField
+                fullWidth
+                label="邮箱地址"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                margin="normal"
+                required
+                autoFocus
+              />
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
+                <TextField
+                  label="图片验证码"
+                  value={captchaCode}
+                  onChange={(e) => setCaptchaCode(e.target.value)}
+                  required
+                  sx={{ flex: 1 }}
+                />
+                <Box
+                  component="img"
+                  src={captchaImage}
+                  alt="验证码"
+                  onClick={getCaptcha}
+                  sx={{
+                    height: 64,
+                    cursor: 'pointer',
+                    borderRadius: 1,
+                    bgcolor: 'action.hover',
+                  }}
+                />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
+                <TextField
+                  label="邮箱验证码"
+                  value={emailCode}
+                  onChange={(e) => setEmailCode(e.target.value)}
+                  required
+                  sx={{ flex: 1 }}
+                />
+                <Button
+                  variant="outlined"
+                  onClick={handleSendEmailCode}
+                  disabled={loading || countdown > 0}
+                  sx={{ minWidth: 120 }}
+                >
+                  {countdown > 0 ? `${countdown}s` : '发送验证码'}
+                </Button>
+              </Box>
+              <Button
+                fullWidth
+                type="submit"
+                variant="contained"
+                size="large"
+                sx={{ mt: 3, mb: 2 }}
+                disabled={loading}
+              >
+                {loading ? '登录中...' : '登录'}
+              </Button>
+            </form>
+          )}
+
+          <Box sx={{ textAlign: 'center', mt: 2, display: 'flex', justifyContent: 'center', gap: 2 }}>
+            <Link
+              component="button"
+              type="button"
+              variant="body2"
+              onClick={() => navigate('/register')}
+            >
+              没有账号？立即注册
+            </Link>
+            <Link
+              component="button"
+              type="button"
+              variant="body2"
+              onClick={() => navigate('/forgot-password')}
+            >
+              忘记密码？
             </Link>
           </Box>
-        )}
-      </Container>
+
+          {config.sso_enabled && (
+            <Box sx={{ mt: 3 }}>
+              <Divider sx={{ my: 2 }}>或</Divider>
+              <Button
+                fullWidth
+                variant="outlined"
+                size="large"
+                onClick={handleSSOLogin}
+                disabled={loading}
+                sx={{
+                  background: 'linear-gradient(45deg, #2196f3 30%, #21cbf3 90%)',
+                  color: 'white',
+                  borderColor: 'transparent',
+                  '&:hover': {
+                    background: 'linear-gradient(45deg, #1976d2 30%, #1e88e5 90%)',
+                    borderColor: 'transparent',
+                  },
+                }}
+              >
+                使用 {config.sso_name || 'SSO'} 登录
+              </Button>
+            </Box>
+          )}
+        </CardContent>
+      </Card>
 
       {/* SSO 登录成功提示 */}
       <Snackbar
@@ -470,6 +429,6 @@ export function LoginPage() {
           {ssoMessage?.message}
         </Alert>
       </Snackbar>
-    </Box>
+    </PublicPageLayout>
   )
 }

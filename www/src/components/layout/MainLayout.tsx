@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Box } from '@mui/material'
-import { Header } from './Header'
+import { PublicHeader } from './PublicHeader'
 import { Sidebar, DRAWER_WIDTH } from './Sidebar'
 import { Outlet } from 'react-router-dom'
 import { usePageTitle } from '../../hooks/usePageTitle'
@@ -30,7 +30,7 @@ export function MainLayout({ children }: MainLayoutProps) {
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
 
       {/* 顶部导航栏 */}
-      <Header onMenuClick={handleDrawerToggle} />
+      <PublicHeader onMenuClick={handleDrawerToggle} />
 
       {/* 中间核心区域：包含侧边栏和主内容，flex: 1 会自动撑开剩余空间 */}
       <Box sx={{ display: 'flex', flex: 1 }}>

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Container,
   Box,
   Card,
   CardContent,
@@ -21,6 +20,7 @@ import ContentCopy from '@mui/icons-material/ContentCopy'
 import { authService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
+import { PublicPageLayout } from '../../components/layout'
 
 const steps = ['基本信息', '联系方式', '设置密码', '邮箱验证']
 
@@ -78,7 +78,6 @@ export function RegisterPage() {
   const logoUrl = config.systemInfo.logo_url
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
-  const icp = config.icp?.icp || ''
 
   // 自动加载图片验证码
   useEffect(() => {
@@ -486,20 +485,9 @@ export function RegisterPage() {
   }
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: (theme) => theme.palette.background.default,
-        py: 4,
-      }}
-    >
-      <Container maxWidth="sm">
-        <Card elevation={3}>
-          <CardContent sx={{ p: 4 }}>
+    <PublicPageLayout>
+      <Card elevation={3}>
+        <CardContent sx={{ p: 4 }}>
             {registerSuccess ? (
               // 注册成功页面
               <Box sx={{ textAlign: 'center' }}>
@@ -642,35 +630,6 @@ export function RegisterPage() {
             )}
           </CardContent>
         </Card>
-
-        {icp && (
-          <Box sx={{ textAlign: 'center', mt: 2 }}>
-            <Link
-              href="http://beian.miit.gov.cn/"
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 0.5,
-                color: 'text.secondary',
-                textDecoration: 'none',
-                fontSize: '0.875rem',
-                '&:hover': { color: 'text.primary' },
-              }}
-            >
-              <Box
-                component="img"
-                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
-                alt="备案图标"
-                sx={{ height: 18, width: 18 }}
-              />
-              {icp}
-            </Link>
-          </Box>
-        )}
-      </Container>
-    </Box>
+    </PublicPageLayout>
   )
 }

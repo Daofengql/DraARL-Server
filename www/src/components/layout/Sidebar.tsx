@@ -20,7 +20,6 @@ import Person from '@mui/icons-material/Person'
 import AdminPanelSettings from '@mui/icons-material/AdminPanelSettings'
 import ExitToApp from '@mui/icons-material/ExitToApp'
 import Mic from '@mui/icons-material/Mic'
-import MenuBook from '@mui/icons-material/MenuBook'
 import Radio from '@mui/icons-material/Radio'
 import { authService } from '../../services'
 import { useConfig } from '../../contexts/ConfigContext'
@@ -47,7 +46,6 @@ const menuItems: MenuItem[] = [
   { path: '/groups', label: '群组管理', icon: <Group />, requireApproved: true },
   { path: '/profile', label: '个人中心', icon: <Person /> },
   { path: '/comm-records', label: '通信记录', icon: <Mic />, requireApproved: true },
-  { path: '/docs', label: '技术支持', icon: <MenuBook /> },
 ]
 
 // 1. 在参数中单独解构出 sx，防止它留在 ...props 中覆盖内部样式

@@ -24,7 +24,7 @@ const ProfilePage = lazy(() => import('./pages/profile/ProfilePage').then(m => (
 const SiteConfigPage = lazy(() => import('./pages/settings/SiteConfigPage').then(m => ({ default: m.SiteConfigPage })))
 const CommRecordsPage = lazy(() => import('./pages/comm-records/CommRecordsPage').then(m => ({ default: m.CommRecordsPage })))
 const NotFoundPage = lazy(() => import('./pages/not-found/NotFoundPage').then(m => ({ default: m.NotFoundPage })))
-const DocsPage = lazy(() => import('./pages/docs/DocsPage').then(m => ({ default: m.DocsPage })))
+const PublicDocsPage = lazy(() => import('./pages/docs/PublicDocsPage').then(m => ({ default: m.PublicDocsPage })))
 const RadioPage = lazy(() => import('./pages/radio/RadioPage').then(m => ({ default: m.RadioPage })))
 const AdminDashboardPage = lazy(() => import('./pages/admin/DashboardPage').then(m => ({ default: m.AdminDashboardPage })))
 const AdminDevicePage = lazy(() => import('./pages/admin/DevicePage').then(m => ({ default: m.AdminDevicePage })))
@@ -47,6 +47,9 @@ function App() {
         <Routes>
         {/* 公开路由 - 首页 */}
         <Route path="/" element={<PageSuspense><HomePage /></PageSuspense>} />
+
+        {/* 公开路由 - 文档 */}
+        <Route path="/docs" element={<PageSuspense><PublicDocsPage /></PageSuspense>} />
 
         {/* 公开路由 - 登录/注册 */}
         <Route
@@ -72,7 +75,6 @@ function App() {
           {/* 无需审核即可访问的页面 */}
           <Route path="dashboard" element={<PageSuspense><DashboardPage /></PageSuspense>} />
           <Route path="profile" element={<PageSuspense><ProfilePage /></PageSuspense>} />
-          <Route path="docs" element={<PageSuspense><DocsPage /></PageSuspense>} />
 
           {/* 需要审核通过才能访问的页面 */}
           <Route

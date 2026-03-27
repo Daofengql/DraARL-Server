@@ -152,9 +152,8 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 func userHasGroupAccess(userID int, groupID int) bool {
 	// 1. 检查用户是否有设备属于该群组
 	var deviceCount int64
-	gormdb.Get().Table("devices d").
-		Joins("INNER JOIN group_devices gd ON d.id = gd.device_id").
-		Where("d.owner_id = ? AND gd.group_id = ?", userID, groupID).
+	gormdb.Get().Table("devices").
+		Where("owner_id = ? AND group_id = ?", userID, groupID).
 		Count(&deviceCount)
 	if deviceCount > 0 {
 		return true
@@ -184,9 +183,8 @@ func userHasGroupAccess(userID int, groupID int) bool {
 	}
 
 	// 4. 批量检查用户是否有设备属于互联组中的任何群组
-	gormdb.Get().Table("devices d").
-		Joins("INNER JOIN group_devices gd ON d.id = gd.device_id").
-		Where("d.owner_id = ? AND gd.group_id IN ?", userID, targetGroupIDs).
+	gormdb.Get().Table("devices").
+		Where("owner_id = ? AND group_id IN ?", userID, targetGroupIDs).
 		Count(&deviceCount)
 	if deviceCount > 0 {
 		return true

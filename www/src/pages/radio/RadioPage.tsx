@@ -211,11 +211,23 @@ export const RadioPage: React.FC = () => {
   // Refs
   const messageListRef = useRef<HTMLDivElement>(null)
   const messagesRef = useRef<RadioMessage[]>(messages)
+  const isPlayingVoiceRef = useRef(false)
+  const pendingSyncMessagesRef = useRef<RadioMessage[] | null>(null)
 
   // 保持 messagesRef 与 messages 同步
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
+
+  // 供 MessageList 回调 - 播放状态变化
+  const handleVoicePlayStateChange = useCallback((playing: boolean) => {
+    isPlayingVoiceRef.current = playing
+    // 播放结束后，应用挂起的同步结果
+    if (!playing && pendingSyncMessagesRef.current) {
+      setMessages(pendingSyncMessagesRef.current)
+      pendingSyncMessagesRef.current = null
+    }
+  }, [])
 
   // 初始化
   useEffect(() => {
@@ -327,7 +339,7 @@ export const RadioPage: React.FC = () => {
     }
   }, [connectionState, radioService])
 
-  // 【消息同步】每 15 秒从后端同步消息（斩杀线策略）
+  // 【消息同步】每 15 秒从后端同步��息（斩杀线策略）
   useEffect(() => {
     if (connectionState !== 'online') return
 
@@ -343,8 +355,20 @@ export const RadioPage: React.FC = () => {
         // 使用 ref 获取最新的消息列表（避免闭包捕获过期值）
         const currentMessages = messagesRef.current
         const merged = await messageSyncService.syncMessages(currentGroupId, currentMessages, currentUser)
-        // 只有当消息有变化时才更新（避免不必要的重渲染）
-        if (merged.length !== currentMessages.length || JSON.stringify(merged) !== JSON.stringify(currentMessages)) {
+
+        // 用 ID 集合比较，避免 Blob 序列化问题
+        const hasChanges = (() => {
+          if (merged.length !== currentMessages.length) return true
+          const currentIds = new Set(currentMessages.map(m => m.id))
+          return merged.some(m => !currentIds.has(m.id))
+        })()
+
+        if (!hasChanges) return
+
+        if (isPlayingVoiceRef.current) {
+          // 正在播放：挂起同步结果，等播放结束后再应用
+          pendingSyncMessagesRef.current = merged
+        } else {
           setMessages(merged)
         }
       } catch (error) {
@@ -572,6 +596,7 @@ export const RadioPage: React.FC = () => {
           hasMore={messageSyncService.hasMore(currentGroupId)}
           isLoadingMore={isLoadingMore}
           onLoadMore={handleLoadMore}
+          onVoicePlayStateChange={handleVoicePlayStateChange}
         />
       </Box>
 

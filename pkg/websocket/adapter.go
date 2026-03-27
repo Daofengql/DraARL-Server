@@ -27,16 +27,22 @@ func (a *WSManagerAdapter) GetDevicesByGroup(groupID int) []interfaces.WSDeviceI
 	return result
 }
 
-// SendToDevice 向设备发送数据
+// SendToDevice 向设备发送数据（异步非阻塞）
+// 优化：
+// 1. 直接使用传入的 device 引用，消除二次查找
+// 2. 使用异步写通道，避免同步阻塞
+// 3. 通道满时丢帧而非阻塞整条转发链路
 func (a *WSManagerAdapter) SendToDevice(device interfaces.WSDeviceInterface, data []byte, messageType int) error {
-	// 通过 userID 查找 WSDevice
 	if device.IsGhost() {
-		userID := device.GetUserID()
-		wsDevice, ok := a.manager.GetGhostDevice(userID)
+		// 直接类型断言，消除二次查找
+		wsDevice, ok := device.(*WSDevice)
 		if !ok {
-			return nil // 设备不在线，静默忽略
+			return nil // 类型断言失败，静默忽略
 		}
-		return wsDevice.Conn.WriteMessage(messageType, data)
+		// 异步非阻塞投递
+		if !wsDevice.AsyncWrite(messageType, data) {
+			// 通道满丢帧，但不返回错误（实时语音丢帧优于阻塞）
+		}
 	}
 	return nil
 }
@@ -113,10 +119,10 @@ func handleHeartbeat(device *WSDevice, packet *WSPacket) {
 		}
 	}
 
-	// 回填呼号
+	// 回填呼号（通过异步通道发送，避免写锁竞争）
 	response := EncodeHeartbeatResponse(packet, device.CallSign)
-	if err := device.Conn.WriteMessage(websocket.BinaryMessage, response); err != nil {
-		log.Printf("[WS] Heartbeat response failed: %v", err)
+	if !device.AsyncWrite(websocket.BinaryMessage, response) {
+		log.Printf("[WS] Heartbeat response failed for %s: write channel full or closed", device.GetIdentifier())
 	}
 }
 

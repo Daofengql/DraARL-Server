@@ -223,17 +223,21 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 }
 
 // routeServerVoiceToLinkedGroups 转发服务器互联语音到关联群组
+// 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
 func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
 		return
 	}
 
-	// 获取该群组所属的所有互联组
 	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
 	if len(linkGroupIDs) == 0 {
 		return
 	}
+
+	// 【前置逻辑说明】使用 map 进行目标组去重。
+	// 当源群组加入多个互联组且目标群组存在交集时，防止目标组的 UDP 设备收到多份重复报文
+	processedTargets := make(map[int]bool)
 
 	for _, linkGroupID := range linkGroupIDs {
 		linkGroup, exists := GetGroupFromCache(linkGroupID)
@@ -243,9 +247,11 @@ func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDevic
 
 		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
 		for _, targetID := range targetGroupIDs {
-			if targetID == sourceGroupID {
+			// 跳过源组自身，且跳过已处理过的交集目标组
+			if targetID == sourceGroupID || processedTargets[targetID] {
 				continue
 			}
+			processedTargets[targetID] = true
 
 			targetGroup, exists := GetGroupFromCache(targetID)
 			if !exists {
@@ -257,20 +263,10 @@ func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDevic
 				continue
 			}
 
-			// 转发到目标组的 UDP 设备
+			// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteVoiceToWSClients 处理
 			for _, targetDev := range pool.DevConnList {
 				if canForwardToDevice(targetDev, 0, targetID, false) {
 					conn.WriteToUDP(data, targetDev.UDPAddr)
-				}
-			}
-
-			// 同时转发到该群组的 WebSocket 设备
-			if r.wsManager != nil {
-				wsDevices := r.wsManager.GetDevicesByGroup(targetID)
-				for _, device := range wsDevices {
-					if !device.IsDisabledRecv() {
-						r.wsManager.SendToDevice(device, data, 2)
-					}
 				}
 			}
 		}
@@ -278,6 +274,7 @@ func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDevic
 }
 
 // routeTextToLinkedGroups 转发文本消息到关联群组
+// 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
 func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	conn := GetGlobalConn()
 	if conn == nil {
@@ -289,6 +286,10 @@ func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterf
 		return
 	}
 
+	// 【前置逻辑说明】使用 map 进行目标组去重。
+	// 当源群组加入多个互联组且目标群组存在交集时，防止目标组的 UDP 设备收到多份重复报文
+	processedTargets := make(map[int]bool)
+
 	for _, linkGroupID := range linkGroupIDs {
 		linkGroup, exists := GetGroupFromCache(linkGroupID)
 		if !exists || linkGroup.Status != 1 {
@@ -297,9 +298,11 @@ func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterf
 
 		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
 		for _, targetID := range targetGroupIDs {
-			if targetID == sourceGroupID {
+			// ��过源组自身，且跳过已处理过的交集目标组
+			if targetID == sourceGroupID || processedTargets[targetID] {
 				continue
 			}
+			processedTargets[targetID] = true
 
 			targetGroup, exists := GetGroupFromCache(targetID)
 			if !exists {
@@ -311,20 +314,10 @@ func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterf
 				continue
 			}
 
-			// 转发到目标组的 UDP 设备
+			// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteTextToWSClients 处理
 			for _, targetDev := range pool.DevConnList {
 				if canForwardToDevice(targetDev, 0, targetID, false) {
 					conn.WriteToUDP(data, targetDev.UDPAddr)
-				}
-			}
-
-			// 同时转发到该群组的 WebSocket 设备
-			if r.wsManager != nil {
-				wsDevices := r.wsManager.GetDevicesByGroup(targetID)
-				for _, device := range wsDevices {
-					if !device.IsDisabledRecv() {
-						r.wsManager.SendToDevice(device, data, 2)
-					}
 				}
 			}
 		}
@@ -385,7 +378,7 @@ func BroadcastTextFromUDP(source *models.Device, data []byte, groupID int) {
 	}
 }
 
-// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客户端
+// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客��端
 // 【新增】解决 WS JWT 客户端之间无法互相转发的问题
 func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	if r.wsManager == nil {
@@ -412,13 +405,18 @@ func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterfac
 
 	// 2. 转发到互联组的 WS 客户端
 	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
+
+	// 【前置逻辑说明】引入 map 去重机制，防止多虚拟组交集导致的 WS 双倍发包
+	processedTargets := make(map[int]bool)
+
 	for _, linkGroupID := range linkGroupIDs {
 		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
 		for _, targetID := range targetGroupIDs {
-			// 跳过源组
-			if targetID == sourceGroupID {
+			// 跳过源组与重复的目标组
+			if targetID == sourceGroupID || processedTargets[targetID] {
 				continue
 			}
+			processedTargets[targetID] = true
 
 			// 检查目标群组状态
 			targetGroup, exists := GetGroupFromCache(targetID)
@@ -426,9 +424,9 @@ func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterfac
 				continue
 			}
 
-			// 转发到目标组的 WS 客户端
-			wsDevices := r.wsManager.GetDevicesByGroup(targetID)
-			for _, device := range wsDevices {
+			// 专注负责目标组 WS 客户端的下发
+			linkedWsDevices := r.wsManager.GetDevicesByGroup(targetID)
+			for _, device := range linkedWsDevices {
 				if device.IsDisabledRecv() {
 					continue
 				}
@@ -467,20 +465,27 @@ func (r *MessageRouter) RouteTextToWSClients(source interfaces.WSDeviceInterface
 
 	// 2. 转发到互联组的 WS 客户端
 	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
+
+	// 【前置逻辑说明】引入 map 去重机制，防止多虚拟组交集导致的 WS 双倍发包
+	processedTargets := make(map[int]bool)
+
 	for _, linkGroupID := range linkGroupIDs {
 		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
 		for _, targetID := range targetGroupIDs {
-			if targetID == sourceGroupID {
+			// 跳过源组与重复的目标组
+			if targetID == sourceGroupID || processedTargets[targetID] {
 				continue
 			}
+			processedTargets[targetID] = true
 
 			targetGroup, exists := GetGroupFromCache(targetID)
 			if !exists || targetGroup.Status != 1 {
 				continue
 			}
 
-			wsDevices := r.wsManager.GetDevicesByGroup(targetID)
-			for _, device := range wsDevices {
+			// 专注负责目标组 WS 客户端的下发
+			linkedWsDevices := r.wsManager.GetDevicesByGroup(targetID)
+			for _, device := range linkedWsDevices {
 				if device.IsDisabledRecv() {
 					continue
 				}

@@ -90,7 +90,24 @@ type WSDevice struct {
 	Traffic     int64
 	VoiceTime   int64
 	PacketCount int64
+
+	// ==========================================
+	// 异步写入优化：带缓冲的写通道
+	// 解决跨组转发时同步阻塞导致的延迟累积问题
+	// ==========================================
+	writeCh   chan *writeRequest // 异步写缓冲通道
+	closeCh   chan struct{}      // 关闭信号
+	writeMu   sync.Mutex         // 保护 writeCh 的访问
+	writeOnce sync.Once          // 确保 writer 只启动一次
 }
+
+// writeRequest 写请求结构
+type writeRequest struct {
+	messageType int
+	data        []byte
+}
+
+const writeChSize = 64 // 写通道缓冲大小，约 4 秒的音频帧 (63ms * 64 ≈ 4s)
 
 // GetIdentifier 获取设备唯一标识
 func (d *WSDevice) GetIdentifier() string {
@@ -161,6 +178,77 @@ func (d *WSDevice) GetLastPacketTime() time.Time {
 }
 
 // ==========================================
+// 异步写入优化：独立 writer goroutine
+// 解决跨组转发时同步阻塞导致的延迟累积问题
+// ==========================================
+
+// StartWriter 启动独立的 writer goroutine
+// 使用 sync.Once 确保只启动一次
+func (d *WSDevice) StartWriter() {
+	d.writeOnce.Do(func() {
+		d.writeCh = make(chan *writeRequest, writeChSize)
+		d.closeCh = make(chan struct{})
+		go d.writerLoop()
+	})
+}
+
+// writerLoop writer goroutine 主循环
+// 所有写操作都通过此 goroutine 串行执行，避免写锁竞争
+func (d *WSDevice) writerLoop() {
+	for {
+		select {
+		case req := <-d.writeCh:
+			if err := d.Conn.WriteMessage(req.messageType, req.data); err != nil {
+				log.Printf("[WS] Async write failed for %s: %v", d.GetIdentifier(), err)
+				return
+			}
+		case <-d.closeCh:
+			return
+		}
+	}
+}
+
+// AsyncWrite 异步写入数据（非阻塞）
+// 返回值：true=投递成功，false=通道满（丢帧）
+func (d *WSDevice) AsyncWrite(messageType int, data []byte) bool {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	if d.writeCh == nil {
+		return false
+	}
+
+	select {
+	case d.writeCh <- &writeRequest{messageType: messageType, data: data}:
+		return true
+	default:
+		// 通道满，丢帧而不是阻塞
+		log.Printf("[WS] Write channel full for %s, dropping frame", d.GetIdentifier())
+		return false
+	}
+}
+
+// StopWriter 停止 writer goroutine
+func (d *WSDevice) StopWriter() {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	if d.closeCh != nil {
+		close(d.closeCh)
+		d.closeCh = nil
+	}
+	if d.writeCh != nil {
+		close(d.writeCh)
+		d.writeCh = nil
+	}
+}
+
+// WritePing 通过异步通道发送 Ping 消息
+func (d *WSDevice) WritePing() bool {
+	return d.AsyncWrite(websocket.PingMessage, []byte{})
+}
+
+// ==========================================
 // 性能优化：分片锁实现
 // ==========================================
 
@@ -174,9 +262,17 @@ type connShard struct {
 	groupDevices map[int]map[string]*WSDevice // 群组索引
 }
 
-// WSConnectionManager WebSocket 连接管理器（分片锁优化版）
+// WSConnectionManager WebSocket 连接管理器（优化版）
+// 使用全局群组索引实现 O(1) 的群组查询，解决跨组转发卡顿问题
 type WSConnectionManager struct {
 	shards [shardCount]*connShard // 分片数组
+
+	// 【优化】全局群组索引：独立锁，避免分片遍历
+	// key: groupID, value: map[deviceKey]*WSDevice
+	globalGroupIndex struct {
+		mu        sync.RWMutex
+		devices   map[int]map[string]*WSDevice
+	}
 
 	// 配置
 	AuthTimeout      time.Duration
@@ -223,6 +319,9 @@ func NewWSConnectionManager() *WSConnectionManager {
 		PreReconnectTime: 240 * time.Second, // 240 秒开始准备重连
 	}
 
+	// 初始化全局群组索引
+	m.globalGroupIndex.devices = make(map[int]map[string]*WSDevice)
+
 	// 初始化所有分片
 	for i := 0; i < shardCount; i++ {
 		m.shards[i] = &connShard{
@@ -267,6 +366,35 @@ func getDeviceKey(device *WSDevice) string {
 }
 
 // ==========================================
+// 全局群组索引辅助方法
+// ==========================================
+
+// addToGlobalGroupIndex 将设备添加到全局群组索引
+func (m *WSConnectionManager) addToGlobalGroupIndex(groupID int, key string, device *WSDevice) {
+	m.globalGroupIndex.mu.Lock()
+	defer m.globalGroupIndex.mu.Unlock()
+
+	if m.globalGroupIndex.devices[groupID] == nil {
+		m.globalGroupIndex.devices[groupID] = make(map[string]*WSDevice)
+	}
+	m.globalGroupIndex.devices[groupID][key] = device
+}
+
+// removeFromGlobalGroupIndex 从全局群组索引中移除设备
+func (m *WSConnectionManager) removeFromGlobalGroupIndex(groupID int, key string) {
+	m.globalGroupIndex.mu.Lock()
+	defer m.globalGroupIndex.mu.Unlock()
+
+	if devices, ok := m.globalGroupIndex.devices[groupID]; ok {
+		delete(devices, key)
+		// 如果群组为空，清理 map
+		if len(devices) == 0 {
+			delete(m.globalGroupIndex.devices, groupID)
+		}
+	}
+}
+
+// ==========================================
 // 公共 API 方法
 // ==========================================
 
@@ -308,9 +436,12 @@ func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
 	device.IsOnline = false
 	device.ConnState = StateDisconnected
 
-	// 从群组索引中移除
+	// 从分片群组索引中移除
 	key := getDeviceKey(device)
 	shard.removeFromGroupIndexInShard(device.GroupID, key)
+
+	// 【优化】从全局群组索引中移除
+	m.removeFromGlobalGroupIndex(device.GroupID, key)
 
 	// 从幽灵设备索引移除
 	if device.DeviceType == DeviceTypeGhost {
@@ -375,22 +506,22 @@ func (m *WSConnectionManager) GetAllOnlineDevices() []*WSDevice {
 }
 
 // GetDevicesByGroup 获取指定群组的在线设备
-// 注意：由于群组可能跨分片，需要遍历所有分片
+// 【优化】使用全局群组索引，O(1) 复杂度，解决跨组转发卡顿问题
 func (m *WSConnectionManager) GetDevicesByGroup(groupID int) []*WSDevice {
-	devices := make([]*WSDevice, 0)
+	m.globalGroupIndex.mu.RLock()
+	defer m.globalGroupIndex.mu.RUnlock()
 
-	// 遍历所有分片
-	for i := 0; i < shardCount; i++ {
-		shard := m.shards[i]
-		shard.mu.RLock()
-		if groupDevs, ok := shard.groupDevices[groupID]; ok {
-			for _, device := range groupDevs {
-				if device.IsOnline {
-					devices = append(devices, device)
-				}
-			}
+	groupDevs, ok := m.globalGroupIndex.devices[groupID]
+	if !ok || len(groupDevs) == 0 {
+		return nil
+	}
+
+	// 预分配切片容量
+	devices := make([]*WSDevice, 0, len(groupDevs))
+	for _, device := range groupDevs {
+		if device.IsOnline {
+			devices = append(devices, device)
 		}
-		shard.mu.RUnlock()
 	}
 
 	return devices
@@ -444,9 +575,12 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 
 	shard.ghostDevices[userID] = device
 
-	// 添加到群组索引
+	// 添加到分片群组索引
 	key := getDeviceKey(device)
 	shard.addToGroupIndexInShard(device.GroupID, key, device)
+
+	// 【优化】添加到全局群组索引
+	m.addToGlobalGroupIndex(device.GroupID, key, device)
 
 	log.Printf("[WS] Ghost device registered: user-%d (%s-%d) group-%d", userID, callsign, ssid, device.GroupID)
 }
@@ -475,11 +609,17 @@ func (m *WSConnectionManager) SetDeviceGroup(device *WSDevice, newGroupID int) {
 	key := getDeviceKey(device)
 	shard.removeFromGroupIndexInShard(oldGroupID, key)
 
+	// 【优化】从全局群组索引中移除
+	m.removeFromGlobalGroupIndex(oldGroupID, key)
+
 	// 更新群组
 	device.GroupID = newGroupID
 
 	// 添加到新群组索引
 	shard.addToGroupIndexInShard(newGroupID, key, device)
+
+	// 【优化】添加到全局群组索引
+	m.addToGlobalGroupIndex(newGroupID, key, device)
 
 	log.Printf("[WS] Device group changed: %s from group %d to %d", device.GetIdentifier(), oldGroupID, newGroupID)
 }

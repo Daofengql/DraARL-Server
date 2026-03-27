@@ -234,6 +234,7 @@ export class RadioService {
 
   // 语音结束检测
   private voiceEndTimer: ReturnType<typeof setTimeout> | null = null
+  private voiceUiTimer: ReturnType<typeof setTimeout> | null = null   // UI 状态更新定时器
 
   // 语音消息缓存（用于记录接收的语音）
   private voiceChunks: Uint8Array[] = []
@@ -355,6 +356,9 @@ export class RadioService {
   destroy(): void {
     this.disconnect()
     this.saveConfig()
+
+    if (this.voiceEndTimer) clearTimeout(this.voiceEndTimer)
+    if (this.voiceUiTimer) clearTimeout(this.voiceUiTimer)
 
     if (this.audioCapture) {
       this.audioCapture.stop()
@@ -875,26 +879,31 @@ export class RadioService {
 
   /**
    * 重置语音结束检测
+   * UI 响应：600ms 无包后更新说话指示灯（视觉延迟可接受）
+   * 消息提交：1500ms 无包后才真正保存（抵御移动端网络抖动）
    */
   private resetVoiceEndTimer(): void {
-    if (this.voiceEndTimer) {
-      clearTimeout(this.voiceEndTimer)
-    }
+    // 同时重置两个定时器
+    if (this.voiceEndTimer) clearTimeout(this.voiceEndTimer)
+    if (this.voiceUiTimer) clearTimeout(this.voiceUiTimer)
 
-    this.voiceEndTimer = setTimeout(async () => {
-      // 保存语音消息到缓存
-      try {
-        await this.saveVoiceMessage()
-      } catch (error) {
-        console.error('[RadioService] Failed to save voice message:', error)
-      }
-
+    // UI 响应：600ms 无包后更新说话指示灯
+    this.voiceUiTimer = setTimeout(() => {
       if (this.currentSpeaker) {
         this.emit('speakingEnd', this.currentSpeaker.callsign, this.currentSpeaker.ssid)
         this.currentSpeaker = null
       }
       this.setVoiceState('idle')
-    }, 200)
+    }, 600)
+
+    // 消息提交：1500ms 无包后才真正保存
+    this.voiceEndTimer = setTimeout(async () => {
+      try {
+        await this.saveVoiceMessage()
+      } catch (error) {
+        console.error('[RadioService] Failed to save voice message:', error)
+      }
+    }, 1500)
   }
 
   /**

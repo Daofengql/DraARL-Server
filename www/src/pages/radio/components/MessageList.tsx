@@ -35,6 +35,7 @@ interface MessageListProps {
   hasMore?: boolean
   isLoadingMore?: boolean
   onLoadMore?: () => void
+  onVoicePlayStateChange?: (isPlaying: boolean) => void
 }
 
 // ==========================================
@@ -206,9 +207,10 @@ interface VoiceMessageProps {
   isPlayed: boolean
   isSelf: boolean
   audioData?: Blob | string
+  onPlayStateChange?: (isPlaying: boolean) => void
 }
 
-const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, audioData }: VoiceMessageProps) {
+const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, audioData, onPlayStateChange }: VoiceMessageProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [progress, setProgress] = useState(0)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -238,6 +240,7 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
     sourceNodeRef.current = source
     startTimeRef.current = ctx.currentTime
     setIsPlaying(true)
+    onPlayStateChange?.(true)
 
     const updateProgress = () => {
       if (sourceNodeRef.current && audioContextRef.current) {
@@ -255,10 +258,11 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
       setIsPlaying(false)
       setProgress(0)
       sourceNodeRef.current = null
+      onPlayStateChange?.(false)
     }
 
     source.start()
-  }, [])
+  }, [onPlayStateChange])
 
   const playUrlAudio = useCallback(async (url: string) => {
     const audioUrl = url.startsWith('http') ? url : `/api/minio/${url}`
@@ -266,8 +270,10 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
     await opusPlayer.play(audioUrl, () => {
       setIsPlaying(false)
       setProgress(0)
+      onPlayStateChange?.(false)
     })
     setIsPlaying(true)
+    onPlayStateChange?.(true)
 
     const durationSec = duration / 1000
     const startTime = Date.now()
@@ -282,7 +288,7 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
       }
     }
     animationFrameRef.current = requestAnimationFrame(updateProgress)
-  }, [duration])
+  }, [duration, onPlayStateChange])
 
   const handlePlayPause = useCallback(async () => {
     if (!audioData) return
@@ -384,6 +390,7 @@ interface MessageItemProps {
   formatTimeDivider: (timestamp: number) => string
   needsTimeDivider: (currentMsg: RadioMessage, prevMsg?: RadioMessage) => boolean
   styles: ReturnType<typeof useStaticStyles>
+  onVoicePlayStateChange?: (isPlaying: boolean) => void
 }
 
 const MessageItem = memo(function MessageItem({
@@ -396,6 +403,7 @@ const MessageItem = memo(function MessageItem({
   formatTimeDivider,
   styles,
   getAvatarColor,
+  onVoicePlayStateChange,
 }: MessageItemProps) {
   return (
     <>
@@ -489,6 +497,7 @@ const MessageItem = memo(function MessageItem({
                   isPlayed={message.isPlayed || false}
                   isSelf={isSelf}
                   audioData={message.content as Blob}
+                  onPlayStateChange={onVoicePlayStateChange}
                 />
               )}
             </Box>
@@ -516,7 +525,7 @@ const MessageItem = memo(function MessageItem({
 // 主组件
 // ==========================================
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, currentCallsign, currentSSID, loading, currentUser, hasMore, isLoadingMore, onLoadMore }, ref) => {
+  ({ messages, currentCallsign, currentSSID, loading, currentUser, hasMore, isLoadingMore, onLoadMore, onVoicePlayStateChange }, ref) => {
     const styles = useStaticStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -773,6 +782,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
             formatTimeDivider={formatTimeDivider}
             needsTimeDivider={needsTimeDivider}
             styles={styles}
+            onVoicePlayStateChange={onVoicePlayStateChange}
           />
         ))}
       </Box>

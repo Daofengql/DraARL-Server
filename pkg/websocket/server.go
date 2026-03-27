@@ -79,26 +79,28 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	remoteAddr := conn.RemoteAddr().String()
 	log.Printf("[WS] New connection from %s", remoteAddr)
-	// 启动 Ping/Pong
-	go startPingPong(conn)
 	// 处理认证
 	device, authResult := HandleAuthentication(conn, r, GlobalManager)
 	if device == nil {
 		log.Printf("[WS] Authentication failed from %s: %s", remoteAddr, authResult.Error)
 		return
 	}
-	// 认证成功，处理消息
+	// 认证成功，启动异步 writer 和 Ping/Pong
+	device.StartWriter()
+	go startPingPong(device)
+	// 处理消息
 	handleAuthenticatedConnection(device)
 }
 
 // startPingPong 启动 Ping/Pong 保持连接
-func startPingPong(conn *websocket.Conn) {
+// 优化：通过异步写通道发送 Ping，避免与音频写入竞争写锁
+func startPingPong(device *WSDevice) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		if err := conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
-			log.Printf("[WS] Ping failed: %v", err)
-			conn.Close()
+		if !device.WritePing() {
+			log.Printf("[WS] Ping failed for %s: write channel closed", device.GetIdentifier())
+			device.Conn.Close()
 			return
 		}
 	}
@@ -107,6 +109,7 @@ func startPingPong(conn *websocket.Conn) {
 // handleAuthenticatedConnection 处理已认证的连接（只支持幽灵设备）
 func handleAuthenticatedConnection(device *WSDevice) {
 	defer func() {
+		device.StopWriter() // 先停止 writer goroutine
 		device.Conn.Close()
 		GlobalManager.UnregisterDevice(device)
 		GlobalGhostManager.RemoveGhostDevice(device.UserID, device)

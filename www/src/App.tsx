@@ -23,6 +23,7 @@ const ServersPage = lazy(() => import('./pages/servers/ServersPage').then(m => (
 const ProfilePage = lazy(() => import('./pages/profile/ProfilePage').then(m => ({ default: m.ProfilePage })))
 const SiteConfigPage = lazy(() => import('./pages/settings/SiteConfigPage').then(m => ({ default: m.SiteConfigPage })))
 const CommRecordsPage = lazy(() => import('./pages/comm-records/CommRecordsPage').then(m => ({ default: m.CommRecordsPage })))
+const LogbookPage = lazy(() => import('./pages/logbook/LogbookPage').then(m => ({ default: m.LogbookPage })))
 const NotFoundPage = lazy(() => import('./pages/not-found/NotFoundPage').then(m => ({ default: m.NotFoundPage })))
 const PublicDocsPage = lazy(() => import('./pages/docs/PublicDocsPage').then(m => ({ default: m.PublicDocsPage })))
 const ForumPage = lazy(() => import('./pages/forum/ForumPage').then(m => ({ default: m.ForumPage })))
@@ -101,11 +102,20 @@ function App() {
               </ApprovedRoute>
             }
           />
+          <Route path="comm-records" element={<Navigate to="/comm-records/platform" replace />} />
           <Route
-            path="comm-records"
+            path="comm-records/platform"
             element={
               <ApprovedRoute>
                 <PageSuspense><CommRecordsPage /></PageSuspense>
+              </ApprovedRoute>
+            }
+          />
+          <Route
+            path="comm-records/logbook"
+            element={
+              <ApprovedRoute>
+                <PageSuspense><LogbookPage /></PageSuspense>
               </ApprovedRoute>
             }
           />
@@ -140,7 +150,9 @@ function App() {
           <Route path="certificate-approvals" element={<PageSuspense><CertificateApprovalsPage /></PageSuspense>} />
           <Route path="relays" element={<PageSuspense><RelaysPage /></PageSuspense>} />
           <Route path="servers" element={<PageSuspense><ServersPage /></PageSuspense>} />
-          <Route path="comm-records" element={<PageSuspense><CommRecordsPage /></PageSuspense>} />
+          <Route path="comm-records" element={<Navigate to="/admin/comm-records/platform" replace />} />
+          <Route path="comm-records/platform" element={<PageSuspense><CommRecordsPage /></PageSuspense>} />
+          <Route path="comm-records/logbook" element={<PageSuspense><LogbookPage /></PageSuspense>} />
           <Route path="assets" element={<PageSuspense><AssetPage /></PageSuspense>} />
           <Route path="settings" element={<PageSuspense><SiteConfigPage /></PageSuspense>} />
         </Route>

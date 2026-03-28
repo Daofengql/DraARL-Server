@@ -16,6 +16,7 @@ import ExpandMore from '@mui/icons-material/ExpandMore'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import LinkIcon from '@mui/icons-material/Link'
 import Folder from '@mui/icons-material/Folder'
+import Book from '@mui/icons-material/Book'
 import { useState, useEffect } from 'react'
 import { authService } from '../../services'
 import { PublicHeader } from './PublicHeader'
@@ -63,7 +64,15 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/group-links', label: '互联管理', icon: <LinkIcon /> },
     ]
   },
-  { path: '/admin/comm-records', label: '通信记录', icon: <Mic /> },
+  {
+    path: '/admin/comm-records',
+    label: '通信记录',
+    icon: <Mic />,
+    children: [
+      { path: '/admin/comm-records/platform', label: '平台发信记录', icon: <Mic /> },
+      { path: '/admin/comm-records/logbook', label: '通联日志', icon: <Book /> },
+    ]
+  },
   { path: '/admin/assets', label: '资源管理', icon: <Folder /> },
   { path: '/admin/settings', label: '站点配置', icon: <Settings /> },
 ]
@@ -78,6 +87,8 @@ export function AdminLayout() {
   const [deviceMenuExpanded, setDeviceMenuExpanded] = useState(false)
   // 群组管理菜单的展开/折叠状态
   const [groupMenuExpanded, setGroupMenuExpanded] = useState(false)
+  // 通信记录菜单的展开/折叠状态
+  const [commRecordsMenuExpanded, setCommRecordsMenuExpanded] = useState(false)
   const { config } = useConfig()
   const icp = config.icp?.icp || ''
 
@@ -94,6 +105,7 @@ export function AdminLayout() {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
     const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers']
     const groupPaths = ['/admin/groups', '/admin/group-links']
+    const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']
 
     // 如果当前路径不在用户管理子菜单下，折叠
     if (!userPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
@@ -108,6 +120,11 @@ export function AdminLayout() {
     // 如果当前路径不在群组管理子菜单下，折叠
     if (!groupPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
       setGroupMenuExpanded(false)
+    }
+
+    // 如果当前路径不在通信记录子菜单下，折叠
+    if (!commRecordsPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
+      setCommRecordsMenuExpanded(false)
     }
   }, [location.pathname])
 
@@ -144,6 +161,11 @@ export function AdminLayout() {
     setGroupMenuExpanded(!groupMenuExpanded)
   }
 
+  // 切换通信记录菜单展开/折叠
+  const toggleCommRecordsMenu = () => {
+    setCommRecordsMenuExpanded(!commRecordsMenuExpanded)
+  }
+
   const isActive = (path: string) => {
     return location.pathname === path || location.pathname.startsWith(path + '/')
   }
@@ -178,11 +200,13 @@ export function AdminLayout() {
           const isUserMenu = item.path === '/admin/users'
           const isDeviceMenu = item.path === '/admin/devices'
           const isGroupMenu = item.path === '/admin/groups'
-          const isExpandableMenu = isUserMenu || isDeviceMenu || isGroupMenu
+          const isCommRecordsMenu = item.path === '/admin/comm-records'
+          const isExpandableMenu = isUserMenu || isDeviceMenu || isGroupMenu || isCommRecordsMenu
           const getMenuExpanded = () => {
             if (isUserMenu) return userMenuExpanded
             if (isDeviceMenu) return deviceMenuExpanded
             if (isGroupMenu) return groupMenuExpanded
+            if (isCommRecordsMenu) return commRecordsMenuExpanded
             return false
           }
           const showChildren = isExpandableMenu ? getMenuExpanded() : (isActive(item.path) || isParentActive(item))
@@ -190,6 +214,7 @@ export function AdminLayout() {
             if (isUserMenu) toggleUserMenu()
             if (isDeviceMenu) toggleDeviceMenu()
             if (isGroupMenu) toggleGroupMenu()
+            if (isCommRecordsMenu) toggleCommRecordsMenu()
           }
 
           return (

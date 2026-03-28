@@ -176,3 +176,28 @@ func hasRole(user interface{}, role string) bool {
 	}
 	return false
 }
+
+// LoadUserInfo 加载用户信息到 context 的中间件
+// 在 AuthMiddleware 之后使用，会查询数据库获取 user_id 并存入 context
+func LoadUserInfo() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		username, exists := c.Get("username")
+		if !exists {
+			c.Next()
+			return
+		}
+
+		// 从数据库获取用户信息
+		repo := gormdb.NewUserRepository()
+		user, err := repo.GetUserByName(username.(string))
+		if err != nil || user == nil {
+			c.Next()
+			return
+		}
+
+		// 将用户ID存入 context
+		c.Set("user_id", user.ID)
+		c.Set("user_callsign", user.CallSign)
+		c.Next()
+	}
+}

@@ -110,6 +110,7 @@ func (s *Server) setupRoutes() {
 		// 需要认证的路由
 		protected := api.Group("")
 		protected.Use(middleware.AuthMiddleware())
+		protected.Use(middleware.LoadUserInfo()) // 加载用户ID到context
 		{
 			// SSO 绑定相关（需认证）
 			protected.GET("/sso/status", handler.GetSSOStatus)
@@ -138,6 +139,14 @@ func (s *Server) setupRoutes() {
 			protected.POST("/upload/operator-certificate", handler.UploadOperatorCertificate)
 			protected.GET("/operator-certificate", handler.GetOperatorCertificate)
 
+			// 通联日志（用户只能操作自己的记录）
+			protected.GET("/logbooks", handler.GetLogbooks)
+			protected.GET("/logbooks/:id", handler.GetLogbook)
+			protected.POST("/logbooks", handler.CreateLogbook)
+			protected.PUT("/logbooks/:id", handler.UpdateLogbook)
+			protected.DELETE("/logbooks/:id", handler.DeleteLogbook)
+			protected.DELETE("/logbooks/batch", handler.BatchDeleteLogbooks)
+
 			// 用户管理（部分需要管理员权限）
 			admin := protected.Group("")
 			admin.Use(middleware.RequireAdmin())
@@ -162,6 +171,13 @@ func (s *Server) setupRoutes() {
 				admin.DELETE("/config/logo", handler.NewSiteConfigHandler().DeleteLogo)
 				admin.POST("/upload/favicon", handler.UploadFavicon)
 				admin.DELETE("/config/favicon", handler.NewSiteConfigHandler().DeleteFavicon)
+
+				// 通联日志管理（管理员可操作所有记录）
+				admin.GET("/admin/logbooks", handler.AdminGetLogbooks)
+				admin.GET("/admin/logbooks/:id", handler.AdminGetLogbook)
+				admin.PUT("/admin/logbooks/:id", handler.AdminUpdateLogbook)
+				admin.DELETE("/admin/logbooks/:id", handler.AdminDeleteLogbook)
+				admin.DELETE("/admin/logbooks/batch", handler.AdminBatchDeleteLogbooks)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）

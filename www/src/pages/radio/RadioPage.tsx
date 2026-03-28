@@ -339,7 +339,7 @@ export const RadioPage: React.FC = () => {
     }
   }, [connectionState, radioService])
 
-  // 【消息同步】每 15 秒从后端同步��息（斩杀线策略）
+  // 【消息同步】每 15 秒从后端同步消息（斩杀线策略）
   useEffect(() => {
     if (connectionState !== 'online') return
 

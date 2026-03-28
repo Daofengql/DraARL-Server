@@ -298,7 +298,7 @@ func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterf
 
 		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
 		for _, targetID := range targetGroupIDs {
-			// ��过源组自身，且跳过已处理过的交集目标组
+			// 跳过源组自身，且跳过已处理过的交集目标组
 			if targetID == sourceGroupID || processedTargets[targetID] {
 				continue
 			}
@@ -378,7 +378,7 @@ func BroadcastTextFromUDP(source *models.Device, data []byte, groupID int) {
 	}
 }
 
-// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客��端
+// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客户端端
 // 【新增】解决 WS JWT 客户端之间无法互相转发的问题
 func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	if r.wsManager == nil {

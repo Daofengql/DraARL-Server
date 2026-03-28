@@ -439,7 +439,7 @@ export function LogbookPage() {
         setUserDetailAnchorEl(anchorEl)
       }
     } catch (error) {
-      console.error('获取用��信息失败:', error)
+      console.error('获取用户信息失败:', error)
     }
   }
 

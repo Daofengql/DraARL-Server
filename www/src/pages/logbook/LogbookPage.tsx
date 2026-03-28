@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
@@ -39,6 +39,7 @@ import {
   Menu,
   ListItemIcon,
   ListItemText,
+  CircularProgress,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
@@ -48,21 +49,27 @@ import FileDownload from '@mui/icons-material/FileDownload'
 import Visibility from '@mui/icons-material/Visibility'
 import LinkIcon from '@mui/icons-material/Link'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
+import Search from '@mui/icons-material/Search'
+import Clear from '@mui/icons-material/Clear'
+import Person from '@mui/icons-material/Person'
 import { PageHeader } from '../../components/common/PageHeader'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
+import { UserDetailPopover } from '../../components/UserDetailPopover'
+import { apiClient } from '../../services/api'
+import { authService } from '../../services/auth'
+import type { User } from '../../types'
 
 // 通联日志数据类型
 interface LogbookEntry {
   id: number
   user_id?: number
   username?: string
-  // 时间
+  my_callsign: string  // 我方呼号（冗余存储，支持客席发射）
+  // 时间（数据库存储UTC，前端负责BJT转换）
   time_utc: string
-  time_bjt: string
   // 频率
   tx_frequency: number // MHz
   rx_frequency: number // MHz
-  same_frequency: boolean // 是否同频
   // 分区
   cq_zone: number
   itu_zone: number
@@ -87,65 +94,137 @@ interface LogbookEntry {
   updated_at?: string
 }
 
+// API 响应类型
+interface LogbookListResponse {
+  code: number
+  message: string
+  data: {
+    total: number
+    items: LogbookEntry[]
+    page: number
+    page_size: number
+  }
+}
+
+interface LogbookResponse {
+  code: number
+  message: string
+  data: LogbookEntry
+}
+
+// 时间转换工具函数
+// UTC 转 BJT：UTC + 8小时 = BJT
+const utcToBjt = (utcTime: string): string => {
+  if (!utcTime) return ''
+  try {
+    // 添加 'Z' 后缀强制解析为 UTC 时间
+    const date = new Date(utcTime.replace(' ', 'T') + 'Z')
+    // BJT = UTC + 8
+    const bjtDate = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+    return bjtDate.toISOString().slice(0, 19).replace('T', ' ')
+  } catch {
+    return utcTime
+  }
+}
+
+// BJT 转 UTC：BJT - 8小时 = UTC
+// 输入的 BJT 时间会被当作本地时间解析（因为 datetime-local 返回的就是本地时间格式）
+// 如果用户在 UTC+8 时区，本地时间就是 BJT，直接 toISOString() 就得到 UTC
+const bjtToUtc = (bjtTime: string): string => {
+  if (!bjtTime) return ''
+  try {
+    // 解析为本地时间（datetime-local 返回的就是本地时间格式）
+    const date = new Date(bjtTime.replace(' ', 'T'))
+    // toISOString() 自动转换为 UTC
+    return date.toISOString().slice(0, 19).replace('T', ' ')
+  } catch {
+    return bjtTime
+  }
+}
+
+// 获取当前UTC时间
+const getCurrentUtcTime = (): string => {
+  // 返回带秒的格式：YYYY-MM-DD HH:MM:SS
+  return new Date().toISOString().slice(0, 19).replace('T', ' ')
+}
+
+// 获取当前BJT时间
+const getCurrentBjtTime = (): string => {
+  const now = new Date()
+  const bjtDate = new Date(now.getTime() + 8 * 60 * 60 * 1000)
+  return bjtDate.toISOString().slice(0, 19).replace('T', ' ')
+}
+
 // 通信模式选项
 const MODE_OPTIONS = [
   'FM', 'AM', 'SSB', 'USB', 'LSB', 'CW', 'FT8', 'FT4', 'RTTY', 'PSK31',
   'DMR', 'D-Star', 'YSF', 'P25', 'NXDN', 'AX.25', 'SSTV', 'DV'
 ]
 
-// 模拟数据
-const MOCK_DATA: LogbookEntry[] = [
-  {
-    id: 1,
-    user_id: 1,
-    username: 'BG7XXX',
-    time_utc: '2024-03-28 08:00:00',
-    time_bjt: '2024-03-28 16:00:00',
-    tx_frequency: 438.5,
-    rx_frequency: 438.5,
-    same_frequency: true,
-    cq_zone: 24,
-    itu_zone: 44,
-    mode: 'FM',
-    callsign: 'BH1ABC',
-    their_rst: '59',
-    their_power: 50,
-    their_qth: '北京',
-    their_radio: 'IC-9700',
-    their_antenna: '八木',
-    my_rst: '59',
-    my_power: 25,
-    my_qth: '广州',
-    my_radio: 'FT-991A',
-    my_antenna: 'GP',
-    notes: '通联良好',
+// API 调用函数
+const logbookApi = {
+  // 获取列表
+  getList: async (params: {
+    page?: number
+    page_size?: number
+    start_time?: string
+    end_time?: string
+    callsign?: string
+    frequency?: number
+    mode?: string
+    user_id?: number
+    username?: string
+  }, isAdmin: boolean = false): Promise<LogbookListResponse> => {
+    const queryParams = new URLSearchParams()
+    if (params.page) queryParams.set('page', String(params.page))
+    if (params.page_size) queryParams.set('page_size', String(params.page_size))
+    if (params.start_time) queryParams.set('start_time', params.start_time)
+    if (params.end_time) queryParams.set('end_time', params.end_time)
+    if (params.callsign) queryParams.set('callsign', params.callsign)
+    if (params.frequency) queryParams.set('frequency', String(params.frequency))
+    if (params.mode) queryParams.set('mode', params.mode)
+    if (params.user_id) queryParams.set('user_id', String(params.user_id))
+    if (params.username) queryParams.set('username', params.username)
+
+    const basePath = isAdmin ? '/api/admin/logbooks' : '/api/logbooks'
+    const response = await apiClient.get(`${basePath}?${queryParams.toString()}`)
+    return response
   },
-  {
-    id: 2,
-    user_id: 1,
-    username: 'BG7XXX',
-    time_utc: '2024-03-27 12:30:00',
-    time_bjt: '2024-03-27 20:30:00',
-    tx_frequency: 14.27,
-    rx_frequency: 14.27,
-    same_frequency: true,
-    cq_zone: 24,
-    itu_zone: 44,
-    mode: 'SSB',
-    callsign: 'JA1ZLC',
-    their_rst: '57',
-    their_power: 100,
-    their_qth: '东京',
-    their_radio: 'TS-990',
-    their_antenna: 'DP',
-    my_rst: '55',
-    my_power: 100,
-    my_qth: '广州',
-    my_radio: 'FT-991A',
-    my_antenna: 'DP',
-    notes: '传播一般',
+
+  // 获取单条
+  getOne: async (id: number, isAdmin: boolean = false): Promise<LogbookResponse> => {
+    const basePath = isAdmin ? '/api/admin/logbooks' : '/api/logbooks'
+    const response = await apiClient.get(`${basePath}/${id}`)
+    return response
   },
-]
+
+  // 创建
+  create: async (data: Omit<LogbookEntry, 'id'>): Promise<LogbookResponse> => {
+    const response = await apiClient.post('/api/logbooks', data)
+    return response
+  },
+
+  // 更新
+  update: async (id: number, data: Partial<LogbookEntry>, isAdmin: boolean = false): Promise<LogbookResponse> => {
+    const basePath = isAdmin ? '/api/admin/logbooks' : '/api/logbooks'
+    const response = await apiClient.put(`${basePath}/${id}`, data)
+    return response
+  },
+
+  // 删除单条
+  delete: async (id: number, isAdmin: boolean = false): Promise<{ code: number; message: string }> => {
+    const basePath = isAdmin ? '/api/admin/logbooks' : '/api/logbooks'
+    const response = await apiClient.delete(`${basePath}/${id}`)
+    return response
+  },
+
+  // 批量删除
+  batchDelete: async (ids: number[], isAdmin: boolean = false): Promise<{ code: number; message: string }> => {
+    const basePath = isAdmin ? '/api/admin/logbooks' : '/api/logbooks'
+    const response = await apiClient.delete(`${basePath}/batch`, { data: { ids } })
+    return response
+  },
+}
 
 // 中继台列表（预留）
 const REPEATER_OPTIONS = [
@@ -159,11 +238,11 @@ export function LogbookPage() {
   const isAdminPage = location.pathname.startsWith('/admin/')
 
   // 数据状态
-  const [entries, setEntries] = useState<LogbookEntry[]>(MOCK_DATA)
-  const [total, setTotal] = useState(MOCK_DATA.length)
-  const [page, setPage] = useState(0)
+  const [entries, setEntries] = useState<LogbookEntry[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1) // API 使用 1-based 分页
   const [rowsPerPage, setRowsPerPage] = useState(10)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   // 选择状态
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -182,6 +261,10 @@ export function LogbookPage() {
   // 导出菜单
   const [exportAnchorEl, setExportAnchorEl] = useState<null | HTMLElement>(null)
 
+  // 用户详情弹窗（管理员页面用）
+  const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+
   // 消息提示
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
@@ -192,10 +275,142 @@ export function LogbookPage() {
   // 时间显示模式
   const [timeDisplayMode, setTimeDisplayMode] = useState<'bjt' | 'utc'>('bjt')
 
+  // 搜索筛选状态
+  const [searchFilters, setSearchFilters] = useState<{
+    startTime: string
+    endTime: string
+    callsign: string
+    frequency: string
+    mode: string
+    username: string
+  }>({
+    startTime: '',
+    endTime: '',
+    callsign: '',
+    frequency: '',
+    mode: '',
+    username: '',
+  })
+
+  // 已应用的筛选条件（只有点击搜索按钮后才会更新）
+  const [appliedFilters, setAppliedFilters] = useState<{
+    startTime: string
+    endTime: string
+    callsign: string
+    frequency: string
+    mode: string
+    username: string
+  }>({
+    startTime: '',
+    endTime: '',
+    callsign: '',
+    frequency: '',
+    mode: '',
+    username: '',
+  })
+
+  // 筛选后的数据（服务端筛选，这里只做展示）
+  const filteredEntries = useMemo(() => {
+    return entries
+  }, [entries])
+
+  // 清除搜索筛选
+  const clearSearchFilters = () => {
+    setSearchFilters({
+      startTime: '',
+      endTime: '',
+      callsign: '',
+      frequency: '',
+      mode: '',
+      username: '',
+    })
+    setAppliedFilters({
+      startTime: '',
+      endTime: '',
+      callsign: '',
+      frequency: '',
+      mode: '',
+      username: '',
+    })
+  }
+
+  // 应用搜索筛选
+  const applySearchFilters = () => {
+    setAppliedFilters({ ...searchFilters })
+    setPage(1) // 重置到第一页
+  }
+
+  // 是否有活动的筛选条件（输入框中）
+  const hasInputFilters = searchFilters.startTime || searchFilters.endTime ||
+    searchFilters.callsign || searchFilters.frequency || searchFilters.mode || searchFilters.username
+
+  // 是否有已应用的筛选条件
+  const hasActiveFilters = appliedFilters.startTime || appliedFilters.endTime ||
+    appliedFilters.callsign || appliedFilters.frequency || appliedFilters.mode || appliedFilters.username
+
+  // 加载数据
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const params: {
+        page: number
+        page_size: number
+        start_time?: string
+        end_time?: string
+        callsign?: string
+        frequency?: number
+        mode?: string
+        username?: string
+      } = {
+        page,
+        page_size: rowsPerPage,
+      }
+
+      // 添加筛选条件（时间需要转换为 UTC）- 使用 appliedFilters
+      if (appliedFilters.startTime) {
+        params.start_time = bjtToUtc(appliedFilters.startTime)
+      }
+      if (appliedFilters.endTime) {
+        params.end_time = bjtToUtc(appliedFilters.endTime)
+      }
+      if (appliedFilters.callsign) {
+        params.callsign = appliedFilters.callsign
+      }
+      if (appliedFilters.frequency) {
+        params.frequency = parseFloat(appliedFilters.frequency)
+      }
+      if (appliedFilters.mode) {
+        params.mode = appliedFilters.mode
+      }
+      // 仅管理员页面支持用户名搜索
+      if (isAdminPage && appliedFilters.username) {
+        params.username = appliedFilters.username
+      }
+
+      const response = await logbookApi.getList(params, isAdminPage)
+      if (response.code >= 200 && response.code < 300) {
+        setEntries(response.data.items)
+        setTotal(response.data.total)
+      } else {
+        setSnackbar({ open: true, message: response.message || '加载失败', severity: 'error' })
+      }
+    } catch (error) {
+      console.error('加载通联日志失败:', error)
+      setSnackbar({ open: true, message: '加载失败', severity: 'error' })
+    } finally {
+      setLoading(false)
+    }
+  }, [page, rowsPerPage, appliedFilters, isAdminPage])
+
+  // 初始加载和已应用筛选条件变化时重新加载
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
   // 全选
   const handleSelectAll = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.checked) {
-      setSelectedIds(entries.map(e => e.id))
+      setSelectedIds(filteredEntries.map(e => e.id))
     } else {
       setSelectedIds([])
     }
@@ -210,11 +425,28 @@ export function LogbookPage() {
 
   // 刷新数据
   const handleRefresh = () => {
-    setLoading(true)
-    setTimeout(() => {
-      setLoading(false)
-      setSnackbar({ open: true, message: '刷新成功', severity: 'success' })
-    }, 500)
+    loadData()
+  }
+
+  // 打开用户详情弹窗
+  const handleOpenUserDetail = async (event: React.MouseEvent<HTMLElement>, userId: number) => {
+    event.stopPropagation()
+    const anchorEl = event.currentTarget
+    try {
+      const response = await apiClient.get(`/api/users/${userId}`)
+      if (response.code >= 200 && response.code < 300 && response.data) {
+        setSelectedUser(response.data)
+        setUserDetailAnchorEl(anchorEl)
+      }
+    } catch (error) {
+      console.error('获取用��信息失败:', error)
+    }
+  }
+
+  // 关闭用户详情弹窗
+  const handleCloseUserDetail = () => {
+    setUserDetailAnchorEl(null)
+    setSelectedUser(null)
   }
 
   // 打开新增弹窗
@@ -249,12 +481,30 @@ export function LogbookPage() {
   }
 
   // 确认删除
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteTarget) {
       const ids = Array.isArray(deleteTarget) ? deleteTarget : [deleteTarget]
-      setEntries(prev => prev.filter(e => !ids.includes(e.id)))
-      setSelectedIds([])
-      setSnackbar({ open: true, message: `成功删除 ${ids.length} 条记录`, severity: 'success' })
+      try {
+        if (ids.length === 1) {
+          const response = await logbookApi.delete(ids[0], isAdminPage)
+          if (response.code < 200 || response.code >= 300) {
+            setSnackbar({ open: true, message: response.message || '删除失败', severity: 'error' })
+            return
+          }
+        } else {
+          const response = await logbookApi.batchDelete(ids, isAdminPage)
+          if (response.code < 200 || response.code >= 300) {
+            setSnackbar({ open: true, message: response.message || '删除失败', severity: 'error' })
+            return
+          }
+        }
+        setSelectedIds([])
+        setSnackbar({ open: true, message: `成功删除 ${ids.length} 条记录`, severity: 'success' })
+        loadData()
+      } catch (error) {
+        console.error('删除通联记录失败:', error)
+        setSnackbar({ open: true, message: '删除失败', severity: 'error' })
+      }
     }
     setDeleteConfirmOpen(false)
     setDeleteTarget(null)
@@ -277,7 +527,7 @@ export function LogbookPage() {
 
     const headers = ['时间', '频率(MHz)', '模式', '对方呼号', 'RST(收/发)', 'CQ分区', 'ITU分区', 'QTH', '备注']
     const rows = dataToExport.map(e => [
-      timeDisplayMode === 'bjt' ? e.time_bjt : e.time_utc,
+      timeDisplayMode === 'bjt' ? utcToBjt(e.time_utc) : e.time_utc,
       e.tx_frequency,
       e.mode,
       e.callsign,
@@ -319,7 +569,7 @@ export function LogbookPage() {
 
     dataToExport.forEach(e => {
       tableHTML += '<tr>'
-      tableHTML += `<td>${timeDisplayMode === 'bjt' ? e.time_bjt : e.time_utc}</td>`
+      tableHTML += `<td>${timeDisplayMode === 'bjt' ? utcToBjt(e.time_utc) : e.time_utc}</td>`
       tableHTML += `<td>${e.tx_frequency}</td>`
       tableHTML += `<td>${e.mode}</td>`
       tableHTML += `<td>${e.callsign}</td>`
@@ -352,7 +602,8 @@ export function LogbookPage() {
 
   // 格式化频率显示
   const formatFrequency = (entry: LogbookEntry) => {
-    if (entry.same_frequency) {
+    const isSame = entry.tx_frequency === entry.rx_frequency
+    if (isSame) {
       return entry.tx_frequency.toFixed(4)
     }
     return `${entry.tx_frequency.toFixed(4)} / ${entry.rx_frequency.toFixed(4)}`
@@ -360,7 +611,7 @@ export function LogbookPage() {
 
   // 获取时间显示
   const getTimeDisplay = (entry: LogbookEntry) => {
-    return timeDisplayMode === 'bjt' ? entry.time_bjt : entry.time_utc
+    return timeDisplayMode === 'bjt' ? utcToBjt(entry.time_utc) : entry.time_utc
   }
 
   return (
@@ -386,11 +637,112 @@ export function LogbookPage() {
         }
       />
 
-      {/* 筛选栏和工具栏 */}
+      {/* 搜索筛选栏 */}
       <Card sx={{ mb: 2 }}>
         <CardContent>
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Grid container spacing={2} alignItems="center">
+            {/* 时间区间搜索 */}
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <TextField
+                fullWidth
+                label="开始时间"
+                type="datetime-local"
+                size="small"
+                value={searchFilters.startTime}
+                onChange={(e) => setSearchFilters(prev => ({ ...prev, startTime: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+              <TextField
+                fullWidth
+                label="结束时间"
+                type="datetime-local"
+                size="small"
+                value={searchFilters.endTime}
+                onChange={(e) => setSearchFilters(prev => ({ ...prev, endTime: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            </Grid>
+
+            {/* 对方呼号搜索 */}
+            <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+              <TextField
+                fullWidth
+                label="对方呼号"
+                size="small"
+                value={searchFilters.callsign}
+                onChange={(e) => setSearchFilters(prev => ({ ...prev, callsign: e.target.value }))}
+                placeholder="例如: BH1ABC"
+                InputProps={{
+                  startAdornment: <Search fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />,
+                }}
+              />
+            </Grid>
+
+            {/* 频率搜索 */}
+            <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+              <TextField
+                fullWidth
+                label="频率 (MHz)"
+                size="small"
+                type="number"
+                value={searchFilters.frequency}
+                onChange={(e) => setSearchFilters(prev => ({ ...prev, frequency: e.target.value }))}
+                placeholder="例如: 438.5"
+                inputProps={{ step: 0.001 }}
+              />
+            </Grid>
+
+            {/* 模式搜索 */}
+            <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+              <FormControl fullWidth size="small">
+                <InputLabel>模式</InputLabel>
+                <Select
+                  value={searchFilters.mode}
+                  label="模式"
+                  onChange={(e) => setSearchFilters(prev => ({ ...prev, mode: e.target.value }))}
+                >
+                  <MenuItem value="">全部</MenuItem>
+                  {MODE_OPTIONS.map(mode => (
+                    <MenuItem key={mode} value={mode}>{mode}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+
+            {/* 用户名搜索（仅管理员页面） */}
+            {isAdminPage && (
+              <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+                <TextField
+                  fullWidth
+                  label="所属用户"
+                  size="small"
+                  value={searchFilters.username}
+                  onChange={(e) => setSearchFilters(prev => ({ ...prev, username: e.target.value }))}
+                  placeholder="输入用户名搜索"
+                  InputProps={{
+                    startAdornment: <Search fontSize="small" sx={{ mr: 0.5, color: 'text.secondary' }} />,
+                  }}
+                />
+              </Grid>
+            )}
+          </Grid>
+
+          {/* 操作按钮行 */}
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', mt: 2 }}>
             <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+              {/* 搜索按钮 */}
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<Search />}
+                onClick={applySearchFilters}
+                disabled={loading}
+              >
+                搜索
+              </Button>
+
               {/* 时间显示模式切换 */}
               <Chip
                 label="BJT"
@@ -404,6 +756,25 @@ export function LogbookPage() {
                 onClick={() => setTimeDisplayMode('utc')}
                 size="small"
               />
+
+              {/* 清除筛选按钮 */}
+              {hasActiveFilters && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<Clear />}
+                  onClick={clearSearchFilters}
+                >
+                  清除筛选
+                </Button>
+              )}
+
+              {/* 筛选结果统计 */}
+              {hasActiveFilters && (
+                <Typography variant="body2" color="text.secondary">
+                  找到 {total} 条记录
+                </Typography>
+              )}
             </Box>
 
             {/* 导出按钮 */}
@@ -411,7 +782,7 @@ export function LogbookPage() {
               variant="outlined"
               startIcon={<FileDownload />}
               onClick={handleExportClick}
-              disabled={entries.length === 0}
+              disabled={filteredEntries.length === 0}
             >
               导出 {selectedIds.length > 0 && `(${selectedIds.length})`}
             </Button>
@@ -456,8 +827,8 @@ export function LogbookPage() {
             <TableRow>
               <TableCell padding="checkbox">
                 <Checkbox
-                  indeterminate={selectedIds.length > 0 && selectedIds.length < entries.length}
-                  checked={entries.length > 0 && selectedIds.length === entries.length}
+                  indeterminate={selectedIds.length > 0 && selectedIds.length < filteredEntries.length}
+                  checked={filteredEntries.length > 0 && selectedIds.length === filteredEntries.length}
                   onChange={handleSelectAll}
                 />
               </TableCell>
@@ -468,28 +839,27 @@ export function LogbookPage() {
               <TableCell>RST (收/发)</TableCell>
               <TableCell>CQ/ITU</TableCell>
               <TableCell>QTH</TableCell>
+              {isAdminPage && <TableCell>所属用户</TableCell>}
               <TableCell align="center">操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={isAdminPage ? 10 : 9} align="center" sx={{ py: 4 }}>
                   加载中...
                 </TableCell>
               </TableRow>
-            ) : entries.length === 0 ? (
+            ) : filteredEntries.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={isAdminPage ? 10 : 9} align="center" sx={{ py: 4 }}>
                   <Typography color="text.secondary">
-                    {isAdminPage ? '暂无通联记录' : '暂无通联记录，点击"新增记录"添加您的第一条通联'}
+                    {hasActiveFilters ? '没有找到符合条件的记录' : (isAdminPage ? '暂无通联记录' : '暂无通联记录，点击"新增记录"添加您的第一条通联')}
                   </Typography>
                 </TableCell>
               </TableRow>
             ) : (
-              entries
-                .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                .map((entry) => (
+              filteredEntries.map((entry) => (
                   <TableRow
                     key={entry.id}
                     hover
@@ -519,6 +889,28 @@ export function LogbookPage() {
                     <TableCell>{entry.their_rst}/{entry.my_rst}</TableCell>
                     <TableCell>{entry.cq_zone}/{entry.itu_zone}</TableCell>
                     <TableCell>{entry.their_qth || '-'}</TableCell>
+                    {isAdminPage && (
+                      <TableCell>
+                        <Box
+                          onClick={(e) => entry.user_id && handleOpenUserDetail(e, entry.user_id)}
+                          sx={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 0.5,
+                            cursor: entry.user_id ? 'pointer' : 'default',
+                            '&:hover': entry.user_id ? {
+                              color: 'primary.main',
+                              textDecoration: 'underline',
+                            } : {},
+                          }}
+                        >
+                          <Person fontSize="small" />
+                          <Typography variant="body2">
+                            {entry.username || '-'}
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                    )}
                     <TableCell align="center">
                       <Stack direction="row" spacing={0.5} justifyContent="center">
                         <Tooltip title="查看详情">
@@ -546,12 +938,12 @@ export function LogbookPage() {
         <TablePagination
           component="div"
           count={total}
-          page={page}
-          onPageChange={(_, newPage) => setPage(newPage)}
+          page={page - 1}
+          onPageChange={(_, newPage) => setPage(newPage + 1)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => {
             setRowsPerPage(parseInt(e.target.value, 10))
-            setPage(0)
+            setPage(1)
           }}
           labelRowsPerPage="每页行数"
           labelDisplayedRows={({ from, to, count }) => `${from}-${to} 共 ${count} 条`}
@@ -579,12 +971,20 @@ export function LogbookPage() {
       <LogbookFormDialog
         open={addDialogOpen}
         onClose={() => setAddDialogOpen(false)}
-        onSave={(entry) => {
-          const newEntry = { ...entry, id: Date.now() }
-          setEntries(prev => [newEntry, ...prev])
-          setTotal(prev => prev + 1)
-          setAddDialogOpen(false)
-          setSnackbar({ open: true, message: '添加成功', severity: 'success' })
+        onSave={async (entry) => {
+          try {
+            const response = await logbookApi.create(entry)
+            if (response.code >= 200 && response.code < 300) {
+              setAddDialogOpen(false)
+              setSnackbar({ open: true, message: '添加成功', severity: 'success' })
+              loadData()
+            } else {
+              setSnackbar({ open: true, message: response.message || '添加失败', severity: 'error' })
+            }
+          } catch (error) {
+            console.error('添加通联记录失败:', error)
+            setSnackbar({ open: true, message: '添加失败', severity: 'error' })
+          }
         }}
         title="新增通联记录"
       />
@@ -593,14 +993,22 @@ export function LogbookPage() {
       <LogbookFormDialog
         open={editDialogOpen}
         onClose={() => setEditDialogOpen(false)}
-        onSave={(entry) => {
+        onSave={async (entry) => {
           if (currentEntry) {
-            setEntries(prev => prev.map(e =>
-              e.id === currentEntry.id ? { ...entry, id: currentEntry.id } : e
-            ))
+            try {
+              const response = await logbookApi.update(currentEntry.id, entry, isAdminPage)
+              if (response.code >= 200 && response.code < 300) {
+                setEditDialogOpen(false)
+                setSnackbar({ open: true, message: '保存成功', severity: 'success' })
+                loadData()
+              } else {
+                setSnackbar({ open: true, message: response.message || '保存失败', severity: 'error' })
+              }
+            } catch (error) {
+              console.error('保存通联记录失败:', error)
+              setSnackbar({ open: true, message: '保存失败', severity: 'error' })
+            }
           }
-          setEditDialogOpen(false)
-          setSnackbar({ open: true, message: '保存成功', severity: 'success' })
         }}
         initialData={currentEntry}
         title="编辑通联记录"
@@ -646,6 +1054,16 @@ export function LogbookPage() {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      {/* 用户详情弹窗（管理员页面用） */}
+      {isAdminPage && (
+        <UserDetailPopover
+          open={Boolean(userDetailAnchorEl)}
+          anchorEl={userDetailAnchorEl}
+          onClose={handleCloseUserDetail}
+          user={selectedUser}
+        />
+      )}
     </Box>
   )
 }
@@ -670,24 +1088,12 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
 
-  // 获取当前时间
-  const getCurrentTime = useCallback((mode: 'bjt' | 'utc') => {
-    const now = new Date()
-    if (mode === 'bjt') {
-      // BJT = UTC + 8
-      const bjtDate = new Date(now.getTime() + 8 * 60 * 60 * 1000)
-      return bjtDate.toISOString().slice(0, 16).replace('T', ' ')
-    }
-    return now.toISOString().slice(0, 16).replace('T', ' ')
-  }, [])
-
   const [formData, setFormData] = useState<Partial<LogbookEntry>>(() =>
     initialData || {
-      time_utc: getCurrentTime('utc'),
-      time_bjt: getCurrentTime('bjt'),
+      my_callsign: '',
+      time_utc: getCurrentUtcTime(),
       tx_frequency: 0,
       rx_frequency: 0,
-      same_frequency: true,
       cq_zone: 24,
       itu_zone: 44,
       mode: 'FM',
@@ -708,19 +1114,24 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
 
   const [timeMode, setTimeMode] = useState<'bjt' | 'utc'>('bjt')
   const [isRepeater, setIsRepeater] = useState(false) // 是否中继模式
+  const [isSameFrequency, setIsSameFrequency] = useState(true) // 是否同频
+  const [hasSubmitted, setHasSubmitted] = useState(false) // 是否尝试过提交
 
   // 重置表单 - 打开时默认使用当前时间
   const resetForm = useCallback(() => {
+    setHasSubmitted(false)
     if (initialData) {
       setFormData(initialData)
-      setIsRepeater(!initialData.same_frequency)
+      setIsRepeater(initialData.tx_frequency !== initialData.rx_frequency)
     } else {
+      // 获取当前用户的呼号和地址作为默认值
+      const currentUser = authService.getStoredUser()
       setFormData({
-        time_utc: getCurrentTime('utc'),
-        time_bjt: getCurrentTime('bjt'),
+        my_callsign: currentUser?.callsign || '',
+        my_qth: currentUser?.address || '',
+        time_utc: getCurrentUtcTime(),
         tx_frequency: 0,
         rx_frequency: 0,
-        same_frequency: true,
         cq_zone: 24,
         itu_zone: 44,
         mode: 'FM',
@@ -732,89 +1143,88 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
         their_antenna: '',
         my_rst: '59',
         my_power: undefined,
-        my_qth: '',
         my_radio: '',
         my_antenna: '',
         notes: '',
       })
       setIsRepeater(false)
     }
-  }, [initialData, getCurrentTime])
+  }, [initialData])
 
   // 打开弹窗时重置
-  useState(() => {
+  useEffect(() => {
     if (open) {
       resetForm()
     }
-  })
+  }, [open, resetForm])
 
-  // 时间转换 BJT <-> UTC (差8小时)
-  const convertTime = (time: string, from: 'bjt' | 'utc', to: 'bjt' | 'utc') => {
-    if (!time) return ''
-    try {
-      const date = new Date(time.replace(' ', 'T'))
-      const offset = from === 'bjt' ? -8 : 8
-      date.setHours(date.getHours() + offset)
-      return date.toISOString().slice(0, 16).replace('T', ' ')
-    } catch {
-      return time
-    }
-  }
-
-  // 处理时间变化
+  // 处理时间变化（根据显示模式自动转换）
   const handleTimeChange = (value: string, mode: 'bjt' | 'utc') => {
-    setTimeMode(mode)
     if (mode === 'bjt') {
+      // 输入的是 BJT，转换为 UTC 存储
       setFormData(prev => ({
         ...prev,
-        time_bjt: value,
-        time_utc: convertTime(value, 'bjt', 'utc'),
+        time_utc: bjtToUtc(value),
       }))
     } else {
+      // 输入的是 UTC，直接存储
       setFormData(prev => ({
         ...prev,
         time_utc: value,
-        time_bjt: convertTime(value, 'utc', 'bjt'),
       }))
     }
+  }
+
+  // 获取当前显示的时间值
+  const getDisplayTime = () => {
+    if (!formData.time_utc) return ''
+    return timeMode === 'bjt' ? utcToBjt(formData.time_utc) : formData.time_utc
   }
 
   // 使用当前时间
   const useCurrentTime = () => {
-    handleTimeChange(getCurrentTime(timeMode), timeMode)
+    // 数据库始终存储UTC时间
+    // 直接获取当前UTC时间存储即可
+    // 显示时会根据时区模式自动转换
+    setFormData(prev => ({
+      ...prev,
+      time_utc: getCurrentUtcTime(),
+    }))
   }
 
   // 处理同频/中继切换
   const handleFreqModeChange = (same: boolean) => {
-    setFormData(prev => ({
-      ...prev,
-      same_frequency: same,
-      rx_frequency: same ? prev.tx_frequency : prev.rx_frequency,
-    }))
+    setIsRepeater(!same)
+    if (same) {
+      setFormData(prev => ({
+        ...prev,
+        rx_frequency: prev.tx_frequency,
+      }))
+    }
   }
 
-  // 处理频率变化
+  // 处理发射频率变化
   const handleTxFrequencyChange = (value: number) => {
     setFormData(prev => ({
       ...prev,
       tx_frequency: value,
-      rx_frequency: prev.same_frequency ? value : prev.rx_frequency,
+      rx_frequency: !isRepeater ? value : prev.rx_frequency,
     }))
   }
 
   // 保存
   const handleSave = () => {
+    setHasSubmitted(true)
     // 验证必填字段
-    if (!formData.callsign || !formData.tx_frequency || !formData.mode) {
+    if (!formData.my_callsign || !formData.callsign || !formData.tx_frequency || !formData.mode) {
       return
     }
 
     onSave({
-      time_utc: formData.time_utc || getCurrentTime('utc'),
-      time_bjt: formData.time_bjt || getCurrentTime('bjt'),
+      my_callsign: formData.my_callsign || '',
+      time_utc: formData.time_utc || getCurrentUtcTime(),
       tx_frequency: formData.tx_frequency || 0,
       rx_frequency: formData.rx_frequency || formData.tx_frequency || 0,
-      same_frequency: formData.same_frequency ?? true,
       cq_zone: formData.cq_zone || 24,
       itu_zone: formData.itu_zone || 44,
       mode: formData.mode || 'FM',
@@ -836,11 +1246,11 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
   // 快速填充中继台
   const handleRepeaterSelect = (repeater: typeof REPEATER_OPTIONS[0] | null) => {
     if (repeater) {
+      setIsRepeater(true)
       setFormData(prev => ({
         ...prev,
         tx_frequency: repeater.freq,
         rx_frequency: repeater.freq + repeater.offset * 0.001,
-        same_frequency: false,
       }))
     }
   }
@@ -893,10 +1303,12 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                     label="日期"
                     type="date"
                     size="small"
-                    value={(timeMode === 'bjt' ? formData.time_bjt : formData.time_utc)?.slice(0, 10) || ''}
+                    value={getDisplayTime().slice(0, 10) || ''}
                     onChange={(e) => {
-                      const currentTime = timeMode === 'bjt' ? formData.time_bjt : formData.time_utc
-                      const newTime = e.target.value + ' ' + (currentTime?.slice(11) || '00:00')
+                      const currentTime = getDisplayTime()
+                      // 保留时间部分（时分秒）
+                      const timePart = currentTime?.slice(11) || '00:00:00'
+                      const newTime = e.target.value + ' ' + timePart
                       handleTimeChange(newTime, timeMode)
                     }}
                     slotProps={{ inputLabel: { shrink: true } }}
@@ -908,10 +1320,12 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                     label="时间"
                     type="time"
                     size="small"
-                    value={(timeMode === 'bjt' ? formData.time_bjt : formData.time_utc)?.slice(11, 16) || ''}
+                    value={getDisplayTime().slice(11, 16) || ''}
                     onChange={(e) => {
-                      const currentTime = timeMode === 'bjt' ? formData.time_bjt : formData.time_utc
-                      const newTime = (currentTime?.slice(0, 10) || new Date().toISOString().slice(0, 10)) + ' ' + e.target.value
+                      const currentTime = getDisplayTime()
+                      // 保留秒数部分（:SS），如果原时间没有秒则使用 :00
+                      const secondsPart = currentTime?.length >= 19 ? currentTime.slice(14, 19) : ':00'
+                      const newTime = (currentTime?.slice(0, 10) || new Date().toISOString().slice(0, 10)) + ' ' + e.target.value + secondsPart
                       handleTimeChange(newTime, timeMode)
                     }}
                     slotProps={{ inputLabel: { shrink: true } }}
@@ -941,20 +1355,26 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                 <Typography variant="subtitle2" color="text.secondary">
                   频率设置
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                   <FormControlLabel
                     control={
                       <Switch
-                        checked={formData.same_frequency}
-                        onChange={(e) => handleFreqModeChange(e.target.checked)}
+                        checked={isSameFrequency}
+                        onChange={(e) => {
+                          const same = e.target.checked
+                          setIsSameFrequency(same)
+                          if (same) {
+                            setFormData(prev => ({ ...prev, rx_frequency: prev.tx_frequency }))
+                          }
+                        }}
                         size="small"
                       />
                     }
                     label={
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        {formData.same_frequency ? <LinkIcon fontSize="small" /> : <LinkOffIcon fontSize="small" />}
+                        {isSameFrequency ? <LinkIcon fontSize="small" /> : <LinkOffIcon fontSize="small" />}
                         <Typography variant="caption">
-                          {formData.same_frequency ? '同频' : '异频'}
+                          {isSameFrequency ? '同频' : '异频'}
                         </Typography>
                       </Box>
                     }
@@ -963,12 +1383,7 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                     control={
                       <Switch
                         checked={isRepeater}
-                        onChange={(e) => {
-                          setIsRepeater(e.target.checked)
-                          if (e.target.checked) {
-                            handleFreqModeChange(false)
-                          }
-                        }}
+                        onChange={(e) => setIsRepeater(e.target.checked)}
                         size="small"
                       />
                     }
@@ -1010,15 +1425,18 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                 <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <TextField
                     fullWidth
-                    label={formData.same_frequency ? "频率 (MHz)" : "发射频率 (MHz)"}
-                    type="number"
+                    required
                     size="small"
+                    label={!isRepeater ? "频率 (MHz)" : "发射频率 (MHz)"}
+                    type="number"
                     value={formData.tx_frequency || ''}
                     onChange={(e) => handleTxFrequencyChange(parseFloat(e.target.value) || 0)}
                     inputProps={{ step: 0.001 }}
+                    error={hasSubmitted && !formData.tx_frequency}
+                    helperText={hasSubmitted && !formData.tx_frequency ? '必填' : ''}
                   />
                 </Grid>
-                {!formData.same_frequency && (
+                {!isSameFrequency && (
                   <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                     <TextField
                       fullWidth
@@ -1103,11 +1521,14 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                     <Grid size={{ xs: 12, sm: 6 }}>
                       <TextField
                         fullWidth
-                        label="对方呼号 *"
+                        required
+                        label="对方呼号"
                         size="small"
                         value={formData.callsign || ''}
                         onChange={(e) => setFormData(prev => ({ ...prev, callsign: e.target.value.toUpperCase() }))}
                         placeholder="例如: BH1ABC"
+                        error={hasSubmitted && !formData.callsign}
+                        helperText={hasSubmitted && !formData.callsign ? '必填' : ''}
                       />
                     </Grid>
                     <Grid size={{ xs: 12, sm: 6 }}>
@@ -1208,6 +1629,19 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                     <Grid size={{ xs: 12, sm: 6 }}>
                       <TextField
                         fullWidth
+                        required
+                        label="我方呼号"
+                        size="small"
+                        value={formData.my_callsign || ''}
+                        onChange={(e) => setFormData(prev => ({ ...prev, my_callsign: e.target.value }))}
+                        placeholder="例如: BG7XXX"
+                        error={hasSubmitted && !formData.my_callsign}
+                        helperText={hasSubmitted && !formData.my_callsign ? '必填' : ''}
+                      />
+                    </Grid>
+                    <Grid size={{ xs: 12, sm: 6 }}>
+                      <TextField
+                        fullWidth
                         label="QTH (位置)"
                         size="small"
                         value={formData.my_qth || ''}
@@ -1298,7 +1732,8 @@ function LogbookDetailDialog({ open, onClose, entry, timeDisplayMode }: LogbookD
   if (!entry) return null
 
   const timeLabel = timeDisplayMode === 'bjt' ? '北京时间 (BJT)' : '协调世界时 (UTC)'
-  const timeValue = timeDisplayMode === 'bjt' ? entry.time_bjt : entry.time_utc
+  const timeValue = timeDisplayMode === 'bjt' ? utcToBjt(entry.time_utc) : entry.time_utc
+  const isSameFrequency = entry.tx_frequency === entry.rx_frequency
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -1330,7 +1765,7 @@ function LogbookDetailDialog({ open, onClose, entry, timeDisplayMode }: LogbookD
                 <Grid size={6}>
                   <Typography variant="caption" color="text.secondary">接收频率</Typography>
                   <Typography variant="body2">
-                    {entry.same_frequency ? '同频' : `${entry.rx_frequency} MHz`}
+                    {isSameFrequency ? '同频' : `${entry.rx_frequency} MHz`}
                   </Typography>
                 </Grid>
                 <Grid size={6}>

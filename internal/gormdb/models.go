@@ -360,6 +360,38 @@ func (DeviceConfig) TableName() string {
 	return "device_configs"
 }
 
+// Logbook 通联日志模型
+type Logbook struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      uint      `gorm:"index;not null;column:user_id" json:"user_id"`                     // 创建者ID
+	MyCallSign  string    `gorm:"type:varchar(32);column:my_callsign" json:"my_callsign"`           // 我方呼号（冗余存储，支持客席发射）
+	TimeUTC     time.Time `gorm:"index;column:time_utc" json:"time_utc"`                            // UTC时间（数据库统一存储UTC，前端自行换算BJT）
+	TxFrequency float64   `gorm:"type:decimal(10,4);column:tx_frequency" json:"tx_frequency"`       // 发射频率 (MHz)
+	RxFrequency float64   `gorm:"type:decimal(10,4);column:rx_frequency" json:"rx_frequency"`       // 接收频率 (MHz)
+	CQZone      int       `gorm:"type:tinyint;column:cq_zone" json:"cq_zone"`                       // CQ分区
+	ITUZone     int       `gorm:"type:tinyint;column:itu_zone" json:"itu_zone"`                     // ITU分区
+	Mode        string    `gorm:"type:varchar(32);column:mode" json:"mode"`                         // 通信模式
+	CallSign    string    `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`           // 对方呼号
+	TheirRST    string    `gorm:"type:varchar(16);column:their_rst" json:"their_rst"`               // 对方信号报告
+	TheirPower  *int      `gorm:"type:int;column:their_power" json:"their_power,omitempty"`         // 对方功率 (W)
+	TheirQTH    string    `gorm:"type:varchar(255);column:their_qth" json:"their_qth"`              // 对方QTH
+	TheirRadio  string    `gorm:"type:varchar(255);column:their_radio" json:"their_radio"`          // 对方电台型号
+	TheirAntenna string   `gorm:"type:varchar(255);column:their_antenna" json:"their_antenna"`      // 对方天线
+	MyRST       string    `gorm:"type:varchar(16);column:my_rst" json:"my_rst"`                     // 我方信号报告
+	MyPower     *int      `gorm:"type:int;column:my_power" json:"my_power,omitempty"`               // 我方功率 (W)
+	MyQTH       string    `gorm:"type:varchar(255);column:my_qth" json:"my_qth"`                    // 我方QTH
+	MyRadio     string    `gorm:"type:varchar(255);column:my_radio" json:"my_radio"`                // 我方电台型号
+	MyAntenna   string    `gorm:"type:varchar(255);column:my_antenna" json:"my_antenna"`            // 我方天线
+	Notes       string    `gorm:"type:text;column:notes" json:"notes"`                              // 备注
+	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (Logbook) TableName() string {
+	return "logbooks"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -377,5 +409,6 @@ func AutoMigrate() error {
 		&Asset{},
 		&UserDevicePreference{},
 		&DeviceConfig{},
+		&Logbook{},
 	)
 }

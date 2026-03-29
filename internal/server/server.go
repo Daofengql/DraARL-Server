@@ -92,6 +92,9 @@ func (s *Server) setupRoutes() {
 		// 站点配置（公开配置，无需认证）
 		api.GET("/config/public", handler.NewSiteConfigHandler().GetPublicConfigs)
 
+		// 公开接口（无需认证）
+		api.GET("/public/relays", middleware.PublicRelaySearchRateLimit(), handler.PublicSearchRelays)
+
 		// Keycloak SSO 路由（无需认证）
 		sso := api.Group("/sso")
 		{
@@ -146,6 +149,13 @@ func (s *Server) setupRoutes() {
 			protected.PUT("/logbooks/:id", handler.UpdateLogbook)
 			protected.DELETE("/logbooks/:id", handler.DeleteLogbook)
 			protected.DELETE("/logbooks/batch", handler.BatchDeleteLogbooks)
+
+			// 电台预设（用户只能操作自己的预设）
+			protected.GET("/user/radio-presets", handler.GetRadioPresets)
+			protected.POST("/user/radio-presets", handler.CreateRadioPreset)
+			protected.PUT("/user/radio-presets/:id", handler.UpdateRadioPreset)
+			protected.DELETE("/user/radio-presets/:id", handler.DeleteRadioPreset)
+			protected.PUT("/user/radio-presets/reorder", handler.ReorderRadioPresets)
 
 			// 用户管理（部分需要管理员权限）
 			admin := protected.Group("")

@@ -242,12 +242,36 @@ func (r *RelayRepository) CreateRelay(relay *Relay) error {
 
 // UpdateRelay 更新中继台
 func (r *RelayRepository) UpdateRelay(relay *Relay) error {
-	return r.db.Save(relay).Error
+	return r.db.Omit("create_time").Save(relay).Error
 }
 
 // DeleteRelay 删除中继台
 func (r *RelayRepository) DeleteRelay(id int) error {
 	return r.db.Delete(&Relay{}, id).Error
+}
+
+// SearchRelaysByLocation 按位置搜索中继台（公开接口）
+// location 可以是省份、城市或区县名称
+func (r *RelayRepository) SearchRelaysByLocation(location string) ([]*Relay, error) {
+	var relays []*Relay
+	query := r.db.Where("status = ?", 1) // 只返回启用的中继台
+	if location != "" {
+		query = query.Where("location LIKE ?", "%"+location+"%")
+	}
+	err := query.Order("id DESC").Find(&relays).Error
+	return relays, err
+}
+
+// SearchRelaysByLocationAdmin 按位置搜索中继台（管理员接口）
+// location 可以是省份、城市或区县名称，不过滤状态
+func (r *RelayRepository) SearchRelaysByLocationAdmin(location string) ([]*Relay, error) {
+	var relays []*Relay
+	query := r.db
+	if location != "" {
+		query = query.Where("location LIKE ?", "%"+location+"%")
+	}
+	err := query.Order("id DESC").Find(&relays).Error
+	return relays, err
 }
 
 // ServerRepository 服务器仓库

@@ -18,6 +18,12 @@ import {
   DialogContent,
   DialogActions,
   Alert,
+  Switch,
+  FormControlLabel,
+  Chip,
+  Checkbox,
+  Toolbar,
+  Tooltip,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
@@ -27,28 +33,39 @@ import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import { relayService } from '../../services'
 import type { Relay } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
+import { RegionCascader } from '../../components/common/RegionCascader'
+
+const initialFormData = {
+  id: 0,
+  name: '',
+  up_freq: '',
+  down_freq: '',
+  send_ctcss: '',
+  receive_ctcss: '',
+  ower_callsign: '',
+  location: '',
+  note: '',
+  status: 1,
+}
 
 export function RelaysPage() {
   const [relays, setRelays] = useState<Relay[]>([])
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [searchLocation, setSearchLocation] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingRelay, setEditingRelay] = useState<Relay | null>(null)
-  const [formData, setFormData] = useState({
-    name: '',
-    tx_frequency: 0,
-    rx_frequency: 0,
-    ctcss: 0,
-    owner: '',
-    location: '',
-    description: '',
-  })
+  const [formData, setFormData] = useState(initialFormData)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+
+  const [statusSwitch, setStatusSwitch] = useState(true)
+  const [validateForm, setValidateForm] = useState(false)
 
   // 确认对话框状态
-  const [confirmDialog, setConfirmDialog] = useState<{
+    const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean
     title: string
     message: string
@@ -63,7 +80,8 @@ export function RelaysPage() {
   const loadRelays = async () => {
     setLoading(true)
     try {
-      const data = await relayService.list()
+      // 使用后端按地区搜索（管理员版本，不过滤状态）
+      const data = await relayService.list(searchLocation || undefined)
       setRelays(data)
     } catch (err) {
       console.error('Failed to load relays:', err)
@@ -72,32 +90,44 @@ export function RelaysPage() {
     }
   }
 
+  // 当搜索条件变化时重新加载
+  const handleSearch = () => {
+    setPage(0)
+    loadRelays()
+  }
+
+  const handleClear = () => {
+    setSearchKeyword('')
+    setSearchLocation('')
+    setPage(0)
+    // 清除后重新加载全部数据
+    relayService.list().then(setRelays).catch(console.error)
+  }
+
   const handleOpenDialog = (relay?: Relay) => {
     if (relay) {
       setEditingRelay(relay)
       setFormData({
+        id: relay.id,
         name: relay.name,
-        tx_frequency: relay.tx_frequency,
-        rx_frequency: relay.rx_frequency,
-        ctcss: relay.ctcss || 0,
-        owner: relay.owner || '',
+        up_freq: relay.up_freq,
+        down_freq: relay.down_freq,
+        send_ctcss: relay.send_ctcss,
+        receive_ctcss: relay.receive_ctcss,
+        ower_callsign: relay.ower_callsign,
         location: relay.location || '',
-        description: relay.description || '',
+        note: relay.note,
+        status: relay.status,
       })
+      setStatusSwitch(relay.status === 1)
     } else {
       setEditingRelay(null)
-      setFormData({
-        name: '',
-        tx_frequency: 0,
-        rx_frequency: 0,
-        ctcss: 0,
-        owner: '',
-        location: '',
-        description: '',
-      })
+      setFormData(initialFormData)
+      setStatusSwitch(true)
     }
     setDialogOpen(true)
     setError('')
+    setValidateForm(false)
   }
 
   const handleCloseDialog = () => {
@@ -106,11 +136,35 @@ export function RelaysPage() {
   }
 
   const handleSave = async () => {
+    setValidateForm(true)
+    // 验证必填项
+    if (!formData.name.trim()) {
+      setError('名称为必填项')
+      return
+    }
+    if (!formData.down_freq.trim()) {
+      setError('接收频率为必填项')
+      return
+    }
+    if (!formData.up_freq.trim()) {
+      setError('发射频率为必填项')
+      return
+    }
+    const locationParts = formData.location.split(' ').filter(Boolean)
+    if (locationParts.length < 2) {
+      setError('位置为必填项，至少需要选择到市级别')
+      return
+    }
+
     try {
+      const data = {
+        ...formData,
+        status: statusSwitch ? 1 : 0,
+      }
       if (editingRelay) {
-        await relayService.update({ id: editingRelay.id, ...formData })
+        await relayService.update(data)
       } else {
-        await relayService.create(formData)
+        await relayService.create(data)
       }
       handleCloseDialog()
       loadRelays()
@@ -137,21 +191,60 @@ export function RelaysPage() {
     })
   }
 
-  const filteredRelays = relays.filter(
-    (r) =>
-      !searchKeyword ||
+  // 全选/取消全选当前页
+  const handleSelectAll = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.checked) {
+      setSelectedIds(paginatedRelays.map(r => r.id))
+    } else {
+      setSelectedIds([])
+    }
+  }
+
+  // 选择/取消选择单个
+  const handleSelect = (id: number) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    )
+  }
+
+  // 批量删除
+  const handleBatchDelete = () => {
+    if (selectedIds.length === 0) return
+
+    setConfirmDialog({
+      open: true,
+      title: '批量删除',
+      message: `确定要删除选中的 ${selectedIds.length} 个中继台吗？此操作不可恢复。`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await Promise.all(selectedIds.map(id => relayService.delete(id)))
+          setSelectedIds([])
+          loadRelays()
+        } catch (err: any) {
+          setError(err.response?.data?.message || '批量删除失败')
+        }
+      },
+    })
+  }
+
+  const filteredRelays = relays.filter((r) => {
+    // 关键字过滤
+    const matchKeyword = !searchKeyword ||
       r.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-      (r.location && r.location.toLowerCase().includes(searchKeyword.toLowerCase()))
-  )
+      (r.ower_callsign && r.ower_callsign.toLowerCase().includes(searchKeyword.toLowerCase()))
+
+    // 地区过滤（支持任意级别）
+    const matchLocation = !searchLocation ||
+      r.location.includes(searchLocation)
+
+    return matchKeyword && matchLocation
+  })
 
   const paginatedRelays = filteredRelays.slice(
     page * rowsPerPage,
     page * rowsPerPage + rowsPerPage
   )
-
-  const formatFrequency = (freq: number) => {
-    return freq > 0 ? `${(freq / 1000000).toFixed(4)} MHz` : '-'
-  }
 
   return (
     <Box>
@@ -169,50 +262,105 @@ export function RelaysPage() {
       )}
 
       <Paper sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, p: 2, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <Box sx={{ minWidth: 250 }}>
+            <RegionCascader
+              value={searchLocation}
+              onChange={setSearchLocation}
+              label="按地区筛选"
+              size="small"
+              helperText="可选择任意级别地区"
+            />
+          </Box>
           <TextField
-            placeholder="搜索中继台名称或位置"
+            placeholder="搜索中继台名称或所有者呼号"
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
             size="small"
-            sx={{ flexGrow: 1 }}
+            sx={{ flexGrow: 1, minWidth: 200 }}
           />
-          <Button variant="outlined" startIcon={<Search />}>
+          <Button
+            variant="outlined"
+            startIcon={<Search />}
+            onClick={handleSearch}
+          >
             搜索
           </Button>
+          {(searchKeyword || searchLocation) && (
+            <Button
+              variant="text"
+              onClick={handleClear}
+            >
+              清除
+            </Button>
+          )}
         </Box>
       </Paper>
 
       <TableContainer component={Paper} sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 700 }}>
+        {selectedIds.length > 0 && (
+          <Toolbar sx={{ bgcolor: 'action.selected', gap: 2 }}>
+            <Typography sx={{ flex: 1 }} color="inherit">
+              已选择 {selectedIds.length} 项
+            </Typography>
+            <Tooltip title="批量删除">
+              <Button
+                variant="contained"
+                color="error"
+                size="small"
+                startIcon={<Delete />}
+                onClick={handleBatchDelete}
+              >
+                批量删除
+              </Button>
+            </Tooltip>
+          </Toolbar>
+        )}
+        <Table sx={{ minWidth: 1000 }}>
           <TableHead>
             <TableRow>
+              <TableCell padding="checkbox">
+                <Checkbox
+                  indeterminate={selectedIds.length > 0 && selectedIds.length < paginatedRelays.length}
+                  checked={paginatedRelays.length > 0 && selectedIds.length === paginatedRelays.length}
+                  onChange={handleSelectAll}
+                />
+              </TableCell>
               <TableCell>ID</TableCell>
               <TableCell>名称</TableCell>
-              <TableCell>下行频率</TableCell>
-              <TableCell>上行频率</TableCell>
-              <TableCell>CTCSS</TableCell>
+              <TableCell>接收频率</TableCell>
+              <TableCell>发射频率</TableCell>
+              <TableCell>接收亚音</TableCell>
+              <TableCell>发射亚音</TableCell>
+              <TableCell>所有者呼号</TableCell>
               <TableCell>位置</TableCell>
-              <TableCell>所有者</TableCell>
+              <TableCell>状态</TableCell>
+              <TableCell>备注</TableCell>
               <TableCell>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={12} align="center">
                   加载中...
                 </TableCell>
               </TableRow>
             ) : paginatedRelays.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={12} align="center">
                   暂无数据
                 </TableCell>
               </TableRow>
             ) : (
               paginatedRelays.map((relay) => (
-                <TableRow key={relay.id} hover>
+                <TableRow key={relay.id} hover selected={selectedIds.includes(relay.id)}>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      checked={selectedIds.includes(relay.id)}
+                      onChange={() => handleSelect(relay.id)}
+                    />
+                  </TableCell>
                   <TableCell>{relay.id}</TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -220,11 +368,20 @@ export function RelaysPage() {
                       {relay.name}
                     </Box>
                   </TableCell>
-                  <TableCell>{formatFrequency(relay.tx_frequency)}</TableCell>
-                  <TableCell>{formatFrequency(relay.rx_frequency)}</TableCell>
-                  <TableCell>{relay.ctcss ? `${relay.ctcss} Hz` : '-'}</TableCell>
+                  <TableCell>{relay.down_freq || '-'}</TableCell>
+                  <TableCell>{relay.up_freq || '-'}</TableCell>
+                  <TableCell>{relay.receive_ctcss || '-'}</TableCell>
+                  <TableCell>{relay.send_ctcss || '-'}</TableCell>
+                  <TableCell>{relay.ower_callsign || '-'}</TableCell>
                   <TableCell>{relay.location || '-'}</TableCell>
-                  <TableCell>{relay.owner || '-'}</TableCell>
+                  <TableCell>
+                    <Chip
+                      label={relay.status === 1 ? '启用' : '禁用'}
+                      color={relay.status === 1 ? 'success' : 'default'}
+                      size="small"
+                    />
+                  </TableCell>
+                  <TableCell>{relay.note || '-'}</TableCell>
                   <TableCell>
                     <IconButton size="small" onClick={() => handleOpenDialog(relay)}>
                       <Edit fontSize="small" />
@@ -256,59 +413,91 @@ export function RelaysPage() {
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>{editingRelay ? '编辑中继台' : '添加中继台'}</DialogTitle>
         <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <Alert severity="info" sx={{ mb: 2, mt: 1 }}>
+            以下频率和亚音参数为<strong>设备上台时需设置</strong>的参数，而非中继台自身的收发参数。
+          </Alert>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <TextField
               label="名称"
               fullWidth
+              required
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             />
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <TextField
+                label="接收频率"
+                sx={{ flex: 1 }}
+                placeholder="例如: 439.500"
+                value={formData.down_freq}
+                onChange={(e) => setFormData({ ...formData, down_freq: e.target.value })}
+                InputProps={{ endAdornment: <Typography color="text.secondary">MHz</Typography> }}
+              />
+              <TextField
+                label="发射频率"
+                sx={{ flex: 1 }}
+                placeholder="例如: 434.500"
+                value={formData.up_freq}
+                onChange={(e) => setFormData({ ...formData, up_freq: e.target.value })}
+                InputProps={{ endAdornment: <Typography color="text.secondary">MHz</Typography> }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <TextField
+                label="接收亚音 (CTCSS)"
+                sx={{ flex: 1 }}
+                placeholder="例如: 88.5"
+                value={formData.receive_ctcss}
+                onChange={(e) => setFormData({ ...formData, receive_ctcss: e.target.value })}
+              />
+              <TextField
+                label="发射亚音 (CTCSS)"
+                sx={{ flex: 1 }}
+                placeholder="例如: 88.5"
+                value={formData.send_ctcss}
+                onChange={(e) => setFormData({ ...formData, send_ctcss: e.target.value })}
+              />
+            </Box>
             <TextField
-              label="下行频率 (Hz)"
-              type="number"
+              label="所有者呼号"
               fullWidth
-              value={formData.tx_frequency}
-              onChange={(e) => setFormData({ ...formData, tx_frequency: parseInt(e.target.value) || 0 })}
+              placeholder="例如: BD7XXX"
+              value={formData.ower_callsign}
+              onChange={(e) => setFormData({ ...formData, ower_callsign: e.target.value })}
             />
-            <TextField
-              label="上行频率 (Hz)"
-              type="number"
-              fullWidth
-              value={formData.rx_frequency}
-              onChange={(e) => setFormData({ ...formData, rx_frequency: parseInt(e.target.value) || 0 })}
-            />
-            <TextField
-              label="CTCSS (Hz)"
-              type="number"
-              fullWidth
-              value={formData.ctcss}
-              onChange={(e) => setFormData({ ...formData, ctcss: parseInt(e.target.value) || 0 })}
-            />
-            <TextField
-              label="所有者"
-              fullWidth
-              value={formData.owner}
-              onChange={(e) => setFormData({ ...formData, owner: e.target.value })}
-            />
-            <TextField
-              label="位置"
-              fullWidth
+            <RegionCascader
               value={formData.location}
-              onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+              onChange={(value) => setFormData({ ...formData, location: value })}
+              label="位置"
+              size="small"
+              required
+              helperText="至少需要选择到市级别"
+              error={validateForm && formData.location.split(' ').filter(Boolean).length < 2}
             />
             <TextField
-              label="描述"
+              label="备注"
               fullWidth
               multiline
-              rows={2}
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              rows={5}
+              placeholder="模拟中继可直接填写说明&#10;DMR: CC:1 TG:4600&#10;D-STAR: REF XXXXX C&#10;YSF: FCS XXXXX"
+              value={formData.note}
+              onChange={(e) => setFormData({ ...formData, note: e.target.value })}
+              helperText="数字中继请在备注中标注参数，如 DMR Color Code、Talk Group 等"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={statusSwitch}
+                  onChange={(e) => setStatusSwitch(e.target.checked)}
+                />
+              }
+              label={statusSwitch ? '启用' : '禁用'}
             />
           </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDialog}>取消</Button>
-          <Button onClick={handleSave} variant="contained">
+          <Button onClick={handleSave} variant="contained" type="button">
             保存
           </Button>
         </DialogActions>

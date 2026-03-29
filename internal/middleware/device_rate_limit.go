@@ -82,6 +82,12 @@ func InitDeviceRateLimiter() {
 				Window:      time.Minute,
 				Description: "同一用户每分钟 10 次",
 			},
+			"public-relay-search-ip": {
+				Key:         "ip",
+				Limit:       10,
+				Window:      time.Minute,
+				Description: "同一 IP 每分钟 10 次",
+			},
 		},
 	}
 
@@ -380,6 +386,32 @@ func SubmitConfigRateLimit() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
+		}
+
+		c.Next()
+	}
+}
+
+// PublicRelaySearchRateLimit 公共中继台查询接口限速中间件（IP 级）
+func PublicRelaySearchRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deviceRateLimiter == nil {
+			c.Next()
+			return
+		}
+
+		clientIP := c.ClientIP()
+		allowed, retryAfter := deviceRateLimiter.checkLimit("public-relay-search-ip", clientIP)
+		if !allowed {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":    429,
+				"message": "请求过于频繁，请稍后重试",
+				"data": gin.H{
+					"retry_after": int(retryAfter.Seconds()),
+				},
+			})
+			c.Abort()
+			return
 		}
 
 		c.Next()

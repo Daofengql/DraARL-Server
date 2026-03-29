@@ -7,6 +7,7 @@ import MenuBook from '@mui/icons-material/MenuBook'
 import Info from '@mui/icons-material/Info'
 import Forum from '@mui/icons-material/Forum'
 import Home from '@mui/icons-material/Home'
+import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import MenuIcon from '@mui/icons-material/Menu'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useConfig } from '../../contexts/ConfigContext'
@@ -53,6 +54,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
   // 导航项
   const navItems = [
     { label: '首页', path: '/', icon: <Home /> },
+    { label: '中继查询', path: '/relays', icon: <SettingsInputAntenna /> },
     { label: '技术交流', path: '/forum', icon: <Forum /> },
     { label: '文档', path: '/docs', icon: <MenuBook /> },
     { label: '关于', path: '/about', icon: <Info /> },

@@ -40,6 +40,8 @@ import {
   ListItemIcon,
   ListItemText,
   CircularProgress,
+  List,
+  ListItem,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
@@ -52,12 +54,33 @@ import LinkOffIcon from '@mui/icons-material/LinkOff'
 import Search from '@mui/icons-material/Search'
 import Clear from '@mui/icons-material/Clear'
 import Person from '@mui/icons-material/Person'
+import Settings from '@mui/icons-material/Settings'
+import DragIndicator from '@mui/icons-material/DragIndicator'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { PageHeader } from '../../components/common/PageHeader'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
+import { RegionCascader } from '../../components/common/RegionCascader'
 import { apiClient } from '../../services/api'
 import { authService } from '../../services/auth'
-import type { User } from '../../types'
+import { relayService } from '../../services/relay'
+import type { User, Relay } from '../../types'
 
 // 通联日志数据类型
 interface LogbookEntry {
@@ -110,6 +133,32 @@ interface LogbookResponse {
   code: number
   message: string
   data: LogbookEntry
+}
+
+// 电台预设类型
+interface RadioPreset {
+  id: number
+  user_id: number
+  name: string
+  radio: string
+  antenna: string
+  power: number | null
+  qth: string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+interface RadioPresetListResponse {
+  code: number
+  message: string
+  data: RadioPreset[]
+}
+
+interface RadioPresetResponse {
+  code: number
+  message: string
+  data: RadioPreset
 }
 
 // 时间转换工具函数
@@ -226,13 +275,6 @@ const logbookApi = {
   },
 }
 
-// 中继台列表（预留）
-const REPEATER_OPTIONS = [
-  { id: 1, name: '广州438.500', freq: 438.5, offset: -5 },
-  { id: 2, name: '深圳439.500', freq: 439.5, offset: -5 },
-  { id: 3, name: '北京439.750', freq: 439.75, offset: -5 },
-]
-
 export function LogbookPage() {
   const location = useLocation()
   const isAdminPage = location.pathname.startsWith('/admin/')
@@ -271,6 +313,10 @@ export function LogbookPage() {
     message: '',
     severity: 'success',
   })
+
+  // 电台预设
+  const [presets, setPresets] = useState<RadioPreset[]>([])
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false)
 
   // 时间显示模式
   const [timeDisplayMode, setTimeDisplayMode] = useState<'bjt' | 'utc'>('bjt')
@@ -348,6 +394,18 @@ export function LogbookPage() {
   const hasActiveFilters = appliedFilters.startTime || appliedFilters.endTime ||
     appliedFilters.callsign || appliedFilters.frequency || appliedFilters.mode || appliedFilters.username
 
+  // 加载电台预设
+  const loadPresets = useCallback(async () => {
+    try {
+      const response = await apiClient.get<RadioPresetListResponse>('/api/user/radio-presets')
+      if (response.code === 200) {
+        setPresets(response.data || [])
+      }
+    } catch (error) {
+      console.error('加载电台预设失败:', error)
+    }
+  }, [])
+
   // 加载数据
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -406,6 +464,11 @@ export function LogbookPage() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 初始加载预设
+  useEffect(() => {
+    loadPresets()
+  }, [loadPresets])
 
   // 全选
   const handleSelectAll = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -987,6 +1050,9 @@ export function LogbookPage() {
           }
         }}
         title="新增通联记录"
+        presets={presets}
+        onManagePresets={() => setPresetDialogOpen(true)}
+        isAdminPage={isAdminPage}
       />
 
       {/* 编辑记录弹窗 */}
@@ -1012,6 +1078,9 @@ export function LogbookPage() {
         }}
         initialData={currentEntry}
         title="编辑通联记录"
+        presets={presets}
+        onManagePresets={() => setPresetDialogOpen(true)}
+        isAdminPage={isAdminPage}
       />
 
       {/* 详情弹窗 */}
@@ -1020,6 +1089,13 @@ export function LogbookPage() {
         onClose={() => setDetailDialogOpen(false)}
         entry={currentEntry}
         timeDisplayMode={timeDisplayMode}
+      />
+
+      {/* 预设管理弹窗 */}
+      <PresetManageDialog
+        open={presetDialogOpen}
+        onClose={() => setPresetDialogOpen(false)}
+        onRefresh={loadPresets}
       />
 
       {/* 删除确认 */}
@@ -1068,13 +1144,6 @@ export function LogbookPage() {
   )
 }
 
-// 我方设备预设选项（预留）
-const MY_RADIO_OPTIONS = [
-  { id: 1, name: 'FT-991A', radio: 'FT-991A', antenna: 'GP', qth: '' },
-  { id: 2, name: 'IC-9700', radio: 'IC-9700', antenna: '八木', qth: '' },
-  { id: 3, name: 'TS-890', radio: 'TS-890', antenna: 'DP', qth: '' },
-]
-
 // 表单弹窗组件
 interface LogbookFormDialogProps {
   open: boolean
@@ -1082,9 +1151,14 @@ interface LogbookFormDialogProps {
   onSave: (entry: Omit<LogbookEntry, 'id'>) => void
   initialData?: LogbookEntry | null
   title: string
+  presets: RadioPreset[]
+  onManagePresets: () => void
+  isAdminPage: boolean
 }
 
-function LogbookFormDialog({ open, onClose, onSave, initialData, title }: LogbookFormDialogProps) {
+
+
+function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets, onManagePresets, isAdminPage }: LogbookFormDialogProps) {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
 
@@ -1116,6 +1190,11 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
   const [isRepeater, setIsRepeater] = useState(false) // 是否中继模式
   const [isSameFrequency, setIsSameFrequency] = useState(true) // 是否同频
   const [hasSubmitted, setHasSubmitted] = useState(false) // 是否尝试过提交
+
+  // 中继台搜索相关状态
+  const [relayLocation, setRelayLocation] = useState('')
+  const [relayOptions, setRelayOptions] = useState<Relay[]>([])
+  const [relaySearching, setRelaySearching] = useState(false)
 
   // 重置表单 - 打开时默认使用当前时间
   const resetForm = useCallback(() => {
@@ -1243,26 +1322,55 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
     })
   }
 
+  // 搜索中继台
+  const handleSearchRelays = async () => {
+    const locationParts = relayLocation.split(' ').filter(Boolean)
+    if (locationParts.length < 2) {
+      return
+    }
+
+    setRelaySearching(true)
+    try {
+      const relays = await relayService.publicSearch(relayLocation)
+      setRelayOptions(relays)
+    } catch (error) {
+      console.error('搜索中继台失败:', error)
+      setRelayOptions([])
+    } finally {
+      setRelaySearching(false)
+    }
+  }
+
   // 快速填充中继台
-  const handleRepeaterSelect = (repeater: typeof REPEATER_OPTIONS[0] | null) => {
-    if (repeater) {
+  const handleRepeaterSelect = (relay: Relay | null) => {
+    if (relay) {
       setIsRepeater(true)
+      // 中继台存储的频率已经是MHz单位，直接使用
+      // up_freq: 中继台上行（中继台接收），down_freq: 中继台下行（中继台发射）
+      // 用户设备：发射频率 = 中继台上行，接收频率 = 中继台下行
+      const txFreq = relay.up_freq ? parseFloat(relay.up_freq) : 0
+      const rxFreq = relay.down_freq ? parseFloat(relay.down_freq) : 0
+      // 如果收发频率不同，关闭同频开关
+      if (txFreq !== rxFreq) {
+        setIsSameFrequency(false)
+      }
       setFormData(prev => ({
         ...prev,
-        tx_frequency: repeater.freq,
-        rx_frequency: repeater.freq + repeater.offset * 0.001,
+        tx_frequency: txFreq,
+        rx_frequency: rxFreq,
       }))
     }
   }
 
   // 快速填充我方设备
-  const handleMyRadioSelect = (preset: typeof MY_RADIO_OPTIONS[0] | null) => {
+  const handleMyRadioSelect = (preset: RadioPreset | null) => {
     if (preset) {
       setFormData(prev => ({
         ...prev,
         my_radio: preset.radio,
         my_antenna: preset.antenna,
         my_qth: preset.qth || prev.my_qth,
+        my_power: preset.power ?? prev.my_power,
       }))
     }
   }
@@ -1395,29 +1503,57 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
               {/* 中继台快速选择 - 仅中继模式显示 */}
               {isRepeater && (
                 <Box sx={{ mb: 2 }}>
-                  <Autocomplete
-                    size="small"
-                    options={REPEATER_OPTIONS}
-                    getOptionLabel={(option) => `${option.name} (${option.freq} MHz)`}
-                    onChange={(_, value) => handleRepeaterSelect(value)}
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label="快速选择中继台"
-                        placeholder="搜索中继台..."
+                  <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, alignItems: { sm: 'flex-end' }, mb: 2 }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <RegionCascader
+                        value={relayLocation}
+                        onChange={setRelayLocation}
+                        label="选择地区搜索中继台"
+                        size="small"
                       />
-                    )}
-                    renderOption={(props, option) => (
-                      <li {...props} key={option.id}>
-                        <Box>
-                          <Typography variant="body2">{option.name}</Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {option.freq} MHz (差频 {option.offset} MHz)
-                          </Typography>
-                        </Box>
-                      </li>
-                    )}
-                  />
+                    </Box>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={handleSearchRelays}
+                      disabled={relaySearching}
+                      startIcon={relaySearching ? <CircularProgress size={16} color="inherit" /> : <Search fontSize="small" />}
+                      sx={{ minWidth: 80, height: 40 }}
+                    >
+                      {relaySearching ? '搜索中...' : '搜索'}
+                    </Button>
+                  </Box>
+                  {relayOptions.length > 0 && (
+                    <Autocomplete
+                      size="small"
+                      options={relayOptions}
+                      getOptionLabel={(option) => option.name}
+                      onChange={(_, value) => handleRepeaterSelect(value)}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="选择中继台"
+                          placeholder="选择中继台自动填入频率..."
+                        />
+                      )}
+                      renderOption={(props, option) => {
+                        const txFreq = option.up_freq || '-'
+                        const rxFreq = option.down_freq || '-'
+                        return (
+                          <li {...props} key={option.id}>
+                            <Box>
+                              <Typography variant="body2">{option.name}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                发: {txFreq} MHz / 收: {rxFreq} MHz
+                                {option.location && ` · ${option.location}`}
+                              </Typography>
+                            </Box>
+                          </li>
+                        )
+                      }}
+                      noOptionsText="暂无中继台数据"
+                    />
+                  )}
                 </Box>
               )}
 
@@ -1596,34 +1732,43 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title }: Logboo
                     bgcolor: 'secondary.50',
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5, gap: 1 }}>
                     <Typography variant="subtitle2" color="secondary.main" sx={{ fontWeight: 600 }}>
                       我方信息
                     </Typography>
-                    <Autocomplete
-                      size="small"
-                      options={MY_RADIO_OPTIONS}
-                      getOptionLabel={(option) => option.name}
-                      onChange={(_, value) => handleMyRadioSelect(value)}
-                      sx={{ width: 140 }}
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          label="快速选择"
+                    {!isAdminPage && (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <Autocomplete
                           size="small"
+                          options={presets}
+                          getOptionLabel={(option) => option.name}
+                          onChange={(_, value) => handleMyRadioSelect(value)}
+                          sx={{ width: 140 }}
+                          renderInput={(params) => (
+                            <TextField
+                              {...params}
+                              label="快速选择"
+                              size="small"
+                            />
+                          )}
+                          renderOption={(props, option) => (
+                            <li {...props} key={option.id}>
+                              <Box>
+                                <Typography variant="body2">{option.name}</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {option.radio} / {option.antenna}
+                                </Typography>
+                              </Box>
+                            </li>
+                          )}
                         />
-                      )}
-                      renderOption={(props, option) => (
-                        <li {...props} key={option.id}>
-                          <Box>
-                            <Typography variant="body2">{option.name}</Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              {option.radio} / {option.antenna}
-                            </Typography>
-                          </Box>
-                        </li>
-                      )}
-                    />
+                        <Tooltip title="管理预设">
+                          <IconButton size="small" onClick={onManagePresets}>
+                            <Settings fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    )}
                   </Box>
                   <Grid container spacing={{ xs: 1, sm: 1.5 }}>
                     <Grid size={{ xs: 12, sm: 6 }}>
@@ -1872,5 +2017,325 @@ function LogbookDetailDialog({ open, onClose, entry, timeDisplayMode }: LogbookD
         <Button onClick={onClose}>关闭</Button>
       </DialogActions>
     </Dialog>
+  )
+}
+
+// 预设管理对话框属性
+interface PresetManageDialogProps {
+  open: boolean
+  onClose: () => void
+  onRefresh: () => void
+}
+
+// 可排序的预设列表项
+interface SortablePresetItemProps {
+  preset: RadioPreset
+  onEdit: (preset: RadioPreset) => void
+  onDelete: (id: number) => void
+}
+
+function SortablePresetItem({ preset, onEdit, onDelete }: SortablePresetItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: preset.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    backgroundColor: isDragging ? 'action.hover' : 'transparent',
+  }
+
+  return (
+    <ListItem
+      ref={setNodeRef}
+      style={style}
+      secondaryAction={
+        <Box>
+          <IconButton size="small" onClick={() => onEdit(preset)}>
+            <Edit fontSize="small" />
+          </IconButton>
+          <IconButton size="small" color="error" onClick={() => onDelete(preset.id)}>
+            <Delete fontSize="small" />
+          </IconButton>
+        </Box>
+      }
+    >
+      <Box {...attributes} {...listeners} sx={{ cursor: 'grab', mr: 1, display: 'flex', alignItems: 'center' }}>
+        <DragIndicator color="action" />
+      </Box>
+      <ListItemText
+        primary={preset.name}
+        secondary={
+          <Typography variant="body2" color="text.secondary">
+            {preset.radio} / {preset.antenna}
+            {preset.power && ` / ${preset.power}W`}
+            {preset.qth && ` / ${preset.qth}`}
+          </Typography>
+        }
+      />
+    </ListItem>
+  )
+}
+
+// 预设管理对话框
+function PresetManageDialog({ open, onClose, onRefresh }: PresetManageDialogProps) {
+  const [presets, setPresets] = useState<RadioPreset[]>([])
+  const [loading, setLoading] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editingPreset, setEditingPreset] = useState<RadioPreset | null>(null)
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({ open: false, message: '', severity: 'success' })
+  const [formData, setFormData] = useState({
+    name: '',
+    radio: '',
+    antenna: '',
+    power: '' as number | '',
+    qth: ''
+  })
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  const loadPresets = useCallback(async () => {
+    setLoading(true)
+    try {
+      const response = await apiClient.get<RadioPresetListResponse>('/api/user/radio-presets')
+      if (response.code >= 200 && response.code < 300 && response.data) {
+        setPresets(response.data)
+      }
+    } catch (error) {
+      console.error('加载预设失败:', error)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) {
+      loadPresets()
+    }
+  }, [open, loadPresets])
+
+  const handleAdd = () => {
+    setEditingPreset(null)
+    setFormData({ name: '', radio: '', antenna: '', power: '', qth: '' })
+    setEditDialogOpen(true)
+  }
+
+  const handleEdit = (preset: RadioPreset) => {
+    setEditingPreset(preset)
+    setFormData({
+      name: preset.name,
+      radio: preset.radio,
+      antenna: preset.antenna,
+      power: preset.power ?? '',
+      qth: preset.qth || ''
+    })
+    setEditDialogOpen(true)
+  }
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('确定要删除这个预设吗？')) return
+
+    try {
+      const response = await apiClient.delete(`/api/user/radio-presets/${id}`)
+      if (response.code >= 200 && response.code < 300) {
+        setSnackbar({ open: true, message: '删除成功', severity: 'success' })
+        loadPresets()
+        onRefresh()
+      } else {
+        setSnackbar({ open: true, message: response.message || '删除失败', severity: 'error' })
+      }
+    } catch (error) {
+      console.error('删除预设失败:', error)
+      setSnackbar({ open: true, message: '删除失败', severity: 'error' })
+    }
+  }
+
+  const handleSave = async () => {
+    if (!formData.name || !formData.radio || !formData.antenna) {
+      setSnackbar({ open: true, message: '请填写必填项', severity: 'error' })
+      return
+    }
+
+    try {
+      const data = {
+        name: formData.name,
+        radio: formData.radio,
+        antenna: formData.antenna,
+        power: formData.power || null,
+        qth: formData.qth || null
+      }
+
+      let response
+      if (editingPreset) {
+        response = await apiClient.put(`/api/user/radio-presets/${editingPreset.id}`, data)
+      } else {
+        response = await apiClient.post('/api/user/radio-presets', data)
+      }
+
+      if (response.code >= 200 && response.code < 300) {
+        setSnackbar({ open: true, message: editingPreset ? '保存成功' : '添加成功', severity: 'success' })
+        setEditDialogOpen(false)
+        loadPresets()
+        onRefresh()
+      } else {
+        setSnackbar({ open: true, message: response.message || '操作失败', severity: 'error' })
+      }
+    } catch (error) {
+      console.error('保存预设失败:', error)
+      setSnackbar({ open: true, message: '操作失败', severity: 'error' })
+    }
+  }
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event
+
+    if (over && active.id !== over.id) {
+      const oldIndex = presets.findIndex(p => p.id === active.id)
+      const newIndex = presets.findIndex(p => p.id === over.id)
+
+      const newPresets = arrayMove(presets, oldIndex, newIndex)
+      setPresets(newPresets)
+
+      // 保存排序到后端
+      try {
+        const orders = newPresets.map((p, index) => ({ id: p.id, order: index }))
+        await apiClient.put('/api/user/radio-presets/reorder', { orders })
+        onRefresh()
+      } catch (error) {
+        console.error('保存排序失败:', error)
+        setSnackbar({ open: true, message: '保存排序失败', severity: 'error' })
+        loadPresets() // 恢复原顺序
+      }
+    }
+  }
+
+  return (
+    <>
+      <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="h6">管理电台预设</Typography>
+            <Button startIcon={<Add />} onClick={handleAdd} variant="contained" size="small">
+              添加预设
+            </Button>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : presets.length === 0 ? (
+            <Box sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+              <Typography>暂无预设，点击上方按钮添加</Typography>
+            </Box>
+          ) : (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={presets.map(p => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <List>
+                  {presets.map((preset) => (
+                    <SortablePresetItem
+                      key={preset.id}
+                      preset={preset}
+                      onEdit={handleEdit}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </List>
+              </SortableContext>
+            </DndContext>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 添加/编辑预设弹窗 */}
+      <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>{editingPreset ? '编辑预设' : '添加预设'}</DialogTitle>
+        <DialogContent>
+          <Box sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              fullWidth
+              required
+              label="预设名称"
+              size="small"
+              value={formData.name}
+              onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="例如: 家里台"
+            />
+            <TextField
+              fullWidth
+              required
+              label="电台设备"
+              size="small"
+              value={formData.radio}
+              onChange={(e) => setFormData(prev => ({ ...prev, radio: e.target.value }))}
+              placeholder="例如: IC-7300"
+            />
+            <TextField
+              fullWidth
+              required
+              label="天线"
+              size="small"
+              value={formData.antenna}
+              onChange={(e) => setFormData(prev => ({ ...prev, antenna: e.target.value }))}
+              placeholder="例如: DP天线"
+            />
+            <TextField
+              fullWidth
+              label="功率 (W)"
+              size="small"
+              type="number"
+              value={formData.power}
+              onChange={(e) => setFormData(prev => ({ ...prev, power: e.target.value ? Number(e.target.value) : '' }))}
+              placeholder="例如: 100"
+            />
+            <TextField
+              fullWidth
+              label="QTH"
+              size="small"
+              value={formData.qth}
+              onChange={(e) => setFormData(prev => ({ ...prev, qth: e.target.value }))}
+              placeholder="例如: 广东省广州市"
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialogOpen(false)}>取消</Button>
+          <Button onClick={handleSave} variant="contained">保存</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={3000}
+        onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={snackbar.severity} onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+    </>
   )
 }

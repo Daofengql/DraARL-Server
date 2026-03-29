@@ -22,25 +22,45 @@ import {
   CircularProgress,
   Alert,
   Snackbar,
+  Paper,
 } from '@mui/material'
 import { deviceService, type DeviceConfig } from '../../services/device'
+import { relayService } from '../../services/relay'
 import { DEVICE_MODELS } from '../../utils/deviceModel'
+import type { Relay } from '../../types'
+import { RegionCascader } from '../common/RegionCascader'
 
-// 预设频率类型
+// 预设频率类型（基于中继台数据）
 interface FreqPreset {
+  id: number
   name: string
-  txFreq?: string
-  rxFreq?: string
-  txCtcss?: string
-  rxCtcss?: string
+  txFreq: string    // 发射频率 MHz
+  rxFreq: string    // 接收频率 MHz
+  txCtcss: string   // 发射亚音 Hz
+  rxCtcss: string   // 接收亚音 Hz
   squelch?: number
   sameFreq?: boolean
   power?: 'high' | 'medium' | 'low'
   bandwidth?: 'wide' | 'narrow'
 }
 
-// 预设频率列表（后续从API获取）
-const FREQ_PRESETS: FreqPreset[] = []
+// 将中继台数据转换为预设格式
+const relayToPreset = (relay: Relay): FreqPreset => {
+  // 中继台：up_freq是上行频率（中继台接收），down_freq是下行频率（中继台发射）
+  // 对于用户设备：发射频率 = 中继台上行频率（up_freq），接收频率 = 中继台下行频率（down_freq）
+  return {
+    id: relay.id,
+    name: relay.name,
+    txFreq: relay.up_freq || '',
+    rxFreq: relay.down_freq || '',
+    txCtcss: relay.send_ctcss || '',
+    rxCtcss: relay.receive_ctcss || '',
+    squelch: 0,
+    sameFreq: relay.up_freq === relay.down_freq,
+    power: 'high',
+    bandwidth: 'wide',
+  }
+}
 
 interface ParamConfigDialogProps {
   open: boolean
@@ -124,6 +144,11 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
     bandwidth: 'wide',
   })
 
+  // 中继台预设相关状态
+  const [relayLocation, setRelayLocation] = useState('')
+  const [relayPresets, setRelayPresets] = useState<FreqPreset[]>([])
+  const [relaySearching, setRelaySearching] = useState(false)
+
   // 平台设置 - 设备编辑
   const [platformFormData, setPlatformFormData] = useState({
     name: '',
@@ -165,6 +190,29 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
       setSnackbar({ open: true, message: '加载配置失败', severity: 'error' })
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 搜索中继台预设
+  const handleSearchRelays = async () => {
+    const locationParts = relayLocation.split(' ').filter(Boolean)
+    if (locationParts.length < 2) {
+      setSnackbar({ open: true, message: '请至少选择到市级别', severity: 'info' })
+      return
+    }
+
+    setRelaySearching(true)
+    try {
+      const relays = await relayService.publicSearch(relayLocation)
+      setRelayPresets(relays.map(relayToPreset))
+      if (relays.length === 0) {
+        setSnackbar({ open: true, message: '该地区暂无中继台数据', severity: 'info' })
+      }
+    } catch (error) {
+      console.error('搜索中继台失败:', error)
+      setSnackbar({ open: true, message: '搜索中继台失败', severity: 'error' })
+    } finally {
+      setRelaySearching(false)
     }
   }
 
@@ -278,35 +326,75 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
           )}
           {tabValue === 0 && (
             <Grid container spacing={3}>
-              {/* 快速填入 */}
+              {/* 中继台预设填入 */}
               <Grid size={12}>
-                <Autocomplete
-                  fullWidth
-                  options={FREQ_PRESETS}
-                  getOptionLabel={(option) => option.name}
-                  onChange={(_, value) => {
-                    if (value) {
-                      setFreqParams({
-                        txFreq: value.txFreq || '',
-                        rxFreq: value.rxFreq || '',
-                        txCtcss: value.txCtcss || '',
-                        rxCtcss: value.rxCtcss || '',
-                        squelch: value.squelch ?? 0,
-                        sameFreq: value.sameFreq ?? true,
-                        power: value.power || 'high',
-                        bandwidth: value.bandwidth || 'wide',
-                      })
-                    }
-                  }}
-                  renderInput={(params) => (
-                    <TextField
-                      {...params}
-                      label="快速填入预设"
-                      placeholder="搜索预设频率..."
+                <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
+                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
+                    中继台预设填入
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, alignItems: { sm: 'flex-end' } }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <RegionCascader
+                        value={relayLocation}
+                        onChange={setRelayLocation}
+                        label="选择地区"
+                        size="small"
+                      />
+                    </Box>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={handleSearchRelays}
+                      disabled={relaySearching}
+                      startIcon={relaySearching ? <CircularProgress size={16} color="inherit" /> : null}
+                      sx={{ minWidth: 80, height: 40 }}
+                    >
+                      {relaySearching ? '搜索中...' : '搜索'}
+                    </Button>
+                  </Box>
+                  {relayPresets.length > 0 && (
+                    <Autocomplete
+                      fullWidth
+                      size="small"
+                      sx={{ mt: 2 }}
+                      options={relayPresets}
+                      getOptionLabel={(option) => option.name}
+                      onChange={(_, value) => {
+                        if (value) {
+                          setFreqParams({
+                            txFreq: value.txFreq || '',
+                            rxFreq: value.rxFreq || '',
+                            txCtcss: value.txCtcss || '',
+                            rxCtcss: value.rxCtcss || '',
+                            squelch: value.squelch ?? 0,
+                            sameFreq: value.sameFreq ?? true,
+                            power: value.power || 'high',
+                            bandwidth: value.bandwidth || 'wide',
+                          })
+                        }
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="选择中继台"
+                          placeholder="选择中继台自动填入参数..."
+                        />
+                      )}
+                      renderOption={(props, option) => (
+                        <li {...props} key={option.id}>
+                          <Box>
+                            <Typography variant="body2">{option.name}</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              发: {option.txFreq} MHz / 收: {option.rxFreq} MHz
+                              {option.txCtcss && ` / 亚音: ${option.txCtcss} Hz`}
+                            </Typography>
+                          </Box>
+                        </li>
+                      )}
+                      noOptionsText="暂无中继台数据"
                     />
                   )}
-                  noOptionsText="暂无预设数据"
-                />
+                </Paper>
               </Grid>
 
               <Grid size={12}><Divider /></Grid>

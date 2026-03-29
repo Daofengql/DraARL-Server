@@ -36,6 +36,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { RegionCascader } from '../../components/common/RegionCascader'
 
 const initialFormData = {
+  id: 0,
   name: '',
   up_freq: '',
   down_freq: '',
@@ -91,6 +92,7 @@ export function RelaysPage() {
     if (relay) {
       setEditingRelay(relay)
       setFormData({
+        id: relay.id,
         name: relay.name,
         up_freq: relay.up_freq,
         down_freq: relay.down_freq,

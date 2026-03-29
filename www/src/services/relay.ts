@@ -57,6 +57,14 @@ const toBackendFormat = (data: Partial<Relay>): Partial<BackendRelay> => ({
 })
 
 export const relayService = {
+  // 公开搜索中继台（无需登录）
+  async publicSearch(location: string): Promise<Relay[]> {
+    const res = await apiClient.get<BackendResponse<{ items: BackendRelay[] }>>('/api/public/relays', {
+      params: { location }
+    })
+    return (res.data?.items || []).map(normalizeRelay)
+  },
+
   // 获取中继台列表
   async getList(params?: {
     page?: number

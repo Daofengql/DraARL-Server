@@ -93,7 +93,7 @@ func (s *Server) setupRoutes() {
 		api.GET("/config/public", handler.NewSiteConfigHandler().GetPublicConfigs)
 
 		// 公开接口（无需认证）
-		api.GET("/public/relays", handler.PublicSearchRelays)
+		api.GET("/public/relays", middleware.PublicRelaySearchRateLimit(), handler.PublicSearchRelays)
 
 		// Keycloak SSO 路由（无需认证）
 		sso := api.Group("/sso")

@@ -242,7 +242,7 @@ func (r *RelayRepository) CreateRelay(relay *Relay) error {
 
 // UpdateRelay 更新中继台
 func (r *RelayRepository) UpdateRelay(relay *Relay) error {
-	return r.db.Save(relay).Error
+	return r.db.Omit("create_time").Save(relay).Error
 }
 
 // DeleteRelay 删除中继台

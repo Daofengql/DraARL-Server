@@ -29,6 +29,7 @@ const PublicDocsPage = lazy(() => import('./pages/docs/PublicDocsPage').then(m =
 const ForumPage = lazy(() => import('./pages/forum/ForumPage').then(m => ({ default: m.ForumPage })))
 const AboutPage = lazy(() => import('./pages/about/AboutPage').then(m => ({ default: m.AboutPage })))
 const RadioPage = lazy(() => import('./pages/radio/RadioPage').then(m => ({ default: m.RadioPage })))
+const RelaySearchPage = lazy(() => import('./pages/relay-search/RelaySearchPage').then(m => ({ default: m.RelaySearchPage })))
 const AdminDashboardPage = lazy(() => import('./pages/admin/DashboardPage').then(m => ({ default: m.AdminDashboardPage })))
 const AdminDevicePage = lazy(() => import('./pages/admin/DevicePage').then(m => ({ default: m.AdminDevicePage })))
 const AdminGroupPage = lazy(() => import('./pages/admin/GroupPage').then(m => ({ default: m.AdminGroupPage })))
@@ -56,6 +57,9 @@ function App() {
 
         {/* 公开路由 - 论坛 */}
         <Route path="/forum" element={<PageSuspense><ForumPage /></PageSuspense>} />
+
+        {/* 公开路由 - 中继台查询 */}
+        <Route path="/relays" element={<PageSuspense><RelaySearchPage /></PageSuspense>} />
 
         {/* 公开路由 - 关于 */}
         <Route path="/about" element={<PageSuspense><AboutPage /></PageSuspense>} />

@@ -76,9 +76,11 @@ import { CSS } from '@dnd-kit/utilities'
 import { PageHeader } from '../../components/common/PageHeader'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
+import { RegionCascader } from '../../components/common/RegionCascader'
 import { apiClient } from '../../services/api'
 import { authService } from '../../services/auth'
-import type { User } from '../../types'
+import { relayService } from '../../services/relay'
+import type { User, Relay } from '../../types'
 
 // 通联日志数据类型
 interface LogbookEntry {
@@ -272,13 +274,6 @@ const logbookApi = {
     return response
   },
 }
-
-// 中继台列表（预留）
-const REPEATER_OPTIONS = [
-  { id: 1, name: '广州438.500', freq: 438.5, offset: -5 },
-  { id: 2, name: '深圳439.500', freq: 439.5, offset: -5 },
-  { id: 3, name: '北京439.750', freq: 439.75, offset: -5 },
-]
 
 export function LogbookPage() {
   const location = useLocation()
@@ -1196,6 +1191,11 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets,
   const [isSameFrequency, setIsSameFrequency] = useState(true) // 是否同频
   const [hasSubmitted, setHasSubmitted] = useState(false) // 是否尝试过提交
 
+  // 中继台搜索相关状态
+  const [relayLocation, setRelayLocation] = useState('')
+  const [relayOptions, setRelayOptions] = useState<Relay[]>([])
+  const [relaySearching, setRelaySearching] = useState(false)
+
   // 重置表单 - 打开时默认使用当前时间
   const resetForm = useCallback(() => {
     setHasSubmitted(false)
@@ -1322,14 +1322,42 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets,
     })
   }
 
+  // 搜索中继台
+  const handleSearchRelays = async () => {
+    const locationParts = relayLocation.split(' ').filter(Boolean)
+    if (locationParts.length < 2) {
+      return
+    }
+
+    setRelaySearching(true)
+    try {
+      const relays = await relayService.publicSearch(relayLocation)
+      setRelayOptions(relays)
+    } catch (error) {
+      console.error('搜索中继台失败:', error)
+      setRelayOptions([])
+    } finally {
+      setRelaySearching(false)
+    }
+  }
+
   // 快速填充中继台
-  const handleRepeaterSelect = (repeater: typeof REPEATER_OPTIONS[0] | null) => {
-    if (repeater) {
+  const handleRepeaterSelect = (relay: Relay | null) => {
+    if (relay) {
       setIsRepeater(true)
+      // 中继台存���的频率已经是MHz单位，直接使用
+      // up_freq: 中继台上行（中继台接收），down_freq: 中继台下行（中继台发射）
+      // 用户设备：发射频率 = 中继台上行，接收频率 = 中继台下行
+      const txFreq = relay.up_freq ? parseFloat(relay.up_freq) : 0
+      const rxFreq = relay.down_freq ? parseFloat(relay.down_freq) : 0
+      // 如果收发频率不同，关闭同频开关
+      if (txFreq !== rxFreq) {
+        setIsSameFrequency(false)
+      }
       setFormData(prev => ({
         ...prev,
-        tx_frequency: repeater.freq,
-        rx_frequency: repeater.freq + repeater.offset * 0.001,
+        tx_frequency: txFreq,
+        rx_frequency: rxFreq,
       }))
     }
   }
@@ -1475,29 +1503,57 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets,
               {/* 中继台快速选择 - 仅中继模式显示 */}
               {isRepeater && (
                 <Box sx={{ mb: 2 }}>
-                  <Autocomplete
-                    size="small"
-                    options={REPEATER_OPTIONS}
-                    getOptionLabel={(option) => `${option.name} (${option.freq} MHz)`}
-                    onChange={(_, value) => handleRepeaterSelect(value)}
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label="快速选择中继台"
-                        placeholder="搜索中继台..."
+                  <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, alignItems: { sm: 'flex-end' }, mb: 2 }}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <RegionCascader
+                        value={relayLocation}
+                        onChange={setRelayLocation}
+                        label="选择地区搜索中继台"
+                        size="small"
                       />
-                    )}
-                    renderOption={(props, option) => (
-                      <li {...props} key={option.id}>
-                        <Box>
-                          <Typography variant="body2">{option.name}</Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {option.freq} MHz (差频 {option.offset} MHz)
-                          </Typography>
-                        </Box>
-                      </li>
-                    )}
-                  />
+                    </Box>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={handleSearchRelays}
+                      disabled={relaySearching}
+                      startIcon={relaySearching ? <CircularProgress size={16} color="inherit" /> : <Search fontSize="small" />}
+                      sx={{ minWidth: 80, height: 40 }}
+                    >
+                      {relaySearching ? '搜索中...' : '搜索'}
+                    </Button>
+                  </Box>
+                  {relayOptions.length > 0 && (
+                    <Autocomplete
+                      size="small"
+                      options={relayOptions}
+                      getOptionLabel={(option) => option.name}
+                      onChange={(_, value) => handleRepeaterSelect(value)}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="选择中继台"
+                          placeholder="选择中继台自动填入频率..."
+                        />
+                      )}
+                      renderOption={(props, option) => {
+                        const txFreq = option.up_freq || '-'
+                        const rxFreq = option.down_freq || '-'
+                        return (
+                          <li {...props} key={option.id}>
+                            <Box>
+                              <Typography variant="body2">{option.name}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                发: {txFreq} MHz / 收: {rxFreq} MHz
+                                {option.location && ` · ${option.location}`}
+                              </Typography>
+                            </Box>
+                          </li>
+                        )
+                      }}
+                      noOptionsText="暂无中继台数据"
+                    />
+                  )}
                 </Box>
               )}
 

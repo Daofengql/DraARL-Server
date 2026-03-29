@@ -8,7 +8,7 @@ const (
 	// SiteShortName 站点短名称/简称
 	SiteShortName = "DraARL"
 	// SystemVersion 系统版本
-	SystemVersion = "v1.1.1"
+	SystemVersion = "v1.1.2"
 	// ProtocolVersion 协议版本
 	ProtocolVersion = "DraARLv1"
 )

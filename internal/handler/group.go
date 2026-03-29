@@ -798,10 +798,21 @@ func GetGroupDevices(c *gin.Context) {
 	})
 }
 
-// GetRelays 获取中继台列表
+// GetRelays 获取中继台列表（管理员接口，支持按地区搜索）
 func GetRelays(c *gin.Context) {
+	location := c.Query("location")
+
 	repo := gormdb.NewRelayRepository()
-	relays, err := repo.ListRelays()
+	var relays []*gormdb.Relay
+	var err error
+
+	if location != "" {
+		// 管理员搜索不限制状态
+		relays, err = repo.SearchRelaysByLocationAdmin(location)
+	} else {
+		relays, err = repo.ListRelays()
+	}
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

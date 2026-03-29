@@ -262,6 +262,18 @@ func (r *RelayRepository) SearchRelaysByLocation(location string) ([]*Relay, err
 	return relays, err
 }
 
+// SearchRelaysByLocationAdmin 按位置搜索中继台（管理员接口）
+// location 可以是省份、城市或区县名称，不过滤状态
+func (r *RelayRepository) SearchRelaysByLocationAdmin(location string) ([]*Relay, error) {
+	var relays []*Relay
+	query := r.db
+	if location != "" {
+		query = query.Where("location LIKE ?", "%"+location+"%")
+	}
+	err := query.Order("id DESC").Find(&relays).Error
+	return relays, err
+}
+
 // ServerRepository 服务器仓库
 type ServerRepository struct {
 	db *gorm.DB

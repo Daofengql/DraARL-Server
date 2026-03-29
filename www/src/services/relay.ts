@@ -77,8 +77,12 @@ export const relayService = {
   },
 
   // 获取中继台列表（兼容旧接口）
-  async list(): Promise<Relay[]> {
-    const res = await apiClient.get<BackendResponse<{ items: BackendRelay[] }>>('/api/relays')
+  async list(location?: string): Promise<Relay[]> {
+    const params: Record<string, string> = {}
+    if (location) {
+      params.location = location
+    }
+    const res = await apiClient.get<BackendResponse<{ items: BackendRelay[] }>>('/api/relays', { params })
     return (res.data?.items || []).map(normalizeRelay)
   },
 

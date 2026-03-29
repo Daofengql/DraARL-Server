@@ -53,6 +53,7 @@ export function RelaysPage() {
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const [searchLocation, setSearchLocation] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -79,13 +80,28 @@ export function RelaysPage() {
   const loadRelays = async () => {
     setLoading(true)
     try {
-      const data = await relayService.list()
+      // 使用后端按地区搜索（管理员版本，不过滤状态）
+      const data = await relayService.list(searchLocation || undefined)
       setRelays(data)
     } catch (err) {
       console.error('Failed to load relays:', err)
     } finally {
       setLoading(false)
     }
+  }
+
+  // 当搜索条件变化时重新加载
+  const handleSearch = () => {
+    setPage(0)
+    loadRelays()
+  }
+
+  const handleClear = () => {
+    setSearchKeyword('')
+    setSearchLocation('')
+    setPage(0)
+    // 清除后重新加载全部数据
+    relayService.list().then(setRelays).catch(console.error)
   }
 
   const handleOpenDialog = (relay?: Relay) => {
@@ -212,12 +228,18 @@ export function RelaysPage() {
     })
   }
 
-  const filteredRelays = relays.filter(
-    (r) =>
-      !searchKeyword ||
+  const filteredRelays = relays.filter((r) => {
+    // 关键字过滤
+    const matchKeyword = !searchKeyword ||
       r.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
       (r.ower_callsign && r.ower_callsign.toLowerCase().includes(searchKeyword.toLowerCase()))
-  )
+
+    // 地区过滤（支持任意级别）
+    const matchLocation = !searchLocation ||
+      r.location.includes(searchLocation)
+
+    return matchKeyword && matchLocation
+  })
 
   const paginatedRelays = filteredRelays.slice(
     page * rowsPerPage,
@@ -240,17 +262,38 @@ export function RelaysPage() {
       )}
 
       <Paper sx={{ mb: 2 }}>
-        <Box sx={{ display: 'flex', gap: 2, p: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, p: 2, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <Box sx={{ minWidth: 250 }}>
+            <RegionCascader
+              value={searchLocation}
+              onChange={setSearchLocation}
+              label="按地区筛选"
+              size="small"
+              helperText="可选择任意级别地区"
+            />
+          </Box>
           <TextField
             placeholder="搜索中继台名称或所有者呼号"
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}
             size="small"
-            sx={{ flexGrow: 1 }}
+            sx={{ flexGrow: 1, minWidth: 200 }}
           />
-          <Button variant="outlined" startIcon={<Search />}>
+          <Button
+            variant="outlined"
+            startIcon={<Search />}
+            onClick={handleSearch}
+          >
             搜索
           </Button>
+          {(searchKeyword || searchLocation) && (
+            <Button
+              variant="text"
+              onClick={handleClear}
+            >
+              清除
+            </Button>
+          )}
         </Box>
       </Paper>
 

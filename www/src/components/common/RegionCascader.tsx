@@ -82,6 +82,7 @@ interface RegionCascaderProps {
   required?: boolean
   helperText?: string
   error?: boolean
+  fullWidth?: boolean
 }
 
 export function RegionCascader({
@@ -93,6 +94,7 @@ export function RegionCascader({
   required = false,
   helperText,
   error = false,
+  fullWidth = true,
 }: RegionCascaderProps) {
   // 解析初始值
   const parseValue = (locationStr: string) => {
@@ -192,7 +194,7 @@ export function RegionCascader({
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: '100%' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: fullWidth ? '100%' : 'auto' }}>
       <Box sx={{ display: 'flex', gap: 1 }}>
         <FormControl size={size} sx={{ minWidth: 100, flex: 1 }} required={required} error={error}>
           <InputLabel shrink>{label}</InputLabel>

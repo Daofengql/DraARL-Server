@@ -250,6 +250,18 @@ func (r *RelayRepository) DeleteRelay(id int) error {
 	return r.db.Delete(&Relay{}, id).Error
 }
 
+// SearchRelaysByLocation 按位置搜索中继台（公开接口）
+// location 可以是省份、城市或区县名称
+func (r *RelayRepository) SearchRelaysByLocation(location string) ([]*Relay, error) {
+	var relays []*Relay
+	query := r.db.Where("status = ?", 1) // 只返回启用的中继台
+	if location != "" {
+		query = query.Where("location LIKE ?", "%"+location+"%")
+	}
+	err := query.Order("id DESC").Find(&relays).Error
+	return relays, err
+}
+
 // ServerRepository 服务器仓库
 type ServerRepository struct {
 	db *gorm.DB

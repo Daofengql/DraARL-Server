@@ -10,34 +10,50 @@ interface BackendResponse<T> {
   data?: T
 }
 
-// 后端中继台响应格式
+// 后端中继台响应格式（与 gormdb.Relay 对应）
 interface BackendRelay {
-  ID: number
-  Name: string
-  TXFrequency: number
-  RXFrequency: number
-  CTCSS?: number
-  Owner: string
-  Location: string
-  Description: string
-  Status: number
-  CreateTime: string
-  UpdateTime: string
+  id: number
+  name: string
+  up_freq: string
+  down_freq: string
+  send_ctss: string
+  recive_ctss: string
+  ower_callsign: string
+  location: string
+  status: number
+  note: string
+  create_time?: string
+  update_time?: string
 }
 
-// 标准化中继台数据
+// 标准化中继台数据（后端 -> 前端）
 const normalizeRelay = (r: BackendRelay): Relay => ({
-  id: r.ID,
-  name: r.Name,
-  tx_frequency: r.TXFrequency,
-  rx_frequency: r.RXFrequency,
-  ctcss: r.CTCSS,
-  owner: r.Owner,
-  location: r.Location,
-  description: r.Description,
-  status: r.Status,
-  created_at: r.CreateTime,
-  updated_at: r.UpdateTime,
+  id: r.id,
+  name: r.name,
+  up_freq: r.up_freq,
+  down_freq: r.down_freq,
+  send_ctcss: r.send_ctss,
+  receive_ctcss: r.recive_ctss,
+  ower_callsign: r.ower_callsign,
+  location: r.location,
+  status: r.status,
+  note: r.note,
+  create_time: r.create_time,
+  update_time: r.update_time,
+})
+
+// 转换前端数据为后端格式（前端 -> 后端）
+const toBackendFormat = (data: Partial<Relay>): Partial<BackendRelay> => ({
+  id: data.id,
+  name: data.name,
+  up_freq: data.up_freq,
+  down_freq: data.down_freq,
+  send_ctss: data.send_ctcss,
+  recive_ctss: data.receive_ctcss,
+  ower_callsign: data.ower_callsign,
+  location: data.location,
+  status: data.status,
+  note: data.note,
 })
 
 export const relayService = {
@@ -66,39 +82,13 @@ export const relayService = {
 
   // 创建中继台
   async create(data: Partial<Relay>): Promise<Relay> {
-    const backendData: Partial<BackendRelay> = {
-      ID: data.id,
-      Name: data.name,
-      TXFrequency: data.tx_frequency,
-      RXFrequency: data.rx_frequency,
-      CTCSS: data.ctcss,
-      Owner: data.owner,
-      Location: data.location,
-      Description: data.description,
-      Status: data.status,
-      CreateTime: data.created_at,
-      UpdateTime: data.updated_at,
-    }
-    const res = await apiClient.post<BackendResponse<BackendRelay>>('/api/relay/create', backendData)
+    const res = await apiClient.post<BackendResponse<BackendRelay>>('/api/relay/create', toBackendFormat(data))
     return normalizeRelay(res.data!)
   },
 
   // 更新中继台
   async update(data: Partial<Relay>): Promise<Relay> {
-    const backendData: Partial<BackendRelay> = {
-      ID: data.id,
-      Name: data.name,
-      TXFrequency: data.tx_frequency,
-      RXFrequency: data.rx_frequency,
-      CTCSS: data.ctcss,
-      Owner: data.owner,
-      Location: data.location,
-      Description: data.description,
-      Status: data.status,
-      CreateTime: data.created_at,
-      UpdateTime: data.updated_at,
-    }
-    const res = await apiClient.post<BackendResponse<BackendRelay>>('/api/relay/update', backendData)
+    const res = await apiClient.post<BackendResponse<BackendRelay>>('/api/relay/update', toBackendFormat(data))
     return normalizeRelay(res.data!)
   },
 

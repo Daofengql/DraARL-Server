@@ -181,17 +181,18 @@ func (s *Server) String() string {
 
 // Relay 中继台模型
 type Relay struct {
-	ID         int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name       string    `gorm:"type:varchar(255)" json:"name"`
-	UpFreq     string    `gorm:"type:varchar(255)" json:"up_freq"`
-	DownFreq   string    `gorm:"type:varchar(255)" json:"down_freq"`
-	SendCTSS   string    `gorm:"type:varchar(255)" json:"send_ctss"`
-	ReciveCTSS string    `gorm:"type:varchar(255)" json:"recive_ctss"`
-	OwerCallSign string  `gorm:"type:varchar(255)" json:"ower_callsign"`
-	CreateTime time.Time `gorm:"autoCreateTime" json:"create_time"`
-	UpdateTime time.Time `gorm:"autoUpdateTime" json:"update_time"`
-	Status     int       `gorm:"type:int;default:1" json:"status"`
-	Note       string    `gorm:"type:text" json:"note"`
+	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name         string    `gorm:"type:varchar(255)" json:"name"`
+	UpFreq       string    `gorm:"type:varchar(255)" json:"up_freq"`
+	DownFreq     string    `gorm:"type:varchar(255)" json:"down_freq"`
+	SendCTSS     string    `gorm:"type:varchar(255)" json:"send_ctss"`
+	ReciveCTSS   string    `gorm:"type:varchar(255)" json:"recive_ctss"`
+	OwerCallSign string    `gorm:"type:varchar(255)" json:"ower_callsign"`
+	Location     string    `gorm:"type:varchar(255)" json:"location"`
+	CreateTime   time.Time `gorm:"autoCreateTime" json:"create_time"`
+	UpdateTime   time.Time `gorm:"autoUpdateTime" json:"update_time"`
+	Status       int       `gorm:"type:int;default:1" json:"status"`
+	Note         string    `gorm:"type:text" json:"note"`
 }
 
 // TableName 指定表名

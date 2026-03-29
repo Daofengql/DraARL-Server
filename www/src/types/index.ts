@@ -170,15 +170,16 @@ export interface GroupMember {
 export interface Relay {
   id: number
   name: string
-  tx_frequency: number
-  rx_frequency: number
-  ctcss?: number
-  owner?: string
-  location?: string
-  description?: string
-  status?: number
-  created_at?: string
-  updated_at?: string
+  up_freq: string        // 上行频率
+  down_freq: string      // 下行频率
+  send_ctcss: string     // 发射亚音
+  receive_ctcss: string  // 接收亚音
+  ower_callsign: string  // 所有者呼号
+  location: string       // 位置
+  status: number
+  note: string
+  create_time?: string
+  update_time?: string
 }
 
 // 服务器相关类型

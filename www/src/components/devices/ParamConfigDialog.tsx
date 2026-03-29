@@ -44,7 +44,7 @@ interface FreqPreset {
   bandwidth?: 'wide' | 'narrow'
 }
 
-// 将中继台数据转换为预��格式
+// 将中继台数据转换为预设格式
 const relayToPreset = (relay: Relay): FreqPreset => {
   // 中继台：up_freq是上行频率（中继台接收），down_freq是下行频率（中继台发射）
   // 对于用户设备：发射频率 = 中继台上行频率（up_freq），接收频率 = 中继台下行频率（down_freq）

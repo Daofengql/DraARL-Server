@@ -1345,7 +1345,7 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets,
   const handleRepeaterSelect = (relay: Relay | null) => {
     if (relay) {
       setIsRepeater(true)
-      // 中继台存���的频率已经是MHz单位，直接使用
+      // 中继台存储的频率已经是MHz单位，直接使用
       // up_freq: 中继台上行（中继台接收），down_freq: 中继台下行（中继台发射）
       // 用户设备：发射频率 = 中继台上行，接收频率 = 中继台下行
       const txFreq = relay.up_freq ? parseFloat(relay.up_freq) : 0

@@ -147,6 +147,13 @@ func (s *Server) setupRoutes() {
 			protected.DELETE("/logbooks/:id", handler.DeleteLogbook)
 			protected.DELETE("/logbooks/batch", handler.BatchDeleteLogbooks)
 
+			// 电台预设（用户只能操作自己的预设）
+			protected.GET("/user/radio-presets", handler.GetRadioPresets)
+			protected.POST("/user/radio-presets", handler.CreateRadioPreset)
+			protected.PUT("/user/radio-presets/:id", handler.UpdateRadioPreset)
+			protected.DELETE("/user/radio-presets/:id", handler.DeleteRadioPreset)
+			protected.PUT("/user/radio-presets/reorder", handler.ReorderRadioPresets)
+
 			// 用户管理（部分需要管理员权限）
 			admin := protected.Group("")
 			admin.Use(middleware.RequireAdmin())

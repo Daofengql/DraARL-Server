@@ -392,6 +392,25 @@ func (Logbook) TableName() string {
 	return "logbooks"
 }
 
+// UserRadioPreset 用户电台预设
+type UserRadioPreset struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    uint      `gorm:"not null;index;column:user_id" json:"user_id"`           // 所属用户ID
+	Name      string    `gorm:"type:varchar(64);not null;column:name" json:"name"`      // 预设名称（如"家里台"、"车载台"）
+	Radio     string    `gorm:"type:varchar(64);column:radio" json:"radio"`             // 电台型号
+	Antenna   string    `gorm:"type:varchar(64);column:antenna" json:"antenna"`         // 天线类型
+	Power     *int      `gorm:"type:int;column:power" json:"power,omitempty"`           // 功率 (W)
+	QTH       string    `gorm:"type:varchar(255);column:qth" json:"qth"`                // QTH位置
+	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`          // 排序权重
+	CreatedAt time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+// TableName 指定表名
+func (UserRadioPreset) TableName() string {
+	return "user_radio_presets"
+}
+
 // AutoMigrate 自动迁移表结构
 func AutoMigrate() error {
 	return Get().AutoMigrate(
@@ -410,5 +429,6 @@ func AutoMigrate() error {
 		&UserDevicePreference{},
 		&DeviceConfig{},
 		&Logbook{},
+		&UserRadioPreset{},
 	)
 }

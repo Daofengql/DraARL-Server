@@ -117,7 +117,7 @@ type Group struct {
 	CallSign          string    `gorm:"type:varchar(255);column:call_sign" json:"callsign"`
 	Password          string    `gorm:"type:varchar(255);column:password" json:"password"`
 	AllowCallSignSSID string    `gorm:"type:text;column:allow_callsign_ssid" json:"allow_callsign_ssid"`
-	OwerID            int       `gorm:"type:int;column:ower_id" json:"ower_id"`
+	OwerID            int       `gorm:"type:int;index:idx_ower_id;column:ower_id" json:"ower_id"` // 性能优化：添加索引，加速按所有者查询
 	MasterServer      int       `gorm:"type:int;column:master_server" json:"master_server"`
 	SlaveServer       int       `gorm:"type:int;column:slave_server" json:"slave_server"`
 	Status            int       `gorm:"type:int;default:1;column:status" json:"status"`
@@ -331,6 +331,9 @@ type Asset struct {
 	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`      // 排序权重
 	CreatedAt time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	// 关联定义：自引用约束。父目录删除时，级联删除其下所有子内容
+	Parent *Asset `gorm:"foreignKey:ParentID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }
 
 // TableName 指定表名
@@ -482,6 +485,8 @@ func AutoMigrate() error {
 		{"设备配置(无设备)", "DELETE FROM device_configs WHERE device_id NOT IN (SELECT id FROM devices)"},
 		{"电台预设(无用户)", "DELETE FROM user_radio_presets WHERE user_id NOT IN (SELECT id FROM users)"},
 		{"设备偏好(无用户)", "DELETE FROM user_device_preferences WHERE user_id NOT IN (SELECT id FROM users)"},
+		// 自引用约束的孤儿数据需要特殊处理：使用临时表避免 MySQL 不支持在同一查询中删除和查询同一表
+		{"资产(孤儿文件)", "DELETE FROM assets WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM (SELECT id FROM assets) AS tmp)"},
 	}
 
 	for _, task := range cleanups {

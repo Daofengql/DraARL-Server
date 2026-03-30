@@ -1,6 +1,7 @@
 package gormdb
 
 import (
+	"log"
 	"time"
 
 	"gorm.io/gorm"
@@ -75,8 +76,8 @@ type Device struct {
 	Name        string    `gorm:"type:varchar(255);column:name" json:"name"`
 	DMRID       int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
 	SSID        uint8     `gorm:"type:tinyint unsigned;index:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
-	OwnerID     int       `gorm:"type:int;index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
-	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                                   // 位置信息 (原 gird 字段)
+	OwnerID     int       `gorm:"index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
+	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                                                               // 位置信息 (原 gird 字段)
 	DevModel    int       `gorm:"type:int;column:dev_model" json:"dev_model"`
 	GroupID     int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
 	Status      int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
@@ -89,6 +90,10 @@ type Device struct {
 	Note        string    `gorm:"type:text;column:note" json:"note"`
 	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
 	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+
+	// 关联定义：配置与 User 表的外键约束。
+	// 当引用的 User 被删除时，数据库引擎会自动连带删除该 OwnerID 下的所有 Device 记录。
+	Owner *User `gorm:"foreignKey:OwnerID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"owner,omitempty"`
 }
 
 // TableName 指定表名
@@ -133,10 +138,14 @@ func (Group) TableName() string {
 // GroupLink 群组互联关联模型
 type GroupLink struct {
 	ID            int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	LinkGroupID   int       `gorm:"type:int;not null;uniqueIndex:uk_link_target,priority:1;column:link_group_id" json:"link_group_id"`   // 互联组ID
-	TargetGroupID int       `gorm:"type:int;not null;uniqueIndex:uk_link_target,priority:2;column:target_group_id" json:"target_group_id"` // 目标群组ID
+	LinkGroupID   int       `gorm:"not null;uniqueIndex:uk_link_target,priority:1;column:link_group_id" json:"link_group_id"`   // 互联组ID
+	TargetGroupID int       `gorm:"not null;uniqueIndex:uk_link_target,priority:2;column:target_group_id" json:"target_group_id"` // 目标群组ID
 	CreatedAt     time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	// 关联定义：双向级联删除。无论 LinkGroup 还是 TargetGroup 被删，此记录均消亡
+	LinkGroup   *Group `gorm:"foreignKey:LinkGroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"link_group,omitempty"`
+	TargetGroup *Group `gorm:"foreignKey:TargetGroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"target_group,omitempty"`
 }
 
 // TableName 指定表名
@@ -223,7 +232,7 @@ func (OperatorLog) TableName() string {
 // OperatorCert 操作证模型
 type OperatorCert struct {
 	ID          int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID      int        `gorm:"type:int;index;column:user_id" json:"user_id"`
+	UserID      int        `gorm:"index;column:user_id" json:"user_id"`
 	CallSign    string     `gorm:"type:varchar(32);column:callsign" json:"callsign"` // 操作证上的呼号
 	FileName    string     `gorm:"type:varchar(255);column:file_name" json:"file_name"`
 	MinioBucket string     `gorm:"type:varchar(255);column:minio_bucket" json:"minio_bucket"`
@@ -232,10 +241,13 @@ type OperatorCert struct {
 	FileType    string     `gorm:"type:varchar(100);column:file_type" json:"file_type"`
 	UploadTime  time.Time  `gorm:"autoCreateTime;column:upload_time" json:"upload_time"`
 	Status      int        `gorm:"type:tinyint;default:0;column:status" json:"status"`        // 0=待审核, 1=已通过, 2=已拒绝/已替换
-	OldCertID   *int       `gorm:"type:int;column:old_cert_id" json:"old_cert_id"`       // 被替换的旧证书ID
-	ReviewNote  string     `gorm:"type:text;column:review_note" json:"review_note"`    // 审核备注
-	ReviewTime  *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"` // 审核时间
-	ReviewerID  *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`    // 审核人ID
+	OldCertID   *int       `gorm:"type:int;column:old_cert_id" json:"old_cert_id"`            // 被替换的旧证书ID
+	ReviewNote  string     `gorm:"type:text;column:review_note" json:"review_note"`           // 审核备注
+	ReviewTime  *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"`       // 审核时间
+	ReviewerID  *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`            // 审核人ID
+
+	// 关联定义：人员离网，证书销毁
+	User *User `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
 }
 
 // TableName 指定表名
@@ -261,17 +273,23 @@ func (SiteConfig) TableName() string {
 
 // GroupMember 群组成员关系（用户与群组的验证关系）
 type GroupMember struct {
-	ID           int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID      int        `gorm:"index:idx_group_user;column:group_id" json:"group_id"`
-	UserID       int        `gorm:"index:idx_group_user;column:user_id" json:"user_id"`
-	IsVerified   bool       `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
-	JoinTime     time.Time  `gorm:"autoCreateTime;column:join_time" json:"join_time"`
-	LastVerify   time.Time  `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
-	DeviceID     *int       `gorm:"index;column:device_id" json:"device_id,omitempty"`
-	DisableSend  bool       `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`
-	DisableRecv  bool       `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`
-	CreateTime   time.Time  `gorm:"autoCreateTime;column:create_time" json:"created_at"`
-	UpdateTime   time.Time  `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
+	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID     int       `gorm:"index:idx_group_user;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
+	UserID      int       `gorm:"index:idx_group_user;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
+	IsVerified  bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
+	JoinTime    time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
+	LastVerify  time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
+	DeviceID    *int      `gorm:"index;column:device_id" json:"device_id,omitempty"`
+	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`
+	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`
+	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"created_at"`
+	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
+
+	// 关联定义：群解散 或 人销号，都会清理当前的加群记录
+	Group  *Group   `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"group,omitempty"`
+	User   *User    `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
+	// 关联定义：弱依赖设备。设备被删除时，仅将此处的 DeviceID 置为 NULL (OnDelete:SET NULL)
+	Device *Device  `gorm:"foreignKey:DeviceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"device,omitempty"`
 }
 
 // TableName 指定表名
@@ -333,12 +351,15 @@ func (a *Asset) IsFile() bool {
 // UserDevicePreference 用户设备偏好设置
 // 用于存储各平台（Android/iOS/Windows/macOS/Web）的独立偏好设置
 type UserDevicePreference struct {
-	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID      uint      `gorm:"not null;uniqueIndex:uk_user_devmodel;column:user_id" json:"user_id"`     // 用户ID，外键关联 users表
+	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID      int       `gorm:"not null;uniqueIndex:uk_user_devmodel;column:user_id" json:"user_id"`     // 用户ID，外键关联 users表
 	DevModel    uint8     `gorm:"not null;uniqueIndex:uk_user_devmodel;column:dev_model" json:"dev_model"` // 设备型号: 101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web
-	LastGroupID uint      `gorm:"default:0;column:last_group_id" json:"last_group_id"`                     // 该平台最后使用的群组ID
+	LastGroupID int       `gorm:"default:0;column:last_group_id" json:"last_group_id"`                     // 该平台最后使用的群组ID
 	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	// 关联定义：用户删除时，偏好设置级联销毁
+	User *User `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }
 
 // TableName 指定表名
@@ -348,12 +369,16 @@ func (UserDevicePreference) TableName() string {
 
 // DeviceConfig 设备配置模型
 // 用于存储 UDP 普通设备的参数配置，支持双向同步
+// 前置逻辑：配置参数依附于具体设备存在，设备销毁时配置毫无保留价值。
 type DeviceConfig struct {
-	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	DeviceID    uint      `gorm:"not null;uniqueIndex:uk_device_key;index;column:device_id" json:"device_id"` // 关联 devices.id
+	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	DeviceID    int       `gorm:"not null;uniqueIndex:uk_device_key;index;column:device_id" json:"device_id"` // 关联 devices.id
 	ConfigKey   string    `gorm:"type:varchar(64);not null;uniqueIndex:uk_device_key;column:config_key" json:"config_key"`
 	ConfigValue string    `gorm:"type:text;column:config_value" json:"config_value"`
 	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	// 关联定义：配置与 Device 表的外键级联约束
+	Device *Device `gorm:"foreignKey:DeviceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }
 
 // TableName 指定表名
@@ -363,29 +388,32 @@ func (DeviceConfig) TableName() string {
 
 // Logbook 通联日志模型
 type Logbook struct {
-	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID      uint      `gorm:"index;not null;column:user_id" json:"user_id"`                     // 创建者ID
-	MyCallSign  string    `gorm:"type:varchar(32);column:my_callsign" json:"my_callsign"`           // 我方呼号（冗余存储，支持客席发射）
-	TimeUTC     time.Time `gorm:"index;column:time_utc" json:"time_utc"`                            // UTC时间（数据库统一存储UTC，前端自行换算BJT）
-	TxFrequency float64   `gorm:"type:decimal(10,4);column:tx_frequency" json:"tx_frequency"`       // 发射频率 (MHz)
-	RxFrequency float64   `gorm:"type:decimal(10,4);column:rx_frequency" json:"rx_frequency"`       // 接收频率 (MHz)
-	CQZone      int       `gorm:"type:tinyint;column:cq_zone" json:"cq_zone"`                       // CQ分区
-	ITUZone     int       `gorm:"type:tinyint;column:itu_zone" json:"itu_zone"`                     // ITU分区
-	Mode        string    `gorm:"type:varchar(32);column:mode" json:"mode"`                         // 通信模式
-	CallSign    string    `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`           // 对方呼号
-	TheirRST    string    `gorm:"type:varchar(16);column:their_rst" json:"their_rst"`               // 对方信号报告
-	TheirPower  *int      `gorm:"type:int;column:their_power" json:"their_power,omitempty"`         // 对方功率 (W)
-	TheirQTH    string    `gorm:"type:varchar(255);column:their_qth" json:"their_qth"`              // 对方QTH
-	TheirRadio  string    `gorm:"type:varchar(255);column:their_radio" json:"their_radio"`          // 对方电台型号
-	TheirAntenna string   `gorm:"type:varchar(255);column:their_antenna" json:"their_antenna"`      // 对方天线
-	MyRST       string    `gorm:"type:varchar(16);column:my_rst" json:"my_rst"`                     // 我方信号报告
-	MyPower     *int      `gorm:"type:int;column:my_power" json:"my_power,omitempty"`               // 我方功率 (W)
-	MyQTH       string    `gorm:"type:varchar(255);column:my_qth" json:"my_qth"`                    // 我方QTH
-	MyRadio     string    `gorm:"type:varchar(255);column:my_radio" json:"my_radio"`                // 我方电台型号
-	MyAntenna   string    `gorm:"type:varchar(255);column:my_antenna" json:"my_antenna"`            // 我方天线
-	Notes       string    `gorm:"type:text;column:notes" json:"notes"`                              // 备注
-	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
-	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID       int       `gorm:"index;not null;column:user_id" json:"user_id"`                     // 创建者ID
+	MyCallSign   string    `gorm:"type:varchar(32);column:my_callsign" json:"my_callsign"`           // 我方呼号（冗余存储，支持客席发射）
+	TimeUTC      time.Time `gorm:"index;column:time_utc" json:"time_utc"`                            // UTC时间（数据库统一存储UTC，前端自行换算BJT）
+	TxFrequency  float64   `gorm:"type:decimal(10,4);column:tx_frequency" json:"tx_frequency"`       // 发射频率 (MHz)
+	RxFrequency  float64   `gorm:"type:decimal(10,4);column:rx_frequency" json:"rx_frequency"`       // 接收频率 (MHz)
+	CQZone       int       `gorm:"type:tinyint;column:cq_zone" json:"cq_zone"`                       // CQ分区
+	ITUZone      int       `gorm:"type:tinyint;column:itu_zone" json:"itu_zone"`                     // ITU分区
+	Mode         string    `gorm:"type:varchar(32);column:mode" json:"mode"`                         // 通信模式
+	CallSign     string    `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`           // 对方呼号
+	TheirRST     string    `gorm:"type:varchar(16);column:their_rst" json:"their_rst"`               // 对方信号报告
+	TheirPower   *int      `gorm:"type:int;column:their_power" json:"their_power,omitempty"`         // 对方功率 (W)
+	TheirQTH     string    `gorm:"type:varchar(255);column:their_qth" json:"their_qth"`              // 对方QTH
+	TheirRadio   string    `gorm:"type:varchar(255);column:their_radio" json:"their_radio"`          // 对方电台型号
+	TheirAntenna string    `gorm:"type:varchar(255);column:their_antenna" json:"their_antenna"`      // 对方天线
+	MyRST        string    `gorm:"type:varchar(16);column:my_rst" json:"my_rst"`                     // 我方信号报告
+	MyPower      *int      `gorm:"type:int;column:my_power" json:"my_power,omitempty"`               // 我方功率 (W)
+	MyQTH        string    `gorm:"type:varchar(255);column:my_qth" json:"my_qth"`                    // 我方QTH
+	MyRadio      string    `gorm:"type:varchar(255);column:my_radio" json:"my_radio"`                // 我方电台型号
+	MyAntenna    string    `gorm:"type:varchar(255);column:my_antenna" json:"my_antenna"`            // 我方天线
+	Notes        string    `gorm:"type:text;column:notes" json:"notes"`                              // 备注
+	CreatedAt    time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt    time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	// 关联定义：操作员销号，日志级联销毁
+	User *User `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }
 
 // TableName 指定表名
@@ -395,8 +423,8 @@ func (Logbook) TableName() string {
 
 // UserRadioPreset 用户电台预设
 type UserRadioPreset struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID    uint      `gorm:"not null;index;column:user_id" json:"user_id"`           // 所属用户ID
+	ID        int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    int       `gorm:"not null;index;column:user_id" json:"user_id"`           // 所属用户ID
 	Name      string    `gorm:"type:varchar(64);not null;column:name" json:"name"`      // 预设名称（如"家里台"、"车载台"）
 	Radio     string    `gorm:"type:varchar(64);column:radio" json:"radio"`             // 电台型号
 	Antenna   string    `gorm:"type:varchar(64);column:antenna" json:"antenna"`         // 天线类型
@@ -405,6 +433,9 @@ type UserRadioPreset struct {
 	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`          // 排序权重
 	CreatedAt time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	// 关联定义：用户删除时，预设级联销毁
+	User *User `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }
 
 // TableName 指定表名
@@ -412,9 +443,63 @@ func (UserRadioPreset) TableName() string {
 	return "user_radio_presets"
 }
 
-// AutoMigrate 自动迁移表结构
+// AutoMigrate 自动清洗脏数据并迁移��结构与外键约束
+// 前置逻辑：
+// 1. 使用原生 SQL 优先清理违反外键原则的悬空记录。
+// 2. 移除重复数据，为唯一索引的建立扫除障碍。
+// 3. 将最终的约束控制权完全交接给 GORM。
 func AutoMigrate() error {
-	return Get().AutoMigrate(
+	db := Get()
+
+	// ==========================================
+	// 阶段一：数据清洗 (Data Cleansing)
+	// ==========================================
+
+	// 1. 清理 users 表中的重复记录 (保留 ID 较小的记录)
+	// 原理：使用内连接查找手机号相同且 ID 较大的冗余行进行删除
+	cleanupDupUserSQL := `
+		DELETE u1 FROM users u1
+		INNER JOIN users u2
+		WHERE u1.id > u2.id AND u1.phone = u2.phone AND u1.phone != ''
+	`
+	if err := db.Exec(cleanupDupUserSQL).Error; err != nil {
+		log.Printf("[Migration Warning] 清理重复用户数据失败: %v", err)
+	}
+
+	// 2. 清理各大子表中的"孤儿数据" (Orphaned Records)
+	// 原理：子表的关联 ID 如果在主表 (如 users, public_groups) 中找不到了，就必须被抹除
+	cleanups := []struct {
+		Desc string
+		SQL  string
+	}{
+		{"操作证孤儿记录", "DELETE FROM operator_certs WHERE user_id NOT IN (SELECT id FROM users)"},
+		{"组成员(无群组)", "DELETE FROM group_members WHERE group_id NOT IN (SELECT id FROM public_groups)"},
+		{"组成员(无用户)", "DELETE FROM group_members WHERE user_id NOT IN (SELECT id FROM users)"},
+		{"群互联(源群丢失)", "DELETE FROM group_links WHERE link_group_id NOT IN (SELECT id FROM public_groups)"},
+		{"群互联(目标丢失)", "DELETE FROM group_links WHERE target_group_id NOT IN (SELECT id FROM public_groups)"},
+		{"设备(无所有者)", "DELETE FROM devices WHERE owner_id NOT IN (SELECT id FROM users)"},
+		{"日志(无所有者)", "DELETE FROM logbooks WHERE user_id NOT IN (SELECT id FROM users)"},
+		{"设备配置(无设备)", "DELETE FROM device_configs WHERE device_id NOT IN (SELECT id FROM devices)"},
+		{"电台预设(无用户)", "DELETE FROM user_radio_presets WHERE user_id NOT IN (SELECT id FROM users)"},
+		{"设备偏好(无用户)", "DELETE FROM user_device_preferences WHERE user_id NOT IN (SELECT id FROM users)"},
+	}
+
+	for _, task := range cleanups {
+		res := db.Exec(task.SQL)
+		if res.Error != nil {
+			log.Printf("[Migration Warning] %s 清理异常: %v", task.Desc, res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("[Migration Info] %s: 成功清理 %d 条脏数据", task.Desc, res.RowsAffected)
+		}
+	}
+
+	// ==========================================
+	// 阶段二：执行 GORM 标准化迁移 (Schema Mapping)
+	// ==========================================
+	// GORM 底层会进行计算，比对现有数据库结构与代码中的结构体。
+	// 只有在缺失表、缺失字段、或缺失外键时，才会发送 ALTER TABLE 语句，非常安全。
+	log.Println("[Migration Info] 正在启动 GORM 核心迁移机制，建立级��外键约束...")
+	err := db.AutoMigrate(
 		&User{},
 		&Device{},
 		&Group{},
@@ -432,4 +517,11 @@ func AutoMigrate() error {
 		&Logbook{},
 		&UserRadioPreset{},
 	)
+
+	if err != nil {
+		return err
+	}
+
+	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
+	return nil
 }

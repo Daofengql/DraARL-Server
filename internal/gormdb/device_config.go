@@ -17,7 +17,7 @@ func NewDeviceConfigRepository() *DeviceConfigRepository {
 }
 
 // GetDeviceConfig 获取单个配置项
-func (r *DeviceConfigRepository) GetDeviceConfig(deviceID uint, key string) (*DeviceConfig, error) {
+func (r *DeviceConfigRepository) GetDeviceConfig(deviceID int, key string) (*DeviceConfig, error) {
 	var config DeviceConfig
 	err := r.db.Where("device_id = ? AND config_key = ?", deviceID, key).First(&config).Error
 	if err != nil {
@@ -31,7 +31,7 @@ func (r *DeviceConfigRepository) GetDeviceConfig(deviceID uint, key string) (*De
 
 // GetDeviceConfigs 获取设备的所有配置
 // 返回 map[config_key]config_value
-func (r *DeviceConfigRepository) GetDeviceConfigs(deviceID uint) (map[string]string, error) {
+func (r *DeviceConfigRepository) GetDeviceConfigs(deviceID int) (map[string]string, error) {
 	var configs []DeviceConfig
 	err := r.db.Where("device_id = ?", deviceID).Find(&configs).Error
 	if err != nil {
@@ -46,7 +46,7 @@ func (r *DeviceConfigRepository) GetDeviceConfigs(deviceID uint) (map[string]str
 }
 
 // SetDeviceConfig 设置单个配置项（存在则更新，不存在则创建）
-func (r *DeviceConfigRepository) SetDeviceConfig(deviceID uint, key, value string) error {
+func (r *DeviceConfigRepository) SetDeviceConfig(deviceID int, key, value string) error {
 	var config DeviceConfig
 	err := r.db.Where("device_id = ? AND config_key = ?", deviceID, key).First(&config).Error
 	if err != nil {
@@ -69,7 +69,7 @@ func (r *DeviceConfigRepository) SetDeviceConfig(deviceID uint, key, value strin
 
 // SetDeviceConfigs 批量设置配置项
 // 会更新存在的配置项，创建不存在的配置项
-func (r *DeviceConfigRepository) SetDeviceConfigs(deviceID uint, configs map[string]string) error {
+func (r *DeviceConfigRepository) SetDeviceConfigs(deviceID int, configs map[string]string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for key, value := range configs {
 			var config DeviceConfig
@@ -101,17 +101,17 @@ func (r *DeviceConfigRepository) SetDeviceConfigs(deviceID uint, configs map[str
 }
 
 // DeleteDeviceConfig 删除单个配置项
-func (r *DeviceConfigRepository) DeleteDeviceConfig(deviceID uint, key string) error {
+func (r *DeviceConfigRepository) DeleteDeviceConfig(deviceID int, key string) error {
 	return r.db.Where("device_id = ? AND config_key = ?", deviceID, key).Delete(&DeviceConfig{}).Error
 }
 
 // DeleteDeviceConfigs 删除设备的所有配置
-func (r *DeviceConfigRepository) DeleteDeviceConfigs(deviceID uint) error {
+func (r *DeviceConfigRepository) DeleteDeviceConfigs(deviceID int) error {
 	return r.db.Where("device_id = ?", deviceID).Delete(&DeviceConfig{}).Error
 }
 
 // HasDeviceConfigs 检查设备是否有配置记录
-func (r *DeviceConfigRepository) HasDeviceConfigs(deviceID uint) (bool, error) {
+func (r *DeviceConfigRepository) HasDeviceConfigs(deviceID int) (bool, error) {
 	var count int64
 	err := r.db.Model(&DeviceConfig{}).Where("device_id = ?", deviceID).Count(&count).Error
 	if err != nil {
@@ -122,7 +122,7 @@ func (r *DeviceConfigRepository) HasDeviceConfigs(deviceID uint) (bool, error) {
 
 // UpdateDeviceConfigIfChanged 仅当配置值发生变化时更新
 // 返回是否发生了更新
-func (r *DeviceConfigRepository) UpdateDeviceConfigIfChanged(deviceID uint, key, value string) (bool, error) {
+func (r *DeviceConfigRepository) UpdateDeviceConfigIfChanged(deviceID int, key, value string) (bool, error) {
 	var config DeviceConfig
 	err := r.db.Where("device_id = ? AND config_key = ?", deviceID, key).First(&config).Error
 	if err != nil {
@@ -156,7 +156,7 @@ func (r *DeviceConfigRepository) UpdateDeviceConfigIfChanged(deviceID uint, key,
 
 // UpdateDeviceConfigsIfChanged 批量更新配置项（仅更新变化的配置）
 // 返回实际更新的配置项数量
-func (r *DeviceConfigRepository) UpdateDeviceConfigsIfChanged(deviceID uint, configs map[string]string) (int, error) {
+func (r *DeviceConfigRepository) UpdateDeviceConfigsIfChanged(deviceID int, configs map[string]string) (int, error) {
 	updatedCount := 0
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		for key, value := range configs {

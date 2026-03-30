@@ -13,59 +13,59 @@ import (
 
 // LogbookCreateRequest 创建通联日志请求
 type LogbookCreateRequest struct {
-	MyCallSign  string  `json:"my_callsign" binding:"required"`           // 我方呼号（必填）
-	TimeUTC     string  `json:"time_utc" binding:"required"`              // UTC时间，格式：2006-01-02 15:04:05
-	TxFrequency float64 `json:"tx_frequency" binding:"required"`          // 发射频率 (MHz)
-	RxFrequency float64 `json:"rx_frequency"`                             // 接收频率 (MHz)，不填则等于发射频率
-	CQZone      int     `json:"cq_zone"`                                  // CQ分区
-	ITUZone     int     `json:"itu_zone"`                                 // ITU分区
-	Mode        string  `json:"mode" binding:"required"`                  // 通信模式
-	CallSign    string  `json:"callsign" binding:"required"`              // 对方呼号
-	TheirRST    string  `json:"their_rst"`                                // 对方信号报告
-	TheirPower  *int    `json:"their_power"`                              // 对方功率 (W)
-	TheirQTH    string  `json:"their_qth"`                                // 对方QTH
-	TheirRadio  string  `json:"their_radio"`                              // 对方电台型号
-	TheirAntenna string `json:"their_antenna"`                            // 对方天线
-	MyRST       string  `json:"my_rst"`                                   // 我方信号报告
-	MyPower     *int    `json:"my_power"`                                 // 我方功率 (W)
-	MyQTH       string  `json:"my_qth"`                                   // 我方QTH
-	MyRadio     string  `json:"my_radio"`                                 // 我方电台型号
-	MyAntenna   string  `json:"my_antenna"`                               // 我方天线
-	Notes       string  `json:"notes"`                                    // 备注
+	MyCallSign   string  `json:"my_callsign" binding:"required"`  // 我方呼号（必填）
+	TimeUTC      string  `json:"time_utc" binding:"required"`     // UTC时间，格式：2006-01-02 15:04:05
+	TxFrequency  float64 `json:"tx_frequency" binding:"required"` // 发射频率 (MHz)
+	RxFrequency  float64 `json:"rx_frequency"`                    // 接收频率 (MHz)，不填则等于发射频率
+	CQZone       int     `json:"cq_zone"`                         // CQ分区
+	ITUZone      int     `json:"itu_zone"`                        // ITU分区
+	Mode         string  `json:"mode" binding:"required"`         // 通信模式
+	CallSign     string  `json:"callsign" binding:"required"`     // 对方呼号
+	TheirRST     string  `json:"their_rst"`                       // 对方信号报告
+	TheirPower   *int    `json:"their_power"`                     // 对方功率 (W)
+	TheirQTH     string  `json:"their_qth"`                       // 对方QTH
+	TheirRadio   string  `json:"their_radio"`                     // 对方电台型号
+	TheirAntenna string  `json:"their_antenna"`                   // 对方天线
+	MyRST        string  `json:"my_rst"`                          // 我方信号报告
+	MyPower      *int    `json:"my_power"`                        // 我方功率 (W)
+	MyQTH        string  `json:"my_qth"`                          // 我方QTH
+	MyRadio      string  `json:"my_radio"`                        // 我方电台型号
+	MyAntenna    string  `json:"my_antenna"`                      // 我方天线
+	Notes        string  `json:"notes"`                           // 备注
 }
 
 // LogbookUpdateRequest 更新通联日志请求
 type LogbookUpdateRequest struct {
-	MyCallSign  string  `json:"my_callsign"`
-	TimeUTC     string  `json:"time_utc"`
-	TxFrequency float64 `json:"tx_frequency"`
-	RxFrequency float64 `json:"rx_frequency"`
-	CQZone      int     `json:"cq_zone"`
-	ITUZone     int     `json:"itu_zone"`
-	Mode        string  `json:"mode"`
-	CallSign    string  `json:"callsign"`
-	TheirRST    string  `json:"their_rst"`
-	TheirPower  *int    `json:"their_power"`
-	TheirQTH    string  `json:"their_qth"`
-	TheirRadio  string  `json:"their_radio"`
-	TheirAntenna string `json:"their_antenna"`
-	MyRST       string  `json:"my_rst"`
-	MyPower     *int    `json:"my_power"`
-	MyQTH       string  `json:"my_qth"`
-	MyRadio     string  `json:"my_radio"`
-	MyAntenna   string  `json:"my_antenna"`
-	Notes       string  `json:"notes"`
+	MyCallSign   string  `json:"my_callsign"`
+	TimeUTC      string  `json:"time_utc"`
+	TxFrequency  float64 `json:"tx_frequency"`
+	RxFrequency  float64 `json:"rx_frequency"`
+	CQZone       int     `json:"cq_zone"`
+	ITUZone      int     `json:"itu_zone"`
+	Mode         string  `json:"mode"`
+	CallSign     string  `json:"callsign"`
+	TheirRST     string  `json:"their_rst"`
+	TheirPower   *int    `json:"their_power"`
+	TheirQTH     string  `json:"their_qth"`
+	TheirRadio   string  `json:"their_radio"`
+	TheirAntenna string  `json:"their_antenna"`
+	MyRST        string  `json:"my_rst"`
+	MyPower      *int    `json:"my_power"`
+	MyQTH        string  `json:"my_qth"`
+	MyRadio      string  `json:"my_radio"`
+	MyAntenna    string  `json:"my_antenna"`
+	Notes        string  `json:"notes"`
 }
 
 // LogbookQueryRequest 查询参数
 type LogbookQueryRequest struct {
 	Page      int     `form:"page" binding:"min=1"`
 	PageSize  int     `form:"page_size" binding:"min=1,max=100"`
-	StartTime string  `form:"start_time"`           // UTC时间，格式：2006-01-02 15:04:05
-	EndTime   string  `form:"end_time"`             // UTC时间，格式：2006-01-02 15:04:05
-	CallSign  string  `form:"callsign"`             // 对方呼号（模糊匹配）
-	Frequency float64 `form:"frequency"`            // 频率（匹配发射或接收）
-	Mode      string  `form:"mode"`                 // 通信模式
+	StartTime string  `form:"start_time"` // UTC时间，格式：2006-01-02 15:04:05
+	EndTime   string  `form:"end_time"`   // UTC时间，格式：2006-01-02 15:04:05
+	CallSign  string  `form:"callsign"`   // 对方呼号（模糊匹配）
+	Frequency float64 `form:"frequency"`  // 频率（匹配发射或接收）
+	Mode      string  `form:"mode"`       // 通信模式
 }
 
 // GetLogbooks 获取当前用户的通联日志列表
@@ -98,12 +98,12 @@ func GetLogbooks(c *gin.Context) {
 
 	// 构建查询参数
 	params := gormdb.LogbookQueryParams{
-		UserID:   uint(userID.(int)),
-		Page:     req.Page,
-		PageSize: req.PageSize,
-		CallSign: req.CallSign,
+		UserID:    uint(userID.(int)),
+		Page:      req.Page,
+		PageSize:  req.PageSize,
+		CallSign:  req.CallSign,
 		Frequency: req.Frequency,
-		Mode:     req.Mode,
+		Mode:      req.Mode,
 	}
 
 	// 解析时间
@@ -233,26 +233,26 @@ func CreateLogbook(c *gin.Context) {
 	}
 
 	logbook := &gormdb.Logbook{
-		UserID:      uint(userID.(int)),
-		MyCallSign:  req.MyCallSign,
-		TimeUTC:     timeUTC,
-		TxFrequency: req.TxFrequency,
-		RxFrequency: rxFrequency,
-		CQZone:      req.CQZone,
-		ITUZone:     req.ITUZone,
-		Mode:        req.Mode,
-		CallSign:    req.CallSign,
-		TheirRST:    req.TheirRST,
-		TheirPower:  req.TheirPower,
-		TheirQTH:    req.TheirQTH,
-		TheirRadio:  req.TheirRadio,
+		UserID:       userID.(int),
+		MyCallSign:   req.MyCallSign,
+		TimeUTC:      timeUTC,
+		TxFrequency:  req.TxFrequency,
+		RxFrequency:  rxFrequency,
+		CQZone:       req.CQZone,
+		ITUZone:      req.ITUZone,
+		Mode:         req.Mode,
+		CallSign:     req.CallSign,
+		TheirRST:     req.TheirRST,
+		TheirPower:   req.TheirPower,
+		TheirQTH:     req.TheirQTH,
+		TheirRadio:   req.TheirRadio,
 		TheirAntenna: req.TheirAntenna,
-		MyRST:       req.MyRST,
-		MyPower:     req.MyPower,
-		MyQTH:       req.MyQTH,
-		MyRadio:     req.MyRadio,
-		MyAntenna:   req.MyAntenna,
-		Notes:       req.Notes,
+		MyRST:        req.MyRST,
+		MyPower:      req.MyPower,
+		MyQTH:        req.MyQTH,
+		MyRadio:      req.MyRadio,
+		MyAntenna:    req.MyAntenna,
+		Notes:        req.Notes,
 	}
 
 	repo := gormdb.NewLogbookRepository()
@@ -516,11 +516,11 @@ func AdminGetLogbooks(c *gin.Context) {
 
 	// 构建查询参数
 	params := gormdb.LogbookQueryParams{
-		Page:     req.Page,
-		PageSize: req.PageSize,
-		CallSign: req.CallSign,
+		Page:      req.Page,
+		PageSize:  req.PageSize,
+		CallSign:  req.CallSign,
 		Frequency: req.Frequency,
-		Mode:     req.Mode,
+		Mode:      req.Mode,
 	}
 
 	// 解析时间
@@ -807,29 +807,29 @@ func AdminBatchDeleteLogbooks(c *gin.Context) {
 // logbookToJSON 转换为JSON响应格式
 func logbookToJSON(lb *gormdb.Logbook) gin.H {
 	return gin.H{
-		"id":           lb.ID,
-		"user_id":      lb.UserID,
-		"my_callsign":  lb.MyCallSign,
-		"time_utc":     lb.TimeUTC.UTC().Format("2006-01-02 15:04:05"),
-		"tx_frequency": lb.TxFrequency,
-		"rx_frequency": lb.RxFrequency,
-		"cq_zone":      lb.CQZone,
-		"itu_zone":     lb.ITUZone,
-		"mode":         lb.Mode,
-		"callsign":     lb.CallSign,
-		"their_rst":    lb.TheirRST,
-		"their_power":  lb.TheirPower,
-		"their_qth":    lb.TheirQTH,
-		"their_radio":  lb.TheirRadio,
+		"id":            lb.ID,
+		"user_id":       lb.UserID,
+		"my_callsign":   lb.MyCallSign,
+		"time_utc":      lb.TimeUTC.UTC().Format("2006-01-02 15:04:05"),
+		"tx_frequency":  lb.TxFrequency,
+		"rx_frequency":  lb.RxFrequency,
+		"cq_zone":       lb.CQZone,
+		"itu_zone":      lb.ITUZone,
+		"mode":          lb.Mode,
+		"callsign":      lb.CallSign,
+		"their_rst":     lb.TheirRST,
+		"their_power":   lb.TheirPower,
+		"their_qth":     lb.TheirQTH,
+		"their_radio":   lb.TheirRadio,
 		"their_antenna": lb.TheirAntenna,
-		"my_rst":       lb.MyRST,
-		"my_power":     lb.MyPower,
-		"my_qth":       lb.MyQTH,
-		"my_radio":     lb.MyRadio,
-		"my_antenna":   lb.MyAntenna,
-		"notes":        lb.Notes,
-		"created_at":   lb.CreatedAt.Format("2006-01-02 15:04:05"),
-		"updated_at":   lb.UpdatedAt.Format("2006-01-02 15:04:05"),
+		"my_rst":        lb.MyRST,
+		"my_power":      lb.MyPower,
+		"my_qth":        lb.MyQTH,
+		"my_radio":      lb.MyRadio,
+		"my_antenna":    lb.MyAntenna,
+		"notes":         lb.Notes,
+		"created_at":    lb.CreatedAt.Format("2006-01-02 15:04:05"),
+		"updated_at":    lb.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
 }
 
@@ -844,29 +844,29 @@ func logbookToJSONWithUser(lb *gormdb.Logbook) gin.H {
 	}
 
 	return gin.H{
-		"id":           lb.ID,
-		"user_id":      lb.UserID,
-		"username":     username,
-		"my_callsign":  lb.MyCallSign,
-		"time_utc":     lb.TimeUTC.UTC().Format("2006-01-02 15:04:05"),
-		"tx_frequency": lb.TxFrequency,
-		"rx_frequency": lb.RxFrequency,
-		"cq_zone":      lb.CQZone,
-		"itu_zone":     lb.ITUZone,
-		"mode":         lb.Mode,
-		"callsign":     lb.CallSign,
-		"their_rst":    lb.TheirRST,
-		"their_power":  lb.TheirPower,
-		"their_qth":    lb.TheirQTH,
-		"their_radio":  lb.TheirRadio,
+		"id":            lb.ID,
+		"user_id":       lb.UserID,
+		"username":      username,
+		"my_callsign":   lb.MyCallSign,
+		"time_utc":      lb.TimeUTC.UTC().Format("2006-01-02 15:04:05"),
+		"tx_frequency":  lb.TxFrequency,
+		"rx_frequency":  lb.RxFrequency,
+		"cq_zone":       lb.CQZone,
+		"itu_zone":      lb.ITUZone,
+		"mode":          lb.Mode,
+		"callsign":      lb.CallSign,
+		"their_rst":     lb.TheirRST,
+		"their_power":   lb.TheirPower,
+		"their_qth":     lb.TheirQTH,
+		"their_radio":   lb.TheirRadio,
 		"their_antenna": lb.TheirAntenna,
-		"my_rst":       lb.MyRST,
-		"my_power":     lb.MyPower,
-		"my_qth":       lb.MyQTH,
-		"my_radio":     lb.MyRadio,
-		"my_antenna":   lb.MyAntenna,
-		"notes":        lb.Notes,
-		"created_at":   lb.CreatedAt.Format("2006-01-02 15:04:05"),
-		"updated_at":   lb.UpdatedAt.Format("2006-01-02 15:04:05"),
+		"my_rst":        lb.MyRST,
+		"my_power":      lb.MyPower,
+		"my_qth":        lb.MyQTH,
+		"my_radio":      lb.MyRadio,
+		"my_antenna":    lb.MyAntenna,
+		"notes":         lb.Notes,
+		"created_at":    lb.CreatedAt.Format("2006-01-02 15:04:05"),
+		"updated_at":    lb.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
 }

@@ -70,9 +70,38 @@ func (r *GroupRepository) UpdateGroupFields(id int, fields map[string]interface{
 	return r.db.Model(&Group{}).Where("id = ?", id).Updates(fields).Error
 }
 
-// DeleteGroup 删除群组
+// DeleteGroup 删除群组（仅删除群组记录，不清理关联数据）
+// 注意： 请使用 DeleteGroupWithCascade 进行完整的级联删除
 func (r *GroupRepository) DeleteGroup(id int) error {
 	return r.db.Delete(&Group{}, id).Error
+}
+
+// DeleteGroupWithCascade 删除群组及其所有关联数据（事务级联删除）
+// 包括： group_members, group_links, 以及设备中的群组引用
+func (r *GroupRepository) DeleteGroupWithCascade(id int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// 1. 删除群组的所有成员
+		if err := tx.Where("group_id = ?", id).Delete(&GroupMember{}).Error; err != nil {
+			return err
+		}
+
+		// 2. 删除群组的所有互联关系（作为互联组或目标组）
+		if err := tx.Where("link_group_id = ? OR target_group_id = ?", id, id).Delete(&GroupLink{}).Error; err != nil {
+			return err
+		}
+
+		// 3. 清除设备中的群组引用（将 group_id 设为 NULL）
+		if err := tx.Model(&Device{}).Where("group_id = ?", id).Update("group_id", nil).Error; err != nil {
+			return err
+		}
+
+		// 4. 最后删除群组本身
+		if err := tx.Delete(&Group{}, id).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 // GroupCount 获取群组总数

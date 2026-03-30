@@ -739,7 +739,7 @@ func SSOUnbind(c *gin.Context) {
 func buildUserData(user *gormdb.User) gin.H {
 	// 获取用户 Web 端的群组偏好
 	userRepo := gormdb.NewUserRepository()
-	lastGroupID, _ := userRepo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+	lastGroupID, _ := userRepo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 
 	return gin.H{
 		"id":              user.ID,

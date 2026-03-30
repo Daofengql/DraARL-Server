@@ -270,24 +270,39 @@ func (r *OperatorCertRepository) ListByCertStatus(certStatus int, limit, offset 
 		return nil, 0, err
 	}
 
-	// 为每个用户加载指定状态的操作证信息
+	// 获取分页后的用户ID列表
+	pagedUserIDs := make([]int, 0, len(users))
+	for _, u := range users {
+		pagedUserIDs = append(pagedUserIDs, u.ID)
+	}
+
+	// 批量获取这些用户的操作证（优化 N+1 查询）
+	var allCerts []*OperatorCert
+	certQuery := r.db.Where("user_id IN ?", pagedUserIDs)
+	if certStatus == 0 {
+		// 待审核：获取最新的待审核证书
+		certQuery = certQuery.Where("status = ?", 0).Order("user_id, id DESC")
+	} else if certStatus == 1 {
+		// 已通过：获取有效的证书
+		certQuery = certQuery.Where("status = ?", 1).Order("user_id, id DESC")
+	} else {
+		// 已拒绝：获取最新的拒绝证书
+		certQuery = certQuery.Where("status = ?", 2).Order("user_id, id DESC")
+	}
+	certQuery.Find(&allCerts)
+
+	// 按用户ID分组，每个用户只取第一个（最新的）证书
+	userCertMap := make(map[int]*OperatorCert)
+	for _, cert := range allCerts {
+		if _, exists := userCertMap[cert.UserID]; !exists {
+			userCertMap[cert.UserID] = cert
+		}
+	}
+
+	// 构建结果
 	result := make([]*UserWithCert, 0, len(users))
 	for _, u := range users {
-		var cert *OperatorCert
-		var certErr error
-
-		if certStatus == 0 {
-			cert, certErr = r.GetPendingByUserID(u.ID)
-		} else if certStatus == 1 {
-			cert, certErr = r.GetActiveByUserID(u.ID)
-		} else {
-			cert, certErr = r.GetLatestByUserID(u.ID)
-			if cert != nil && cert.Status != 2 {
-				cert = nil
-			}
-		}
-
-		if certErr == nil && cert != nil {
+		if cert, ok := userCertMap[u.ID]; ok {
 			result = append(result, &UserWithCert{
 				User: u,
 				Cert: cert,
@@ -341,19 +356,33 @@ func (r *OperatorCertRepository) ListByCertStatusWithAllCerts(certStatus int, li
 		return nil, 0, err
 	}
 
-	// 为每个用户加载所有操作证信息
+	// 获取分页后的用户ID列表
+	pagedUserIDs := make([]int, 0, len(users))
+	for _, u := range users {
+		pagedUserIDs = append(pagedUserIDs, u.ID)
+	}
+
+	// 批量获取这些用户的所有操作证（优化 N+1 查询）
+	var allCerts []*OperatorCert
+	r.db.Where("user_id IN ?", pagedUserIDs).Order("user_id, id DESC").Find(&allCerts)
+
+	// 按用户ID分组
+	userCertsMap := make(map[int][]*OperatorCert)
+	for _, cert := range allCerts {
+		userCertsMap[cert.UserID] = append(userCertsMap[cert.UserID], cert)
+	}
+
+	// 构建结果
 	result := make([]*UserWithCerts, 0, len(users))
 	for _, u := range users {
-		// 获取该用户的所有操作证（不管状态）
-		var certs []*OperatorCert
-		certErr := r.db.Where("user_id = ?", u.ID).Order("id DESC").Find(&certs).Error
-
-		if certErr == nil {
-			result = append(result, &UserWithCerts{
-				User:  u,
-				Certs: certs,
-			})
+		certs := userCertsMap[u.ID]
+		if certs == nil {
+			certs = []*OperatorCert{}
 		}
+		result = append(result, &UserWithCerts{
+			User:  u,
+			Certs: certs,
+		})
 	}
 
 	return result, total, nil

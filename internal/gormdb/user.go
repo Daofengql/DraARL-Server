@@ -234,31 +234,32 @@ func (r *UserRepository) DeleteUserWithCascade(id int) error {
 			return err
 		}
 
-		// 4. 删除用户拥有的群组（如果是群组所有者）
-		// 先删除群组的成员和互联关系
-		var ownedGroups []*Group
-		if err := tx.Where("ower_id = ?", id).Find(&ownedGroups).Error; err != nil {
+		// 4. 删除用户拥有的群组（如果是群组所有者）- 批量操作优化
+		// 获取用户拥有的所有群组ID
+		var ownedGroupIDs []int
+		if err := tx.Model(&Group{}).Where("ower_id = ?", id).Pluck("id", &ownedGroupIDs).Error; err != nil {
 			return err
 		}
-		for _, group := range ownedGroups {
-			// 删除群组成员
-			if err := tx.Where("group_id = ?", group.ID).Delete(&GroupMember{}).Error; err != nil {
+
+		if len(ownedGroupIDs) > 0 {
+			// 批量删除群组成员
+			if err := tx.Where("group_id IN ?", ownedGroupIDs).Delete(&GroupMember{}).Error; err != nil {
 				return err
 			}
-			// 删除群组互联关系
-			if err := tx.Where("link_group_id = ? OR target_group_id = ?", group.ID, group.ID).
+			// 批量删除群组互联关系
+			if err := tx.Where("link_group_id IN ? OR target_group_id IN ?", ownedGroupIDs, ownedGroupIDs).
 				Delete(&GroupLink{}).Error; err != nil {
 				return err
 			}
-			// 删除群组中的设备引用（将 group_id 设为 NULL）
-			if err := tx.Model(&Device{}).Where("group_id = ?", group.ID).
+			// 批量清除设备中的群组引用
+			if err := tx.Model(&Device{}).Where("group_id IN ?", ownedGroupIDs).
 				Update("group_id", nil).Error; err != nil {
 				return err
 			}
-		}
-		// 删除用户拥有的群组
-		if err := tx.Where("ower_id = ?", id).Delete(&Group{}).Error; err != nil {
-			return err
+			// 批量删除群组
+			if err := tx.Where("ower_id = ?", id).Delete(&Group{}).Error; err != nil {
+				return err
+			}
 		}
 
 		// 5. 删除用户的操作证

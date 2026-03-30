@@ -625,7 +625,7 @@ func DeleteGroup(c *gin.Context) {
 		groupName = group.Name
 	}
 
-	if err := repo.DeleteGroup(id); err != nil {
+	if err := repo.DeleteGroupWithCascade(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除群组失败",

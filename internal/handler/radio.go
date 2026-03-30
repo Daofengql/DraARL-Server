@@ -310,7 +310,7 @@ func UpdateRadioGroup(c *gin.Context) {
 
 	// 【持久化】保存分平台群组偏好到 user_device_preferences 表
 	userRepo := gormdb.NewUserRepository()
-	if err := userRepo.UpsertUserDevicePreference(uint(userID), devModel, uint(req.GroupID)); err != nil {
+	if err := userRepo.UpsertUserDevicePreference(userID, devModel, req.GroupID); err != nil {
 		log.Printf("[RADIO] 警告: 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
 		// 不影响响应，群组切换已成功
 	}

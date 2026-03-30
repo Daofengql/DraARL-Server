@@ -141,12 +141,12 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 
 	// 使用分平台群组偏好 (user_device_preferences 表)
 	// DevModel=105 为 Web 浏览器端
-	lastGroupID, err := repo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+	lastGroupID, err := repo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 	if err != nil {
 		log.Printf("[WS-AUTH] 获取用户 %d 的群组偏好失败: %v，使用默认群组", user.ID, err)
-		lastGroupID = uint(models.GroupIDPublicMin)
+		lastGroupID = models.GroupIDPublicMin
 	}
-	result.GroupID = int(lastGroupID)
+	result.GroupID = lastGroupID
 
 	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s) group-%d", user.ID, user.CallSign, result.GroupID)
 	return result

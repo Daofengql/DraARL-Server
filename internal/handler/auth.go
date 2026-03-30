@@ -164,7 +164,7 @@ func Login(c *gin.Context) {
 
 	// 获取用户 Web 端的群组偏好
 	userRepo := gormdb.NewUserRepository()
-	lastGroupID, _ := userRepo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+	lastGroupID, _ := userRepo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 
 	// 构建用户数据
 	userData := gin.H{
@@ -429,7 +429,7 @@ func GetCurrentUser(c *gin.Context) {
 
 	// 获取用户 Web 端的群组偏好
 	userRepo := gormdb.NewUserRepository()
-	lastGroupID, _ := userRepo.GetUserLastGroupID(uint(user.ID), protocol.DraARLDevModelBrowser)
+	lastGroupID, _ := userRepo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -871,7 +871,7 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := repo.DeleteUser(id); err != nil {
+	if err := repo.DeleteUserWithCascade(id); err != nil {
 		log.Printf("删除用户失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

@@ -109,17 +109,17 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	// 7. SSID 已在函数开头计算并验证（此处无需重复计算）
 
 	// 8. 获取用户该平台的群组偏好
-	groupID, err := userRepo.GetUserLastGroupID(uint(user.ID), packet.DevModel)
+	groupID, err := userRepo.GetUserLastGroupID(user.ID, packet.DevModel)
 	if err != nil {
 		log.Printf("[UDP-JWT] 获取群组偏好失败: %v (用户: %s)", err, claims.Username)
-		groupID = uint(models.GroupIDPublicMin) // 使用默认群组
+		groupID = models.GroupIDPublicMin // 使用默认群组
 	}
 
 	// 9. 验证群组是否存在且未禁用
 	if groupID > 0 {
 		if gp, exists := GetGroupFromCache(int(groupID)); !exists || gp.Status != 1 {
 			log.Printf("[UDP-JWT] 群组无效或已禁用: %d (用户: %s)", groupID, claims.Username)
-			groupID = uint(models.GroupIDPublicMin) // 回退到默认群组
+			groupID = models.GroupIDPublicMin // 回退到默认群组
 		}
 	}
 
@@ -234,17 +234,17 @@ func AuthenticateJWT(token string) *JWTAuthResult {
 
 // GetGhostDeviceGroupID 获取幽灵设备的群组 ID
 // 优先从 user_device_preferences 读取，如果没有或为 0 则返回默认群组
-func GetGhostDeviceGroupID(userID uint, devModel byte) uint {
+func GetGhostDeviceGroupID(userID int, devModel byte) int {
 	userRepo := gormdb.NewUserRepository()
 	groupID, err := userRepo.GetUserLastGroupID(userID, devModel)
 	if err != nil || groupID == 0 {
-		return uint(models.GroupIDPublicMin) // 默认公共群组
+		return models.GroupIDPublicMin // 默认公共群组
 	}
 
 	// 验证群组是否存在且未禁用
-	if gp, exists := GetGroupFromCache(int(groupID)); exists && gp.Status == 1 {
+	if gp, exists := GetGroupFromCache(groupID); exists && gp.Status == 1 {
 		return groupID
 	}
 
-	return uint(models.GroupIDPublicMin)
+	return models.GroupIDPublicMin
 }

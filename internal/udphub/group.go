@@ -140,7 +140,7 @@ func UpdatePublicGroup(gp *models.Group) error {
 func DeletePublicGroup(id int) error {
 	repo := gormdb.NewGroupRepository()
 
-	if err := repo.DeleteGroup(id); err != nil {
+	if err := repo.DeleteGroupWithCascade(id); err != nil {
 		return err
 	}
 

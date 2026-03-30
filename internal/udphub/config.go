@@ -382,7 +382,7 @@ func SyncDeviceConfig(dev *models.Device) {
 	}
 
 	repo := gormdb.NewDeviceConfigRepository()
-	hasConfigs, err := repo.HasDeviceConfigs(uint(dev.ID))
+	hasConfigs, err := repo.HasDeviceConfigs(dev.ID)
 	if err != nil {
 		log.Printf("[CONFIG] 查询设备配置失败: %v", err)
 		return
@@ -390,7 +390,7 @@ func SyncDeviceConfig(dev *models.Device) {
 
 	if hasConfigs {
 		// 数据库中有配置记录，下发配置到设备
-		configs, err := repo.GetDeviceConfigs(uint(dev.ID))
+		configs, err := repo.GetDeviceConfigs(dev.ID)
 		if err != nil {
 			log.Printf("[CONFIG] 获取设备配置失败: %v", err)
 			return
@@ -443,7 +443,7 @@ func HandleDeviceConfigReport(dev *models.Device, data []byte) {
 
 	// 存储到数据库（仅更新变化的配置）
 	repo := gormdb.NewDeviceConfigRepository()
-	updatedCount, err := repo.UpdateDeviceConfigsIfChanged(uint(dev.ID), configs)
+	updatedCount, err := repo.UpdateDeviceConfigsIfChanged(dev.ID, configs)
 	if err != nil {
 		log.Printf("[CONFIG] 保存设备配置失败: %v", err)
 		return
@@ -477,7 +477,7 @@ func SendConfigToDeviceByID(deviceID int, configs map[string]string) error {
 // GetDeviceConfigsFromDB 从数据库获取设备配置（供 API 调用）
 func GetDeviceConfigsFromDB(deviceID int) (map[string]string, error) {
 	repo := gormdb.NewDeviceConfigRepository()
-	return repo.GetDeviceConfigs(uint(deviceID))
+	return repo.GetDeviceConfigs(deviceID)
 }
 
 // SaveDeviceConfigsToDB 保存设备配置到数据库（供 API 调用）
@@ -486,7 +486,7 @@ func SaveDeviceConfigsToDB(deviceID int, configs map[string]string) error {
 	repo := gormdb.NewDeviceConfigRepository()
 
 	// 保存到数据库
-	if err := repo.SetDeviceConfigs(uint(deviceID), configs); err != nil {
+	if err := repo.SetDeviceConfigs(deviceID, configs); err != nil {
 		return err
 	}
 

@@ -17,8 +17,8 @@ type RadioPresetRequest struct {
 	Radio     string `json:"radio"`                   // 电台型号
 	Antenna   string `json:"antenna"`                 // 天线类型
 	Power     *int   `json:"power"`                   // 功率 (W)
-	QTH       string `json:"qth"`                       // QTH位置
-	SortOrder int    `json:"sort_order"`                // 排序权重
+	QTH       string `json:"qth"`                     // QTH位置
+	SortOrder int    `json:"sort_order"`              // 排序权重
 }
 
 // GetRadioPresets 获取当前用户的电台预设列表
@@ -76,7 +76,7 @@ func CreateRadioPreset(c *gin.Context) {
 	}
 
 	preset := &gormdb.UserRadioPreset{
-		UserID:    uint(userID.(int)),
+		UserID:    userID.(int),
 		Name:      req.Name,
 		Radio:     req.Radio,
 		Antenna:   req.Antenna,
@@ -136,8 +136,8 @@ func UpdateRadioPreset(c *gin.Context) {
 	if err := gormdb.Get().Where("id = ? AND user_id = ?", id, userID).First(&preset).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
-			"message": "预设不存在或无权修改",
+				"code":    404,
+				"message": "预设不存在或无权修改",
 			})
 			return
 		}
@@ -157,7 +157,7 @@ func UpdateRadioPreset(c *gin.Context) {
 	preset.QTH = req.QTH
 	preset.SortOrder = req.SortOrder
 
-    if err := gormdb.Get().Save(&preset).Error; err != nil {
+	if err := gormdb.Get().Save(&preset).Error; err != nil {
 		log.Printf("更新电台预设失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

@@ -130,16 +130,11 @@ func main() {
 		stdlog.Println("执行数据库自动迁移...")
 
 		// 自动迁移表结构（创建新表或更新表结构）
+		// 包含数据清洗和外键约束建立的完整迁移逻辑
 		if err := gormdb.AutoMigrate(); err != nil {
 			stdlog.Fatalf("数据库表迁移失败: %v", err)
 		}
-		stdlog.Println("GORM 表结构迁移完成")
-
-		// 更新数据库结构（添加缺失的列）
-		if err := db.UpdateDatabase(); err != nil {
-			stdlog.Fatalf("数据库结构更新失败: %v", err)
-		}
-		stdlog.Println("数据库结构更新完成")
+		stdlog.Println("数据库迁移完成（含外键约束）")
 	}
 
 	// 初始化管理员用户（首次启动时）

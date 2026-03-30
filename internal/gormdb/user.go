@@ -2,6 +2,7 @@ package gormdb
 
 import (
 	"errors"
+
 	"gorm.io/gorm"
 )
 
@@ -195,9 +196,9 @@ func (r *UserRepository) UpdateUserStatus(id int, status int) error {
 // UpdateLastLogin 更新最后登录时间和IP
 func (r *UserRepository) UpdateLastLogin(userID int, ip string) error {
 	return r.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
-		"last_login_time":  gorm.Expr("NOW()"),
-		"last_login_ip":    ip,
-		"login_err_times":  0,
+		"last_login_time": gorm.Expr("NOW()"),
+		"last_login_ip":   ip,
+		"login_err_times": 0,
 	}).Error
 }
 
@@ -206,9 +207,87 @@ func (r *UserRepository) IncrementLoginError(userID int) error {
 	return r.db.Model(&User{}).Where("id = ?", userID).UpdateColumn("login_err_times", gorm.Expr("login_err_times + 1")).Error
 }
 
-// DeleteUser 删除用户
+// DeleteUser 删除用户（仅删除用户记录，不清理关联数据）
+// 注意： 请使用 DeleteUserWithCascade 进行完整的级联删除
 func (r *UserRepository) DeleteUser(id int) error {
 	return r.db.Delete(&User{}, id).Error
+}
+
+// DeleteUserWithCascade 删除用户及其所有关联数据（事务级联删除）
+// 包括： devices, group_members, operator_certs, logbooks,
+// user_device_preferences, user_radio_presets
+func (r *UserRepository) DeleteUserWithCascade(id int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// 1. 删除用户的设备
+		if err := tx.Where("owner_id = ?", id).Delete(&Device{}).Error; err != nil {
+			return err
+		}
+
+		// 2. 删除用户的群组成员关系
+		if err := tx.Where("user_id = ?", id).Delete(&GroupMember{}).Error; err != nil {
+			return err
+		}
+
+		// 3. 删除用户的群组互联关系（作为目标群组）
+		if err := tx.Where("target_group_id IN (SELECT id FROM public_groups WHERE ower_id = ?)", id).
+			Delete(&GroupLink{}).Error; err != nil {
+			return err
+		}
+
+		// 4. 删除用户拥有的群组（如果是群组所有者）
+		// 先删除群组的成员和互联关系
+		var ownedGroups []*Group
+		if err := tx.Where("ower_id = ?", id).Find(&ownedGroups).Error; err != nil {
+			return err
+		}
+		for _, group := range ownedGroups {
+			// 删除群组成员
+			if err := tx.Where("group_id = ?", group.ID).Delete(&GroupMember{}).Error; err != nil {
+				return err
+			}
+			// 删除群组互联关系
+			if err := tx.Where("link_group_id = ? OR target_group_id = ?", group.ID, group.ID).
+				Delete(&GroupLink{}).Error; err != nil {
+				return err
+			}
+			// 删除群组中的设备引用（将 group_id 设为 NULL）
+			if err := tx.Model(&Device{}).Where("group_id = ?", group.ID).
+				Update("group_id", nil).Error; err != nil {
+				return err
+			}
+		}
+		// 删除用户拥有的群组
+		if err := tx.Where("ower_id = ?", id).Delete(&Group{}).Error; err != nil {
+			return err
+		}
+
+		// 5. 删除用户的操作证
+		if err := tx.Where("user_id = ?", id).Delete(&OperatorCert{}).Error; err != nil {
+			return err
+		}
+
+		// 6. 删除用户的通联日志
+		if err := tx.Where("user_id = ?", id).Delete(&Logbook{}).Error; err != nil {
+			return err
+		}
+
+		// 7. 删除用户的设备偏好设置
+		if err := tx.Where("user_id = ?", id).Delete(&UserDevicePreference{}).Error; err != nil {
+			return err
+		}
+
+		// 8. 删除用户的电台预设
+		if err := tx.Where("user_id = ?", id).Delete(&UserRadioPreset{}).Error; err != nil {
+			return err
+		}
+
+		// 9. 最后删除用户本身
+		if err := tx.Delete(&User{}, id).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 // AddOperatorLog 添加操作日志
@@ -377,7 +456,7 @@ func (r *UserRepository) GetUserBriefByIDs(ids []int) (map[int]*UserBriefInfo, e
 // UpdateUserEmail 更新用户邮箱
 func (r *UserRepository) UpdateUserEmail(id int, email string) error {
 	return r.db.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"email":         email,
+		"email":          email,
 		"email_verified": true,
 	}).Error
 }
@@ -387,7 +466,7 @@ func (r *UserRepository) UpdateUserEmail(id int, email string) error {
 // ==========================================
 
 // GetUserDevicePreference 获取用户指定平台的设备偏好设置
-func (r *UserRepository) GetUserDevicePreference(userID uint, devModel uint8) (*UserDevicePreference, error) {
+func (r *UserRepository) GetUserDevicePreference(userID int, devModel uint8) (*UserDevicePreference, error) {
 	var pref UserDevicePreference
 	err := r.db.Where("user_id = ? AND dev_model = ?", userID, devModel).First(&pref).Error
 	if err != nil {
@@ -400,7 +479,7 @@ func (r *UserRepository) GetUserDevicePreference(userID uint, devModel uint8) (*
 }
 
 // UpsertUserDevicePreference 创建或更新用户设备偏好设置
-func (r *UserRepository) UpsertUserDevicePreference(userID uint, devModel uint8, groupID uint) error {
+func (r *UserRepository) UpsertUserDevicePreference(userID int, devModel uint8, groupID int) error {
 	return r.db.Assign(map[string]interface{}{
 		"last_group_id": groupID,
 		"updated_at":    gorm.Expr("NOW()"),
@@ -412,7 +491,7 @@ func (r *UserRepository) UpsertUserDevicePreference(userID uint, devModel uint8,
 
 // GetUserLastGroupID 获取用户指定平台的最后群组ID
 // 如果没有记录或群组ID为0，返回默认值 999
-func (r *UserRepository) GetUserLastGroupID(userID uint, devModel uint8) (uint, error) {
+func (r *UserRepository) GetUserLastGroupID(userID int, devModel uint8) (int, error) {
 	pref, err := r.GetUserDevicePreference(userID, devModel)
 	if err != nil {
 		return 999, err

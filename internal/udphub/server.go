@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,10 @@ import (
 var (
 	// 全局 UDP 连接
 	globalConn *net.UDPConn
+
+	// UDP 服务器关闭信号
+	udpShutdown     chan struct{}
+	udpShutdownOnce sync.Once
 
 	// ==========================================
 	// 性能优化：sync.Pool 复用 UDP 数据包内存
@@ -150,6 +155,30 @@ func cleanupRateLimiter() {
 	}
 }
 
+func isUDPShuttingDown() bool {
+	if udpShutdown == nil {
+		return false
+	}
+	select {
+	case <-udpShutdown:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitWithShutdown(d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-udpShutdown:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 // StartUDPServer 启动 UDP 服务器（DraARLv1 协议）
 func StartUDPServer(port int) error {
 	return StartDraARLServer(port)
@@ -168,6 +197,7 @@ func StartDraARLServer(port int) error {
 	}
 
 	globalConn = conn
+	udpShutdown = make(chan struct{})
 	log.Printf("DraARLv1 UDP server started on port %d", port)
 
 	// 启动认证失败记录清理器
@@ -177,8 +207,13 @@ func StartDraARLServer(port int) error {
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			cleanupRateLimiter()
+		for {
+			select {
+			case <-udpShutdown:
+				return
+			case <-ticker.C:
+				cleanupRateLimiter()
+			}
 		}
 	}()
 
@@ -208,11 +243,37 @@ func StartDraARLServer(port int) error {
 	// 【修复爆音方案3】初始化语音平滑发送器
 	InitVoiceSmoother(conn)
 
-	// 处理数据包
+	// 处理数据包（响应关闭信号）
 	for {
-		limitChan <- true
-		processDraARLConn(conn)
+		select {
+		case <-udpShutdown:
+			log.Println("[UDP] 服务器正在关闭...")
+			return nil
+		case limitChan <- true:
+			go processDraARLConn(conn)
+		}
 	}
+}
+
+// StopUDPServer 停止 UDP 服务器
+func StopUDPServer() {
+	udpShutdownOnce.Do(func() {
+		close(udpShutdown)
+
+		// 关闭 UDP 连接（这会使阻塞的 ReadFromUDP 返回错误）
+		if globalConn != nil {
+			globalConn.Close()
+			globalConn = nil
+		}
+
+		// 停止相关组件
+		StopCommRecorder()
+		StopBatchSender()
+		StopVoiceSmoother()
+		StopTextMessageBuffer()
+
+		log.Println("[UDP] 服务器已关闭")
+	})
 }
 
 // processDraARLConn 处理 DraARLv1 UDP 连接
@@ -223,50 +284,63 @@ func processDraARLConn(conn *net.UDPConn) {
 	proxyProtocolEnabled := config.Get().System.ProxyProtocol == "v2"
 
 	for {
-		// 从 sync.Pool 获取缓冲区，避免频繁内存分配
-		data := packetPool.Get().([]byte)
-		// 注意：使用后需要归还，但在异步处理前需要复制数据
-		// 这里我们在处理完成后立即归还
-
-		n, remoteAddr, err := conn.ReadFromUDP(data)
+		buf := packetPool.Get().([]byte)
+		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			packetPool.Put(data) // 出错时归还
+			packetPool.Put(buf)
+			// 正常关闭连接时不记录错误日志（连接被主动关闭是预期的关闭行为）
+			if isClosedConnError(err) {
+				return
+			}
 			log.Printf("[ERROR] Read from UDP failed: %v", err)
 			return
 		}
 
-		// 复制有效数据（因为 data 会被归还到池中）
-		packetData := make([]byte, n)
-		copy(packetData, data[:n])
-		packetPool.Put(data) // 立即归还缓冲区
-
-		// Panic recovery
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[PANIC] Recovered from panic while processing packet from %v: %v", remoteAddr, r)
-				}
-			}()
-
-			// 解析 PROXY Protocol 头部（如果启用）
-			realAddr := remoteAddr
-			var proxyInfo *ProxyProtocolInfo
-			if proxyProtocolEnabled {
-				var isProxyProtocol bool
-				proxyInfo, packetData, isProxyProtocol = ParseProxyProtocolV2(packetData)
-				if isProxyProtocol && proxyInfo != nil && proxyInfo.IsProxy {
-					realAddr = GetRealAddr(remoteAddr, proxyInfo)
-				}
-			}
-
-			// 处理 DraARLv1 数据包
-			if len(packetData) >= 4 && string(packetData[0:4]) == "DraA" {
-				processDraARLPacket(packetData, remoteAddr, realAddr, conn)
-			} else {
-				log.Printf("[DECODE] Unknown protocol from %v (real: %v): %s", remoteAddr, realAddr, string(packetData[:min(4, len(packetData))]))
-			}
-		}()
+		processDraARLDatagram(conn, buf[:n], remoteAddr, proxyProtocolEnabled)
+		packetPool.Put(buf)
 	}
+}
+
+// isClosedConnError 检查是否为连接关闭错误
+func isClosedConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// "use of closed network connection" 是连接被主动关闭时的标准错误
+	errStr := err.Error()
+	return strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "connection closed") ||
+		strings.Contains(errStr, "closed")
+}
+
+func processDraARLDatagram(conn *net.UDPConn, packetData []byte, remoteAddr *net.UDPAddr, proxyProtocolEnabled bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] Recovered from panic while processing packet from %v: %v", remoteAddr, r)
+		}
+	}()
+
+	// 解析 PROXY Protocol 头部（如果启用）
+	realAddr := remoteAddr
+	if proxyProtocolEnabled {
+		var proxyInfo *ProxyProtocolInfo
+		var isProxyProtocol bool
+		proxyInfo, packetData, isProxyProtocol = ParseProxyProtocolV2(packetData)
+		if isProxyProtocol && proxyInfo != nil && proxyInfo.IsProxy {
+			realAddr = GetRealAddr(remoteAddr, proxyInfo)
+		}
+	}
+
+	// 处理 DraARLv1 数据包
+	if len(packetData) >= 4 &&
+		packetData[0] == 'D' &&
+		packetData[1] == 'r' &&
+		packetData[2] == 'a' &&
+		packetData[3] == 'A' {
+		processDraARLPacket(packetData, remoteAddr, realAddr, conn)
+		return
+	}
+	log.Printf("[DECODE] Unknown protocol from %v (real: %v): %s", remoteAddr, realAddr, string(packetData[:min(4, len(packetData))]))
 }
 
 // processDraARLPacket 处理 DraARLv1 数据包
@@ -409,13 +483,9 @@ func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*mod
 	// 2. username 为空时，通过 SSID + UDP 地址查找幽灵设备
 	// 幽灵设备发送数据包时 username 为空，需要通过地址匹配
 	if protocol.IsGhostSSID(ssid) && udpAddr != nil {
-		// 遍历幽灵设备，匹配 SSID 和 UDP 地址
-		ghosts := GlobalUDPGhostManager.GetAll()
-		addrStr := udpAddr.String()
-		for _, ghost := range ghosts {
-			if ghost.SSID == ssid && ghost.UDPAddr != nil && ghost.UDPAddr.String() == addrStr {
-				return ghost, true
-			}
+		ghost := GlobalUDPGhostManager.FindBySSIDAndAddr(ssid, udpAddr)
+		if ghost != nil {
+			return ghost, true
 		}
 	}
 
@@ -803,7 +873,15 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 // groupID: 目标群组 ID
 // data: 要转发的数据
 func forwardToGhostDevices(sourceUsername string, sourceSSID byte, groupID int, data []byte) {
+	conn := globalConn
+	if conn == nil {
+		return
+	}
+
 	ghosts := GlobalUDPGhostManager.GetByGroup(groupID)
+	if len(ghosts) == 0 {
+		return
+	}
 	for _, ghost := range ghosts {
 		// 跳过发送者自己
 		if ghost.Username == sourceUsername && ghost.SSID == sourceSSID {
@@ -817,50 +895,31 @@ func forwardToGhostDevices(sourceUsername string, sourceSSID byte, groupID int, 
 		// 在 60ms-180ms 巨型音频帧架构下，平滑器 (VoiceSmoother) 和批量器 (BatchSender)
 		// 反而会破坏原有的音频时间戳结构，造成瞬时大量吐包或无端延迟。
 		// 放弃排队，直接使用原生 UDP 发送，将 Jitter 交给接收端的 Opus 解码器处理。
-		globalConn.WriteToUDP(data, ghost.UDPAddr)
+		conn.WriteToUDP(data, ghost.UDPAddr)
 	}
 }
 
 // forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
 func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID int) {
-	// 获取该群组所属的所有互联组
-	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
-	if len(linkGroupIDs) == 0 {
+	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
+	if len(targetGroupIDs) == 0 {
 		return // 不属于任何互联组，无需转发
 	}
 
-	// 遍历每个互联组
-	for _, linkGroupID := range linkGroupIDs {
-		// 获取互联组并检查状态
-		linkGroup, exists := GetGroupFromCache(linkGroupID)
-		if !exists || linkGroup.Status != 1 {
-			continue // 互联组不存在或已禁用，跳过
-		}
+	for _, targetID := range targetGroupIDs {
+		// 获取目标群组的转发
+		if targetGroup, exists := GetGroupFromCache(targetID); exists {
+			pool := targetGroup.ConnPool.(*CurrentConnPool)
 
-		// 获取该互联组关联的所有目标群组
-		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
-		for _, targetID := range targetGroupIDs {
-			if targetID == sourceGroupID {
-				continue // 不转发回自己
-			}
+			// 1. 发送给目标组的 UDP 普通设备（跨组不排除自己，因为源设备不在目标组）
+			forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
 
-			// 获取目标群组的转发
-			if targetGroup, exists := GetGroupFromCache(targetID); exists {
-				pool := targetGroup.ConnPool.(*CurrentConnPool)
-				// 1. 发送给目标组的 UDP 普通设备（跨组不排除自己，因为源设备不在目标组）
-				for _, targetDev := range pool.DevConnList {
-					if canForwardToDevice(targetDev, 0, targetID, false) {
-						globalConn.WriteToUDP(data, targetDev.UDPAddr)
-					}
-				}
+			// 2. 【新增】转发给目标组的 UDP 幽灵设备
+			forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
 
-				// 2. 【新增】转发给目标组的 UDP 幽灵设备
-				forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
-
-				// 3. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
-				// 否则 WS 客户端永远听不到其他实体组传来的 UDP 声音
-				BroadcastVoiceFromUDP(dev, data, targetID)
-			}
+			// 3. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
+			// 否则 WS 客户端永远听不到其他实体组传来的 UDP 声音
+			BroadcastVoiceFromUDP(dev, data, targetID)
 		}
 	}
 }
@@ -894,38 +953,23 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 
 // forwardMessageToLinkedGroups 将文本消息转发到互联组关联的其他群组
 func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID int) {
-	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
-	if len(linkGroupIDs) == 0 {
+	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
+	if len(targetGroupIDs) == 0 {
 		return
 	}
 
-	for _, linkGroupID := range linkGroupIDs {
-		linkGroup, exists := GetGroupFromCache(linkGroupID)
-		if !exists || linkGroup.Status != 1 {
-			continue
-		}
+	for _, targetID := range targetGroupIDs {
+		if targetGroup, exists := GetGroupFromCache(targetID); exists {
+			pool := targetGroup.ConnPool.(*CurrentConnPool)
 
-		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
-		for _, targetID := range targetGroupIDs {
-			if targetID == sourceGroupID {
-				continue
-			}
+			// 1. 发送给目标组的 UDP 设备
+			forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
 
-			if targetGroup, exists := GetGroupFromCache(targetID); exists {
-				pool := targetGroup.ConnPool.(*CurrentConnPool)
-				// 1. 发送给目标组的 UDP 设备
-				for _, targetDev := range pool.DevConnList {
-					if canForwardToDevice(targetDev, 0, targetID, false) {
-						globalConn.WriteToUDP(data, targetDev.UDPAddr)
-					}
-				}
+			// 2. 【新增】转发给目标组的 UDP 幽灵设备
+			forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
 
-				// 2. 【新增】转发给目标组的 UDP 幽灵设备
-				forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
-
-				// 3. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
-				BroadcastTextFromUDP(dev, data, targetID)
-			}
+			// 3. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
+			BroadcastTextFromUDP(dev, data, targetID)
 		}
 	}
 }
@@ -1004,9 +1048,19 @@ func canForwardToDevice(target *models.Device, sourceID int, expectedGroupID int
 // forwardToUDPDevices 统一的 UDP 设备转发逻辑
 // 遍历设备列表，将数据转发给所有有效的目标设备
 func forwardToUDPDevices(devices []*models.Device, sourceID int, expectedGroupID int, skipSelf bool, data []byte) {
+	conn := globalConn
+	if conn == nil {
+		return
+	}
+	seenAddr := make(map[string]struct{}, len(devices))
 	for _, target := range devices {
 		if canForwardToDevice(target, sourceID, expectedGroupID, skipSelf) {
-			globalConn.WriteToUDP(data, target.UDPAddr)
+			addrKey := target.UDPAddr.String()
+			if _, exists := seenAddr[addrKey]; exists {
+				continue
+			}
+			seenAddr[addrKey] = struct{}{}
+			conn.WriteToUDP(data, target.UDPAddr)
 		}
 	}
 }
@@ -1048,10 +1102,14 @@ func StartGroupCacheSync() {
 		defer ticker.Stop()
 
 		for {
-			<-ticker.C
-			refreshGroupCache()
-			refreshDeviceCache()
-			refreshGroupLinkCache() // 同步群组互联缓存
+			select {
+			case <-udpShutdown:
+				return
+			case <-ticker.C:
+				refreshGroupCache()
+				refreshDeviceCache()
+				refreshGroupLinkCache() // 同步群组互联缓存
+			}
 		}
 	}()
 	log.Println("[CACHE] 数据库群组和设备定时同步任务已启动 (间隔: 10s)")

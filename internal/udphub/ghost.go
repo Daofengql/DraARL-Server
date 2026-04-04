@@ -187,6 +187,27 @@ func (m *UDPGhostManager) GetAll() []*models.Device {
 	return devices
 }
 
+// FindBySSIDAndAddr 通过 SSID + UDP 地址查找幽灵设备
+// 性能优化：避免通过 GetAll 先构建切片再遍历
+func (m *UDPGhostManager) FindBySSIDAndAddr(ssid byte, addr *net.UDPAddr) *models.Device {
+	if addr == nil {
+		return nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, dev := range m.devices {
+		if dev.SSID != ssid || dev.UDPAddr == nil {
+			continue
+		}
+		if dev.UDPAddr.Port == addr.Port && dev.UDPAddr.IP.Equal(addr.IP) {
+			return dev
+		}
+	}
+	return nil
+}
+
 // GetOnlineCount 获取在线的 UDP 幽灵设备数量
 func (m *UDPGhostManager) GetOnlineCount() int {
 	m.mu.RLock()

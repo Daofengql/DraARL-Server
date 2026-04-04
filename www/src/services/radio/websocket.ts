@@ -138,13 +138,21 @@ export class RadioWebSocket {
       }
     }
 
+    if (this.token) {
+      try {
+        await this.syncWSTokenCookie()
+      } catch (error) {
+        this.isConnecting = false
+        this.setState('disconnected')
+        const errorMsg = 'WS 认证信息同步失败'
+        if (this.onError) this.onError(errorMsg)
+        throw error instanceof Error ? error : new Error(errorMsg)
+      }
+    }
+
     return new Promise((resolve, reject) => {
       try {
-        // 构建 WebSocket URL（只传 token，SSID 由后端固定为 105）
-        let url = this.config.url
-        if (this.token) {
-          url += `?token=${encodeURIComponent(this.token)}`
-        }
+        const url = this.config.url
 
         this.ws = new WebSocket(url)
         this.ws.binaryType = 'arraybuffer'
@@ -275,6 +283,11 @@ export class RadioWebSocket {
         this.onStateChange(state)
       }
     }
+  }
+
+  private async syncWSTokenCookie() {
+    if (!this.token) return
+    await apiClient.post('/api/auth/ws-token/sync')
   }
 
   // 处理二进制消息

@@ -12,7 +12,7 @@ import (
 	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
 	"draarl/pkg/cache"
-	"draarl/pkg/jwt"
+	appcrypto "draarl/pkg/crypto"
 	"draarl/pkg/minio"
 
 	"github.com/gin-gonic/gin"
@@ -141,7 +141,7 @@ func Login(c *gin.Context) {
 
 	// 生成 JWT token
 	roles := user.GetRoles()
-	token, err := jwt.GenerateToken(user.Name, roles)
+	issued, err := issueAuthTokens(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -204,8 +204,11 @@ func Login(c *gin.Context) {
 		"code":    200,
 		"message": "登录成功",
 		"data": gin.H{
-			"token": token,
-			"user":  userData,
+			"token":              issued.AccessToken,
+			"refresh_token":      issued.RefreshToken,
+			"expires_in":         issued.AccessExpiresIn,
+			"refresh_expires_in": issued.RefreshExpiresIn,
+			"user":               userData,
 		},
 	})
 }
@@ -238,6 +241,10 @@ func Logout(c *gin.Context) {
 	}
 
 	// JWT 是无状态的，客户端删除 token 即可
+	revokeCurrentRefreshToken(c, "logout")
+	clearRefreshTokenCookie(c)
+	clearWSTokenCookie(c)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "登出成功",
@@ -341,7 +348,7 @@ func Register(c *gin.Context) {
 
 	// 生成设备准入密码
 	devicePassword := generateDevicePassword()
-	hashedDevicePassword, err := bcrypt.GenerateFromPassword([]byte(devicePassword), bcrypt.DefaultCost)
+	encryptedDevicePassword, err := appcrypto.Encrypt(devicePassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -359,7 +366,7 @@ func Register(c *gin.Context) {
 	user := &gormdb.User{
 		Name:           req.Username,
 		Password:       string(hashedPassword),
-		DevicePassword: string(hashedDevicePassword),
+		DevicePassword: encryptedDevicePassword,
 		NickName:       nickname,
 		CallSign:       req.CallSign,
 		Phone:          req.Phone,

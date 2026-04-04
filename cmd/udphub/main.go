@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	stdlog "log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
 	"draarl/internal/aprs"
+	authstore "draarl/internal/auth"
 	"draarl/internal/config"
 	"draarl/internal/db"
 	gormdb "draarl/internal/gormdb"
@@ -39,6 +42,8 @@ var (
 )
 
 func main() {
+	config.SetReleaseBuild(isRelease == "true")
+
 	// release 模式下禁用 gin 调试日志
 	if isRelease == "true" {
 		gin.SetMode(gin.ReleaseMode)
@@ -72,6 +77,14 @@ func main() {
 	if err := initJWTSecret(cfg); err != nil {
 		stdlog.Fatalf("初始化JWT密钥失败: %v", err)
 	}
+
+	if err := cfg.ValidateAllowedOrigins(); err != nil {
+		stdlog.Fatalf("Web Origin 配置无效: %v", err)
+	}
+	if err := authstore.InitRefreshTokenStore(cfg); err != nil {
+		stdlog.Fatalf("初始化 refresh token 存储失败: %v", err)
+	}
+	defer authstore.CloseRefreshTokenStore()
 
 	// 初始化 AES 加密器（用于设备密码加密）
 	if err := crypto.InitAES(cfg.DeviceAuth.AESKey); err != nil {
@@ -188,11 +201,12 @@ func main() {
 	aprs.StartAPRSService()
 
 	// 启动 HTTP 服务器（Web API 和前端服务）
+	srv := server.New(cfg)
+	httpErrCh := make(chan error, 1)
 	go func() {
 		stdlog.Println("正在启动 HTTP 服务器...")
-		srv := server.New(cfg)
 		if err := srv.Start(); err != nil {
-			stdlog.Printf("HTTP 服务器错误: %v", err)
+			httpErrCh <- err
 		}
 	}()
 
@@ -203,9 +217,30 @@ func main() {
 	// 等待信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	select {
+	case sig := <-quit:
+		stdlog.Printf("收到退出信号: %s", sig.String())
+	case err := <-httpErrCh:
+		stdlog.Printf("HTTP 服务器异常退出: %v", err)
+	}
 
 	stdlog.Println("正在关闭服务...")
+
+	// 优雅关闭 HTTP 服务
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		stdlog.Printf("HTTP 服务关闭失败: %v", err)
+	}
+	shutdownCancel()
+
+	// 停止 UDP 服务器
+	stdlog.Println("正在停止 UDP 服务器...")
+	udphub.StopUDPServer()
+
+	// 停止待绑定设备管理器
+	if manager := udphub.GetPendingDeviceManager(); manager != nil {
+		manager.Stop()
+	}
 
 	// 停止 APRS 服务
 	aprs.StopAPRSService()

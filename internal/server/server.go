@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+	"strings"
 
 	"draarl/internal/common"
 	"draarl/internal/config"
@@ -28,7 +25,15 @@ type Server struct {
 }
 
 func New(cfg *config.Configuration) *Server {
-	engine := gin.Default()
+	engine := gin.New()
+	engine.Use(gin.Recovery())
+	engine.Use(accessLogMiddleware())
+
+	allowedOrigins := cfg.GetAllowedOrigins()
+	allowedOriginSet := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		allowedOriginSet[strings.ToLower(origin)] = struct{}{}
+	}
 
 	// 初始化MinIO
 	if err := minio.InitMinIO(); err != nil {
@@ -38,15 +43,43 @@ func New(cfg *config.Configuration) *Server {
 	// 初始化站点配置（如果数据库为空则从YAML迁移）
 	initSiteConfigs(cfg)
 
+	// WebSocket Origin 白名单
+	ws.SetAllowedOrigins(allowedOrigins)
+
 	// CORS 中间件
 	engine.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		origin := strings.TrimSpace(c.GetHeader("Origin"))
+		if origin != "" {
+			normalizedOrigin := normalizeOrigin(origin)
+			if _, allowed := allowedOriginSet[normalizedOrigin]; !allowed {
+				if c.Request.Method == http.MethodOptions {
+					c.AbortWithStatus(http.StatusForbidden)
+					return
+				}
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"code":    403,
+					"message": "origin_not_allowed",
+				})
+				return
+			}
+
+			c.Writer.Header().Set("Vary", "Origin")
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		}
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		if hasTokenLikeQuery(c.Request.URL.RawQuery) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "token_query_not_allowed",
+			})
 			return
 		}
 
@@ -75,7 +108,9 @@ func (s *Server) setupRoutes() {
 		{
 			auth.POST("/login", handler.Login)
 			auth.POST("/logout", handler.Logout)
+			auth.POST("/refresh", handler.RefreshToken)
 			auth.POST("/register", handler.Register)
+			auth.POST("/ws-token/clear", handler.ClearWSTokenCookie)
 			auth.POST("/email-login", handler.EmailLogin)         // 邮箱验证码登录
 			auth.POST("/send-code", handler.SendVerificationCode) // 发送邮箱验证码
 			auth.POST("/verify-email", handler.VerifyEmail)       // 验证邮箱（注册用）
@@ -100,6 +135,7 @@ func (s *Server) setupRoutes() {
 		{
 			sso.GET("/login", handler.GetSSOLoginURL)
 			sso.GET("/callback", handler.SSOCallback)
+			sso.POST("/exchange", handler.ExchangeSSOCode)
 		}
 
 		// 设备动态码绑定接口（设备端，无需 JWT）
@@ -119,6 +155,7 @@ func (s *Server) setupRoutes() {
 			protected.GET("/sso/status", handler.GetSSOStatus)
 			protected.POST("/sso/bind", handler.SSOBind)
 			protected.DELETE("/sso/unbind", handler.SSOUnbind)
+			protected.POST("/auth/ws-token/sync", handler.SyncWSTokenCookie)
 
 			// 当前用户信息（所有认证用户可访问）
 			protected.GET("/me", handler.GetCurrentUser)
@@ -430,33 +467,32 @@ func (s *Server) Start() error {
 	}
 
 	log.Printf("HTTP 服务器启动在 %s", addr)
+	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
 
-	// 在 goroutine 中启动服务器
-	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP 服务器启动失败: %v", err)
-		}
-	}()
-
-	// 优雅关闭
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
+// Shutdown 优雅关闭 HTTP 服务
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.server == nil {
+		return nil
+	}
 	log.Println("正在关闭 HTTP 服务器...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	if err := s.server.Shutdown(ctx); err != nil {
 		log.Printf("HTTP 服务器关闭失败: %v", err)
 		return err
 	}
-
 	log.Println("HTTP 服务器已关闭")
 	return nil
 }
 
 func (s *Server) GetEngine() *gin.Engine {
 	return s.engine
+}
+
+func normalizeOrigin(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	trimmed = strings.TrimSuffix(trimmed, "/")
+	return trimmed
 }

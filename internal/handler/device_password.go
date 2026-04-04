@@ -60,12 +60,43 @@ func GetDevicePassword(c *gin.Context) {
 		return
 	}
 
-	// 解密已存在的密码
-	devicePassword, err := crypto.Decrypt(user.DevicePassword)
+	// 解码已存在的密码（兼容历史 bcrypt，不可逆则自动重建）
+	devicePassword, legacyPassword, err := crypto.DecodeDevicePassword(user.DevicePassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码解密失败",
+		})
+		return
+	}
+	if legacyPassword || devicePassword == "" {
+		devicePassword = generateDevicePassword()
+		encryptedPassword, encErr := crypto.Encrypt(devicePassword)
+		if encErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "设备密码迁移失败",
+			})
+			return
+		}
+		if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
+			log.Printf("迁移历史设备密码失败: %v", updateErr)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "设备密码迁移失败",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "成功",
+			"data": gin.H{
+				"device_password": devicePassword,
+				"has_password":    true,
+				"is_new":          true,
+				"created_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+			},
 		})
 		return
 	}

@@ -14,7 +14,7 @@ import (
 
 var (
 	dbManager *DBManager
-	once      sync.Once
+	managerMu sync.Mutex
 )
 
 // DBManager 数据库连接管理器
@@ -23,6 +23,7 @@ type DBManager struct {
 	db         *gorm.DB
 	cfg        *Config
 	lastHealth time.Time
+	stopHealth chan struct{}
 }
 
 // Config 数据库配置
@@ -36,67 +37,76 @@ type Config struct {
 
 // Init 初始化 GORM 数据库连接
 func Init(cfg *Config) error {
-	var err error
-	once.Do(func() {
-		dbManager = &DBManager{
-			cfg:        cfg,
-			lastHealth: time.Now(),
-		}
+	managerMu.Lock()
+	defer managerMu.Unlock()
 
-		// 配置 GORM logger
-		var gormLogger logger.Interface
-		switch cfg.LogLevel {
-		case "silent":
-			gormLogger = logger.Default.LogMode(logger.Silent)
-		case "error":
-			gormLogger = logger.Default.LogMode(logger.Error)
-		case "warn":
-			gormLogger = logger.Default.LogMode(logger.Warn)
-		case "info":
-			gormLogger = logger.Default.LogMode(logger.Info)
-		default:
-			gormLogger = logger.Default.LogMode(logger.Error)
-		}
+	manager := &DBManager{
+		cfg:        cfg,
+		lastHealth: time.Now(),
+		stopHealth: make(chan struct{}),
+	}
 
-		dbManager.db, err = gorm.Open(mysql.Open(cfg.DSN), &gorm.Config{
-			Logger: gormLogger,
-			NowFunc: func() time.Time {
-				return time.Now()
-			},
-		})
+	// 配置 GORM logger
+	var gormLogger logger.Interface
+	switch cfg.LogLevel {
+	case "silent":
+		gormLogger = logger.Default.LogMode(logger.Silent)
+	case "error":
+		gormLogger = logger.Default.LogMode(logger.Error)
+	case "warn":
+		gormLogger = logger.Default.LogMode(logger.Warn)
+	case "info":
+		gormLogger = logger.Default.LogMode(logger.Info)
+	default:
+		gormLogger = logger.Default.LogMode(logger.Error)
+	}
 
-		if err != nil {
-			err = fmt.Errorf("failed to connect database: %w", err)
-			return
-		}
-
-		// 获取底层的 sql.DB
-		sqlDB, err := dbManager.db.DB()
-		if err != nil {
-			err = fmt.Errorf("failed to get sql.DB: %w", err)
-			return
-		}
-
-		// 设置连接池参数
-		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-		sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
-		// 设置连接最大空闲时间为 30 秒，避免使用已失效的连接
-		// MySQL wait_timeout 默认 8 小时，但网络环境可能导致连接提前失效
-		sqlDB.SetConnMaxIdleTime(30 * time.Second)
-
-		// 验证连接
-		if err = sqlDB.Ping(); err != nil {
-			err = fmt.Errorf("failed to ping database: %w", err)
-			return
-		}
-
-		log.Println("GORM database connected successfully")
-
-		// 启动健康检查协程
-		go dbManager.healthCheck()
+	newDB, err := gorm.Open(mysql.Open(cfg.DSN), &gorm.Config{
+		Logger: gormLogger,
+		NowFunc: func() time.Time {
+			return time.Now()
+		},
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to connect database: %w", err)
+	}
+	manager.db = newDB
+
+	// 获取底层的 sql.DB
+	sqlDB, err := manager.db.DB()
+	if err != nil {
+		return fmt.Errorf("failed to get sql.DB: %w", err)
+	}
+
+	// 设置连接池参数
+	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
+	// 设置连接最大空闲时间为 30 秒，避免使用已失效的连接
+	// MySQL wait_timeout 默认 8 小时，但网络环境可能导致连接提前失效
+	sqlDB.SetConnMaxIdleTime(30 * time.Second)
+
+	// 验证连接
+	if err = sqlDB.Ping(); err != nil {
+		_ = sqlDB.Close()
+		return fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	// 支持重复初始化（测试/重载场景）
+	if dbManager != nil {
+		close(dbManager.stopHealth)
+		if oldSQLDB, oldErr := dbManager.db.DB(); oldErr == nil {
+			_ = oldSQLDB.Close()
+		}
+	}
+	dbManager = manager
+
+	log.Println("GORM database connected successfully")
+
+	// 启动健康检查协程
+	go dbManager.healthCheck()
+
+	return nil
 }
 
 // healthCheck 定期检查数据库连接健康状态
@@ -104,8 +114,13 @@ func (m *DBManager) healthCheck() {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		m.checkHealth()
+	for {
+		select {
+		case <-ticker.C:
+			m.checkHealth()
+		case <-m.stopHealth:
+			return
+		}
 	}
 }
 
@@ -164,18 +179,32 @@ func Get() *gorm.DB {
 
 // Close 关闭数据库连接
 func Close() error {
-	if dbManager != nil {
-		dbManager.mu.Lock()
-		defer dbManager.mu.Unlock()
+	managerMu.Lock()
+	defer managerMu.Unlock()
 
-		if dbManager.db != nil {
-			sqlDB, err := dbManager.db.DB()
-			if err != nil {
-				return err
-			}
-			return sqlDB.Close()
-		}
+	if dbManager == nil {
+		return nil
 	}
+
+	dbManager.mu.Lock()
+	defer dbManager.mu.Unlock()
+
+	if dbManager.stopHealth != nil {
+		close(dbManager.stopHealth)
+		dbManager.stopHealth = nil
+	}
+
+	if dbManager.db != nil {
+		sqlDB, err := dbManager.db.DB()
+		if err != nil {
+			return err
+		}
+		dbManager.db = nil
+		dbManager = nil
+		return sqlDB.Close()
+	}
+
+	dbManager = nil
 	return nil
 }
 

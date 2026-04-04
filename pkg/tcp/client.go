@@ -17,6 +17,7 @@ type Client struct {
 	onError   func(error)
 	mu        sync.Mutex
 	connected bool
+	stopChan  chan struct{}
 }
 
 // NewClient 创建新的TCP客户端
@@ -25,6 +26,7 @@ func NewClient(host, port string, onMessage func(message []byte)) *Client {
 		host:      host,
 		port:      port,
 		onMessage: onMessage,
+		stopChan:  make(chan struct{}),
 	}
 }
 
@@ -37,19 +39,28 @@ func (c *Client) SetOnError(onError func(error)) {
 
 // Connect 连接到TCP服务器
 func (c *Client) Connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	for {
+		select {
+		case <-c.stopChan:
+			return net.ErrClosed
+		default:
+		}
+
 		conn, err := net.Dial("tcp", net.JoinHostPort(c.host, c.port))
 		if err != nil {
 			log.Printf("无法连接到TCP服务器 %s:%s: %v", c.host, c.port, err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-c.stopChan:
+				return net.ErrClosed
+			case <-time.After(5 * time.Second):
+			}
 			continue
 		}
 
+		c.mu.Lock()
 		c.conn = conn
 		c.connected = true
+		c.mu.Unlock()
 		log.Printf("已连接到TCP服务器 %s:%s", c.host, c.port)
 
 		// 启动读取消息的 goroutine
@@ -99,6 +110,12 @@ func (c *Client) SendBytes(data []byte) error {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	select {
+	case <-c.stopChan:
+	default:
+		close(c.stopChan)
+	}
 
 	return c.close()
 }

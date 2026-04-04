@@ -277,7 +277,9 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 
 // checkDeviceOnline 检查设备在线状态
 func checkDeviceOnline() {
-	time.Sleep(10 * time.Second)
+	if !waitWithShutdown(10 * time.Second) {
+		return
+	}
 
 	// 配置参数
 	const (
@@ -288,7 +290,9 @@ func checkDeviceOnline() {
 	)
 
 	for {
-		time.Sleep(checkInterval)
+		if !waitWithShutdown(checkInterval) {
+			return
+		}
 
 		// 【新增】查询数据库获取已审核通过的用户总数
 		// 这代表了所有可以随时登录的幽灵设备的理论总数

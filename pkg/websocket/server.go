@@ -3,6 +3,9 @@ package websocket
 import (
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"draarl/internal/udphub"
@@ -11,14 +14,57 @@ import (
 )
 
 var (
+	allowedOriginsMu sync.RWMutex
+	allowedOrigins   = make(map[string]struct{})
+
 	upgrader = websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
-		CheckOrigin: func(r *http.Request) bool {
-			return true // 允许所有来源
-		},
+		CheckOrigin:     checkOrigin,
 	}
 )
+
+// SetAllowedOrigins 配置 WebSocket 的 Origin 白名单。
+func SetAllowedOrigins(origins []string) {
+	next := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		normalized := normalizeOrigin(origin)
+		if normalized != "" {
+			next[normalized] = struct{}{}
+		}
+	}
+
+	allowedOriginsMu.Lock()
+	allowedOrigins = next
+	allowedOriginsMu.Unlock()
+}
+
+func checkOrigin(r *http.Request) bool {
+	origin := normalizeOrigin(r.Header.Get("Origin"))
+
+	allowedOriginsMu.RLock()
+	defer allowedOriginsMu.RUnlock()
+
+	// 非浏览器客户端可能不带 Origin，放行。
+	if origin == "" {
+		return true
+	}
+
+	_, ok := allowedOrigins[origin]
+	return ok
+}
+
+func normalizeOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
+}
 
 // 全局连接管理器
 var GlobalManager = NewWSConnectionManager()

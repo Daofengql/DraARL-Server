@@ -90,6 +90,8 @@ type SMTPConfig struct {
 	Host        string `json:"host"`         // SMTP服务器地址
 	Port        int    `json:"port"`         // SMTP端口
 	UseSSL      bool   `json:"use_ssl"`      // 是否使用SSL
+	// 仅用于本地调试。生产环境会强制拒绝该选项。
+	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // 是否跳过 TLS 证书校验
 	SenderName  string `json:"sender_name"`  // 发件人昵称
 	SenderEmail string `json:"sender_email"` // 发件人邮箱
 	Password    string `json:"password"`     // 邮箱授权码
@@ -493,6 +495,7 @@ func (r *SiteConfigRepository) GetSMTPConfig() (*SMTPConfig, error) {
 		Host:        "smtp.qq.com",
 		Port:        465,
 		UseSSL:      true,
+		InsecureSkipVerify: false,
 		SenderName:  "DraARL麟链",
 		SenderEmail: "",
 		Password:    "",
@@ -508,6 +511,8 @@ func (r *SiteConfigRepository) GetSMTPConfig() (*SMTPConfig, error) {
 			}
 		case "smtp.use_ssl":
 			result.UseSSL = config.Value == "true"
+		case "smtp.insecure_skip_verify":
+			result.InsecureSkipVerify = config.Value == "true"
 		case "smtp.sender_name":
 			result.SenderName = config.Value
 		case "smtp.sender_email":
@@ -526,10 +531,15 @@ func (r *SiteConfigRepository) SetSMTPConfig(config SMTPConfig) error {
 	if config.UseSSL {
 		useSSLStr = "true"
 	}
+	insecureSkipVerifyStr := "false"
+	if config.InsecureSkipVerify {
+		insecureSkipVerifyStr = "true"
+	}
 	configs := []SiteConfig{
 		{Key: "smtp.host", Value: config.Host, Category: CategorySMTP, Description: "SMTP服务器地址"},
 		{Key: "smtp.port", Value: strconv.Itoa(config.Port), Category: CategorySMTP, Description: "SMTP端口"},
 		{Key: "smtp.use_ssl", Value: useSSLStr, Category: CategorySMTP, Description: "是否使用SSL"},
+		{Key: "smtp.insecure_skip_verify", Value: insecureSkipVerifyStr, Category: CategorySMTP, Description: "是否跳过 TLS 证书校验（仅调试）"},
 		{Key: "smtp.sender_name", Value: config.SenderName, Category: CategorySMTP, Description: "发件人昵称"},
 		{Key: "smtp.sender_email", Value: config.SenderEmail, Category: CategorySMTP, Description: "发件人邮箱"},
 		{Key: "smtp.password", Value: config.Password, Category: CategorySMTP, Description: "邮箱授权码"},

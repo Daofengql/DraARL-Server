@@ -27,6 +27,17 @@ func (a *WSManagerAdapter) GetDevicesByGroup(groupID int) []interfaces.WSDeviceI
 	return result
 }
 
+// ForEachDeviceByGroup 遍历指定群组的在线设备（避免额外接口切片转换）
+func (a *WSManagerAdapter) ForEachDeviceByGroup(groupID int, fn func(interfaces.WSDeviceInterface)) {
+	if a == nil || a.manager == nil || fn == nil {
+		return
+	}
+	devices := a.manager.GetDevicesByGroup(groupID)
+	for _, d := range devices {
+		fn(d)
+	}
+}
+
 // SendToDevice 向设备发送数据（异步非阻塞）
 // 优化：
 // 1. 直接使用传入的 device 引用，消除二次查找

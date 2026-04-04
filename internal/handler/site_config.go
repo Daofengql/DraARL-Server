@@ -772,6 +772,15 @@ func (h *SiteConfigHandler) UpdateSMTPConfig(c *gin.Context) {
 		return
 	}
 
+	// 生产环境强制 TLS 证书校验
+	if config.Get().IsProduction() && req.InsecureSkipVerify {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "生产环境禁止开启 InsecureSkipVerify",
+		})
+		return
+	}
+
 	// 如果密码是脱敏格式（包含*），则不更新密码
 	existingConfig, _ := h.repo.GetSMTPConfig()
 	if existingConfig != nil && len(req.Password) > 0 && containsStars(req.Password) {

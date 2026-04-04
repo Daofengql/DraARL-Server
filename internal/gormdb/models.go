@@ -39,7 +39,7 @@ type User struct {
 	LastLoginIP    string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
 	DMRID          int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
 	MDCID          string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
-	DevicePassword string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码(bcrypt哈希)
+	DevicePassword string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码（AES 可逆密文；兼容历史 bcrypt 并在认证后自动迁移）
 }
 
 // TableName 指定表名
@@ -274,8 +274,8 @@ func (SiteConfig) TableName() string {
 // GroupMember 群组成员关系（用户与群组的验证关系）
 type GroupMember struct {
 	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID     int       `gorm:"index:idx_group_user;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
-	UserID      int       `gorm:"index:idx_group_user;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
+	GroupID     int       `gorm:"uniqueIndex:uk_group_user,priority:1;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
+	UserID      int       `gorm:"uniqueIndex:uk_group_user,priority:2;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
 	IsVerified  bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
 	JoinTime    time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
 	LastVerify  time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`

@@ -37,25 +37,20 @@ func (r *MessageRouter) RouteVoiceFromUDP(source *models.Device, data []byte, gr
 		return
 	}
 
-	// 获取群组内的所有在线 WebSocket 设备
-	devices := r.wsManager.GetDevicesByGroup(groupID)
-
-	for _, device := range devices {
+	r.wsManager.ForEachDeviceByGroup(groupID, func(device interfaces.WSDeviceInterface) {
 		// 不转发给自己（如果是普通设备）
 		if !device.IsGhost() && device.GetDeviceID() == source.ID {
-			continue
+			return
 		}
 
 		// 检查目标设备是否禁收
 		if device.IsDisabledRecv() {
-			continue
+			return
 		}
 
 		// 发送语音数据
-		if err := r.wsManager.SendToDevice(device, data, 2); err != nil { // 2 = websocket.BinaryMessage
-			log.Printf("[ROUTE] Failed to send voice to WS device %s: %v", device.GetIdentifier(), err)
-		}
-	}
+		_ = r.wsManager.SendToDevice(device, data, 2) // 2 = websocket.BinaryMessage
+	})
 }
 
 // RouteTextFromUDP 转发 UDP 文本消息到 WebSocket 设备
@@ -64,22 +59,18 @@ func (r *MessageRouter) RouteTextFromUDP(source *models.Device, data []byte, gro
 		return
 	}
 
-	devices := r.wsManager.GetDevicesByGroup(groupID)
-
-	for _, device := range devices {
+	r.wsManager.ForEachDeviceByGroup(groupID, func(device interfaces.WSDeviceInterface) {
 		// 不转发给自己
 		if !device.IsGhost() && device.GetDeviceID() == source.ID {
-			continue
+			return
 		}
 
 		if device.IsDisabledRecv() {
-			continue
+			return
 		}
 
-		if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
-			log.Printf("[ROUTE] Failed to send text to WS device %s: %v", device.GetIdentifier(), err)
-		}
-	}
+		_ = r.wsManager.SendToDevice(device, data, 2)
+	})
 }
 
 // RouteServerVoiceFromUDP 转发 UDP 服务器互联语音到 WebSocket 设备
@@ -88,17 +79,13 @@ func (r *MessageRouter) RouteServerVoiceFromUDP(source *models.Device, data []by
 		return
 	}
 
-	devices := r.wsManager.GetDevicesByGroup(groupID)
-
-	for _, device := range devices {
+	r.wsManager.ForEachDeviceByGroup(groupID, func(device interfaces.WSDeviceInterface) {
 		if device.IsDisabledRecv() {
-			continue
+			return
 		}
 
-		if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
-			log.Printf("[ROUTE] Failed to send server voice to WS device %s: %v", device.GetIdentifier(), err)
-		}
-	}
+		_ = r.wsManager.SendToDevice(device, data, 2)
+	})
 }
 
 // RouteVoiceToUDP 转发 WebSocket 语音到 UDP 设备
@@ -145,22 +132,9 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		return
 	}
 
-	// 【前置逻辑说明：WS → UDP 转发不跳过"自己"】
-	// WS 设备和 UDP 设备是不同的协议栈，不存在"回声"问题。
-	// 即使同一个用户通过 WS 和 UDP 同时在线，也应该正常转发。
-	// 只有当 WS 幽灵设备和 UDP 幽灵设备同用户时才需要跳过（已在 forwardToGhostDevices 中处理）
-	skipSelf := false
-	sourceID := 0 // 不再需要排除自己
-
 	// 1. 发送给普通 UDP 设备
-	// 【前置逻辑说明：剥离批量缓冲，保障大包实时性】
-	// 在 60ms-180ms 巨型音频帧架构下，批量发送器反而会造成延迟。
-	// 直接使用原生 UDP 发送，将 Jitter 交给接收端的 Opus 解码器处理。
-	for _, targetDev := range pool.DevConnList {
-		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
-			conn.WriteToUDP(voicePacket, targetDev.UDPAddr)
-		}
-	}
+	// 注意：UDP ghost 设备走独立的 forwardToGhostDevices 路径，避免同组双发导致重音
+	forwardToNonGhostUDPDevices(pool.DevConnList, 0, groupID, false, voicePacket)
 
 	// 2. 【核心修复：补全 WS 到 UDP Ghost 的桥接】
 	// 前置逻辑说明：之前的代码由于缺少这行，导致 WS 网页端说话，UDP JWT 幽灵客户端永远听不见。
@@ -202,15 +176,8 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 		return
 	}
 
-	// 【前置逻辑说明：WS → UDP 转发不跳过"自己"】
-	// 同 RouteVoiceToUDP，WS 和 UDP 是不同协议栈，不需要跳过
-	skipSelf := false
-	sourceID := 0
-	for _, targetDev := range pool.DevConnList {
-		if canForwardToDevice(targetDev, sourceID, groupID, skipSelf) {
-			conn.WriteToUDP(textPacket, targetDev.UDPAddr)
-		}
-	}
+	// 注意：UDP ghost 设备走独立的 forwardToGhostDevices 路径，避免同组双发
+	forwardToNonGhostUDPDevices(pool.DevConnList, 0, groupID, false, textPacket)
 
 	// 【核心修复：补全 WS 到 UDP Ghost 的文本消息桥接】
 	forwardToGhostDevices(source.GetUsername(), source.GetSSID(), groupID, textPacket)
@@ -222,105 +189,77 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 	r.RouteTextToWSClients(source, textPacket, groupID)
 }
 
-// routeServerVoiceToLinkedGroups 转发服务器互联语音到关联群组
-// 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
-func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
+// forwardToNonGhostUDPDevices 仅转发到普通 UDP 设备（排除 UDP ghost）
+// 用于 WS -> UDP 同组转发，避免与 forwardToGhostDevices 双路径重叠导致重复发包。
+func forwardToNonGhostUDPDevices(devices []*models.Device, sourceID int, expectedGroupID int, skipSelf bool, data []byte) {
 	conn := GetGlobalConn()
 	if conn == nil {
 		return
 	}
 
-	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
-	if len(linkGroupIDs) == 0 {
+	for _, target := range devices {
+		if target == nil || protocol.IsGhostSSID(target.SSID) {
+			continue
+		}
+		if canForwardToDevice(target, sourceID, expectedGroupID, skipSelf) {
+			conn.WriteToUDP(data, target.UDPAddr)
+		}
+	}
+}
+
+// routeServerVoiceToLinkedGroups 转发服务器互联语音到关联群组
+// 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
+func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
+	if GetGlobalConn() == nil {
 		return
 	}
 
-	// 【前置逻辑说明】使用 map 进行目标组去重。
-	// 当源群组加入多个互联组且目标群组存在交集时，防止目标组的 UDP 设备收到多份重复报文
-	processedTargets := make(map[int]bool)
+	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
+	if len(targetGroupIDs) == 0 {
+		return
+	}
 
-	for _, linkGroupID := range linkGroupIDs {
-		linkGroup, exists := GetGroupFromCache(linkGroupID)
-		if !exists || linkGroup.Status != 1 {
+	for _, targetID := range targetGroupIDs {
+		targetGroup, exists := GetGroupFromCache(targetID)
+		if !exists {
 			continue
 		}
 
-		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
-		for _, targetID := range targetGroupIDs {
-			// 跳过源组自身，且跳过已处理过的交集目标组
-			if targetID == sourceGroupID || processedTargets[targetID] {
-				continue
-			}
-			processedTargets[targetID] = true
-
-			targetGroup, exists := GetGroupFromCache(targetID)
-			if !exists {
-				continue
-			}
-
-			pool, ok := targetGroup.ConnPool.(*CurrentConnPool)
-			if !ok {
-				continue
-			}
-
-			// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteVoiceToWSClients 处理
-			for _, targetDev := range pool.DevConnList {
-				if canForwardToDevice(targetDev, 0, targetID, false) {
-					conn.WriteToUDP(data, targetDev.UDPAddr)
-				}
-			}
+		pool, ok := targetGroup.ConnPool.(*CurrentConnPool)
+		if !ok {
+			continue
 		}
+
+		// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteVoiceToWSClients 处理
+		forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
 	}
 }
 
 // routeTextToLinkedGroups 转发文本消息到关联群组
 // 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
 func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
-	conn := GetGlobalConn()
-	if conn == nil {
+	if GetGlobalConn() == nil {
 		return
 	}
 
-	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
-	if len(linkGroupIDs) == 0 {
+	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
+	if len(targetGroupIDs) == 0 {
 		return
 	}
 
-	// 【前置逻辑说明】使用 map 进行目标组去重。
-	// 当源群组加入多个互联组且目标群组存在交集时，防止目标组的 UDP 设备收到多份重复报文
-	processedTargets := make(map[int]bool)
-
-	for _, linkGroupID := range linkGroupIDs {
-		linkGroup, exists := GetGroupFromCache(linkGroupID)
-		if !exists || linkGroup.Status != 1 {
+	for _, targetID := range targetGroupIDs {
+		targetGroup, exists := GetGroupFromCache(targetID)
+		if !exists {
 			continue
 		}
 
-		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
-		for _, targetID := range targetGroupIDs {
-			// 跳过源组自身，且跳过已处理过的交集目标组
-			if targetID == sourceGroupID || processedTargets[targetID] {
-				continue
-			}
-			processedTargets[targetID] = true
-
-			targetGroup, exists := GetGroupFromCache(targetID)
-			if !exists {
-				continue
-			}
-
-			pool, ok := targetGroup.ConnPool.(*CurrentConnPool)
-			if !ok {
-				continue
-			}
-
-			// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteTextToWSClients 处理
-			for _, targetDev := range pool.DevConnList {
-				if canForwardToDevice(targetDev, 0, targetID, false) {
-					conn.WriteToUDP(data, targetDev.UDPAddr)
-				}
-			}
+		pool, ok := targetGroup.ConnPool.(*CurrentConnPool)
+		if !ok {
+			continue
 		}
+
+		// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteTextToWSClients 处理
+		forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
 	}
 }
 
@@ -386,56 +325,37 @@ func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterfac
 	}
 
 	// 1. 转发到同组的其他 WS 客户端
-	wsDevices := r.wsManager.GetDevicesByGroup(sourceGroupID)
-	for _, device := range wsDevices {
+	r.wsManager.ForEachDeviceByGroup(sourceGroupID, func(device interfaces.WSDeviceInterface) {
 		// 跳过发送者自己（通过 UserID 判断，因为 WS 客户端都是幽灵设备）
 		if device.IsGhost() && device.GetUserID() == source.GetUserID() {
-			continue
+			return
 		}
 
 		// 检查目标设备是否禁收
 		if device.IsDisabledRecv() {
+			return
+		}
+
+		_ = r.wsManager.SendToDevice(device, data, 2)
+	})
+
+	// 2. 转发到互联组的 WS 客户端
+	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
+	for _, targetID := range targetGroupIDs {
+		// 检查目标群组状态
+		targetGroup, exists := GetGroupFromCache(targetID)
+		if !exists || targetGroup.Status != 1 {
 			continue
 		}
 
-		if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
-			log.Printf("[ROUTE] Failed to send voice to WS client: %v", err)
-		}
-	}
-
-	// 2. 转发到互联组的 WS 客户端
-	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
-
-	// 【前置逻辑说明】引入 map 去重机制，防止多虚拟组交集导致的 WS 双倍发包
-	processedTargets := make(map[int]bool)
-
-	for _, linkGroupID := range linkGroupIDs {
-		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
-		for _, targetID := range targetGroupIDs {
-			// 跳过源组与重复的目标组
-			if targetID == sourceGroupID || processedTargets[targetID] {
-				continue
-			}
-			processedTargets[targetID] = true
-
-			// 检查目标群组状态
-			targetGroup, exists := GetGroupFromCache(targetID)
-			if !exists || targetGroup.Status != 1 {
-				continue
+		// 专注负责目标组 WS 客户端的下发
+		r.wsManager.ForEachDeviceByGroup(targetID, func(device interfaces.WSDeviceInterface) {
+			if device.IsDisabledRecv() {
+				return
 			}
 
-			// 专注负责目标组 WS 客户端的下发
-			linkedWsDevices := r.wsManager.GetDevicesByGroup(targetID)
-			for _, device := range linkedWsDevices {
-				if device.IsDisabledRecv() {
-					continue
-				}
-
-				if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
-					log.Printf("[ROUTE] Failed to send voice to linked WS client: %v", err)
-				}
-			}
-		}
+			_ = r.wsManager.SendToDevice(device, data, 2)
+		})
 	}
 }
 
@@ -447,53 +367,34 @@ func (r *MessageRouter) RouteTextToWSClients(source interfaces.WSDeviceInterface
 	}
 
 	// 1. 转发到同组的其他 WS 客户端
-	wsDevices := r.wsManager.GetDevicesByGroup(sourceGroupID)
-	for _, device := range wsDevices {
+	r.wsManager.ForEachDeviceByGroup(sourceGroupID, func(device interfaces.WSDeviceInterface) {
 		// 跳过发送者自己
 		if device.IsGhost() && device.GetUserID() == source.GetUserID() {
-			continue
+			return
 		}
 
 		if device.IsDisabledRecv() {
+			return
+		}
+
+		_ = r.wsManager.SendToDevice(device, data, 2)
+	})
+
+	// 2. 转发到互联组的 WS 客户端
+	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
+	for _, targetID := range targetGroupIDs {
+		targetGroup, exists := GetGroupFromCache(targetID)
+		if !exists || targetGroup.Status != 1 {
 			continue
 		}
 
-		if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
-			log.Printf("[ROUTE] Failed to send text to WS client: %v", err)
-		}
-	}
-
-	// 2. 转发到互联组的 WS 客户端
-	linkGroupIDs := GetLinkGroupsForTarget(sourceGroupID)
-
-	// 【前置逻辑说明】引入 map 去重机制，防止多虚拟组交集导致的 WS 双倍发包
-	processedTargets := make(map[int]bool)
-
-	for _, linkGroupID := range linkGroupIDs {
-		targetGroupIDs := GetTargetGroupsForLink(linkGroupID)
-		for _, targetID := range targetGroupIDs {
-			// 跳过源组与重复的目标组
-			if targetID == sourceGroupID || processedTargets[targetID] {
-				continue
-			}
-			processedTargets[targetID] = true
-
-			targetGroup, exists := GetGroupFromCache(targetID)
-			if !exists || targetGroup.Status != 1 {
-				continue
+		// 专注负责目标组 WS 客户端的下发
+		r.wsManager.ForEachDeviceByGroup(targetID, func(device interfaces.WSDeviceInterface) {
+			if device.IsDisabledRecv() {
+				return
 			}
 
-			// 专注负责目标组 WS 客户端的下发
-			linkedWsDevices := r.wsManager.GetDevicesByGroup(targetID)
-			for _, device := range linkedWsDevices {
-				if device.IsDisabledRecv() {
-					continue
-				}
-
-				if err := r.wsManager.SendToDevice(device, data, 2); err != nil {
-					log.Printf("[ROUTE] Failed to send text to linked WS client: %v", err)
-				}
-			}
-		}
+			_ = r.wsManager.SendToDevice(device, data, 2)
+		})
 	}
 }

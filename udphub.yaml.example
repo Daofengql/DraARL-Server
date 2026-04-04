@@ -24,11 +24,25 @@ Database:
     MaxIdleConns: 5            # 最大空闲连接数
     MaxLifetime: 300           # 连接最大存活时间(秒)
 
+# Redis 配置（refresh token 优先使用 Redis；不可用时自动降级到内存存储）
+Redis:
+    Host: "127.0.0.1"
+    Port: 6379
+    Password: ""
+    DB: 0
+    Prefix: "draarl"
+    DialTimeoutSec: 3
+    ReadTimeoutSec: 2
+    WriteTimeoutSec: 2
+    PoolSize: 20
+
 # Web服务配置
 Web:
     Host: ""                   # 监听地址，空则监听所有网卡
     Port: "9000"               # Web服务端口
     FrontendURL: "http://localhost:5173"  # 前端地址，用于SSO回调后重定向
+    AllowedOrigins:            # CORS / WS Origin 白名单（生产环境必须显式配置）
+        - "http://localhost:5173"
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:

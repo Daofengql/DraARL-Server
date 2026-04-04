@@ -76,6 +76,8 @@ type APRS struct {
 	tcpClient *tcp.Client
 	errorChan chan error
 	mu        sync.RWMutex
+	stopChan  chan struct{}
+	stopOnce  sync.Once
 }
 
 // APRSTVResponse APRS.TV API 响应
@@ -171,7 +173,32 @@ func LoadAPRSConfig() error {
 
 // NewAPRS 创建 APRS 客户端
 func NewAPRS() *APRS {
-	return &APRS{}
+	return &APRS{
+		stopChan: make(chan struct{}),
+	}
+}
+
+// isStopped 检查 APRS 是否正在停止
+func (a *APRS) isStopped() bool {
+	select {
+	case <-a.stopChan:
+		return true
+	default:
+		return false
+	}
+}
+
+// waitOrStop 在等待期间响应停止信号
+func (a *APRS) waitOrStop(d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-a.stopChan:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // Start 启动 APRS 服务
@@ -185,38 +212,61 @@ func (a *APRS) Start() {
 	a.errorChan = make(chan error, 1)
 
 	for {
+		if a.isStopped() {
+			return
+		}
+
 		a.mu.Lock()
 		a.tcpClient = tcp.NewClient(currentAPRSConfig.APRSServerHost, currentAPRSConfig.APRSServerPort, a.handleTCPMessage)
 		a.mu.Unlock()
 
 		if err := a.tcpClient.Connect(); err != nil {
+			if a.isStopped() {
+				return
+			}
 			aprsLog("TCP 连接失败: %v", err)
-			time.Sleep(5 * time.Second)
+			if !a.waitOrStop(5 * time.Second) {
+				return
+			}
 			continue
 		}
 
 		a.Login()
+		if a.isStopped() {
+			return
+		}
 
-		time.Sleep(5 * time.Second)
+		if !a.waitOrStop(5 * time.Second) {
+			return
+		}
 
 		// 启动定时发送
 		a.startLocationWatch()
 
-		err := <-a.errorChan
+		select {
+		case <-a.stopChan:
+			return
+		case err := <-a.errorChan:
+			a.mu.Lock()
+			if a.tcpClient != nil {
+				a.tcpClient.Close()
+			}
+			a.mu.Unlock()
 
-		a.mu.Lock()
-		if a.tcpClient != nil {
-			a.tcpClient.Close()
+			if !a.waitOrStop(5 * time.Second) {
+				return
+			}
+			aprsLog("发送错误，重新初始化 TCP 连接: %v", err)
 		}
-		a.mu.Unlock()
-
-		time.Sleep(5 * time.Second)
-		aprsLog("发送错误，重新初始化 TCP 连接: %v", err)
 	}
 }
 
 // Stop 停止 APRS 服务
 func (a *APRS) Stop() {
+	a.stopOnce.Do(func() {
+		close(a.stopChan)
+	})
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.tcpClient != nil {
@@ -226,27 +276,54 @@ func (a *APRS) Stop() {
 
 // startLocationWatch 启动位置定时发送
 func (a *APRS) startLocationWatch() {
-	a.sendAPRSPosition()
+	if err := a.sendAPRSPosition(); err != nil {
+		select {
+		case a.errorChan <- fmt.Errorf("发送 APRS 位置失败: %w", err):
+		default:
+		}
+		return
+	}
 
-	time.Sleep(time.Minute)
+	if !a.waitOrStop(time.Minute) {
+		return
+	}
+	if err := a.sendAPRSPosition(); err != nil {
+		select {
+		case a.errorChan <- fmt.Errorf("发送 APRS 位置失败: %w", err):
+		default:
+		}
+		return
+	}
 
-	a.sendAPRSPosition()
-
-	time.Sleep(5 * time.Minute)
-
-	a.sendAPRSPosition()
+	if !a.waitOrStop(5 * time.Minute) {
+		return
+	}
+	if err := a.sendAPRSPosition(); err != nil {
+		select {
+		case a.errorChan <- fmt.Errorf("发送 APRS 位置失败: %w", err):
+		default:
+		}
+		return
+	}
 
 	// 启动定时发送（每 10 分钟一次）
 	ticker := time.NewTicker(10 * time.Minute)
-	go func() {
-		for range ticker.C {
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stopChan:
+			return
+		case <-ticker.C:
 			if err := a.sendAPRSPosition(); err != nil {
-				a.errorChan <- fmt.Errorf("发送 APRS 位置失败: %w", err)
+				select {
+				case a.errorChan <- fmt.Errorf("发送 APRS 位置失败: %w", err):
+				default:
+				}
 				aprsLog("定时发送 APRS 位置失败: %v", err)
 				return
 			}
 		}
-	}()
+	}
 }
 
 // Login 登录 APRS 服务器
@@ -255,11 +332,17 @@ func (a *APRS) Login() {
 	passcode := GenerateAPRSPasscode(currentAPRSConfig.CallSign)
 
 	for {
+		if a.isStopped() {
+			return
+		}
+
 		err := a.tcpClient.Send(fmt.Sprintf("user %s pass %d vers DraARL 1.0\n", currentAPRSConfig.CallSign, passcode))
 
 		if err != nil {
 			aprsLog("认证失败: %v", err)
-			time.Sleep(10 * time.Second)
+			if !a.waitOrStop(10 * time.Second) {
+				return
+			}
 			continue
 		} else {
 			aprsLog("认证成功")
@@ -471,8 +554,13 @@ func startAPRSTVService() {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		getNRLFromAPRSTV()
+	for {
+		select {
+		case <-ticker.C:
+			getNRLFromAPRSTV()
+		case <-APRSClient.stopChan:
+			return
+		}
 	}
 }
 

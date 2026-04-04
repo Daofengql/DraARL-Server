@@ -1,43 +1,47 @@
 package udphub
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 )
 
 // PROXY Protocol v2 常量
 const (
-	// PROXY Protocol v2 签名 (12 字节)
-	proxyProtocolV2Signature = "\x0D\x0A\x0D\x0A\x00\x0D\x0A\x51\x55\x49\x54\x0A"
-
 	// PROXY Protocol v2 版本
 	proxyProtocolVersion2 = 0x20
 
 	// 命令类型
-	proxyCommandLocal  = 0x00 // LOCAL 命令（健康检查等）
-	proxyCommandProxy  = 0x01 // PROXY 命令（携带原始地址）
+	proxyCommandLocal = 0x00 // LOCAL 命令（健康检查等）
+	proxyCommandProxy = 0x01 // PROXY 命令（携带原始地址）
 
 	// 地址族和协议
-	afUnspec       = 0x00 // AF_UNSPEC
-	afInet         = 0x10 // AF_INET (IPv4)
-	afInet6        = 0x20 // AF_INET6 (IPv6)
-	afUnix         = 0x30 // AF_UNIX
-	protoUnspec    = 0x00 // UNSPEC
-	protoStream    = 0x01 // TCP
-	protoDgram     = 0x02 // UDP
+	afUnspec    = 0x00 // AF_UNSPEC
+	afInet      = 0x10 // AF_INET (IPv4)
+	afInet6     = 0x20 // AF_INET6 (IPv6)
+	afUnix      = 0x30 // AF_UNIX
+	protoUnspec = 0x00 // UNSPEC
+	protoStream = 0x01 // TCP
+	protoDgram  = 0x02 // UDP
 
 	// 地址长度
 	ipv4AddrLen = 12 // IPv4: 源IP(4) + 目的IP(4) + 源端口(2) + 目的端口(2)
 	ipv6AddrLen = 36 // IPv6: 源IP(16) + 目的IP(16) + 源端口(2) + 目的端口(2)
 )
 
+var proxyProtocolV2Signature = [12]byte{
+	0x0D, 0x0A, 0x0D, 0x0A,
+	0x00, 0x0D, 0x0A, 0x51,
+	0x55, 0x49, 0x54, 0x0A,
+}
+
 // ProxyProtocolInfo PROXY Protocol 解析结果
 type ProxyProtocolInfo struct {
-	SourceIP      net.IP
-	SourcePort    uint16
-	DestinationIP net.IP
+	SourceIP        net.IP
+	SourcePort      uint16
+	DestinationIP   net.IP
 	DestinationPort uint16
-	IsProxy       bool // true 表示是 PROXY 命令，false 表示 LOCAL 命令
+	IsProxy         bool // true 表示是 PROXY 命令，false 表示 LOCAL 命令
 }
 
 // ParseProxyProtocolV2 解析 PROXY Protocol v2 头部
@@ -50,7 +54,7 @@ func ParseProxyProtocolV2(data []byte) (*ProxyProtocolInfo, []byte, bool) {
 	}
 
 	// 检查签名
-	if string(data[0:12]) != proxyProtocolV2Signature {
+	if !bytes.Equal(data[0:12], proxyProtocolV2Signature[:]) {
 		return nil, data, false
 	}
 

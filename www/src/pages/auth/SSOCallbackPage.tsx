@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { CircularProgress, Typography, Box } from '@mui/material'
-import { authService } from '../../services'
+import { authService, ssoService } from '../../services'
 import { usePageTitle } from '../../hooks/usePageTitle'
 
 export function SSOCallbackPage() {
@@ -12,10 +12,14 @@ export function SSOCallbackPage() {
   usePageTitle()
 
   useEffect(() => {
-    // 新流程：后端直接重定向过来，带有 token 和 user 参数
-    const token = searchParams.get('token')
-    const userStr = searchParams.get('user')
+    // 新流程：后端重定向携带一次性交换码，前端再向后端换取登录态
+    const code = searchParams.get('code')
     const ssoError = searchParams.get('sso_error')
+
+    // 立即清理地址栏参数，避免 code/sso_error 留在浏览器历史或被前端埋点采集
+    if ((code || ssoError) && window.location.search) {
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
 
     // 检查是否在弹出窗口中（有 opener）
     const isPopup = window.opener && window.opener !== window
@@ -42,50 +46,47 @@ export function SSOCallbackPage() {
       }
     }
 
-    // 处理成功回调
-    if (token && userStr) {
-      try {
-        const user = JSON.parse(decodeURIComponent(userStr))
-        if (isPopup) {
-          // 通过 postMessage 通知父窗口
-          window.opener.postMessage(
-            {
-              type: 'SSO_LOGIN_SUCCESS',
-              token,
-              user,
-            },
-            window.location.origin
-          )
-          // 关闭弹出窗口
-          setTimeout(() => window.close(), 100)
-          return
-        } else {
-          // 不是弹出窗口，直接保存并跳转
+    // 处理成功回调（交换码换取 token + user）
+    if (code) {
+      ssoService.exchangeCode(code)
+        .then(({ token, user }) => {
+          if (isPopup) {
+            window.opener.postMessage(
+              {
+                type: 'SSO_LOGIN_SUCCESS',
+                token,
+                user,
+              },
+              window.location.origin
+            )
+            setTimeout(() => window.close(), 100)
+            return
+          }
+
           authService.saveAuth(token, user)
           window.location.href = '/dashboard'
-          return
-        }
-      } catch (e) {
-        if (isPopup) {
-          window.opener.postMessage(
-            {
-              type: 'SSO_LOGIN_ERROR',
-              error: '解析用户信息失败',
-            },
-            window.location.origin
-          )
-          setTimeout(() => window.close(), 100)
-          return
-        } else {
-          setError('解析用户信息失败')
+        })
+        .catch((err: any) => {
+          const message = err?.response?.data?.message || 'SSO 登录数据交换失败'
+          if (isPopup) {
+            window.opener.postMessage(
+              {
+                type: 'SSO_LOGIN_ERROR',
+                error: message,
+              },
+              window.location.origin
+            )
+            setTimeout(() => window.close(), 100)
+            return
+          }
+          setError(message)
           setTimeout(() => (window.location.href = '/login'), 3000)
-          return
-        }
-      }
+        })
+      return
     }
 
     // 如果没有必要参数，跳转登录页
-    if (!token && !ssoError) {
+    if (!code && !ssoError) {
       if (isPopup) {
         window.close()
       } else {

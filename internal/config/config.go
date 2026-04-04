@@ -4,9 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -14,7 +17,18 @@ import (
 // Config 全局配置
 var Config *Configuration
 var configFilePath string
-var once sync.Once
+var configMu sync.RWMutex
+var releaseBuild atomic.Bool
+
+// SetReleaseBuild 设置是否为 release 构建产物。
+func SetReleaseBuild(release bool) {
+	releaseBuild.Store(release)
+}
+
+// IsReleaseBuild 返回当前是否为 release 构建产物。
+func IsReleaseBuild() bool {
+	return releaseBuild.Load()
+}
 
 // Configuration 系统配置
 type Configuration struct {
@@ -41,10 +55,25 @@ type Configuration struct {
 		MaxLifetime  int `yaml:"MaxLifetime" json:"max_lifetime"` // 秒
 	} `yaml:"Database" json:"database"`
 
+	Redis struct {
+		Host            string `yaml:"Host" json:"host"`
+		Port            int    `yaml:"Port" json:"port"`
+		Password        string `yaml:"Password" json:"password"`
+		DB              int    `yaml:"DB" json:"db"`
+		Prefix          string `yaml:"Prefix" json:"prefix"`
+		DialTimeoutSec  int    `yaml:"DialTimeoutSec" json:"dial_timeout_sec"`
+		ReadTimeoutSec  int    `yaml:"ReadTimeoutSec" json:"read_timeout_sec"`
+		WriteTimeoutSec int    `yaml:"WriteTimeoutSec" json:"write_timeout_sec"`
+		PoolSize        int    `yaml:"PoolSize" json:"pool_size"`
+	} `yaml:"Redis" json:"redis"`
+
 	Web struct {
 		Host        string `yaml:"Host" json:"host"`
 		Port        string `yaml:"Port" json:"port"`
 		FrontendURL string `yaml:"FrontendURL" json:"frontend_url"` // 前端地址，用于SSO回调重定向
+		// 允许跨域访问的来源白名单（格式: https://example.com）。
+		// 非生产环境留空时会回退为 FrontendURL 对应的 Origin（若可解析）。
+		AllowedOrigins []string `yaml:"AllowedOrigins" json:"allowed_origins"`
 	} `yaml:"Web" json:"web"`
 
 	// Keycloak SSO 配置
@@ -100,46 +129,45 @@ func (c *Configuration) GetDSN() string {
 	)
 }
 
+// RedisAddr 返回 Redis 地址。
+func (c *Configuration) RedisAddr() string {
+	return fmt.Sprintf("%s:%d", strings.TrimSpace(c.Redis.Host), c.Redis.Port)
+}
+
 // Load 加载配置文件
 func Load(configPath string) (*Configuration, error) {
-	var loadErr error
-	once.Do(func() {
-		if configPath == "" {
-			dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
-			if err != nil {
-				loadErr = fmt.Errorf("get config filepath err: %w", err)
-				return
-			}
-			configPath = filepath.Join(dir, "udphub.yaml")
-		}
-		configFilePath = configPath
-
-		yamlFile, err := os.ReadFile(configPath)
+	if configPath == "" {
+		dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 		if err != nil {
-			loadErr = fmt.Errorf("udphub.yaml open err: %w", err)
-			return
+			return nil, fmt.Errorf("get config filepath err: %w", err)
 		}
-
-		Config = &Configuration{}
-		err = yaml.Unmarshal(yamlFile, Config)
-		if err != nil {
-			loadErr = fmt.Errorf("Unmarshal: %w", err)
-			return
-		}
-
-		// 设置默认值
-		Config.SetDefaults()
-	})
-
-	if Config == nil {
-		return nil, loadErr
+		configPath = filepath.Join(dir, "udphub.yaml")
 	}
 
-	return Config, nil
+	yamlFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("udphub.yaml open err: %w", err)
+	}
+
+	cfg := &Configuration{}
+	if err = yaml.Unmarshal(yamlFile, cfg); err != nil {
+		return nil, fmt.Errorf("Unmarshal: %w", err)
+	}
+
+	configFilePath = configPath
+	if err := cfg.SetDefaults(); err != nil {
+		return nil, err
+	}
+
+	configMu.Lock()
+	Config = cfg
+	configMu.Unlock()
+
+	return cfg, nil
 }
 
 // SetDefaults 设置默认配置值
-func (c *Configuration) SetDefaults() {
+func (c *Configuration) SetDefaults() error {
 	// 数据库默认值
 	if c.Database.Port == 0 {
 		c.Database.Port = 3306
@@ -157,18 +185,46 @@ func (c *Configuration) SetDefaults() {
 		c.Database.MaxLifetime = 300 // 5分钟
 	}
 
+	// Redis 默认值
+	if strings.TrimSpace(c.Redis.Host) == "" {
+		c.Redis.Host = "127.0.0.1"
+	}
+	if c.Redis.Port == 0 {
+		c.Redis.Port = 6379
+	}
+	if c.Redis.DB < 0 {
+		c.Redis.DB = 0
+	}
+	if strings.TrimSpace(c.Redis.Prefix) == "" {
+		c.Redis.Prefix = "draarl"
+	}
+	if c.Redis.DialTimeoutSec <= 0 {
+		c.Redis.DialTimeoutSec = 3
+	}
+	if c.Redis.ReadTimeoutSec <= 0 {
+		c.Redis.ReadTimeoutSec = 2
+	}
+	if c.Redis.WriteTimeoutSec <= 0 {
+		c.Redis.WriteTimeoutSec = 2
+	}
+	if c.Redis.PoolSize <= 0 {
+		c.Redis.PoolSize = 20
+	}
+
 	// AES 密钥默认值：如果不符合要求则自动生成并写入配置文件
 	if c.ValidateAESKey() != nil {
 		aesKey, err := GenerateAESKey(32) // 默认使用 AES-256
 		if err != nil {
-			panic(fmt.Sprintf("生成 AES 密钥失败: %v", err))
+			return fmt.Errorf("生成 AES 密钥失败: %w", err)
 		}
 		c.DeviceAuth.AESKey = aesKey
 		// 保存到配置文件
 		if err := c.SaveToFile(configFilePath); err != nil {
-			panic(fmt.Sprintf("保存配置文件失败: %v", err))
+			return fmt.Errorf("保存配置文件失败: %w", err)
 		}
 	}
+
+	return nil
 }
 
 // JWTSecretMinLength JWT密钥最小长度
@@ -253,4 +309,55 @@ func GenerateAESKey(keyLen int) (string, error) {
 // GetConfigPath 获取配置文件路径
 func GetConfigPath() string {
 	return configFilePath
+}
+
+// GetAllowedOrigins 返回标准化后的 Origin 白名单。
+func (c *Configuration) GetAllowedOrigins() []string {
+	originSet := make(map[string]struct{})
+
+	for _, item := range c.Web.AllowedOrigins {
+		if origin := normalizeOrigin(item); origin != "" {
+			originSet[origin] = struct{}{}
+		}
+	}
+
+	if len(originSet) == 0 && !c.IsProduction() {
+		if origin := normalizeOrigin(c.Web.FrontendURL); origin != "" {
+			originSet[origin] = struct{}{}
+		}
+	}
+
+	results := make([]string, 0, len(originSet))
+	for origin := range originSet {
+		results = append(results, origin)
+	}
+
+	return results
+}
+
+// ValidateAllowedOrigins 校验 Origin 白名单配置。
+func (c *Configuration) ValidateAllowedOrigins() error {
+	if c.IsProduction() && len(c.GetAllowedOrigins()) == 0 {
+		return fmt.Errorf("生产环境必须配置 Web.AllowedOrigins，不能依赖 FrontendURL 回退")
+	}
+	return nil
+}
+
+// IsProduction 判断当前运行环境是否为生产环境。
+func (c *Configuration) IsProduction() bool {
+	return IsReleaseBuild()
+}
+
+func normalizeOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 }

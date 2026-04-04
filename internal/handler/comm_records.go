@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -149,57 +150,67 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 // 1. 用户拥有属于该群组的设备
 // 2. 用户曾在该群组发送过消息（幽灵设备记录）
 // 3. 用户拥有属于该群组互联组的设备（互联组权限传递）
-func userHasGroupAccess(userID int, groupID int) bool {
+func userHasGroupAccess(userID int, groupID int) (bool, error) {
 	// 1. 检查用户是否有设备属于该群组
 	var deviceCount int64
-	gormdb.Get().Table("devices").
+	if err := gormdb.Get().Table("devices").
 		Where("owner_id = ? AND group_id = ?", userID, groupID).
-		Count(&deviceCount)
+		Count(&deviceCount).Error; err != nil {
+		return false, err
+	}
 	if deviceCount > 0 {
-		return true
+		return true, nil
 	}
 
 	// 2. 检查用户是否在该群组有过通信记录（幽灵设备）
 	var recordCount int64
-	gormdb.Get().Table("comm_records").
+	if err := gormdb.Get().Table("comm_records").
 		Where("user_id = ? AND group_id = ?", userID, groupID).
-		Count(&recordCount)
+		Count(&recordCount).Error; err != nil {
+		return false, err
+	}
 	if recordCount > 0 {
-		return true
+		return true, nil
 	}
 
 	// 3. 检查互联组：用户是否有设备属于互联组中的其他群组
 	// 使用单次 JOIN 查询获取所有活跃互联组关联的目标群组
 	var targetGroupIDs []int
-	gormdb.Get().Table("group_links gl1").
+	if err := gormdb.Get().Table("group_links gl1").
 		Select("DISTINCT gl2.target_group_id").
 		Joins("INNER JOIN public_groups pg ON gl1.link_group_id = pg.id AND pg.status = 1").
 		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
 		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", groupID, groupID).
-		Pluck("target_group_id", &targetGroupIDs)
+		Pluck("target_group_id", &targetGroupIDs).Error; err != nil {
+		return false, err
+	}
 
 	if len(targetGroupIDs) == 0 {
-		return false
+		return false, nil
 	}
 
 	// 4. 批量检查用户是否有设备属于互联组中的任何群组
-	gormdb.Get().Table("devices").
+	if err := gormdb.Get().Table("devices").
 		Where("owner_id = ? AND group_id IN ?", userID, targetGroupIDs).
-		Count(&deviceCount)
+		Count(&deviceCount).Error; err != nil {
+		return false, err
+	}
 	if deviceCount > 0 {
-		return true
+		return true, nil
 	}
 
 	// 5. 批量检查用户是否在互联组的任何群组有过通信记录
-	gormdb.Get().Table("comm_records").
+	if err := gormdb.Get().Table("comm_records").
 		Where("user_id = ? AND group_id IN ?", userID, targetGroupIDs).
-		Count(&recordCount)
-	return recordCount > 0
+		Count(&recordCount).Error; err != nil {
+		return false, err
+	}
+	return recordCount > 0, nil
 }
 
 // getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
 // 只有互联组状态开启(status=1)时才包含互联组内的其他群组
-func getRelatedGroupIDs(groupID int) []int {
+func getRelatedGroupIDs(groupID int) ([]int, error) {
 	groupIDs := []int{groupID}
 
 	// 使用单次 JOIN 查询获取所有活跃互联组的目标群组
@@ -208,15 +219,17 @@ func getRelatedGroupIDs(groupID int) []int {
 	// 2. 只保留状态开启(status=1)的互联组（通过 public_groups 表）
 	// 3. 获取这些互联组关联的所有目标群组
 	var targetGroupIDs []int
-	gormdb.Get().Table("group_links gl1").
+	if err := gormdb.Get().Table("group_links gl1").
 		Select("DISTINCT gl2.target_group_id").
 		Joins("INNER JOIN public_groups pg ON gl1.link_group_id = pg.id AND pg.status = 1").
 		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
 		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", groupID, groupID).
-		Pluck("target_group_id", &targetGroupIDs)
+		Pluck("target_group_id", &targetGroupIDs).Error; err != nil {
+		return groupIDs, err
+	}
 
 	groupIDs = append(groupIDs, targetGroupIDs...)
-	return groupIDs
+	return groupIDs, nil
 }
 
 // GetCommRecords 获取通信记录列表（使用联表查询）
@@ -294,7 +307,16 @@ func GetCommRecords(c *gin.Context) {
 			groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
 			if err == nil && currentUser != nil {
 				// 验证用户是否有权限访问该群组（通过设备所属群组或群组成员关系）
-				if userHasGroupAccess(currentUser.ID, int(groupID)) {
+				allowed, accessErr := userHasGroupAccess(currentUser.ID, int(groupID))
+				if accessErr != nil {
+					log.Printf("[COMM_RECORDS] 验证群组访问权限失败 user=%d group=%d err=%v", currentUser.ID, groupID, accessErr)
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"code":    500,
+						"message": "查询群组权限失败",
+					})
+					return
+				}
+				if allowed {
 					// 用户有权限访问该群组，不添加 owner_id/user_id 过滤
 					// 但仍然通过群组筛选来限制可见范围
 				} else {
@@ -341,7 +363,15 @@ func GetCommRecords(c *gin.Context) {
 			// 逻辑：
 			// 1. 当前群组本身
 			// 2. 如果互联组状态开启(status=1)，则包含互联组内其他群组的记录
-			relatedGroupIDs := getRelatedGroupIDs(int(groupID))
+			relatedGroupIDs, relatedErr := getRelatedGroupIDs(int(groupID))
+			if relatedErr != nil {
+				log.Printf("[COMM_RECORDS] 获取互联群组失败 group=%d err=%v", groupID, relatedErr)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "查询互联群组失败",
+				})
+				return
+			}
 			if len(relatedGroupIDs) > 1 {
 				db = db.Where("cr.group_id IN ?", relatedGroupIDs)
 			} else {
@@ -359,15 +389,29 @@ func GetCommRecords(c *gin.Context) {
 
 	// 统计总数
 	var total int64
-	db.Count(&total)
+	if err := db.Count(&total).Error; err != nil {
+		log.Printf("[COMM_RECORDS] 统计通信记录总数失败 err=%v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询通信记录失败",
+		})
+		return
+	}
 
 	// 查询列表
 	var results []CommRecordWithDetails
 	offset := (page - 1) * pageSize
-	db.Order("cr.start_time DESC").
+	if err := db.Order("cr.start_time DESC").
 		Offset(offset).
 		Limit(pageSize).
-		Scan(&results)
+		Scan(&results).Error; err != nil {
+		log.Printf("[COMM_RECORDS] 查询通信记录列表失败 err=%v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询通信记录失败",
+		})
+		return
+	}
 
 	// 转换为响应格式
 	list := make([]CommRecordResponse, len(results))

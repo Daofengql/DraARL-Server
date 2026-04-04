@@ -92,8 +92,9 @@ func PreCheck(c *gin.Context) {
 	}
 
 	// AES 解密存储的密码并验证
-	storedPassword, err := crypto.Decrypt(user.DevicePassword)
+	match, legacyPassword, err := crypto.VerifyDevicePassword(user.DevicePassword, req.DevicePassword)
 	if err != nil {
+		log.Printf("[DEVICE] 设备密码校验失败: user=%s err=%v", req.Username, err)
 		c.JSON(http.StatusOK, gin.H{
 			"code": 200,
 			"data": PreCheckResponse{
@@ -105,7 +106,7 @@ func PreCheck(c *gin.Context) {
 	}
 
 	// 验证密码
-	if storedPassword != req.DevicePassword {
+	if !match {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 200,
 			"data": PreCheckResponse{
@@ -114,6 +115,18 @@ func PreCheck(c *gin.Context) {
 			},
 		})
 		return
+	}
+
+	// 历史 bcrypt 数据兼容迁移：认证成功后自动迁移为 AES 可逆加密格式
+	if legacyPassword {
+		encryptedPassword, encErr := crypto.Encrypt(req.DevicePassword)
+		if encErr != nil {
+			log.Printf("[DEVICE] 历史设备密码迁移加密失败: user=%s err=%v", req.Username, encErr)
+		} else if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
+			log.Printf("[DEVICE] 历史设备密码迁移写库失败: user=%s err=%v", req.Username, updateErr)
+		} else {
+			log.Printf("[DEVICE] 历史设备密码已迁移为 AES 存储: user=%s", req.Username)
+		}
 	}
 
 	// 认证成功
@@ -383,14 +396,38 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	// 解密设备密码
-	devicePassword, err := crypto.Decrypt(user.DevicePassword)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "获取设备密码失败",
-		})
-		return
+	// 读取设备密码（兼容历史 bcrypt：不可逆，自动生成新密码并迁移）
+	devicePassword := ""
+	legacyPassword := false
+	if user.DevicePassword != "" {
+		devicePassword, legacyPassword, err = crypto.DecodeDevicePassword(user.DevicePassword)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "获取设备密码失败",
+			})
+			return
+		}
+	}
+
+	if user.DevicePassword == "" || legacyPassword || devicePassword == "" {
+		devicePassword = generateDevicePassword()
+		encryptedPassword, encErr := crypto.Encrypt(devicePassword)
+		if encErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "生成设备密码失败",
+			})
+			return
+		}
+		if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "更新设备密码失败",
+			})
+			return
+		}
+		log.Printf("[DEVICE] 已为用户重建并迁移设备密码: user=%s legacy=%v", user.Name, legacyPassword)
 	}
 
 	// 设置设备配置

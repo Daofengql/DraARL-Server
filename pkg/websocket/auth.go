@@ -18,6 +18,8 @@ type AuthType int
 const (
 	AuthTypeNone AuthType = iota // 未认证
 	AuthTypeJWT                  // JWT 认证（幽灵设备）
+
+	wsTokenCookieName = "ws_token"
 )
 
 // AuthResult 认证结果
@@ -32,7 +34,7 @@ type AuthResult struct {
 	Error    string
 }
 
-// WSPreAuthData 预认证数据（从 URL 参数或 Cookie 中提取）
+// WSPreAuthData 预认证数据（仅从 HttpOnly Cookie 中提取，避免 URL/JS 透传 token）
 type WSPreAuthData struct {
 	Token string // JWT Token
 }
@@ -41,14 +43,9 @@ type WSPreAuthData struct {
 func ParsePreAuthData(r *http.Request) *WSPreAuthData {
 	data := &WSPreAuthData{}
 
-	// 1. 尝试从 URL 参数获取 token
-	data.Token = r.URL.Query().Get("token")
-
-	// 2. 如果 URL 参数中没有 token，尝试从 Cookie 获取
-	if data.Token == "" {
-		if cookie, err := r.Cookie("token"); err == nil {
-			data.Token = cookie.Value
-		}
+	// 仅读取专用 ws_token（由后端 Set-Cookie 注入 HttpOnly）
+	if cookie, err := r.Cookie(wsTokenCookieName); err == nil {
+		data.Token = cookie.Value
 	}
 
 	return data

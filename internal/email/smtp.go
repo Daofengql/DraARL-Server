@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"draarl/internal/config"
 	"gopkg.in/gomail.v2"
 
 	gormdb "draarl/internal/gormdb"
@@ -107,7 +108,19 @@ func (s *SMTPService) SendMail(to, subject, body string) error {
 	// 如果使用SSL，设置TLS配置
 	if s.config.UseSSL {
 		d.SSL = true
-		d.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+		tlsCfg := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+
+		if s.config.InsecureSkipVerify {
+			if config.Config != nil && config.Config.IsProduction() {
+				return fmt.Errorf("生产环境禁止启用 InsecureSkipVerify")
+			}
+			tlsCfg.InsecureSkipVerify = true
+			log.Printf("[SMTP] 警告: 当前启用了 InsecureSkipVerify，仅建议本地调试使用")
+		}
+
+		d.TLSConfig = tlsCfg
 	}
 
 	if err := d.DialAndSend(m); err != nil {

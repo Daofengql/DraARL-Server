@@ -25,6 +25,8 @@ type BatchSender struct {
 	running    int32
 	stats      BatchSenderStats
 	flushChan  chan struct{}
+	stopChan   chan struct{}
+	stopOnce   sync.Once
 }
 
 // udpPacket UDP 数据包
@@ -77,6 +79,7 @@ func NewBatchSender(conn *net.UDPConn, config BatchSenderConfig) *BatchSender {
 		queueSize: config.QueueSize,
 		queue:     make(chan *udpPacket, config.QueueSize),
 		flushChan: make(chan struct{}, 1),
+		stopChan:  make(chan struct{}),
 	}
 }
 
@@ -101,6 +104,10 @@ func (bs *BatchSender) Stop() {
 	if !atomic.CompareAndSwapInt32(&bs.running, 1, 0) {
 		return // 已经停止
 	}
+
+	bs.stopOnce.Do(func() {
+		close(bs.stopChan)
+	})
 
 	// 触发最后一次刷新
 	select {
@@ -160,13 +167,24 @@ func (bs *BatchSender) runBatchSender() {
 
 	for {
 		select {
-		case packet, ok := <-bs.queue:
-			if !ok {
-				// 队列关闭，发送剩余数据
-				if len(batch) > 0 {
-					bs.sendBatch(batch)
+		case <-bs.stopChan:
+			if len(batch) > 0 {
+				bs.sendBatch(batch)
+			}
+			for {
+				select {
+				case packet := <-bs.queue:
+					if packet == nil {
+						return
+					}
+					bs.sendBatch([]*udpPacket{packet})
+				default:
+					return
 				}
-				return
+			}
+		case packet := <-bs.queue:
+			if packet == nil {
+				continue
 			}
 
 			batch = append(batch, packet)
@@ -204,12 +222,19 @@ func (bs *BatchSender) runFlusher() {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
-	for atomic.LoadInt32(&bs.running) == 1 {
-		<-ticker.C
+	for {
 		select {
-		case bs.flushChan <- struct{}{}:
-		default:
-			// 已有刷新请求在等待
+		case <-bs.stopChan:
+			return
+		case <-ticker.C:
+			if atomic.LoadInt32(&bs.running) != 1 {
+				return
+			}
+			select {
+			case bs.flushChan <- struct{}{}:
+			default:
+				// 已有刷新请求在等待
+			}
 		}
 	}
 }

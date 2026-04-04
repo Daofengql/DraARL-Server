@@ -12,37 +12,44 @@ import (
 
 var (
 	db   *sql.DB
-	once sync.Once
+	dbMu sync.RWMutex
 )
 
 // Init 初始化MySQL数据库连接
 func Init(dsn string, maxOpenConns, maxIdleConns, maxLifetime int) error {
-	var err error
-	once.Do(func() {
-		db, err = sql.Open("mysql", dsn)
-		if err != nil {
-			log.Fatal(err)
-			return
-		}
+	dbMu.Lock()
+	defer dbMu.Unlock()
 
-		// 设置连接池参数
-		db.SetMaxOpenConns(maxOpenConns)
-		db.SetMaxIdleConns(maxIdleConns)
-		db.SetConnMaxLifetime(time.Duration(maxLifetime) * time.Second)
+	newDB, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return err
+	}
 
-		// 验证连接
-		if err = db.Ping(); err != nil {
-			err = fmt.Errorf("failed to ping database: %w", err)
-			return
-		}
+	// 设置连接池参数
+	newDB.SetMaxOpenConns(maxOpenConns)
+	newDB.SetMaxIdleConns(maxIdleConns)
+	newDB.SetConnMaxLifetime(time.Duration(maxLifetime) * time.Second)
 
-		log.Println("MySQL database connected successfully")
-	})
-	return err
+	// 验证连接
+	if err = newDB.Ping(); err != nil {
+		_ = newDB.Close()
+		return fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	// 支持重复初始化（测试/重载场景）
+	if db != nil {
+		_ = db.Close()
+	}
+	db = newDB
+
+	log.Println("MySQL database connected successfully")
+	return nil
 }
 
 // Get 获取数据库连接
 func Get() *sql.DB {
+	dbMu.RLock()
+	defer dbMu.RUnlock()
 	if db == nil {
 		panic("database not initialized, call Init() first")
 	}
@@ -51,8 +58,12 @@ func Get() *sql.DB {
 
 // Close 关闭数据库连接
 func Close() error {
+	dbMu.Lock()
+	defer dbMu.Unlock()
 	if db != nil {
-		return db.Close()
+		err := db.Close()
+		db = nil
+		return err
 	}
 	return nil
 }

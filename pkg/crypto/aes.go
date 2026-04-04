@@ -7,6 +7,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -151,4 +154,56 @@ func IsEncrypted(s string) bool {
 	// 尝试 Base64 解码
 	_, err := base64.StdEncoding.DecodeString(s)
 	return err == nil
+}
+
+// IsBcryptHash 检查字符串是否为 bcrypt 哈希格式
+func IsBcryptHash(s string) bool {
+	return strings.HasPrefix(s, "$2a$") || strings.HasPrefix(s, "$2b$") || strings.HasPrefix(s, "$2y$")
+}
+
+// VerifyDevicePassword 验证设备密码并识别是否为历史 bcrypt 存储格式。
+// 返回值:
+//   - match: 密码是否匹配
+//   - legacy: 是否命中历史 bcrypt 存储格式
+func VerifyDevicePassword(stored, plainInput string) (match bool, legacy bool, err error) {
+	if stored == "" {
+		return false, false, nil
+	}
+
+	// 先尝试 AES 解密（新格式）
+	decrypted, decErr := Decrypt(stored)
+	if decErr == nil {
+		return decrypted == plainInput, false, nil
+	}
+
+	// 兼容历史 bcrypt（旧格式）
+	if IsBcryptHash(stored) {
+		err = bcrypt.CompareHashAndPassword([]byte(stored), []byte(plainInput))
+		if err == nil {
+			return true, true, nil
+		}
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return false, true, nil
+		}
+		return false, true, err
+	}
+
+	// 既不是可解密 AES，也不是 bcrypt
+	return false, false, decErr
+}
+
+// DecodeDevicePassword 解码设备密码。
+// 返回 legacy=true 表示命中历史 bcrypt 存储格式（不可逆，需要重置或迁移）。
+func DecodeDevicePassword(stored string) (plain string, legacy bool, err error) {
+	if stored == "" {
+		return "", false, nil
+	}
+	decrypted, decErr := Decrypt(stored)
+	if decErr == nil {
+		return decrypted, false, nil
+	}
+	if IsBcryptHash(stored) {
+		return "", true, nil
+	}
+	return "", false, decErr
 }

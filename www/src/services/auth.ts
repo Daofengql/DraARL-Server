@@ -10,6 +10,9 @@ import type {
 
 interface LoginResponse {
   token: string
+  refresh_token?: string
+  expires_in?: number
+  refresh_expires_in?: number
   user: User
 }
 
@@ -101,6 +104,7 @@ export const authService = {
   saveAuth(token: string, user: User) {
     localStorage.setItem('token', token)
     localStorage.setItem('user', JSON.stringify(user))
+    void this.syncWSTokenCookie()
     // 触发自定义事件，通知其他组件用户信息已更新
     window.dispatchEvent(new CustomEvent('user-updated'))
   },
@@ -109,6 +113,23 @@ export const authService = {
   clearAuth() {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    void this.clearWSTokenCookie()
+  },
+
+  async syncWSTokenCookie(): Promise<void> {
+    try {
+      await apiClient.post('/api/auth/ws-token/sync')
+    } catch (error) {
+      console.warn('Failed to sync ws_token cookie:', error)
+    }
+  },
+
+  async clearWSTokenCookie(): Promise<void> {
+    try {
+      await apiClient.post('/api/auth/ws-token/clear')
+    } catch (error) {
+      console.warn('Failed to clear ws_token cookie:', error)
+    }
   },
 
   // 获取存储的用户信息
@@ -284,6 +305,10 @@ export interface SSOStatusResponse {
   keycloak_id?: string
 }
 
+export interface SSOCodeExchangeRequest {
+  code: string
+}
+
 export const ssoService = {
   // 获取 SSO 登录 URL
   async getLoginURL(): Promise<SSOLoginURLResponse> {
@@ -306,6 +331,12 @@ export const ssoService = {
   // 解除 SSO 绑定
   async unbind(): Promise<void> {
     await apiClient.delete('/api/sso/unbind')
+  },
+
+  // 使用一次性交换码换取登录态数据
+  async exchangeCode(code: string): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>('/api/sso/exchange', { code } satisfies SSOCodeExchangeRequest)
+    return res.data!
   },
 }
 

@@ -19,7 +19,6 @@ import (
 	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
 	"draarl/pkg/cache"
-	"draarl/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,12 +34,21 @@ const (
 var (
 	stateStore = make(map[string]stateEntry)
 	stateMutex sync.RWMutex
+
+	loginCodeStore = make(map[string]loginCodeEntry)
+	loginCodeMutex sync.RWMutex
 )
 
 type stateEntry struct {
 	Action    string    // "login" 或 "bind"
 	UserID    int       // 绑定操作时的用户ID
 	ExpiresAt time.Time // 过期时间
+}
+
+type loginCodeEntry struct {
+	UserID    int
+	UserJSON  string
+	ExpiresAt time.Time
 }
 
 // ============== SSO OpenID 辅助函数 ==============
@@ -182,6 +190,61 @@ func cleanExpiredStates() {
 	}
 }
 
+// saveLoginCode 保存一次性 SSO 登录交换码
+func saveLoginCode(userID int, userData gin.H) (string, error) {
+	userDataJSON, err := json.Marshal(userData)
+	if err != nil {
+		return "", err
+	}
+
+	code := generateState()
+
+	loginCodeMutex.Lock()
+	defer loginCodeMutex.Unlock()
+
+	loginCodeStore[code] = loginCodeEntry{
+		UserID:    userID,
+		UserJSON:  string(userDataJSON),
+		ExpiresAt: time.Now().Add(2 * time.Minute),
+	}
+
+	go cleanExpiredLoginCodes()
+
+	return code, nil
+}
+
+// consumeLoginCode 消费一次性 SSO 登录交换码
+func consumeLoginCode(code string) *loginCodeEntry {
+	loginCodeMutex.Lock()
+	defer loginCodeMutex.Unlock()
+
+	entry, exists := loginCodeStore[code]
+	if !exists {
+		return nil
+	}
+
+	delete(loginCodeStore, code)
+
+	if time.Now().After(entry.ExpiresAt) {
+		return nil
+	}
+
+	return &entry
+}
+
+// cleanExpiredLoginCodes 清理过期登录交换码
+func cleanExpiredLoginCodes() {
+	loginCodeMutex.Lock()
+	defer loginCodeMutex.Unlock()
+
+	now := time.Now()
+	for k, v := range loginCodeStore {
+		if now.After(v.ExpiresAt) {
+			delete(loginCodeStore, k)
+		}
+	}
+}
+
 // ============== Keycloak OAuth 实现 ==============
 
 // KeycloakTokenResponse Keycloak token响应
@@ -306,6 +369,77 @@ func SSOCallback(c *gin.Context) {
 	}
 }
 
+// ExchangeSSOCode 使用一次性交换码换取登录态数据（避免 URL 透传 token）
+func ExchangeSSOCode(c *gin.Context) {
+	var req struct {
+		Code string `json:"code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "请求参数错误",
+		})
+		return
+	}
+
+	entry := consumeLoginCode(req.Code)
+	if entry == nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "无效或已过期的登录交换码",
+		})
+		return
+	}
+
+	userData := gin.H{}
+	if err := json.Unmarshal([]byte(entry.UserJSON), &userData); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "解析登录数据失败",
+		})
+		return
+	}
+
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByID(entry.UserID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "用户不存在或会话已失效",
+		})
+		return
+	}
+
+	if user.Status != 1 || user.ApprovalStatus != 1 {
+		c.JSON(http.StatusForbidden, Response{
+			Code:    403,
+			Message: "用户状态异常，无法完成登录",
+		})
+		return
+	}
+
+	issued, err := issueAuthTokens(c, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "生成令牌失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "成功",
+		Data: gin.H{
+			"token":              issued.AccessToken,
+			"refresh_token":      issued.RefreshToken,
+			"expires_in":         issued.AccessExpiresIn,
+			"refresh_expires_in": issued.RefreshExpiresIn,
+			"user":               userData,
+		},
+	})
+}
+
 // getKeycloakUserInfo 通过code获取Keycloak用户信息
 func getKeycloakUserInfo(code string) (*KeycloakUserInfo, error) {
 	cfg := getKeycloakConfig()
@@ -320,8 +454,7 @@ func getKeycloakUserInfo(code string) (*KeycloakUserInfo, error) {
 	data.Set("code", code)
 	data.Set("redirect_uri", cfg.Keycloak.RedirectURI)
 
-	log.Printf("[SSO] Token request URL: %s", tokenURL)
-	log.Printf("[SSO] Client ID: %s, Redirect URI: %s", cfg.Keycloak.ClientID, cfg.Keycloak.RedirectURI)
+	log.Printf("[SSO] 正在请求 Token 交换")
 
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
@@ -331,10 +464,10 @@ func getKeycloakUserInfo(code string) (*KeycloakUserInfo, error) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[SSO] Token response status: %d", resp.StatusCode)
+	log.Printf("[SSO] Token 响应状态: %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[SSO] Token response body: %s", string(body))
+		log.Printf("[SSO] Token 请求失败: status=%d, body_size=%d", resp.StatusCode, len(body))
 		return nil, fmt.Errorf("token请求失败(status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -416,9 +549,7 @@ func handleLoginCallback(c *gin.Context, kcUserInfo *KeycloakUserInfo) {
 	repo := gormdb.NewUserRepository()
 	repo.UpdateLastLogin(user.ID, c.ClientIP())
 
-	// 生成JWT token
-	roles := user.GetRoles()
-	token, err := jwt.GenerateToken(user.Name, roles)
+	issued, err := issueAuthTokens(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -442,8 +573,11 @@ func handleLoginCallback(c *gin.Context, kcUserInfo *KeycloakUserInfo) {
 		Code:    200,
 		Message: "登录成功",
 		Data: gin.H{
-			"token": token,
-			"user":  buildUserData(user),
+			"token":              issued.AccessToken,
+			"refresh_token":      issued.RefreshToken,
+			"expires_in":         issued.AccessExpiresIn,
+			"refresh_expires_in": issued.RefreshExpiresIn,
+			"user":               buildUserData(user),
 		},
 	})
 }
@@ -528,13 +662,6 @@ func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, f
 	repo := gormdb.NewUserRepository()
 	repo.UpdateLastLogin(user.ID, c.ClientIP())
 
-	// 生成JWT token
-	roles := user.GetRoles()
-	token, err := jwt.GenerateToken(user.Name, roles)
-	if err != nil {
-		return fmt.Sprintf("%s/login?sso_error=%s", frontendURL, url.QueryEscape("生成令牌失败"))
-	}
-
 	// 记录审计日志
 	oplog.AddLog(
 		fmt.Sprintf("用户 %s (%s) 通过SSO登录成功，IP: %s", user.Name, user.CallSign, c.ClientIP()),
@@ -545,10 +672,14 @@ func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, f
 		c.ClientIP(),
 	)
 
-	// 重定向到前端，带上token
+	// 重定向到前端，携带一次性交换码（避免 URL 透传 token）
 	userData := buildUserData(user)
-	userDataJSON, _ := json.Marshal(userData)
-	return fmt.Sprintf("%s/sso/callback?token=%s&user=%s", frontendURL, token, url.QueryEscape(string(userDataJSON)))
+	code, err := saveLoginCode(user.ID, userData)
+	if err != nil {
+		log.Printf("保存 SSO 登录交换码失败: %v", err)
+		return fmt.Sprintf("%s/login?sso_error=%s", frontendURL, url.QueryEscape("登录会话创建失败"))
+	}
+	return fmt.Sprintf("%s/sso/callback?code=%s", frontendURL, url.QueryEscape(code))
 }
 
 // handleBindCallbackRedirect 处理绑定回调并重定向到前端

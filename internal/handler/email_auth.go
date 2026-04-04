@@ -9,7 +9,6 @@ import (
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/pkg/cache"
-	"draarl/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -202,8 +201,7 @@ func EmailLogin(c *gin.Context) {
 	mgr.DeleteSession(req.SessionID)
 
 	// 生成 JWT token
-	roles := user.GetRoles()
-	token, err := jwt.GenerateToken(user.Name, roles)
+	issued, err := issueAuthTokens(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -226,8 +224,11 @@ func EmailLogin(c *gin.Context) {
 		"code":    200,
 		"message": "登录成功",
 		"data": gin.H{
-			"token": token,
-			"user":  buildUserResponse(user),
+			"token":              issued.AccessToken,
+			"refresh_token":      issued.RefreshToken,
+			"expires_in":         issued.AccessExpiresIn,
+			"refresh_expires_in": issued.RefreshExpiresIn,
+			"user":               buildUserResponse(user),
 		},
 	})
 }
@@ -365,7 +366,7 @@ func VerifyEmail(c *gin.Context) {
 		"code":    200,
 		"message": "邮箱验证成功",
 		"data": gin.H{
-			"email":     session.Email,
+			"email":      session.Email,
 			"session_id": session.SessionID,
 		},
 	})
@@ -390,8 +391,8 @@ func buildUserResponse(user *gormdb.User) gin.H {
 
 // ChangeEmailRequest 修改邮箱请求
 type ChangeEmailRequest struct {
-	OldSessionID string `json:"old_session_id"` // 旧邮箱验证会话ID（有邮箱时必填）
-	OldCode      string `json:"old_code"`       // 旧邮箱验证码（有邮箱时必填）
+	OldSessionID string `json:"old_session_id"`                    // 旧邮箱验证会话ID（有邮箱时必填）
+	OldCode      string `json:"old_code"`                          // 旧邮箱验证码（有邮箱时必填）
 	NewSessionID string `json:"new_session_id" binding:"required"` // 新邮箱验证会话ID
 	NewCode      string `json:"new_code" binding:"required"`       // 新邮箱验证码
 }

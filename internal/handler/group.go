@@ -32,18 +32,23 @@ type GroupInfo struct {
 
 // GetGroups 获取群组列表（区分公开/私有）
 func GetGroups(c *gin.Context) {
-	// 获取查询参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	keyword := c.Query("keyword")
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 
 	ctx := c.Request.Context()
-	groupCache := cache.GetGroupCache()
 	userCache := cache.GetUserCache()
-	deviceCache := cache.GetDeviceCache()
-
-	// 获取当前用户（使用缓存）
 	username, _ := c.Get("username")
+
 	var currentUser *gormdb.User
 	if userCache != nil {
 		currentUser, _ = userCache.GetUserByName(ctx, username.(string))
@@ -52,231 +57,126 @@ func GetGroups(c *gin.Context) {
 		userRepo := gormdb.NewUserRepository()
 		currentUser, _ = userRepo.GetUserByName(username.(string))
 	}
-
-	var groups []*gormdb.Group
-	var total int64
-	var err error
-
-	if keyword != "" {
-		// 关键词搜索（搜索功能不缓存）
-		groups, err = gormdb.NewGroupRepository().SearchGroups(keyword)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    500,
-				"message": "查询群组列表失败",
-			})
-			return
-		}
-	} else {
-		// 获取所有可见群组
-		// 公开群组所有人可见，私有群组只对已验证用户可见
-		if currentUser != nil {
-			// 优化：尝试使用一次查询获取用户可见的所有群组
-			// 如果缓存可用，仍然使用缓存（缓存已经优化过了）
-			if groupCache != nil {
-				// 使用缓存获取用户已认证的群组ID列表
-				var members []*gormdb.GroupMember
-				members, err = groupCache.GetGroupsByUserID(ctx, currentUser.ID)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "获取用户群组失败",
-					})
-					return
-				}
-
-				// 获取所有公开群组
-				var publicGroups []*gormdb.Group
-				publicGroups, err = groupCache.GetPublicGroups(ctx)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "获取公开群组失败",
-					})
-					return
-				}
-
-				// 获取用户已验证的私有群组（先去重）
-				groupIDSet := make(map[int]bool)
-				for _, m := range members {
-					groupIDSet[m.GroupID] = true
-				}
-				groupIDs := make([]int, 0, len(groupIDSet))
-				for id := range groupIDSet {
-					groupIDs = append(groupIDs, id)
-				}
-				var privateGroups []*gormdb.Group
-				if len(groupIDs) > 0 {
-					privateGroups, err = gormdb.NewGroupRepository().GetGroupsByIDs(groupIDs)
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{
-							"code":    500,
-							"message": "获取私有群组失败",
-						})
-						return
-					}
-				}
-
-				// 合并公开群组和私有群组，并去重
-				groups = append(publicGroups, privateGroups...)
-				seen := make(map[int]bool)
-				uniqueGroups := make([]*gormdb.Group, 0, len(groups))
-				for _, g := range groups {
-					if !seen[g.ID] {
-						seen[g.ID] = true
-						if !g.IsVirtual {
-							uniqueGroups = append(uniqueGroups, g)
-						}
-					}
-				}
-				groups = uniqueGroups
-			} else {
-				// 无缓存时使用优化的单次查询
-				groups, err = gormdb.NewGroupRepository().GetUserVisibleGroups(currentUser.ID)
-				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "获取群组列表失败",
-					})
-					return
-				}
-			}
-		} else {
-			// 管理员查看所有群组
-			groups, err = gormdb.NewGroupRepository().ListGroups()
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "查询群组列表失败",
-				})
-				return
-			}
-		}
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
 	}
 
-	// 计算总数和分页
-	total = int64(len(groups))
+	uid := currentUser.ID
+	likeKeyword := "%" + keyword + "%"
 	offset := (page - 1) * pageSize
-	if int64(offset) >= total {
-		groups = []*gormdb.Group{}
-	} else if offset+pageSize > int(total) {
-		groups = groups[offset:]
-	} else {
-		groups = groups[offset : offset+pageSize]
+
+	countQuery := gormdb.Get().Table("public_groups g").
+		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
+		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
+		Where("(g.type = 1 OR gm.user_id IS NOT NULL)")
+	if keyword != "" {
+		countQuery = countQuery.Where("CAST(g.id AS CHAR) LIKE ? OR g.name LIKE ?", likeKeyword, likeKeyword)
 	}
 
-	// 获取所有设备，用于统计各个群组的在线/总设备数（使用缓存）
-	var allDevices []*gormdb.Device
-	if deviceCache != nil {
-		allDevices, _, _ = deviceCache.GetDeviceList(ctx, 1, 10000)
-	} else {
-		deviceRepo := gormdb.NewDeviceRepository()
-		allDevices, _, _ = deviceRepo.ListDevices(10000, 1)
+	var total int64
+	if err := countQuery.Distinct("g.id").Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询群组总数失败",
+		})
+		return
 	}
 
-	// 性能优化：使用指针类型避免重复 map 查找
-	type groupStats struct {
-		online int
-		total  int
-	}
-	groupDeviceStats := make(map[int]*groupStats)
-	for _, d := range allDevices {
-		// 性能优化：使用指针避免二次查找
-		stat := groupDeviceStats[d.GroupID]
-		if stat == nil {
-			stat = &groupStats{}
-			groupDeviceStats[d.GroupID] = stat
-		}
-		stat.total++
-		if d.ISOnline {
-			stat.online++
-		}
-	}
-
-	// 获取当前用户已加入的群组ID列表（用于判断is_joined）
-	memberRepo := gormdb.NewGroupMemberRepository()
-	var joinedGroupIDs map[int]bool
-	if currentUser != nil {
-		members, _ := memberRepo.ListGroupsByUser(currentUser.ID)
-		joinedGroupIDs = make(map[int]bool, len(members))
-		for _, m := range members {
-			joinedGroupIDs[m.GroupID] = true
-		}
+	type groupListRow struct {
+		ID                int       `gorm:"column:id"`
+		Name              string    `gorm:"column:name"`
+		Type              int       `gorm:"column:type"`
+		CallSign          string    `gorm:"column:call_sign"`
+		AllowCallSignSSID string    `gorm:"column:allow_callsign_ssid"`
+		OwerID            int       `gorm:"column:ower_id"`
+		OwnerCallSign     string    `gorm:"column:owner_callsign"`
+		MasterServer      int       `gorm:"column:master_server"`
+		SlaveServer       int       `gorm:"column:slave_server"`
+		Status            int       `gorm:"column:status"`
+		Note              string    `gorm:"column:note"`
+		CreateTime        time.Time `gorm:"column:create_time"`
+		UpdateTime        time.Time `gorm:"column:update_time"`
+		OnlineCount       int       `gorm:"column:online_count"`
+		TotalCount        int       `gorm:"column:total_count"`
+		IsJoined          bool      `gorm:"column:is_joined"`
 	}
 
-	// 批量获取所有者呼号（解决 N+1 查询问题）
-	userRepo := gormdb.NewUserRepository()
-	ownerIDs := make([]int, 0, len(groups))
-	for _, g := range groups {
-		if g.OwerID > 0 {
-			ownerIDs = append(ownerIDs, g.OwerID)
-		}
+	rows := make([]groupListRow, 0, pageSize)
+	dataQuery := gormdb.Get().Table("public_groups g").
+		Select(`
+			g.id, g.name, g.type, g.call_sign, g.allow_callsign_ssid, g.ower_id, g.master_server, g.slave_server, g.status, g.note, g.create_time, g.update_time,
+			COALESCE(u.callsign, '') AS owner_callsign,
+			COALESCE(stats.online_count, 0) AS online_count,
+			COALESCE(stats.total_count, 0) AS total_count,
+			CASE
+				WHEN g.type = 1 THEN true
+				WHEN gm.user_id IS NOT NULL THEN true
+				ELSE false
+			END AS is_joined
+		`).
+		Joins("LEFT JOIN users u ON u.id = g.ower_id").
+		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
+		Joins(`
+			LEFT JOIN (
+				SELECT group_id,
+					SUM(CASE WHEN is_online = 1 THEN 1 ELSE 0 END) AS online_count,
+					COUNT(1) AS total_count
+				FROM devices
+				GROUP BY group_id
+			) stats ON stats.group_id = g.id
+		`).
+		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
+		Where("(g.type = 1 OR gm.user_id IS NOT NULL)")
+	if keyword != "" {
+		dataQuery = dataQuery.Where("CAST(g.id AS CHAR) LIKE ? OR g.name LIKE ?", likeKeyword, likeKeyword)
 	}
-	// 去重
-	ownerIDSet := make(map[int]bool)
-	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
-	for _, id := range ownerIDs {
-		if !ownerIDSet[id] {
-			ownerIDSet[id] = true
-			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
-		}
-	}
-	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
-
-	// Get current user ID for owner check
-	currentUserID := 0
-	if currentUser != nil {
-		currentUserID = currentUser.ID
+	if err := dataQuery.
+		Distinct().
+		Order("g.id DESC").
+		Offset(offset).
+		Limit(pageSize).
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "查询群组列表失败",
+		})
+		return
 	}
 
-	// Convert to frontend expected format with extended status
-	resultItems := make([]gin.H, 0, len(groups))
-	for _, g := range groups {
-		isJoined := false
-
-		// Check if user has joined the group
-		if g.Type == 1 {
-			// Public groups are considered joined by default
-			isJoined = true
-		} else if g.Type == 2 && currentUser != nil {
-			// Private groups check if in joined list
-			isJoined = joinedGroupIDs[g.ID]
+	uniqueRows := make([]groupListRow, 0, len(rows))
+	seenGroupIDs := make(map[int]struct{}, len(rows))
+	for _, row := range rows {
+		if _, exists := seenGroupIDs[row.ID]; exists {
+			continue
 		}
+		seenGroupIDs[row.ID] = struct{}{}
+		uniqueRows = append(uniqueRows, row)
+	}
 
-		// Check if current user is the group owner
-		isOwner := g.OwerID == currentUserID
-
-		// 性能优化：指针类型 map 查找
-		var onlineCount, totalCount int
-		if stat := groupDeviceStats[g.ID]; stat != nil {
-			onlineCount = stat.online
-			totalCount = stat.total
-		}
-
-		// Get owner callsign from lookup map
-		var ownerCallSign string
-		if brief, ok := ownerCallSigns[g.OwerID]; ok {
-			ownerCallSign = brief.CallSign
-		}
-
+	resultItems := make([]gin.H, 0, len(uniqueRows))
+	for _, row := range uniqueRows {
 		resultItems = append(resultItems, gin.H{
-			"id":                  g.ID,
-			"name":                g.Name,
-			"type":                g.Type,
-			"callsign":            g.CallSign,
-			"allow_callsign_ssid": g.AllowCallSignSSID,
-			"ower_id":             g.OwerID,
-			"ower_callsign":       ownerCallSign,
-			"master_server":       g.MasterServer,
-			"slave_server":        g.SlaveServer,
-			"status":              g.Status,
-			"note":                g.Note,
-			"is_joined":           isJoined,
-			"is_owner":            isOwner,
-			"online_count":        onlineCount,
-			"total_count":         totalCount,
-			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":                  row.ID,
+			"name":                row.Name,
+			"type":                row.Type,
+			"callsign":            row.CallSign,
+			"allow_callsign_ssid": row.AllowCallSignSSID,
+			"ower_id":             row.OwerID,
+			"ower_callsign":       row.OwnerCallSign,
+			"master_server":       row.MasterServer,
+			"slave_server":        row.SlaveServer,
+			"status":              row.Status,
+			"note":                row.Note,
+			"is_joined":           row.IsJoined,
+			"is_owner":            row.OwerID == uid,
+			"online_count":        row.OnlineCount,
+			"total_count":         row.TotalCount,
+			"create_time":         row.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":         row.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -284,7 +184,7 @@ func GetGroups(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"items":     resultItems, // 返回组装后的数据
+			"items":     resultItems,
 			"total":     total,
 			"page":      page,
 			"page_size": pageSize,

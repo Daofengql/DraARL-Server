@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"log"
+	"sort"
 	"sync"
 
 	gormdb "draarl/internal/gormdb"
@@ -18,12 +19,15 @@ type GroupLinkCache struct {
 	targetToLinks map[int][]int
 	// linkGroupID -> []targetGroupID (一个互联组包含哪些实体组)
 	linkToTargets map[int][]int
+	// targetGroupID -> []peerTargetGroupID (已去重，且过滤掉停用互联组)
+	targetToPeers map[int][]int
 }
 
 // 全局群组互联缓存
 var globalGroupLinkCache = &GroupLinkCache{
 	targetToLinks: make(map[int][]int),
 	linkToTargets: make(map[int][]int),
+	targetToPeers: make(map[int][]int),
 }
 
 // RefreshGroupCache 刷新群组缓存（导出函数，供外部调用）
@@ -65,10 +69,38 @@ func refreshGroupLinkCache() {
 		newLinkToTargets[link.LinkGroupID] = append(newLinkToTargets[link.LinkGroupID], link.TargetGroupID)
 	}
 
+	// 预计算：每个源群组可以直达的目标群组（去重，过滤停用互联组）
+	newTargetToPeers := make(map[int][]int, len(newTargetToLinks))
+	for sourceGroupID, linkGroupIDs := range newTargetToLinks {
+		peerSet := make(map[int]struct{})
+		for _, linkGroupID := range linkGroupIDs {
+			linkGroup, exists := GetGroupFromCache(linkGroupID)
+			if !exists || linkGroup.Status != 1 {
+				continue
+			}
+			for _, targetID := range newLinkToTargets[linkGroupID] {
+				if targetID == sourceGroupID {
+					continue
+				}
+				peerSet[targetID] = struct{}{}
+			}
+		}
+		if len(peerSet) == 0 {
+			continue
+		}
+		peers := make([]int, 0, len(peerSet))
+		for targetID := range peerSet {
+			peers = append(peers, targetID)
+		}
+		sort.Ints(peers)
+		newTargetToPeers[sourceGroupID] = peers
+	}
+
 	// 加写锁，安全更新缓存
 	globalGroupLinkCache.Lock()
 	globalGroupLinkCache.targetToLinks = newTargetToLinks
 	globalGroupLinkCache.linkToTargets = newLinkToTargets
+	globalGroupLinkCache.targetToPeers = newTargetToPeers
 	globalGroupLinkCache.Unlock()
 
 	log.Printf("[CACHE] 群组互联关系同步完成，共 %d 个关联", len(links))
@@ -96,6 +128,18 @@ func GetTargetGroupsForLink(linkGroupID int) []int {
 
 	if targetGroupIDs, ok := globalGroupLinkCache.linkToTargets[linkGroupID]; ok {
 		return targetGroupIDs // 直接返回，不拷贝
+	}
+	return nil
+}
+
+// GetLinkedTargetGroups 获取源群组可转发到的目标群组（已去重）
+// 性能优化：直接返回预计算结果，避免热路径上重复构建去重 map
+func GetLinkedTargetGroups(sourceGroupID int) []int {
+	globalGroupLinkCache.RLock()
+	defer globalGroupLinkCache.RUnlock()
+
+	if peers, ok := globalGroupLinkCache.targetToPeers[sourceGroupID]; ok {
+		return peers
 	}
 	return nil
 }

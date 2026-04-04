@@ -9,37 +9,37 @@ import (
 
 // User 用户模型
 type User struct {
-	ID              int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name            string     `gorm:"type:varchar(255);uniqueIndex;column:name" json:"name"`
-	Email           string     `gorm:"type:varchar(255);uniqueIndex;column:email" json:"email"`
-	EmailVerified   bool       `gorm:"type:tinyint(1);default:0;column:email_verified" json:"email_verified"`
-	CallSign        string     `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`
-	Gird            string     `gorm:"type:varchar(255);column:gird" json:"gird"`
-	Phone           string     `gorm:"type:varchar(32);index;column:phone" json:"phone"`
-	Password        string     `gorm:"type:varchar(255);column:password" json:"-"`
-	Birthday        string     `gorm:"type:varchar(32);column:birthday" json:"birthday"`
-	Sex             int        `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
-	Avatar          string     `gorm:"type:varchar(512);column:avatar" json:"avatar"`
-	Address         string     `gorm:"type:varchar(512);column:address" json:"address"`
-	Roles           string     `gorm:"type:varchar(32);column:roles;default:user" json:"roles"` // 单角色：user 或 admin
-	Introduction    string     `gorm:"type:text;column:introduction" json:"introduction"`
-	AlarmMsg        bool       `gorm:"type:tinyint(1);default:0;column:alarm_msg" json:"alarm_msg"`
-	Status          int        `gorm:"type:tinyint;default:1;column:status" json:"status"`
-	ApprovalStatus  int        `gorm:"type:tinyint;default:0;column:approval_status" json:"approval_status"` // 0=待审核, 1=已通过, 2=已拒绝
-	ReviewerID      *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`                    // 审核人ID
-	ReviewNote      string     `gorm:"type:text;column:review_note" json:"review_note"`                // 审核备注
-	ReviewTime      *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"`            // 审核时间
-	UpdateTime      time.Time  `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	LastLoginTime   *time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
-	LoginErrTimes   int        `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
-	CreateTime      time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	OpenID          string     `gorm:"type:varchar(255);index;column:openid" json:"openid"`
-	NickName        string     `gorm:"type:varchar(255);column:nickname" json:"nickname"`
-	PID             string     `gorm:"type:varchar(255);column:pid" json:"pid"`
-	LastLoginIP     string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
-	DMRID           int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
-	MDCID           string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
-	DevicePassword  string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码(bcrypt哈希)
+	ID             int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name           string     `gorm:"type:varchar(255);uniqueIndex;column:name" json:"name"`
+	Email          string     `gorm:"type:varchar(255);uniqueIndex;column:email" json:"email"`
+	EmailVerified  bool       `gorm:"type:tinyint(1);default:0;column:email_verified" json:"email_verified"`
+	CallSign       string     `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`
+	Gird           string     `gorm:"type:varchar(255);column:gird" json:"gird"`
+	Phone          string     `gorm:"type:varchar(32);index;column:phone" json:"phone"`
+	Password       string     `gorm:"type:varchar(255);column:password" json:"-"`
+	Birthday       string     `gorm:"type:varchar(32);column:birthday" json:"birthday"`
+	Sex            int        `gorm:"type:tinyint;default:0;column:sex" json:"sex"`
+	Avatar         string     `gorm:"type:varchar(512);column:avatar" json:"avatar"`
+	Address        string     `gorm:"type:varchar(512);column:address" json:"address"`
+	Roles          string     `gorm:"type:varchar(32);column:roles;default:user" json:"roles"` // 单角色：user 或 admin
+	Introduction   string     `gorm:"type:text;column:introduction" json:"introduction"`
+	AlarmMsg       bool       `gorm:"type:tinyint(1);default:0;column:alarm_msg" json:"alarm_msg"`
+	Status         int        `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	ApprovalStatus int        `gorm:"type:tinyint;default:0;column:approval_status" json:"approval_status"` // 0=待审核, 1=已通过, 2=已拒绝
+	ReviewerID     *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`                       // 审核人ID
+	ReviewNote     string     `gorm:"type:text;column:review_note" json:"review_note"`                      // 审核备注
+	ReviewTime     *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"`                  // 审核时间
+	UpdateTime     time.Time  `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	LastLoginTime  *time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
+	LoginErrTimes  int        `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
+	CreateTime     time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	OpenID         string     `gorm:"type:varchar(255);index;column:openid" json:"openid"`
+	NickName       string     `gorm:"type:varchar(255);column:nickname" json:"nickname"`
+	PID            string     `gorm:"type:varchar(255);column:pid" json:"pid"`
+	LastLoginIP    string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
+	DMRID          int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
+	MDCID          string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
+	DevicePassword string     `gorm:"type:varchar(255);column:device_password" json:"-"` // 设备准入密码（AES 可逆密文；兼容历史 bcrypt 并在认证后自动迁移）
 }
 
 // TableName 指定表名
@@ -77,14 +77,14 @@ type Device struct {
 	DMRID       int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
 	SSID        uint8     `gorm:"type:tinyint unsigned;index:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
 	OwnerID     int       `gorm:"index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
-	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                                                               // 位置信息 (原 gird 字段)
+	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                         // 位置信息 (原 gird 字段)
 	DevModel    int       `gorm:"type:int;column:dev_model" json:"dev_model"`
 	GroupID     int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
 	Status      int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
 	IsCerted    bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
 	Priority    int       `gorm:"type:int;default:100;column:priority" json:"priority"`
-	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"` // 设备级禁发
-	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"` // 设备级禁收
+	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
+	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
 	ISOnline    bool      `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
 	OnlineTime  time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
 	Note        string    `gorm:"type:text;column:note" json:"note"`
@@ -138,7 +138,7 @@ func (Group) TableName() string {
 // GroupLink 群组互联关联模型
 type GroupLink struct {
 	ID            int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	LinkGroupID   int       `gorm:"not null;uniqueIndex:uk_link_target,priority:1;column:link_group_id" json:"link_group_id"`   // 互联组ID
+	LinkGroupID   int       `gorm:"not null;uniqueIndex:uk_link_target,priority:1;column:link_group_id" json:"link_group_id"`     // 互联组ID
 	TargetGroupID int       `gorm:"not null;uniqueIndex:uk_link_target,priority:2;column:target_group_id" json:"target_group_id"` // 目标群组ID
 	CreatedAt     time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
@@ -155,27 +155,27 @@ func (GroupLink) TableName() string {
 
 // Server 服务器模型
 type Server struct {
-	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name        string    `gorm:"type:varchar(255)" json:"name"`
-	ServerType  int       `gorm:"type:int" json:"server_type"`
-	JoinKey     string    `gorm:"type:varchar(255)" json:"join_key"`
-	CPUType     string    `gorm:"type:varchar(255)" json:"cpu_type"`
-	MemSize     string    `gorm:"type:varchar(255)" json:"mem_size"`
-	InputRate   int       `gorm:"type:int" json:"input_rate"`
-	OutputRate  int       `gorm:"type:int" json:"output_rate"`
-	Netcard     string    `gorm:"type:varchar(255)" json:"netcard"`
-	IPType      int       `gorm:"type:int" json:"ip_type"`
-	IPAddr      string    `gorm:"type:varchar(255)" json:"ip_addr"`
-	DNSName     string    `gorm:"type:varchar(255)" json:"dns_name"`
-	GroupList   int       `gorm:"type:int" json:"group_list"`
-	OwerID      string    `gorm:"type:varchar(255)" json:"ower_id"`
-	OwerCallSign string   `gorm:"type:varchar(255)" json:"ower_callsign"`
-	IsOnline    bool      `gorm:"type:tinyint(1)" json:"is_online"`
-	Status      int       `gorm:"type:int" json:"status"`
-	CreateTime  time.Time `gorm:"autoCreateTime" json:"create_time"`
-	UpdateTime  time.Time `gorm:"autoUpdateTime" json:"update_time"`
-	Note        string    `gorm:"type:text" json:"note"`
-	UDPPort     int       `gorm:"type:int" json:"udp_port"`
+	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name         string    `gorm:"type:varchar(255)" json:"name"`
+	ServerType   int       `gorm:"type:int" json:"server_type"`
+	JoinKey      string    `gorm:"type:varchar(255)" json:"join_key"`
+	CPUType      string    `gorm:"type:varchar(255)" json:"cpu_type"`
+	MemSize      string    `gorm:"type:varchar(255)" json:"mem_size"`
+	InputRate    int       `gorm:"type:int" json:"input_rate"`
+	OutputRate   int       `gorm:"type:int" json:"output_rate"`
+	Netcard      string    `gorm:"type:varchar(255)" json:"netcard"`
+	IPType       int       `gorm:"type:int" json:"ip_type"`
+	IPAddr       string    `gorm:"type:varchar(255)" json:"ip_addr"`
+	DNSName      string    `gorm:"type:varchar(255)" json:"dns_name"`
+	GroupList    int       `gorm:"type:int" json:"group_list"`
+	OwerID       string    `gorm:"type:varchar(255)" json:"ower_id"`
+	OwerCallSign string    `gorm:"type:varchar(255)" json:"ower_callsign"`
+	IsOnline     bool      `gorm:"type:tinyint(1)" json:"is_online"`
+	Status       int       `gorm:"type:int" json:"status"`
+	CreateTime   time.Time `gorm:"autoCreateTime" json:"create_time"`
+	UpdateTime   time.Time `gorm:"autoUpdateTime" json:"update_time"`
+	Note         string    `gorm:"type:text" json:"note"`
+	UDPPort      int       `gorm:"type:int" json:"udp_port"`
 }
 
 // TableName 指定表名
@@ -240,11 +240,11 @@ type OperatorCert struct {
 	FileSize    int64      `gorm:"type:bigint;column:file_size" json:"file_size"`
 	FileType    string     `gorm:"type:varchar(100);column:file_type" json:"file_type"`
 	UploadTime  time.Time  `gorm:"autoCreateTime;column:upload_time" json:"upload_time"`
-	Status      int        `gorm:"type:tinyint;default:0;column:status" json:"status"`        // 0=待审核, 1=已通过, 2=已拒绝/已替换
-	OldCertID   *int       `gorm:"type:int;column:old_cert_id" json:"old_cert_id"`            // 被替换的旧证书ID
-	ReviewNote  string     `gorm:"type:text;column:review_note" json:"review_note"`           // 审核备注
-	ReviewTime  *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"`       // 审核时间
-	ReviewerID  *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`            // 审核人ID
+	Status      int        `gorm:"type:tinyint;default:0;column:status" json:"status"`  // 0=待审核, 1=已通过, 2=已拒绝/已替换
+	OldCertID   *int       `gorm:"type:int;column:old_cert_id" json:"old_cert_id"`      // 被替换的旧证书ID
+	ReviewNote  string     `gorm:"type:text;column:review_note" json:"review_note"`     // 审核备注
+	ReviewTime  *time.Time `gorm:"type:datetime;column:review_time" json:"review_time"` // 审核时间
+	ReviewerID  *int       `gorm:"type:int;column:reviewer_id" json:"reviewer_id"`      // 审核人ID
 
 	// 关联定义：人员离网，证书销毁
 	User *User `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
@@ -274,8 +274,8 @@ func (SiteConfig) TableName() string {
 // GroupMember 群组成员关系（用户与群组的验证关系）
 type GroupMember struct {
 	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID     int       `gorm:"index:idx_group_user;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
-	UserID      int       `gorm:"index:idx_group_user;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
+	GroupID     int       `gorm:"uniqueIndex:uk_group_user,priority:1;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
+	UserID      int       `gorm:"uniqueIndex:uk_group_user,priority:2;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
 	IsVerified  bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
 	JoinTime    time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
 	LastVerify  time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
@@ -286,10 +286,10 @@ type GroupMember struct {
 	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
 
 	// 关联定义：群解散 或 人销号，都会清理当前的加群记录
-	Group  *Group   `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"group,omitempty"`
-	User   *User    `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
+	Group *Group `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"group,omitempty"`
+	User  *User  `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
 	// 关联定义：弱依赖设备。设备被删除时，仅将此处的 DeviceID 置为 NULL (OnDelete:SET NULL)
-	Device *Device  `gorm:"foreignKey:DeviceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"device,omitempty"`
+	Device *Device `gorm:"foreignKey:DeviceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"device,omitempty"`
 }
 
 // TableName 指定表名
@@ -300,16 +300,16 @@ func (GroupMember) TableName() string {
 // CommRecord 通信记录（精简版，名称通过联表查询获取）
 type CommRecord struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`    // 发送设备ID（0=幽灵设备，>0=普通设备）
-	DeviceSSID uint8     `gorm:"column:device_ssid" json:"device_ssid"`               // 设备 SSID（冗余，便于查询）
-	GroupID    *uint     `gorm:"index;index:idx_group_start,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于按群组查询
-	UserID     *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`   // 性能优化：复合索引用于按用户查询
+	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`                                                                    // 发送设备ID（0=幽灵设备，>0=普通设备）
+	DeviceSSID uint8     `gorm:"column:device_ssid" json:"device_ssid"`                                                                               // 设备 SSID（冗余，便于查询）
+	GroupID    *uint     `gorm:"index;index:idx_group_start,priority:1;column:group_id" json:"group_id"`                                              // 性能优化：复合索引用于按群组查询
+	UserID     *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`                                                 // 性能优化：复合索引用于按用户查询
 	StartTime  time.Time `gorm:"index;index:idx_group_start,priority:2;index:idx_user_start,priority:2;not null;column:start_time" json:"start_time"` // 性能优化：复合索引
-	EndTime    time.Time `gorm:"column:end_time" json:"end_time"`                     // 通信结束时间
-	DurationMs int       `gorm:"column:duration_ms" json:"duration_ms"`               // 通信时长（毫秒）
-	AudioPath  string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"` // MinIO 音频文件路径
-	AudioSize  int64     `gorm:"column:audio_size" json:"audio_size"`                 // 音频文件大小（字节）
-	Status     int       `gorm:"default:0;index;column:status" json:"status"`         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
+	EndTime    time.Time `gorm:"column:end_time" json:"end_time"`                                                                                     // 通信结束时间
+	DurationMs int       `gorm:"column:duration_ms" json:"duration_ms"`                                                                               // 通信时长（毫秒）
+	AudioPath  string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`                                                               // MinIO 音频文件路径
+	AudioSize  int64     `gorm:"column:audio_size" json:"audio_size"`                                                                                 // 音频文件大小（字节）
+	Status     int       `gorm:"default:0;index;column:status" json:"status"`                                                                         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
 	CreatedAt  time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 }
 
@@ -321,14 +321,14 @@ func (CommRecord) TableName() string {
 // Asset 资源管理模型（虚拟文件系统）
 type Asset struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	ParentID  *uint     `gorm:"index;column:parent_id" json:"parent_id"`           // 父目录ID（NULL表示根目录）
-	Name      string    `gorm:"type:varchar(255);not null;column:name" json:"name"` // 显示名称（虚拟）
-	Type      string    `gorm:"type:varchar(20);not null;column:type" json:"type"`  // "folder" | "file"
-	Path      string    `gorm:"type:varchar(512);column:path" json:"path"`          // MinIO真实路径（仅文件有值）
-	Size      int64     `gorm:"column:size" json:"size"`                            // 文件大小（字节）
+	ParentID  *uint     `gorm:"index;column:parent_id" json:"parent_id"`             // 父目录ID（NULL表示根目录）
+	Name      string    `gorm:"type:varchar(255);not null;column:name" json:"name"`  // 显示名称（虚拟）
+	Type      string    `gorm:"type:varchar(20);not null;column:type" json:"type"`   // "folder" | "file"
+	Path      string    `gorm:"type:varchar(512);column:path" json:"path"`           // MinIO真实路径（仅文件有值）
+	Size      int64     `gorm:"column:size" json:"size"`                             // 文件大小（字节）
 	MimeType  string    `gorm:"type:varchar(100);column:mime_type" json:"mime_type"` // MIME类型
-	Remark    string    `gorm:"type:text;column:remark" json:"remark"`              // 备注
-	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`      // 排序权重
+	Remark    string    `gorm:"type:text;column:remark" json:"remark"`               // 备注
+	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`       // 排序权重
 	CreatedAt time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
 
@@ -392,26 +392,26 @@ func (DeviceConfig) TableName() string {
 // Logbook 通联日志模型
 type Logbook struct {
 	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID       int       `gorm:"index;not null;column:user_id" json:"user_id"`                     // 创建者ID
-	MyCallSign   string    `gorm:"type:varchar(32);column:my_callsign" json:"my_callsign"`           // 我方呼号（冗余存储，支持客席发射）
-	TimeUTC      time.Time `gorm:"index;column:time_utc" json:"time_utc"`                            // UTC时间（数据库统一存储UTC，前端自行换算BJT）
-	TxFrequency  float64   `gorm:"type:decimal(10,4);column:tx_frequency" json:"tx_frequency"`       // 发射频率 (MHz)
-	RxFrequency  float64   `gorm:"type:decimal(10,4);column:rx_frequency" json:"rx_frequency"`       // 接收频率 (MHz)
-	CQZone       int       `gorm:"type:tinyint;column:cq_zone" json:"cq_zone"`                       // CQ分区
-	ITUZone      int       `gorm:"type:tinyint;column:itu_zone" json:"itu_zone"`                     // ITU分区
-	Mode         string    `gorm:"type:varchar(32);column:mode" json:"mode"`                         // 通信模式
-	CallSign     string    `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`           // 对方呼号
-	TheirRST     string    `gorm:"type:varchar(16);column:their_rst" json:"their_rst"`               // 对方信号报告
-	TheirPower   *int      `gorm:"type:int;column:their_power" json:"their_power,omitempty"`         // 对方功率 (W)
-	TheirQTH     string    `gorm:"type:varchar(255);column:their_qth" json:"their_qth"`              // 对方QTH
-	TheirRadio   string    `gorm:"type:varchar(255);column:their_radio" json:"their_radio"`          // 对方电台型号
-	TheirAntenna string    `gorm:"type:varchar(255);column:their_antenna" json:"their_antenna"`      // 对方天线
-	MyRST        string    `gorm:"type:varchar(16);column:my_rst" json:"my_rst"`                     // 我方信号报告
-	MyPower      *int      `gorm:"type:int;column:my_power" json:"my_power,omitempty"`               // 我方功率 (W)
-	MyQTH        string    `gorm:"type:varchar(255);column:my_qth" json:"my_qth"`                    // 我方QTH
-	MyRadio      string    `gorm:"type:varchar(255);column:my_radio" json:"my_radio"`                // 我方电台型号
-	MyAntenna    string    `gorm:"type:varchar(255);column:my_antenna" json:"my_antenna"`            // 我方天线
-	Notes        string    `gorm:"type:text;column:notes" json:"notes"`                              // 备注
+	UserID       int       `gorm:"index;not null;column:user_id" json:"user_id"`                // 创建者ID
+	MyCallSign   string    `gorm:"type:varchar(32);column:my_callsign" json:"my_callsign"`      // 我方呼号（冗余存储，支持客席发射）
+	TimeUTC      time.Time `gorm:"index;column:time_utc" json:"time_utc"`                       // UTC时间（数据库统一存储UTC，前端自行换算BJT）
+	TxFrequency  float64   `gorm:"type:decimal(10,4);column:tx_frequency" json:"tx_frequency"`  // 发射频率 (MHz)
+	RxFrequency  float64   `gorm:"type:decimal(10,4);column:rx_frequency" json:"rx_frequency"`  // 接收频率 (MHz)
+	CQZone       int       `gorm:"type:tinyint;column:cq_zone" json:"cq_zone"`                  // CQ分区
+	ITUZone      int       `gorm:"type:tinyint;column:itu_zone" json:"itu_zone"`                // ITU分区
+	Mode         string    `gorm:"type:varchar(32);column:mode" json:"mode"`                    // 通信模式
+	CallSign     string    `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`      // 对方呼号
+	TheirRST     string    `gorm:"type:varchar(16);column:their_rst" json:"their_rst"`          // 对方信号报告
+	TheirPower   *int      `gorm:"type:int;column:their_power" json:"their_power,omitempty"`    // 对方功率 (W)
+	TheirQTH     string    `gorm:"type:varchar(255);column:their_qth" json:"their_qth"`         // 对方QTH
+	TheirRadio   string    `gorm:"type:varchar(255);column:their_radio" json:"their_radio"`     // 对方电台型号
+	TheirAntenna string    `gorm:"type:varchar(255);column:their_antenna" json:"their_antenna"` // 对方天线
+	MyRST        string    `gorm:"type:varchar(16);column:my_rst" json:"my_rst"`                // 我方信号报告
+	MyPower      *int      `gorm:"type:int;column:my_power" json:"my_power,omitempty"`          // 我方功率 (W)
+	MyQTH        string    `gorm:"type:varchar(255);column:my_qth" json:"my_qth"`               // 我方QTH
+	MyRadio      string    `gorm:"type:varchar(255);column:my_radio" json:"my_radio"`           // 我方电台型号
+	MyAntenna    string    `gorm:"type:varchar(255);column:my_antenna" json:"my_antenna"`       // 我方天线
+	Notes        string    `gorm:"type:text;column:notes" json:"notes"`                         // 备注
 	CreatedAt    time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
 
@@ -427,13 +427,13 @@ func (Logbook) TableName() string {
 // UserRadioPreset 用户电台预设
 type UserRadioPreset struct {
 	ID        int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID    int       `gorm:"not null;index;column:user_id" json:"user_id"`           // 所属用户ID
-	Name      string    `gorm:"type:varchar(64);not null;column:name" json:"name"`      // 预设名称（如"家里台"、"车载台"）
-	Radio     string    `gorm:"type:varchar(64);column:radio" json:"radio"`             // 电台型号
-	Antenna   string    `gorm:"type:varchar(64);column:antenna" json:"antenna"`         // 天线类型
-	Power     *int      `gorm:"type:int;column:power" json:"power,omitempty"`           // 功率 (W)
-	QTH       string    `gorm:"type:varchar(255);column:qth" json:"qth"`                // QTH位置
-	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`          // 排序权重
+	UserID    int       `gorm:"not null;index;column:user_id" json:"user_id"`      // 所属用户ID
+	Name      string    `gorm:"type:varchar(64);not null;column:name" json:"name"` // 预设名称（如"家里台"、"车载台"）
+	Radio     string    `gorm:"type:varchar(64);column:radio" json:"radio"`        // 电台型号
+	Antenna   string    `gorm:"type:varchar(64);column:antenna" json:"antenna"`    // 天线类型
+	Power     *int      `gorm:"type:int;column:power" json:"power,omitempty"`      // 功率 (W)
+	QTH       string    `gorm:"type:varchar(255);column:qth" json:"qth"`           // QTH位置
+	SortOrder int       `gorm:"default:0;column:sort_order" json:"sort_order"`     // 排序权重
 	CreatedAt time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
 
@@ -446,7 +446,7 @@ func (UserRadioPreset) TableName() string {
 	return "user_radio_presets"
 }
 
-// AutoMigrate 自动清洗脏数据并迁移��结构与外键约束
+// AutoMigrate 自动清洗脏数据并迁移主结构与外键约束
 // 前置逻辑：
 // 1. 使用原生 SQL 优先清理违反外键原则的悬空记录。
 // 2. 移除重复数据，为唯一索引的建立扫除障碍。
@@ -503,7 +503,7 @@ func AutoMigrate() error {
 	// ==========================================
 	// GORM 底层会进行计算，比对现有数据库结构与代码中的结构体。
 	// 只有在缺失表、缺失字段、或缺失外键时，才会发送 ALTER TABLE 语句，非常安全。
-	log.Println("[Migration Info] 正在启动 GORM 核心迁移机制，建立级��外键约束...")
+	log.Println("[Migration Info] 正在启动 GORM 核心迁移机制，建立级联外键约束...")
 	err := db.AutoMigrate(
 		&User{},
 		&Device{},

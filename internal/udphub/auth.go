@@ -142,21 +142,33 @@ func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
 		return result
 	}
 
-	// AES 解密存储的密码并验证
-	storedPassword, err := crypto.Decrypt(user.DevicePassword)
+	// 验证设备密码（兼容历史 bcrypt）
+	match, legacyPassword, err := crypto.VerifyDevicePassword(user.DevicePassword, password)
 	if err != nil {
 		recordFailure(ip, username)
 		result.Error = "invalid_password"
-		log.Printf("[AUTH] 设备认证失败（密码解密失败）: %s:%s, err: %v", ip, username, err)
+		log.Printf("[AUTH] 设备认证失败（密码校验失败）: %s:%s, err: %v", ip, username, err)
 		return result
 	}
 
 	// 验证密码
-	if storedPassword != password {
+	if !match {
 		recordFailure(ip, username)
 		result.Error = "invalid_password"
 		log.Printf("[AUTH] 设备认证失败（密码错误）: %s:%s", ip, username)
 		return result
+	}
+
+	// 历史 bcrypt 兼容迁移：认证通过后自动迁移为 AES 可逆加密
+	if legacyPassword {
+		encryptedPassword, encErr := crypto.Encrypt(password)
+		if encErr != nil {
+			log.Printf("[AUTH] 历史设备密码迁移加密失败: %s:%s, err: %v", ip, username, encErr)
+		} else if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
+			log.Printf("[AUTH] 历史设备密码迁移写库失败: %s:%s, err: %v", ip, username, updateErr)
+		} else {
+			log.Printf("[AUTH] 历史设备密码已迁移为 AES 存储: %s:%s", ip, username)
+		}
 	}
 
 	// 认证成功，清除失败记录
@@ -189,8 +201,13 @@ func StartAuthCleaner() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			CleanExpiredAuthFailures()
+		for {
+			select {
+			case <-udpShutdown:
+				return
+			case <-ticker.C:
+				CleanExpiredAuthFailures()
+			}
 		}
 	}()
 }

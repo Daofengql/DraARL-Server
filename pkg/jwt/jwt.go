@@ -11,6 +11,9 @@ import (
 // SecretMinLength 密钥最小长度
 const SecretMinLength = 32
 
+// AccessTokenTTL Access Token 默认有效期（短时效）。
+const AccessTokenTTL = 3 * time.Hour
+
 var jwtSecret = []byte("nrl1234")
 
 // Claims JWT声明
@@ -32,8 +35,7 @@ func SetSecret(secret string) error {
 // GenerateToken 生成JWT令牌
 func GenerateToken(username string, roles []string) (string, error) {
 	now := time.Now()
-	// 默认过期时间：30天
-	expireTime := now.Add(30 * 24 * time.Hour)
+	expireTime := now.Add(AccessTokenTTL)
 
 	claims := Claims{
 		username,
@@ -93,11 +95,12 @@ func RefreshToken(tokenString string) (string, error) {
 	return GenerateToken(claims.Username, claims.Roles)
 }
 
-// MustParseToken 强制解析令牌，失败则panic
+// MustParseToken 强制解析令牌（兼容函数）。
+// 为避免在 goroutine 中触发不可恢复 panic，解析失败时返回 nil。
 func MustParseToken(tokenString string) *Claims {
 	claims, err := ParseToken(tokenString)
 	if err != nil {
-		panic(fmt.Sprintf("failed to parse token: %v", err))
+		return nil
 	}
 	return claims
 }

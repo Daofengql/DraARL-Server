@@ -396,7 +396,7 @@ func (r *UserRepository) UpdateUserDevicePassword(id int, devicePassword string)
 	return r.db.Model(&User{}).Where("id = ?", id).Update("device_password", devicePassword).Error
 }
 
-// GetUserDevicePassword 获取用户设备密码哈希
+// GetUserDevicePassword 获取用户设备密码存储值（AES 密文；兼容历史 bcrypt）
 func (r *UserRepository) GetUserDevicePassword(id int) (string, error) {
 	var user User
 	err := r.db.Select("device_password").First(&user, id).Error

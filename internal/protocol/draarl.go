@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -82,24 +83,24 @@ const (
 
 // DraARLv1Packet DraARLv1协议数据包
 type DraARLv1Packet struct {
-	TimeStamp       time.Time
-	UDPAddrStr      string
-	UDPAddr         *net.UDPAddr
+	TimeStamp  time.Time
+	UDPAddrStr string
+	UDPAddr    *net.UDPAddr
 
 	// Header fields (90 bytes)
-	Version         string // 4B  - "DraA"
-	Length          uint16 // 2B  - 报文总长度
-	Username        string // 32B - 用户名
-	DevicePassword  string // 10B - 设备准入密码
-	Type            byte   // 1B  - 数据包类型
-	DevModel        byte   // 1B  - 设备型号
-	SSID            byte   // 1B  - 设备子号
-	DMRID           uint32 // 3B  - DMR ID (uint24)
-	CallSign        string // 32B - 呼号（服务器填充）
-	Reserved        []byte // 4B  - 保留
+	Version        string // 4B  - "DraA"
+	Length         uint16 // 2B  - 报文总长度
+	Username       string // 32B - 用户名
+	DevicePassword string // 10B - 设备准入密码
+	Type           byte   // 1B  - 数据包类型
+	DevModel       byte   // 1B  - 设备型号
+	SSID           byte   // 1B  - 设备子号
+	DMRID          uint32 // 3B  - DMR ID (uint24)
+	CallSign       string // 32B - 呼号（服务器填充）
+	Reserved       []byte // 4B  - 保留
 
 	// DATA region
-	DATA            []byte
+	DATA []byte
 
 	// ServerVoice type specific fields (parsed from DATA)
 	OriginalUsername string // 32B - 原始发送方用户名
@@ -336,12 +337,12 @@ func (p *DraARLv1Packet) String() string {
 
 // GetUsernameSSID 获取组合 username-ssid
 func GetUsernameSSID(username string, ssid byte) string {
-	return fmt.Sprintf("%s-%d", username, ssid)
+	return username + "-" + strconv.Itoa(int(ssid))
 }
 
 // GetCallSignSSID 获取组合 callsign-ssid（向后兼容）
 func GetCallSignSSID(callsign string, ssid byte) string {
-	return fmt.Sprintf("%s-%d", callsign, ssid)
+	return callsign + "-" + strconv.Itoa(int(ssid))
 }
 
 // ParseUsernameSSID 解析 username-ssid

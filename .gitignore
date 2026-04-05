@@ -42,6 +42,7 @@ udphub.yaml
 !udphub.yaml.example
 !*.example.yaml
 !*.example.yml
+!docs/mkdocs.yml
 !.github/workflows/*.yml
 
 # Database files

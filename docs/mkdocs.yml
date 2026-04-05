@@ -1,0 +1,31 @@
+﻿site_name: DraARL Server Docs
+site_description: DraARL Server API and Protocol Documentation
+site_url: ""
+docs_dir: .
+site_dir: ../site
+
+theme:
+  name: material
+  language: zh
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
+
+nav:
+  - 首页: index.md
+  - 协议文档: Protocol.md
+  - API 文档:
+      - 总览: api/README.md
+      - 00. 约定与鉴权: api/00-约定与鉴权.md
+      - 01. 认证与 SSO: api/01-认证与SSO.md
+      - 02. 用户与资料: api/02-用户与资料.md
+      - 03. 设备与配置: api/03-设备与配置.md
+      - 04. 群组与互联: api/04-群组与互联.md
+      - 05. 无线电与实时通信: api/05-无线电与实时通信.md
+      - 06. 通联记录与日志: api/06-通联记录与日志.md
+      - 07. 资源上传与站点配置: api/07-资源上传与站点配置.md
+      - 08. 运维与管理接口: api/08-运维与管理接口.md
+      - 09. 完整路由索引: api/09-完整路由索引.md

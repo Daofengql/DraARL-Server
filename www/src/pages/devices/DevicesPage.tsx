@@ -102,8 +102,7 @@ export function DevicesPage() {
   const handleToggleSend = async (device: Device) => {
     try {
       await deviceService.update(device.id, {
-        ...device,
-        disable_send: !device.disable_send,
+        disable_send: !(device.disable_send ?? false),
       })
       loadDevices()
     } catch (err: any) {
@@ -115,8 +114,7 @@ export function DevicesPage() {
   const handleToggleRecv = async (device: Device) => {
     try {
       await deviceService.update(device.id, {
-        ...device,
-        disable_recv: !device.disable_recv,
+        disable_recv: !(device.disable_recv ?? false),
       })
       loadDevices()
     } catch (err: any) {
@@ -232,6 +230,7 @@ export function DevicesPage() {
               <TableCell align="center">名称</TableCell>
               <TableCell align="center">设备类型</TableCell>
               <TableCell align="center">呼号-SSID</TableCell>
+              <TableCell align="center">最新上线IP</TableCell>
               <TableCell align="center">所在群组</TableCell>
               <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
               <TableCell align="center" sx={{ width: 120 }}>操作</TableCell>
@@ -240,13 +239,13 @@ export function DevicesPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   加载中...
                 </TableCell>
               </TableRow>
             ) : paginatedDevices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   暂无设备数据
                 </TableCell>
               </TableRow>
@@ -268,6 +267,16 @@ export function DevicesPage() {
                     </TableCell>
                     <TableCell align="center">
                       {device.callsign}-{device.ssid}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Typography variant="body2">
+                        {device.last_online_ip || '-'}
+                      </Typography>
+                      {device.last_online_ip_location && (
+                        <Typography variant="caption" color="text.secondary">
+                          {device.last_online_ip_location}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell align="center">
                       <Button

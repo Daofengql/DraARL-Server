@@ -1,7 +1,9 @@
 package gormdb
 
 import (
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -72,24 +74,25 @@ func (u *User) GetRoles() []string {
 
 // Device 设备模型
 type Device struct {
-	ID          int       `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name        string    `gorm:"type:varchar(255);column:name" json:"name"`
-	DMRID       int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
-	SSID        uint8     `gorm:"type:tinyint unsigned;index:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
-	OwnerID     int       `gorm:"index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
-	QTH         string    `gorm:"type:varchar(255);column:qth" json:"qth"`                         // 位置信息 (原 gird 字段)
-	DevModel    int       `gorm:"type:int;column:dev_model" json:"dev_model"`
-	GroupID     int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
-	Status      int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
-	IsCerted    bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
-	Priority    int       `gorm:"type:int;default:100;column:priority" json:"priority"`
-	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
-	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
-	ISOnline    bool      `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
-	OnlineTime  time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
-	Note        string    `gorm:"type:text;column:note" json:"note"`
-	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	ID           int       `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Name         string    `gorm:"type:varchar(255);column:name" json:"name"`
+	DMRID        int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
+	SSID         uint8     `gorm:"type:tinyint unsigned;index:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
+	OwnerID      int       `gorm:"index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
+	QTH          string    `gorm:"type:varchar(255);column:qth" json:"qth"`                         // 位置信息 (原 gird 字段)
+	LastOnlineIP string    `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`    // 设备最近一次上线时的客户端 IP
+	DevModel     int       `gorm:"type:int;column:dev_model" json:"dev_model"`
+	GroupID      int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
+	Status       int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	IsCerted     bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
+	Priority     int       `gorm:"type:int;default:100;column:priority" json:"priority"`
+	DisableSend  bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
+	DisableRecv  bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
+	ISOnline     bool      `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
+	OnlineTime   time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
+	Note         string    `gorm:"type:text;column:note" json:"note"`
+	CreateTime   time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime   time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
 
 	// 关联定义：配置与 User 表的外键约束。
 	// 当引用的 User 被删除时，数据库引擎会自动连带删除该 OwnerID 下的所有 Device 记录。
@@ -273,23 +276,18 @@ func (SiteConfig) TableName() string {
 
 // GroupMember 群组成员关系（用户与群组的验证关系）
 type GroupMember struct {
-	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID     int       `gorm:"uniqueIndex:uk_group_user,priority:1;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
-	UserID      int       `gorm:"uniqueIndex:uk_group_user,priority:2;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
-	IsVerified  bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
-	JoinTime    time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
-	LastVerify  time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
-	DeviceID    *int      `gorm:"index;column:device_id" json:"device_id,omitempty"`
-	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`
-	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`
-	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"created_at"`
-	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
+	ID         int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID    int       `gorm:"uniqueIndex:uk_group_user,priority:1;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
+	UserID     int       `gorm:"uniqueIndex:uk_group_user,priority:2;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
+	IsVerified bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
+	JoinTime   time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
+	LastVerify time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
+	CreateTime time.Time `gorm:"autoCreateTime;column:create_time" json:"created_at"`
+	UpdateTime time.Time `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
 
 	// 关联定义：群解散 或 人销号，都会清理当前的加群记录
 	Group *Group `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"group,omitempty"`
 	User  *User  `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
-	// 关联定义：弱依赖设备。设备被删除时，仅将此处的 DeviceID 置为 NULL (OnDelete:SET NULL)
-	Device *Device `gorm:"foreignKey:DeviceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"device,omitempty"`
 }
 
 // TableName 指定表名
@@ -527,6 +525,92 @@ func AutoMigrate() error {
 		return err
 	}
 
+	// 阶段三：下线 group_members 历史设备级字段（仅保留成员资格语义）
+	pruneLegacyGroupMemberColumns(db)
+
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 	return nil
+}
+
+// pruneLegacyGroupMemberColumns 安全下线 group_members 历史字段：
+// - device_id
+// - disable_send
+// - disable_recv
+func pruneLegacyGroupMemberColumns(db *gorm.DB) {
+	if !db.Migrator().HasTable(&GroupMember{}) {
+		return
+	}
+
+	legacyColumns := []string{"device_id", "disable_send", "disable_recv"}
+	for _, col := range legacyColumns {
+		if !db.Migrator().HasColumn(&GroupMember{}, col) {
+			continue
+		}
+
+		// device_id 可能存在历史外键，先按信息架构查询并移除约束
+		if col == "device_id" {
+			var dbName string
+			if err := db.Raw("SELECT DATABASE()").Scan(&dbName).Error; err == nil && dbName != "" {
+				var rows []struct {
+					ConstraintName string `gorm:"column:constraint_name"`
+				}
+				fkSQL := `
+					SELECT DISTINCT constraint_name
+					FROM information_schema.key_column_usage
+					WHERE table_schema = ?
+					  AND table_name = 'group_members'
+					  AND column_name = 'device_id'
+					  AND referenced_table_name IS NOT NULL
+				`
+				if err := db.Raw(fkSQL, dbName).Scan(&rows).Error; err == nil {
+					for _, row := range rows {
+						if row.ConstraintName == "" {
+							continue
+						}
+						if err := dropGroupMemberDeviceForeignKey(db, row.ConstraintName); err != nil {
+							log.Printf("[Migration Warning] 删除 group_members.%s 外键 %s 失败: %v", col, row.ConstraintName, err)
+						}
+					}
+				}
+			}
+		}
+
+		if err := db.Migrator().DropColumn(&GroupMember{}, col); err != nil {
+			log.Printf("[Migration Warning] 删除 group_members.%s 失败: %v", col, err)
+			continue
+		}
+		log.Printf("[Migration Info] 已删除遗留字段 group_members.%s", col)
+	}
+}
+
+// dropGroupMemberDeviceForeignKey 删除 group_members.device_id 的历史外键。
+// 兼容策略：
+// 1) 优先使用 GORM Migrator（跨数据库）
+// 2) 若失败，回退到 MySQL 语法 DROP FOREIGN KEY
+func dropGroupMemberDeviceForeignKey(db *gorm.DB, constraintName string) error {
+	if constraintName == "" {
+		return nil
+	}
+
+	// MySQL/MariaDB 仅支持 DROP FOREIGN KEY，直接使用正确语法，避免先触发 1064 噪音日志。
+	if strings.EqualFold(db.Dialector.Name(), "mysql") {
+		sql := fmt.Sprintf("ALTER TABLE `group_members` DROP FOREIGN KEY `%s`", constraintName)
+		if err := db.Exec(sql).Error; err == nil {
+			log.Printf("[Migration Info] 已使用 MySQL 语法删除外键: %s", constraintName)
+			return nil
+		} else {
+			// 1091: 外键不存在（可能并发迁移或已被手工清理），按成功处理。
+			if strings.Contains(err.Error(), "Error 1091") {
+				log.Printf("[Migration Info] 外键 %s 不存在，跳过删除", constraintName)
+				return nil
+			}
+			return fmt.Errorf("mysql drop foreign key failed: %w", err)
+		}
+	}
+
+	if err := db.Migrator().DropConstraint(&GroupMember{}, constraintName); err == nil {
+		return nil
+	} else {
+		return fmt.Errorf("gorm drop constraint failed: %w", err)
+	}
 }

@@ -603,7 +603,6 @@ func GetGroupDevices(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	deviceCache := cache.GetDeviceCache()
-	groupCache := cache.GetGroupCache()
 
 	var devicesRaw []*gormdb.Device
 	if deviceCache != nil {
@@ -618,30 +617,6 @@ func GetGroupDevices(c *gin.Context) {
 			"message": "查询设备列表失败",
 		})
 		return
-	}
-
-	// 获取群组成员记录，用于获取群组级别的禁发/禁收设置（使用缓存）
-	var groupMembers []*gormdb.GroupMember
-	if groupCache != nil {
-		groupMembers, _ = groupCache.GetGroupMembers(ctx, groupID)
-	} else {
-		memberRepo := gormdb.NewGroupMemberRepository()
-		groupMembers, _ = memberRepo.ListMembersByGroup(groupID)
-	}
-
-	// 构建设备ID到群组成员状态的映射
-	type memberStatus struct {
-		disableSend bool
-		disableRecv bool
-	}
-	deviceMemberStatus := make(map[int]memberStatus)
-	for _, m := range groupMembers {
-		if m.DeviceID != nil {
-			deviceMemberStatus[*m.DeviceID] = memberStatus{
-				disableSend: m.DisableSend,
-				disableRecv: m.DisableRecv,
-			}
-		}
 	}
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
@@ -663,57 +638,30 @@ func GetGroupDevices(c *gin.Context) {
 	}
 	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 
-	// 转换为响应格式
+	// 转换为响应格式（收发控制只来自 devices 表）
 	devices := make([]gin.H, 0, len(devicesRaw))
 	for _, d := range devicesRaw {
-		// 获取设备级别的禁发/禁收状态
-		deviceDisableSend := d.DisableSend
-		deviceDisableRecv := d.DisableRecv
 		// 获取所有者呼号
 		var callsign string
 		if brief, ok := ownerCallSigns[d.OwnerID]; ok {
 			callsign = brief.CallSign
 		}
 
-		// 如果有群组成员级别的设置，需要进行合并（设备级别优先）
-		if memberStatus, ok := deviceMemberStatus[d.ID]; ok {
-			// 最终状态 = 设备级 OR 群组成员级（任一禁用则禁用）
-			finalDisableSend := deviceDisableSend || memberStatus.disableSend
-			finalDisableRecv := deviceDisableRecv || memberStatus.disableRecv
-
-			devices = append(devices, gin.H{
-				"id":           d.ID,
-				"name":         d.Name,
-				"callsign":     callsign,
-				"ssid":         d.SSID,
-				"dev_model":    d.DevModel,
-				"group_id":     d.GroupID,
-				"status":       d.Status,
-				"priority":     d.Priority,
-				"is_online":    d.ISOnline,
-				"disable_send": finalDisableSend, // 合并后的禁发状态
-				"disable_recv": finalDisableRecv, // 合并后的禁收状态
-				"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
-				"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
-			})
-		} else {
-			// 没有群组成员记录，只使用设备级别的设置
-			devices = append(devices, gin.H{
-				"id":           d.ID,
-				"name":         d.Name,
-				"callsign":     callsign,
-				"ssid":         d.SSID,
-				"dev_model":    d.DevModel,
-				"group_id":     d.GroupID,
-				"status":       d.Status,
-				"priority":     d.Priority,
-				"is_online":    d.ISOnline,
-				"disable_send": deviceDisableSend,
-				"disable_recv": deviceDisableRecv,
-				"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
-				"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
-			})
-		}
+		devices = append(devices, gin.H{
+			"id":           d.ID,
+			"name":         d.Name,
+			"callsign":     callsign,
+			"ssid":         d.SSID,
+			"dev_model":    d.DevModel,
+			"group_id":     d.GroupID,
+			"status":       d.Status,
+			"priority":     d.Priority,
+			"is_online":    d.ISOnline,
+			"disable_send": d.DisableSend,
+			"disable_recv": d.DisableRecv,
+			"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1118,132 +1066,6 @@ func GetGroupMembers(c *gin.Context) {
 			"items": members,
 			"total": len(members),
 		},
-	})
-}
-
-// UpdateDeviceStatusRequest 设置设备禁发/禁收请求
-type UpdateDeviceStatusRequest struct {
-	DisableSend bool `json:"disable_send"`
-	DisableRecv bool `json:"disable_recv"`
-}
-
-// UpdateDeviceStatus 设置设备禁发/禁收
-func UpdateDeviceStatus(c *gin.Context) {
-	groupIDStr := c.Param("id")
-	deviceIDStr := c.Param("deviceId")
-	groupID, err := strconv.Atoi(groupIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的群组ID",
-		})
-		return
-	}
-	deviceID, err := strconv.Atoi(deviceIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的设备ID",
-		})
-		return
-	}
-
-	var req UpdateDeviceStatusRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-		})
-		return
-	}
-
-	// 检查权限：只有群组创建者可操作
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
-		return
-	}
-
-	repo := gormdb.NewGroupRepository()
-	group, err := repo.GetGroupByID(groupID)
-	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
-			"message": "群组不存在",
-		})
-		return
-	}
-
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
-		return
-	}
-
-	// 检查权限：群组创建者或管理员可操作
-	isAdmin := hasRoleGORM(currentUser, "admin")
-	if group.OwerID != currentUser.ID && !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
-			"code":    403,
-			"message": "需要群组创建者或管理员权限",
-		})
-		return
-	}
-
-	// 更新GroupMember表的设备状态
-	memberRepo := gormdb.NewGroupMemberRepository()
-	err = memberRepo.UpdateMemberDeviceStatusByDevice(groupID, deviceID, req.DisableSend, req.DisableRecv)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "更新设备状态失败",
-		})
-		return
-	}
-
-	// 使设备详情和群组设备列表缓存失效
-	ctx := c.Request.Context()
-	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		// 获取设备信息以获取 owner_id 和 ssid
-		repo := gormdb.NewDeviceRepository()
-		if device, err := repo.GetDeviceByID(deviceID); err == nil && device != nil {
-			// 使用 OwnerID 作为缓存键
-			_ = deviceCache.InvalidateDevice(ctx, deviceID, device.OwnerID, uint8(device.SSID))
-		}
-		// 使群组设备列表缓存失效
-		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
-	}
-
-	// 记录审计日志
-	statusDesc := ""
-	if req.DisableSend && req.DisableRecv {
-		statusDesc = "禁发+禁收"
-	} else if req.DisableSend {
-		statusDesc = "禁发"
-	} else if req.DisableRecv {
-		statusDesc = "禁收"
-	} else {
-		statusDesc = "恢复正常"
-	}
-	oplog.AddLog(
-		fmt.Sprintf("设置群组设备状态: 群组 %s (ID: %d) 设备 ID %d -> %s", group.Name, groupID, deviceID, statusDesc),
-		"group_device_status",
-		currentUser.ID,
-		currentUser.Name,
-		currentUser.CallSign,
-		c.ClientIP(),
-	)
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "更新成功",
 	})
 }
 

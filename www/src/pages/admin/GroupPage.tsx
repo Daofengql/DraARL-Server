@@ -39,7 +39,6 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SearchBar } from '../../components/common/SearchBar'
 import { OnlineIndicator } from '../../components/common/OnlineIndicator'
-import { SendRecvControl } from '../../components/common/SendRecvControl'
 import { GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function AdminGroupPage() {
@@ -277,22 +276,6 @@ export function AdminGroupPage() {
     )
   }
 
-  // 更新设备禁发/禁收状态
-  const handleUpdateDeviceStatus = async (groupId: number, deviceId: number, disableSend: boolean, disableRecv: boolean) => {
-    try {
-      await groupService.updateDevice(groupId, deviceId, { disable_send: disableSend, disable_recv: disableRecv })
-      // 刷新设备列表
-      setGroupDevices((prev) => {
-        const newCache = { ...prev }
-        delete newCache[groupId]
-        return newCache
-      })
-      fetchGroupDevices(groupId)
-    } catch {
-      setError('更新设备状态失败')
-    }
-  }
-
   // 踢出设备
   const handleKickDevice = async (groupId: number, deviceId: number, deviceName: string) => {
     setConfirmDialog({
@@ -447,12 +430,9 @@ export function AdminGroupPage() {
                         </Typography>
                       </Stack>
                       <Stack direction="row" alignItems="center" spacing={1}>
-                        <SendRecvControl
-                          disableSend={device.disable_send ?? false}
-                          disableRecv={device.disable_recv ?? false}
-                          onToggleSend={() => handleUpdateDeviceStatus(group.id, device.id!, !(device.disable_send ?? false), device.disable_recv ?? false)}
-                          onToggleRecv={() => handleUpdateDeviceStatus(group.id, device.id!, device.disable_send ?? false, !(device.disable_recv ?? false))}
-                        />
+                        <Typography variant="caption" color="text.secondary">
+                          发:{device.disable_send ? '禁用' : '正常'} / 收:{device.disable_recv ? '禁用' : '正常'}
+                        </Typography>
                         <Tooltip title="踢出设备">
                           <IconButton
                             size="small"

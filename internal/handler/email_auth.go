@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"draarl/internal/email"
 	"draarl/internal/gormdb"
@@ -193,8 +194,17 @@ func EmailLogin(c *gin.Context) {
 	}
 
 	// 更新最后登录时间
-	if err := repo.UpdateLastLogin(user.ID, c.ClientIP()); err != nil {
+	clientIP := c.ClientIP()
+	if err := repo.UpdateLastLogin(user.ID, clientIP); err != nil {
 		log.Printf("更新最后登录时间失败: %v", err)
+	} else {
+		now := time.Now()
+		user.LastLoginTime = &now
+		user.LastLoginIP = clientIP
+		user.LoginErrTimes = 0
+		if userCache := cache.GetUserCache(); userCache != nil {
+			_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		}
 	}
 
 	// 删除验证会话
@@ -386,6 +396,15 @@ func buildUserResponse(user *gormdb.User) gin.H {
 		"status":          user.Status,
 		"approval_status": user.ApprovalStatus,
 		"isAdmin":         hasRoleGORM(user, "admin"),
+		"last_login_time": func() string {
+			if user.LastLoginTime != nil {
+				return user.LastLoginTime.Format("2006-01-02 15:04:05")
+			}
+			return ""
+		}(),
+		"last_login_ip":          user.LastLoginIP,
+		"last_login_ip_location": getIPLocation(user.LastLoginIP),
+		"login_err_times":        user.LoginErrTimes,
 	}
 }
 

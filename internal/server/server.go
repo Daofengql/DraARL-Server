@@ -281,8 +281,6 @@ func (s *Server) setupRoutes() {
 					groupOwner.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
 					groupOwner.DELETE("/groups/:id", handler.DeleteGroup)
 					groupOwner.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
-					// 设置设备禁发/禁收
-					groupOwner.PUT("/groups/:id/devices/:deviceId", handler.UpdateDeviceStatus)
 					// 踢出设备
 					groupOwner.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
 				}

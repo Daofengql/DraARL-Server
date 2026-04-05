@@ -547,7 +547,18 @@ func handleLoginCallback(c *gin.Context, kcUserInfo *KeycloakUserInfo) {
 
 	// 更新最后登录时间
 	repo := gormdb.NewUserRepository()
-	repo.UpdateLastLogin(user.ID, c.ClientIP())
+	clientIP := c.ClientIP()
+	if err := repo.UpdateLastLogin(user.ID, clientIP); err != nil {
+		log.Printf("更新最后登录时间失败: %v", err)
+	} else {
+		now := time.Now()
+		user.LastLoginTime = &now
+		user.LastLoginIP = clientIP
+		user.LoginErrTimes = 0
+		if userCache := cache.GetUserCache(); userCache != nil {
+			_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		}
+	}
 
 	issued, err := issueAuthTokens(c, user)
 	if err != nil {
@@ -660,7 +671,18 @@ func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, f
 
 	// 更新最后登录时间
 	repo := gormdb.NewUserRepository()
-	repo.UpdateLastLogin(user.ID, c.ClientIP())
+	clientIP := c.ClientIP()
+	if err := repo.UpdateLastLogin(user.ID, clientIP); err != nil {
+		log.Printf("更新最后登录时间失败: %v", err)
+	} else {
+		now := time.Now()
+		user.LastLoginTime = &now
+		user.LastLoginIP = clientIP
+		user.LoginErrTimes = 0
+		if userCache := cache.GetUserCache(); userCache != nil {
+			_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		}
+	}
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -898,9 +920,10 @@ func buildUserData(user *gormdb.User) gin.H {
 			}
 			return ""
 		}(),
-		"last_login_ip":   user.LastLoginIP,
-		"login_err_times": user.LoginErrTimes,
-		"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
-		"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+		"last_login_ip":          user.LastLoginIP,
+		"last_login_ip_location": getIPLocation(user.LastLoginIP),
+		"login_err_times":        user.LoginErrTimes,
+		"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
+		"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
 	}
 }

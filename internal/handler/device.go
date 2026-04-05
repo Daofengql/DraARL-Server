@@ -25,25 +25,27 @@ type DeviceListRequest struct {
 
 // DeviceInfo 设备信息响应
 type DeviceInfo struct {
-	ID            int    `json:"id"`
-	Name          string `json:"name"`
-	CallSign      string `json:"callsign"`
-	SSID          uint8  `json:"ssid"`
-	DevModel      int    `json:"dev_model"`
-	GroupID       int    `json:"group_id"`
-	Status        int8   `json:"status"`
-	Priority      int    `json:"priority"`
-	IsOnline      bool   `json:"is_online"`
-	DisableSend   bool   `json:"disable_send"`
-	DisableRecv   bool   `json:"disable_recv"`
-	QTH           string `json:"qth"`
-	Note          string `json:"note"`
-	OwnerID       int    `json:"owner_id,omitempty"`
-	OwnerName     string `json:"owner_name,omitempty"`
-	OwnerCallSign string `json:"owner_callsign,omitempty"`
-	OnlineTime    string `json:"online_time,omitempty"`
-	CreateTime    string `json:"create_time,omitempty"`
-	UpdateTime    string `json:"update_time,omitempty"`
+	ID                   int    `json:"id"`
+	Name                 string `json:"name"`
+	CallSign             string `json:"callsign"`
+	SSID                 uint8  `json:"ssid"`
+	DevModel             int    `json:"dev_model"`
+	GroupID              int    `json:"group_id"`
+	Status               int8   `json:"status"`
+	Priority             int    `json:"priority"`
+	IsOnline             bool   `json:"is_online"`
+	DisableSend          bool   `json:"disable_send"`
+	DisableRecv          bool   `json:"disable_recv"`
+	QTH                  string `json:"qth"`
+	LastOnlineIP         string `json:"last_online_ip,omitempty"`
+	LastOnlineIPLocation string `json:"last_online_ip_location,omitempty"`
+	Note                 string `json:"note"`
+	OwnerID              int    `json:"owner_id,omitempty"`
+	OwnerName            string `json:"owner_name,omitempty"`
+	OwnerCallSign        string `json:"owner_callsign,omitempty"`
+	OnlineTime           string `json:"online_time,omitempty"`
+	CreateTime           string `json:"create_time,omitempty"`
+	UpdateTime           string `json:"update_time,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -145,20 +147,22 @@ func GetDevices(c *gin.Context) {
 	items := make([]*DeviceInfo, 0, len(devices))
 	for _, d := range devices {
 		info := &DeviceInfo{
-			ID:          d.ID,
-			Name:        d.Name,
-			SSID:        d.SSID,
-			DevModel:    d.DevModel,
-			GroupID:     d.GroupID,
-			Status:      d.Status,
-			Priority:    d.Priority,
-			IsOnline:    d.ISOnline,
-			DisableSend: d.DisableSend, // 补充设备级禁发状态
-			DisableRecv: d.DisableRecv, // 补充设备级禁收状态
-			QTH:         d.QTH,
-			Note:        d.Note,
-			CreateTime:  d.CreateTime.Format("2006-01-02 15:04:05"),
-			UpdateTime:  d.UpdateTime.Format("2006-01-02 15:04:05"),
+			ID:                   d.ID,
+			Name:                 d.Name,
+			SSID:                 d.SSID,
+			DevModel:             d.DevModel,
+			GroupID:              d.GroupID,
+			Status:               d.Status,
+			Priority:             d.Priority,
+			IsOnline:             d.ISOnline,
+			DisableSend:          d.DisableSend, // 补充设备级禁发状态
+			DisableRecv:          d.DisableRecv, // 补充设备级禁收状态
+			QTH:                  d.QTH,
+			LastOnlineIP:         d.LastOnlineIP,
+			LastOnlineIPLocation: getIPLocation(d.LastOnlineIP),
+			Note:                 d.Note,
+			CreateTime:           d.CreateTime.Format("2006-01-02 15:04:05"),
+			UpdateTime:           d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
 
 		// 从批量查询结果中获取设备所有者信息
@@ -261,19 +265,21 @@ func GetDevice(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":          device.ID,
-			"name":        device.Name,
-			"callsign":    callsign,
-			"ssid":        device.SSID,
-			"dev_model":   device.DevModel,
-			"group_id":    device.GroupID,
-			"status":      device.Status,
-			"priority":    device.Priority,
-			"is_online":   device.ISOnline,
-			"owner_id":    device.OwnerID,
-			"note":        device.Note,
-			"create_time": device.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time": device.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":                      device.ID,
+			"name":                    device.Name,
+			"callsign":                callsign,
+			"ssid":                    device.SSID,
+			"dev_model":               device.DevModel,
+			"group_id":                device.GroupID,
+			"status":                  device.Status,
+			"priority":                device.Priority,
+			"is_online":               device.ISOnline,
+			"last_online_ip":          device.LastOnlineIP,
+			"last_online_ip_location": getIPLocation(device.LastOnlineIP),
+			"owner_id":                device.OwnerID,
+			"note":                    device.Note,
+			"create_time":             device.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":             device.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
@@ -286,8 +292,8 @@ type UpdateDeviceRequest struct {
 	Priority    int    `json:"priority"`
 	Note        string `json:"note"`
 	DevModel    int    `json:"dev_model"`
-	DisableSend bool   `json:"disable_send"` // 设备级禁发
-	DisableRecv bool   `json:"disable_recv"` // 设备级禁收
+	DisableSend *bool  `json:"disable_send"` // 设备级禁发（可选字段）
+	DisableRecv *bool  `json:"disable_recv"` // 设备级禁收（可选字段）
 }
 
 // UpdateDevice 更新设备
@@ -363,8 +369,15 @@ func UpdateDevice(c *gin.Context) {
 		device.DevModel = req.DevModel
 	}
 	// 设备级别的收发控制（设备所有者和管理员可设置）
-	updates["disable_send"] = req.DisableSend
-	updates["disable_recv"] = req.DisableRecv
+	// 仅在请求显式传入字段时更新，避免未传字段被默认值覆盖。
+	if req.DisableSend != nil {
+		updates["disable_send"] = *req.DisableSend
+		device.DisableSend = *req.DisableSend
+	}
+	if req.DisableRecv != nil {
+		updates["disable_recv"] = *req.DisableRecv
+		device.DisableRecv = *req.DisableRecv
+	}
 
 	// 记录旧群组ID（用于缓存失效）
 	oldGroupID := device.GroupID
@@ -375,6 +388,11 @@ func UpdateDevice(c *gin.Context) {
 			"message": "更新设备失败",
 		})
 		return
+	}
+
+	// 立即同步 UDP Hub 运行时内存，避免等待定时器导致收发控制生效延迟
+	if req.DisableSend != nil || req.DisableRecv != nil {
+		udphub.SyncDeviceCommControlByID(id, device.DisableSend, device.DisableRecv)
 	}
 
 	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
@@ -611,20 +629,10 @@ func ChangeDeviceGroup(c *gin.Context) {
 				IsVerified: true,
 				JoinTime:   time.Now(),
 				LastVerify: time.Now(),
-				DeviceID:   &req.DeviceID,
 			}); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "创建成员记录失败",
-				})
-				return
-			}
-		} else {
-			// 已验证用户，更新 GroupMember 记录的设备ID
-			if err := memberRepo.UpdateMemberDevice(req.GroupID, currentUser.ID, &req.DeviceID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "更新成员设备失败",
 				})
 				return
 			}

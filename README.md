@@ -429,8 +429,8 @@ sudo systemctl start draarl
 - owner_id, status, is_virtual
 
 **group_members - 群组成员表**
-- id, group_id, device_id
-- disable_send, disable_recv, joined_at
+- id, group_id, user_id
+- is_verified, join_time, last_verify
 
 **comm_records - 通信记录表**
 - id, device_id, group_id

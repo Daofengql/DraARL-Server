@@ -273,23 +273,18 @@ func (SiteConfig) TableName() string {
 
 // GroupMember 群组成员关系（用户与群组的验证关系）
 type GroupMember struct {
-	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID     int       `gorm:"uniqueIndex:uk_group_user,priority:1;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
-	UserID      int       `gorm:"uniqueIndex:uk_group_user,priority:2;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
-	IsVerified  bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
-	JoinTime    time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
-	LastVerify  time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
-	DeviceID    *int      `gorm:"index;column:device_id" json:"device_id,omitempty"`
-	DisableSend bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`
-	DisableRecv bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`
-	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"created_at"`
-	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
+	ID         int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID    int       `gorm:"uniqueIndex:uk_group_user,priority:1;column:group_id;constraint:OnDelete:CASCADE" json:"group_id"`
+	UserID     int       `gorm:"uniqueIndex:uk_group_user,priority:2;column:user_id;constraint:OnDelete:CASCADE" json:"user_id"`
+	IsVerified bool      `gorm:"type:tinyint(1);default:0;column:is_verified" json:"is_verified"`
+	JoinTime   time.Time `gorm:"autoCreateTime;column:join_time" json:"join_time"`
+	LastVerify time.Time `gorm:"autoUpdateTime;column:last_verify" json:"last_verify"`
+	CreateTime time.Time `gorm:"autoCreateTime;column:create_time" json:"created_at"`
+	UpdateTime time.Time `gorm:"autoUpdateTime;column:update_time" json:"updated_at"`
 
 	// 关联定义：群解散 或 人销号，都会清理当前的加群记录
 	Group *Group `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"group,omitempty"`
 	User  *User  `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
-	// 关联定义：弱依赖设备。设备被删除时，仅将此处的 DeviceID 置为 NULL (OnDelete:SET NULL)
-	Device *Device `gorm:"foreignKey:DeviceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"device,omitempty"`
 }
 
 // TableName 指定表名
@@ -527,6 +522,60 @@ func AutoMigrate() error {
 		return err
 	}
 
+	// 阶段三：下线 group_members 历史设备级字段（仅保留成员资格语义）
+	pruneLegacyGroupMemberColumns(db)
+
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 	return nil
+}
+
+// pruneLegacyGroupMemberColumns 安全下线 group_members 历史字段：
+// - device_id
+// - disable_send
+// - disable_recv
+func pruneLegacyGroupMemberColumns(db *gorm.DB) {
+	if !db.Migrator().HasTable(&GroupMember{}) {
+		return
+	}
+
+	legacyColumns := []string{"device_id", "disable_send", "disable_recv"}
+	for _, col := range legacyColumns {
+		if !db.Migrator().HasColumn(&GroupMember{}, col) {
+			continue
+		}
+
+		// device_id 可能存在历史外键，先按信息架构查询并移除约束
+		if col == "device_id" {
+			var dbName string
+			if err := db.Raw("SELECT DATABASE()").Scan(&dbName).Error; err == nil && dbName != "" {
+				var rows []struct {
+					ConstraintName string `gorm:"column:constraint_name"`
+				}
+				fkSQL := `
+					SELECT DISTINCT constraint_name
+					FROM information_schema.key_column_usage
+					WHERE table_schema = ?
+					  AND table_name = 'group_members'
+					  AND column_name = 'device_id'
+					  AND referenced_table_name IS NOT NULL
+				`
+				if err := db.Raw(fkSQL, dbName).Scan(&rows).Error; err == nil {
+					for _, row := range rows {
+						if row.ConstraintName == "" {
+							continue
+						}
+						if err := db.Migrator().DropConstraint(&GroupMember{}, row.ConstraintName); err != nil {
+							log.Printf("[Migration Warning] 删除 group_members.%s 外键 %s 失败: %v", col, row.ConstraintName, err)
+						}
+					}
+				}
+			}
+		}
+
+		if err := db.Migrator().DropColumn(&GroupMember{}, col); err != nil {
+			log.Printf("[Migration Warning] 删除 group_members.%s 失败: %v", col, err)
+			continue
+		}
+		log.Printf("[Migration Info] 已删除遗留字段 group_members.%s", col)
+	}
 }

@@ -726,3 +726,60 @@ func ChangeDeviceGroupByID(deviceID int, newGroupID int) error {
 	log.Printf("[GROUP] Device %s (ID: %d) changed to group %d", dev.CallSign, deviceID, newGroupID)
 	return nil
 }
+
+// SyncDeviceCommControlByID 同步设备禁发/禁收到 UDP Hub 运行时内存。
+// 设计目标：设备控制接口更新数据库后，立即在内存转发路径生效，不依赖 10 秒轮询同步。
+func SyncDeviceCommControlByID(deviceID int, disableSend, disableRecv bool) {
+	seen := make(map[*models.Device]struct{}, 8)
+	updated := 0
+
+	apply := func(dev *models.Device) {
+		if dev == nil || dev.ID != deviceID {
+			return
+		}
+		if _, ok := seen[dev]; ok {
+			return
+		}
+		seen[dev] = struct{}{}
+		dev.DisableSend = disableSend
+		dev.DisableRecv = disableRecv
+		updated++
+	}
+
+	// 1) 两套主索引
+	for _, dev := range devUsernameSSIDMap {
+		apply(dev)
+	}
+	for _, dev := range devCallsignSSIDMap {
+		apply(dev)
+	}
+
+	// 2) 群组缓存中的连接池与设备映射（覆盖所有转发读取路径）
+	cache := globalGroupCacheAtomic.Load()
+	if cache != nil {
+		if groupMap, ok := cache.(map[int]*models.Group); ok {
+			for _, gp := range groupMap {
+				if gp == nil {
+					continue
+				}
+				for _, dev := range gp.DevMap {
+					apply(dev)
+				}
+				pool := getGroupConnPool(gp)
+				if pool == nil {
+					continue
+				}
+				for _, dev := range pool.DevConnMap {
+					apply(dev)
+				}
+				for _, dev := range pool.DevConnList {
+					apply(dev)
+				}
+			}
+		}
+	}
+
+	if updated > 0 {
+		log.Printf("[DEVICE] Device ID %d comm control synced in memory: disable_send=%v disable_recv=%v (refs=%d)", deviceID, disableSend, disableRecv, updated)
+	}
+}

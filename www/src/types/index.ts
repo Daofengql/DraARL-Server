@@ -162,8 +162,6 @@ export interface GroupMember {
   join_time: string
   last_verify: string
   device_count?: number    // 该成员在群组中的设备数
-  disable_send: boolean
-  disable_recv: boolean
 }
 
 // 中继台相关类型

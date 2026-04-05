@@ -98,7 +98,7 @@ func (r *DeviceRepository) DeleteDeviceByID(id int) error {
 }
 
 // DeleteDeviceWithCascade 删除设备及其所有关联数据（事务级联删除）
-// 包括： device_configs, group_members 中的设备引用, comm_records 中的设备引用
+// 包括：device_configs, comm_records 中的设备引用
 func (r *DeviceRepository) DeleteDeviceWithCascade(id int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// 1. 删除设备的配置
@@ -106,17 +106,12 @@ func (r *DeviceRepository) DeleteDeviceWithCascade(id int) error {
 			return err
 		}
 
-		// 2. 清除群组成员中的设备引用（将 device_id 设为 NULL）
-		if err := tx.Model(&GroupMember{}).Where("device_id = ?", id).Update("device_id", nil).Error; err != nil {
-			return err
-		}
-
-		// 3. 清除通信记录中的设备引用（将 device_id 设为 NULL，保留记录用于统计）
+		// 2. 清除通信记录中的设备引用（将 device_id 设为 NULL，保留记录用于统计）
 		if err := tx.Model(&CommRecord{}).Where("device_id = ?", id).Update("device_id", nil).Error; err != nil {
 			return err
 		}
 
-		// 4. 最后删除设备本身
+		// 3. 最后删除设备本身
 		if err := tx.Delete(&Device{}, id).Error; err != nil {
 			return err
 		}

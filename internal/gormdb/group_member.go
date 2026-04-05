@@ -85,35 +85,6 @@ func (r *GroupMemberRepository) UpdateMemberVerification(groupID, userID int, is
 		Updates(updates).Error
 }
 
-// UpdateMemberDevice 更新成员设备
-func (r *GroupMemberRepository) UpdateMemberDevice(groupID, userID int, deviceID *int) error {
-	return r.db.Model(&GroupMember{}).
-		Where("group_id = ? AND user_id = ?", groupID, userID).
-		Update("device_id", deviceID).Error
-}
-
-// UpdateMemberDeviceStatus 更新成员设备禁发/禁收状态
-func (r *GroupMemberRepository) UpdateMemberDeviceStatus(groupID, userID int, disableSend, disableRecv bool) error {
-	updates := map[string]interface{}{
-		"disable_send": disableSend,
-		"disable_recv": disableRecv,
-	}
-	return r.db.Model(&GroupMember{}).
-		Where("group_id = ? AND user_id = ?", groupID, userID).
-		Updates(updates).Error
-}
-
-// UpdateMemberDeviceStatusByDevice 根据设备ID更新设备状态
-func (r *GroupMemberRepository) UpdateMemberDeviceStatusByDevice(groupID, deviceID int, disableSend, disableRecv bool) error {
-	updates := map[string]interface{}{
-		"disable_send": disableSend,
-		"disable_recv": disableRecv,
-	}
-	return r.db.Model(&GroupMember{}).
-		Where("group_id = ? AND device_id = ?", groupID, deviceID).
-		Updates(updates).Error
-}
-
 // DeleteMember 删除群组成员记录
 func (r *GroupMemberRepository) DeleteMember(groupID, userID int) error {
 	return r.db.Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{}).Error
@@ -133,13 +104,6 @@ func (r *GroupMemberRepository) DeleteMembersByUser(userID int) error {
 func (r *GroupMemberRepository) IsVerifiedMember(groupID, userID int) bool {
 	member, _ := r.GetVerifiedMemberByGroupAndUser(groupID, userID)
 	return member != nil
-}
-
-// GetMemberByDevice 获取设备所在的群组成员记录
-func (r *GroupMemberRepository) GetMemberByDevice(deviceID int) ([]*GroupMember, error) {
-	var members []*GroupMember
-	err := r.db.Where("device_id = ?", deviceID).Find(&members).Error
-	return members, err
 }
 
 // CountMembersByGroup 统计群组成员数

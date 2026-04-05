@@ -286,8 +286,8 @@ type UpdateDeviceRequest struct {
 	Priority    int    `json:"priority"`
 	Note        string `json:"note"`
 	DevModel    int    `json:"dev_model"`
-	DisableSend bool   `json:"disable_send"` // 设备级禁发
-	DisableRecv bool   `json:"disable_recv"` // 设备级禁收
+	DisableSend *bool  `json:"disable_send"` // 设备级禁发（可选字段）
+	DisableRecv *bool  `json:"disable_recv"` // 设备级禁收（可选字段）
 }
 
 // UpdateDevice 更新设备
@@ -363,8 +363,15 @@ func UpdateDevice(c *gin.Context) {
 		device.DevModel = req.DevModel
 	}
 	// 设备级别的收发控制（设备所有者和管理员可设置）
-	updates["disable_send"] = req.DisableSend
-	updates["disable_recv"] = req.DisableRecv
+	// 仅在请求显式传入字段时更新，避免未传字段被默认值覆盖。
+	if req.DisableSend != nil {
+		updates["disable_send"] = *req.DisableSend
+		device.DisableSend = *req.DisableSend
+	}
+	if req.DisableRecv != nil {
+		updates["disable_recv"] = *req.DisableRecv
+		device.DisableRecv = *req.DisableRecv
+	}
 
 	// 记录旧群组ID（用于缓存失效）
 	oldGroupID := device.GroupID
@@ -375,6 +382,11 @@ func UpdateDevice(c *gin.Context) {
 			"message": "更新设备失败",
 		})
 		return
+	}
+
+	// 立即同步 UDP Hub 运行时内存，避免等待定时器导致收发控制生效延迟
+	if req.DisableSend != nil || req.DisableRecv != nil {
+		udphub.SyncDeviceCommControlByID(id, device.DisableSend, device.DisableRecv)
 	}
 
 	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
@@ -611,20 +623,10 @@ func ChangeDeviceGroup(c *gin.Context) {
 				IsVerified: true,
 				JoinTime:   time.Now(),
 				LastVerify: time.Now(),
-				DeviceID:   &req.DeviceID,
 			}); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "创建成员记录失败",
-				})
-				return
-			}
-		} else {
-			// 已验证用户，更新 GroupMember 记录的设备ID
-			if err := memberRepo.UpdateMemberDevice(req.GroupID, currentUser.ID, &req.DeviceID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "更新成员设备失败",
 				})
 				return
 			}

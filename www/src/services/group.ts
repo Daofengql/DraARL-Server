@@ -180,15 +180,6 @@ export const groupService = {
     }
   },
 
-  // 设置设备禁发/禁收
-  async updateDevice(
-    groupId: number,
-    deviceId: number,
-    data: { disable_send?: boolean; disable_recv?: boolean }
-  ): Promise<void> {
-    await apiClient.put<BackendResponse<unknown>>(`/api/groups/${groupId}/devices/${deviceId}`, data)
-  },
-
   // 踢出设备
   async kickDevice(groupId: number, deviceId: number): Promise<void> {
     await apiClient.delete<BackendResponse<unknown>>(`/api/groups/${groupId}/devices/${deviceId}`)

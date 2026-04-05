@@ -144,7 +144,6 @@ export function AdminDevicePage() {
   const handleToggleSend = async (device: Device) => {
     try {
       await deviceService.update(device.id, {
-        ...device,
         disable_send: !(device.disable_send ?? false),
       })
       loadDevices()
@@ -157,7 +156,6 @@ export function AdminDevicePage() {
   const handleToggleRecv = async (device: Device) => {
     try {
       await deviceService.update(device.id, {
-        ...device,
         disable_recv: !(device.disable_recv ?? false),
       })
       loadDevices()

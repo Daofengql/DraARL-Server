@@ -608,10 +608,61 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 	}
 }
 
+// buildUDPSpeakerIdentity 为 UDP 设备构造半双工仲裁使用的说话人身份。
+func buildUDPSpeakerIdentity(dev *models.Device, packet *protocol.DraARLv1Packet) (speakerID string, speakerLabel string) {
+	if dev == nil {
+		return "", ""
+	}
+
+	ssid := dev.SSID
+	if ssid == 0 && packet != nil {
+		ssid = packet.SSID
+	}
+
+	labelBase := dev.CallSign
+	if labelBase == "" {
+		labelBase = dev.Username
+	}
+	if labelBase == "" && packet != nil {
+		if packet.CallSign != "" {
+			labelBase = packet.CallSign
+		} else {
+			labelBase = packet.Username
+		}
+	}
+	if labelBase == "" && dev.UDPAddr != nil {
+		labelBase = dev.UDPAddr.String()
+	}
+	if labelBase == "" {
+		labelBase = "unknown"
+	}
+	speakerLabel = fmt.Sprintf("%s-%d", labelBase, ssid)
+
+	switch {
+	case dev.ID > 0:
+		speakerID = fmt.Sprintf("udp_dev:%d", dev.ID)
+	case dev.Username != "":
+		speakerID = fmt.Sprintf("udp_user:%s:%d", dev.Username, ssid)
+	case packet != nil && packet.Username != "":
+		speakerID = fmt.Sprintf("udp_user:%s:%d", packet.Username, ssid)
+	case dev.UDPAddr != nil:
+		speakerID = fmt.Sprintf("udp_addr:%s:%d", dev.UDPAddr.String(), ssid)
+	default:
+		speakerID = fmt.Sprintf("udp_ssid:%d", ssid)
+	}
+
+	return speakerID, speakerLabel
+}
+
 // handleDraARLVoice 处理 DraARLv1 语音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
 	if dev.DisableSend {
+		return
+	}
+
+	speakerID, speakerLabel := buildUDPSpeakerIdentity(dev, packet)
+	if !tryAcquireHalfDuplex(gp.ID, speakerID, speakerLabel, packet.TimeStamp) {
 		return
 	}
 
@@ -809,6 +860,11 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
 	if dev.DisableSend {
+		return
+	}
+
+	speakerID, speakerLabel := buildUDPSpeakerIdentity(dev, packet)
+	if !tryAcquireHalfDuplex(gp.ID, speakerID, speakerLabel, packet.TimeStamp) {
 		return
 	}
 
@@ -1177,11 +1233,6 @@ func refreshGroupCache() {
 				DevConnList: make([]*models.Device, 0, 32),
 			}
 			newGroup.DevMap = make(map[int]*models.Device, 32)
-
-			// 如果是会议模式，启动混音
-			if newGroup.Type == models.GroupTypeMeeting {
-				go startMixPCM(newGroup)
-			}
 
 			newGroupCache[newGroup.ID] = newGroup
 			log.Printf("[CACHE] 新群组已加载: %d - %s", newGroup.ID, newGroup.Name)

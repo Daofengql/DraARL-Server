@@ -35,10 +35,8 @@ func New(cfg *config.Configuration) *Server {
 		allowedOriginSet[strings.ToLower(origin)] = struct{}{}
 	}
 
-	// 初始化MinIO
-	if err := minio.InitMinIO(); err != nil {
-		log.Printf("MinIO 初始化失败: %v", err)
-	}
+	// 后台初始化 MinIO（失败自动重试），避免阻塞 Gin 启动
+	minio.StartInitMinIOInBackground()
 
 	// 初始化站点配置（如果数据库为空则从YAML迁移）
 	initSiteConfigs(cfg)

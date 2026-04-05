@@ -103,6 +103,9 @@ func refreshGroupLinkCache() {
 	globalGroupLinkCache.targetToPeers = newTargetToPeers
 	globalGroupLinkCache.Unlock()
 
+	// 群组互联拓扑更新后，重置半双工域缓存，确保仲裁范围与最新转发关系一致。
+	resetHalfDuplexDomainCache()
+
 	log.Printf("[CACHE] 群组互联关系同步完成，共 %d 个关联", len(links))
 }
 

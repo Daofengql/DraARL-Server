@@ -7,22 +7,23 @@ import (
 
 // Device 设备信息
 type Device struct {
-	ID         int       `json:"id"`
-	Name       string    `json:"name"`
-	DMRID      uint32    `json:"dmrid"`
-	SSID       byte      `json:"ssid"`
-	OwnerID    int       `json:"owner_id"` // 所有者用户ID (外键关联 users.id)
-	CallSign   string    `json:"callsign"` // 运行时字段：从用户缓存获取
-	QTH        string    `json:"qth"`      // 位置信息 (原 gird 字段)
-	DevModel   byte      `json:"dev_model"`
-	GroupID    int       `json:"group_id"`
-	Status     byte      `json:"status"`
-	IsCerted   bool      `json:"is_certed"`
-	Priority   int       `json:"priority"`
-	OnlineTime time.Time `json:"online_time"`
-	CreateTime time.Time `json:"create_time"`
-	UpdateTime time.Time `json:"update_time"`
-	Note       string    `json:"note"`
+	ID           int       `json:"id"`
+	Name         string    `json:"name"`
+	DMRID        uint32    `json:"dmrid"`
+	SSID         byte      `json:"ssid"`
+	OwnerID      int       `json:"owner_id"`       // 所有者用户ID (外键关联 users.id)
+	CallSign     string    `json:"callsign"`       // 运行时字段：从用户缓存获取
+	QTH          string    `json:"qth"`            // 位置信息 (原 gird 字段)
+	LastOnlineIP string    `json:"last_online_ip"` // 最近一次上线的客户端 IP（与 QTH 并行保留）
+	DevModel     byte      `json:"dev_model"`
+	GroupID      int       `json:"group_id"`
+	Status       byte      `json:"status"`
+	IsCerted     bool      `json:"is_certed"`
+	Priority     int       `json:"priority"`
+	OnlineTime   time.Time `json:"online_time"`
+	CreateTime   time.Time `json:"create_time"`
+	UpdateTime   time.Time `json:"update_time"`
+	Note         string    `json:"note"`
 
 	// 设备级别的收发控制（优先级高于群组设置）
 	DisableSend bool `json:"disable_send"` // 设备级禁发

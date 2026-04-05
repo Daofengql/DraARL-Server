@@ -25,6 +25,8 @@ interface BackendDevice {
   disable_send?: boolean
   disable_recv?: boolean
   qth?: string
+  last_online_ip?: string
+  last_online_ip_location?: string
   note?: string
   password?: string
   online_time?: string
@@ -51,6 +53,8 @@ const normalizeDevice = (d: BackendDevice): Device => ({
   disable_send: d.disable_send,
   disable_recv: d.disable_recv,
   qth: d.qth,
+  last_online_ip: d.last_online_ip,
+  last_online_ip_location: d.last_online_ip_location,
   note: d.note,
   owner_id: d.owner_id,
   owner_name: d.owner_name,

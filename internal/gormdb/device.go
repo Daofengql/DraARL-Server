@@ -135,12 +135,15 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 }
 
 // UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）
-func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime string) error {
+func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime, lastOnlineIP string) error {
 	updates := map[string]interface{}{
 		"is_online": isOnline,
 	}
 	if onlineTime != "" {
 		updates["online_time"] = onlineTime
+	}
+	if lastOnlineIP != "" {
+		updates["last_online_ip"] = lastOnlineIP
 	}
 	return r.db.Model(&Device{}).
 		Where("owner_id = ? AND ssid = ?", ownerID, ssid).

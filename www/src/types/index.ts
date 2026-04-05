@@ -27,6 +27,7 @@ export interface User {
   alarm_msg?: boolean
   last_login_time?: string
   last_login_ip?: string
+  last_login_ip_location?: string
   login_err_times?: number
   last_group_id?: number  // 用户上次选中的群组 ID（用于跨设备/跨会话同步）
 }
@@ -66,6 +67,8 @@ export interface Device {
   status: number
   priority?: number
   qth?: string
+  last_online_ip?: string
+  last_online_ip_location?: string
   online_time?: string
   last_heartbeat?: string // 前端兼容字段
   disable_send?: boolean  // 禁用发送

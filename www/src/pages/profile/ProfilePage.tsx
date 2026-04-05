@@ -1032,7 +1032,11 @@ export function ProfilePage() {
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 120, color: 'text.secondary' }}>登录IP</Box>
-                    <ListItemText>{user?.last_login_ip || '-'}</ListItemText>
+                    <ListItemText>
+                      {user?.last_login_ip
+                        ? `${user.last_login_ip}${user.last_login_ip_location ? ` (${user.last_login_ip_location})` : ''}`
+                        : '-'}
+                    </ListItemText>
                   </ListItem>
                   <ListItem divider>
                     <Box sx={{ minWidth: 120, color: 'text.secondary' }}>登录错误次数</Box>

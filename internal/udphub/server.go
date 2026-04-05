@@ -529,6 +529,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		Priority:     100,
 		Status:       0,
 		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
+		LastOnlineIP: realAddr.IP.String(),
 	}
 
 	// 保存设备到数据库
@@ -543,6 +544,8 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		dev.UDPAddr = packet.UDPAddr
 		dev.ISOnline = true
 		dev.LastPacketTime = packet.TimeStamp
+		dev.OnlineTime = packet.TimeStamp
+		dev.LastOnlineIP = realAddr.IP.String()
 		devUsernameSSIDMap[usernameSSID] = dev
 
 		// 同时更新 callsign 索引（向后兼容）
@@ -728,6 +731,10 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	wasOnline := dev.ISOnline
 	currentAddr := packet.UDPAddr.String()
 	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
+	realIP := ""
+	if realAddr != nil && realAddr.IP != nil {
+		realIP = realAddr.IP.String()
+	}
 
 	// 解析 GPS 信息 (DATA 区域前 24 字节)
 	if len(packet.DATA) >= 24 {
@@ -750,6 +757,9 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	// 更新设备地址和时间（UDPAddr 存储 frp 转发地址，用于发送响应）
 	dev.UDPAddr = packet.UDPAddr
 	dev.LastPacketTime = packet.TimeStamp
+	if realIP != "" {
+		dev.LastOnlineIP = realIP
+	}
 
 	// 检测重连
 	if addrChanged && wasOnline {
@@ -787,6 +797,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		if packet.DevModel != 0 {
 			dev.DevModel = packet.DevModel
 		}
+		dev.OnlineTime = packet.TimeStamp
 
 		// QTH 查询使用真实 IP
 		dev.QTH = getQTH(realAddr.IP.String())
@@ -1297,13 +1308,16 @@ func refreshDeviceCache() {
 				updatedCount++
 			}
 
-			// ==========================================
-			// 关键修复：补全缓存失效逻辑
-			// 当检测到设备的在线状态发生改变时，不仅需要失效单设备缓存，
-			// 还必须使全局设备列表和对应群组的设备列表缓存同时失效。
-			// ==========================================
-			if memDev.ISOnline != dbDev.ISOnline {
-				repo.UpdateDeviceOnlineStatus(memDev.OwnerID, uint8(memDev.SSID), memDev.ISOnline, "")
+			onlineStateChanged := memDev.ISOnline != dbDev.ISOnline
+			lastOnlineIPChanged := memDev.LastOnlineIP != "" && memDev.LastOnlineIP != dbDev.LastOnlineIP
+
+			// 在线状态与最近上线 IP 的变更都需要同步到数据库，并使缓存失效。
+			if onlineStateChanged || lastOnlineIPChanged {
+				onlineTime := ""
+				if onlineStateChanged && memDev.ISOnline && !memDev.OnlineTime.IsZero() {
+					onlineTime = memDev.OnlineTime.Format("2006-01-02 15:04:05")
+				}
+				repo.UpdateDeviceOnlineStatus(memDev.OwnerID, uint8(memDev.SSID), memDev.ISOnline, onlineTime, memDev.LastOnlineIP)
 				onlineSyncCount++
 
 				// 获取缓存接口实例
@@ -1330,7 +1344,7 @@ func refreshDeviceCache() {
 		log.Printf("[CACHE] 设备属性同步完成，更新了 %d 个设备", updatedCount)
 	}
 	if onlineSyncCount > 0 {
-		log.Printf("[CACHE] 设备在线状态已同步到数据库，更新了 %d 个设备", onlineSyncCount)
+		log.Printf("[CACHE] 设备在线状态/IP 已同步到数据库，更新了 %d 个设备", onlineSyncCount)
 	}
 }
 

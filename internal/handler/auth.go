@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"draarl/internal/email"
 	gormdb "draarl/internal/gormdb"
@@ -135,8 +136,17 @@ func Login(c *gin.Context) {
 	}
 
 	// 更新最后登录时间
-	if err := repo.UpdateLastLogin(user.ID, c.ClientIP()); err != nil {
+	clientIP := c.ClientIP()
+	if err := repo.UpdateLastLogin(user.ID, clientIP); err != nil {
 		log.Printf("更新最后登录时间失败: %v", err)
+	} else {
+		now := time.Now()
+		user.LastLoginTime = &now
+		user.LastLoginIP = clientIP
+		user.LoginErrTimes = 0
+		if userCache := cache.GetUserCache(); userCache != nil {
+			_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		}
 	}
 
 	// 生成 JWT token
@@ -194,10 +204,11 @@ func Login(c *gin.Context) {
 			}
 			return ""
 		}(),
-		"last_login_ip":   user.LastLoginIP,
-		"login_err_times": user.LoginErrTimes,
-		"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
-		"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+		"last_login_ip":          user.LastLoginIP,
+		"last_login_ip_location": getIPLocation(user.LastLoginIP),
+		"login_err_times":        user.LoginErrTimes,
+		"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
+		"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -471,10 +482,11 @@ func GetCurrentUser(c *gin.Context) {
 				}
 				return ""
 			}(),
-			"last_login_ip":   user.LastLoginIP,
-			"login_err_times": user.LoginErrTimes,
-			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+			"last_login_ip":          user.LastLoginIP,
+			"last_login_ip_location": getIPLocation(user.LastLoginIP),
+			"login_err_times":        user.LoginErrTimes,
+			"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
@@ -1483,10 +1495,11 @@ func UpdateProfile(c *gin.Context) {
 				}
 				return ""
 			}(),
-			"last_login_ip":   user.LastLoginIP,
-			"login_err_times": user.LoginErrTimes,
-			"created_at":      user.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+			"last_login_ip":          user.LastLoginIP,
+			"last_login_ip_location": getIPLocation(user.LastLoginIP),
+			"login_err_times":        user.LoginErrTimes,
+			"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
+			"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }

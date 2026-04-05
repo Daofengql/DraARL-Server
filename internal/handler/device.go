@@ -25,25 +25,27 @@ type DeviceListRequest struct {
 
 // DeviceInfo 设备信息响应
 type DeviceInfo struct {
-	ID            int    `json:"id"`
-	Name          string `json:"name"`
-	CallSign      string `json:"callsign"`
-	SSID          uint8  `json:"ssid"`
-	DevModel      int    `json:"dev_model"`
-	GroupID       int    `json:"group_id"`
-	Status        int8   `json:"status"`
-	Priority      int    `json:"priority"`
-	IsOnline      bool   `json:"is_online"`
-	DisableSend   bool   `json:"disable_send"`
-	DisableRecv   bool   `json:"disable_recv"`
-	QTH           string `json:"qth"`
-	Note          string `json:"note"`
-	OwnerID       int    `json:"owner_id,omitempty"`
-	OwnerName     string `json:"owner_name,omitempty"`
-	OwnerCallSign string `json:"owner_callsign,omitempty"`
-	OnlineTime    string `json:"online_time,omitempty"`
-	CreateTime    string `json:"create_time,omitempty"`
-	UpdateTime    string `json:"update_time,omitempty"`
+	ID                   int    `json:"id"`
+	Name                 string `json:"name"`
+	CallSign             string `json:"callsign"`
+	SSID                 uint8  `json:"ssid"`
+	DevModel             int    `json:"dev_model"`
+	GroupID              int    `json:"group_id"`
+	Status               int8   `json:"status"`
+	Priority             int    `json:"priority"`
+	IsOnline             bool   `json:"is_online"`
+	DisableSend          bool   `json:"disable_send"`
+	DisableRecv          bool   `json:"disable_recv"`
+	QTH                  string `json:"qth"`
+	LastOnlineIP         string `json:"last_online_ip,omitempty"`
+	LastOnlineIPLocation string `json:"last_online_ip_location,omitempty"`
+	Note                 string `json:"note"`
+	OwnerID              int    `json:"owner_id,omitempty"`
+	OwnerName            string `json:"owner_name,omitempty"`
+	OwnerCallSign        string `json:"owner_callsign,omitempty"`
+	OnlineTime           string `json:"online_time,omitempty"`
+	CreateTime           string `json:"create_time,omitempty"`
+	UpdateTime           string `json:"update_time,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -145,20 +147,22 @@ func GetDevices(c *gin.Context) {
 	items := make([]*DeviceInfo, 0, len(devices))
 	for _, d := range devices {
 		info := &DeviceInfo{
-			ID:          d.ID,
-			Name:        d.Name,
-			SSID:        d.SSID,
-			DevModel:    d.DevModel,
-			GroupID:     d.GroupID,
-			Status:      d.Status,
-			Priority:    d.Priority,
-			IsOnline:    d.ISOnline,
-			DisableSend: d.DisableSend, // 补充设备级禁发状态
-			DisableRecv: d.DisableRecv, // 补充设备级禁收状态
-			QTH:         d.QTH,
-			Note:        d.Note,
-			CreateTime:  d.CreateTime.Format("2006-01-02 15:04:05"),
-			UpdateTime:  d.UpdateTime.Format("2006-01-02 15:04:05"),
+			ID:                   d.ID,
+			Name:                 d.Name,
+			SSID:                 d.SSID,
+			DevModel:             d.DevModel,
+			GroupID:              d.GroupID,
+			Status:               d.Status,
+			Priority:             d.Priority,
+			IsOnline:             d.ISOnline,
+			DisableSend:          d.DisableSend, // 补充设备级禁发状态
+			DisableRecv:          d.DisableRecv, // 补充设备级禁收状态
+			QTH:                  d.QTH,
+			LastOnlineIP:         d.LastOnlineIP,
+			LastOnlineIPLocation: getIPLocation(d.LastOnlineIP),
+			Note:                 d.Note,
+			CreateTime:           d.CreateTime.Format("2006-01-02 15:04:05"),
+			UpdateTime:           d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
 
 		// 从批量查询结果中获取设备所有者信息
@@ -261,19 +265,21 @@ func GetDevice(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":          device.ID,
-			"name":        device.Name,
-			"callsign":    callsign,
-			"ssid":        device.SSID,
-			"dev_model":   device.DevModel,
-			"group_id":    device.GroupID,
-			"status":      device.Status,
-			"priority":    device.Priority,
-			"is_online":   device.ISOnline,
-			"owner_id":    device.OwnerID,
-			"note":        device.Note,
-			"create_time": device.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time": device.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":                      device.ID,
+			"name":                    device.Name,
+			"callsign":                callsign,
+			"ssid":                    device.SSID,
+			"dev_model":               device.DevModel,
+			"group_id":                device.GroupID,
+			"status":                  device.Status,
+			"priority":                device.Priority,
+			"is_online":               device.ISOnline,
+			"last_online_ip":          device.LastOnlineIP,
+			"last_online_ip_location": getIPLocation(device.LastOnlineIP),
+			"owner_id":                device.OwnerID,
+			"note":                    device.Note,
+			"create_time":             device.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":             device.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }

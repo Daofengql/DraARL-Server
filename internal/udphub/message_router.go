@@ -1,7 +1,9 @@
 package udphub
 
 import (
+	"fmt"
 	"log"
+	"time"
 
 	"draarl/internal/interfaces"
 	"draarl/internal/models"
@@ -27,6 +29,35 @@ func NewMessageRouter(wsManager interfaces.WSManagerInterface) *MessageRouter {
 // SetWSManager 设置 WebSocket 管理器
 func (r *MessageRouter) SetWSManager(wsManager interfaces.WSManagerInterface) {
 	r.wsManager = wsManager
+}
+
+func buildWSSpeakerIdentity(source interfaces.WSDeviceInterface) (speakerID string, speakerLabel string) {
+	if source == nil {
+		return "", ""
+	}
+
+	labelBase := source.GetCallSign()
+	if labelBase == "" {
+		labelBase = source.GetUsername()
+	}
+	if labelBase == "" {
+		labelBase = source.GetIdentifier()
+	}
+	if labelBase == "" {
+		labelBase = "ws-unknown"
+	}
+	speakerLabel = fmt.Sprintf("%s-%d", labelBase, source.GetSSID())
+
+	switch {
+	case source.GetDeviceID() > 0:
+		speakerID = fmt.Sprintf("ws_dev:%d", source.GetDeviceID())
+	case source.GetUserID() > 0:
+		speakerID = fmt.Sprintf("ws_user:%d:%d", source.GetUserID(), source.GetSSID())
+	default:
+		speakerID = fmt.Sprintf("ws_id:%s:%d", source.GetIdentifier(), source.GetSSID())
+	}
+
+	return speakerID, speakerLabel
 }
 
 // RouteVoiceFromUDP 转发 UDP 语音到 WebSocket 设备
@@ -96,6 +127,9 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		log.Println("[ROUTE_ERR] WS -> UDP 转发失败: 全局 UDP 连接尚未初始化")
 		return
 	}
+	if source == nil || source.IsDisabledSend() {
+		return
+	}
 
 	// 获取群组信息
 	group, exists := GetGroupFromCache(groupID)
@@ -107,6 +141,11 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 检查群组是否已禁用
 	if group.Status != 1 {
 		log.Printf("[ROUTE_WARN] WS -> UDP 转发丢弃: 目标群组 %d 已被禁用", groupID)
+		return
+	}
+
+	speakerID, speakerLabel := buildWSSpeakerIdentity(source)
+	if !tryAcquireHalfDuplex(groupID, speakerID, speakerLabel, time.Now()) {
 		return
 	}
 

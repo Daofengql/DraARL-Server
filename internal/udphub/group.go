@@ -49,11 +49,6 @@ func initPublicGroups() {
 
 		publicGroupMap[newGroup.ID] = newGroup
 
-		// 会议模式启动混音
-		if newGroup.Type == models.GroupTypeMeeting {
-			go startMixPCM(newGroup)
-		}
-
 		log.Printf("Loaded public group: %d - %s (type: %d)", newGroup.ID, newGroup.Name, newGroup.Type)
 	}
 
@@ -106,11 +101,6 @@ func CreatePublicGroup(gp *models.Group) error {
 
 	publicGroupMap[newGroup.ID] = newGroup
 
-	// 会议模式启动混音
-	if newGroup.Type == models.GroupTypeMeeting {
-		go startMixPCM(newGroup)
-	}
-
 	return nil
 }
 
@@ -146,22 +136,6 @@ func DeletePublicGroup(id int) error {
 
 	delete(publicGroupMap, id)
 	return nil
-}
-
-// startMixPCM 会议模式混音（独立函数，不是方法）
-// 注意：当前版本暂不支持混音功能，未来需要实现 Opus 编解码
-func startMixPCM(g *models.Group) {
-	pool := getGroupConnPool(g)
-	if pool == nil {
-		g.ConnPool = &CurrentConnPool{DevConnMap: make(map[string]*models.Device)}
-		pool = g.ConnPool.(*CurrentConnPool)
-	}
-
-	log.Printf("[MEETING] Group %d - %s: Meeting mode started (audio mixing currently disabled)", g.ID, g.Name)
-
-	// 空闲等待，不做任何处理
-	// 未来可实现 Opus 编解码进行混音
-	select {}
 }
 
 // convertStr2IntArray 将字符串转换为整数数组

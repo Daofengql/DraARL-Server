@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -616,8 +617,8 @@ func getNRLFromAPRSTV() {
 			continue
 		}
 
-		// 过滤自身
-		if host == currentAPRSConfig.SelfAddress {
+		// 仅过滤“同 host + 同 port”的自身节点，避免误过滤同一台机器上的其他端口服务
+		if isSameEndpoint(host, port, currentAPRSConfig.SelfAddress, currentAPRSConfig.SelfPort) {
 			continue
 		}
 
@@ -626,13 +627,68 @@ func getNRLFromAPRSTV() {
 	}
 }
 
+func isSameEndpoint(hostA, portA, hostB, portB string) bool {
+	if !sameHost(hostA, hostB) {
+		return false
+	}
+	return strings.TrimSpace(portA) == strings.TrimSpace(portB)
+}
+
+func sameHost(a, b string) bool {
+	an := normalizeHostForCompare(a)
+	bn := normalizeHostForCompare(b)
+	if an == "" || bn == "" {
+		return false
+	}
+	return an == bn
+}
+
+func normalizeHostForCompare(host string) string {
+	h := strings.TrimSpace(host)
+	if h == "" {
+		return ""
+	}
+
+	// 容错: 若配置里误填了 URL 或 host:port，先提取主机部分
+	if strings.Contains(h, "://") {
+		if u, err := url.Parse(h); err == nil && u.Hostname() != "" {
+			h = u.Hostname()
+		}
+	} else if sh, _, err := net.SplitHostPort(h); err == nil {
+		h = sh
+	}
+
+	h = strings.Trim(strings.ToLower(h), "[]")
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.String()
+	}
+	return h
+}
+
 // decodeMsgFromAPRS 从 APRS 消息解码地址
 func decodeMsgFromAPRS(str string) (host, port string, err error) {
-	s1 := strings.Split(strings.TrimSpace(str)[1:], ",")
+	raw := strings.TrimSpace(str)
+	if len(raw) < 2 {
+		return "", "", fmt.Errorf("invalid APRS msg: too short")
+	}
+
+	payload := raw
+	// 兼容历史格式: 以 "@" 开头
+	if raw[0] == '@' {
+		payload = raw[1:]
+	}
+
+	s1 := strings.Split(payload, ",")
+	if len(s1) == 0 || strings.TrimSpace(s1[0]) == "" {
+		return "", "", fmt.Errorf("invalid APRS msg: empty endpoint")
+	}
 
 	parsedURL, err := url.Parse(s1[0])
 	if err != nil {
 		return "", "", err
+	}
+	if parsedURL.Hostname() == "" || parsedURL.Port() == "" {
+		return "", "", fmt.Errorf("invalid APRS msg endpoint: %s", s1[0])
 	}
 
 	host = parsedURL.Hostname()

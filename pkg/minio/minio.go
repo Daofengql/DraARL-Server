@@ -7,8 +7,11 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"image"
@@ -29,14 +32,60 @@ import (
 // Client MinIO客户端
 var Client *minio.Client
 
+var (
+	clientMu sync.RWMutex
+	initOnce sync.Once
+)
+
+const (
+	initTimeout       = 5 * time.Second
+	initRetryInterval = 30 * time.Second
+)
+
+func getClient() *minio.Client {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return Client
+}
+
+func setClient(c *minio.Client) {
+	clientMu.Lock()
+	Client = c
+	clientMu.Unlock()
+}
+
+// GetClient 返回当前 MinIO 客户端（可能为 nil）
+func GetClient() *minio.Client {
+	return getClient()
+}
+
 // InitMinIO 初始化MinIO客户端
 func InitMinIO() error {
 	cfg := config.Get()
+	endpoint := strings.TrimSpace(cfg.MinIO.Endpoint)
+	if endpoint == "" {
+		return fmt.Errorf("MinIO Endpoint 为空")
+	}
+
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   initTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   initTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: initTimeout,
+	}
 
 	var err error
-	Client, err = minio.New(cfg.MinIO.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.MinIO.AccessKey, cfg.MinIO.SecretKey, ""),
-		Secure: cfg.MinIO.UseSSL,
+	client, err := minio.New(endpoint, &minio.Options{
+		Creds:     credentials.NewStaticV4(cfg.MinIO.AccessKey, cfg.MinIO.SecretKey, ""),
+		Secure:    cfg.MinIO.UseSSL,
+		Transport: transport,
 	})
 
 	if err != nil {
@@ -44,36 +93,64 @@ func InitMinIO() error {
 	}
 
 	// 检查bucket是否存在，不存在则创建
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), initTimeout)
+	defer cancel()
 	bucket := cfg.MinIO.Bucket
 	if bucket == "" {
 		bucket = "draarl"
 	}
 
-	exists, err := Client.BucketExists(ctx, bucket)
+	exists, err := client.BucketExists(ctx, bucket)
 	if err != nil {
 		return fmt.Errorf("检查bucket失败: %w", err)
 	}
 
 	if !exists {
-		err = Client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
+		createCtx, createCancel := context.WithTimeout(context.Background(), initTimeout)
+		defer createCancel()
+
+		err = client.MakeBucket(createCtx, bucket, minio.MakeBucketOptions{})
 		if err != nil {
 			return fmt.Errorf("创建bucket失败: %w", err)
 		}
 		log.Printf("创建MinIO bucket: %s", bucket)
 	}
 
-	log.Printf("MinIO 初始化成功: %s (bucket: %s)", cfg.MinIO.Endpoint, bucket)
+	setClient(client)
+	log.Printf("MinIO 初始化成功: %s (bucket: %s)", endpoint, bucket)
 	return nil
+}
+
+// StartInitMinIOInBackground 后台初始化 MinIO，失败自动重试，不阻塞主服务启动
+func StartInitMinIOInBackground() {
+	cfg := config.Get()
+	if strings.TrimSpace(cfg.MinIO.Endpoint) == "" {
+		log.Printf("MinIO Endpoint 未配置，跳过初始化")
+		return
+	}
+
+	initOnce.Do(func() {
+		go func() {
+			for {
+				if err := InitMinIO(); err != nil {
+					log.Printf("MinIO 初始化失败，%s 后重试: %v", initRetryInterval, err)
+					time.Sleep(initRetryInterval)
+					continue
+				}
+				return
+			}
+		}()
+	})
 }
 
 // UploadFile 上传文件到MinIO
 func UploadFile(ctx context.Context, bucket, objectName string, reader io.Reader, size int64, contentType string) error {
-	if Client == nil {
+	client := getClient()
+	if client == nil {
 		return fmt.Errorf("MinIO客户端未初始化")
 	}
 
-	_, err := Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+	_, err := client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	return err
@@ -83,7 +160,7 @@ func UploadFile(ctx context.Context, bucket, objectName string, reader io.Reader
 // 生成格式: uploads/{fileType}/{year}/{month}/{uuid}{ext}
 // 例如: uploads/avatar/2026/03/a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg
 func UploadMultipartFile(fileHeader *multipart.FileHeader, userID int, fileType string) (string, int64, error) {
-	if Client == nil {
+	if getClient() == nil {
 		return "", 0, fmt.Errorf("MinIO客户端未初始化")
 	}
 
@@ -172,7 +249,8 @@ func GetAvatarThumbURL(avatarPath string) string {
 
 // DeleteFile 删除文件
 func DeleteFile(ctx context.Context, objectName string) error {
-	if Client == nil {
+	client := getClient()
+	if client == nil {
 		return fmt.Errorf("MinIO客户端未初始化")
 	}
 
@@ -182,12 +260,13 @@ func DeleteFile(ctx context.Context, objectName string) error {
 		bucket = "draarl"
 	}
 
-	return Client.RemoveObject(ctx, bucket, objectName, minio.RemoveObjectOptions{})
+	return client.RemoveObject(ctx, bucket, objectName, minio.RemoveObjectOptions{})
 }
 
 // PresignedURL 生成临时访问URL
 func PresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
-	if Client == nil {
+	client := getClient()
+	if client == nil {
 		return "", fmt.Errorf("MinIO客户端未初始化")
 	}
 
@@ -197,7 +276,7 @@ func PresignedURL(ctx context.Context, objectName string, expiry time.Duration) 
 		bucket = "draarl"
 	}
 
-	url, err := Client.PresignedGetObject(ctx, bucket, objectName, expiry, nil)
+	url, err := client.PresignedGetObject(ctx, bucket, objectName, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("生成预签名URL失败: %w", err)
 	}
@@ -207,7 +286,7 @@ func PresignedURL(ctx context.Context, objectName string, expiry time.Duration) 
 
 // IsEnabled 检查MinIO是否启用
 func IsEnabled() bool {
-	return Client != nil
+	return getClient() != nil
 }
 
 // GenerateThumbnail 生成图片缩略图
@@ -224,9 +303,13 @@ func GenerateThumbnail(originalObject string, width, height int, ext string) (st
 	}
 
 	ctx := context.Background()
+	client := getClient()
+	if client == nil {
+		return "", nil, fmt.Errorf("MinIO客户端未初始化")
+	}
 
 	// 从MinIO下载原图片
-	reader, err := Client.GetObject(ctx, bucket, originalObject, minio.GetObjectOptions{})
+	reader, err := client.GetObject(ctx, bucket, originalObject, minio.GetObjectOptions{})
 	if err != nil {
 		return "", nil, fmt.Errorf("下载原图片失败: %w", err)
 	}
@@ -330,7 +413,8 @@ func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 
 // UploadAvatar 上传处理后的头像图片
 func UploadAvatar(userID int, imageData []byte, ext string) (string, int64, error) {
-	if Client == nil {
+	client := getClient()
+	if client == nil {
 		return "", 0, fmt.Errorf("MinIO客户端未初始化")
 	}
 
@@ -350,7 +434,7 @@ func UploadAvatar(userID int, imageData []byte, ext string) (string, int64, erro
 	reader := bytes.NewReader(imageData)
 	size := int64(len(imageData))
 
-	_, err := Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+	_, err := client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: "image/jpeg",
 	})
 	if err != nil {
@@ -471,7 +555,8 @@ func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 
 // UploadLogo 上传处理后的 Logo 图片
 func UploadLogo(imageData []byte, ext string) (string, int64, error) {
-	if Client == nil {
+	client := getClient()
+	if client == nil {
 		return "", 0, fmt.Errorf("MinIO客户端未初始化")
 	}
 
@@ -491,7 +576,7 @@ func UploadLogo(imageData []byte, ext string) (string, int64, error) {
 	reader := bytes.NewReader(imageData)
 	size := int64(len(imageData))
 
-	_, err := Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+	_, err := client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: "image/png",
 	})
 	if err != nil {
@@ -503,7 +588,8 @@ func UploadLogo(imageData []byte, ext string) (string, int64, error) {
 
 // UploadFavicon 上传站点favicon（直接上传，不做处理）
 func UploadFavicon(fileHeader *multipart.FileHeader) (string, int64, error) {
-	if Client == nil {
+	client := getClient()
+	if client == nil {
 		return "", 0, fmt.Errorf("MinIO客户端未初始化")
 	}
 
@@ -548,7 +634,7 @@ func UploadFavicon(fileHeader *multipart.FileHeader) (string, int64, error) {
 	reader := bytes.NewReader(fileData)
 	size := int64(len(fileData))
 
-	_, err = Client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
+	_, err = client.PutObject(ctx, bucket, objectName, reader, size, minio.PutObjectOptions{
 		ContentType: contentType,
 	})
 	if err != nil {

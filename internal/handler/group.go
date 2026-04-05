@@ -13,6 +13,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	groupTypePublic  = 1
+	groupTypePrivate = 2
+)
+
+func isSupportedGroupType(groupType int) bool {
+	return groupType == groupTypePublic || groupType == groupTypePrivate
+}
+
 // GroupInfo 群组信息响应
 type GroupInfo struct {
 	ID                int    `json:"id"`
@@ -315,10 +324,22 @@ func CreateGroup(c *gin.Context) {
 		return
 	}
 
+	groupType := req.Type
+	if groupType == 0 {
+		groupType = groupTypePublic
+	}
+	if !isSupportedGroupType(groupType) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "群组类型仅支持公开(1)或私有(2)",
+		})
+		return
+	}
+
 	repo := gormdb.NewGroupRepository()
 	group := &gormdb.Group{
 		Name:              req.Name,
-		Type:              req.Type,
+		Type:              groupType,
 		CallSign:          req.CallSign,
 		Password:          req.Password,
 		AllowCallSignSSID: req.AllowCallSignSSID,
@@ -355,7 +376,7 @@ func CreateGroup(c *gin.Context) {
 
 	// 记录审计日志
 	groupTypeStr := "公开群组"
-	if req.Type == 2 {
+	if groupType == groupTypePrivate {
 		groupTypeStr = "私有群组"
 	}
 	oplog.AddLog(
@@ -424,7 +445,14 @@ func UpdateGroup(c *gin.Context) {
 	if req.Name != "" {
 		group.Name = req.Name
 	}
-	if req.Type > 0 {
+	if req.Type != 0 {
+		if !isSupportedGroupType(req.Type) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "群组类型仅支持公开(1)或私有(2)",
+			})
+			return
+		}
 		group.Type = req.Type
 	}
 	if req.CallSign != "" {

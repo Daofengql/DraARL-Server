@@ -118,20 +118,21 @@ func (cu *CommUploader) ProcessBatch() {
 // RawOpusHeader 原始 Opus 数据文件头格式
 // 用于前端 opus-decoder 库解码
 type RawOpusHeader struct {
-	Magic       [4]byte // "OPUS"
-	Version     uint16  // 格式版本 = 1
-	SampleRate  uint32  // 采样率 = 16000
-	Channels    uint16  // 声道数 = 1
-	FrameSize   uint16  // 帧大小 = 320 (20ms at 16kHz)
-	FrameCount  uint32  // 帧数量
-	Reserved    [6]byte // 保留字段
+	Magic      [4]byte // "OPUS"
+	Version    uint16  // 格式版本 = 1
+	SampleRate uint32  // 采样率 = 16000
+	Channels   uint16  // 声道数 = 1
+	FrameSize  uint16  // 帧大小 = 320 (20ms at 16kHz)
+	FrameCount uint32  // 帧数量
+	Reserved   [6]byte // 保留字段
 }
 
 // uploadAudio 上传单个音频文件到 MinIO
 // 存储为带帧长度前缀的原始 Opus 数据格式
 // 前端可使用 opus-decoder 库进行解码播放
 func (cu *CommUploader) uploadAudio(session *AudioSession) (string, int64, error) {
-	if minio_local.Client == nil {
+	client := minio_local.GetClient()
+	if client == nil {
 		return "", 0, fmt.Errorf("MinIO 客户端未初始化")
 	}
 
@@ -185,7 +186,7 @@ func (cu *CommUploader) uploadAudio(session *AudioSession) (string, int64, error
 	reader := bytes.NewReader(rawData)
 
 	// 上传到 MinIO
-	_, err := minio_local.Client.PutObject(cu.ctx, bucket, objectName,
+	_, err := client.PutObject(cu.ctx, bucket, objectName,
 		reader, int64(len(rawData)), minio.PutObjectOptions{
 			ContentType: "application/octet-stream",
 		})

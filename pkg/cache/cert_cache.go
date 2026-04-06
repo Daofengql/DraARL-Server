@@ -150,6 +150,33 @@ func (c *CertCache) GetPendingCertByUserID(ctx context.Context, userID int) (*go
 	return dbCert, nil
 }
 
+// GetLatestPendingOrRejectedCertByUserID 获取用户最新的待审核/已拒绝操作证（带缓存）
+func (c *CertCache) GetLatestPendingOrRejectedCertByUserID(ctx context.Context, userID int) (*gormdb.OperatorCert, error) {
+	key := fmt.Sprintf("cert:review:user:%d", userID)
+
+	var cert gormdb.OperatorCert
+	if err := c.cache.Get(ctx, key, &cert); err == nil {
+		if cert.ID == 0 {
+			return nil, nil
+		}
+		return &cert, nil
+	}
+
+	repo := gormdb.NewOperatorCertRepository()
+	dbCert, err := repo.GetLatestPendingOrRejectedByUserID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if dbCert == nil {
+		_ = c.cache.Set(ctx, key, &gormdb.OperatorCert{}, 30*time.Second)
+		return nil, nil
+	}
+
+	_ = c.cache.Set(ctx, key, dbCert, time.Minute)
+	return dbCert, nil
+}
+
 // GetCertByID 通过ID获取操作证（带缓存）
 func (c *CertCache) GetCertByID(ctx context.Context, certID int) (*gormdb.OperatorCert, error) {
 	key := certByIDKey(certID)
@@ -185,6 +212,7 @@ func (c *CertCache) InvalidateUserCert(ctx context.Context, userID int) error {
 		certByUserIDKey(userID),
 		fmt.Sprintf("cert:latest:%d", userID),
 		fmt.Sprintf("cert:pending:user:%d", userID),
+		fmt.Sprintf("cert:review:user:%d", userID),
 	}
 	return c.cache.Delete(ctx, keys...)
 }
@@ -199,6 +227,7 @@ func (c *CertCache) InvalidateCert(ctx context.Context, certID int, userID int) 
 			certByUserIDKey(userID),
 			fmt.Sprintf("cert:latest:%d", userID),
 			fmt.Sprintf("cert:pending:user:%d", userID),
+			fmt.Sprintf("cert:review:user:%d", userID),
 		)
 	}
 	return c.cache.Delete(ctx, keys...)

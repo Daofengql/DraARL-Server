@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	ws "draarl/pkg/websocket"
@@ -115,13 +116,35 @@ func UpdateRadioSSID(c *gin.Context) {
 
 	// 更新幽灵设备的 SSID
 	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
+	oldSSID := 0
 	if ok && ghostDevice != nil {
+		oldSSID = int(ghostDevice.SSID)
 		ghostDevice.SSID = byte(req.SSID)
 		// 同步更新关联的 WSDevice
 		if ghostDevice.Conn != nil {
 			ghostDevice.Conn.SSID = byte(req.SSID)
 		}
 	}
+
+	username, _ := c.Get("username")
+	operatorName := ""
+	operatorCallSign := ""
+	if usernameStr, ok := username.(string); ok && usernameStr != "" {
+		if user, err := gormdb.NewUserRepository().GetUserByName(usernameStr); err == nil && user != nil {
+			operatorName = user.Name
+			operatorCallSign = user.CallSign
+		} else {
+			operatorName = usernameStr
+		}
+	}
+	oplog.AddLog(
+		fmt.Sprintf("更新在线收发SSID: user_id=%d, ssid=%d->%d", userID, oldSSID, req.SSID),
+		"radio_ssid_update",
+		userID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -331,6 +354,25 @@ func UpdateRadioGroup(c *gin.Context) {
 			log.Printf("[RADIO] 警告: 失效用户 %d 缓存失败: %v", userID, err)
 		}
 	}
+
+	operatorName := ""
+	operatorCallSign := ""
+	if usernameStr != "" {
+		if user, err := gormdb.NewUserRepository().GetUserByName(usernameStr); err == nil && user != nil {
+			operatorName = user.Name
+			operatorCallSign = user.CallSign
+		} else {
+			operatorName = usernameStr
+		}
+	}
+	oplog.AddLog(
+		fmt.Sprintf("切换在线收发群组: user_id=%d, dev_model=%d, group_id=%d->%d", userID, devModel, oldGroupID, req.GroupID),
+		"radio_group_update",
+		userID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

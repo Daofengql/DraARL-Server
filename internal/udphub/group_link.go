@@ -15,7 +15,8 @@ import (
 // GroupLinkCache 群组互联缓存结构
 type GroupLinkCache struct {
 	sync.RWMutex
-	// targetGroupID -> []linkGroupID (一个实体组可能属于多个互联组)
+	// targetGroupID -> []linkGroupID
+	// 业务约束上每个实体组只能归属一个虚拟互联组，这里保留切片结构用于兼容历史数据与平滑升级。
 	targetToLinks map[int][]int
 	// linkGroupID -> []targetGroupID (一个互联组包含哪些实体组)
 	linkToTargets map[int][]int

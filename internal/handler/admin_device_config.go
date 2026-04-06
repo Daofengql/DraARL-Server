@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
+	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 
 	"github.com/gin-gonic/gin"
@@ -108,6 +111,29 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 		return
 	}
 
+	operatorID := 0
+	operatorName := ""
+	operatorCallSign := ""
+	if u, exists := c.Get("user"); exists {
+		if user, ok := u.(*gormdb.User); ok && user != nil {
+			operatorID = user.ID
+			operatorName = user.Name
+			operatorCallSign = user.CallSign
+		}
+	}
+	configKeys := make([]string, 0, len(configs))
+	for k := range configs {
+		configKeys = append(configKeys, k)
+	}
+	oplog.AddLog(
+		fmt.Sprintf("管理员更新设备配置: device_id=%d, config_keys=%v", deviceID, configKeys),
+		"admin_device_config_update",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "配置已保存",
@@ -157,12 +183,49 @@ func AdminSyncDeviceConfig(c *gin.Context) {
 
 	// 尝试发送配置到设备
 	if err := udphub.SendConfigToDeviceByID(deviceID, paramConfigs); err != nil {
+		operatorID := 0
+		operatorName := ""
+		operatorCallSign := ""
+		if u, exists := c.Get("user"); exists {
+			if user, ok := u.(*gormdb.User); ok && user != nil {
+				operatorID = user.ID
+				operatorName = user.Name
+				operatorCallSign = user.CallSign
+			}
+		}
+		oplog.AddLog(
+			fmt.Sprintf("管理员同步设备配置: device_id=%d, result=deferred_offline, config_count=%d", deviceID, len(paramConfigs)),
+			"admin_device_config_sync",
+			operatorID,
+			operatorName,
+			operatorCallSign,
+			c.ClientIP(),
+		)
 		c.JSON(http.StatusOK, gin.H{
 			"code":    200,
 			"message": "设备离线，配置将在设备上线时自动同步",
 		})
 		return
 	}
+
+	operatorID := 0
+	operatorName := ""
+	operatorCallSign := ""
+	if u, exists := c.Get("user"); exists {
+		if user, ok := u.(*gormdb.User); ok && user != nil {
+			operatorID = user.ID
+			operatorName = user.Name
+			operatorCallSign = user.CallSign
+		}
+	}
+	oplog.AddLog(
+		fmt.Sprintf("管理员同步设备配置: device_id=%d, result=sent, config_count=%d", deviceID, len(paramConfigs)),
+		"admin_device_config_sync",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
 	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 
 	"github.com/gin-gonic/gin"
@@ -186,6 +188,21 @@ func UpdateDeviceConfig(c *gin.Context) {
 		return
 	}
 
+	// 记录审计日志
+	operatorID, operatorName, operatorCallSign := getDeviceConfigAuditOperator(c, userID)
+	configKeys := make([]string, 0, len(configs))
+	for k := range configs {
+		configKeys = append(configKeys, k)
+	}
+	oplog.AddLog(
+		fmt.Sprintf("更新设备配置: device_id=%d, owner_id=%d, config_keys=%v", deviceID, device.OwnerID, configKeys),
+		"device_config_update",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "配置已保存",
@@ -266,14 +283,33 @@ func SyncDeviceConfig(c *gin.Context) {
 		}
 	}
 
+	operatorID, operatorName, operatorCallSign := getDeviceConfigAuditOperator(c, userID)
+
 	// 尝试发送配置到设备
 	if err := udphub.SendConfigToDeviceByID(deviceID, paramConfigs); err != nil {
+		oplog.AddLog(
+			fmt.Sprintf("同步设备配置: device_id=%d, owner_id=%d, result=deferred_offline, config_count=%d", deviceID, device.OwnerID, len(paramConfigs)),
+			"device_config_sync",
+			operatorID,
+			operatorName,
+			operatorCallSign,
+			c.ClientIP(),
+		)
 		c.JSON(http.StatusOK, gin.H{
 			"code":    200,
 			"message": "设备离线，配置将在设备上线时自动同步",
 		})
 		return
 	}
+
+	oplog.AddLog(
+		fmt.Sprintf("同步设备配置: device_id=%d, owner_id=%d, result=sent, config_count=%d", deviceID, device.OwnerID, len(paramConfigs)),
+		"device_config_sync",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -289,4 +325,19 @@ func isAdmin(username string) bool {
 		return false
 	}
 	return user.HasRole("admin")
+}
+
+func getDeviceConfigAuditOperator(c *gin.Context, fallbackUserID int) (int, string, string) {
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+	if usernameStr == "" {
+		return fallbackUserID, "", ""
+	}
+
+	user, err := gormdb.NewUserRepository().GetUserByName(usernameStr)
+	if err != nil || user == nil {
+		return fallbackUserID, usernameStr, ""
+	}
+
+	return user.ID, user.Name, user.CallSign
 }

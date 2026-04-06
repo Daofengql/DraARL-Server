@@ -76,6 +76,20 @@ func (r *OperatorCertRepository) GetPendingByUserID(userID int) (*OperatorCert, 
 	return &cert, nil
 }
 
+// GetLatestPendingOrRejectedByUserID 获取用户最新的待审核/已拒绝操作证（status IN 0,2）
+// 用于用户页展示当前需要关注的审核状态，避免把已替换的历史证书误当成待处理项。
+func (r *OperatorCertRepository) GetLatestPendingOrRejectedByUserID(userID int) (*OperatorCert, error) {
+	var cert OperatorCert
+	err := r.db.Where("user_id = ? AND status IN ?", userID, []int{0, 2}).Order("id DESC").First(&cert).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &cert, nil
+}
+
 // GetByID 根据ID获取操作证
 func (r *OperatorCertRepository) GetByID(id int) (*OperatorCert, error) {
 	var cert OperatorCert

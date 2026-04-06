@@ -1,15 +1,16 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
+	"github.com/gin-gonic/gin"
 )
 
 // CreateVirtualGroupRequest 创建虚拟互联组请求
@@ -162,7 +163,7 @@ func GetVirtualGroups(c *gin.Context) {
 		"message": "成功",
 		"data": gin.H{
 			"items": result,
-			"total":  len(result),
+			"total": len(result),
 		},
 	})
 }
@@ -486,7 +487,7 @@ func GetGroupLinkTargets(c *gin.Context) {
 		"message": "成功",
 		"data": gin.H{
 			"items": links,
-			"total":  len(links),
+			"total": len(links),
 		},
 	})
 }
@@ -581,8 +582,41 @@ func AddGroupLinkTarget(c *gin.Context) {
 		return
 	}
 
+	// 业务约束：同一个实体组不能被多个虚拟互联组同时关联
+	// 否则会导致互联拓扑重叠，产生不可预期的跨组扩散风险。
+	existingLinks, err := linkRepo.GetLinksByTargetGroup(req.TargetGroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "检查目标群组关联状态失败",
+		})
+		return
+	}
+	for _, link := range existingLinks {
+		if link.LinkGroupID == linkGroupID {
+			continue
+		}
+		conflictGroup, _ := groupRepo.GetGroupByID(link.LinkGroupID)
+		conflictName := fmt.Sprintf("ID=%d", link.LinkGroupID)
+		if conflictGroup != nil {
+			conflictName = fmt.Sprintf("%s (ID: %d)", conflictGroup.Name, conflictGroup.ID)
+		}
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": fmt.Sprintf("目标群组已被虚拟互联组 %s 关联，每个实体组只能加入一个虚拟互联组", conflictName),
+		})
+		return
+	}
+
 	// 添加关联
 	if err := linkRepo.AddLink(linkGroupID, req.TargetGroupID); err != nil {
+		if errors.Is(err, gormdb.ErrTargetGroupAlreadyLinked) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "目标群组已被其他虚拟互联组关联，每个实体组只能加入一个虚拟互联组",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "添加关联失败",
@@ -731,12 +765,31 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		return
 	}
 
-	// 过滤掉虚拟组
+	// 获取已被互联占用的实体组
+	linkRepo := gormdb.NewGroupLinkRepository()
+	linkedTargetIDs, err := linkRepo.GetLinkedTargetGroupIDs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取已关联目标群组失败",
+		})
+		return
+	}
+	linkedTargetSet := make(map[int]struct{}, len(linkedTargetIDs))
+	for _, id := range linkedTargetIDs {
+		linkedTargetSet[id] = struct{}{}
+	}
+
+	// 过滤掉虚拟组和已被占用的实体组
 	availableGroups := make([]*gormdb.Group, 0)
 	for _, g := range groups {
-		if !g.IsVirtual {
-			availableGroups = append(availableGroups, g)
+		if g.IsVirtual {
+			continue
 		}
+		if _, occupied := linkedTargetSet[g.ID]; occupied {
+			continue
+		}
+		availableGroups = append(availableGroups, g)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -744,7 +797,7 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		"message": "成功",
 		"data": gin.H{
 			"items": availableGroups,
-			"total":  len(availableGroups),
+			"total": len(availableGroups),
 		},
 	})
 }

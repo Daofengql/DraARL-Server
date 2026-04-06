@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	gormdb "draarl/internal/gormdb"
 	"draarl/internal/config"
+	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/pkg/cache"
 	"draarl/pkg/minio"
+	"github.com/gin-gonic/gin"
 )
 
 // UploadResponse 文件上传响应
@@ -196,6 +196,10 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	callsign := c.PostForm("callsign")
 	fileHeader, err := c.FormFile("file")
+	hasNewFile := err == nil
+	oldCallSign := user.CallSign
+	callSignChanged := callsign != "" && callsign != oldCallSign
+	callSignUpdated := false
 
 	// 修复逻辑1：如果既没有传文件，也没有改呼号，才驳回
 	if err != nil && (callsign == "" || callsign == user.CallSign) {
@@ -283,6 +287,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		if err := userRepo.UpdateUserCallSign(user.ID, callsign); err != nil {
 			log.Printf("更新用户呼号失败: %v", err)
 		} else {
+			callSignUpdated = true
 			// 更新呼号成功后，使用户缓存失效
 			if userCache := cache.GetUserCache(); userCache != nil {
 				_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
@@ -333,6 +338,30 @@ func UploadOperatorCertificate(c *gin.Context) {
 	if certCache := cache.GetCertCache(); certCache != nil {
 		_ = certCache.InvalidateUserCert(c.Request.Context(), user.ID)
 	}
+
+	submitMode := "首次提交"
+	if pendingCert != nil {
+		submitMode = "更新待审核记录"
+	} else if activeCert != nil {
+		submitMode = "提交换证申请"
+	}
+	fileSource := "上传新文件"
+	if !hasNewFile {
+		fileSource = "复用已有文件"
+	}
+	finalCallSign := oldCallSign
+	if callSignChanged && callSignUpdated {
+		finalCallSign = callsign
+	}
+	oplog.AddLog(
+		fmt.Sprintf("提交操作证审核: cert_id=%d, mode=%s, file_source=%s, callsign_changed=%t, old_callsign=%s, new_callsign=%s, file_name=%s",
+			cert.ID, submitMode, fileSource, callSignChanged, oldCallSign, finalCallSign, cert.FileName),
+		"operator_cert_submit",
+		user.ID,
+		user.Name,
+		finalCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -393,24 +422,10 @@ func GetOperatorCertificate(c *gin.Context) {
 
 	// 获取待审核或被拒绝的最新操作证
 	if certCache != nil {
-		pendingCert, _ = certCache.GetPendingCertByUserID(ctx, user.ID)
+		pendingCert, _ = certCache.GetLatestPendingOrRejectedCertByUserID(ctx, user.ID)
 	} else {
 		certRepo := gormdb.NewOperatorCertRepository()
-		pendingCert, _ = certRepo.GetPendingByUserID(user.ID)
-	}
-	if pendingCert == nil {
-		// 获取最新的操作证（可能是被拒绝的）
-		var latestCert *gormdb.OperatorCert
-		if certCache != nil {
-			latestCert, _ = certCache.GetLatestCertByUserID(ctx, user.ID)
-		} else {
-			certRepo := gormdb.NewOperatorCertRepository()
-			latestCert, _ = certRepo.GetLatestByUserID(user.ID)
-		}
-		// 只有当最新操作证不是已通过状态时才返回（避免重复返回 activeCert）
-		if latestCert != nil && latestCert.Status != 1 {
-			pendingCert = latestCert
-		}
+		pendingCert, _ = certRepo.GetLatestPendingOrRejectedByUserID(user.ID)
 	}
 
 	// 构建响应
@@ -596,10 +611,10 @@ func UploadFavicon(c *gin.Context) {
 
 	// 检查文件类型（支持 ico, png, svg）
 	allowedTypes := map[string]bool{
-		"image/x-icon":        true,
+		"image/x-icon":             true,
 		"image/vnd.microsoft.icon": true,
-		"image/png":           true,
-		"image/svg+xml":       true,
+		"image/png":                true,
+		"image/svg+xml":            true,
 	}
 	contentType := fileHeader.Header.Get("Content-Type")
 	if !allowedTypes[contentType] {
@@ -1154,6 +1169,24 @@ func ApproveOperatorCertificate(c *gin.Context) {
 
 	log.Printf("管理员 %s 审批操作证 %d: %s", currentUser.Name, certID, statusText)
 
+	// 记录审计日志
+	targetUserName := ""
+	targetCallSign := ""
+	userRepo := gormdb.NewUserRepository()
+	if certUser, userErr := userRepo.GetUserByID(cert.UserID); userErr == nil && certUser != nil {
+		targetUserName = certUser.Name
+		targetCallSign = certUser.CallSign
+	}
+	oplog.AddLog(
+		fmt.Sprintf("审批操作证: cert_id=%d, user_id=%d, user=%s, callsign=%s, result=%s, note=%s",
+			certID, cert.UserID, targetUserName, targetCallSign, statusText, req.Note),
+		"operator_cert_approval",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "审批成功",
@@ -1250,6 +1283,16 @@ func GetCertificateApprovals(c *gin.Context) {
 		}
 		items = append(items, item)
 	}
+
+	// 记录审计日志（查询类敏感操作）
+	oplog.AddLog(
+		fmt.Sprintf("查询操作证审批列表: status=%d, page=%d, page_size=%d, total=%d", status, page, limit, total),
+		"operator_cert_query",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

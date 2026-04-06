@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 
@@ -342,6 +344,9 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 
+	// 记录旧群组ID（用于缓存失效和审计）
+	oldGroupID := device.GroupID
+
 	// 更新字段
 	updates := make(map[string]interface{})
 	if req.Name != "" {
@@ -379,9 +384,6 @@ func UpdateDevice(c *gin.Context) {
 		device.DisableRecv = *req.DisableRecv
 	}
 
-	// 记录旧群组ID（用于缓存失效）
-	oldGroupID := device.GroupID
-
 	if err := repo.UpdateDeviceFields(id, updates); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -413,6 +415,24 @@ func UpdateDevice(c *gin.Context) {
 		}
 	}
 
+	operatorName := ""
+	operatorCallSign := ""
+	operatorID := 0
+	if currentUser != nil {
+		operatorID = currentUser.ID
+		operatorName = currentUser.Name
+		operatorCallSign = currentUser.CallSign
+	}
+	oplog.AddLog(
+		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, dev_model=%d, disable_send=%t, disable_recv=%t",
+			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority, device.DevModel, device.DisableSend, device.DisableRecv),
+		"device_update",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
@@ -424,6 +444,11 @@ func UpdateDevice(c *gin.Context) {
 
 // DeleteDevice 删除设备
 func DeleteDevice(c *gin.Context) {
+	// 获取当前操作者
+	username, _ := c.Get("username")
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err == nil {
@@ -440,10 +465,6 @@ func DeleteDevice(c *gin.Context) {
 		}
 
 		// 检查权限：只有设备所有者或管理员可以删除
-		username, _ := c.Get("username")
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ := userRepo.GetUserByName(username.(string))
-
 		if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.OwnerID != currentUser.ID {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    403,
@@ -470,6 +491,23 @@ func DeleteDevice(c *gin.Context) {
 				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
 			}
 		}
+
+		operatorName := ""
+		operatorCallSign := ""
+		operatorID := 0
+		if currentUser != nil {
+			operatorID = currentUser.ID
+			operatorName = currentUser.Name
+			operatorCallSign = currentUser.CallSign
+		}
+		oplog.AddLog(
+			fmt.Sprintf("删除设备: device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupID, device.SSID),
+			"device_delete",
+			operatorID,
+			operatorName,
+			operatorCallSign,
+			c.ClientIP(),
+		)
 	} else {
 		// 通过 owner_id 和 ssid 删除（兼容旧接口，需要先查询获取设备ID）
 		ownerIDStr := c.Query("owner_id")
@@ -528,6 +566,23 @@ func DeleteDevice(c *gin.Context) {
 				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
 			}
 		}
+
+		operatorName := ""
+		operatorCallSign := ""
+		operatorID := 0
+		if currentUser != nil {
+			operatorID = currentUser.ID
+			operatorName = currentUser.Name
+			operatorCallSign = currentUser.CallSign
+		}
+		oplog.AddLog(
+			fmt.Sprintf("删除设备(兼容接口): device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupID, device.SSID),
+			"device_delete",
+			operatorID,
+			operatorName,
+			operatorCallSign,
+			c.ClientIP(),
+		)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -564,6 +619,16 @@ func ChangeDeviceGroup(c *gin.Context) {
 		return
 	}
 
+	userRepo := gormdb.NewUserRepository()
+	currentUser, _ := userRepo.GetUserByName(username.(string))
+	if currentUser == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户不存在",
+		})
+		return
+	}
+
 	repo := gormdb.NewDeviceRepository()
 	device, err := repo.GetDeviceByID(req.DeviceID)
 	if err != nil || device == nil {
@@ -585,21 +650,13 @@ func ChangeDeviceGroup(c *gin.Context) {
 		return
 	}
 
+	usedGroupPassword := false
+
 	// 检查权限：公开群组所有人可见，私有群组需要已验证
 	if group.Type == 1 {
 		// 公开群组，直接允许切换
 	} else {
 		// 私有群组，需要已验证
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ := userRepo.GetUserByName(username.(string))
-		if currentUser == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "用户不存在",
-			})
-			return
-		}
-
 		// 检查用户是否已验证
 		memberRepo := gormdb.NewGroupMemberRepository()
 		isVerified := memberRepo.IsVerifiedMember(req.GroupID, currentUser.ID)
@@ -621,6 +678,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 				})
 				return
 			}
+			usedGroupPassword = true
 
 			// 密码验证成功，创建 GroupMember 记录
 			if err := memberRepo.CreateMember(&gormdb.GroupMember{
@@ -672,6 +730,15 @@ func ChangeDeviceGroup(c *gin.Context) {
 	}
 
 	// 注：WS 只支持 JWT 幽灵设备，幽灵设备群组切换通过前端直接调用 WebSocket 发送 Config 包实现
+	oplog.AddLog(
+		fmt.Sprintf("修改设备群组: device_id=%d, owner_id=%d, group_id=%d->%d, group_type=%d, used_password=%t",
+			req.DeviceID, device.OwnerID, oldGroupID, req.GroupID, group.Type, usedGroupPassword),
+		"device_group_change",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

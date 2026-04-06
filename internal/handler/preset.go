@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 
 	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -94,6 +96,16 @@ func CreateRadioPreset(c *gin.Context) {
 		return
 	}
 
+	operatorID, operatorName, operatorCallSign := getPresetAuditOperator(c, userID.(int))
+	oplog.AddLog(
+		fmt.Sprintf("创建电台预设: preset_id=%d, name=%s", preset.ID, preset.Name),
+		"radio_preset_create",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    201,
 		"message": "创建成功",
@@ -150,6 +162,8 @@ func UpdateRadioPreset(c *gin.Context) {
 	}
 
 	// 更新字段
+	oldName := preset.Name
+	oldSortOrder := preset.SortOrder
 	preset.Name = req.Name
 	preset.Radio = req.Radio
 	preset.Antenna = req.Antenna
@@ -165,6 +179,16 @@ func UpdateRadioPreset(c *gin.Context) {
 		})
 		return
 	}
+
+	operatorID, operatorName, operatorCallSign := getPresetAuditOperator(c, userID.(int))
+	oplog.AddLog(
+		fmt.Sprintf("更新电台预设: preset_id=%d, name=%s->%s, sort_order=%d->%d", preset.ID, oldName, preset.Name, oldSortOrder, preset.SortOrder),
+		"radio_preset_update",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -194,10 +218,27 @@ func DeleteRadioPreset(c *gin.Context) {
 		return
 	}
 
-	// 删除预设，确保是当前用户的
-	result := gormdb.Get().Where("id = ? AND user_id = ?", id, userID).Delete(&gormdb.UserRadioPreset{})
-	if result.Error != nil {
-		log.Printf("删除电台预设失败: %v", result.Error)
+	// 先查询预设，确保是当前用户的
+	var preset gormdb.UserRadioPreset
+	if err := gormdb.Get().Where("id = ? AND user_id = ?", id, userID).First(&preset).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "预设不存在或无权删除",
+			})
+			return
+		}
+		log.Printf("获取电台预设失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取电台预设失败",
+		})
+		return
+	}
+
+	// 删除预设
+	if err := gormdb.Get().Delete(&preset).Error; err != nil {
+		log.Printf("删除电台预设失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除电台预设失败",
@@ -205,13 +246,15 @@ func DeleteRadioPreset(c *gin.Context) {
 		return
 	}
 
-	if result.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
-			"message": "预设不存在或无权删除",
-		})
-		return
-	}
+	operatorID, operatorName, operatorCallSign := getPresetAuditOperator(c, userID.(int))
+	oplog.AddLog(
+		fmt.Sprintf("删除电台预设: preset_id=%d, name=%s", preset.ID, preset.Name),
+		"radio_preset_delete",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -269,6 +312,16 @@ func ReorderRadioPresets(c *gin.Context) {
 		return
 	}
 
+	operatorID, operatorName, operatorCallSign := getPresetAuditOperator(c, userID.(int))
+	oplog.AddLog(
+		fmt.Sprintf("批量更新电台预设排序: count=%d", len(req.Orders)),
+		"radio_preset_reorder",
+		operatorID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "排序更新成功",
@@ -289,4 +342,19 @@ func presetToJSON(p gormdb.UserRadioPreset) gin.H {
 		"created_at": p.CreatedAt.Format("2006-01-02 15:04:05"),
 		"updated_at": p.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
+}
+
+func getPresetAuditOperator(c *gin.Context, fallbackUserID int) (int, string, string) {
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+	if usernameStr == "" {
+		return fallbackUserID, "", ""
+	}
+
+	user, err := gormdb.NewUserRepository().GetUserByName(usernameStr)
+	if err != nil || user == nil {
+		return fallbackUserID, usernameStr, ""
+	}
+
+	return user.ID, user.Name, user.CallSign
 }

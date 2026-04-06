@@ -1,14 +1,16 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-	"github.com/gin-gonic/gin/binding"
 	gormdb "draarl/internal/gormdb"
+	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 	"draarl/pkg/crypto"
+	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 )
 
 // ==========================================
@@ -24,9 +26,9 @@ type PreCheckRequest struct {
 
 // PreCheckResponse 设备预检查响应
 type PreCheckResponse struct {
-	Status    string `json:"status"`              // authenticated | need_bind
-	Message   string `json:"message,omitempty"`   // 提示信息
-	CallSign  string `json:"call_sign,omitempty"` // 认证成功时返回呼号
+	Status   string `json:"status"`              // authenticated | need_bind
+	Message  string `json:"message,omitempty"`   // 提示信息
+	CallSign string `json:"call_sign,omitempty"` // 认证成功时返回呼号
 }
 
 // PreCheck 设备上电后检查存储的账号密码是否有效
@@ -343,6 +345,14 @@ func BindDevice(c *gin.Context) {
 	}
 
 	log.Printf("[DEVICE] 设备绑定成功: MAC=%s, User=%s", device.MAC, username)
+	oplog.AddLog(
+		fmt.Sprintf("绑定设备成功: mac=%s", device.MAC),
+		"device_bind",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{
@@ -456,6 +466,14 @@ func SubmitDeviceConfig(c *gin.Context) {
 	}
 
 	log.Printf("[DEVICE] 设备配置已保存: MAC=%s, User=%s, SSID=%d", mac, username, req.SSID)
+	oplog.AddLog(
+		fmt.Sprintf("提交设备绑定配置: mac=%s, ssid=%d, dmr_id=%d", mac, req.SSID, user.DMRID),
+		"device_bind_config_submit",
+		user.ID,
+		user.Name,
+		user.CallSign,
+		c.ClientIP(),
+	)
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{

@@ -6,6 +6,11 @@ import (
 	"gorm.io/gorm"
 )
 
+var (
+	// ErrTargetGroupAlreadyLinked 目标群组已被其他虚拟互联组占用
+	ErrTargetGroupAlreadyLinked = errors.New("target group already linked by another virtual group")
+)
+
 // GroupLinkRepository 群组互联仓库
 type GroupLinkRepository struct {
 	db *gorm.DB
@@ -18,6 +23,17 @@ func NewGroupLinkRepository() *GroupLinkRepository {
 
 // AddLink 添加互联关系
 func (r *GroupLinkRepository) AddLink(linkGroupID, targetGroupID int) error {
+	// 业务约束：一个实体群组只能归属于一个虚拟互联组，避免互联拓扑重叠导致不可控扩散。
+	var count int64
+	if err := r.db.Model(&GroupLink{}).
+		Where("target_group_id = ? AND link_group_id <> ?", targetGroupID, linkGroupID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrTargetGroupAlreadyLinked
+	}
+
 	link := &GroupLink{
 		LinkGroupID:   linkGroupID,
 		TargetGroupID: targetGroupID,
@@ -111,6 +127,15 @@ func (r *GroupLinkRepository) IsTargetGroupLinked(targetGroupID int) (bool, erro
 		Where("target_group_id = ?", targetGroupID).
 		Count(&count).Error
 	return count > 0, err
+}
+
+// GetLinkedTargetGroupIDs 获取所有已被互联的目标群组ID（去重）
+func (r *GroupLinkRepository) GetLinkedTargetGroupIDs() ([]int, error) {
+	var groupIDs []int
+	err := r.db.Model(&GroupLink{}).
+		Distinct("target_group_id").
+		Pluck("target_group_id", &groupIDs).Error
+	return groupIDs, err
 }
 
 // DeleteLinksByTargetGroup 删除与目标群组相关的所有互联关系（群组删除时调用）

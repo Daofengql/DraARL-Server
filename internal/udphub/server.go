@@ -528,7 +528,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		DevModel:     packet.DevModel,
 		Priority:     100,
 		Status:       0,
-		GroupID:      models.GroupIDPublicMin, // 默认加入公共群组
+		GroupID:      models.GroupIDPrivate1, // 默认加入群组1（避免 999 在部分库中缺失导致外键失败）
 		LastOnlineIP: realAddr.IP.String(),
 	}
 

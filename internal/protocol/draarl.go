@@ -42,6 +42,10 @@ const (
 	DraARLDevModelMacOS        byte = 104 // macOS 客户端 (预留)
 	DraARLDevModelBrowser      byte = 105 // 浏览器客户端
 	DraARLDevModelInterconnect byte = 106 // 互联设备
+	DraARLDevModelESP32        byte = 107 // ESP32 链路台/手咪
+	DraARLDevModelNSBridge     byte = 110 // 南山对讲桥接器
+	DraARLDevModelHTBridge     byte = 111 // HT 对讲桥接器
+	DraARLDevModelTTBridge     byte = 112 // 涛涛对讲桥接器
 )
 
 // ==========================================
@@ -455,6 +459,14 @@ func GetDevModelName(devModel byte) string {
 		return "Web Browser"
 	case DraARLDevModelInterconnect:
 		return "Interconnect"
+	case DraARLDevModelESP32:
+		return "ESP32"
+	case DraARLDevModelNSBridge:
+		return "Nanshan Bridge"
+	case DraARLDevModelHTBridge:
+		return "HT Bridge"
+	case DraARLDevModelTTBridge:
+		return "Taotao Bridge"
 	default:
 		return fmt.Sprintf("Unknown(%d)", devModel)
 	}

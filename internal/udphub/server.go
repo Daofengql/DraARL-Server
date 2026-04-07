@@ -540,6 +540,14 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 	}
 
 	if dev != nil {
+		if dev.CallSign == "" {
+			dev.CallSign = authResult.CallSign
+		}
+		if dev.Username == "" && authResult.User != nil {
+			dev.Username = authResult.User.Name
+		}
+		dev.CallSignSSID = fmt.Sprintf("%s-%d", dev.CallSign, dev.SSID)
+
 		// UDPAddr 存储 frp 转发地址（用于发送响应）
 		dev.UDPAddr = packet.UDPAddr
 		dev.ISOnline = true

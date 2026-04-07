@@ -5,6 +5,7 @@ import PhoneIphone from '@mui/icons-material/PhoneIphone'
 import DesktopWindows from '@mui/icons-material/DesktopWindows'
 import LaptopMac from '@mui/icons-material/LaptopMac'
 import Language from '@mui/icons-material/Language'
+import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 
 // 设备型号定义
 export const DEVICE_MODELS = [
@@ -15,6 +16,11 @@ export const DEVICE_MODELS = [
   { value: 103, label: 'Windows 客户端', icon: DesktopWindows },
   { value: 104, label: 'macOS 客户端', icon: LaptopMac },
   { value: 105, label: '浏览器客户端', icon: Language },
+  { value: 106, label: '互联设备', icon: SettingsInputAntenna },
+  { value: 107, label: 'ESP32 链路台/手咪', icon: SettingsInputAntenna },
+  { value: 110, label: '南山对讲桥接器', icon: SettingsInputAntenna },
+  { value: 111, label: 'HT 对讲桥接器', icon: SettingsInputAntenna },
+  { value: 112, label: '涛涛对讲桥接器', icon: SettingsInputAntenna },
 ] as const
 
 export type DeviceModelValue = (typeof DEVICE_MODELS)[number]['value']
@@ -54,4 +60,8 @@ export function formatDeviceDisplayName(deviceName: string, devModel: number): s
 // 检查是否是幽灵设备
 export function isGhostDevice(devModel: number): boolean {
   return devModel >= 100 && devModel <= 105
+}
+
+export function isPlatformOnlyDeviceModel(devModel: number): boolean {
+  return devModel >= 110 && devModel <= 112
 }

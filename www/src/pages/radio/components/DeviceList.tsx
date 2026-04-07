@@ -29,6 +29,7 @@ import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone'
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows'
 import LaptopMacIcon from '@mui/icons-material/LaptopMac'
 import LanguageIcon from '@mui/icons-material/Language'
+import SettingsInputAntennaIcon from '@mui/icons-material/SettingsInputAntenna'
 import { apiClient } from '../../../services'
 import { DeviceModel } from '../../../types/radio'
 import type { OnlineDevice } from '../../../types/radio'
@@ -53,6 +54,12 @@ const getDeviceIcon = (devModel: number) => {
       return <LaptopMacIcon />
     case 105: // 浏览器
       return <LanguageIcon />
+    case 106: // 互联设备
+    case 107: // ESP32
+    case 110: // 南山对讲桥接器
+    case 111: // HT对讲桥接器
+    case 112: // 涛涛对讲桥接器
+      return <SettingsInputAntennaIcon />
     default:
       return <HeadsetIcon />
   }
@@ -73,6 +80,16 @@ const getDeviceModelName = (devModel: number) => {
       return 'macOS'
     case 105:
       return '浏览器'
+    case 106:
+      return '互联设备'
+    case 107:
+      return 'ESP32 链路台/手咪'
+    case 110:
+      return '南山对讲桥接器'
+    case 111:
+      return 'HT 对讲桥接器'
+    case 112:
+      return '涛涛对讲桥接器'
     default:
       return '未知设备'
   }

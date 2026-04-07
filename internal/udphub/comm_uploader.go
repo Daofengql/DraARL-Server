@@ -122,7 +122,7 @@ type RawOpusHeader struct {
 	Version    uint16  // 格式版本 = 1
 	SampleRate uint32  // 采样率 = 16000
 	Channels   uint16  // 声道数 = 1
-	FrameSize  uint16  // 帧大小 = 320 (20ms at 16kHz)
+	FrameSize  uint16  // 帧大小 = 960 (60ms at 16kHz)
 	FrameCount uint32  // 帧数量
 	Reserved   [6]byte // 保留字段
 }
@@ -163,7 +163,7 @@ func (cu *CommUploader) uploadAudio(session *AudioSession) (string, int64, error
 		Version:    1,
 		SampleRate: 16000,
 		Channels:   1,
-		FrameSize:  320, // 20ms at 16kHz
+		FrameSize:  960, // 60ms at 16kHz
 		FrameCount: uint32(frameCount),
 	}
 	copy(header.Magic[:], []byte("OPUS"))

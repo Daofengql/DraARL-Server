@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"gorm.io/gorm"
 	"draarl/internal/gormdb"
+	"gorm.io/gorm"
 )
 
 // DBRecord 待写入数据库的记录
@@ -90,8 +90,8 @@ func (cs *CommSyncer) SyncToDatabase() {
 			status = 3 // 上传失败
 		}
 
-		// 计算时长
-		durationMs := int(item.Session.LastPacketTime.Sub(item.Session.StartTime).Milliseconds())
+		// 录音时长按实际 Opus 帧数估算，避免大包/弱网场景下被墙钟时间严重低估。
+		durationMs := estimateSessionDurationMs(item.Session)
 		endTime := item.Session.StartTime.Add(time.Duration(durationMs) * time.Millisecond)
 
 		// 处理设备ID（幽灵设备使用负数ID，存储为0）

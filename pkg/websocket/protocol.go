@@ -13,16 +13,16 @@ import (
 // WSPacket WebSocket 数据包（基于 DraARLv1 协议）
 type WSPacket struct {
 	// Header fields (90 bytes)
-	Version        string    // 4B  - "DraA"
-	Length         uint16    // 2B  - 报文总长度
-	Username       string    // 32B - 用户名
-	DevicePassword string    // 10B - 设备准入密码
-	Type           byte      // 1B  - 数据包类型
-	DevModel       byte      // 1B  - 设备型号
-	SSID           byte      // 1B  - 设备子号
-	DMRID          uint32    // 3B  - DMR ID (uint24)
-	CallSign       string    // 32B - 呼号（服务器填充）
-	Reserved       []byte    // 4B  - 保留
+	Version        string // 4B  - "DraA"
+	Length         uint16 // 2B  - 报文总长度
+	Username       string // 32B - 用户名
+	DevicePassword string // 10B - 设备准入密码
+	Type           byte   // 1B  - 数据包类型
+	DevModel       byte   // 1B  - 设备型号
+	SSID           byte   // 1B  - 设备子号
+	DMRID          uint32 // 3B  - DMR ID (uint24)
+	CallSign       string // 32B - 呼号（服务器填充）
+	Reserved       []byte // 4B  - 保留
 
 	// DATA region
 	DATA []byte
@@ -241,6 +241,14 @@ func GetDeviceModelName(devModel byte) string {
 		return "Browser"
 	case protocol.DraARLDevModelInterconnect:
 		return "Interconnect"
+	case protocol.DraARLDevModelESP32:
+		return "ESP32"
+	case protocol.DraARLDevModelNSBridge:
+		return "Nanshan Bridge"
+	case protocol.DraARLDevModelHTBridge:
+		return "HT Bridge"
+	case protocol.DraARLDevModelTTBridge:
+		return "Taotao Bridge"
 	default:
 		return fmt.Sprintf("Unknown(%d)", devModel)
 	}

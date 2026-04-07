@@ -30,6 +30,10 @@ const (
 	DevModelWindows    byte = 103
 	DevModelBrowser    byte = 105
 	DevModelRescue     byte = 106
+	DevModelESP32      byte = 107
+	DevModelNSBridge   byte = 110
+	DevModelHTBridge   byte = 111
+	DevModelTTBridge   byte = 112
 	DevModelServer     byte = 200
 	DevModelBM         byte = 201
 	DevModelNanny      byte = 250

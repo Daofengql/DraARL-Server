@@ -119,13 +119,19 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 	// 转换回 models.Device
 	modelDev := gormDev.ToModelDevice()
 
-	// 获取所有者信息填充 Username
+	// 保留认证链路已经拿到的运行时字段，避免新设备首次上线时出现空呼号。
+	modelDev.CallSign = dev.CallSign
+	modelDev.Username = dev.Username
+
+	// 获取所有者信息填充 Username/CallSign（数据库为准，补齐运行时字段）
 	if gormDev.OwnerID > 0 {
 		userRepo := gormdb.NewUserRepository()
 		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
 			modelDev.Username = owner.Name
+			modelDev.CallSign = owner.CallSign
 		}
 	}
+	modelDev.CallSignSSID = protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
 
 	log.Printf("Created new device in database: %s-%d (ID: %d)", dev.CallSign, dev.SSID, modelDev.ID)
 	return modelDev, nil

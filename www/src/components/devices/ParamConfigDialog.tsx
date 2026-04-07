@@ -26,7 +26,7 @@ import {
 } from '@mui/material'
 import { deviceService, type DeviceConfig } from '../../services/device'
 import { relayService } from '../../services/relay'
-import { DEVICE_MODELS } from '../../utils/deviceModel'
+import { DEVICE_MODELS, isPlatformOnlyDeviceModel } from '../../utils/deviceModel'
 import type { Relay } from '../../types'
 import { RegionCascader } from '../common/RegionCascader'
 
@@ -154,6 +154,15 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
     name: '',
     model: 1,
   })
+  const platformOnly = isPlatformOnlyDeviceModel(deviceModel)
+  const tabs = platformOnly
+    ? [{ key: 'platform', label: '平台设置' }]
+    : [
+        { key: 'freq', label: '频率设置' },
+        { key: 'system', label: '系统设置' },
+        { key: 'platform', label: '平台设置' },
+      ]
+  const currentTab = tabs[tabValue]?.key ?? 'platform'
 
   // 加载设备配置
   useEffect(() => {
@@ -166,6 +175,12 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
       })
     }
   }, [open, deviceId, deviceName, deviceModel])
+
+  useEffect(() => {
+    if (tabValue >= tabs.length) {
+      setTabValue(0)
+    }
+  }, [tabValue, tabs.length])
 
   const loadConfig = async () => {
     if (!deviceId) return
@@ -282,12 +297,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
 
   // 根据 tab 获取标题
   const getTabTitle = () => {
-    switch (tabValue) {
-      case 0: return '频率设置'
-      case 1: return '系统设置'
-      case 2: return '平台设置'
-      default: return '参数配置'
-    }
+    return tabs[tabValue]?.label || '参数配置'
   }
 
   return (
@@ -312,9 +322,9 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
       </DialogTitle>
       <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 3 }}>
         <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}>
-          <Tab label="频率设置" />
-          <Tab label="系统设置" />
-          <Tab label="平台设置" />
+          {tabs.map((tab) => (
+            <Tab key={tab.key} label={tab.label} />
+          ))}
         </Tabs>
       </Box>
       <DialogContent>
@@ -324,7 +334,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
               设备当前离线，配置将保存到服务器，设备上线后自动同步。
             </Alert>
           )}
-          {tabValue === 0 && (
+          {currentTab === 'freq' && (
             <Grid container spacing={3}>
               {/* 中继台预设填入 */}
               <Grid size={12}>
@@ -511,12 +521,12 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
               </Grid>
             </Grid>
           )}
-          {tabValue === 1 && (
+          {currentTab === 'system' && (
             <Typography color="text.secondary" align="center" sx={{ py: 4 }}>
               系统设置功能开发中，敬请期待...
             </Typography>
           )}
-          {tabValue === 2 && (
+          {currentTab === 'platform' && (
             <Grid container spacing={3}>
               <Grid size={12}>
                 <TextField
@@ -533,7 +543,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
                   <Select
                     value={platformFormData.model}
                     label="设备型号"
-                    onChange={(e) => setPlatformFormData(prev => ({ ...prev, model: e.target.value as number }))}
+                    onChange={(e) => setPlatformFormData(prev => ({ ...prev, model: Number(e.target.value) }))}
                   >
                     {DEVICE_MODELS.map((model) => (
                       <MenuItem key={model.value} value={model.value}>
@@ -549,7 +559,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose}>取消</Button>
-        {tabValue === 2 ? (
+        {currentTab === 'platform' ? (
           // 平台设置的保存按钮
           <Button
             variant="contained"

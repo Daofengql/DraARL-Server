@@ -23,6 +23,13 @@ type AudioSession struct {
 	mu             sync.Mutex
 }
 
+const (
+	// 当前链路已切到 60ms Opus 帧，这里统一用帧数来推导录音时长。
+	opusFrameDurationMs = 60
+	// 与主语音链路的 PTT 结束判定保持一致，避免录音会话被过早切碎。
+	commSessionGapThreshold = 600 * time.Millisecond
+)
+
 // CommBuffer 通信缓冲管理器
 type CommBuffer struct {
 	sessions     map[string]*AudioSession // 活跃会话 (key: deviceID)
@@ -114,8 +121,8 @@ func (cb *CommBuffer) AppendPacket(
 	session, exists := cb.sessions[sessionKey]
 	now := time.Now()
 
-	// 判断是否是新会话（间隔超时 200ms 视为新会话，与 PTT 检测逻辑一致）
-	if !exists || now.Sub(session.LastPacketTime) > 200*time.Millisecond {
+	// 判断是否是新会话。60ms/120ms/240ms 大包模式下，200ms 容错太低，会把一次发言切成很多段。
+	if !exists || now.Sub(session.LastPacketTime) > commSessionGapThreshold {
 		// 关闭旧会话
 		if exists {
 			cb.finalizeSession(session)
@@ -168,8 +175,7 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	// 使用最后一个数据包时间计算时长，与数据库保存逻辑一致
-	durationMs := int(session.LastPacketTime.Sub(session.StartTime).Milliseconds())
+	durationMs := estimateSessionDurationMs(session)
 
 	// 检查最小时长阈值
 	if durationMs < cb.config.MinDurationMs {
@@ -206,8 +212,8 @@ func (cb *CommBuffer) CheckTimeout() {
 
 	now := time.Now()
 	for key, session := range cb.sessions {
-		// 超过 500ms 没有新数据包，视为会话结束
-		if now.Sub(session.LastPacketTime) > 500*time.Millisecond {
+		// 与新会话判定阈值保持一致，避免录音器先于主链路截断。
+		if now.Sub(session.LastPacketTime) > commSessionGapThreshold {
 			cb.finalizeSession(session)
 			delete(cb.sessions, key)
 		}
@@ -238,4 +244,17 @@ func (cb *CommBuffer) UpdateConfig(config *CommSettingsConfig) {
 		defer cb.mu.Unlock()
 		cb.config = config
 	}
+}
+
+func estimateSessionDurationMs(session *AudioSession) int {
+	if session == nil {
+		return 0
+	}
+	if session.PacketCount > 0 {
+		return session.PacketCount * opusFrameDurationMs
+	}
+	if session.LastPacketTime.After(session.StartTime) {
+		return int(session.LastPacketTime.Sub(session.StartTime).Milliseconds())
+	}
+	return 0
 }

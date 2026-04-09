@@ -8,11 +8,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  FormControl,
   Grid,
-  InputLabel,
-  Select,
-  MenuItem,
   Snackbar,
   Tab,
   Tabs,
@@ -21,7 +17,7 @@ import {
 } from '@mui/material'
 import { deviceService, type DeviceConfig } from '../../services/device'
 import {
-  DEVICE_MODELS,
+  getDevModelName,
   getDeviceConfigTabs,
 } from '../../utils/deviceModel'
 import {
@@ -73,7 +69,6 @@ export function ParamConfigDialog({
   const [radioConfig, setRadioConfig] = useState<RadioConfigForm>(defaultRadioConfig.current)
   const [platformFormData, setPlatformFormData] = useState({
     name: '',
-    model: 1,
   })
 
   const tabs = getDeviceConfigTabs(deviceModel)
@@ -133,14 +128,12 @@ export function ParamConfigDialog({
       setRadioConfig(defaultRadioConfig.current)
       setPlatformFormData({
         name: '',
-        model: 1,
       })
       return
     }
 
     setPlatformFormData({
       name: deviceName,
-      model: deviceModel,
     })
     setRadioConfig(defaultRadioConfig.current)
 
@@ -200,7 +193,6 @@ export function ParamConfigDialog({
     try {
       await deviceService.update(deviceId, {
         name: platformFormData.name,
-        model: platformFormData.model,
       })
       setSnackbar({ open: true, message: '设备信息保存成功', severity: 'success' })
       onDeviceUpdated?.()
@@ -277,22 +269,14 @@ export function ParamConfigDialog({
                 />
               </Grid>
               <Grid size={12}>
-                <FormControl fullWidth>
-                  <InputLabel>设备型号</InputLabel>
-                  <Select
-                    value={platformFormData.model}
-                    label="设备型号"
-                    onChange={(event) => setPlatformFormData((prev) => ({ ...prev, model: Number(event.target.value) }))}
-                  >
-                    {DEVICE_MODELS.map((model) => (
-                      <MenuItem key={model.value} value={model.value}>
-                        {model.label}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                <TextField
+                  fullWidth
+                  label="设备型号（只读）"
+                  value={getDevModelName(deviceModel)}
+                  slotProps={{ input: { readOnly: true } }}
+                />
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                  历史型号 106/107 仍可正常显示和读取，但不再作为新配置可选项。
+                  设备型号由客户端上报，Web 端不可修改。
                 </Typography>
               </Grid>
             </Grid>

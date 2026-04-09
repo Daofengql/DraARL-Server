@@ -462,6 +462,24 @@ func IsBridgeSoftwareDevModel(devModel byte) bool {
 	return devModel >= 110 && devModel <= 150
 }
 
+// IsValidClientReportedDevModel 判断客户端上报的设备型号是否在协议允许范围内。
+// 规则：
+// 1) 0-99 互联产品段
+// 2) 100-105 幽灵/保留段
+// 3) 106/107 历史兼容型号
+// 4) 110-150 互联网桥软件段
+// 5) 151-255 待定段
+// 6) 108-109 视为无效保留空洞
+func IsValidClientReportedDevModel(devModel byte) bool {
+	if IsInterconnectProductDevModel(devModel) || IsGhostReservedDevModel(devModel) || IsBridgeSoftwareDevModel(devModel) {
+		return true
+	}
+	if devModel == DraARLDevModelLegacyBridge || devModel == DraARLDevModelLegacyESP32 {
+		return true
+	}
+	return devModel >= 151
+}
+
 // IsSelectableHardwareDevModel 判断是否为当前前台允许新选的硬件型号
 func IsSelectableHardwareDevModel(devModel byte) bool {
 	return devModel == DraARLDevModelESP32Radio || devModel == DraARLDevModelESP32NoRadio

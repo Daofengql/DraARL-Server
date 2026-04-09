@@ -492,6 +492,51 @@ func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*mod
 	return nil, false
 }
 
+// applyClientReportedDevModel 处理客户端上报的 DevModel：
+// 1) 校验协议范围；
+// 2) 仅在发生变化时更新内存；
+// 3) 对已落库设备同步写回 devices.dev_model。
+func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
+	if dev == nil {
+		return
+	}
+	if !protocol.IsValidClientReportedDevModel(reportedDevModel) {
+		log.Printf("[DEV_MODEL] 忽略非法设备型号上报: device_id=%d username=%s ssid=%d reported=%d",
+			dev.ID, dev.Username, dev.SSID, reportedDevModel)
+		return
+	}
+	if dev.DevModel == reportedDevModel {
+		return
+	}
+
+	oldModel := dev.DevModel
+	dev.DevModel = reportedDevModel
+	if dev.ID <= 0 {
+		return
+	}
+
+	repo := gormdb.NewDeviceRepository()
+	if err := repo.UpdateDeviceFields(dev.ID, map[string]interface{}{
+		"dev_model": int(reportedDevModel),
+	}); err != nil {
+		log.Printf("[DEV_MODEL] 持久化设备型号失败: device_id=%d old=%d new=%d err=%v",
+			dev.ID, oldModel, reportedDevModel, err)
+		return
+	}
+
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		ctx := context.Background()
+		_ = deviceCache.InvalidateDevice(ctx, dev.ID, dev.OwnerID, uint8(dev.SSID))
+		_ = deviceCache.InvalidateDeviceList(ctx)
+		if dev.GroupID > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, dev.GroupID)
+		}
+	}
+
+	log.Printf("[DEV_MODEL] 设备型号已更新: device_id=%d old=%d new=%d",
+		dev.ID, oldModel, reportedDevModel)
+}
+
 // handleNewDraARLDevice 处理新 DraARLv1 设备
 // realAddr: 真实客户端地址（用于识别设备和日志）
 func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, usernameSSID string) {
@@ -518,6 +563,13 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 	}
 
 	// 认证成功，创建或更新设备
+	reportedDevModel := packet.DevModel
+	if !protocol.IsValidClientReportedDevModel(reportedDevModel) {
+		log.Printf("[DEV_MODEL] 新设备上报非法设备型号，回退为 Unknown: username=%s ssid=%d reported=%d",
+			packet.Username, packet.SSID, packet.DevModel)
+		reportedDevModel = protocol.DraARLDevModelUnknown
+	}
+
 	newDevice := &models.Device{
 		Username: packet.Username,
 		CallSign: authResult.CallSign,
@@ -525,7 +577,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		OwnerID:  authResult.User.ID, // 设置所有者ID
 		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
 		CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID),
-		DevModel:     packet.DevModel,
+		DevModel:     reportedDevModel,
 		Priority:     100,
 		Status:       0,
 		GroupID:      models.GroupIDPrivate1, // 默认加入群组1（避免 999 在部分库中缺失导致外键失败）
@@ -540,6 +592,8 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 	}
 
 	if dev != nil {
+		applyClientReportedDevModel(dev, packet.DevModel)
+
 		if dev.CallSign == "" {
 			dev.CallSign = authResult.CallSign
 		}
@@ -768,6 +822,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	if realIP != "" {
 		dev.LastOnlineIP = realIP
 	}
+	applyClientReportedDevModel(dev, packet.DevModel)
 
 	// 检测重连
 	if addrChanged && wasOnline {
@@ -802,9 +857,6 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 
 	if !dev.ISOnline {
 		// 新设备上线
-		if packet.DevModel != 0 {
-			dev.DevModel = packet.DevModel
-		}
 		dev.OnlineTime = packet.TimeStamp
 
 		// QTH 查询使用真实 IP

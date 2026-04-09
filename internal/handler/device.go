@@ -293,7 +293,6 @@ type UpdateDeviceRequest struct {
 	Status      int8   `json:"status"`
 	Priority    int    `json:"priority"`
 	Note        string `json:"note"`
-	DevModel    int    `json:"dev_model"`
 	DisableSend *bool  `json:"disable_send"` // 设备级禁发（可选字段）
 	DisableRecv *bool  `json:"disable_recv"` // 设备级禁收（可选字段）
 }
@@ -369,10 +368,6 @@ func UpdateDevice(c *gin.Context) {
 		updates["note"] = req.Note
 		device.Note = req.Note
 	}
-	if req.DevModel > 0 {
-		updates["dev_model"] = req.DevModel
-		device.DevModel = req.DevModel
-	}
 	// 设备级别的收发控制（设备所有者和管理员可设置）
 	// 仅在请求显式传入字段时更新，避免未传字段被默认值覆盖。
 	if req.DisableSend != nil {
@@ -424,8 +419,8 @@ func UpdateDevice(c *gin.Context) {
 		operatorCallSign = currentUser.CallSign
 	}
 	oplog.AddLog(
-		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, dev_model=%d, disable_send=%t, disable_recv=%t",
-			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority, device.DevModel, device.DisableSend, device.DisableRecv),
+		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, disable_send=%t, disable_recv=%t",
+			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority, device.DisableSend, device.DisableRecv),
 		"device_update",
 		operatorID,
 		operatorName,

@@ -67,14 +67,6 @@ const normalizeDevice = (d: BackendDevice): Device => ({
   updated_at: d.update_time, // 前端兼容
 })
 
-const normalizeOptionalNumber = (value: unknown): number | undefined => {
-  if (value === null || value === undefined || value === '') {
-    return undefined
-  }
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
 export const deviceService = {
   // 获取设备列表
   async getList(params?: {
@@ -108,13 +100,11 @@ export const deviceService = {
 
   // 更新设备
   async update(id: number, data: Partial<Device>): Promise<Device> {
-    const devModel = normalizeOptionalNumber(data.model ?? data.dev_model)
     const backendData: Partial<BackendDevice> = {
       id: data.id,
       name: data.name,
       callsign: data.callsign,
       ssid: data.ssid,
-      dev_model: devModel,
       group_id: data.group_id,
       is_online: data.online ?? data.is_online,
       status: data.status,

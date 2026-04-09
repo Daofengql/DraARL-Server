@@ -28,6 +28,8 @@ import { PublicPageLayout } from '../../components/layout'
 import { relayService } from '../../services'
 import type { Relay } from '../../types'
 import { RegionCascader } from '../../components/common/RegionCascader'
+import { formatToneDisplay } from '../../utils/radioConfig'
+import { getErrorMessage } from '../../utils/errorMessage'
 
 export function RelaySearchPage() {
   const [relays, setRelays] = useState<Relay[]>([])
@@ -57,8 +59,8 @@ export function RelaySearchPage() {
       const data = await relayService.publicSearch(location)
       setRelays(data)
       setPage(0)
-    } catch (err: any) {
-      setError(err.response?.data?.message || '查询失败，请稍后重试')
+    } catch (error) {
+      setError(getErrorMessage(error, '查询失败，请稍后重试'))
       setRelays([])
     } finally {
       setLoading(false)
@@ -150,8 +152,8 @@ export function RelaySearchPage() {
                         </TableCell>
                         <TableCell>{relay.down_freq || '-'}</TableCell>
                         <TableCell>{relay.up_freq || '-'}</TableCell>
-                        <TableCell>{relay.receive_ctcss || '-'}</TableCell>
-                        <TableCell>{relay.send_ctcss || '-'}</TableCell>
+                        <TableCell>{relay.receive_ctcss ? formatToneDisplay(relay.receive_ctcss) : '-'}</TableCell>
+                        <TableCell>{relay.send_ctcss ? formatToneDisplay(relay.send_ctcss) : '-'}</TableCell>
                         <TableCell>{relay.location || '-'}</TableCell>
                         <TableCell>
                           <Chip

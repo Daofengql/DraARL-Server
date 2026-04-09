@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Box,
   Paper,
@@ -34,6 +34,13 @@ import { relayService } from '../../services'
 import type { Relay } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { RegionCascader } from '../../components/common/RegionCascader'
+import { ToneSelector } from '../../components/devices/frequency/ToneSelector'
+import {
+  buildToneSelection,
+  formatToneDisplay,
+  toneSelectionToRelayValue,
+} from '../../utils/radioConfig'
+import { getErrorMessage } from '../../utils/errorMessage'
 
 const initialFormData = {
   id: 0,
@@ -65,7 +72,7 @@ export function RelaysPage() {
   const [validateForm, setValidateForm] = useState(false)
 
   // 确认对话框状态
-    const [confirmDialog, setConfirmDialog] = useState<{
+  const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean
     title: string
     message: string
@@ -73,27 +80,27 @@ export function RelaysPage() {
     onConfirm: () => void
   }>({ open: false, title: '', message: '', type: 'info', onConfirm: () => {} })
 
-  useEffect(() => {
-    loadRelays()
-  }, [])
-
-  const loadRelays = async () => {
+  const loadRelays = useCallback(async (location?: string) => {
     setLoading(true)
     try {
       // 使用后端按地区搜索（管理员版本，不过滤状态）
-      const data = await relayService.list(searchLocation || undefined)
+      const data = await relayService.list(location)
       setRelays(data)
     } catch (err) {
       console.error('Failed to load relays:', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    void loadRelays()
+  }, [loadRelays])
 
   // 当搜索条件变化时重新加载
   const handleSearch = () => {
     setPage(0)
-    loadRelays()
+    void loadRelays(searchLocation || undefined)
   }
 
   const handleClear = () => {
@@ -168,8 +175,8 @@ export function RelaysPage() {
       }
       handleCloseDialog()
       loadRelays()
-    } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
+    } catch (error) {
+      setError(getErrorMessage(error, '操作失败'))
     }
   }
 
@@ -184,8 +191,8 @@ export function RelaysPage() {
         try {
           await relayService.delete(id)
           loadRelays()
-        } catch (err: any) {
-          setError(err.response?.data?.message || '删除失败')
+        } catch (error) {
+          setError(getErrorMessage(error, '删除失败'))
         }
       },
     })
@@ -221,8 +228,8 @@ export function RelaysPage() {
           await Promise.all(selectedIds.map(id => relayService.delete(id)))
           setSelectedIds([])
           loadRelays()
-        } catch (err: any) {
-          setError(err.response?.data?.message || '批量删除失败')
+        } catch (error) {
+          setError(getErrorMessage(error, '批量删除失败'))
         }
       },
     })
@@ -370,8 +377,8 @@ export function RelaysPage() {
                   </TableCell>
                   <TableCell>{relay.down_freq || '-'}</TableCell>
                   <TableCell>{relay.up_freq || '-'}</TableCell>
-                  <TableCell>{relay.receive_ctcss || '-'}</TableCell>
-                  <TableCell>{relay.send_ctcss || '-'}</TableCell>
+                  <TableCell>{relay.receive_ctcss ? formatToneDisplay(relay.receive_ctcss) : '-'}</TableCell>
+                  <TableCell>{relay.send_ctcss ? formatToneDisplay(relay.send_ctcss) : '-'}</TableCell>
                   <TableCell>{relay.ower_callsign || '-'}</TableCell>
                   <TableCell>{relay.location || '-'}</TableCell>
                   <TableCell>
@@ -442,20 +449,16 @@ export function RelaysPage() {
                 InputProps={{ endAdornment: <Typography color="text.secondary">MHz</Typography> }}
               />
             </Box>
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <TextField
-                label="接收亚音 (CTCSS)"
-                sx={{ flex: 1 }}
-                placeholder="例如: 88.5"
-                value={formData.receive_ctcss}
-                onChange={(e) => setFormData({ ...formData, receive_ctcss: e.target.value })}
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
+              <ToneSelector
+                label="接收亚音"
+                value={buildToneSelection({ legacy: formData.receive_ctcss })}
+                onChange={(tone) => setFormData({ ...formData, receive_ctcss: toneSelectionToRelayValue(tone) })}
               />
-              <TextField
-                label="发射亚音 (CTCSS)"
-                sx={{ flex: 1 }}
-                placeholder="例如: 88.5"
-                value={formData.send_ctcss}
-                onChange={(e) => setFormData({ ...formData, send_ctcss: e.target.value })}
+              <ToneSelector
+                label="发射亚音"
+                value={buildToneSelection({ legacy: formData.send_ctcss })}
+                onChange={(tone) => setFormData({ ...formData, send_ctcss: toneSelectionToRelayValue(tone) })}
               />
             </Box>
             <TextField

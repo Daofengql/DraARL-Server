@@ -84,6 +84,18 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	if req.TxCtcss != nil {
 		configs["tx_ctcss"] = *req.TxCtcss
 	}
+	if req.RxToneMode != nil {
+		configs["rx_tone_mode"] = *req.RxToneMode
+	}
+	if req.RxToneValue != nil {
+		configs["rx_tone_value"] = *req.RxToneValue
+	}
+	if req.TxToneMode != nil {
+		configs["tx_tone_mode"] = *req.TxToneMode
+	}
+	if req.TxToneValue != nil {
+		configs["tx_tone_value"] = *req.TxToneValue
+	}
 	if req.SqlLevel != nil {
 		configs["sql_level"] = *req.SqlLevel
 	}

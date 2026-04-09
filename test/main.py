@@ -330,7 +330,7 @@ class ClientPanel(ttk.LabelFrame):
         # 创建配置窗口
         config_window = tk.Toplevel(self.root)
         config_window.title(f"Config - {self.panel_name}")
-        config_window.geometry("400x550")
+        config_window.geometry("420x640")
         config_window.resizable(False, False)
 
         # 主区域
@@ -343,6 +343,27 @@ class ClientPanel(ttk.LabelFrame):
 
         # 获取当前配置
         config = self.client.get_device_config()
+        tone_mode_options = ["off", "ctcss", "cdcss_n", "cdcss_i"]
+
+        def normalize_tone_mode(value: str) -> str:
+            raw = str(value).strip().lower()
+            if raw in ("", "off", "0"):
+                return "off"
+            if raw in ("ctcss", "1"):
+                return "ctcss"
+            if raw in ("cdcss_n", "cdcss-n", "2"):
+                return "cdcss_n"
+            if raw in ("cdcss_i", "cdcss-i", "3"):
+                return "cdcss_i"
+            return "off"
+
+        def format_tone_mode(value: str) -> str:
+            return {
+                "off": "OFF",
+                "ctcss": "CTCSS",
+                "cdcss_n": "CDCSS_N",
+                "cdcss_i": "CDCSS_I",
+            }.get(normalize_tone_mode(value), "OFF")
 
         # 配置项显示
         self.config_labels = {}
@@ -351,6 +372,10 @@ class ClientPanel(ttk.LabelFrame):
             ("tx_freq", "发射频率", lambda v: f"{int(v)/1e6:.4f} MHz" if v else "-"),
             ("rx_ctcss", "接收亚音", lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭"),
             ("tx_ctcss", "发射亚音", lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭"),
+            ("rx_tone_mode", "接收数字亚音模式", format_tone_mode),
+            ("rx_tone_value", "接收数字亚音值", lambda v: v if v else "-"),
+            ("tx_tone_mode", "发射数字亚音模式", format_tone_mode),
+            ("tx_tone_value", "发射数字亚音值", lambda v: v if v else "-"),
             ("sql_level", "静噪等级", lambda v: f"{v}"),
             ("power_level", "功率等级", lambda v: {"1": "低", "2": "中", "3": "高"}.get(v, v)),
             ("tx_bandwidth", "发射带宽", lambda v: "窄带" if v == "1" else "宽带"),
@@ -400,6 +425,28 @@ class ClientPanel(ttk.LabelFrame):
         ttk.Entry(ctcss_row, textvariable=self.config_vars['rx_ctcss'], width=8).pack(side=tk.LEFT, padx=5)
         ttk.Label(ctcss_row, text="0=关闭", foreground="gray").pack(side=tk.LEFT, padx=5)
 
+        # 数字亚音模式
+        tone_mode_row = ttk.Frame(edit_frame)
+        tone_mode_row.pack(fill=tk.X, pady=2)
+        ttk.Label(tone_mode_row, text="发射数字亚音:", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self.config_vars['tx_tone_mode'] = tk.StringVar(value=normalize_tone_mode(config.get('tx_tone_mode', 'off')))
+        ttk.Combobox(tone_mode_row, textvariable=self.config_vars['tx_tone_mode'],
+                     values=tone_mode_options, width=9, state="readonly").pack(side=tk.LEFT, padx=5)
+        ttk.Label(tone_mode_row, text="接收:").pack(side=tk.LEFT, padx=(10, 0))
+        self.config_vars['rx_tone_mode'] = tk.StringVar(value=normalize_tone_mode(config.get('rx_tone_mode', 'off')))
+        ttk.Combobox(tone_mode_row, textvariable=self.config_vars['rx_tone_mode'],
+                     values=tone_mode_options, width=9, state="readonly").pack(side=tk.LEFT, padx=5)
+
+        # 数字亚音值
+        tone_value_row = ttk.Frame(edit_frame)
+        tone_value_row.pack(fill=tk.X, pady=2)
+        ttk.Label(tone_value_row, text="发射数字亚音值:", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self.config_vars['tx_tone_value'] = tk.StringVar(value=config.get('tx_tone_value', '0'))
+        ttk.Entry(tone_value_row, textvariable=self.config_vars['tx_tone_value'], width=8).pack(side=tk.LEFT, padx=5)
+        ttk.Label(tone_value_row, text="接收值:").pack(side=tk.LEFT, padx=(10, 0))
+        self.config_vars['rx_tone_value'] = tk.StringVar(value=config.get('rx_tone_value', '0'))
+        ttk.Entry(tone_value_row, textvariable=self.config_vars['rx_tone_value'], width=8).pack(side=tk.LEFT, padx=5)
+
         # 静噪等级
         sql_row = ttk.Frame(edit_frame)
         sql_row.pack(fill=tk.X, pady=2)
@@ -445,6 +492,10 @@ class ClientPanel(ttk.LabelFrame):
                     "tx_freq": lambda v: f"{int(v)/1e6:.4f} MHz" if v else "-",
                     "rx_ctcss": lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭",
                     "tx_ctcss": lambda v: f"{float(v):.1f} Hz" if v and v != "0" and v != "0.0" else "关闭",
+                    "rx_tone_mode": format_tone_mode,
+                    "rx_tone_value": lambda v: v if v else "-",
+                    "tx_tone_mode": format_tone_mode,
+                    "tx_tone_value": lambda v: v if v else "-",
                     "sql_level": lambda v: f"{v}",
                     "power_level": lambda v: {"1": "低", "2": "中", "3": "高"}.get(v, v),
                     "tx_bandwidth": lambda v: "窄带" if v == "1" else "宽带",
@@ -466,6 +517,10 @@ class ClientPanel(ttk.LabelFrame):
                     self.client._get_tlv_type('tx_freq'): str(int(float(self.config_vars['tx_freq'].get()) * 1e6)),
                     self.client._get_tlv_type('rx_ctcss'): self.config_vars['rx_ctcss'].get(),
                     self.client._get_tlv_type('tx_ctcss'): self.config_vars['tx_ctcss'].get(),
+                    self.client._get_tlv_type('rx_tone_mode'): self.config_vars['rx_tone_mode'].get(),
+                    self.client._get_tlv_type('rx_tone_value'): self.config_vars['rx_tone_value'].get(),
+                    self.client._get_tlv_type('tx_tone_mode'): self.config_vars['tx_tone_mode'].get(),
+                    self.client._get_tlv_type('tx_tone_value'): self.config_vars['tx_tone_value'].get(),
                     self.client._get_tlv_type('sql_level'): str(int(float(sql_scale.get()))),
                     self.client._get_tlv_type('power_level'): self.config_vars['power_level'].get(),
                     self.client._get_tlv_type('tx_bandwidth'): self.config_vars['tx_bandwidth'].get(),

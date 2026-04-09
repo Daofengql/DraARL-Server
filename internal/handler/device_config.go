@@ -81,13 +81,17 @@ func GetDeviceConfig(c *gin.Context) {
 
 // UpdateDeviceConfigRequest 更新设备配置请求
 type UpdateDeviceConfigRequest struct {
-	RxFreq      *string `json:"rx_freq"`      // 接收频率 (Hz)
-	TxFreq      *string `json:"tx_freq"`      // 发射频率 (Hz)
-	RxCtcss     *string `json:"rx_ctcss"`     // 接收亚音 (Hz, 0=关闭)
-	TxCtcss     *string `json:"tx_ctcss"`     // 发射亚音 (Hz, 0=关闭)
-	SqlLevel    *string `json:"sql_level"`    // 静噪等级 (0-9)
-	PowerLevel  *string `json:"power_level"`  // 功率等级 (1=低, 2=中, 3=高)
-	TxBandwidth *string `json:"tx_bandwidth"` // 发射带宽 (1=窄带, 2=宽带)
+	RxFreq      *string `json:"rx_freq"`       // 接收频率 (Hz)
+	TxFreq      *string `json:"tx_freq"`       // 发射频率 (Hz)
+	RxCtcss     *string `json:"rx_ctcss"`      // 接收亚音旧字段 (Hz, 0=关闭)
+	TxCtcss     *string `json:"tx_ctcss"`      // 发射亚音旧字段 (Hz, 0=关闭)
+	RxToneMode  *string `json:"rx_tone_mode"`  // 接收亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+	RxToneValue *string `json:"rx_tone_value"` // 接收亚音值 (88.5/023)
+	TxToneMode  *string `json:"tx_tone_mode"`  // 发射亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+	TxToneValue *string `json:"tx_tone_value"` // 发射亚音值 (88.5/023)
+	SqlLevel    *string `json:"sql_level"`     // 静噪等级 (0-8)
+	PowerLevel  *string `json:"power_level"`   // 功率等级 (1=低, 3=高)
+	TxBandwidth *string `json:"tx_bandwidth"`  // 发射带宽 (1=窄带, 2=宽带)
 }
 
 // UpdateDeviceConfig 更新设备配置
@@ -160,6 +164,18 @@ func UpdateDeviceConfig(c *gin.Context) {
 	}
 	if req.TxCtcss != nil {
 		configs["tx_ctcss"] = *req.TxCtcss
+	}
+	if req.RxToneMode != nil {
+		configs["rx_tone_mode"] = *req.RxToneMode
+	}
+	if req.RxToneValue != nil {
+		configs["rx_tone_value"] = *req.RxToneValue
+	}
+	if req.TxToneMode != nil {
+		configs["tx_tone_mode"] = *req.TxToneMode
+	}
+	if req.TxToneValue != nil {
+		configs["tx_tone_value"] = *req.TxToneValue
 	}
 	if req.SqlLevel != nil {
 		configs["sql_level"] = *req.SqlLevel

@@ -259,9 +259,13 @@ class TLVType:
     TX_FREQ = 0x02      # 发射频率 (8 bytes, big-endian uint64 Hz)
     RX_CTCSS = 0x03     # 接收亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
     TX_CTCSS = 0x04     # 发射亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
-    SQL_LEVEL = 0x05    # 静噪等级 (1 byte, uint8 0-9)
-    POWER_LEVEL = 0x06  # 功率等级 (1 byte, uint8 1=低, 2=中, 3=高)
+    SQL_LEVEL = 0x05    # 静噪等级 (1 byte, uint8 0-8)
+    POWER_LEVEL = 0x06  # 功率等级 (1 byte, uint8 1=低, 3=高)
     TX_BANDWIDTH = 0x07 # 发射带宽 (1 byte, uint8 1=窄带, 2=宽带)
+    RX_TONE_MODE = 0x08   # 接收亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
+    RX_TONE_VALUE = 0x09  # 接收亚音值 (8 bytes, ASCII, 如 88.5/023)
+    TX_TONE_MODE = 0x0A   # 发射亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
+    TX_TONE_VALUE = 0x0B  # 发射亚音值 (8 bytes, ASCII, 如 88.5/023)
     TIMESTAMP = 0x10    # 时间戳 (8 bytes, big-endian int64 Unix毫秒)
 
 # TLV Type 到配置键名的映射
@@ -273,6 +277,10 @@ TLV_TYPE_TO_KEY = {
     TLVType.SQL_LEVEL: "sql_level",
     TLVType.POWER_LEVEL: "power_level",
     TLVType.TX_BANDWIDTH: "tx_bandwidth",
+    TLVType.RX_TONE_MODE: "rx_tone_mode",
+    TLVType.RX_TONE_VALUE: "rx_tone_value",
+    TLVType.TX_TONE_MODE: "tx_tone_mode",
+    TLVType.TX_TONE_VALUE: "tx_tone_value",
     TLVType.TIMESTAMP: "timestamp",
 }
 
@@ -288,16 +296,35 @@ TLV_LENGTH = {
     TLVType.SQL_LEVEL: 1,
     TLVType.POWER_LEVEL: 1,
     TLVType.TX_BANDWIDTH: 1,
+    TLVType.RX_TONE_MODE: 1,
+    TLVType.RX_TONE_VALUE: 8,
+    TLVType.TX_TONE_MODE: 1,
+    TLVType.TX_TONE_VALUE: 8,
     TLVType.TIMESTAMP: 8,
 }
 
+TONE_MODE_TO_BYTE = {
+    "off": 0,
+    "ctcss": 1,
+    "cdcss_n": 2,
+    "cdcss_i": 3,
+}
 
-def encode_tlv(configs: dict) -> bytes:
+BYTE_TO_TONE_MODE = {
+    0: "off",
+    1: "ctcss",
+    2: "cdcss_n",
+    3: "cdcss_i",
+}
+
+
+def encode_tlv(configs: dict, return_count: bool = False):
     """
     将配置 dict 编码为 TLV 格式
     返回: 完整的 TLV 列表（不含 DATA[0] 和 DATA[1]）
     """
     result = bytearray()
+    count = 0
     for key, value in configs.items():
         tlv_type = KEY_TO_TLV_TYPE.get(key)
         if tlv_type is None:
@@ -311,9 +338,32 @@ def encode_tlv(configs: dict) -> bytes:
         # Length (1 byte)
         result.append(length)
         # Value (N bytes)
-        result.extend(_encode_tlv_value(tlv_type, str(value)))
+        value_bytes = _encode_tlv_value(tlv_type, str(value))
+        if len(value_bytes) != length:
+            if len(value_bytes) > length:
+                value_bytes = value_bytes[:length]
+            else:
+                value_bytes = value_bytes.ljust(length, b'\x00')
+        result.extend(value_bytes)
+        count += 1
 
-    return bytes(result)
+    encoded = bytes(result)
+    if return_count:
+        return encoded, count
+    return encoded
+
+
+def _normalize_tone_mode(value: str) -> str:
+    raw = str(value).strip().lower()
+    if raw in ("", "off", "0"):
+        return "off"
+    if raw in ("ctcss", "1"):
+        return "ctcss"
+    if raw in ("cdcss_n", "cdcss-n", "dcs", "dcs_n", "2"):
+        return "cdcss_n"
+    if raw in ("cdcss_i", "cdcss-i", "dcs_i", "3"):
+        return "cdcss_i"
+    return "off"
 
 
 def _encode_tlv_value(tlv_type: int, value: str) -> bytes:
@@ -341,6 +391,14 @@ def _encode_tlv_value(tlv_type: int, value: str) -> bytes:
         except ValueError:
             val = 0
         return bytes([val & 0xFF])
+
+    elif tlv_type in (TLVType.RX_TONE_MODE, TLVType.TX_TONE_MODE):
+        mode = _normalize_tone_mode(value)
+        return bytes([TONE_MODE_TO_BYTE.get(mode, 0)])
+
+    elif tlv_type in (TLVType.RX_TONE_VALUE, TLVType.TX_TONE_VALUE):
+        # 8 bytes, ASCII
+        return value.strip().encode('ascii', errors='ignore')[:8].ljust(8, b'\x00')
 
     elif tlv_type == TLVType.TIMESTAMP:
         # 8 bytes, big-endian int64 (Unix毫秒)
@@ -370,6 +428,9 @@ def decode_tlv(data: bytes) -> dict:
         offset += 2
 
         if offset + length > len(data):
+            key = TLV_TYPE_TO_KEY.get(tlv_type)
+            if key is not None:
+                result[key] = _default_value_for_tlv(tlv_type)
             break
 
         value_bytes = data[offset:offset + length]
@@ -379,33 +440,56 @@ def decode_tlv(data: bytes) -> dict:
         if key is None:
             continue
 
+        expected_len = TLV_LENGTH.get(tlv_type)
+        if expected_len is not None and expected_len != length:
+            result[key] = _default_value_for_tlv(tlv_type)
+            continue
+
         value = _decode_tlv_value(tlv_type, value_bytes)
         result[key] = value
 
     return result
 
 
+def _default_value_for_tlv(tlv_type: int) -> str:
+    if tlv_type in (TLVType.RX_TONE_MODE, TLVType.TX_TONE_MODE):
+        return "off"
+    if tlv_type in (TLVType.RX_TONE_VALUE, TLVType.TX_TONE_VALUE):
+        return ""
+    return "0"
+
+
 def _decode_tlv_value(tlv_type: int, data: bytes) -> str:
     """解码单个 TLV 值"""
     if tlv_type in (TLVType.RX_FREQ, TLVType.TX_FREQ):
-        if len(data) < 8:
+        if len(data) != 8:
             return "0"
         freq = struct.unpack('>Q', data[:8])[0]
         return str(freq)
 
     elif tlv_type in (TLVType.RX_CTCSS, TLVType.TX_CTCSS):
-        if len(data) < 4:
+        if len(data) != 4:
             return "0"
         ctcss = struct.unpack('>f', data[:4])[0]
         return f"{ctcss:.1f}"
 
     elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH):
-        if len(data) < 1:
+        if len(data) != 1:
             return "0"
         return str(data[0])
 
+    elif tlv_type in (TLVType.RX_TONE_MODE, TLVType.TX_TONE_MODE):
+        if len(data) != 1:
+            return "off"
+        return BYTE_TO_TONE_MODE.get(data[0], "off")
+
+    elif tlv_type in (TLVType.RX_TONE_VALUE, TLVType.TX_TONE_VALUE):
+        if len(data) != 8:
+            return ""
+        return data.decode('ascii', errors='ignore').rstrip('\x00').strip()
+
     elif tlv_type == TLVType.TIMESTAMP:
-        if len(data) < 8:
+        if len(data) != 8:
             return "0"
         ts = struct.unpack('>q', data[:8])[0]
         return str(ts)
@@ -426,10 +510,10 @@ def build_config_set_packet(configs: dict) -> bytes:
     if not configs:
         return bytes([ConfigType.SET, 0x00])
 
-    tlv_data = encode_tlv(configs)
+    tlv_data, item_count = encode_tlv(configs, return_count=True)
     result = bytearray()
     result.append(ConfigType.SET)
-    result.append(len(configs))  # 配置项数量
+    result.append(item_count)  # 实际编码配置项数量
     result.extend(tlv_data)
 
     return bytes(result)

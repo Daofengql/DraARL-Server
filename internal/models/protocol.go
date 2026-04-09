@@ -23,32 +23,47 @@ const (
 
 // DeviceModel 设备型号
 const (
-	DevModelUnknown    byte = 0
-	DevModelWeChatMini byte = 100
-	DevModelAndroid    byte = 101
-	DevModelIOS        byte = 102
-	DevModelWindows    byte = 103
-	DevModelBrowser    byte = 105
-	DevModelRescue     byte = 106
-	DevModelESP32      byte = 107
-	DevModelNSBridge   byte = 110
-	DevModelHTBridge   byte = 111
-	DevModelTTBridge   byte = 112
-	DevModelServer     byte = 200
-	DevModelBM         byte = 201
-	DevModelNanny      byte = 250
-	DevModelFullNet    byte = 255
+	DevModelUnknown      byte = 0
+	DevModelESP32Radio   byte = 1
+	DevModelESP32NoRadio byte = 2
+	DevModelWeChatMini   byte = 100
+	DevModelAndroid      byte = 101
+	DevModelIOS          byte = 102
+	DevModelWindows      byte = 103
+	DevModelBrowser      byte = 105
+	DevModelLegacyBridge byte = 106
+	DevModelLegacyESP32  byte = 107
+	DevModelNSBridge     byte = 110
+	DevModelHTBridge     byte = 111
+	DevModelTTBridge     byte = 112
+	DevModelServer       byte = 200
+	DevModelBM           byte = 201
+	DevModelNanny        byte = 250
+	DevModelFullNet      byte = 255
+)
+
+const (
+	DevModelRescue = DevModelLegacyBridge
+	DevModelESP32  = DevModelLegacyESP32
 )
 
 // SSIDRange SSID 范围定义
 const (
-	SSIDReserved    byte = 0
-	SSIDHardwareMin byte = 1
-	SSIDHardwareMax byte = 99
-	SSIDSoftwareMin byte = 100
-	SSIDSoftwareMax byte = 199
-	SSIDServerMin   byte = 200
-	SSIDServerMax   byte = 255
+	SSIDReserved         byte = 0
+	SSIDNormalMin1       byte = 1
+	SSIDNormalMax1       byte = 99
+	SSIDGhostReservedMin byte = 100
+	SSIDGhostReservedMax byte = 105
+	SSIDNormalMin2       byte = 106
+	SSIDNormalMax2       byte = 235
+	SSIDInterconnectMin  byte = 236
+	SSIDInterconnectMax  byte = 255
+	SSIDHardwareMin           = SSIDNormalMin1
+	SSIDHardwareMax           = SSIDNormalMax2
+	SSIDSoftwareMin           = SSIDGhostReservedMin
+	SSIDSoftwareMax           = SSIDGhostReservedMax
+	SSIDServerMin             = SSIDInterconnectMin
+	SSIDServerMax             = SSIDInterconnectMax
 )
 
 // GroupType 群组类型

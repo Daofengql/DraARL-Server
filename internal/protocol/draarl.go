@@ -34,18 +34,25 @@ const (
 
 // DraARLv1 设备型号常量
 const (
-	DraARLDevModelUnknown      byte = 0   // 未知设备
+	DraARLDevModelUnknown      byte = 0   // 未知/历史默认
+	DraARLDevModelESP32Radio   byte = 1   // ESP32 链路盒子（1W 射频版）
+	DraARLDevModelESP32NoRadio byte = 2   // ESP32 链路盒子（无射频版）
 	DraARLDevModelWeChatMini   byte = 100 // 微信小程序
 	DraARLDevModelAndroid      byte = 101 // Android 客户端
 	DraARLDevModelIOS          byte = 102 // iOS 客户端
 	DraARLDevModelWindows      byte = 103 // Windows 客户端
 	DraARLDevModelMacOS        byte = 104 // macOS 客户端 (预留)
 	DraARLDevModelBrowser      byte = 105 // 浏览器客户端
-	DraARLDevModelInterconnect byte = 106 // 互联设备
-	DraARLDevModelESP32        byte = 107 // ESP32 链路台/手咪
+	DraARLDevModelLegacyBridge byte = 106 // 互联设备（历史型号，仅兼容显示）
+	DraARLDevModelLegacyESP32  byte = 107 // ESP32 链路台/手咪（历史型号，仅兼容显示）
 	DraARLDevModelNSBridge     byte = 110 // 南山对讲桥接器
 	DraARLDevModelHTBridge     byte = 111 // HT 对讲桥接器
 	DraARLDevModelTTBridge     byte = 112 // 涛涛对讲桥接器
+)
+
+const (
+	DraARLDevModelInterconnect = DraARLDevModelLegacyBridge
+	DraARLDevModelESP32        = DraARLDevModelLegacyESP32
 )
 
 // ==========================================
@@ -440,11 +447,35 @@ func IsReservedSSID(ssid byte) bool {
 	return IsGhostSSID(ssid) || IsInterconnectSSID(ssid)
 }
 
+// IsInterconnectProductDevModel 判断是否属于互联产品段（0-99）
+func IsInterconnectProductDevModel(devModel byte) bool {
+	return devModel <= 99
+}
+
+// IsGhostReservedDevModel 判断是否属于幽灵/保留段（100-105）
+func IsGhostReservedDevModel(devModel byte) bool {
+	return devModel >= DraARLDevModelWeChatMini && devModel <= DraARLDevModelBrowser
+}
+
+// IsBridgeSoftwareDevModel 判断是否属于互联网桥软件段（110-150）
+func IsBridgeSoftwareDevModel(devModel byte) bool {
+	return devModel >= 110 && devModel <= 150
+}
+
+// IsSelectableHardwareDevModel 判断是否为当前前台允许新选的硬件型号
+func IsSelectableHardwareDevModel(devModel byte) bool {
+	return devModel == DraARLDevModelESP32Radio || devModel == DraARLDevModelESP32NoRadio
+}
+
 // GetDevModelName 获取设备型号名称
 func GetDevModelName(devModel byte) string {
 	switch devModel {
 	case DraARLDevModelUnknown:
 		return "Unknown"
+	case DraARLDevModelESP32Radio:
+		return "ESP32 Radio Box (1W)"
+	case DraARLDevModelESP32NoRadio:
+		return "ESP32 Link Box (No RF)"
 	case DraARLDevModelWeChatMini:
 		return "WeChat Mini"
 	case DraARLDevModelAndroid:
@@ -457,10 +488,10 @@ func GetDevModelName(devModel byte) string {
 		return "macOS"
 	case DraARLDevModelBrowser:
 		return "Web Browser"
-	case DraARLDevModelInterconnect:
-		return "Interconnect"
-	case DraARLDevModelESP32:
-		return "ESP32"
+	case DraARLDevModelLegacyBridge:
+		return "Interconnect (Legacy)"
+	case DraARLDevModelLegacyESP32:
+		return "ESP32 Link Device (Legacy)"
 	case DraARLDevModelNSBridge:
 		return "Nanshan Bridge"
 	case DraARLDevModelHTBridge:

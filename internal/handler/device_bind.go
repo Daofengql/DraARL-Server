@@ -7,6 +7,7 @@ import (
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/protocol"
 	"draarl/internal/udphub"
 	"draarl/pkg/crypto"
 	"github.com/gin-gonic/gin"
@@ -366,7 +367,14 @@ func BindDevice(c *gin.Context) {
 // SubmitConfigRequest 提交设备配置请求
 type SubmitConfigRequest struct {
 	DeviceMAC string `json:"device_mac" binding:"required"`
-	SSID      int    `json:"ssid" binding:"required,min=1,max=99"`
+	SSID      *int   `json:"ssid" binding:"required"`
+}
+
+func isValidDynamicBindSSID(ssid int) bool {
+	if ssid < 0 || ssid > 255 {
+		return false
+	}
+	return protocol.IsValidNormalSSID(byte(ssid))
 }
 
 // SubmitDeviceConfig 提交设备配置
@@ -377,6 +385,22 @@ func SubmitDeviceConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
+		})
+		return
+	}
+
+	if req.SSID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	if !isValidDynamicBindSSID(*req.SSID) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "SSID 必须在 1-99 或 106-235 范围内",
 		})
 		return
 	}
@@ -453,7 +477,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 	config := &udphub.PendingDeviceConfig{
 		Username:       user.Name,
 		DevicePassword: devicePassword,
-		SSID:           req.SSID,
+		SSID:           *req.SSID,
 		DMRID:          user.DMRID,
 	}
 
@@ -465,9 +489,9 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[DEVICE] 设备配置已保存: MAC=%s, User=%s, SSID=%d", mac, username, req.SSID)
+	log.Printf("[DEVICE] 设备配置已保存: MAC=%s, User=%s, SSID=%d", mac, username, *req.SSID)
 	oplog.AddLog(
-		fmt.Sprintf("提交设备绑定配置: mac=%s, ssid=%d, dmr_id=%d", mac, req.SSID, user.DMRID),
+		fmt.Sprintf("提交设备绑定配置: mac=%s, ssid=%d, dmr_id=%d", mac, *req.SSID, user.DMRID),
 		"device_bind_config_submit",
 		user.ID,
 		user.Name,

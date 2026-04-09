@@ -93,6 +93,10 @@ class SerialClient(BaseClient):
             TLVType.SQL_LEVEL: "3",
             TLVType.POWER_LEVEL: "3",
             TLVType.TX_BANDWIDTH: "2",
+            TLVType.RX_TONE_MODE: "off",
+            TLVType.RX_TONE_VALUE: "0",
+            TLVType.TX_TONE_MODE: "off",
+            TLVType.TX_TONE_VALUE: "0",
         }
 
         # 配置更新回调
@@ -556,6 +560,10 @@ class SerialClient(BaseClient):
                 TLVType.SQL_LEVEL: "sql_level",
                 TLVType.POWER_LEVEL: "power_level",
                 TLVType.TX_BANDWIDTH: "tx_bandwidth",
+                TLVType.RX_TONE_MODE: "rx_tone_mode",
+                TLVType.RX_TONE_VALUE: "rx_tone_value",
+                TLVType.TX_TONE_MODE: "tx_tone_mode",
+                TLVType.TX_TONE_VALUE: "tx_tone_value",
             }.get(tlv_type, str(tlv_type))
             result[name] = value
         return result
@@ -570,5 +578,9 @@ class SerialClient(BaseClient):
             "sql_level": TLVType.SQL_LEVEL,
             "power_level": TLVType.POWER_LEVEL,
             "tx_bandwidth": TLVType.TX_BANDWIDTH,
+            "rx_tone_mode": TLVType.RX_TONE_MODE,
+            "rx_tone_value": TLVType.RX_TONE_VALUE,
+            "tx_tone_mode": TLVType.TX_TONE_MODE,
+            "tx_tone_value": TLVType.TX_TONE_VALUE,
         }
         return mapping.get(key, 0)

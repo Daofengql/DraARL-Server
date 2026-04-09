@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Dialog,
   DialogTitle,
@@ -19,6 +19,8 @@ import Visibility from '@mui/icons-material/Visibility'
 import VisibilityOff from '@mui/icons-material/VisibilityOff'
 import CheckCircle from '@mui/icons-material/CheckCircle'
 import { deviceBindService } from '../../services'
+import { DYNAMIC_BIND_SSID_HINT, isValidDynamicBindSSID } from '../../utils/ssid'
+import { getErrorMessage } from '../../utils/errorMessage'
 
 interface DynamicCodeBindDialogProps {
   open: boolean
@@ -28,6 +30,7 @@ interface DynamicCodeBindDialogProps {
 const steps = ['输入动态码', '配置设备参数', '完成']
 
 export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogProps) {
+  const requestSeqRef = useRef(0)
   const [activeStep, setActiveStep] = useState(0)
   const [dynamicCode, setDynamicCode] = useState(['', '', '', '', '', ''])
   const [ssid, setSsid] = useState('1')
@@ -37,14 +40,8 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
   // 六个输入框的 ref
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
 
-  // 当 dialog 打开时，聚焦第一个输入框
-  useEffect(() => {
-    if (open && inputRefs.current[0]) {
-      setTimeout(() => inputRefs.current[0]?.focus(), 100)
-    }
-  }, [open])
-
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
+    requestSeqRef.current += 1
     setActiveStep(0)
     setDynamicCode(['', '', '', '', '', ''])
     setSsid('1')
@@ -53,7 +50,18 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     setBindResult(null)
     setConfigResult(null)
     setShowPassword(false)
-  }
+  }, [])
+
+  // 当 dialog 打开时，聚焦第一个输入框
+  useEffect(() => {
+    if (open && inputRefs.current[0]) {
+      setTimeout(() => inputRefs.current[0]?.focus(), 100)
+    }
+  }, [open])
+
+  useEffect(() => {
+    handleReset()
+  }, [open, handleReset])
 
   // 处理单个输入框的变化
   const handleCodeChange = (index: number, value: string) => {
@@ -93,6 +101,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
   // 获取完整的动态码
   const getFullCode = () => dynamicCode.join('')
+  const isCodeComplete = dynamicCode.every((digit) => digit !== '')
 
   // 绑定结果
   const [bindResult, setBindResult] = useState<{
@@ -127,28 +136,32 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
     setLoading(true)
     setError('')
+    const requestSeq = requestSeqRef.current
 
     try {
       const result = await deviceBindService.bindDevice(code)
+      if (requestSeq !== requestSeqRef.current) {
+        return
+      }
       setBindResult(result)
       setActiveStep(1)
-    } catch (err: any) {
-      setError(err.response?.data?.message || '绑定失败，请检查动态码是否正确')
+    } catch (error) {
+      if (requestSeq !== requestSeqRef.current) {
+        return
+      }
+      setError(getErrorMessage(error, '绑定失败，请检查动态码是否正确'))
     } finally {
-      setLoading(false)
+      if (requestSeq === requestSeqRef.current) {
+        setLoading(false)
+      }
     }
-  }
-
-  // 验证 SSID 范围 (1-99 或 106-235)
-  const isValidSsid = (ssidNum: number) => {
-    return (ssidNum >= 1 && ssidNum <= 99) || (ssidNum >= 106 && ssidNum <= 235)
   }
 
   // 步骤2：提交配置
   const handleSubmitConfig = async () => {
     const ssidNum = parseInt(ssid, 10)
-    if (isNaN(ssidNum) || !isValidSsid(ssidNum)) {
-      setError('SSID 必须在 1-99 或 106-235 范围内')
+    if (isNaN(ssidNum) || !isValidDynamicBindSSID(ssidNum)) {
+      setError(DYNAMIC_BIND_SSID_HINT)
       return
     }
 
@@ -159,18 +172,27 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
     setLoading(true)
     setError('')
+    const requestSeq = requestSeqRef.current
 
     try {
       const result = await deviceBindService.submitDeviceConfig({
         device_mac: bindResult.device_mac,
         ssid: ssidNum,
       })
+      if (requestSeq !== requestSeqRef.current) {
+        return
+      }
       setConfigResult(result)
       setActiveStep(2)
-    } catch (err: any) {
-      setError(err.response?.data?.message || '配置提交失败')
+    } catch (error) {
+      if (requestSeq !== requestSeqRef.current) {
+        return
+      }
+      setError(getErrorMessage(error, '配置提交失败'))
     } finally {
-      setLoading(false)
+      if (requestSeq === requestSeqRef.current) {
+        setLoading(false)
+      }
     }
   }
 
@@ -252,7 +274,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
               }}
               disabled={loading}
               error={!!error && activeStep === 1}
-              helperText={error && activeStep === 1 ? error : '设备在群组中的唯一标识 (1-99 或 106-235)'}
+              helperText={error && activeStep === 1 ? error : `设备在群组中的唯一标识，${DYNAMIC_BIND_SSID_HINT}`}
               slotProps={{
                 htmlInput: {
                   min: 1,
@@ -331,7 +353,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
             <Button
               variant="contained"
               onClick={handleBindDevice}
-              disabled={loading || dynamicCode.length !== 6}
+              disabled={loading || !isCodeComplete}
             >
               {loading ? <CircularProgress size={24} /> : '绑定设备'}
             </Button>

@@ -2,7 +2,7 @@
  * 设备列表组件
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import {
   Box,
   Typography,
@@ -15,84 +15,22 @@ import {
   Chip,
   Divider,
   Skeleton,
-  useTheme,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
-import PersonIcon from '@mui/icons-material/Person'
 import HeadsetIcon from '@mui/icons-material/Headset'
 import ComputerIcon from '@mui/icons-material/Computer'
-import PhoneIcon from '@mui/icons-material/Phone'
-import TabletIcon from '@mui/icons-material/Tablet'
-import ChatBubbleIcon from '@mui/icons-material/ChatBubble'
-import AndroidIcon from '@mui/icons-material/Android'
-import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone'
-import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows'
-import LaptopMacIcon from '@mui/icons-material/LaptopMac'
-import LanguageIcon from '@mui/icons-material/Language'
-import SettingsInputAntennaIcon from '@mui/icons-material/SettingsInputAntenna'
 import { apiClient } from '../../../services'
-import { DeviceModel } from '../../../types/radio'
 import type { OnlineDevice } from '../../../types/radio'
+import { getDevModelIcon, getDevModelName } from '../../../utils/deviceModel'
+import { getErrorMessage } from '../../../utils/errorMessage'
 
 interface DeviceListProps {
   groupId: number
   onClose: () => void
 }
 
-// 设备型号图标映射
-const getDeviceIcon = (devModel: number) => {
-  switch (devModel) {
-    case 100: // 微信小程序
-      return <ChatBubbleIcon />
-    case 101: // Android
-      return <AndroidIcon />
-    case 102: // iOS
-      return <PhoneIphoneIcon />
-    case 103: // Windows
-      return <DesktopWindowsIcon />
-    case 104: // macOS
-      return <LaptopMacIcon />
-    case 105: // 浏览器
-      return <LanguageIcon />
-    case 106: // 互联设备
-    case 107: // ESP32
-    case 110: // 南山对讲桥接器
-    case 111: // HT对讲桥接器
-    case 112: // 涛涛对讲桥接器
-      return <SettingsInputAntennaIcon />
-    default:
-      return <HeadsetIcon />
-  }
-}
-
-// 设备型号名称映射
-const getDeviceModelName = (devModel: number) => {
-  switch (devModel) {
-    case 100:
-      return '微信小程序'
-    case 101:
-      return 'Android'
-    case 102:
-      return 'iOS'
-    case 103:
-      return 'Windows'
-    case 104:
-      return 'macOS'
-    case 105:
-      return '浏览器'
-    case 106:
-      return '互联设备'
-    case 107:
-      return 'ESP32 链路台/手咪'
-    case 110:
-      return '南山对讲桥接器'
-    case 111:
-      return 'HT 对讲桥接器'
-    case 112:
-      return '涛涛对讲桥接器'
-    default:
-      return '未知设备'
-  }
+interface GroupDevicesResponse {
+  data?: OnlineDevice[]
 }
 
 // 头像颜色
@@ -115,26 +53,25 @@ const getAvatarColor = (callsign: string) => {
 }
 
 export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
-  const theme = useTheme()
   const [devices, setDevices] = useState<OnlineDevice[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // 加载设备列表
-  const loadDevices = async () => {
+  const loadDevices = useCallback(async () => {
     try {
       setLoading(true)
-      const response = await apiClient.get<any>(`/api/groups/${groupId}/devices`)
+      const response = await apiClient.get<GroupDevicesResponse>(`/api/groups/${groupId}/devices`)
       const data = response.data || []
       setDevices(data)
       setError(null)
     } catch (err) {
       console.error('Failed to load devices:', err)
-      setError('加载设备列表失败')
+      setError(getErrorMessage(err, '加载设备列表失败'))
     } finally {
       setLoading(false)
     }
-  }
+  }, [groupId])
 
   useEffect(() => {
     loadDevices()
@@ -143,7 +80,7 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
     const interval = setInterval(loadDevices, 10000)
 
     return () => clearInterval(interval)
-  }, [groupId])
+  }, [loadDevices])
 
   // 分组设备：普通设备 vs 幽灵设备
   const normalDevices = devices.filter(d => !d.isGhost)
@@ -198,7 +135,7 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
                     <ListItem key={device.id} disableGutters sx={{ mb: 1 }}>
                       <ListItemAvatar>
                         <Avatar sx={{ bgcolor: getAvatarColor(device.callsign) }}>
-                          {getDeviceIcon(device.devModel)}
+                          {getDevModelIcon(device.devModel) || <HeadsetIcon />}
                         </Avatar>
                       </ListItemAvatar>
                       <ListItemText
@@ -218,7 +155,7 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
                         secondary={
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             <Typography variant="caption">
-                              {getDeviceModelName(device.devModel)}
+                              {getDevModelName(device.devModel)}
                             </Typography>
                             {device.nickname && (
                               <Typography variant="caption" color="text.secondary">
@@ -239,14 +176,14 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
               <>
                 <Divider sx={{ my: 2 }} />
                 <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-                  浏览器客户端 ({ghostDevices.length})
+                  幽灵客户端 ({ghostDevices.length})
                 </Typography>
                 <List disablePadding>
                   {ghostDevices.map((device) => (
                     <ListItem key={device.id} disableGutters sx={{ mb: 1 }}>
                       <ListItemAvatar>
                         <Avatar sx={{ bgcolor: getAvatarColor(device.callsign) }}>
-                          <ComputerIcon />
+                          {getDevModelIcon(device.devModel) || <ComputerIcon />}
                         </Avatar>
                       </ListItemAvatar>
                       <ListItemText
@@ -260,7 +197,7 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
                         }
                         secondary={
                           <Typography variant="caption">
-                            {device.nickname || 'Web 客户端'}
+                            {device.nickname || getDevModelName(device.devModel)}
                           </Typography>
                         }
                       />

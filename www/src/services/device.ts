@@ -218,11 +218,15 @@ export const deviceService = {
 
 // 设备配置类型定义
 export interface DeviceConfig {
-  rx_freq?: string     // 接收频率 (Hz)
-  tx_freq?: string     // 发射频率 (Hz)
-  rx_ctcss?: string    // 接收亚音 (Hz, 0=关闭)
-  tx_ctcss?: string    // 发射亚音 (Hz, 0=关闭)
-  sql_level?: string   // 静噪等级 (0-9)
-  power_level?: string // 功率等级 (1=低, 2=中, 3=高)
-  tx_bandwidth?: string // 发射带宽 (1=窄带, 2=宽带)
+  rx_freq?: string       // 接收频率 (Hz)
+  tx_freq?: string       // 发射频率 (Hz)
+  rx_ctcss?: string      // 接收亚音旧字段 (Hz, 0=关闭)
+  tx_ctcss?: string      // 发射亚音旧字段 (Hz, 0=关闭)
+  rx_tone_mode?: string  // 接收亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+  rx_tone_value?: string // 接收亚音值 (88.5/023)
+  tx_tone_mode?: string  // 发射亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+  tx_tone_value?: string // 发射亚音值 (88.5/023)
+  sql_level?: string     // 静噪等级 (0-8)
+  power_level?: string   // 功率等级 (1=低, 3=高)
+  tx_bandwidth?: string  // 发射带宽 (1=窄带, 2=宽带)
 }

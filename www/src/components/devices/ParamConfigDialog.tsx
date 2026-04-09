@@ -1,66 +1,45 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  Alert,
   Box,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Button,
-  Tabs,
-  Tab,
-  Grid,
-  TextField,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
+  Grid,
   InputLabel,
   Select,
   MenuItem,
-  FormControlLabel,
-  Switch,
-  Divider,
-  Typography,
-  Autocomplete,
-  CircularProgress,
-  Alert,
   Snackbar,
-  Paper,
+  Tab,
+  Tabs,
+  TextField,
+  Typography,
 } from '@mui/material'
 import { deviceService, type DeviceConfig } from '../../services/device'
-import { relayService } from '../../services/relay'
-import { DEVICE_MODELS, isPlatformOnlyDeviceModel } from '../../utils/deviceModel'
-import type { Relay } from '../../types'
-import { RegionCascader } from '../common/RegionCascader'
-
-// 预设频率类型（基于中继台数据）
-interface FreqPreset {
-  id: number
-  name: string
-  txFreq: string    // 发射频率 MHz
-  rxFreq: string    // 接收频率 MHz
-  txCtcss: string   // 发射亚音 Hz
-  rxCtcss: string   // 接收亚音 Hz
-  squelch?: number
-  sameFreq?: boolean
-  power?: 'high' | 'medium' | 'low'
-  bandwidth?: 'wide' | 'narrow'
-}
-
-// 将中继台数据转换为预设格式
-const relayToPreset = (relay: Relay): FreqPreset => {
-  // 中继台：up_freq是上行频率（中继台接收），down_freq是下行频率（中继台发射）
-  // 对于用户设备：发射频率 = 中继台上行频率（up_freq），接收频率 = 中继台下行频率（down_freq）
-  return {
-    id: relay.id,
-    name: relay.name,
-    txFreq: relay.up_freq || '',
-    rxFreq: relay.down_freq || '',
-    txCtcss: relay.send_ctcss || '',
-    rxCtcss: relay.receive_ctcss || '',
-    squelch: 0,
-    sameFreq: relay.up_freq === relay.down_freq,
-    power: 'high',
-    bandwidth: 'wide',
-  }
-}
+import {
+  DEVICE_MODELS,
+  getDeviceConfigTabs,
+} from '../../utils/deviceModel'
+import {
+  bandwidthToLevel,
+  buildToneSelection,
+  getDefaultRadioConfig,
+  hzToMHz,
+  levelToBandwidth,
+  levelToPower,
+  mhzToHz,
+  normalizeSquelchLevel,
+  powerToLevel,
+  toneSelectionToLegacyValue,
+  toneSelectionToToneValue,
+  type RadioConfigForm,
+} from '../../utils/radioConfig'
+import { getErrorMessage } from '../../utils/errorMessage'
+import { FrequencyConfigCardContainer } from './frequency/FrequencyConfigCardContainer'
 
 interface ParamConfigDialogProps {
   open: boolean
@@ -72,109 +51,33 @@ interface ParamConfigDialogProps {
   onDeviceUpdated?: () => void
 }
 
-// 内部使用的频率参数（MHz 单位）
-interface FreqParams {
-  txFreq: string    // MHz
-  rxFreq: string    // MHz
-  txCtcss: string   // Hz
-  rxCtcss: string   // Hz
-  squelch: number   // 0-9
-  sameFreq: boolean
-  power: 'high' | 'medium' | 'low'
-  bandwidth: 'wide' | 'narrow'
-}
-
-// 将 Hz 转换为 MHz 显示
-const hzToMHz = (hz: string): string => {
-  if (!hz || hz === '0') return ''
-  const num = parseInt(hz, 10)
-  if (isNaN(num)) return ''
-  return (num / 1_000_000).toFixed(6).replace(/\.?0+$/, '')
-}
-
-// 将 MHz 转换为 Hz 存储
-const mHzToHz = (mhz: string): string => {
-  if (!mhz) return '0'
-  const num = parseFloat(mhz)
-  if (isNaN(num)) return '0'
-  return Math.round(num * 1_000_000).toString()
-}
-
-// 将功率等级转换
-const powerToLevel = (power: string): string => {
-  switch (power) {
-    case 'low': return '1'
-    case 'medium': return '2'
-    case 'high': return '3'
-    default: return '3'
-  }
-}
-
-const levelToPower = (level: string): 'high' | 'medium' | 'low' => {
-  switch (level) {
-    case '1': return 'low'
-    case '2': return 'medium'
-    case '3': return 'high'
-    default: return 'high'
-  }
-}
-
-// 将带宽转换
-const bandwidthToLevel = (bandwidth: string): string => {
-  return bandwidth === 'narrow' ? '1' : '2'
-}
-
-const levelToBandwidth = (level: string): 'wide' | 'narrow' => {
-  return level === '1' ? 'narrow' : 'wide'
-}
-
-export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isOnline, onClose, onDeviceUpdated }: ParamConfigDialogProps) {
+export function ParamConfigDialog({
+  open,
+  deviceId,
+  deviceName,
+  deviceModel,
+  isOnline,
+  onClose,
+  onDeviceUpdated,
+}: ParamConfigDialogProps) {
+  const defaultRadioConfig = useRef(getDefaultRadioConfig())
+  const loadRequestRef = useRef(0)
   const [tabValue, setTabValue] = useState(0)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({ open: false, message: '', severity: 'info' })
-  const [freqParams, setFreqParams] = useState<FreqParams>({
-    txFreq: '',
-    rxFreq: '',
-    txCtcss: '',
-    rxCtcss: '',
-    squelch: 0,
-    sameFreq: true,
-    power: 'high',
-    bandwidth: 'wide',
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({
+    open: false,
+    message: '',
+    severity: 'info',
   })
-
-  // 中继台预设相关状态
-  const [relayLocation, setRelayLocation] = useState('')
-  const [relayPresets, setRelayPresets] = useState<FreqPreset[]>([])
-  const [relaySearching, setRelaySearching] = useState(false)
-
-  // 平台设置 - 设备编辑
+  const [radioConfig, setRadioConfig] = useState<RadioConfigForm>(defaultRadioConfig.current)
   const [platformFormData, setPlatformFormData] = useState({
     name: '',
     model: 1,
   })
-  const platformOnly = isPlatformOnlyDeviceModel(deviceModel)
-  const tabs = platformOnly
-    ? [{ key: 'platform', label: '平台设置' }]
-    : [
-        { key: 'freq', label: '频率设置' },
-        { key: 'system', label: '系统设置' },
-        { key: 'platform', label: '平台设置' },
-      ]
-  const currentTab = tabs[tabValue]?.key ?? 'platform'
 
-  // 加载设备配置
-  useEffect(() => {
-    if (open && deviceId) {
-      loadConfig()
-      // 初始化平台设置表单
-      setPlatformFormData({
-        name: deviceName,
-        model: deviceModel,
-      })
-    }
-  }, [open, deviceId, deviceName, deviceModel])
+  const tabs = getDeviceConfigTabs(deviceModel)
+  const currentTab = tabs[tabValue]?.key ?? 'platform'
 
   useEffect(() => {
     if (tabValue >= tabs.length) {
@@ -182,74 +85,94 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
     }
   }, [tabValue, tabs.length])
 
-  const loadConfig = async () => {
-    if (!deviceId) return
+  const loadConfig = useCallback(async (currentDeviceId: number, requestId: number) => {
     setLoading(true)
     try {
-      const config = await deviceService.getConfig(deviceId)
-      // 转换配置到本地状态
-      const rxFreqMHz = hzToMHz(config.rx_freq || '0')
-      const txFreqMHz = hzToMHz(config.tx_freq || '0')
-      setFreqParams({
-        rxFreq: rxFreqMHz,
+      const config = await deviceService.getConfig(currentDeviceId)
+      if (loadRequestRef.current !== requestId) {
+        return
+      }
+      const rxFreqMHz = hzToMHz(config.rx_freq)
+      const txFreqMHz = hzToMHz(config.tx_freq)
+      setRadioConfig({
         txFreq: txFreqMHz,
-        rxCtcss: config.rx_ctcss || '',
-        txCtcss: config.tx_ctcss || '',
-        squelch: parseInt(config.sql_level || '0', 10),
-        sameFreq: rxFreqMHz === txFreqMHz || !rxFreqMHz || !txFreqMHz,
-        power: levelToPower(config.power_level || '3'),
-        bandwidth: levelToBandwidth(config.tx_bandwidth || '2'),
+        rxFreq: rxFreqMHz,
+        txTone: buildToneSelection({
+          mode: config.tx_tone_mode,
+          value: config.tx_tone_value,
+        }),
+        rxTone: buildToneSelection({
+          mode: config.rx_tone_mode,
+          value: config.rx_tone_value,
+        }),
+        squelch: normalizeSquelchLevel(Number(config.sql_level || '0')),
+        sameFreq: !rxFreqMHz || !txFreqMHz || rxFreqMHz === txFreqMHz,
+        power: levelToPower(config.power_level),
+        bandwidth: levelToBandwidth(config.tx_bandwidth),
       })
     } catch (error) {
+      if (loadRequestRef.current !== requestId) {
+        return
+      }
       console.error('加载配置失败:', error)
-      setSnackbar({ open: true, message: '加载配置失败', severity: 'error' })
+      setRadioConfig(defaultRadioConfig.current)
+      setSnackbar({ open: true, message: getErrorMessage(error, '加载配置失败'), severity: 'error' })
     } finally {
-      setLoading(false)
+      if (loadRequestRef.current === requestId) {
+        setLoading(false)
+      }
     }
-  }
+  }, [])
 
-  // 搜索中继台预设
-  const handleSearchRelays = async () => {
-    const locationParts = relayLocation.split(' ').filter(Boolean)
-    if (locationParts.length < 2) {
-      setSnackbar({ open: true, message: '请至少选择到市级别', severity: 'info' })
+  useEffect(() => {
+    if (!open) {
+      loadRequestRef.current += 1
+      setLoading(false)
+      setSaving(false)
+      setTabValue(0)
+      setRadioConfig(defaultRadioConfig.current)
+      setPlatformFormData({
+        name: '',
+        model: 1,
+      })
       return
     }
 
-    setRelaySearching(true)
-    try {
-      const relays = await relayService.publicSearch(relayLocation)
-      setRelayPresets(relays.map(relayToPreset))
-      if (relays.length === 0) {
-        setSnackbar({ open: true, message: '该地区暂无中继台数据', severity: 'info' })
-      }
-    } catch (error) {
-      console.error('搜索中继台失败:', error)
-      setSnackbar({ open: true, message: '搜索中继台失败', severity: 'error' })
-    } finally {
-      setRelaySearching(false)
+    setPlatformFormData({
+      name: deviceName,
+      model: deviceModel,
+    })
+    setRadioConfig(defaultRadioConfig.current)
+
+    if (deviceId) {
+      const requestId = loadRequestRef.current + 1
+      loadRequestRef.current = requestId
+      void loadConfig(deviceId, requestId)
+    } else {
+      setLoading(false)
     }
-  }
+  }, [open, deviceId, deviceName, deviceModel, loadConfig])
 
   const handleSaveAndSync = async () => {
     if (!deviceId) return
     setSaving(true)
     try {
-      // 构建配置对象（使用 Hz 单位）
       const config: Partial<DeviceConfig> = {
-        tx_freq: mHzToHz(freqParams.txFreq),
-        rx_freq: freqParams.sameFreq ? mHzToHz(freqParams.txFreq) : mHzToHz(freqParams.rxFreq),
-        tx_ctcss: freqParams.txCtcss || '0',
-        rx_ctcss: freqParams.rxCtcss || '0',
-        sql_level: freqParams.squelch.toString(),
-        power_level: powerToLevel(freqParams.power),
-        tx_bandwidth: bandwidthToLevel(freqParams.bandwidth),
+        tx_freq: mhzToHz(radioConfig.txFreq),
+        rx_freq: radioConfig.sameFreq ? mhzToHz(radioConfig.txFreq) : mhzToHz(radioConfig.rxFreq),
+        tx_tone_mode: radioConfig.txTone.mode,
+        tx_tone_value: toneSelectionToToneValue(radioConfig.txTone),
+        rx_tone_mode: radioConfig.rxTone.mode,
+        rx_tone_value: toneSelectionToToneValue(radioConfig.rxTone),
+        tx_ctcss: toneSelectionToLegacyValue(radioConfig.txTone),
+        rx_ctcss: toneSelectionToLegacyValue(radioConfig.rxTone),
+        sql_level: String(normalizeSquelchLevel(radioConfig.squelch)),
+        power_level: powerToLevel(radioConfig.power),
+        tx_bandwidth: bandwidthToLevel(radioConfig.bandwidth),
       }
 
-      // 保存到数据库
       await deviceService.updateConfig(deviceId, config)
 
-      // 如果设备在线，立即同步
       if (isOnline) {
         const result = await deviceService.syncConfig(deviceId)
         setSnackbar({ open: true, message: result.message || '配置已下发到设备', severity: 'success' })
@@ -260,13 +183,12 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
       onClose()
     } catch (error) {
       console.error('保存配置失败:', error)
-      setSnackbar({ open: true, message: '保存配置失败', severity: 'error' })
+      setSnackbar({ open: true, message: getErrorMessage(error, '保存配置失败'), severity: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
-  // 保存平台设置（设备名称和型号）
   const handleSavePlatform = async () => {
     if (!deviceId) return
     if (!platformFormData.name.trim()) {
@@ -283,33 +205,25 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
       setSnackbar({ open: true, message: '设备信息保存成功', severity: 'success' })
       onDeviceUpdated?.()
       onClose()
-    } catch (error: any) {
+    } catch (error) {
       console.error('保存设备信息失败:', error)
-      setSnackbar({ open: true, message: error.response?.data?.message || '保存失败', severity: 'error' })
+      setSnackbar({ open: true, message: getErrorMessage(error, '保存失败'), severity: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
-  const handleClose = () => {
-    onClose()
-  }
-
-  // 根据 tab 获取标题
-  const getTabTitle = () => {
-    return tabs[tabValue]?.label || '参数配置'
-  }
-
   return (
-    <Dialog
-      open={open}
-      onClose={(_, reason) => reason === 'backdropClick' ? null : handleClose()}
-      maxWidth="md"
-      fullWidth
-    >
+    <>
+      <Dialog
+        open={open}
+        onClose={(_, reason) => (reason === 'backdropClick' ? null : onClose())}
+        maxWidth="md"
+        fullWidth
+      >
       <DialogTitle sx={{ pb: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>{getTabTitle()} - {deviceName}</span>
+          <span>{tabs[tabValue]?.label || '参数配置'} - {deviceName}</span>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             {loading && <CircularProgress size={20} />}
             {isOnline ? (
@@ -320,13 +234,15 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
           </Box>
         </Box>
       </DialogTitle>
+
       <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 3 }}>
-        <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)}>
+        <Tabs value={tabValue} onChange={(_, value) => setTabValue(value)}>
           {tabs.map((tab) => (
             <Tab key={tab.key} label={tab.label} />
           ))}
         </Tabs>
       </Box>
+
       <DialogContent>
         <Box sx={{ py: 2 }}>
           {!isOnline && (
@@ -334,198 +250,21 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
               设备当前离线，配置将保存到服务器，设备上线后自动同步。
             </Alert>
           )}
+
           {currentTab === 'freq' && (
-            <Grid container spacing={3}>
-              {/* 中继台预设填入 */}
-              <Grid size={12}>
-                <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
-                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    中继台预设填入
-                  </Typography>
-                  <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, alignItems: { sm: 'flex-end' } }}>
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <RegionCascader
-                        value={relayLocation}
-                        onChange={setRelayLocation}
-                        label="选择地区"
-                        size="small"
-                      />
-                    </Box>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={handleSearchRelays}
-                      disabled={relaySearching}
-                      startIcon={relaySearching ? <CircularProgress size={16} color="inherit" /> : null}
-                      sx={{ minWidth: 80, height: 40 }}
-                    >
-                      {relaySearching ? '搜索中...' : '搜索'}
-                    </Button>
-                  </Box>
-                  {relayPresets.length > 0 && (
-                    <Autocomplete
-                      fullWidth
-                      size="small"
-                      sx={{ mt: 2 }}
-                      options={relayPresets}
-                      getOptionLabel={(option) => option.name}
-                      onChange={(_, value) => {
-                        if (value) {
-                          setFreqParams({
-                            txFreq: value.txFreq || '',
-                            rxFreq: value.rxFreq || '',
-                            txCtcss: value.txCtcss || '',
-                            rxCtcss: value.rxCtcss || '',
-                            squelch: value.squelch ?? 0,
-                            sameFreq: value.sameFreq ?? true,
-                            power: value.power || 'high',
-                            bandwidth: value.bandwidth || 'wide',
-                          })
-                        }
-                      }}
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          label="选择中继台"
-                          placeholder="选择中继台自动填入参数..."
-                        />
-                      )}
-                      renderOption={(props, option) => (
-                        <li {...props} key={option.id}>
-                          <Box>
-                            <Typography variant="body2">{option.name}</Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              发: {option.txFreq} MHz / 收: {option.rxFreq} MHz
-                              {option.txCtcss && ` / 亚音: ${option.txCtcss} Hz`}
-                            </Typography>
-                          </Box>
-                        </li>
-                      )}
-                      noOptionsText="暂无中继台数据"
-                    />
-                  )}
-                </Paper>
-              </Grid>
-
-              <Grid size={12}><Divider /></Grid>
-
-              {/* 频率设置 */}
-              <Grid size={6}>
-                <TextField
-                  fullWidth
-                  label="发射频率 (MHz)"
-                  value={freqParams.txFreq}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setFreqParams(prev => ({
-                      ...prev,
-                      txFreq: val,
-                      rxFreq: prev.sameFreq ? val : prev.rxFreq,
-                    }))
-                  }}
-                  placeholder="例如: 439.500"
-                />
-              </Grid>
-              <Grid size={6}>
-                <TextField
-                  fullWidth
-                  label="接收频率 (MHz)"
-                  value={freqParams.sameFreq ? freqParams.txFreq : freqParams.rxFreq}
-                  onChange={(e) => setFreqParams(prev => ({ ...prev, rxFreq: e.target.value }))}
-                  disabled={freqParams.sameFreq}
-                  placeholder="例如: 439.500"
-                />
-              </Grid>
-
-              {/* 收发同频开关 */}
-              <Grid size={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={freqParams.sameFreq}
-                      onChange={(e) => setFreqParams(prev => ({
-                        ...prev,
-                        sameFreq: e.target.checked,
-                        rxFreq: e.target.checked ? prev.txFreq : prev.rxFreq,
-                      }))}
-                    />
-                  }
-                  label="收发同频"
-                />
-              </Grid>
-
-              <Grid size={12}><Divider /></Grid>
-
-              {/* 亚音设置 */}
-              <Grid size={6}>
-                <TextField
-                  fullWidth
-                  label="发送亚音 (CTCSS Hz)"
-                  value={freqParams.txCtcss}
-                  onChange={(e) => setFreqParams(prev => ({ ...prev, txCtcss: e.target.value }))}
-                  placeholder="例如: 88.5"
-                  helperText="留空或 0 表示关闭"
-                />
-              </Grid>
-              <Grid size={6}>
-                <TextField
-                  fullWidth
-                  label="接收亚音 (CTCSS Hz)"
-                  value={freqParams.rxCtcss}
-                  onChange={(e) => setFreqParams(prev => ({ ...prev, rxCtcss: e.target.value }))}
-                  placeholder="例如: 88.5"
-                  helperText="留空或 0 表示关闭"
-                />
-              </Grid>
-
-              <Grid size={12}><Divider /></Grid>
-
-              {/* SQL静噪、功率、带宽 */}
-              <Grid size={4}>
-                <TextField
-                  fullWidth
-                  label="SQL 静噪等级"
-                  type="number"
-                  value={freqParams.squelch}
-                  onChange={(e) => setFreqParams(prev => ({ ...prev, squelch: Number(e.target.value) }))}
-                  slotProps={{ htmlInput: { min: 0, max: 9 } }}
-                  helperText="0-9 级"
-                />
-              </Grid>
-              <Grid size={4}>
-                <FormControl fullWidth>
-                  <InputLabel>发射功率</InputLabel>
-                  <Select
-                    value={freqParams.power}
-                    label="发射功率"
-                    onChange={(e) => setFreqParams(prev => ({ ...prev, power: e.target.value as 'high' | 'medium' | 'low' }))}
-                  >
-                    <MenuItem value="high">高功率</MenuItem>
-                    <MenuItem value="medium">中功率</MenuItem>
-                    <MenuItem value="low">低功率</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid size={4}>
-                <FormControl fullWidth>
-                  <InputLabel>发射带宽</InputLabel>
-                  <Select
-                    value={freqParams.bandwidth}
-                    label="发射带宽"
-                    onChange={(e) => setFreqParams(prev => ({ ...prev, bandwidth: e.target.value as 'wide' | 'narrow' }))}
-                  >
-                    <MenuItem value="wide">宽带 (25kHz)</MenuItem>
-                    <MenuItem value="narrow">窄带 (12.5kHz)</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
-            </Grid>
+            <FrequencyConfigCardContainer
+              devModel={deviceModel}
+              value={radioConfig}
+              onChange={setRadioConfig}
+            />
           )}
+
           {currentTab === 'system' && (
-            <Typography color="text.secondary" align="center" sx={{ py: 4 }}>
-              系统设置功能开发中，敬请期待...
-            </Typography>
+            <Alert severity="info">
+              当前系统设置区域已按设备型号规则保留，但本轮没有新增系统级参数。`DevModel=2` 仅显示“系统设置 + 平台设置”，以便后续按型号继续扩展。
+            </Alert>
           )}
+
           {currentTab === 'platform' && (
             <Grid container spacing={3}>
               <Grid size={12}>
@@ -533,7 +272,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
                   fullWidth
                   label="设备名称"
                   value={platformFormData.name}
-                  onChange={(e) => setPlatformFormData(prev => ({ ...prev, name: e.target.value }))}
+                  onChange={(event) => setPlatformFormData((prev) => ({ ...prev, name: event.target.value }))}
                   placeholder="请输入设备名称"
                 />
               </Grid>
@@ -543,7 +282,7 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
                   <Select
                     value={platformFormData.model}
                     label="设备型号"
-                    onChange={(e) => setPlatformFormData(prev => ({ ...prev, model: Number(e.target.value) }))}
+                    onChange={(event) => setPlatformFormData((prev) => ({ ...prev, model: Number(event.target.value) }))}
                   >
                     {DEVICE_MODELS.map((model) => (
                       <MenuItem key={model.value} value={model.value}>
@@ -552,15 +291,18 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
                     ))}
                   </Select>
                 </FormControl>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  历史型号 106/107 仍可正常显示和读取，但不再作为新配置可选项。
+                </Typography>
               </Grid>
             </Grid>
           )}
         </Box>
       </DialogContent>
+
       <DialogActions>
-        <Button onClick={handleClose}>取消</Button>
-        {currentTab === 'platform' ? (
-          // 平台设置的保存按钮
+        <Button onClick={onClose}>取消</Button>
+        {currentTab === 'platform' && (
           <Button
             variant="contained"
             onClick={handleSavePlatform}
@@ -569,8 +311,8 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
           >
             {saving ? '保存中...' : '保存'}
           </Button>
-        ) : (
-          // 频率设置/系统设置的保存按钮
+        )}
+        {currentTab === 'freq' && (
           <Button
             variant="contained"
             onClick={handleSaveAndSync}
@@ -582,16 +324,18 @@ export function ParamConfigDialog({ open, deviceId, deviceName, deviceModel, isO
         )}
       </DialogActions>
 
+      </Dialog>
+
       <Snackbar
         open={snackbar.open}
         autoHideDuration={3000}
-        onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}
+        onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}>
+        <Alert severity={snackbar.severity} onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}>
           {snackbar.message}
         </Alert>
       </Snackbar>
-    </Dialog>
+    </>
   )
 }

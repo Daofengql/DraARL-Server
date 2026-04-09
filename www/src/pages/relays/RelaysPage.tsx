@@ -39,6 +39,7 @@ import {
   buildToneSelection,
   formatToneDisplay,
   toneSelectionToRelayValue,
+  type ToneSelection,
 } from '../../utils/radioConfig'
 import { getErrorMessage } from '../../utils/errorMessage'
 
@@ -56,6 +57,7 @@ const initialFormData = {
 }
 
 export function RelaysPage() {
+  const offTone: ToneSelection = { mode: 'off', value: '0' }
   const [relays, setRelays] = useState<Relay[]>([])
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
@@ -66,6 +68,8 @@ export function RelaysPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingRelay, setEditingRelay] = useState<Relay | null>(null)
   const [formData, setFormData] = useState(initialFormData)
+  const [receiveTone, setReceiveTone] = useState<ToneSelection>(offTone)
+  const [sendTone, setSendTone] = useState<ToneSelection>(offTone)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   const [statusSwitch, setStatusSwitch] = useState(true)
@@ -114,6 +118,8 @@ export function RelaysPage() {
   const handleOpenDialog = (relay?: Relay) => {
     if (relay) {
       setEditingRelay(relay)
+      setReceiveTone(buildToneSelection({ legacy: relay.receive_ctcss }))
+      setSendTone(buildToneSelection({ legacy: relay.send_ctcss }))
       setFormData({
         id: relay.id,
         name: relay.name,
@@ -129,6 +135,8 @@ export function RelaysPage() {
       setStatusSwitch(relay.status === 1)
     } else {
       setEditingRelay(null)
+      setReceiveTone(offTone)
+      setSendTone(offTone)
       setFormData(initialFormData)
       setStatusSwitch(true)
     }
@@ -452,13 +460,19 @@ export function RelaysPage() {
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
               <ToneSelector
                 label="接收亚音"
-                value={buildToneSelection({ legacy: formData.receive_ctcss })}
-                onChange={(tone) => setFormData({ ...formData, receive_ctcss: toneSelectionToRelayValue(tone) })}
+                value={receiveTone}
+                onChange={(tone) => {
+                  setReceiveTone(tone)
+                  setFormData((prev) => ({ ...prev, receive_ctcss: toneSelectionToRelayValue(tone) }))
+                }}
               />
               <ToneSelector
                 label="发射亚音"
-                value={buildToneSelection({ legacy: formData.send_ctcss })}
-                onChange={(tone) => setFormData({ ...formData, send_ctcss: toneSelectionToRelayValue(tone) })}
+                value={sendTone}
+                onChange={(tone) => {
+                  setSendTone(tone)
+                  setFormData((prev) => ({ ...prev, send_ctcss: toneSelectionToRelayValue(tone) }))
+                }}
               />
             </Box>
             <TextField

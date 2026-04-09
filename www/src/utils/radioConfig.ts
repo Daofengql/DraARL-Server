@@ -139,6 +139,7 @@ export function buildToneSelection(params?: {
 }
 
 export function normalizeToneSelection(mode?: string, rawValue?: string): ToneSelection {
+  const hasExplicitMode = String(mode ?? '').trim() !== ''
   const normalizedMode = normalizeToneMode(mode)
   const value = String(rawValue || '').trim().toUpperCase()
 
@@ -150,7 +151,9 @@ export function normalizeToneSelection(mode?: string, rawValue?: string): ToneSe
     }
   }
 
-  if (normalizedMode === 'off') {
+  // 仅在明确传入 mode 时才优先按 mode 处理；
+  // 对只有 legacy 值（如 "88.5"）的场景，应继续向下推断为 CTCSS。
+  if (hasExplicitMode && normalizedMode === 'off') {
     return { mode: 'off', value: '0' }
   }
 

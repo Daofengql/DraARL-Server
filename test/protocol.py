@@ -266,6 +266,10 @@ class TLVType:
     RX_TONE_VALUE = 0x09  # 接收亚音值 (8 bytes, ASCII, 如 88.5/023)
     TX_TONE_MODE = 0x0A   # 发射亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
     TX_TONE_VALUE = 0x0B  # 发射亚音值 (8 bytes, ASCII, 如 88.5/023)
+    RF_GUARD_ENABLED = 0x0C           # 射频保护开关 (1 byte, uint8 0=关,1=开)
+    RF_GUARD_SINGLE_TX_LIMIT_S = 0x0D # 单次发射上限 (2 bytes, big-endian uint16 秒)
+    RF_GUARD_WINDOW_S = 0x0E          # 统计窗口 (2 bytes, big-endian uint16 秒)
+    RF_GUARD_MAX_TX_IN_WINDOW_S = 0x0F # 窗口内累计发射上限 (2 bytes, big-endian uint16 秒)
     TIMESTAMP = 0x10    # 时间戳 (8 bytes, big-endian int64 Unix毫秒)
 
 # TLV Type 到配置键名的映射
@@ -281,6 +285,10 @@ TLV_TYPE_TO_KEY = {
     TLVType.RX_TONE_VALUE: "rx_tone_value",
     TLVType.TX_TONE_MODE: "tx_tone_mode",
     TLVType.TX_TONE_VALUE: "tx_tone_value",
+    TLVType.RF_GUARD_ENABLED: "rf_guard_enabled",
+    TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "rf_guard_single_tx_limit_s",
+    TLVType.RF_GUARD_WINDOW_S: "rf_guard_window_s",
+    TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "rf_guard_max_tx_in_window_s",
     TLVType.TIMESTAMP: "timestamp",
 }
 
@@ -300,6 +308,10 @@ TLV_LENGTH = {
     TLVType.RX_TONE_VALUE: 8,
     TLVType.TX_TONE_MODE: 1,
     TLVType.TX_TONE_VALUE: 8,
+    TLVType.RF_GUARD_ENABLED: 1,
+    TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: 2,
+    TLVType.RF_GUARD_WINDOW_S: 2,
+    TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: 2,
     TLVType.TIMESTAMP: 8,
 }
 
@@ -384,13 +396,20 @@ def _encode_tlv_value(tlv_type: int, value: str) -> bytes:
             ctcss = 0.0
         return struct.pack('>f', ctcss)
 
-    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH):
+    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH, TLVType.RF_GUARD_ENABLED):
         # 1 byte, uint8
         try:
             val = int(value)
         except ValueError:
             val = 0
         return bytes([val & 0xFF])
+
+    elif tlv_type in (TLVType.RF_GUARD_SINGLE_TX_LIMIT_S, TLVType.RF_GUARD_WINDOW_S, TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S):
+        try:
+            val = int(value)
+        except ValueError:
+            val = 0
+        return struct.pack('>H', val & 0xFFFF)
 
     elif tlv_type in (TLVType.RX_TONE_MODE, TLVType.TX_TONE_MODE):
         mode = _normalize_tone_mode(value)
@@ -473,10 +492,15 @@ def _decode_tlv_value(tlv_type: int, data: bytes) -> str:
         ctcss = struct.unpack('>f', data[:4])[0]
         return f"{ctcss:.1f}"
 
-    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH):
+    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH, TLVType.RF_GUARD_ENABLED):
         if len(data) != 1:
             return "0"
         return str(data[0])
+
+    elif tlv_type in (TLVType.RF_GUARD_SINGLE_TX_LIMIT_S, TLVType.RF_GUARD_WINDOW_S, TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S):
+        if len(data) != 2:
+            return "0"
+        return str(struct.unpack('>H', data[:2])[0])
 
     elif tlv_type in (TLVType.RX_TONE_MODE, TLVType.TX_TONE_MODE):
         if len(data) != 1:

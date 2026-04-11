@@ -105,15 +105,51 @@ export interface WSConfig {
   voiceEndTimeout: number // 语音结束超时 (ms)
 }
 
+function toWebSocketURL(input: string): string {
+  const trimmed = input.trim()
+  if (!trimmed) {
+    return getCurrentWebSocketURL('/ws')
+  }
+
+  try {
+    const resolved = new URL(trimmed, window.location.origin)
+    if (resolved.protocol === 'ws:' || resolved.protocol === 'wss:') {
+      return resolved.toString()
+    }
+    if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+      resolved.protocol = resolved.protocol === 'https:' ? 'wss:' : 'ws:'
+      return resolved.toString()
+    }
+  } catch {
+    // 忽略，回退到字符串拼接
+  }
+
+  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) {
+    return trimmed
+  }
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed.replace(/^http/i, 'ws')
+  }
+
+  return getCurrentWebSocketURL(trimmed.startsWith('/') ? trimmed : `/${trimmed}`)
+}
+
+function getCurrentWebSocketURL(path: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}${normalizedPath}`
+}
+
 // 获取 WebSocket URL
 function getDefaultWSUrl(): string {
   // 优先使用环境变量
   const envUrl = import.meta.env.VITE_WS_URL
   if (envUrl) {
-    return envUrl
+    return toWebSocketURL(envUrl)
   }
   // 回退到基于当前页面地址的 URL
-  return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
+  return getCurrentWebSocketURL('/ws')
 }
 
 // 默认配置

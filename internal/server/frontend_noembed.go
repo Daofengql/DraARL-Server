@@ -7,11 +7,17 @@ import (
 	"log"
 	"strings"
 
+	"draarl/internal/config"
+
 	"github.com/gin-gonic/gin"
 )
 
 // setupFrontend 设置前端静态文件服务（API 模式，无嵌入）
-func setupFrontend(engine *gin.Engine) {
+func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
+	if cfg != nil && cfg.Web.FrontendCDN.Enabled {
+		log.Println("Frontend CDN mode ignored in API-only mode (build with -tags=embed to bootstrap embedded assets)")
+	}
+
 	// SPA fallback：所有非 API 和非 /ws 的路由都返回 404
 	engine.NoRoute(func(c *gin.Context) {
 		// 跳过后端专属路由

@@ -29,6 +29,10 @@ import {
   levelToPower,
   mhzToHz,
   normalizeSquelchLevel,
+  normalizeRfGuardEnabled,
+  normalizeRfGuardMaxTxInWindow,
+  normalizeRfGuardSingleTxLimit,
+  normalizeRfGuardWindow,
   powerToLevel,
   toneSelectionToLegacyValue,
   toneSelectionToToneValue,
@@ -104,6 +108,13 @@ export function ParamConfigDialog({
         sameFreq: !rxFreqMHz || !txFreqMHz || rxFreqMHz === txFreqMHz,
         power: levelToPower(config.power_level),
         bandwidth: levelToBandwidth(config.tx_bandwidth),
+        rfGuardEnabled: normalizeRfGuardEnabled(config.rf_guard_enabled),
+        rfGuardSingleTxLimitS: normalizeRfGuardSingleTxLimit(Number(config.rf_guard_single_tx_limit_s)),
+        rfGuardWindowS: normalizeRfGuardWindow(Number(config.rf_guard_window_s)),
+        rfGuardMaxTxInWindowS: normalizeRfGuardMaxTxInWindow(
+          Number(config.rf_guard_max_tx_in_window_s),
+          Number(config.rf_guard_window_s),
+        ),
       })
     } catch (error) {
       if (loadRequestRef.current !== requestId) {
@@ -162,6 +173,12 @@ export function ParamConfigDialog({
         sql_level: String(normalizeSquelchLevel(radioConfig.squelch)),
         power_level: powerToLevel(radioConfig.power),
         tx_bandwidth: bandwidthToLevel(radioConfig.bandwidth),
+        rf_guard_enabled: radioConfig.rfGuardEnabled ? '1' : '0',
+        rf_guard_single_tx_limit_s: String(normalizeRfGuardSingleTxLimit(radioConfig.rfGuardSingleTxLimitS)),
+        rf_guard_window_s: String(normalizeRfGuardWindow(radioConfig.rfGuardWindowS)),
+        rf_guard_max_tx_in_window_s: String(
+          normalizeRfGuardMaxTxInWindow(radioConfig.rfGuardMaxTxInWindowS, radioConfig.rfGuardWindowS),
+        ),
       }
 
       await deviceService.updateConfig(deviceId, config)

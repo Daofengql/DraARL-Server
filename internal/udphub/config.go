@@ -28,50 +28,62 @@ const (
 
 // TLV 配置项 Type 定义
 const (
-	TLVTypeRxFreq      byte = 0x01 // 接收频率 (8 bytes, big-endian uint64 Hz)
-	TLVTypeTxFreq      byte = 0x02 // 发射频率 (8 bytes, big-endian uint64 Hz)
-	TLVTypeRxCtcss     byte = 0x03 // 接收亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
-	TLVTypeTxCtcss     byte = 0x04 // 发射亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
-	TLVTypeSqlLevel    byte = 0x05 // 静噪等级 (1 byte, uint8 0-8)
-	TLVTypePowerLevel  byte = 0x06 // 功率等级 (1 byte, uint8 1=低, 3=高；历史 2 兼容映射为高)
-	TLVTypeTxBandwidth byte = 0x07 // 发射带宽 (1 byte, uint8 1=窄带, 2=宽带)
-	TLVTypeRxToneMode  byte = 0x08 // 接收亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
-	TLVTypeRxToneValue byte = 0x09 // 接收亚音值 (8 bytes, ASCII, 如 88.5/023)
-	TLVTypeTxToneMode  byte = 0x0A // 发射亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
-	TLVTypeTxToneValue byte = 0x0B // 发射亚音值 (8 bytes, ASCII, 如 88.5/023)
-	TLVTypeTimestamp   byte = 0x10 // 时间戳 (8 bytes, big-endian int64 Unix毫秒)
+	TLVTypeRxFreq                byte = 0x01 // 接收频率 (8 bytes, big-endian uint64 Hz)
+	TLVTypeTxFreq                byte = 0x02 // 发射频率 (8 bytes, big-endian uint64 Hz)
+	TLVTypeRxCtcss               byte = 0x03 // 接收亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
+	TLVTypeTxCtcss               byte = 0x04 // 发射亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
+	TLVTypeSqlLevel              byte = 0x05 // 静噪等级 (1 byte, uint8 0-8)
+	TLVTypePowerLevel            byte = 0x06 // 功率等级 (1 byte, uint8 1=低, 3=高；历史 2 兼容映射为高)
+	TLVTypeTxBandwidth           byte = 0x07 // 发射带宽 (1 byte, uint8 1=窄带, 2=宽带)
+	TLVTypeRxToneMode            byte = 0x08 // 接收亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
+	TLVTypeRxToneValue           byte = 0x09 // 接收亚音值 (8 bytes, ASCII, 如 88.5/023)
+	TLVTypeTxToneMode            byte = 0x0A // 发射亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
+	TLVTypeTxToneValue           byte = 0x0B // 发射亚音值 (8 bytes, ASCII, 如 88.5/023)
+	TLVTypeRFGuardEnabled        byte = 0x0C // 射频保护开关 (1 byte, uint8 0=关,1=开)
+	TLVTypeRFGuardSingleTxLimitS byte = 0x0D // 单次发射上限 (2 bytes, big-endian uint16 秒)
+	TLVTypeRFGuardWindowS        byte = 0x0E // 统计窗口 (2 bytes, big-endian uint16 秒)
+	TLVTypeRFGuardMaxTxInWindowS byte = 0x0F // 窗口内累计发射上限 (2 bytes, big-endian uint16 秒)
+	TLVTypeTimestamp             byte = 0x10 // 时间戳 (8 bytes, big-endian int64 Unix毫秒)
 )
 
 // 配置键名映射 (TLV Type -> 数据库 Key)
 var tlvTypeToKeyMap = map[byte]string{
-	TLVTypeRxFreq:      "rx_freq",
-	TLVTypeTxFreq:      "tx_freq",
-	TLVTypeRxCtcss:     "rx_ctcss",
-	TLVTypeTxCtcss:     "tx_ctcss",
-	TLVTypeSqlLevel:    "sql_level",
-	TLVTypePowerLevel:  "power_level",
-	TLVTypeTxBandwidth: "tx_bandwidth",
-	TLVTypeRxToneMode:  ConfigKeyRxToneMode,
-	TLVTypeRxToneValue: ConfigKeyRxToneValue,
-	TLVTypeTxToneMode:  ConfigKeyTxToneMode,
-	TLVTypeTxToneValue: ConfigKeyTxToneValue,
-	TLVTypeTimestamp:   "timestamp",
+	TLVTypeRxFreq:                "rx_freq",
+	TLVTypeTxFreq:                "tx_freq",
+	TLVTypeRxCtcss:               "rx_ctcss",
+	TLVTypeTxCtcss:               "tx_ctcss",
+	TLVTypeSqlLevel:              "sql_level",
+	TLVTypePowerLevel:            "power_level",
+	TLVTypeTxBandwidth:           "tx_bandwidth",
+	TLVTypeRxToneMode:            ConfigKeyRxToneMode,
+	TLVTypeRxToneValue:           ConfigKeyRxToneValue,
+	TLVTypeTxToneMode:            ConfigKeyTxToneMode,
+	TLVTypeTxToneValue:           ConfigKeyTxToneValue,
+	TLVTypeRFGuardEnabled:        ConfigKeyRFGuardEnabled,
+	TLVTypeRFGuardSingleTxLimitS: ConfigKeyRFGuardSingleTxLimitS,
+	TLVTypeRFGuardWindowS:        ConfigKeyRFGuardWindowS,
+	TLVTypeRFGuardMaxTxInWindowS: ConfigKeyRFGuardMaxTxInWindowS,
+	TLVTypeTimestamp:             "timestamp",
 }
 
 // 配置键名反向映射 (数据库 Key -> TLV Type)
 var keyToTlvTypeMap = map[string]byte{
-	"rx_freq":            TLVTypeRxFreq,
-	"tx_freq":            TLVTypeTxFreq,
-	"rx_ctcss":           TLVTypeRxCtcss,
-	"tx_ctcss":           TLVTypeTxCtcss,
-	"sql_level":          TLVTypeSqlLevel,
-	"power_level":        TLVTypePowerLevel,
-	"tx_bandwidth":       TLVTypeTxBandwidth,
-	ConfigKeyRxToneMode:  TLVTypeRxToneMode,
-	ConfigKeyRxToneValue: TLVTypeRxToneValue,
-	ConfigKeyTxToneMode:  TLVTypeTxToneMode,
-	ConfigKeyTxToneValue: TLVTypeTxToneValue,
-	"timestamp":          TLVTypeTimestamp,
+	"rx_freq":                      TLVTypeRxFreq,
+	"tx_freq":                      TLVTypeTxFreq,
+	"rx_ctcss":                     TLVTypeRxCtcss,
+	"tx_ctcss":                     TLVTypeTxCtcss,
+	"sql_level":                    TLVTypeSqlLevel,
+	"power_level":                  TLVTypePowerLevel,
+	"tx_bandwidth":                 TLVTypeTxBandwidth,
+	ConfigKeyRxToneMode:            TLVTypeRxToneMode,
+	ConfigKeyRxToneValue:           TLVTypeRxToneValue,
+	ConfigKeyTxToneMode:            TLVTypeTxToneMode,
+	ConfigKeyTxToneValue:           TLVTypeTxToneValue,
+	ConfigKeyRFGuardEnabled:        TLVTypeRFGuardEnabled,
+	ConfigKeyRFGuardSingleTxLimitS: TLVTypeRFGuardSingleTxLimitS,
+	ConfigKeyRFGuardWindowS:        TLVTypeRFGuardWindowS,
+	ConfigKeyRFGuardMaxTxInWindowS: TLVTypeRFGuardMaxTxInWindowS,
+	"timestamp":                    TLVTypeTimestamp,
 }
 
 var managedConfigKeys = []string{
@@ -86,34 +98,46 @@ var managedConfigKeys = []string{
 	ConfigKeyRxToneValue,
 	ConfigKeyTxToneMode,
 	ConfigKeyTxToneValue,
+	ConfigKeyRFGuardEnabled,
+	ConfigKeyRFGuardSingleTxLimitS,
+	ConfigKeyRFGuardWindowS,
+	ConfigKeyRFGuardMaxTxInWindowS,
 	"timestamp",
 }
 
 // TLV 长度定义
 var tlvLengthMap = map[byte]int{
-	TLVTypeRxFreq:      8,
-	TLVTypeTxFreq:      8,
-	TLVTypeRxCtcss:     4,
-	TLVTypeTxCtcss:     4,
-	TLVTypeSqlLevel:    1,
-	TLVTypePowerLevel:  1,
-	TLVTypeTxBandwidth: 1,
-	TLVTypeRxToneMode:  1,
-	TLVTypeRxToneValue: 8,
-	TLVTypeTxToneMode:  1,
-	TLVTypeTxToneValue: 8,
-	TLVTypeTimestamp:   8,
+	TLVTypeRxFreq:                8,
+	TLVTypeTxFreq:                8,
+	TLVTypeRxCtcss:               4,
+	TLVTypeTxCtcss:               4,
+	TLVTypeSqlLevel:              1,
+	TLVTypePowerLevel:            1,
+	TLVTypeTxBandwidth:           1,
+	TLVTypeRxToneMode:            1,
+	TLVTypeRxToneValue:           8,
+	TLVTypeTxToneMode:            1,
+	TLVTypeTxToneValue:           8,
+	TLVTypeRFGuardEnabled:        1,
+	TLVTypeRFGuardSingleTxLimitS: 2,
+	TLVTypeRFGuardWindowS:        2,
+	TLVTypeRFGuardMaxTxInWindowS: 2,
+	TLVTypeTimestamp:             8,
 }
 
 // DeviceConfig 设备配置结构体（用于内存表示）
 type DeviceConfig struct {
-	RxFreq      uint64  // 接收频率 (Hz)
-	TxFreq      uint64  // 发射频率 (Hz)
-	RxCtcss     float32 // 接收亚音 (Hz, 0=关闭)
-	TxCtcss     float32 // 发射亚音 (Hz, 0=关闭)
-	SqlLevel    uint8   // 静噪等级 (0-8)
-	PowerLevel  uint8   // 功率等级 (1=低, 3=高；历史 2 兼容映射为高)
-	TxBandwidth uint8   // 发射带宽 (1=窄带, 2=宽带)
+	RxFreq                uint64  // 接收频率 (Hz)
+	TxFreq                uint64  // 发射频率 (Hz)
+	RxCtcss               float32 // 接收亚音 (Hz, 0=关闭)
+	TxCtcss               float32 // 发射亚音 (Hz, 0=关闭)
+	SqlLevel              uint8   // 静噪等级 (0-8)
+	PowerLevel            uint8   // 功率等级 (1=低, 3=高；历史 2 兼容映射为高)
+	TxBandwidth           uint8   // 发射带宽 (1=窄带, 2=宽带)
+	RFGuardEnabled        uint8   // 射频保护开关 (0=关,1=开)
+	RFGuardSingleTxLimitS uint16  // 单次发射上限 (秒)
+	RFGuardWindowS        uint16  // 统计窗口 (秒)
+	RFGuardMaxTxInWindowS uint16  // 窗口内累计发射上限 (秒)
 }
 
 // ==========================================
@@ -190,13 +214,22 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 		binary.BigEndian.PutUint32(buf, math.Float32bits(float32(ctcss)))
 		return buf, true
 
-	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth:
+	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled:
 		// 1 byte, uint8
 		var val uint8
 		if _, err := fmt.Sscanf(value, "%d", &val); err != nil {
 			return nil, false
 		}
 		return []byte{val}, true
+
+	case TLVTypeRFGuardSingleTxLimitS, TLVTypeRFGuardWindowS, TLVTypeRFGuardMaxTxInWindowS:
+		var val uint16
+		if _, err := fmt.Sscanf(value, "%d", &val); err != nil {
+			return nil, false
+		}
+		buf := make([]byte, 2)
+		binary.BigEndian.PutUint16(buf, val)
+		return buf, true
 
 	case TLVTypeRxToneMode, TLVTypeTxToneMode:
 		mode := normalizeToneMode(value)
@@ -298,12 +331,18 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 		}
 		return fmt.Sprintf("%.1f", ctcss), true
 
-	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth:
+	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled:
 		// 1 byte, uint8
 		if len(data) != 1 {
 			return "", false
 		}
 		return fmt.Sprintf("%d", data[0]), true
+
+	case TLVTypeRFGuardSingleTxLimitS, TLVTypeRFGuardWindowS, TLVTypeRFGuardMaxTxInWindowS:
+		if len(data) != 2 {
+			return "", false
+		}
+		return fmt.Sprintf("%d", binary.BigEndian.Uint16(data)), true
 
 	case TLVTypeRxToneMode, TLVTypeTxToneMode:
 		if len(data) != 1 {

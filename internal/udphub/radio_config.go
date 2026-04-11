@@ -17,6 +17,20 @@ const (
 	ConfigKeyRxToneValue = "rx_tone_value"
 	ConfigKeyTxToneMode  = "tx_tone_mode"
 	ConfigKeyTxToneValue = "tx_tone_value"
+
+	ConfigKeyRFGuardEnabled        = "rf_guard_enabled"
+	ConfigKeyRFGuardSingleTxLimitS = "rf_guard_single_tx_limit_s"
+	ConfigKeyRFGuardWindowS        = "rf_guard_window_s"
+	ConfigKeyRFGuardMaxTxInWindowS = "rf_guard_max_tx_in_window_s"
+	RFGuardSingleTxLimitMinS       = 1
+	RFGuardSingleTxLimitMaxS       = 1800
+	RFGuardWindowMinS              = 5
+	RFGuardWindowMaxS              = 3600
+	RFGuardMaxTxInWindowMinS       = 1
+	RFGuardEnabledDefault          = true
+	RFGuardSingleTxLimitDefaultS   = 30
+	RFGuardWindowDefaultS          = 300
+	RFGuardMaxTxInWindowDefaultS   = 60
 )
 
 var dcsTonePattern = regexp.MustCompile(`^(\d{3})([NI])$`)
@@ -51,6 +65,20 @@ func NormalizeDeviceConfigs(configs map[string]string) map[string]string {
 	}
 	if value, ok := normalized["tx_bandwidth"]; ok {
 		normalized["tx_bandwidth"] = normalizeBandwidthLevel(value)
+	}
+	if value, ok := normalized[ConfigKeyRFGuardEnabled]; ok {
+		normalized[ConfigKeyRFGuardEnabled] = normalizeRFGuardEnabled(value)
+	}
+	if value, ok := normalized[ConfigKeyRFGuardSingleTxLimitS]; ok {
+		normalized[ConfigKeyRFGuardSingleTxLimitS] = normalizeRFGuardSingleTxLimit(value)
+	}
+	windowValue := ""
+	if value, ok := normalized[ConfigKeyRFGuardWindowS]; ok {
+		windowValue = normalizeRFGuardWindow(value)
+		normalized[ConfigKeyRFGuardWindowS] = windowValue
+	}
+	if value, ok := normalized[ConfigKeyRFGuardMaxTxInWindowS]; ok {
+		normalized[ConfigKeyRFGuardMaxTxInWindowS] = normalizeRFGuardMaxTxInWindow(value, windowValue)
 	}
 
 	return normalized
@@ -227,6 +255,69 @@ func normalizeBandwidthLevel(raw string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeRFGuardEnabled(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", "1", "true", "on", "enabled":
+		if RFGuardEnabledDefault {
+			return "1"
+		}
+		return "0"
+	case "0", "false", "off", "disabled":
+		return "0"
+	default:
+		if RFGuardEnabledDefault {
+			return "1"
+		}
+		return "0"
+	}
+}
+
+func normalizeRFGuardSingleTxLimit(raw string) string {
+	return normalizeRFDuration(raw, RFGuardSingleTxLimitDefaultS, RFGuardSingleTxLimitMinS, RFGuardSingleTxLimitMaxS)
+}
+
+func normalizeRFGuardWindow(raw string) string {
+	return normalizeRFDuration(raw, RFGuardWindowDefaultS, RFGuardWindowMinS, RFGuardWindowMaxS)
+}
+
+func normalizeRFGuardMaxTxInWindow(raw, windowRaw string) string {
+	window := RFGuardWindowDefaultS
+	if parsed, err := strconv.Atoi(strings.TrimSpace(windowRaw)); err == nil {
+		if parsed < RFGuardWindowMinS {
+			parsed = RFGuardWindowMinS
+		}
+		if parsed > RFGuardWindowMaxS {
+			parsed = RFGuardWindowMaxS
+		}
+		window = parsed
+	}
+
+	defaultValue := RFGuardMaxTxInWindowDefaultS
+	if defaultValue > window {
+		defaultValue = window
+	}
+
+	return normalizeRFDuration(raw, defaultValue, RFGuardMaxTxInWindowMinS, window)
+}
+
+func normalizeRFDuration(raw string, defaultValue, minValue, maxValue int) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return strconv.Itoa(defaultValue)
+	}
+	value, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return strconv.Itoa(defaultValue)
+	}
+	if value < minValue {
+		value = minValue
+	}
+	if value > maxValue {
+		value = maxValue
+	}
+	return strconv.Itoa(value)
 }
 
 func toneModeToByte(mode string) byte {

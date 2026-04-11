@@ -105,6 +105,18 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	if req.TxBandwidth != nil {
 		configs["tx_bandwidth"] = *req.TxBandwidth
 	}
+	if req.RFGuardEnabled != nil {
+		configs[udphub.ConfigKeyRFGuardEnabled] = *req.RFGuardEnabled
+	}
+	if req.RFGuardSingleTxLimitS != nil {
+		configs[udphub.ConfigKeyRFGuardSingleTxLimitS] = *req.RFGuardSingleTxLimitS
+	}
+	if req.RFGuardWindowS != nil {
+		configs[udphub.ConfigKeyRFGuardWindowS] = *req.RFGuardWindowS
+	}
+	if req.RFGuardMaxTxInWindowS != nil {
+		configs[udphub.ConfigKeyRFGuardMaxTxInWindowS] = *req.RFGuardMaxTxInWindowS
+	}
 
 	if len(configs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{

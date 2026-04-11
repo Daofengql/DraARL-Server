@@ -35,9 +35,6 @@ func New(cfg *config.Configuration) *Server {
 		allowedOriginSet[strings.ToLower(origin)] = struct{}{}
 	}
 
-	// 后台初始化 MinIO（失败自动重试），避免阻塞 Gin 启动
-	minio.StartInitMinIOInBackground()
-
 	// 初始化站点配置（如果数据库为空则从YAML迁移）
 	initSiteConfigs(cfg)
 
@@ -49,7 +46,10 @@ func New(cfg *config.Configuration) *Server {
 		origin := strings.TrimSpace(c.GetHeader("Origin"))
 		if origin != "" {
 			normalizedOrigin := normalizeOrigin(origin)
-			if _, allowed := allowedOriginSet[normalizedOrigin]; !allowed {
+			requestOrigin := getRequestOrigin(c.Request)
+			_, allowed := allowedOriginSet[normalizedOrigin]
+			isSameOrigin := requestOrigin != "" && normalizedOrigin == requestOrigin
+			if !allowed && !isSameOrigin {
 				if c.Request.Method == http.MethodOptions {
 					c.AbortWithStatus(http.StatusForbidden)
 					return
@@ -91,12 +91,18 @@ func New(cfg *config.Configuration) *Server {
 
 	s.setupRoutes()
 
+	// 前端 CDN 模式会在 setupFrontend 中同步初始化 MinIO。
+	// 其他情况仍按原有方式后台初始化，避免阻塞主服务启动。
+	if !minio.IsEnabled() {
+		minio.StartInitMinIOInBackground()
+	}
+
 	return s
 }
 
 func (s *Server) setupRoutes() {
 	// 前端静态文件服务（根据编译标签选择嵌入模式或磁盘模式）
-	setupFrontend(s.engine)
+	setupFrontend(s.engine, s.config)
 
 	// API 路由
 	api := s.engine.Group("/api")
@@ -491,4 +497,29 @@ func normalizeOrigin(raw string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	trimmed = strings.TrimSuffix(trimmed, "/")
 	return trimmed
+}
+
+func getRequestOrigin(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+
+	scheme := "http"
+	if forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwardedProto != "" {
+		scheme = forwardedProto
+	} else if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on") {
+		scheme = "https"
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host == "" {
+		return ""
+	}
+
+	return normalizeOrigin(scheme + "://" + host)
 }

@@ -97,6 +97,10 @@ class SerialClient(BaseClient):
             TLVType.RX_TONE_VALUE: "0",
             TLVType.TX_TONE_MODE: "off",
             TLVType.TX_TONE_VALUE: "0",
+            TLVType.RF_GUARD_ENABLED: "1",
+            TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "30",
+            TLVType.RF_GUARD_WINDOW_S: "300",
+            TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "60",
         }
 
         # 配置更新回调
@@ -564,6 +568,10 @@ class SerialClient(BaseClient):
                 TLVType.RX_TONE_VALUE: "rx_tone_value",
                 TLVType.TX_TONE_MODE: "tx_tone_mode",
                 TLVType.TX_TONE_VALUE: "tx_tone_value",
+                TLVType.RF_GUARD_ENABLED: "rf_guard_enabled",
+                TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "rf_guard_single_tx_limit_s",
+                TLVType.RF_GUARD_WINDOW_S: "rf_guard_window_s",
+                TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "rf_guard_max_tx_in_window_s",
             }.get(tlv_type, str(tlv_type))
             result[name] = value
         return result
@@ -582,5 +590,9 @@ class SerialClient(BaseClient):
             "rx_tone_value": TLVType.RX_TONE_VALUE,
             "tx_tone_mode": TLVType.TX_TONE_MODE,
             "tx_tone_value": TLVType.TX_TONE_VALUE,
+            "rf_guard_enabled": TLVType.RF_GUARD_ENABLED,
+            "rf_guard_single_tx_limit_s": TLVType.RF_GUARD_SINGLE_TX_LIMIT_S,
+            "rf_guard_window_s": TLVType.RF_GUARD_WINDOW_S,
+            "rf_guard_max_tx_in_window_s": TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S,
         }
         return mapping.get(key, 0)

@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // 使用相对资源路径，结合后端动态注入的 <base href> 同时兼容本地嵌入与 MinIO 托管。
+  base: './',
   build: {
     // 使用 esbuild 激进压缩
     minify: 'esbuild',

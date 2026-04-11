@@ -148,6 +148,19 @@ function parseMarkdownSections(md: string) {
   return sections
 }
 
+function resolveFrontendAssetURL(relativePath: string) {
+  const assetBase =
+    (window as Window & { __DRAARL_ASSET_BASE__?: string }).__DRAARL_ASSET_BASE__ || '/'
+
+  try {
+    const baseURL = new URL(assetBase, window.location.origin)
+    return new URL(relativePath, baseURL).toString()
+  } catch {
+    const normalizedBase = assetBase.endsWith('/') ? assetBase : `${assetBase}/`
+    return `${normalizedBase}${relativePath}`
+  }
+}
+
 // 图片映射
 const imageMap: Record<string, string> = {
   '../../assets/device-access-flow.svg': deviceAccessFlowImg,
@@ -250,7 +263,7 @@ function DeviceProtocolContent() {
   const [error, setError] = useState(false)
 
   useEffect(() => {
-    fetch('/docs/device-protocol.md')
+    fetch(resolveFrontendAssetURL('docs/device-protocol.md'))
       .then((res) => {
         if (!res.ok) throw new Error('Failed to load')
         return res.text()

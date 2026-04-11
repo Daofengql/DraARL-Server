@@ -219,4 +219,8 @@ export interface DeviceConfig {
   sql_level?: string     // 静噪等级 (0-8)
   power_level?: string   // 功率等级 (1=低, 3=高)
   tx_bandwidth?: string  // 发射带宽 (1=窄带, 2=宽带)
+  rf_guard_enabled?: string           // 射频保护开关 (0=关, 1=开)
+  rf_guard_single_tx_limit_s?: string // 单次发射上限 (秒)
+  rf_guard_window_s?: string          // 统计窗口 (秒)
+  rf_guard_max_tx_in_window_s?: string // 窗口内累计发射上限 (秒)
 }

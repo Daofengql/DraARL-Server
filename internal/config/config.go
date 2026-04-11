@@ -74,6 +74,10 @@ type Configuration struct {
 		// 允许跨域访问的来源白名单（格式: https://example.com）。
 		// 非生产环境留空时会回退为 FrontendURL 对应的 Origin（若可解析）。
 		AllowedOrigins []string `yaml:"AllowedOrigins" json:"allowed_origins"`
+		FrontendCDN    struct {
+			Enabled      bool   `yaml:"Enabled" json:"enabled"`
+			ObjectPrefix string `yaml:"ObjectPrefix" json:"object_prefix"` // MinIO 中的前端资源前缀目录
+		} `yaml:"FrontendCDN" json:"frontend_cdn"`
 	} `yaml:"Web" json:"web"`
 
 	// Keycloak SSO 配置
@@ -209,6 +213,11 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.Redis.PoolSize <= 0 {
 		c.Redis.PoolSize = 20
+	}
+
+	// 前端 CDN 默认值
+	if strings.TrimSpace(c.Web.FrontendCDN.ObjectPrefix) == "" {
+		c.Web.FrontendCDN.ObjectPrefix = "frontend"
 	}
 
 	// AES 密钥默认值：如果不符合要求则自动生成并写入配置文件

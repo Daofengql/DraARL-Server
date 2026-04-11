@@ -161,6 +161,10 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x09 | rx_tone_value | 8 | ASCII | 接收亚音值（如 `88.5`、`023`） |
 | 0x0A | tx_tone_mode | 1 | uint8 | 发射亚音类型 (0=OFF, 1=CTCSS, 2=CDCSS_N, 3=CDCSS_I) |
 | 0x0B | tx_tone_value | 8 | ASCII | 发射亚音值（如 `88.5`、`023`） |
+| 0x0C | rf_guard_enabled | 1 | uint8 | 射频保护开关 (0=关, 1=开) |
+| 0x0D | rf_guard_single_tx_limit_s | 2 | big-endian uint16 | 单次发射上限 (秒, 1-1800) |
+| 0x0E | rf_guard_window_s | 2 | big-endian uint16 | 统计窗口 (秒, 5-3600) |
+| 0x0F | rf_guard_max_tx_in_window_s | 2 | big-endian uint16 | 窗口内累计发射上限 (秒, 1-window_s) |
 | 0x10 | timestamp | 8 | big-endian int64 | Unix 时间戳 (毫秒) |
 
 ### 频率配置约定
@@ -193,15 +197,15 @@ DATA = [0x02, 0x01, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x32, 0x3C, 0xE0]
 **设备上报全部配置**：
 
 ```text
-DATA = [0x02, 0x0B, TLV1, TLV2, TLV3, TLV4, TLV5, TLV6, TLV7, TLV8, TLV9, TLV10, TLV11]
-              └─ 典型全量上报为 11 个配置项
+DATA = [0x02, 0x0F, TLV1, TLV2, TLV3, TLV4, TLV5, TLV6, TLV7, TLV8, TLV9, TLV10, TLV11, TLV12, TLV13, TLV14, TLV15]
+              └─ 当前典型全量上报为 15 个配置项
 ```
 
 **完整数字亚音下发（示例，按 Type 升序）**：
 
 ```text
 DATA = [
-  0x02, 0x0B,
+  0x02, 0x0F,
   0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x32, 0x3C, 0xE0,                    // rx_freq = 439500000
   0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x19, 0xB8, 0x2A, 0xE0,                    // tx_freq = 431500000
   0x03, 0x04, 0x00, 0x00, 0x00, 0x00,                                              // rx_ctcss = 0
@@ -212,7 +216,11 @@ DATA = [
   0x08, 0x01, 0x02,                                                                  // rx_tone_mode = CDCSS_N
   0x09, 0x08, 0x30, 0x32, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00,                      // rx_tone_value = "023"
   0x0A, 0x01, 0x03,                                                                  // tx_tone_mode = CDCSS_I
-  0x0B, 0x08, 0x34, 0x33, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00                       // tx_tone_value = "431"
+  0x0B, 0x08, 0x34, 0x33, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00,                      // tx_tone_value = "431"
+  0x0C, 0x01, 0x01,                                                                  // rf_guard_enabled = 1
+  0x0D, 0x02, 0x00, 0x1E,                                                            // rf_guard_single_tx_limit_s = 30
+  0x0E, 0x02, 0x01, 0x2C,                                                            // rf_guard_window_s = 300
+  0x0F, 0x02, 0x00, 0x3C                                                             // rf_guard_max_tx_in_window_s = 60
 ]
 ```
 
@@ -555,3 +563,4 @@ POST /api/device/confirm-bind
 | v1.7 | 2026-03 | 新增动态码绑定流程，支持无输入能力的普通设备通过 Web 端完成账号绑定 |
 | v1.8 | 2026-04 | 新增设备型号 110/111/112，分别对应南山对讲桥接器、HT 对讲桥接器、涛涛对讲桥接器 |
 | v1.9 | 2026-04 | 重构 DevModel 分段与动态绑定 SSID 规则；新增 `rx_tone_* / tx_tone_*` 数字亚音表达；SQL 收敛为 0-8；功率统一为高/低两档并兼容历史中档 |
+| v1.10 | 2026-04 | Config 包新增 `rf_guard_*` 四项射频保护配置，支持单次发射上限、统计窗口与窗口内累计发射上限 |

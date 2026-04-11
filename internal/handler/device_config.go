@@ -81,17 +81,21 @@ func GetDeviceConfig(c *gin.Context) {
 
 // UpdateDeviceConfigRequest 更新设备配置请求
 type UpdateDeviceConfigRequest struct {
-	RxFreq      *string `json:"rx_freq"`       // 接收频率 (Hz)
-	TxFreq      *string `json:"tx_freq"`       // 发射频率 (Hz)
-	RxCtcss     *string `json:"rx_ctcss"`      // 接收亚音旧字段 (Hz, 0=关闭)
-	TxCtcss     *string `json:"tx_ctcss"`      // 发射亚音旧字段 (Hz, 0=关闭)
-	RxToneMode  *string `json:"rx_tone_mode"`  // 接收亚音类型 (off/ctcss/cdcss_n/cdcss_i)
-	RxToneValue *string `json:"rx_tone_value"` // 接收亚音值 (88.5/023)
-	TxToneMode  *string `json:"tx_tone_mode"`  // 发射亚音类型 (off/ctcss/cdcss_n/cdcss_i)
-	TxToneValue *string `json:"tx_tone_value"` // 发射亚音值 (88.5/023)
-	SqlLevel    *string `json:"sql_level"`     // 静噪等级 (0-8)
-	PowerLevel  *string `json:"power_level"`   // 功率等级 (1=低, 3=高)
-	TxBandwidth *string `json:"tx_bandwidth"`  // 发射带宽 (1=窄带, 2=宽带)
+	RxFreq                *string `json:"rx_freq"`                     // 接收频率 (Hz)
+	TxFreq                *string `json:"tx_freq"`                     // 发射频率 (Hz)
+	RxCtcss               *string `json:"rx_ctcss"`                    // 接收亚音旧字段 (Hz, 0=关闭)
+	TxCtcss               *string `json:"tx_ctcss"`                    // 发射亚音旧字段 (Hz, 0=关闭)
+	RxToneMode            *string `json:"rx_tone_mode"`                // 接收亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+	RxToneValue           *string `json:"rx_tone_value"`               // 接收亚音值 (88.5/023)
+	TxToneMode            *string `json:"tx_tone_mode"`                // 发射亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+	TxToneValue           *string `json:"tx_tone_value"`               // 发射亚音值 (88.5/023)
+	SqlLevel              *string `json:"sql_level"`                   // 静噪等级 (0-8)
+	PowerLevel            *string `json:"power_level"`                 // 功率等级 (1=低, 3=高)
+	TxBandwidth           *string `json:"tx_bandwidth"`                // 发射带宽 (1=窄带, 2=宽带)
+	RFGuardEnabled        *string `json:"rf_guard_enabled"`            // 射频保护开关 (0=关, 1=开)
+	RFGuardSingleTxLimitS *string `json:"rf_guard_single_tx_limit_s"`  // 单次发射上限 (秒)
+	RFGuardWindowS        *string `json:"rf_guard_window_s"`           // 统计窗口 (秒)
+	RFGuardMaxTxInWindowS *string `json:"rf_guard_max_tx_in_window_s"` // 窗口内累计发射上限 (秒)
 }
 
 // UpdateDeviceConfig 更新设备配置
@@ -185,6 +189,18 @@ func UpdateDeviceConfig(c *gin.Context) {
 	}
 	if req.TxBandwidth != nil {
 		configs["tx_bandwidth"] = *req.TxBandwidth
+	}
+	if req.RFGuardEnabled != nil {
+		configs[udphub.ConfigKeyRFGuardEnabled] = *req.RFGuardEnabled
+	}
+	if req.RFGuardSingleTxLimitS != nil {
+		configs[udphub.ConfigKeyRFGuardSingleTxLimitS] = *req.RFGuardSingleTxLimitS
+	}
+	if req.RFGuardWindowS != nil {
+		configs[udphub.ConfigKeyRFGuardWindowS] = *req.RFGuardWindowS
+	}
+	if req.RFGuardMaxTxInWindowS != nil {
+		configs[udphub.ConfigKeyRFGuardMaxTxInWindowS] = *req.RFGuardMaxTxInWindowS
 	}
 
 	if len(configs) == 0 {

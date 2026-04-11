@@ -21,9 +21,17 @@ import { RegionCascader } from '../../common/RegionCascader'
 import { ToneSelector } from './ToneSelector'
 import {
   POWER_OPTIONS,
+  RF_GUARD_MAX_TX_IN_WINDOW_MIN_S,
+  RF_GUARD_SINGLE_TX_LIMIT_MAX_S,
+  RF_GUARD_SINGLE_TX_LIMIT_MIN_S,
+  RF_GUARD_WINDOW_MAX_S,
+  RF_GUARD_WINDOW_MIN_S,
   SQL_LEVEL_OPTIONS,
   buildToneSelection,
   formatToneDisplay,
+  normalizeRfGuardMaxTxInWindow,
+  normalizeRfGuardSingleTxLimit,
+  normalizeRfGuardWindow,
   normalizeSquelchLevel,
   type RadioConfigForm,
 } from '../../../utils/radioConfig'
@@ -38,6 +46,8 @@ interface RelayPreset {
   rxToneRaw: string
   sameFreq: boolean
 }
+
+type RelayUsageMode = 'relay' | 'hotspot'
 
 interface SA818FrequencyCardProps {
   value: RadioConfigForm
@@ -54,16 +64,35 @@ const relayToPreset = (relay: Relay): RelayPreset => ({
   sameFreq: relay.up_freq === relay.down_freq,
 })
 
+const applyRelayPresetToForm = (
+  currentValue: RadioConfigForm,
+  preset: RelayPreset,
+  mode: RelayUsageMode,
+): RadioConfigForm => {
+  const useHotspotMode = mode === 'hotspot'
+
+  return {
+    ...currentValue,
+    txFreq: useHotspotMode ? (preset.rxFreq || '') : (preset.txFreq || ''),
+    rxFreq: useHotspotMode ? (preset.txFreq || '') : (preset.rxFreq || ''),
+    txTone: buildToneSelection({ legacy: useHotspotMode ? preset.rxToneRaw : preset.txToneRaw }),
+    rxTone: buildToneSelection({ legacy: useHotspotMode ? preset.txToneRaw : preset.rxToneRaw }),
+    sameFreq: preset.sameFreq,
+  }
+}
+
 export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps) {
   const [relayLocation, setRelayLocation] = useState('')
   const [relayPresets, setRelayPresets] = useState<RelayPreset[]>([])
   const [selectedRelay, setSelectedRelay] = useState<RelayPreset | null>(null)
+  const [relayUsageMode, setRelayUsageMode] = useState<RelayUsageMode>('relay')
   const [relaySearching, setRelaySearching] = useState(false)
   const [relayError, setRelayError] = useState('')
 
   useEffect(() => {
     setRelayPresets([])
     setSelectedRelay(null)
+    setRelayUsageMode('relay')
     setRelayError('')
   }, [relayLocation])
 
@@ -89,6 +118,43 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
     } finally {
       setRelaySearching(false)
     }
+  }
+
+  const updateRfGuardNumber = (
+    field: 'rfGuardSingleTxLimitS' | 'rfGuardWindowS' | 'rfGuardMaxTxInWindowS',
+    rawValue: string,
+  ) => {
+    if (rawValue.trim() === '') {
+      return
+    }
+
+    const parsed = Number(rawValue)
+    if (!Number.isFinite(parsed)) {
+      return
+    }
+
+    if (field === 'rfGuardSingleTxLimitS') {
+      onChange({
+        ...value,
+        rfGuardSingleTxLimitS: normalizeRfGuardSingleTxLimit(parsed),
+      })
+      return
+    }
+
+    if (field === 'rfGuardWindowS') {
+      const nextWindow = normalizeRfGuardWindow(parsed)
+      onChange({
+        ...value,
+        rfGuardWindowS: nextWindow,
+        rfGuardMaxTxInWindowS: normalizeRfGuardMaxTxInWindow(value.rfGuardMaxTxInWindowS, nextWindow),
+      })
+      return
+    }
+
+    onChange({
+      ...value,
+      rfGuardMaxTxInWindowS: normalizeRfGuardMaxTxInWindow(parsed, value.rfGuardWindowS),
+    })
   }
 
   return (
@@ -133,15 +199,9 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
             isOptionEqualToValue={(option, selected) => option.id === selected.id}
             onChange={(_, preset) => {
               setSelectedRelay(preset)
+              setRelayUsageMode('relay')
               if (!preset) return
-              onChange({
-                ...value,
-                txFreq: preset.txFreq || '',
-                rxFreq: preset.rxFreq || '',
-                txTone: buildToneSelection({ legacy: preset.txToneRaw }),
-                rxTone: buildToneSelection({ legacy: preset.rxToneRaw }),
-                sameFreq: preset.sameFreq,
-              })
+              onChange(applyRelayPresetToForm(value, preset, 'relay'))
             }}
             renderInput={(params) => (
               <TextField
@@ -162,6 +222,26 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
             )}
             noOptionsText="暂无中继台数据"
           />
+        )}
+        {selectedRelay && (
+          <Box sx={{ mt: 2 }}>
+            <FormControlLabel
+              control={(
+                <Switch
+                  checked={relayUsageMode === 'hotspot'}
+                  onChange={(event) => {
+                    const nextMode: RelayUsageMode = event.target.checked ? 'hotspot' : 'relay'
+                    setRelayUsageMode(nextMode)
+                    onChange(applyRelayPresetToForm(value, selectedRelay, nextMode))
+                  }}
+                />
+              )}
+              label="热点模式"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              关闭时按中继参数正常接入；开启后自动对调收发频率和亚音，用当前设备模拟中继。
+            </Typography>
+          </Box>
         )}
       </Paper>
 
@@ -260,6 +340,56 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
           </Select>
         </FormControl>
       </Box>
+
+      <Divider />
+
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
+          发射保护
+        </Typography>
+        <FormControlLabel
+          control={(
+            <Switch
+              checked={value.rfGuardEnabled}
+              onChange={(event) => onChange({ ...value, rfGuardEnabled: event.target.checked })}
+            />
+          )}
+          label="启用发射保护"
+        />
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+          用于限制单次连续发射和一段时间内的累计发射时长，降低设备长时间满占空比工作的风险。
+        </Typography>
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+          <TextField
+            fullWidth
+            type="number"
+            label="单次发射上限 (秒)"
+            value={value.rfGuardSingleTxLimitS}
+            onChange={(event) => updateRfGuardNumber('rfGuardSingleTxLimitS', event.target.value)}
+            slotProps={{ htmlInput: { min: RF_GUARD_SINGLE_TX_LIMIT_MIN_S, max: RF_GUARD_SINGLE_TX_LIMIT_MAX_S, step: 1 } }}
+            helperText={`${RF_GUARD_SINGLE_TX_LIMIT_MIN_S}-${RF_GUARD_SINGLE_TX_LIMIT_MAX_S} 秒`}
+          />
+          <TextField
+            fullWidth
+            type="number"
+            label="统计窗口 (秒)"
+            value={value.rfGuardWindowS}
+            onChange={(event) => updateRfGuardNumber('rfGuardWindowS', event.target.value)}
+            slotProps={{ htmlInput: { min: RF_GUARD_WINDOW_MIN_S, max: RF_GUARD_WINDOW_MAX_S, step: 1 } }}
+            helperText={`${RF_GUARD_WINDOW_MIN_S}-${RF_GUARD_WINDOW_MAX_S} 秒`}
+          />
+          <TextField
+            fullWidth
+            type="number"
+            label="窗口内累计上限 (秒)"
+            value={value.rfGuardMaxTxInWindowS}
+            onChange={(event) => updateRfGuardNumber('rfGuardMaxTxInWindowS', event.target.value)}
+            slotProps={{ htmlInput: { min: RF_GUARD_MAX_TX_IN_WINDOW_MIN_S, max: value.rfGuardWindowS || RF_GUARD_WINDOW_MAX_S, step: 1 } }}
+            helperText={`${RF_GUARD_MAX_TX_IN_WINDOW_MIN_S}-${Math.max(RF_GUARD_MAX_TX_IN_WINDOW_MIN_S, value.rfGuardWindowS)} 秒`}
+          />
+        </Box>
+      </Paper>
     </Box>
   )
 }

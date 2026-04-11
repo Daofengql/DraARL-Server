@@ -214,6 +214,9 @@ Web:
     Host: "localhost"
     Port: "9002"
     FrontendURL: "http://localhost:5173"
+    FrontendCDN:
+        Enabled: false
+        ObjectPrefix: "frontend"
 
 # Keycloak SSO配置（可选）
 Keycloak:

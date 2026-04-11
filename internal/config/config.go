@@ -71,8 +71,8 @@ type Configuration struct {
 		Host        string `yaml:"Host" json:"host"`
 		Port        string `yaml:"Port" json:"port"`
 		FrontendURL string `yaml:"FrontendURL" json:"frontend_url"` // 前端地址，用于SSO回调重定向
-		// 允许跨域访问的来源白名单（格式: https://example.com）。
-		// 非生产环境留空时会回退为 FrontendURL 对应的 Origin（若可解析）。
+		// 允许访问 API / WebSocket 的页面来源白名单（格式: https://example.com）。
+		// FrontendURL 对应的 Origin 会自动加入此集合；若 index.html 由后端提供，通常这里应配置后端对外页面域名。
 		AllowedOrigins []string `yaml:"AllowedOrigins" json:"allowed_origins"`
 		FrontendCDN    struct {
 			Enabled      bool   `yaml:"Enabled" json:"enabled"`
@@ -220,6 +220,11 @@ func (c *Configuration) SetDefaults() error {
 		c.Web.FrontendCDN.ObjectPrefix = "frontend"
 	}
 
+	// 规范化 MinIO BasePath：去除尾部斜杠，避免 URL 拼接时产生双斜杠
+	if c.MinIO.BasePath != "" {
+		c.MinIO.BasePath = strings.TrimRight(c.MinIO.BasePath, "/")
+	}
+
 	// AES 密钥默认值：如果不符合要求则自动生成并写入配置文件
 	if c.ValidateAESKey() != nil {
 		aesKey, err := GenerateAESKey(32) // 默认使用 AES-256
@@ -330,10 +335,8 @@ func (c *Configuration) GetAllowedOrigins() []string {
 		}
 	}
 
-	if len(originSet) == 0 && !c.IsProduction() {
-		if origin := normalizeOrigin(c.Web.FrontendURL); origin != "" {
-			originSet[origin] = struct{}{}
-		}
+	if origin := normalizeOrigin(c.Web.FrontendURL); origin != "" {
+		originSet[origin] = struct{}{}
 	}
 
 	results := make([]string, 0, len(originSet))
@@ -347,7 +350,7 @@ func (c *Configuration) GetAllowedOrigins() []string {
 // ValidateAllowedOrigins 校验 Origin 白名单配置。
 func (c *Configuration) ValidateAllowedOrigins() error {
 	if c.IsProduction() && len(c.GetAllowedOrigins()) == 0 {
-		return fmt.Errorf("生产环境必须配置 Web.AllowedOrigins，不能依赖 FrontendURL 回退")
+		return fmt.Errorf("生产环境必须配置可解析的 Web.FrontendURL 或 Web.AllowedOrigins")
 	}
 	return nil
 }

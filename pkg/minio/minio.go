@@ -214,9 +214,15 @@ func UploadMultipartFile(fileHeader *multipart.FileHeader, userID int, fileType 
 
 // GetFileURL 获取文件的访问URL
 func GetFileURL(objectName string) string {
+	if strings.TrimSpace(objectName) == "" {
+		return ""
+	}
+
 	cfg := config.Get()
+	cleanObject := strings.TrimLeft(objectName, "/")
+
 	if cfg.MinIO.BasePath != "" {
-		return cfg.MinIO.BasePath + "/" + objectName
+		return cfg.MinIO.BasePath + "/" + cleanObject
 	}
 
 	// 如果没有配置BasePath，返回MinIO的直链
@@ -224,7 +230,7 @@ func GetFileURL(objectName string) string {
 	if cfg.MinIO.UseSSL {
 		protocol = "https"
 	}
-	return fmt.Sprintf("%s://%s/%s/%s", protocol, cfg.MinIO.Endpoint, cfg.MinIO.Bucket, objectName)
+	return fmt.Sprintf("%s://%s/%s/%s", protocol, cfg.MinIO.Endpoint, cfg.MinIO.Bucket, cleanObject)
 }
 
 // GetAvatarURL 根据头像相对路径生成原图完整URL

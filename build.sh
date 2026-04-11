@@ -9,8 +9,13 @@ set -e
 
 BINARY_NAME="DraARL"
 
-# Get version from git
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+if [ -z "$1" ]; then
+    echo "Usage: $0 <version>"
+    echo "Example: $0 v1.2.3"
+    exit 1
+fi
+
+VERSION="$1"
 
 # Get build time
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -33,7 +38,7 @@ rm -rf internal/server/web 2>/dev/null || true
 # Build frontend
 echo "[2/4] Building frontend..."
 cd www
-npm run build
+VITE_APP_VERSION="$VERSION" npm run build
 cd ..
 
 echo ""
@@ -44,7 +49,7 @@ cp -r www/dist internal/server/web/dist
 echo ""
 echo "[4/4] Building backend with embedded frontend..."
 export CGO_ENABLED=0
-go build -ldflags="-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME -X main.isRelease=true" -tags=embed -o "$BINARY_NAME" ./cmd/udphub
+go build -ldflags="-s -w -X draarl/internal/buildinfo.Version=$VERSION -X draarl/internal/buildinfo.BuildTime=$BUILD_TIME -X draarl/internal/buildinfo.Release=true" -tags=embed -o "$BINARY_NAME" ./cmd/udphub
 
 if [ $? -eq 0 ]; then
     echo ""

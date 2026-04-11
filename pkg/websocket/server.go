@@ -41,7 +41,6 @@ func SetAllowedOrigins(origins []string) {
 
 func checkOrigin(r *http.Request) bool {
 	origin := normalizeOrigin(r.Header.Get("Origin"))
-	requestOrigin := getRequestOrigin(r)
 
 	allowedOriginsMu.RLock()
 	defer allowedOriginsMu.RUnlock()
@@ -51,15 +50,11 @@ func checkOrigin(r *http.Request) bool {
 		return true
 	}
 
-	if requestOrigin != "" && origin == requestOrigin {
-		return true
-	}
-
 	if _, ok := allowedOrigins[origin]; ok {
 		return true
 	}
 
-	log.Printf("[WS] Origin rejected: origin=%s request_origin=%s host=%s", origin, requestOrigin, r.Host)
+	log.Printf("[WS] Origin rejected: origin=%s host=%s", origin, r.Host)
 	return false
 }
 
@@ -73,31 +68,6 @@ func normalizeOrigin(raw string) string {
 		return ""
 	}
 	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
-}
-
-func getRequestOrigin(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-
-	scheme := "http"
-	if forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwardedProto != "" {
-		scheme = forwardedProto
-	} else if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on") {
-		scheme = "https"
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
-	}
-	if host == "" {
-		return ""
-	}
-
-	return normalizeOrigin(scheme + "://" + host)
 }
 
 // 全局连接管理器

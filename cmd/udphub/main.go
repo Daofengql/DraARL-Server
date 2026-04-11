@@ -15,6 +15,7 @@ import (
 
 	"draarl/internal/aprs"
 	authstore "draarl/internal/auth"
+	"draarl/internal/buildinfo"
 	"draarl/internal/config"
 	"draarl/internal/db"
 	gormdb "draarl/internal/gormdb"
@@ -28,24 +29,16 @@ import (
 	"draarl/pkg/jwt"
 )
 
-var (
-	version   = "1.0.0"
-	buildTime = "unknown"
-	// release 模式标志，通过 ldflags 设置
-	// release 模式下会禁用 gin 和 gorm 的调试日志
-	isRelease = "false"
-)
-
 // 命令行参数
 var (
 	autoMigrate = flag.Bool("auto-migrate", false, "强制执行数据库自动迁移")
 )
 
 func main() {
-	config.SetReleaseBuild(isRelease == "true")
+	config.SetReleaseBuild(buildinfo.IsRelease())
 
 	// release 模式下禁用 gin 调试日志
-	if isRelease == "true" {
+	if buildinfo.IsRelease() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -57,7 +50,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("DraARL version %s (build time: %s)\n", version, buildTime)
+		fmt.Printf("DraARL version %s (build time: %s)\n", buildinfo.VersionString(), buildinfo.BuildTimeString())
 		os.Exit(0)
 	}
 
@@ -123,7 +116,7 @@ func main() {
 
 	// 初始化 GORM 数据库
 	gormLogLevel := "info"
-	if isRelease == "true" {
+	if buildinfo.IsRelease() {
 		gormLogLevel = "error" // release 模式下只记录错误
 	}
 	gormCfg := &gormdb.Config{
@@ -210,7 +203,7 @@ func main() {
 		}
 	}()
 
-	stdlog.Printf("DraARL v%s 启动成功", version)
+	stdlog.Printf("DraARL v%s 启动成功", buildinfo.VersionString())
 	stdlog.Printf("配置: UDP端口=%s, Web端口=%s, MySQL=%s:%d/%s",
 		cfg.System.Port, cfg.Web.Port, cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName)
 

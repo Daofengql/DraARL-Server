@@ -216,7 +216,7 @@ Web:
     FrontendURL: "http://localhost:5173"
     FrontendCDN:
         Enabled: false
-        ObjectPrefix: "frontend"
+        ObjectPrefix: "frontend" # 实际会按版本写入如 frontend/v1.2.3/assets
 
 # Keycloak SSO配置（可选）
 Keycloak:

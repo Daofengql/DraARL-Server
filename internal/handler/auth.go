@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"draarl/internal/buildinfo"
 	"draarl/internal/email"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
@@ -1035,7 +1036,7 @@ func GetPlatformInfo(c *gin.Context) {
 			"name":     "DraARL 麟链",
 			"logourl":  "",
 			"language": "zh-CN",
-			"version":  "v2.0.0",
+			"version":  buildinfo.VersionString(),
 			"icp":      "",
 			"mail":     "",
 			"callsign": "",

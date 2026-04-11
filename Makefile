@@ -3,7 +3,7 @@
 BINARY_NAME=draarl
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-LDFLAGS=-ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
+LDFLAGS=-ldflags "-X draarl/internal/buildinfo.Version=$(VERSION) -X draarl/internal/buildinfo.BuildTime=$(BUILD_TIME)"
 
 # Go parameters
 GOCMD=go

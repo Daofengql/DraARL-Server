@@ -1,4 +1,5 @@
 import { apiClient } from './api'
+import { SITE_CONFIG } from '../config/site'
 import type {
   PlatformInfo,
   PlatformStats,
@@ -14,7 +15,7 @@ export const platformService = {
   // 获取平台信息
   async getInfo(): Promise<PlatformInfo> {
     const res = await apiClient.get<BackendResponse<PlatformInfo>>('/api/platform/info')
-    return res.data || { name: 'DraARL', version: '1.0.0' }
+    return res.data || { name: 'DraARL', version: SITE_CONFIG.VERSION }
   },
 
   // 获取统计信息

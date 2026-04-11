@@ -59,6 +59,8 @@ jobs:
 
       - name: Build Frontend
         working-directory: ./www
+        env:
+          VITE_APP_VERSION: ${{ github.ref_name }}
         run: |
           # 干净地安装前端依赖并执行构建
           npm ci
@@ -79,13 +81,13 @@ jobs:
         run: |
           # 编译 Go 后端
           # -ldflags="-s -w" 用于去除调试信息，减小体积
-          # -X main.version 注入当前的 tag 名称作为版本号
-          # -X main.buildTime 注入构建时间
-          # -X main.isRelease=true 启用 release 模式
+          # -X draarl/internal/buildinfo.Version 注入当前的 tag 名称作为版本号
+          # -X draarl/internal/buildinfo.BuildTime 注入构建时间
+          # -X draarl/internal/buildinfo.Release=true 启用 release 模式
           # -tags=embed 启用内嵌资源的构建标签
           BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           go build \
-            -ldflags="-s -w -X main.version=${{ github.ref_name }} -X main.buildTime=${BUILD_TIME} -X main.isRelease=true" \
+            -ldflags="-s -w -X draarl/internal/buildinfo.Version=${{ github.ref_name }} -X draarl/internal/buildinfo.BuildTime=${BUILD_TIME} -X draarl/internal/buildinfo.Release=true" \
             -tags=embed \
             -o ${{ matrix.filename }} \
             ./cmd/udphub/...

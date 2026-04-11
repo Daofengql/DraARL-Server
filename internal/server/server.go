@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"draarl/internal/common"
@@ -42,47 +43,7 @@ func New(cfg *config.Configuration) *Server {
 	ws.SetAllowedOrigins(allowedOrigins)
 
 	// CORS 中间件
-	engine.Use(func(c *gin.Context) {
-		origin := strings.TrimSpace(c.GetHeader("Origin"))
-		if origin != "" {
-			normalizedOrigin := normalizeOrigin(origin)
-			requestOrigin := getRequestOrigin(c.Request)
-			_, allowed := allowedOriginSet[normalizedOrigin]
-			isSameOrigin := requestOrigin != "" && normalizedOrigin == requestOrigin
-			if !allowed && !isSameOrigin {
-				if c.Request.Method == http.MethodOptions {
-					c.AbortWithStatus(http.StatusForbidden)
-					return
-				}
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-					"code":    403,
-					"message": "origin_not_allowed",
-				})
-				return
-			}
-
-			c.Writer.Header().Set("Vary", "Origin")
-			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-			c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		}
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-
-		if hasTokenLikeQuery(c.Request.URL.RawQuery) {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "token_query_not_allowed",
-			})
-			return
-		}
-
-		c.Next()
-	})
+	engine.Use(originGuardMiddleware(allowedOriginSet))
 
 	s := &Server{
 		config: cfg,
@@ -493,33 +454,82 @@ func (s *Server) GetEngine() *gin.Engine {
 	return s.engine
 }
 
+func originGuardMiddleware(allowedOriginSet map[string]struct{}) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		requestOrigin, hasBrowserSource := requestSourceOrigin(c)
+		if hasBrowserSource {
+			if requestOrigin == "" {
+				abortOriginNotAllowed(c)
+				return
+			}
+			if _, allowed := allowedOriginSet[requestOrigin]; !allowed {
+				abortOriginNotAllowed(c)
+				return
+			}
+
+			if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
+				c.Writer.Header().Set("Vary", "Origin")
+				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+				c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+				c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			} else {
+				c.Writer.Header().Set("Vary", "Origin, Referer")
+			}
+		}
+
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		if hasTokenLikeQuery(c.Request.URL.RawQuery) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "token_query_not_allowed",
+			})
+			return
+		}
+
+		c.Next()
+	}
+}
+
+func abortOriginNotAllowed(c *gin.Context) {
+	if c.Request.Method == http.MethodOptions {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+		"code":    403,
+		"message": "origin_not_allowed",
+	})
+}
+
+func requestSourceOrigin(c *gin.Context) (string, bool) {
+	if origin := strings.TrimSpace(c.GetHeader("Origin")); origin != "" {
+		return normalizeOrigin(origin), true
+	}
+
+	if referer := strings.TrimSpace(c.GetHeader("Referer")); referer != "" {
+		return originFromURL(referer), true
+	}
+
+	return "", false
+}
+
+func originFromURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	return normalizeOrigin(parsed.Scheme + "://" + parsed.Host)
+}
+
 func normalizeOrigin(raw string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	trimmed = strings.TrimSuffix(trimmed, "/")
 	return trimmed
-}
-
-func getRequestOrigin(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-
-	scheme := "http"
-	if forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwardedProto != "" {
-		scheme = forwardedProto
-	} else if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on") {
-		scheme = "https"
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
-	}
-	if host == "" {
-		return ""
-	}
-
-	return normalizeOrigin(scheme + "://" + host)
 }

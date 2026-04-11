@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"draarl/internal/buildinfo"
 	"draarl/internal/common"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
@@ -227,6 +228,7 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 	if prefix == "" {
 		return "", fmt.Errorf("frontend CDN object prefix is empty")
 	}
+	versionedPrefix := joinObjectPath(prefix, buildinfo.FrontendAssetVersion())
 
 	if !miniohelper.IsEnabled() {
 		if err := miniohelper.InitMinIO(); err != nil {
@@ -252,13 +254,7 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 		bucket = "draarl"
 	}
 
-	manifestObject := joinObjectPath(prefix, defaultFrontendCDNManifest)
-	indexObject := joinObjectPath(prefix, frontendIndexFile)
-
-	// index.html 始终由 Go 动态渲染，CDN 前缀下不保留它。
-	if err := deleteObjectIfExists(ctx, client, bucket, indexObject); err != nil {
-		log.Printf("Frontend CDN cleanup warning (%s): %v", indexObject, err)
-	}
+	manifestObject := joinObjectPath(versionedPrefix, defaultFrontendCDNManifest)
 
 	storedManifest, err := readFrontendManifest(ctx, client, bucket, manifestObject)
 	if err != nil {
@@ -266,20 +262,28 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 	}
 
 	if !hasFrontendManifestChanged(storedManifest, manifest) {
-		return miniohelper.GetFileURL(prefix), nil
+		complete, err := isFrontendDeploymentComplete(ctx, client, bucket, versionedPrefix, manifest)
+		if err != nil {
+			return "", fmt.Errorf("verify frontend CDN deployment: %w", err)
+		}
+		if complete {
+			return miniohelper.GetFileURL(versionedPrefix), nil
+		}
+
+		log.Printf("Frontend CDN deployment incomplete under prefix %s, re-uploading assets", versionedPrefix)
 	}
 
-	if err := purgeFrontendPrefix(ctx, client, bucket, prefix); err != nil {
+	if err := purgeFrontendPrefix(ctx, client, bucket, versionedPrefix); err != nil {
 		return "", fmt.Errorf("purge frontend CDN prefix: %w", err)
 	}
 	if storedManifest != nil {
-		log.Printf("Frontend CDN manifest changed, purged MinIO prefix %s before re-upload", prefix)
+		log.Printf("Frontend CDN manifest changed, purged MinIO prefix %s before re-upload", versionedPrefix)
 	}
 
 	uploadedFiles := 0
 	var uploadedBytes int64
 	for _, asset := range assets {
-		objectName := joinObjectPath(prefix, asset.Path)
+		objectName := joinObjectPath(versionedPrefix, asset.Path)
 		if err := miniohelper.UploadFile(ctx, bucket, objectName, bytes.NewReader(asset.Data), int64(len(asset.Data)), asset.ContentType); err != nil {
 			return "", fmt.Errorf("upload %s: %w", asset.Path, err)
 		}
@@ -295,8 +299,8 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 		return "", fmt.Errorf("upload frontend CDN manifest: %w", err)
 	}
 
-	log.Printf("Frontend CDN assets synced to MinIO prefix %s (%d files, %d bytes)", prefix, uploadedFiles, uploadedBytes)
-	return miniohelper.GetFileURL(prefix), nil
+	log.Printf("Frontend CDN assets synced to MinIO prefix %s (%d files, %d bytes)", versionedPrefix, uploadedFiles, uploadedBytes)
+	return miniohelper.GetFileURL(versionedPrefix), nil
 }
 
 func hasFrontendManifestChanged(stored, current *frontendCDNManifest) bool {
@@ -421,6 +425,50 @@ func readFrontendManifest(ctx context.Context, client *minioapi.Client, bucket, 
 		return nil, err
 	}
 	return manifest, nil
+}
+
+func isFrontendDeploymentComplete(ctx context.Context, client *minioapi.Client, bucket, prefix string, manifest *frontendCDNManifest) (bool, error) {
+	if manifest == nil {
+		return false, nil
+	}
+
+	objectPrefix := normalizeObjectPrefix(prefix)
+	if objectPrefix == "" {
+		return false, fmt.Errorf("frontend CDN object prefix is empty")
+	}
+	listPrefix := objectPrefix + "/"
+
+	expectedFiles := make(map[string]frontendCDNManifestFile, len(manifest.Files))
+	for _, file := range manifest.Files {
+		expectedFiles[file.Path] = file
+	}
+
+	manifestFound := false
+	for objectInfo := range client.ListObjects(ctx, bucket, minioapi.ListObjectsOptions{
+		Prefix:    listPrefix,
+		Recursive: true,
+	}) {
+		if objectInfo.Err != nil {
+			return false, objectInfo.Err
+		}
+
+		relativePath := strings.TrimPrefix(objectInfo.Key, listPrefix)
+		if relativePath == defaultFrontendCDNManifest {
+			manifestFound = true
+			continue
+		}
+
+		expected, ok := expectedFiles[relativePath]
+		if !ok {
+			return false, nil
+		}
+		if objectInfo.Size != expected.Size {
+			return false, nil
+		}
+		delete(expectedFiles, relativePath)
+	}
+
+	return manifestFound && len(expectedFiles) == 0, nil
 }
 
 func purgeFrontendPrefix(ctx context.Context, client *minioapi.Client, bucket, prefix string) error {

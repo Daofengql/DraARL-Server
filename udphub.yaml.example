@@ -41,11 +41,11 @@ Web:
     Host: ""                   # 监听地址，空则监听所有网卡
     Port: "9000"               # Web服务端口
     FrontendURL: "http://localhost:5173"  # 前端地址，用于SSO回调后重定向
-    AllowedOrigins:            # CORS / WS Origin 白名单（生产环境必须显式配置）
+    AllowedOrigins:            # CORS / WS Origin 白名单：填写真正发起 API/WS 请求的页面域名
         - "http://localhost:5173"
     FrontendCDN:
         Enabled: false         # 开启后，启动时会将嵌入的前端静态资源同步到 MinIO
-        ObjectPrefix: "frontend" # MinIO 中的前端资源目录，最终结构如 frontend/assets、frontend/docs、frontend/vite.svg
+        ObjectPrefix: "frontend" # MinIO 中的前端资源根目录，实际会按版本写入如 frontend/v1.2.3/assets、frontend/v1.2.3/docs
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:

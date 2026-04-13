@@ -14,6 +14,7 @@ import {
   StepLabel,
   CircularProgress,
   IconButton,
+  MenuItem,
 } from '@mui/material'
 import Visibility from '@mui/icons-material/Visibility'
 import VisibilityOff from '@mui/icons-material/VisibilityOff'
@@ -33,7 +34,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
   const requestSeqRef = useRef(0)
   const [activeStep, setActiveStep] = useState(0)
   const [dynamicCode, setDynamicCode] = useState(['', '', '', '', '', ''])
-  const [ssid, setSsid] = useState('1')
+  const [ssid, setSsid] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -44,7 +45,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     requestSeqRef.current += 1
     setActiveStep(0)
     setDynamicCode(['', '', '', '', '', ''])
-    setSsid('1')
+    setSsid('')
     setLoading(false)
     setError('')
     setBindResult(null)
@@ -107,6 +108,8 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
   const [bindResult, setBindResult] = useState<{
     device_mac: string
     call_sign: string
+    available_ssids: number[]
+    recommended_ssid: number
   } | null>(null)
 
   // 配置结果
@@ -144,6 +147,13 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
         return
       }
       setBindResult(result)
+      if (result.recommended_ssid > 0) {
+        setSsid(String(result.recommended_ssid))
+      } else if (result.available_ssids.length > 0) {
+        setSsid(String(result.available_ssids[0]))
+      } else {
+        setSsid('')
+      }
       setActiveStep(1)
     } catch (error) {
       if (requestSeq !== requestSeqRef.current) {
@@ -198,6 +208,9 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
   // 渲染步骤内容
   const renderStepContent = () => {
+    const availableSSIDs = bindResult?.available_ssids ?? []
+    const noAvailableSSID = availableSSIDs.length === 0
+
     switch (activeStep) {
       case 0:
         return (
@@ -263,25 +276,31 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
                 呼叫：<strong>{bindResult?.call_sign}</strong>
               </Typography>
             </Alert>
-            <TextField
-              label="SSID"
-              fullWidth
-              type="number"
-              value={ssid}
-              onChange={(e) => {
-                setSsid(e.target.value)
-                setError('')
-              }}
-              disabled={loading}
-              error={!!error && activeStep === 1}
-              helperText={error && activeStep === 1 ? error : `设备在群组中的唯一标识，${DYNAMIC_BIND_SSID_HINT}`}
-              slotProps={{
-                htmlInput: {
-                  min: 1,
-                  max: 235,
-                },
-              }}
-            />
+            {noAvailableSSID ? (
+              <Alert severity="warning">
+                当前账号名下普通设备可分配的 SSID 已用完，请先释放已有设备 SSID 后再绑定。
+              </Alert>
+            ) : (
+              <TextField
+                label="SSID"
+                fullWidth
+                select
+                value={ssid}
+                onChange={(e) => {
+                  setSsid(e.target.value)
+                  setError('')
+                }}
+                disabled={loading}
+                error={!!error && activeStep === 1}
+                helperText={error && activeStep === 1 ? error : `已自动去重当前用户已有 SSID，默认选择最小可用值，共 ${availableSSIDs.length} 个可选`}
+              >
+                {availableSSIDs.map((value) => (
+                  <MenuItem key={value} value={String(value)}>
+                    {value}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
           </Box>
         )
 
@@ -365,7 +384,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
             <Button
               variant="contained"
               onClick={handleSubmitConfig}
-              disabled={loading}
+              disabled={loading || !bindResult?.available_ssids?.length}
             >
               {loading ? <CircularProgress size={24} /> : '提交配置'}
             </Button>

@@ -282,6 +282,41 @@ type BindRequest struct {
 	DynamicCode string `json:"dynamic_code" binding:"required"`
 }
 
+func listUserUsedDynamicBindSSIDs(userID int, manager *udphub.PendingDeviceManager, excludeMAC string) (map[int]struct{}, error) {
+	repo := gormdb.NewDeviceRepository()
+	devices, err := repo.ListDevicesByOwnerID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	used := make(map[int]struct{}, len(devices))
+	for _, device := range devices {
+		used[int(device.SSID)] = struct{}{}
+	}
+
+	if manager != nil {
+		for ssid := range manager.ListConfiguredSSIDsByUser(uint(userID), excludeMAC) {
+			used[ssid] = struct{}{}
+		}
+	}
+
+	return used, nil
+}
+
+func buildAvailableDynamicBindSSIDs(used map[int]struct{}) []int {
+	available := make([]int, 0, 229)
+	for ssid := 1; ssid <= 255; ssid++ {
+		if !protocol.IsValidNormalSSID(byte(ssid)) {
+			continue
+		}
+		if _, exists := used[ssid]; exists {
+			continue
+		}
+		available = append(available, ssid)
+	}
+	return available
+}
+
 // BindDevice 用户输入动态码绑定设备
 // POST /api/device/bind
 func BindDevice(c *gin.Context) {
@@ -345,6 +380,20 @@ func BindDevice(c *gin.Context) {
 		return
 	}
 
+	usedSSIDs, err := listUserUsedDynamicBindSSIDs(user.ID, manager, device.MAC)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取可分配 SSID 失败",
+		})
+		return
+	}
+	availableSSIDs := buildAvailableDynamicBindSSIDs(usedSSIDs)
+	recommendedSSID := 0
+	if len(availableSSIDs) > 0 {
+		recommendedSSID = availableSSIDs[0]
+	}
+
 	log.Printf("[DEVICE] 设备绑定成功: MAC=%s, User=%s", device.MAC, username)
 	oplog.AddLog(
 		fmt.Sprintf("绑定设备成功: mac=%s", device.MAC),
@@ -357,9 +406,11 @@ func BindDevice(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{
-			"device_mac": device.MAC,
-			"call_sign":  user.CallSign,
-			"message":    "绑定成功，请配置设备参数",
+			"device_mac":       device.MAC,
+			"call_sign":        user.CallSign,
+			"message":          "绑定成功，请配置设备参数",
+			"available_ssids":  availableSSIDs,
+			"recommended_ssid": recommendedSSID,
 		},
 	})
 }
@@ -430,6 +481,31 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
+	manager := udphub.GetPendingDeviceManager()
+	if manager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "服务未初始化",
+		})
+		return
+	}
+
+	usedSSIDs, err := listUserUsedDynamicBindSSIDs(user.ID, manager, mac)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "校验 SSID 失败",
+		})
+		return
+	}
+	if _, exists := usedSSIDs[*req.SSID]; exists {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "SSID 已被当前用户占用，请选择其他 SSID",
+		})
+		return
+	}
+
 	// 读取设备密码（兼容历史 bcrypt：不可逆，自动生成新密码并迁移）
 	devicePassword := ""
 	legacyPassword := false
@@ -465,15 +541,6 @@ func SubmitDeviceConfig(c *gin.Context) {
 	}
 
 	// 设置设备配置
-	manager := udphub.GetPendingDeviceManager()
-	if manager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "服务未初始化",
-		})
-		return
-	}
-
 	config := &udphub.PendingDeviceConfig{
 		Username:       user.Name,
 		DevicePassword: devicePassword,

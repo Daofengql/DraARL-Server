@@ -213,6 +213,25 @@ func (m *PendingDeviceManager) GetByCode(code string) (*PendingDevice, bool) {
 	return device, exists
 }
 
+// ListConfiguredSSIDsByUser 返回指定用户当前在待绑定队列中已占用的 SSID。
+func (m *PendingDeviceManager) ListConfiguredSSIDsByUser(userID uint, excludeMAC string) map[int]struct{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	used := make(map[int]struct{})
+	for mac, device := range m.byMAC {
+		if device == nil || !device.Bound || device.BoundUserID != userID || device.Config == nil {
+			continue
+		}
+		if excludeMAC != "" && mac == excludeMAC {
+			continue
+		}
+		used[device.Config.SSID] = struct{}{}
+	}
+
+	return used
+}
+
 // Remove 移除待绑定设备
 func (m *PendingDeviceManager) Remove(mac string) {
 	m.mu.Lock()

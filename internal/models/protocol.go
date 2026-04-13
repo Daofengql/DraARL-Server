@@ -36,6 +36,7 @@ const (
 	DevModelNSBridge     byte = 110
 	DevModelHTBridge     byte = 111
 	DevModelTTBridge     byte = 112
+	DevModelNRL2Bridge   byte = 113
 	DevModelServer       byte = 200
 	DevModelBM           byte = 201
 	DevModelNanny        byte = 250

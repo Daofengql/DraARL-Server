@@ -48,6 +48,7 @@ const (
 	DraARLDevModelNSBridge     byte = 110 // 南山对讲桥接器
 	DraARLDevModelHTBridge     byte = 111 // HT 对讲桥接器
 	DraARLDevModelTTBridge     byte = 112 // 涛涛对讲桥接器
+	DraARLDevModelNRL2Bridge   byte = 113 // NRL2 桥接器
 )
 
 const (
@@ -516,6 +517,8 @@ func GetDevModelName(devModel byte) string {
 		return "HT Bridge"
 	case DraARLDevModelTTBridge:
 		return "Taotao Bridge"
+	case DraARLDevModelNRL2Bridge:
+		return "NRL2 Bridge"
 	default:
 		return fmt.Sprintf("Unknown(%d)", devModel)
 	}

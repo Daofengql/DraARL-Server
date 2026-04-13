@@ -253,6 +253,8 @@ export interface BindDeviceResponse {
   device_mac: string
   call_sign: string
   message: string
+  available_ssids: number[]
+  recommended_ssid: number
 }
 
 // 提交设备配置请求

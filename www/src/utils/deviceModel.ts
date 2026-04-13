@@ -32,6 +32,7 @@ const DEVICE_MODEL_DEFINITIONS: DeviceModelOption[] = [
   { value: 110, label: '南山对讲桥接器', icon: SettingsInputAntenna, selectable: true },
   { value: 111, label: 'HT 对讲桥接器', icon: SettingsInputAntenna, selectable: true },
   { value: 112, label: '涛涛对讲桥接器', icon: SettingsInputAntenna, selectable: true },
+  { value: 113, label: 'NRL2 桥接器', icon: SettingsInputAntenna, selectable: true },
 ]
 
 export const ALL_DEVICE_MODELS = DEVICE_MODEL_DEFINITIONS
@@ -41,7 +42,7 @@ export type DeviceModelValue = (typeof DEVICE_MODELS)[number]['value']
 const UNKNOWN_MODEL: DeviceModelOption = { value: -1, label: '未知设备', icon: Devices, selectable: false }
 
 export function getDeviceInfo(devModel: number): DeviceModelOption {
-  if (devModel >= 113 && devModel <= 150) {
+  if (devModel >= 114 && devModel <= 150) {
     return { value: devModel, label: `互联网桥软件 (${devModel})`, icon: SettingsInputAntenna, selectable: false }
   }
   if (devModel >= 3 && devModel <= 99) {

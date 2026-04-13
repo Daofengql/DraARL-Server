@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -64,5 +65,35 @@ func TestSubmitDeviceConfigAcceptsDualNormalSSIDRangesBeforeMACValidation(t *tes
 				t.Fatalf("expected MAC validation error, got %s", recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestBuildAvailableDynamicBindSSIDsFiltersUsedAndKeepsAscendingOrder(t *testing.T) {
+	used := map[int]struct{}{
+		1:   {},
+		2:   {},
+		99:  {},
+		106: {},
+		110: {},
+		235: {},
+	}
+
+	got := buildAvailableDynamicBindSSIDs(used)
+	if len(got) == 0 {
+		t.Fatalf("expected available ssids, got empty list")
+	}
+
+	wantPrefix := []int{3, 4, 5, 6, 7}
+	if !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("expected prefix %v, got %v", wantPrefix, got[:len(wantPrefix)])
+	}
+
+	for _, ssid := range got {
+		if _, exists := used[ssid]; exists {
+			t.Fatalf("unexpected used ssid in available list: %d", ssid)
+		}
+		if ssid == 100 || ssid == 105 || ssid == 236 {
+			t.Fatalf("unexpected reserved ssid in available list: %d", ssid)
+		}
 	}
 }

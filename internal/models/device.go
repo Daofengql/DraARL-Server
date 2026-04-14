@@ -50,6 +50,7 @@ type Device struct {
 	CallSignSSID       string            `json:"callsign_ssid"`
 	LastATcommand      *ATCommand        `json:"last_at_command,omitempty"`
 	Username           string            `json:"username"` // 运行时字段：从认证结果获取，用于索引
+	MAC                string            `json:"mac"`      // 运行时字段：设备上报的 MAC，用于快速重连判定
 
 	// Connection state tracking
 	LastDisconnectTime time.Time `json:"last_disconnect_time"` // Last time device went offline

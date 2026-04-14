@@ -1,10 +1,11 @@
 """
 HTTP API 客户端
-用于群组切换等操作
+用于群组切换、动态绑定等操作
 """
 
-import requests
 from typing import Optional, Dict, Any
+
+import requests
 
 
 class HTTPClient:
@@ -46,6 +47,10 @@ class HTTPClient:
             self.log(f"[HTTP错误] {e}")
             return {"code": 500, "message": str(e)}
 
+    def _is_success(self, result: Optional[Dict[str, Any]]) -> bool:
+        """判断业务请求是否成功"""
+        return isinstance(result, dict) and result.get('code') == 200
+
     # ==========================================
     # 认证相关
     # ==========================================
@@ -78,6 +83,98 @@ class HTTPClient:
         else:
             self.log(f"[登录失败] {result.get('message', '未知错误')}")
             return False
+
+    # ==========================================
+    # 动态绑定相关
+    # ==========================================
+
+    def device_pre_check(self, mac: str, username: str, device_password: str) -> Dict[str, Any]:
+        """
+        设备预检查
+        """
+        result = self._request('POST', '/api/device/pre-check', json={
+            'mac': mac,
+            'username': username,
+            'device_password': device_password,
+        })
+
+        if self._is_success(result):
+            status = result.get('data', {}).get('status', '')
+            self.log(f"[预检查] status={status}")
+        else:
+            self.log(f"[预检查失败] {result.get('message', '未知错误')}")
+        return result
+
+    def request_device_code(self, mac: str) -> Dict[str, Any]:
+        """
+        请求动态码
+        """
+        result = self._request('POST', '/api/device/request-code', json={
+            'mac': mac,
+        })
+
+        if self._is_success(result):
+            data = result.get('data', {})
+            self.log(
+                f"[动态码] {data.get('dynamic_code', '')} "
+                f"(expires_in={data.get('expires_in', '')}s)"
+            )
+        else:
+            self.log(f"[动态码失败] {result.get('message', '未知错误')}")
+        return result
+
+    def confirm_device_bind(self, mac: str) -> Dict[str, Any]:
+        """
+        设备轮询绑定状态
+        """
+        result = self._request('POST', '/api/device/confirm-bind', json={
+            'mac': mac,
+        })
+
+        if self._is_success(result):
+            status = result.get('data', {}).get('status', '')
+            self.log(f"[确认绑定] status={status}")
+        else:
+            self.log(f"[确认绑定失败] {result.get('message', '未知错误')}")
+        return result
+
+    def bind_device(self, dynamic_code: str) -> Dict[str, Any]:
+        """
+        用户端确认绑定设备
+        """
+        result = self._request('POST', '/api/device/bind', json={
+            'dynamic_code': dynamic_code,
+        })
+
+        if self._is_success(result):
+            data = result.get('data', {})
+            self.log(
+                f"[绑定成功] MAC={data.get('device_mac', '')}, "
+                f"recommended_ssid={data.get('recommended_ssid', '')}"
+            )
+        else:
+            self.log(f"[绑定失败] {result.get('message', '未知错误')}")
+        return result
+
+    def submit_device_config(self, device_mac: str, ssid: int) -> Dict[str, Any]:
+        """
+        提交设备绑定配置
+        """
+        result = self._request('POST', '/api/device/submit-config', json={
+            'device_mac': device_mac,
+            'ssid': ssid,
+        })
+
+        if self._is_success(result):
+            data = result.get('data', {})
+            auth_info = data.get('udp_auth_info', {})
+            self.log(
+                f"[提交配置成功] username={auth_info.get('username', '')}, "
+                f"dmr_id={data.get('dmr_id', '')}"
+            )
+        else:
+            self.log(f"[提交配置失败] {result.get('message', '未知错误')}")
+        return result
 
     # ==========================================
     # 群组相关

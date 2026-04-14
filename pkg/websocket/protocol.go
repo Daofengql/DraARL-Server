@@ -244,11 +244,13 @@ func GetDeviceModelName(devModel byte) string {
 	case protocol.DraARLDevModelESP32:
 		return "ESP32"
 	case protocol.DraARLDevModelNSBridge:
-		return "Nanshan Bridge"
+		return "Nanshan Soft Bridge"
 	case protocol.DraARLDevModelHTBridge:
-		return "HT Bridge"
+		return "HT Soft Bridge"
 	case protocol.DraARLDevModelTTBridge:
-		return "Taotao Bridge"
+		return "Taotao Soft Bridge"
+	case protocol.DraARLDevModelNRL2Bridge:
+		return "NRL2 Soft Bridge"
 	default:
 		return fmt.Sprintf("Unknown(%d)", devModel)
 	}

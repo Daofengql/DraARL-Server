@@ -8,6 +8,7 @@ import (
 
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/protocol"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	ws "draarl/pkg/websocket"
@@ -76,13 +77,12 @@ func GetRadioConfig(c *gin.Context) {
 	// 检查 WebSocket 幽灵设备状态
 	isConnected := false
 	groupID := 999 // 默认群组
-	ssid := 10     // 默认 SSID
+	ssid := int(protocol.SSIDGhostWeb)
 
 	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
 	if ok && ghostDevice != nil {
 		isConnected = true
 		groupID = ghostDevice.GroupID
-		ssid = int(ghostDevice.SSID)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -96,61 +96,13 @@ func GetRadioConfig(c *gin.Context) {
 	})
 }
 
-// UpdateRadioSSID 更新 SSID 设置 (API-002)
+// UpdateRadioSSID 已废弃，保留旧路由用于提示 Web 幽灵设备 SSID 固定为 105。
 func UpdateRadioSSID(c *gin.Context) {
-	var req struct {
-		SSID int `json:"ssid" binding:"required,min=0,max=255"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的 SSID"})
-		return
-	}
-
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
-		return
-	}
-
-	// 更新幽灵设备的 SSID
-	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
-	oldSSID := 0
-	if ok && ghostDevice != nil {
-		oldSSID = int(ghostDevice.SSID)
-		ghostDevice.SSID = byte(req.SSID)
-		// 同步更新关联的 WSDevice
-		if ghostDevice.Conn != nil {
-			ghostDevice.Conn.SSID = byte(req.SSID)
-		}
-	}
-
-	username, _ := c.Get("username")
-	operatorName := ""
-	operatorCallSign := ""
-	if usernameStr, ok := username.(string); ok && usernameStr != "" {
-		if user, err := gormdb.NewUserRepository().GetUserByName(usernameStr); err == nil && user != nil {
-			operatorName = user.Name
-			operatorCallSign = user.CallSign
-		} else {
-			operatorName = usernameStr
-		}
-	}
-	oplog.AddLog(
-		fmt.Sprintf("更新在线收发SSID: user_id=%d, ssid=%d->%d", userID, oldSSID, req.SSID),
-		"radio_ssid_update",
-		userID,
-		operatorName,
-		operatorCallSign,
-		c.ClientIP(),
-	)
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "SSID 已更新",
+	c.JSON(http.StatusGone, gin.H{
+		"code":    410,
+		"message": "Web 幽灵设备 SSID 固定为 105，不再支持修改",
 		"data": gin.H{
-			"ssid": req.SSID,
+			"ssid": int(protocol.SSIDGhostWeb),
 		},
 	})
 }
@@ -182,7 +134,7 @@ func GetRadioStatus(c *gin.Context) {
 			GroupID:      ghostDevice.GroupID,
 			OnlineSince:  ghostDevice.Conn.ConnectTime.Format("2006-01-02 15:04:05"),
 			CallSign:     ghostDevice.CallSign,
-			SSID:         int(ghostDevice.SSID),
+			SSID:         int(protocol.SSIDGhostWeb),
 			IsSpeaking:   false, // 语音状态通过 WebSocket 实时推送，API 不再提供
 			VoiceSending: false, // 语音状态通过 WebSocket 实时推送，API 不再提供
 		},

@@ -345,7 +345,7 @@ func (s *Server) setupRoutes() {
 			radio := approved.Group("/radio")
 			{
 				radio.GET("/config", handler.GetRadioConfig)                   // 获取在线收发配置
-				radio.PUT("/ssid", handler.UpdateRadioSSID)                    // 更新 SSID
+				radio.PUT("/ssid", handler.UpdateRadioSSID)                    // 已废弃：Web 幽灵设备 SSID 固定为 105
 				radio.GET("/status", handler.GetRadioStatus)                   // 获取幽灵设备状态
 				radio.GET("/groups/stats", handler.GetRadioGroupStats)         // 获取所有群组实时统计（含 WS 设备）
 				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices) // 获取群组在线设备

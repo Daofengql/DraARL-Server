@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"draarl/internal/gormdb"
@@ -14,6 +15,16 @@ import (
 	"draarl/internal/protocol"
 	"draarl/pkg/geoip"
 )
+
+var deviceRegistrationLocks sync.Map
+
+func lockDeviceRegistration(ownerID int, ssid byte) func() {
+	key := getOwnerSSIDKey(ownerID, ssid)
+	muAny, _ := deviceRegistrationLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // getGroupConnPool 获取群组连接池
 func getGroupConnPool(gp *models.Group) *CurrentConnPool {
@@ -31,6 +42,10 @@ func loadAllDevices() {
 		log.Printf("Load devices from database failed: %v", err)
 		return
 	}
+
+	devOwnerSSIDMap = make(map[string]*models.Device, len(devices))
+	devUsernameSSIDMap = make(map[string]*models.Device, len(devices))
+	devCallsignSSIDMap = make(map[string]*models.Device, len(devices))
 
 	// 批量获取所有用户信息（用于获取呼号）
 	userRepo := gormdb.NewUserRepository()
@@ -65,7 +80,7 @@ func loadAllDevices() {
 			modelDev.GroupID = models.GroupIDPublicMin
 		}
 
-		devCallsignSSIDMap[callsignSSID] = modelDev
+		indexRuntimeDevice(modelDev)
 
 		// 加入群组
 		if gp, ok := publicGroupMap[modelDev.GroupID]; ok {
@@ -86,9 +101,11 @@ func loadAllDevices() {
 // addDevice 添加新设备（如果已存在则从数据库加载）
 func addDevice(dev *models.Device) (*models.Device, error) {
 	repo := gormdb.NewDeviceRepository()
+	unlock := lockDeviceRegistration(dev.OwnerID, dev.SSID)
+	defer unlock()
 
 	// 检查设备是否已存在
-	existingDev, err := repo.GetDeviceByCallSignSSID(dev.CallSign, dev.SSID)
+	existingDev, err := repo.GetDeviceByOwnerSSID(dev.OwnerID, dev.SSID)
 	if err == nil && existingDev != nil {
 		// 设备已存在，转换为 models.Device 并返回
 		modelDev := existingDev.ToModelDevice()
@@ -113,6 +130,21 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 	gormDev.UpdateTime = time.Now()
 
 	if err := repo.CreateDevice(gormDev); err != nil {
+		if errors.Is(err, gormdb.ErrOwnerSSIDConflict) {
+			existingDev, getErr := repo.GetDeviceByOwnerSSID(dev.OwnerID, dev.SSID)
+			if getErr == nil && existingDev != nil {
+				modelDev := existingDev.ToModelDevice()
+				if existingDev.OwnerID > 0 {
+					userRepo := gormdb.NewUserRepository()
+					if owner, ownerErr := userRepo.GetUserByID(existingDev.OwnerID); ownerErr == nil && owner != nil {
+						modelDev.Username = owner.Name
+						modelDev.CallSign = owner.CallSign
+					}
+				}
+				modelDev.CallSignSSID = protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
+				return modelDev, nil
+			}
+		}
 		return nil, fmt.Errorf("add device to database failed: %w", err)
 	}
 
@@ -159,10 +191,11 @@ func getDevice(callsign string, ssid byte) *models.Device {
 		userRepo := gormdb.NewUserRepository()
 		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
 			dev.Username = owner.Name
+			dev.CallSign = owner.CallSign
 		}
 	}
 
-	devCallsignSSIDMap[callsignSSID] = dev
+	indexRuntimeDevice(dev)
 	return dev
 }
 
@@ -186,20 +219,12 @@ func getDeviceByDMRID(dmrid uint32) *models.Device {
 		}
 	}
 
-	// 使用 owner_id + ssid 构建索引 key
-	key := fmt.Sprintf("%d-%d", dev.OwnerID, dev.SSID)
-
 	// 检查是否已在内存中（使用 owner_id 索引）
-	if existingDev, ok := devUsernameSSIDMap[key]; ok {
+	if existingDev := findDeviceByOwnerSSIDFromMemory(dev.OwnerID, dev.SSID); existingDev != nil {
 		return existingDev
 	}
 
-	// 同时更新 callsign 索引（向后兼容）
-	if dev.CallSign != "" {
-		callsignSSID := protocol.GetCallSignSSID(dev.CallSign, uint8(dev.SSID))
-		dev.CallSignSSID = callsignSSID
-		devCallsignSSIDMap[callsignSSID] = dev
-	}
+	indexRuntimeDevice(dev)
 
 	return dev
 }
@@ -368,6 +393,7 @@ func checkDeviceOnline() {
 							dev.LastDisconnectTime = t
 							dev.ISOnline = false
 							dev.ReconnectCount++
+							removeRuntimeDeviceMAC(dev)
 
 							delete(pool.DevConnMap, addrStr)
 							change = true
@@ -434,6 +460,7 @@ func checkDeviceOnline() {
 								dev.LastDisconnectTime = t
 								dev.ISOnline = false
 								dev.ReconnectCount++
+								removeRuntimeDeviceMAC(dev)
 
 								delete(pool.DevConnMap, addrStr)
 								continue
@@ -643,7 +670,7 @@ func GetDevice(callsign string, ssid byte) *models.Device {
 // 注意：由于呼号字段不唯一，此方法比 GetDevice 更可靠
 func GetDeviceByID(deviceID int) *models.Device {
 	// 先从 username 索引查找
-	for _, d := range devUsernameSSIDMap {
+	for _, d := range devOwnerSSIDMap {
 		if d.ID == deviceID {
 			return d
 		}
@@ -680,7 +707,7 @@ func GetDeviceByID(deviceID int) *models.Device {
 	}
 
 	// 添加到内存缓存
-	devCallsignSSIDMap[callsignSSID] = dev
+	indexRuntimeDevice(dev)
 	log.Printf("[UDP] Device ID:%d loaded from database into memory cache", deviceID)
 
 	return dev
@@ -688,12 +715,12 @@ func GetDeviceByID(deviceID int) *models.Device {
 
 // GetDeviceCount 获取设备总数
 func GetDeviceCount() int {
-	return len(devCallsignSSIDMap)
+	return len(devOwnerSSIDMap)
 }
 
 // GetAllDevices 获取所有设备
 func GetAllDevices() map[string]*models.Device {
-	return devCallsignSSIDMap
+	return devOwnerSSIDMap
 }
 
 // ChangeDeviceGroupByID 通过设备ID更改设备群组（供 API 调用）
@@ -702,7 +729,7 @@ func ChangeDeviceGroupByID(deviceID int, newGroupID int) error {
 	var dev *models.Device
 
 	// 先从 username 索引查找
-	for _, d := range devUsernameSSIDMap {
+	for _, d := range devOwnerSSIDMap {
 		if d.ID == deviceID {
 			dev = d
 			break
@@ -753,7 +780,7 @@ func SyncDeviceCommControlByID(deviceID int, disableSend, disableRecv bool) {
 	}
 
 	// 1) 两套主索引
-	for _, dev := range devUsernameSSIDMap {
+	for _, dev := range devOwnerSSIDMap {
 		apply(dev)
 	}
 	for _, dev := range devCallsignSSIDMap {

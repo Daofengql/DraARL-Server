@@ -40,35 +40,43 @@ func getDeviceKey(username string, ssid byte) string {
 	return fmt.Sprintf("%s-%d", username, ssid)
 }
 
-// Register 注册 UDP 幽灵设备
-// 如果已存在同 key 设备，会被新设备替换（实现单端登录踢旧设备）
-// 返回被踢掉的旧设备（如果有）
+// Register 注册或刷新 UDP 幽灵设备。
+// 当前策略是不再踢旧设备；调用方在入参前负责完成冲突判断。
 func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
 	key := getDeviceKey(device.Username, device.SSID)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var oldDevice *models.Device
-	// 1. 处理旧设备（踢下线逻辑）
 	if existing, exists := m.devices[key]; exists {
-		oldDevice = existing
-		// 从旧的群组二级索引中移除
-		if groupMap, ok := m.groupDevices[existing.GroupID]; ok {
-			delete(groupMap, key)
-			// 如果群组为空，清理 map 防止内存泄漏
-			if len(groupMap) == 0 {
-				delete(m.groupDevices, existing.GroupID)
+		oldGroupID := existing.GroupID
+		if oldGroupID != device.GroupID {
+			if groupMap, ok := m.groupDevices[oldGroupID]; ok {
+				delete(groupMap, key)
+				if len(groupMap) == 0 {
+					delete(m.groupDevices, oldGroupID)
+				}
 			}
 		}
-		log.Printf("[UDP-GHOST] 踢掉旧设备: %s (用户: %s, SSID: %d)",
-			key, device.Username, device.SSID)
+
+		existing.Username = device.Username
+		existing.CallSign = device.CallSign
+		existing.OwnerID = device.OwnerID
+		existing.SSID = device.SSID
+		existing.CallSignSSID = device.CallSignSSID
+		existing.DevModel = device.DevModel
+		existing.GroupID = device.GroupID
+		existing.Priority = device.Priority
+		existing.Status = device.Status
+		existing.ISOnline = device.ISOnline
+		existing.UDPAddr = device.UDPAddr
+		existing.LastPacketTime = device.LastPacketTime
+		existing.OnlineTime = device.OnlineTime
+		device = existing
+	} else {
+		m.devices[key] = device
 	}
 
-	// 2. 更新主索引
-	m.devices[key] = device
-
-	// 3. 更新群组二级索引
 	if m.groupDevices[device.GroupID] == nil {
 		m.groupDevices[device.GroupID] = make(map[string]*models.Device)
 	}
@@ -77,7 +85,7 @@ func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
 	log.Printf("[UDP-GHOST] 设备注册: %s (用户: %s, 呼号: %s, 群组: %d)",
 		key, device.Username, device.CallSign, device.GroupID)
 
-	return oldDevice
+	return device
 }
 
 // Get 获取指定的 UDP 幽灵设备
@@ -330,4 +338,29 @@ func (m *UDPGhostManager) GetStats() (total int, online int) {
 		}
 	}
 	return
+}
+
+// UpdateUserCallSign 在管理员审批通过后同步在线 UDP 幽灵设备的呼号。
+func (m *UDPGhostManager) UpdateUserCallSign(ownerID int, username, newCallSign string) {
+	if ownerID <= 0 && username == "" {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, dev := range m.devices {
+		if dev == nil {
+			continue
+		}
+		if ownerID > 0 && dev.OwnerID == ownerID {
+			dev.CallSign = newCallSign
+			dev.CallSignSSID = protocol.GetCallSignSSID(newCallSign, dev.SSID)
+			continue
+		}
+		if ownerID <= 0 && username != "" && dev.Username == username {
+			dev.CallSign = newCallSign
+			dev.CallSignSSID = protocol.GetCallSignSSID(newCallSign, dev.SSID)
+		}
+	}
 }

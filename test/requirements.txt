@@ -3,6 +3,9 @@
 # WebSocket 客户端
 websocket-client>=1.6.0
 
+# HTTP API 调用
+requests>=2.31.0
+
 # 音频处理
 pyaudio>=0.2.13
 opuslib>=3.0.0

@@ -43,17 +43,28 @@ class JWTAuthStatus:
     USER_DISABLED = 3        # 用户已禁用
     USER_NOT_APPROVED = 4    # 用户未审核
     INVALID_DEV_MODEL = 5    # 无效的设备型号
+    GHOST_DEVICE_CONFLICT = 6  # 同平台已有在线幽灵设备
+
+
+class HeartbeatStatus:
+    SUCCESS = 0
+    DEVICE_CONFLICT_ONLINE = 1
+    RESERVED_SSID = 2
+    AUTH_FAILED = 3
 
 # SSID 范围
 class SSIDRange:
     NORMAL1_MIN = 1
     NORMAL1_MAX = 99
     NORMAL2_MIN = 106
-    NORMAL2_MAX = 235
+    NORMAL2_MAX = 254
     GHOST_MIN = 100
     GHOST_MAX = 105
-    INTERCONNECT_MIN = 236
+    INTERCONNECT_MIN = 255
     INTERCONNECT_MAX = 255
+
+
+HEARTBEAT_GPS_PAYLOAD_SIZE = 24
 
 
 class DraARLv1Packet:
@@ -225,6 +236,30 @@ def get_ghost_ssid(dev_model: int) -> int:
     if is_ghost_dev_model_or_web(dev_model):
         return dev_model
     return 0
+
+
+def normalize_mac(mac: str) -> str:
+    """规范化 MAC 文本；非法输入返回空字符串。"""
+    mac = (mac or "").strip().upper()
+    if len(mac) != 17:
+        return ""
+    for i, ch in enumerate(mac):
+        if i % 3 == 2:
+            if ch != ":":
+                return ""
+            continue
+        if ch not in "0123456789ABCDEF":
+            return ""
+    return mac
+
+
+def build_heartbeat_payload(lat: float, lon: float, alt: float, mac: str = "") -> bytes:
+    """构建心跳 DATA：前 24 字节 GPS，可选追加 MAC 文本。"""
+    payload = struct.pack('>ddd', lat, lon, alt)
+    normalized = normalize_mac(mac)
+    if normalized:
+        payload += normalized.encode('ascii')
+    return payload
 
 
 def get_dev_model_name(dev_model: int) -> str:

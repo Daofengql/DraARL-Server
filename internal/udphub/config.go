@@ -105,6 +105,60 @@ var managedConfigKeys = []string{
 	"timestamp",
 }
 
+const deviceConfigProfileSA818 = "sa818-radio-v1"
+
+var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
+	deviceConfigProfileSA818: {
+		"rx_freq":                      {},
+		"tx_freq":                      {},
+		"rx_ctcss":                     {},
+		"tx_ctcss":                     {},
+		ConfigKeyRxToneMode:            {},
+		ConfigKeyRxToneValue:           {},
+		ConfigKeyTxToneMode:            {},
+		ConfigKeyTxToneValue:           {},
+		"sql_level":                    {},
+		"power_level":                  {},
+		"tx_bandwidth":                 {},
+		ConfigKeyRFGuardEnabled:        {},
+		ConfigKeyRFGuardSingleTxLimitS: {},
+		ConfigKeyRFGuardWindowS:        {},
+		ConfigKeyRFGuardMaxTxInWindowS: {},
+	},
+}
+
+func resolveDeviceConfigProfile(dev *models.Device) string {
+	if dev == nil {
+		return ""
+	}
+	if dev.DevModel == protocol.DraARLDevModelESP32Radio {
+		return deviceConfigProfileSA818
+	}
+	return ""
+}
+
+func filterConfigsForDevice(dev *models.Device, configs map[string]string) map[string]string {
+	configs = filterSendableConfigs(NormalizeDeviceConfigs(configs))
+	if len(configs) == 0 {
+		return configs
+	}
+
+	profile := resolveDeviceConfigProfile(dev)
+	allowedKeys, ok := deviceConfigProfileAllowedKeys[profile]
+	if !ok {
+		return map[string]string{}
+	}
+
+	filtered := make(map[string]string, len(configs))
+	for key, value := range configs {
+		if _, allowed := allowedKeys[key]; !allowed {
+			continue
+		}
+		filtered[key] = value
+	}
+	return filtered
+}
+
 // TLV 长度定义
 var tlvLengthMap = map[byte]int{
 	TLVTypeRxFreq:                8,
@@ -450,7 +504,7 @@ func sendConfigToDevice(dev *models.Device, configs map[string]string) error {
 		return fmt.Errorf("device not ready")
 	}
 
-	configs = filterSendableConfigs(NormalizeDeviceConfigs(configs))
+	configs = filterConfigsForDevice(dev, configs)
 	if len(configs) == 0 {
 		return nil // 无配置需要下发
 	}
@@ -560,8 +614,8 @@ func SyncDeviceConfig(dev *models.Device) {
 		}
 		configs = buildConfigSnapshotForOverwrite(configs)
 
-		// 过滤掉 timestamp，只下发设备参数
-		paramConfigs := filterSendableConfigs(configs)
+		// 按设备能力过滤，只下发当前设备支持的参数
+		paramConfigs := filterConfigsForDevice(dev, configs)
 
 		if len(paramConfigs) > 0 {
 			if err := sendConfigToDevice(dev, paramConfigs); err != nil {
@@ -654,7 +708,7 @@ func SaveDeviceConfigsToDB(deviceID int, configs map[string]string) error {
 	// 如果设备在线，下发配置
 	dev := GetDeviceByID(deviceID)
 	if dev != nil && dev.ISOnline && dev.UDPAddr != nil {
-		if err := sendConfigToDevice(dev, filterSendableConfigs(configs)); err != nil {
+		if err := sendConfigToDevice(dev, configs); err != nil {
 			log.Printf("[CONFIG] 下发配置到在线设备失败: %v", err)
 			// 不返回错误，因为数据库已保存成功
 		}

@@ -15,7 +15,7 @@ import (
 func TestSubmitDeviceConfigRejectsInvalidSSIDRanges(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	testCases := []int{0, 100, 105, 236, 255}
+	testCases := []int{0, 100, 101, 102, 103, 104, 105, 255}
 	for _, ssid := range testCases {
 		t.Run(strconv.Itoa(ssid), func(t *testing.T) {
 			body, _ := json.Marshal(map[string]any{
@@ -33,7 +33,7 @@ func TestSubmitDeviceConfigRejectsInvalidSSIDRanges(t *testing.T) {
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("expected status 400, got %d", recorder.Code)
 			}
-			if !bytes.Contains(recorder.Body.Bytes(), []byte("1-99")) || !bytes.Contains(recorder.Body.Bytes(), []byte("106-235")) {
+			if !bytes.Contains(recorder.Body.Bytes(), []byte("1-99")) || !bytes.Contains(recorder.Body.Bytes(), []byte("106-254")) {
 				t.Fatalf("expected SSID range error message, got %s", recorder.Body.String())
 			}
 		})
@@ -43,7 +43,7 @@ func TestSubmitDeviceConfigRejectsInvalidSSIDRanges(t *testing.T) {
 func TestSubmitDeviceConfigAcceptsDualNormalSSIDRangesBeforeMACValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	testCases := []int{1, 99, 106, 235}
+	testCases := []int{1, 99, 106, 254}
 	for _, ssid := range testCases {
 		t.Run(strconv.Itoa(ssid), func(t *testing.T) {
 			body, _ := json.Marshal(map[string]any{
@@ -75,7 +75,7 @@ func TestBuildAvailableDynamicBindSSIDsFiltersUsedAndKeepsAscendingOrder(t *test
 		99:  {},
 		106: {},
 		110: {},
-		235: {},
+		254: {},
 	}
 
 	got := buildAvailableDynamicBindSSIDs(used)
@@ -92,7 +92,7 @@ func TestBuildAvailableDynamicBindSSIDsFiltersUsedAndKeepsAscendingOrder(t *test
 		if _, exists := used[ssid]; exists {
 			t.Fatalf("unexpected used ssid in available list: %d", ssid)
 		}
-		if ssid == 100 || ssid == 105 || ssid == 236 {
+		if ssid == 100 || ssid == 105 || ssid == 255 {
 			t.Fatalf("unexpected reserved ssid in available list: %d", ssid)
 		}
 	}

@@ -27,7 +27,8 @@ from protocol import (
     PacketType, DevModel, encode_packet, DraARLv1Packet,
     parse_merged_opus_frames, build_merged_opus_frames,
     ConfigType, TLVType, KEY_TO_TLV_TYPE, encode_tlv, decode_tlv,
-    build_config_set_packet, build_config_query_packet, parse_config_packet
+    HeartbeatStatus, build_config_set_packet, build_config_query_packet,
+    build_heartbeat_payload, normalize_mac, parse_config_packet
 )
 
 
@@ -44,6 +45,7 @@ class SerialClient(BaseClient):
         username: str = "",
         device_password: str = "",
         ssid: int = 1,
+        mac: str = "",
         dmrid: int = 0,
         dev_model: int = DevModel.WINDOWS,
         log_callback: Optional[Callable[[str], None]] = None,
@@ -56,9 +58,11 @@ class SerialClient(BaseClient):
         self.username = username
         self.device_password = device_password
         self.ssid = ssid
+        self.mac = normalize_mac(mac)
         self.dmrid = dmrid
         self.dev_model = dev_model
         self.enable_audio = enable_audio and PYAUDIO_AVAILABLE and OPUS_AVAILABLE
+        self.last_heartbeat_status = HeartbeatStatus.SUCCESS
 
         # 调试日志
         self.log(f"[调试] pyaudio可用: {PYAUDIO_AVAILABLE}, opuslib可用: {OPUS_AVAILABLE}")
@@ -182,9 +186,11 @@ class SerialClient(BaseClient):
             self._send_heartbeat()
 
             # 等待认证结果
-            time.sleep(0.5)
+            start_time = time.time()
+            while self.running and not self.authenticated and self.state != ClientState.ERROR and time.time() - start_time < 5:
+                time.sleep(0.1)
 
-            return True
+            return self.authenticated
 
         except Exception as e:
             self.log(f"[连接错误] {e}")
@@ -227,8 +233,8 @@ class SerialClient(BaseClient):
         if not self.serial_conn or not self.serial_conn.is_open:
             return
 
-        # GPS 数据 (24 字节)
-        gps_data = struct.pack('>ddd', self.gps_lat, self.gps_lon, self.gps_alt)
+        # 心跳 DATA：前 24 字节 GPS，可选追加 MAC 文本
+        gps_data = build_heartbeat_payload(self.gps_lat, self.gps_lon, self.gps_alt, self.mac)
 
         packet = encode_packet(
             username=self.username,
@@ -331,12 +337,9 @@ class SerialClient(BaseClient):
             if not packet:
                 continue
 
-            # 认证成功
-            if packet.callsign and not self.authenticated:
-                self.callsign = packet.callsign
-                self.authenticated = True
-                self._set_state(ClientState.CONNECTED)
-                self.log(f"[认证成功] 呼号: {packet.callsign}")
+            if self._handle_heartbeat_packet(packet):
+                last_sender = None
+                continue
 
             # 语音数据
             if packet.packet_type == PacketType.OPUS_16K and packet.data:
@@ -370,6 +373,40 @@ class SerialClient(BaseClient):
             # Config 配置包
             elif packet.packet_type == PacketType.CONFIG and packet.data:
                 self._handle_config_packet(packet.data)
+
+    def _handle_heartbeat_packet(self, packet: DraARLv1Packet) -> bool:
+        """处理心跳成功/拒绝响应。"""
+        if packet.packet_type != PacketType.HEARTBEAT:
+            return False
+
+        if packet.callsign and not self.authenticated:
+            self.callsign = packet.callsign
+            self.authenticated = True
+            self.last_heartbeat_status = HeartbeatStatus.SUCCESS
+            self._set_state(ClientState.CONNECTED)
+            self.log(f"[认证成功] 呼号: {packet.callsign}")
+            return True
+
+        if not packet.callsign and packet.data:
+            status = packet.data[0]
+            if status in (
+                HeartbeatStatus.DEVICE_CONFLICT_ONLINE,
+                HeartbeatStatus.RESERVED_SSID,
+                HeartbeatStatus.AUTH_FAILED,
+            ):
+                self.last_heartbeat_status = status
+                self.authenticated = False
+                message = packet.data[1:].decode('utf-8', errors='replace') if len(packet.data) > 1 else ""
+                labels = {
+                    HeartbeatStatus.DEVICE_CONFLICT_ONLINE: "同 SSID 设备已在线",
+                    HeartbeatStatus.RESERVED_SSID: "SSID 属于保留段",
+                    HeartbeatStatus.AUTH_FAILED: "设备认证失败",
+                }
+                self.log(f"[心跳拒绝] {labels.get(status, '未知错误')} ({message})")
+                self._set_state(ClientState.ERROR)
+                return True
+
+        return False
 
     def _transmit_loop(self):
         """音频采集和发送循环"""

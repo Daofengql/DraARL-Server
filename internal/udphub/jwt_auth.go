@@ -48,24 +48,6 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		return
 	}
 
-	// ==========================================
-	// 【性能优化】设备重连复用认证态
-	// 如果该幽灵设备已在内存中且在线，避免重复的 JWT 解析和数据库查询
-	// 这在客户端断网重连场景下非常有效
-	// ==========================================
-	ssid := protocol.GetGhostSSID(packet.DevModel)
-	devKey := getDeviceKey(packet.Username, ssid)
-	if existingGhost := GlobalUDPGhostManager.GetDeviceByKey(devKey); existingGhost != nil && existingGhost.ISOnline {
-		// 设备已在线，直接复用认证态
-		log.Printf("[UDP-JWT] 设备重连复用认证态: %s (地址: %v)", devKey, realAddr)
-		// 更新设备的 UDP 地址（可能因为网络切换而改变）
-		existingGhost.UDPAddr = packet.UDPAddr
-		existingGhost.LastPacketTime = time.Now()
-		// 直接发送成功响应
-		sendJWTAuthResponse(packet, conn, true, existingGhost.CallSign, protocol.JWTAuthSuccess, "")
-		return
-	}
-
 	// 2. 验证 Token
 	claims, err := jwt.ParseToken(token)
 	if err != nil {
@@ -106,7 +88,25 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		return
 	}
 
-	// 7. SSID 已在函数开头计算并验证（此处无需重复计算）
+	ssid := protocol.GetGhostSSID(packet.DevModel)
+	if existingGhost := GlobalUDPGhostManager.Get(user.Name, ssid); existingGhost != nil {
+		if existingGhost.ISOnline && isRecentlyActiveDevice(existingGhost) && !sameUDPAddr(existingGhost.UDPAddr, packet.UDPAddr) {
+			log.Printf("[UDP-JWT] 幽灵设备冲突: user=%s dev_model=%d old_addr=%v new_addr=%v",
+				user.Name, packet.DevModel, existingGhost.UDPAddr, packet.UDPAddr)
+			sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthGhostDeviceConflict, "Ghost device already online")
+			return
+		}
+
+		if existingGhost.ISOnline && sameUDPAddr(existingGhost.UDPAddr, packet.UDPAddr) {
+			existingGhost.LastPacketTime = time.Now()
+			existingGhost.CallSign = user.CallSign
+			existingGhost.OwnerID = user.ID
+			existingGhost.CallSignSSID = protocol.GetCallSignSSID(user.CallSign, ssid)
+			sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
+			log.Printf("[UDP-JWT] 设备重连复用认证态: %s (地址: %v)", getDeviceKey(user.Name, ssid), realAddr)
+			return
+		}
+	}
 
 	// 8. 获取用户该平台的群组偏好
 	groupID, err := userRepo.GetUserLastGroupID(user.ID, packet.DevModel)
@@ -141,12 +141,8 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		OnlineTime:     now,
 	}
 
-	// 11. 注册设备（会自动踢掉同 key 的旧设备）
-	oldDevice := GlobalUDPGhostManager.Register(ghostDevice)
-	if oldDevice != nil {
-		log.Printf("[UDP-JWT] 踢掉旧设备: %s-%d (新地址: %v)",
-			user.Name, ssid, realAddr)
-	}
+	// 11. 注册设备（在准入前已完成冲突检查）
+	GlobalUDPGhostManager.Register(ghostDevice)
 
 	// 12. 发送成功响应
 	sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")

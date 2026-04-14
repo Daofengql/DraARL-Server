@@ -78,7 +78,11 @@ func (r *DeviceRepository) ListDevicesByOwnerID(ownerID int) ([]*Device, error) 
 
 // CreateDevice 创建设备
 func (r *DeviceRepository) CreateDevice(device *Device) error {
-	return r.db.Create(device).Error
+	err := r.db.Create(device).Error
+	if IsDuplicateKeyError(err) {
+		return ErrOwnerSSIDConflict
+	}
+	return err
 }
 
 // UpdateDevice 更新设备

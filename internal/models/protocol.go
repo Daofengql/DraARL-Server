@@ -33,10 +33,10 @@ const (
 	DevModelBrowser      byte = 105
 	DevModelLegacyBridge byte = 106
 	DevModelLegacyESP32  byte = 107
-	DevModelNSBridge     byte = 110
-	DevModelHTBridge     byte = 111
-	DevModelTTBridge     byte = 112
-	DevModelNRL2Bridge   byte = 113
+	DevModelNSBridge     byte = 236
+	DevModelTTBridge     byte = 237
+	DevModelHTBridge     byte = 238
+	DevModelNRL2Bridge   byte = 239
 	DevModelServer       byte = 200
 	DevModelBM           byte = 201
 	DevModelNanny        byte = 250
@@ -56,8 +56,8 @@ const (
 	SSIDGhostReservedMin byte = 100
 	SSIDGhostReservedMax byte = 105
 	SSIDNormalMin2       byte = 106
-	SSIDNormalMax2       byte = 235
-	SSIDInterconnectMin  byte = 236
+	SSIDNormalMax2       byte = 254
+	SSIDInterconnectMin  byte = 255
 	SSIDInterconnectMax  byte = 255
 	SSIDHardwareMin           = SSIDNormalMin1
 	SSIDHardwareMax           = SSIDNormalMax2

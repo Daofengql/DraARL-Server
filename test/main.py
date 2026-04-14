@@ -3,11 +3,12 @@ DraARL 调试客户端
 支持 UDP普通设备、UDP JWT 两种连接方式
 """
 
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
-import threading
-import sys
 import os
+import random
+import sys
+import threading
+import tkinter as tk
+from tkinter import messagebox, scrolledtext, ttk
 
 # 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +34,7 @@ class ClientPanel(ttk.LabelFrame):
         self.client = None
         self.is_connected = False
         self.root = parent  # 保存 parent 用于创建子窗口
+        self.bound_dmrid = 0
 
         self._build_ui()
 
@@ -87,6 +89,8 @@ class ClientPanel(ttk.LabelFrame):
         # Config 按钮（UDP 普通设备和串口设备）
         if self.client_type in ("udp_device", "serial_device"):
             ttk.Button(text_frame, text="Config", command=self.show_config).pack(side=tk.LEFT, padx=5)
+        if self.client_type == "udp_device":
+            ttk.Button(text_frame, text="动态绑定", command=self.show_dynamic_bind).pack(side=tk.LEFT, padx=5)
 
         # 群组切换（仅 JWT 客户端）
         if self.client_type == "udp_jwt":
@@ -117,6 +121,11 @@ class ClientPanel(ttk.LabelFrame):
         devmodel_combo = ttk.Combobox(parent, textvariable=self.devmodel_var, width=10,
                                        values=["100", "106", "107"])
         devmodel_combo.grid(row=1, column=3, padx=2)
+
+        ttk.Label(parent, text="MAC:").grid(row=2, column=0, sticky=tk.W)
+        self.mac_var = tk.StringVar(value=self._generate_random_mac())
+        ttk.Entry(parent, textvariable=self.mac_var, width=14).grid(row=2, column=1, padx=2, sticky=tk.W)
+        ttk.Button(parent, text="随机", command=self.refresh_mac).grid(row=2, column=2, padx=(5, 0), sticky=tk.W)
 
     def _build_serial_device_params(self, parent):
         """串口设备参数"""
@@ -151,6 +160,11 @@ class ClientPanel(ttk.LabelFrame):
                                        values=["100", "106", "107"])
         devmodel_combo.grid(row=2, column=3, padx=2)
 
+        ttk.Label(parent, text="MAC:").grid(row=3, column=0, sticky=tk.W)
+        self.mac_var = tk.StringVar(value=self._generate_random_mac())
+        ttk.Entry(parent, textvariable=self.mac_var, width=14).grid(row=3, column=1, padx=2, sticky=tk.W)
+        ttk.Button(parent, text="随机", command=self.refresh_mac).grid(row=3, column=2, padx=(5, 0), sticky=tk.W)
+
     def _build_udp_jwt_params(self, parent):
         """UDP JWT 参数"""
         ttk.Label(parent, text="型号:").grid(row=0, column=0, sticky=tk.W)
@@ -175,6 +189,19 @@ class ClientPanel(ttk.LabelFrame):
         token = generate_jwt(username, ["user"])
         self.token_var.set(token)
         self.log(f"[Token] 已生成: {token[:50]}...")
+
+    def _generate_random_mac(self) -> str:
+        """生成一个本地管理 MAC，便于重复测试动态绑定。"""
+        octets = [0x02, 0xAA, 0xBB]
+        octets.extend(random.randint(0x00, 0xFF) for _ in range(3))
+        return ":".join(f"{value:02X}" for value in octets)
+
+    def refresh_mac(self):
+        """刷新当前面板的模拟 MAC"""
+        if hasattr(self, 'mac_var'):
+            new_mac = self._generate_random_mac()
+            self.mac_var.set(new_mac)
+            self.log(f"[MAC] 已更新为 {new_mac}")
 
     def log(self, message: str):
         """线程安全日志输出"""
@@ -207,6 +234,8 @@ class ClientPanel(ttk.LabelFrame):
                     username=self.username_var.get(),
                     device_password=self.password_var.get(),
                     ssid=int(self.ssid_var.get()),
+                    mac=self.mac_var.get() if hasattr(self, 'mac_var') else "",
+                    dmrid=self.bound_dmrid,
                     dev_model=int(self.devmodel_var.get()),
                     log_callback=self.log,
                     enable_audio=True
@@ -233,6 +262,8 @@ class ClientPanel(ttk.LabelFrame):
                     username=self.username_var.get(),
                     device_password=self.password_var.get(),
                     ssid=int(self.ssid_var.get()),
+                    mac=self.mac_var.get() if hasattr(self, 'mac_var') else "",
+                    dmrid=self.bound_dmrid,
                     dev_model=int(self.devmodel_var.get()),
                     log_callback=self.log,
                     enable_audio=True
@@ -613,6 +644,236 @@ class ClientPanel(ttk.LabelFrame):
 
         config_window.protocol("WM_DELETE_WINDOW", on_close)
 
+    def show_dynamic_bind(self):
+        """显示动态绑定测试窗口"""
+        if self.client_type != "udp_device":
+            return
+
+        bind_window = tk.Toplevel(self.root)
+        bind_window.title(f"动态绑定 - {self.panel_name}")
+        bind_window.geometry("560x520")
+        bind_window.resizable(False, False)
+
+        outer = ttk.Frame(bind_window, padding=10)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        tips = (
+            "流程: 设备预检查 -> 请求动态码 -> 用户登录并绑定 -> 提交SSID -> 设备确认绑定。\n"
+            "完成后会自动回填当前面板的 username / device_password / ssid。"
+        )
+        ttk.Label(outer, text=tips, foreground="gray").pack(anchor=tk.W, pady=(0, 8))
+
+        form = ttk.LabelFrame(outer, text="参数", padding=10)
+        form.pack(fill=tk.X)
+
+        bind_username_var = tk.StringVar(value=self.username_var.get() or "admin")
+        bind_password_var = tk.StringVar(value="")
+        bind_mac_var = tk.StringVar(value=self.mac_var.get() if hasattr(self, 'mac_var') else self._generate_random_mac())
+        bind_device_password_var = tk.StringVar(value=self.password_var.get())
+        bind_ssid_var = tk.StringVar(value=self.ssid_var.get() or "1")
+        bind_code_var = tk.StringVar(value="")
+        recommended_ssid_var = tk.StringVar(value="")
+        available_ssids_var = tk.StringVar(value="")
+
+        ttk.Label(form, text="账号用户名:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(form, textvariable=bind_username_var, width=16).grid(row=0, column=1, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="账号密码:").grid(row=0, column=2, sticky=tk.W, pady=2)
+        ttk.Entry(form, textvariable=bind_password_var, width=16, show="*").grid(row=0, column=3, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="设备MAC:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(form, textvariable=bind_mac_var, width=18).grid(row=1, column=1, sticky=tk.W, padx=4, pady=2)
+        ttk.Button(
+            form,
+            text="随机MAC",
+            command=lambda: bind_mac_var.set(self._generate_random_mac())
+        ).grid(row=1, column=2, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="现设备密码:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(form, textvariable=bind_device_password_var, width=16).grid(row=2, column=1, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="目标SSID:").grid(row=2, column=2, sticky=tk.W, pady=2)
+        ttk.Entry(form, textvariable=bind_ssid_var, width=10).grid(row=2, column=3, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="动态码:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(form, textvariable=bind_code_var, width=16).grid(row=3, column=1, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="推荐SSID:").grid(row=3, column=2, sticky=tk.W, pady=2)
+        ttk.Label(form, textvariable=recommended_ssid_var, foreground="blue").grid(row=3, column=3, sticky=tk.W, padx=4, pady=2)
+
+        ttk.Label(form, text="可用SSID:").grid(row=4, column=0, sticky=tk.NW, pady=2)
+        available_label = ttk.Label(form, textvariable=available_ssids_var, foreground="gray", wraplength=360, justify=tk.LEFT)
+        available_label.grid(row=4, column=1, columnspan=3, sticky=tk.W, padx=4, pady=2)
+
+        log_box = scrolledtext.ScrolledText(
+            outer, width=66, height=16, wrap=tk.WORD,
+            font=("Consolas", 9), state='disabled'
+        )
+        log_box.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        def bind_log(message: str):
+            self.log(message)
+
+            def append():
+                log_box.config(state='normal')
+                log_box.insert(tk.END, message + "\n")
+                log_box.see(tk.END)
+                log_box.config(state='disabled')
+
+            self.app.root.after(0, append)
+
+        def build_http_client() -> HTTPClient:
+            server_ip = self.app.server_ip.get()
+            http_port = self.app.http_port.get()
+            return HTTPClient(f"http://{server_ip}:{http_port}", log_callback=bind_log)
+
+        def parse_target_ssid() -> int | None:
+            raw = bind_ssid_var.get().strip()
+            if not raw:
+                bind_log("[绑定错误] 请输入目标 SSID")
+                return None
+            try:
+                return int(raw)
+            except ValueError:
+                bind_log("[绑定错误] 目标 SSID 必须是数字")
+                return None
+
+        def update_binding_hints(bind_result: dict):
+            data = bind_result.get('data', {}) if isinstance(bind_result, dict) else {}
+            recommended = data.get('recommended_ssid')
+            available = data.get('available_ssids') or []
+            recommended_ssid_var.set("" if recommended is None else str(recommended))
+            available_ssids_var.set(", ".join(str(item) for item in available[:30]))
+            if recommended is not None and not bind_ssid_var.get().strip():
+                bind_ssid_var.set(str(recommended))
+
+        def apply_ready_config(ready_result: dict):
+            data = ready_result.get('data', {}) if isinstance(ready_result, dict) else {}
+            username = data.get('username', '')
+            device_password = data.get('device_password', '')
+            ssid = data.get('ssid')
+            dmr_id = data.get('dmr_id', 0)
+
+            if username:
+                self.username_var.set(username)
+            if device_password:
+                self.password_var.set(device_password)
+                bind_device_password_var.set(device_password)
+            if ssid is not None:
+                self.ssid_var.set(str(ssid))
+                bind_ssid_var.set(str(ssid))
+            if hasattr(self, 'mac_var'):
+                self.mac_var.set(bind_mac_var.get().strip())
+            self.bound_dmrid = dmr_id or 0
+            bind_log(
+                f"[绑定完成] 已回填 username={username}, ssid={ssid}, dmr_id={self.bound_dmrid}"
+            )
+
+        def do_pre_check():
+            http = build_http_client()
+            result = http.device_pre_check(
+                bind_mac_var.get().strip(),
+                bind_username_var.get().strip(),
+                bind_device_password_var.get().strip(),
+            )
+            bind_log(f"[预检查响应] {result}")
+            return result
+
+        def do_request_code():
+            http = build_http_client()
+            result = http.request_device_code(bind_mac_var.get().strip())
+            if result.get('code') == 200:
+                code = result.get('data', {}).get('dynamic_code', '')
+                if code:
+                    bind_code_var.set(code)
+            bind_log(f"[请求动态码响应] {result}")
+            return result
+
+        def do_bind():
+            username = bind_username_var.get().strip()
+            password = bind_password_var.get().strip()
+            code = bind_code_var.get().strip()
+            if not username or not password:
+                bind_log("[绑定错误] 请输入账号用户名和密码")
+                return None
+            if not code:
+                bind_log("[绑定错误] 请先获取动态码")
+                return None
+
+            http = build_http_client()
+            if not http.login(username, password):
+                return None
+
+            result = http.bind_device(code)
+            update_binding_hints(result)
+            bind_log(f"[设备绑定响应] {result}")
+            return result
+
+        def do_submit():
+            username = bind_username_var.get().strip()
+            password = bind_password_var.get().strip()
+            target_ssid = parse_target_ssid()
+            if not username or not password:
+                bind_log("[提交错误] 请输入账号用户名和密码")
+                return None
+            if target_ssid is None:
+                return None
+
+            http = build_http_client()
+            if not http.login(username, password):
+                return None
+
+            result = http.submit_device_config(bind_mac_var.get().strip(), target_ssid)
+            bind_log(f"[提交配置响应] {result}")
+            return result
+
+        def do_confirm(apply_to_panel: bool = False):
+            http = build_http_client()
+            result = http.confirm_device_bind(bind_mac_var.get().strip())
+            bind_log(f"[确认绑定响应] {result}")
+            if apply_to_panel and result.get('code') == 200 and result.get('data', {}).get('status') == 'ready':
+                apply_ready_config(result)
+            return result
+
+        def do_full_bind():
+            pre_check = do_pre_check()
+            if not isinstance(pre_check, dict):
+                return
+
+            status = pre_check.get('data', {}).get('status', '')
+            if status == 'authenticated':
+                bind_log("[流程] 当前参数已经可直接认证，无需动态绑定")
+                return
+
+            code_result = do_request_code()
+            if not isinstance(code_result, dict) or code_result.get('code') != 200:
+                return
+
+            bind_result = do_bind()
+            if not isinstance(bind_result, dict) or bind_result.get('code') != 200:
+                return
+
+            submit_result = do_submit()
+            if not isinstance(submit_result, dict) or submit_result.get('code') != 200:
+                return
+
+            do_confirm(apply_to_panel=True)
+
+        btn_frame = ttk.Frame(outer)
+        btn_frame.pack(fill=tk.X)
+
+        ttk.Button(btn_frame, text="1. 预检查", command=lambda: threading.Thread(target=do_pre_check, daemon=True).start()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="2. 取动态码", command=lambda: threading.Thread(target=do_request_code, daemon=True).start()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="3. 用户绑定", command=lambda: threading.Thread(target=do_bind, daemon=True).start()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="4. 提交配置", command=lambda: threading.Thread(target=do_submit, daemon=True).start()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="5. 设备确认", command=lambda: threading.Thread(target=lambda: do_confirm(apply_to_panel=True), daemon=True).start()).pack(side=tk.LEFT, padx=4)
+
+        bottom_btn_frame = ttk.Frame(outer)
+        bottom_btn_frame.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(bottom_btn_frame, text="一键完整流程", command=lambda: threading.Thread(target=do_full_bind, daemon=True).start()).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bottom_btn_frame, text="同步到面板MAC", command=lambda: self.mac_var.set(bind_mac_var.get().strip())).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bottom_btn_frame, text="关闭", command=bind_window.destroy).pack(side=tk.RIGHT, padx=4)
+
     def stop(self):
         """停止客户端"""
         try:
@@ -680,7 +941,7 @@ class DebugClientApp:
         help_frame = ttk.LabelFrame(self.root, text="说明", padding=(10, 5))
         help_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(help_frame, text="UDP普通设备: SSID 1-99/106-235, 使用设备密码认证 (快捷键: 1 发言)").pack(anchor=tk.W)
+        ttk.Label(help_frame, text="UDP普通设备: SSID 1-99/106-254, 使用设备密码认证，可打开动态绑定助手 (快捷键: 1 发言)").pack(anchor=tk.W)
         ttk.Label(help_frame, text="UDP JWT: DevModel 101-104, SSID=DevModel, 使用Token认证 (快捷键: 2 发言)").pack(anchor=tk.W)
         ttk.Label(help_frame, text="COM7 串口: 通过串口直接发送数据包到4G透传模块, 波特率 921600 (快捷键: 3 发言)").pack(anchor=tk.W)
 

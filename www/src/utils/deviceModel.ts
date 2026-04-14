@@ -29,10 +29,10 @@ const DEVICE_MODEL_DEFINITIONS: DeviceModelOption[] = [
   { value: 105, label: '浏览器客户端', icon: Language, selectable: true },
   { value: 106, label: '互联设备（历史）', icon: SettingsInputAntenna, selectable: false },
   { value: 107, label: 'ESP32 链路台/手咪（历史）', icon: SettingsInputAntenna, selectable: false },
-  { value: 110, label: '南山对讲桥接器', icon: SettingsInputAntenna, selectable: true },
-  { value: 111, label: 'HT 对讲桥接器', icon: SettingsInputAntenna, selectable: true },
-  { value: 112, label: '涛涛对讲桥接器', icon: SettingsInputAntenna, selectable: true },
-  { value: 113, label: 'NRL2 桥接器', icon: SettingsInputAntenna, selectable: true },
+  { value: 236, label: '南山对讲软件桥接器', icon: SettingsInputAntenna, selectable: true },
+  { value: 237, label: '涛涛对讲软件桥接器', icon: SettingsInputAntenna, selectable: true },
+  { value: 238, label: '本视对讲（HT）软件桥接器', icon: SettingsInputAntenna, selectable: true },
+  { value: 239, label: 'NRL2 系统软件桥接器', icon: SettingsInputAntenna, selectable: true },
 ]
 
 export const ALL_DEVICE_MODELS = DEVICE_MODEL_DEFINITIONS
@@ -42,8 +42,9 @@ export type DeviceModelValue = (typeof DEVICE_MODELS)[number]['value']
 const UNKNOWN_MODEL: DeviceModelOption = { value: -1, label: '未知设备', icon: Devices, selectable: false }
 
 export function getDeviceInfo(devModel: number): DeviceModelOption {
-  if (devModel >= 114 && devModel <= 150) {
-    return { value: devModel, label: `互联网桥软件 (${devModel})`, icon: SettingsInputAntenna, selectable: false }
+  const exactModel = ALL_DEVICE_MODELS.find((model) => model.value === devModel)
+  if (exactModel) {
+    return exactModel
   }
   if (devModel >= 3 && devModel <= 99) {
     return { value: devModel, label: `互联产品 (${devModel})`, icon: SettingsInputAntenna, selectable: false }
@@ -51,7 +52,7 @@ export function getDeviceInfo(devModel: number): DeviceModelOption {
   if (devModel >= 151 && devModel <= 255) {
     return { value: devModel, label: `待定型号 (${devModel})`, icon: SettingsInputAntenna, selectable: false }
   }
-  return ALL_DEVICE_MODELS.find((model) => model.value === devModel) || UNKNOWN_MODEL
+  return UNKNOWN_MODEL
 }
 
 export function getDevModelName(devModel: number): string {
@@ -80,7 +81,7 @@ export function isLegacyDeviceModel(devModel: number): boolean {
 }
 
 export function isPlatformOnlyDeviceModel(devModel: number): boolean {
-  return devModel >= 110 && devModel <= 150
+  return devModel >= 236 && devModel <= 239
 }
 
 export function supportsFrequencyConfig(devModel: number): boolean {

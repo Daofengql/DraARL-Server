@@ -304,7 +304,7 @@ func listUserUsedDynamicBindSSIDs(userID int, manager *udphub.PendingDeviceManag
 }
 
 func buildAvailableDynamicBindSSIDs(used map[int]struct{}) []int {
-	available := make([]int, 0, 229)
+	available := make([]int, 0, 248)
 	for ssid := 1; ssid <= 255; ssid++ {
 		if !protocol.IsValidNormalSSID(byte(ssid)) {
 			continue
@@ -451,7 +451,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 	if !isValidDynamicBindSSID(*req.SSID) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "SSID 必须在 1-99 或 106-235 范围内",
+			"message": "SSID 必须在 1-99 或 106-254 范围内",
 		})
 		return
 	}

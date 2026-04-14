@@ -73,15 +73,15 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 	if authResult.Success {
 		// JWT 认证的设备 SSID 和 DevModel 统一为 105（Web 浏览器）
 		// 注意：不同平台客户端（100-104）应通过心跳包更新 DevModel
-		device.SSID = 105
-		device.DevModel = 105
+		device.SSID = fixedWebGhostSSID
+		device.DevModel = protocol.DraARLDevModelBrowser
 		device.GroupID = authResult.GroupID
 		log.Printf("[WS-AUTH] JWT 认证成功: 用户 %d (%s), 群组 %d", authResult.UserID, authResult.CallSign, authResult.GroupID)
 
-		manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
+		manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
 
 		// 同时创建 GhostDevice 并建立与 WSDevice 的关联
-		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, 105)
+		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
 
 		return device, authResult
 	}

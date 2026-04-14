@@ -187,6 +187,7 @@ class UDPJWTClient(BaseClient):
                 JWTAuthStatus.USER_DISABLED: "用户已禁用",
                 JWTAuthStatus.USER_NOT_APPROVED: "用户未审核",
                 JWTAuthStatus.INVALID_DEV_MODEL: "无效的设备型号",
+                JWTAuthStatus.GHOST_DEVICE_CONFLICT: "同平台已有在线幽灵设备",
             }
             error_msg = error_msgs.get(status, "未知错误")
             extra_msg = packet.data[1:].decode('utf-8', errors='replace') if len(packet.data) > 1 else ""

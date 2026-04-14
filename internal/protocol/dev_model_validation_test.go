@@ -7,8 +7,9 @@ func TestIsValidClientReportedDevModel(t *testing.T) {
 		0, 1, 2, 99,
 		100, 101, 104, 105,
 		106, 107,
-		110, 150,
-		151, 200, 255,
+		151, 200, 235,
+		236, 237, 238, 239,
+		255,
 	}
 	for _, model := range validCases {
 		if !IsValidClientReportedDevModel(model) {
@@ -18,6 +19,7 @@ func TestIsValidClientReportedDevModel(t *testing.T) {
 
 	invalidCases := []byte{
 		108, 109,
+		110, 111, 112, 113, 150,
 	}
 	for _, model := range invalidCases {
 		if IsValidClientReportedDevModel(model) {

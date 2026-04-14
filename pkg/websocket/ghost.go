@@ -18,7 +18,7 @@ type GhostDevice struct {
 	CallSign string // 用户呼号
 	Nickname string // 用户昵称
 	Username string // 用户名
-	SSID     byte   // 设备子号（可配置）
+	SSID     byte   // Web 幽灵设备固定为 105
 
 	// 连接信息
 	Conn           *WSDevice // 关联的 WSDevice
@@ -35,20 +35,22 @@ type GhostDevice struct {
 	Traffic   int64
 }
 
+const fixedWebGhostSSID byte = protocol.SSIDGhostWeb
+
 // GhostDeviceManager 幽灵设备管理器
 type GhostDeviceManager struct {
 	devices map[int]*GhostDevice // key: userID
 	mu      sync.RWMutex
 
-	// 默认 SSID
-	defaultSSID byte
+	// 固定 SSID（Web 幽灵设备始终为 105）
+	fixedSSID byte
 }
 
 // NewGhostDeviceManager 创建幽灵设备管理器
 func NewGhostDeviceManager() *GhostDeviceManager {
 	return &GhostDeviceManager{
-		devices:     make(map[int]*GhostDevice),
-		defaultSSID: 10,
+		devices:   make(map[int]*GhostDevice),
+		fixedSSID: fixedWebGhostSSID,
 	}
 }
 
@@ -56,6 +58,14 @@ func NewGhostDeviceManager() *GhostDeviceManager {
 func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, username, callsign, nickname string, ssid byte) *GhostDevice {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	ssid = m.fixedSSID
+	if wsDevice != nil {
+		wsDevice.SSID = ssid
+		wsDevice.CallSign = callsign
+		wsDevice.Username = username
+		wsDevice.Nickname = nickname
+	}
 
 	// 检查是否已存在
 	if existing, ok := m.devices[userID]; ok {
@@ -66,6 +76,11 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, u
 		existing.CallSign = callsign
 		existing.Nickname = nickname
 		existing.Username = username
+		existing.SSID = ssid
+		if existing.Conn != nil {
+			existing.Conn.CallSign = callsign
+			existing.Conn.SSID = ssid
+		}
 		log.Printf("[GHOST] Updated existing ghost device: user-%d (%s-%d)", userID, callsign, ssid)
 		return existing
 	}
@@ -231,3 +246,19 @@ func IsGhostDevice(id int) bool {
 
 // GlobalGhostManager 全局幽灵设备管理器
 var GlobalGhostManager = NewGhostDeviceManager()
+
+// UpdateUserCallSign 在管理员审批通过后同步在线 Web 幽灵设备的呼号。
+func (m *GhostDeviceManager) UpdateUserCallSign(userID int, newCallSign string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ghost, ok := m.devices[userID]
+	if !ok || ghost == nil {
+		return
+	}
+
+	ghost.CallSign = newCallSign
+	if ghost.Conn != nil {
+		ghost.Conn.CallSign = newCallSign
+	}
+}

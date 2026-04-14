@@ -564,6 +564,8 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
+	ssid = fixedWebGhostSSID
+
 	device.DeviceType = DeviceTypeGhost
 	device.UserID = userID
 	device.Username = username

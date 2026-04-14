@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,10 @@ const DraARLv1HeaderSize = 90
 // 最大包体大小（含头部）
 // 计算：90B 头部 + 3帧×(2B长度+~200B Opus) ≈ 700B，取整 800B
 const DraARLv1MaxPacketSize = 800
+
+const (
+	HeartbeatGPSPayloadSize = 24
+)
 
 // DraARLv1 数据包类型常量
 const (
@@ -45,10 +50,10 @@ const (
 	DraARLDevModelBrowser      byte = 105 // 浏览器客户端
 	DraARLDevModelLegacyBridge byte = 106 // 互联设备（历史型号，仅兼容显示）
 	DraARLDevModelLegacyESP32  byte = 107 // ESP32 链路台/手咪（历史型号，仅兼容显示）
-	DraARLDevModelNSBridge     byte = 110 // 南山对讲桥接器
-	DraARLDevModelHTBridge     byte = 111 // HT 对讲桥接器
-	DraARLDevModelTTBridge     byte = 112 // 涛涛对讲桥接器
-	DraARLDevModelNRL2Bridge   byte = 113 // NRL2 桥接器
+	DraARLDevModelNSBridge     byte = 236 // 南山对讲软件桥接器
+	DraARLDevModelTTBridge     byte = 237 // 涛涛对讲软件桥接器
+	DraARLDevModelHTBridge     byte = 238 // 本视对讲（HT）软件桥接器
+	DraARLDevModelNRL2Bridge   byte = 239 // NRL2 系统软件桥接器
 )
 
 const (
@@ -65,15 +70,15 @@ const (
 	SSIDRangeNormal1Min byte = 1   // 普通设备第一段最小 SSID
 	SSIDRangeNormal1Max byte = 99  // 普通设备第一段最大 SSID
 	SSIDRangeNormal2Min byte = 106 // 普通设备第二段最小 SSID
-	SSIDRangeNormal2Max byte = 235 // 普通设备第二段最大 SSID
+	SSIDRangeNormal2Max byte = 254 // 普通设备第二段最大 SSID
 
 	// 幽灵设备保留 SSID 范围
 	SSIDRangeGhostMin byte = 100 // 幽灵设备保留最小
 	SSIDRangeGhostMax byte = 105 // 幽灵设备保留最大 (含 Web)
 
-	// 服务器互联保留 SSID 范围
-	SSIDRangeInterconnectMin byte = 236 // 服务器互联最小
-	SSIDRangeInterconnectMax byte = 255 // 服务器互联最大
+	// 系统/历史特殊保留 SSID 范围
+	SSIDRangeInterconnectMin byte = 255 // 系统/历史特殊保留最小
+	SSIDRangeInterconnectMax byte = 255 // 系统/历史特殊保留最大
 
 	// 幽灵设备 SSID（等于 DevModel）
 	SSIDGhostAndroid byte = 101 // Android App
@@ -85,12 +90,21 @@ const (
 
 // JWT 认证响应状态码
 const (
-	JWTAuthSuccess         byte = 0 // 认证成功
-	JWTAuthInvalidToken    byte = 1 // Token 无效或过期
-	JWTAuthUserNotFound    byte = 2 // 用户不存在
-	JWTAuthUserDisabled    byte = 3 // 用户已禁用
-	JWTAuthUserNotApproved byte = 4 // 用户未审核
-	JWTAuthInvalidDevModel byte = 5 // 无效的设备型号 (非 101-104)
+	JWTAuthSuccess             byte = 0 // 认证成功
+	JWTAuthInvalidToken        byte = 1 // Token 无效或过期
+	JWTAuthUserNotFound        byte = 2 // 用户不存在
+	JWTAuthUserDisabled        byte = 3 // 用户已禁用
+	JWTAuthUserNotApproved     byte = 4 // 用户未审核
+	JWTAuthInvalidDevModel     byte = 5 // 无效的设备型号 (非 101-104)
+	JWTAuthGhostDeviceConflict byte = 6 // 同平台已有在线幽灵设备
+)
+
+// Heartbeat 响应状态码
+const (
+	HeartbeatStatusSuccess              byte = 0 // 心跳成功
+	HeartbeatStatusDeviceConflictOnline byte = 1 // 同一 owner_id + ssid 已有在线设备
+	HeartbeatStatusReservedSSID         byte = 2 // 保留 SSID，普通设备不可用
+	HeartbeatStatusAuthFailed           byte = 3 // 认证失败
 )
 
 // DraARLv1Packet DraARLv1协议数据包
@@ -294,6 +308,47 @@ func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
 	return packet
 }
 
+// EncodeHeartbeatRejectResponse 编码心跳拒绝响应包。
+// DATA[0] 为拒绝状态码，后续可附带可读错误信息。
+func EncodeHeartbeatRejectResponse(req *DraARLv1Packet, code byte, message string) []byte {
+	data := []byte{code}
+	if message != "" {
+		data = append(data, []byte(message)...)
+	}
+	return EncodeDraARLv1(req.Username, "", req.SSID, req.Type, req.DevModel, req.DMRID, "", data)
+}
+
+// NormalizeMAC 规范化 MAC 文本为大写冒号格式；非法输入返回空串。
+func NormalizeMAC(mac string) string {
+	mac = strings.ToUpper(strings.TrimSpace(mac))
+	if len(mac) != 17 {
+		return ""
+	}
+	for i := 0; i < len(mac); i++ {
+		if i%3 == 2 {
+			if mac[i] != ':' {
+				return ""
+			}
+			continue
+		}
+		c := mac[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			return ""
+		}
+	}
+	return mac
+}
+
+// ExtractHeartbeatMAC 从心跳 DATA 中提取可选 MAC。
+// 约定：前 24 字节仍为 GPS，剩余内容如果是合法 MAC 文本则返回。
+func ExtractHeartbeatMAC(data []byte) string {
+	if len(data) <= HeartbeatGPSPayloadSize {
+		return ""
+	}
+	raw := strings.TrimSpace(string(bytes.Trim(data[HeartbeatGPSPayloadSize:], "\x00")))
+	return NormalizeMAC(raw)
+}
+
 // EncodeServerVoice 编码服务器互联语音包
 func EncodeServerVoice(username, callsign string, ssid, devModel byte, dmrid uint32,
 	originalUsername, originalCallsign string, originalIP net.IP, voiceData []byte) []byte {
@@ -407,9 +462,9 @@ func IsGhostDevModel(devModel byte) bool {
 }
 
 // IsGhostDevModelOrWeb 判断是否为幽灵设备型号（包括 Web）
-// 用于 JWT 认证的所有幽灵设备: 101-105
+// 预留的幽灵设备段: 100-105
 func IsGhostDevModelOrWeb(devModel byte) bool {
-	return devModel >= DraARLDevModelAndroid && devModel <= DraARLDevModelBrowser
+	return devModel >= DraARLDevModelWeChatMini && devModel <= DraARLDevModelBrowser
 }
 
 // GetGhostSSID 获取幽灵设备的 SSID (等于 DevModel)
@@ -426,7 +481,7 @@ func GetGhostSSID(devModel byte) byte {
 // ==========================================
 
 // IsValidNormalSSID 检查是否为有效的普通设备 SSID
-// 普通设备可用: 1-99 或 106-235
+// 普通设备可用: 1-99 或 106-254
 func IsValidNormalSSID(ssid byte) bool {
 	return (ssid >= SSIDRangeNormal1Min && ssid <= SSIDRangeNormal1Max) ||
 		(ssid >= SSIDRangeNormal2Min && ssid <= SSIDRangeNormal2Max)
@@ -437,13 +492,14 @@ func IsGhostSSID(ssid byte) bool {
 	return ssid >= SSIDRangeGhostMin && ssid <= SSIDRangeGhostMax
 }
 
-// IsInterconnectSSID 检查是否为服务器互联保留 SSID (236-255)
+// IsInterconnectSSID 检查是否为系统/历史特殊保留 SSID。
+// 兼容旧命名，当前仅 255 属于该范围。
 func IsInterconnectSSID(ssid byte) bool {
 	return ssid >= SSIDRangeInterconnectMin && ssid <= SSIDRangeInterconnectMax
 }
 
 // IsReservedSSID 检查是否为保留 SSID (用户不可分配)
-// 保留范围: 100-105 (幽灵设备) 和 236-255 (服务器互联)
+// 保留范围: 100-105 (幽灵设备) 和 255 (系统/历史特殊保留)
 func IsReservedSSID(ssid byte) bool {
 	return IsGhostSSID(ssid) || IsInterconnectSSID(ssid)
 }
@@ -458,9 +514,9 @@ func IsGhostReservedDevModel(devModel byte) bool {
 	return devModel >= DraARLDevModelWeChatMini && devModel <= DraARLDevModelBrowser
 }
 
-// IsBridgeSoftwareDevModel 判断是否属于互联网桥软件段（110-150）
+// IsBridgeSoftwareDevModel 判断是否属于互联网桥软件正式型号段（236-239）
 func IsBridgeSoftwareDevModel(devModel byte) bool {
-	return devModel >= 110 && devModel <= 150
+	return devModel >= DraARLDevModelNSBridge && devModel <= DraARLDevModelNRL2Bridge
 }
 
 // IsValidClientReportedDevModel 判断客户端上报的设备型号是否在协议允许范围内。
@@ -468,9 +524,8 @@ func IsBridgeSoftwareDevModel(devModel byte) bool {
 // 1) 0-99 互联产品段
 // 2) 100-105 幽灵/保留段
 // 3) 106/107 历史兼容型号
-// 4) 110-150 互联网桥软件段
-// 5) 151-255 待定段
-// 6) 108-109 视为无效保留空洞
+// 4) 151-255 待定/扩展段，其中 236-239 为当前正式互联网桥软件型号
+// 5) 108-150 视为当前无效保留段（不再兼容 110-113）
 func IsValidClientReportedDevModel(devModel byte) bool {
 	if IsInterconnectProductDevModel(devModel) || IsGhostReservedDevModel(devModel) || IsBridgeSoftwareDevModel(devModel) {
 		return true
@@ -512,13 +567,13 @@ func GetDevModelName(devModel byte) string {
 	case DraARLDevModelLegacyESP32:
 		return "ESP32 Link Device (Legacy)"
 	case DraARLDevModelNSBridge:
-		return "Nanshan Bridge"
+		return "Nanshan Soft Bridge"
 	case DraARLDevModelHTBridge:
-		return "HT Bridge"
+		return "HT Soft Bridge"
 	case DraARLDevModelTTBridge:
-		return "Taotao Bridge"
+		return "Taotao Soft Bridge"
 	case DraARLDevModelNRL2Bridge:
-		return "NRL2 Bridge"
+		return "NRL2 Soft Bridge"
 	default:
 		return fmt.Sprintf("Unknown(%d)", devModel)
 	}

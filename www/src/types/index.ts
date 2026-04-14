@@ -254,6 +254,7 @@ export interface MenuItem {
 // 操作证相关类型
 export interface OperatorCertificate {
   id: number
+  callsign?: string
   file_name: string
   file_size: number
   file_type: string
@@ -272,6 +273,7 @@ export interface CertificateResponse {
 // 操作证上传响应
 export interface OperatorCertificateUpload {
   id: number
+  callsign?: string
   file_name: string
   file_size: number
   upload_time: string

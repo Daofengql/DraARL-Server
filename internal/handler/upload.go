@@ -11,8 +11,10 @@ import (
 	"draarl/internal/config"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	"draarl/pkg/minio"
+	ws "draarl/pkg/websocket"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,6 +26,16 @@ type UploadResponse struct {
 	MinioPath    string `json:"minio_path"`
 	FileURL      string `json:"file_url"`
 	ThumbnailURL string `json:"thumbnail_url,omitempty"` // 缩略图URL
+}
+
+func hasMeaningfulCallSignChange(current, submitted string) bool {
+	current = gormdb.NormalizeCallSign(current)
+	submitted = gormdb.NormalizeCallSign(submitted)
+	return submitted != "" && submitted != current
+}
+
+func shouldRejectOperatorCertSubmission(hasNewFile bool, current, submitted string) bool {
+	return !hasNewFile && !hasMeaningfulCallSignChange(current, submitted)
 }
 
 // UploadFile 通用文件上传接口
@@ -194,15 +206,34 @@ func UploadOperatorCertificate(c *gin.Context) {
 		return
 	}
 
-	callsign := c.PostForm("callsign")
+	userRepo := gormdb.NewUserRepository()
+	callsign := gormdb.NormalizeCallSign(c.PostForm("callsign"))
 	fileHeader, err := c.FormFile("file")
 	hasNewFile := err == nil
-	oldCallSign := user.CallSign
-	callSignChanged := callsign != "" && callsign != oldCallSign
-	callSignUpdated := false
+	oldCallSign := gormdb.NormalizeCallSign(user.CallSign)
+	callSignChanged := hasMeaningfulCallSignChange(oldCallSign, callsign)
 
-	// 修复逻辑1：如果既没有传文件，也没有改呼号，才驳回
-	if err != nil && (callsign == "" || callsign == user.CallSign) {
+	if callSignChanged {
+		available, err := userRepo.IsCallSignAvailable(callsign, user.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "校验呼号失败",
+			})
+			return
+		}
+		if !available {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
+	}
+
+	// 修复逻辑1：如果既没有传文件，也没有改呼号，才驳回。
+	// 这里统一使用标准化后的 oldCallSign，避免仅大小写差异时被误判为“有改动”。
+	if shouldRejectOperatorCertSubmission(hasNewFile, oldCallSign, callsign) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请上传操作证图片或输入新呼号",
@@ -281,18 +312,9 @@ func UploadOperatorCertificate(c *gin.Context) {
 		}
 	}
 
-	// 修复逻辑3：仅更新用户表的呼号字段，绝对不重置 UserApproval 状态
-	if callsign != "" && callsign != user.CallSign {
-		userRepo := gormdb.NewUserRepository()
-		if err := userRepo.UpdateUserCallSign(user.ID, callsign); err != nil {
-			log.Printf("更新用户呼号失败: %v", err)
-		} else {
-			callSignUpdated = true
-			// 更新呼号成功后，使用户缓存失效
-			if userCache := cache.GetUserCache(); userCache != nil {
-				_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
-			}
-		}
+	requestedCallSign := oldCallSign
+	if callSignChanged {
+		requestedCallSign = callsign
 	}
 
 	// 写入或更新操作证待审核记录
@@ -304,7 +326,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	var cert *gormdb.OperatorCert
 	if pendingCert != nil {
-		cert, err = certRepo.UpdatePendingCert(pendingCert.ID, fileName, bucket, objectName, fileSize, contentType)
+		cert, err = certRepo.UpdatePendingCert(pendingCert.ID, requestedCallSign, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
 			// 发生错误时，如果本次传了新文件，清理掉
 			if fileHeader != nil {
@@ -321,7 +343,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 			minio.DeleteFile(c.Request.Context(), oldPendingMinioPath)
 		}
 	} else {
-		cert, err = certRepo.CreatePendingCert(user.ID, fileName, bucket, objectName, fileSize, contentType)
+		cert, err = certRepo.CreatePendingCert(user.ID, requestedCallSign, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
 			if fileHeader != nil {
 				minio.DeleteFile(c.Request.Context(), objectName)
@@ -349,10 +371,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 	if !hasNewFile {
 		fileSource = "复用已有文件"
 	}
-	finalCallSign := oldCallSign
-	if callSignChanged && callSignUpdated {
-		finalCallSign = callsign
-	}
+	finalCallSign := requestedCallSign
 	oplog.AddLog(
 		fmt.Sprintf("提交操作证审核: cert_id=%d, mode=%s, file_source=%s, callsign_changed=%t, old_callsign=%s, new_callsign=%s, file_name=%s",
 			cert.ID, submitMode, fileSource, callSignChanged, oldCallSign, finalCallSign, cert.FileName),
@@ -368,6 +387,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		"message": "操作证信息已提交，请等待管理员审核",
 		"data": gin.H{
 			"id":          cert.ID,
+			"callsign":    cert.CallSign,
 			"file_name":   cert.FileName,
 			"file_size":   cert.FileSize,
 			"upload_time": cert.UploadTime.Format("2006-01-02 15:04:05"),
@@ -437,6 +457,7 @@ func GetOperatorCertificate(c *gin.Context) {
 	if activeCert != nil {
 		response["active_cert"] = gin.H{
 			"id":          activeCert.ID,
+			"callsign":    activeCert.CallSign,
 			"file_name":   activeCert.FileName,
 			"file_size":   activeCert.FileSize,
 			"file_type":   activeCert.FileType,
@@ -450,6 +471,7 @@ func GetOperatorCertificate(c *gin.Context) {
 	if pendingCert != nil {
 		response["pending_cert"] = gin.H{
 			"id":          pendingCert.ID,
+			"callsign":    pendingCert.CallSign,
 			"file_name":   pendingCert.FileName,
 			"file_size":   pendingCert.FileSize,
 			"file_type":   pendingCert.FileType,
@@ -843,6 +865,7 @@ func GetPendingApprovals(c *gin.Context) {
 		for _, cert := range certs {
 			certData := gin.H{
 				"id":          cert.ID,
+				"callsign":    cert.CallSign,
 				"file_name":   cert.FileName,
 				"file_size":   cert.FileSize,
 				"file_type":   cert.FileType,
@@ -871,8 +894,12 @@ func GetPendingApprovals(c *gin.Context) {
 		}
 
 		if targetCert != nil {
+			if targetCert.CallSign != "" {
+				item["callsign"] = targetCert.CallSign
+			}
 			item["cert"] = gin.H{
 				"id":          targetCert.ID,
+				"callsign":    targetCert.CallSign,
 				"file_name":   targetCert.FileName,
 				"file_size":   targetCert.FileSize,
 				"file_type":   targetCert.FileType,
@@ -1128,6 +1155,14 @@ func ApproveOperatorCertificate(c *gin.Context) {
 		return
 	}
 
+	userRepo := gormdb.NewUserRepository()
+	var targetUserName string
+	var oldCallSign string
+	if targetUser, userErr := userRepo.GetUserByID(cert.UserID); userErr == nil && targetUser != nil {
+		targetUserName = targetUser.Name
+		oldCallSign = gormdb.NormalizeCallSign(targetUser.CallSign)
+	}
+
 	// 更新操作证审批状态
 	certRepo := gormdb.NewOperatorCertRepository()
 	if req.Status == 1 {
@@ -1137,6 +1172,13 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	}
 
 	if err != nil {
+		if err == gormdb.ErrCallSignConflict {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
 		log.Printf("更新操作证审批状态失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -1154,11 +1196,22 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	// 审批通过时会同步更新用户表的approval_status字段，需要使用户缓存失效
 	if req.Status == 1 {
 		if userCache := cache.GetUserCache(); userCache != nil {
-			// 获取用户信息以获取用户名
-			userRepo := gormdb.NewUserRepository()
-			if certUser, err := userRepo.GetUserByID(cert.UserID); err == nil && certUser != nil {
-				_ = userCache.InvalidateUser(ctx, cert.UserID, certUser.Name)
-			}
+			_ = userCache.InvalidateUser(ctx, cert.UserID, targetUserName)
+		}
+
+		newCallSign := gormdb.NormalizeCallSign(cert.CallSign)
+		if newCallSign == "" {
+			newCallSign = oldCallSign
+		}
+		if targetUserName != "" && newCallSign != "" && newCallSign != oldCallSign {
+			udphub.SyncUserCallSignChange(cert.UserID, targetUserName, oldCallSign, newCallSign)
+			ws.GlobalGhostManager.UpdateUserCallSign(cert.UserID, newCallSign)
+		}
+
+		if groupCache := cache.GetGroupCache(); groupCache != nil {
+			_ = groupCache.InvalidateGroupList(ctx)
+			_ = groupCache.GetCache().DeletePrefix(ctx, "group:info:")
+			_ = groupCache.GetCache().DeletePrefix(ctx, "group:members:")
 		}
 	}
 
@@ -1170,12 +1223,12 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	log.Printf("管理员 %s 审批操作证 %d: %s", currentUser.Name, certID, statusText)
 
 	// 记录审计日志
-	targetUserName := ""
 	targetCallSign := ""
-	userRepo := gormdb.NewUserRepository()
-	if certUser, userErr := userRepo.GetUserByID(cert.UserID); userErr == nil && certUser != nil {
-		targetUserName = certUser.Name
-		targetCallSign = certUser.CallSign
+	if req.Status == 1 {
+		targetCallSign = gormdb.NormalizeCallSign(cert.CallSign)
+	}
+	if targetCallSign == "" {
+		targetCallSign = oldCallSign
 	}
 	oplog.AddLog(
 		fmt.Sprintf("审批操作证: cert_id=%d, user_id=%d, user=%s, callsign=%s, result=%s, note=%s",

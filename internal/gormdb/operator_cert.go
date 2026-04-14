@@ -1,6 +1,7 @@
 package gormdb
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -76,16 +77,19 @@ func (r *OperatorCertRepository) GetPendingByUserID(userID int) (*OperatorCert, 
 	return &cert, nil
 }
 
-// GetLatestPendingOrRejectedByUserID 获取用户最新的待审核/已拒绝操作证（status IN 0,2）
-// 用于用户页展示当前需要关注的审核状态，避免把已替换的历史证书误当成待处理项。
+// GetLatestPendingOrRejectedByUserID 获取用户“当前最新证书”中的待审核/已拒绝状态。
+// 只有当最新一条操作证本身处于待审核/已拒绝时才返回，避免历史拒绝记录在新证书已通过后继续残留展示。
 func (r *OperatorCertRepository) GetLatestPendingOrRejectedByUserID(userID int) (*OperatorCert, error) {
 	var cert OperatorCert
-	err := r.db.Where("user_id = ? AND status IN ?", userID, []int{0, 2}).Order("id DESC").First(&cert).Error
+	err := r.db.Where("user_id = ?", userID).Order("id DESC").First(&cert).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if cert.Status != 0 && cert.Status != 2 {
+		return nil, nil
 	}
 	return &cert, nil
 }
@@ -112,12 +116,13 @@ func (r *OperatorCertRepository) DeleteByUserID(userID int) error {
 
 // CreatePendingCert 创建待审核操作证
 // 如果用户已有审核通过的操作证，则关联old_cert_id
-func (r *OperatorCertRepository) CreatePendingCert(userID int, fileName, minioBucket, minioPath string, fileSize int64, fileType string) (*OperatorCert, error) {
+func (r *OperatorCertRepository) CreatePendingCert(userID int, callsign, fileName, minioBucket, minioPath string, fileSize int64, fileType string) (*OperatorCert, error) {
 	// 查找当前有效的操作证
 	activeCert, _ := r.GetActiveByUserID(userID)
 
 	cert := &OperatorCert{
 		UserID:      userID,
+		CallSign:    NormalizeCallSign(callsign),
 		FileName:    fileName,
 		MinioBucket: minioBucket,
 		MinioPath:   minioPath,
@@ -139,7 +144,7 @@ func (r *OperatorCertRepository) CreatePendingCert(userID int, fileName, minioBu
 }
 
 // UpdatePendingCert 更新待审核操作证记录（用于重新上传时替换）
-func (r *OperatorCertRepository) UpdatePendingCert(certID int, fileName, minioBucket, minioPath string, fileSize int64, fileType string) (*OperatorCert, error) {
+func (r *OperatorCertRepository) UpdatePendingCert(certID int, callsign, fileName, minioBucket, minioPath string, fileSize int64, fileType string) (*OperatorCert, error) {
 	var cert OperatorCert
 	err := r.db.First(&cert, certID).Error
 	if err != nil {
@@ -151,6 +156,7 @@ func (r *OperatorCertRepository) UpdatePendingCert(certID int, fileName, minioBu
 		return nil, gorm.ErrInvalidData
 	}
 
+	cert.CallSign = NormalizeCallSign(callsign)
 	cert.FileName = fileName
 	cert.MinioBucket = minioBucket
 	cert.MinioPath = minioPath
@@ -178,6 +184,30 @@ func (r *OperatorCertRepository) ApproveCert(certID int, reviewerID int, note st
 			return err
 		}
 
+		var user User
+		if err := tx.First(&user, newCert.UserID).Error; err != nil {
+			return err
+		}
+
+		oldCallSign := NormalizeCallSign(user.CallSign)
+		newCallSign := NormalizeCallSign(newCert.CallSign)
+		if newCallSign == "" {
+			newCallSign = oldCallSign
+		}
+
+		if newCallSign != "" && newCallSign != oldCallSign {
+			available, err := isCallSignAvailable(tx, newCallSign, newCert.UserID)
+			if err != nil {
+				return err
+			}
+			if !available {
+				return ErrCallSignConflict
+			}
+			if err := rewriteGroupAllowCallSignSSID(tx, oldCallSign, newCallSign); err != nil {
+				return err
+			}
+		}
+
 		// 2. 如果该次上传是为了替换旧证书，则将旧证书的状态置为已替换(3)
 		if newCert.OldCertID != nil {
 			if err := tx.Model(&OperatorCert{}).Where("id = ?", *newCert.OldCertID).Update("status", 3).Error; err != nil {
@@ -189,6 +219,7 @@ func (r *OperatorCertRepository) ApproveCert(certID int, reviewerID int, note st
 		now := time.Now()
 		err = tx.Model(&newCert).Updates(map[string]interface{}{
 			"status":      1,
+			"callsign":    newCallSign,
 			"review_note": note,
 			"reviewer_id": reviewerID,
 			"review_time": &now,
@@ -198,12 +229,21 @@ func (r *OperatorCertRepository) ApproveCert(certID int, reviewerID int, note st
 		}
 
 		// 4. 同步更新关联用户的整体审批状态为已通过(1)
-		return tx.Model(&User{}).Where("id = ?", newCert.UserID).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"approval_status": 1,
 			"reviewer_id":     reviewerID,
 			"review_note":     note,
 			"review_time":     &now,
-		}).Error
+		}
+		if newCallSign != "" {
+			updates["callsign"] = newCallSign
+		}
+
+		err = tx.Model(&User{}).Where("id = ?", newCert.UserID).Updates(updates).Error
+		if IsDuplicateColumnError(err, "callsign") {
+			return ErrCallSignConflict
+		}
+		return err
 	})
 }
 
@@ -485,11 +525,13 @@ func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, off
 		u := userMap[cert.UserID]
 		userName := ""
 		nickName := ""
-		callSign := ""
+		callSign := NormalizeCallSign(cert.CallSign)
 		if u != nil {
 			userName = u.Name
 			nickName = u.NickName
-			callSign = u.CallSign
+			if callSign == "" {
+				callSign = u.CallSign
+			}
 		}
 
 		isUpdate := cert.OldCertID != nil
@@ -517,4 +559,50 @@ func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, off
 	}
 
 	return result, total, nil
+}
+
+func rewriteGroupAllowCallSignSSID(tx *gorm.DB, oldCallSign, newCallSign string) error {
+	oldCallSign = NormalizeCallSign(oldCallSign)
+	newCallSign = NormalizeCallSign(newCallSign)
+	if oldCallSign == "" || newCallSign == "" || oldCallSign == newCallSign {
+		return nil
+	}
+
+	var groups []Group
+	if err := tx.Where("allow_callsign_ssid <> ''").Find(&groups).Error; err != nil {
+		return err
+	}
+
+	for _, group := range groups {
+		rewritten, changed := rewriteAllowCallSignSSIDValue(group.AllowCallSignSSID, oldCallSign, newCallSign)
+		if !changed {
+			continue
+		}
+		if err := tx.Model(&Group{}).Where("id = ?", group.ID).Update("allow_callsign_ssid", rewritten).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func rewriteAllowCallSignSSIDValue(raw, oldCallSign, newCallSign string) (string, bool) {
+	if raw == "" {
+		return raw, false
+	}
+
+	oldPrefix := oldCallSign + "-"
+	parts := strings.Split(raw, ",")
+	changed := false
+	for i, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if strings.HasPrefix(trimmed, oldPrefix) {
+			parts[i] = newCallSign + trimmed[len(oldCallSign):]
+			changed = true
+			continue
+		}
+		parts[i] = trimmed
+	}
+
+	return strings.Join(parts, ","), changed
 }

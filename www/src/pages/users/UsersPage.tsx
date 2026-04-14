@@ -114,7 +114,7 @@ export function UsersPage() {
       setEditingUser(user)
       setFormData({
         username: user.username,
-        callsign: user.callsign || '',
+        callsign: '',
         password: '',
         role: user.role,
       })
@@ -141,7 +141,6 @@ export function UsersPage() {
       if (editingUser) {
         const updateData: any = {
           username: formData.username,
-          callsign: formData.callsign,
         }
         // 只有主管理员可以修改角色
         if (isSuperAdmin()) {
@@ -424,12 +423,15 @@ export function UsersPage() {
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
             />
-            <TextField
-              label="呼号（可选）"
-              fullWidth
-              value={formData.callsign}
-              onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
-            />
+            {!editingUser && (
+              <TextField
+                label="呼号（可选）"
+                fullWidth
+                value={formData.callsign}
+                onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
+                helperText="创建后如需改呼号，请走操作证申请并等待管理员审批"
+              />
+            )}
             {/* 只有主管理员可以设置用户角色 */}
             {isSuperAdmin() && (
               <FormControl fullWidth>

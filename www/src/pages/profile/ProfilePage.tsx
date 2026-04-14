@@ -69,6 +69,8 @@ const ApprovalStatusChip = ({ status, reviewNote }: { status?: number; reviewNot
   return <Chip icon={<Pending />} label="待审核" size="small" color="warning" />
 }
 
+const normalizeCallsign = (value?: string | null) => (value || '').trim().toUpperCase()
+
 export function ProfilePage() {
   const [searchParams] = useSearchParams()
   const [user, setUser] = useState<User | null>(null)
@@ -126,7 +128,6 @@ export function ProfilePage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [editForm, setEditForm] = useState({
     nickname: '',
-    callsign: '',
     phone: '',
     address: '',
     introduction: '',
@@ -277,7 +278,6 @@ export function ProfilePage() {
     if (user) {
       setEditForm({
         nickname: user.nickname || '',
-        callsign: user.callsign || '',
         phone: user.phone || '',
         address: user.address || '',
         introduction: user.introduction || '',
@@ -348,7 +348,6 @@ export function ProfilePage() {
     try {
       const updateData: Partial<User> = {
         nickname: editForm.nickname,
-        callsign: editForm.callsign,
         phone: editForm.phone,
         address: editForm.address,
         introduction: editForm.introduction,
@@ -542,7 +541,7 @@ export function ProfilePage() {
     const certToShow = certificate.pending_cert || (certificate.active_cert ? certificate.active_cert : null)
     setUploadPreview(certToShow?.file_url || null)
     // 初始化呼号输入为当前用户的呼号
-    setCertCallsign(user?.callsign || '')
+    setCertCallsign(normalizeCallsign(user?.callsign))
     setUploadDialogOpen(true)
   }
 
@@ -604,8 +603,10 @@ export function ProfilePage() {
   }
 
   const handleUploadCertificate = async () => {
+    const normalizedCurrentCallsign = normalizeCallsign(user?.callsign)
+    const normalizedPendingCallsign = normalizeCallsign(certCallsign)
     // 判断呼号是否发生实质性修改
-    const isCallsignChanged = certCallsign && certCallsign !== user?.callsign
+    const isCallsignChanged = normalizedPendingCallsign !== '' && normalizedPendingCallsign !== normalizedCurrentCallsign
 
     // 如果没选新文件，且呼号也没变，则拦截
     if (!selectedFile && !isCallsignChanged) {
@@ -616,7 +617,7 @@ export function ProfilePage() {
     setUploadingCert(true)
     try {
       // 传递 selectedFile (可能为 undefined) 和 certCallsign 给 service
-      await authService.uploadOperatorCertificate(selectedFile || undefined, certCallsign)
+      await authService.uploadOperatorCertificate(selectedFile || undefined, normalizedPendingCallsign)
 
       // 上传成功后重新加载证书和用户信息
       await Promise.all([loadCertificate(), loadUserInfo()])
@@ -1306,7 +1307,7 @@ export function ProfilePage() {
         <DialogContent>
           <Box sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              上传操作证时可以设置您的呼号。设置呼号后会重置审核状态，需要等待管理员重新审核。
+              上传操作证时可以同步提交新的呼号申请。只有管理员审核通过后，新的呼号才会真正生效。
             </Typography>
             {/* 呼号输入 */}
             <TextField
@@ -1316,7 +1317,7 @@ export function ProfilePage() {
               onChange={(e) => setCertCallsign(e.target.value.toUpperCase())}
               placeholder="例如: BG0ABC"
               sx={{ mb: 2 }}
-              helperText="可选，留空则不修改呼号"
+              helperText="可选，留空则沿用当前呼号；如修改呼号，需等待管理员审批通过后生效"
             />
             <Box
               onDrop={handleDrop}
@@ -1382,7 +1383,7 @@ export function ProfilePage() {
             onClick={handleUploadCertificate}
             variant="contained"
             startIcon={<Upload />}
-            disabled={(!selectedFile && !(certCallsign && certCallsign !== user?.callsign)) || uploadingCert}
+            disabled={(!selectedFile && !(normalizeCallsign(certCallsign) && normalizeCallsign(certCallsign) !== normalizeCallsign(user?.callsign))) || uploadingCert}
           >
             {uploadingCert ? '提交中...' : '提交'}
           </Button>

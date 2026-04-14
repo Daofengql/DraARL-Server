@@ -64,6 +64,11 @@ func (r *UserRepository) GetUserByName(name string) (*User, error) {
 
 // GetUserByCallSign 通过呼号获取用户
 func (r *UserRepository) GetUserByCallSign(callsign string) (*User, error) {
+	callsign = NormalizeCallSign(callsign)
+	if callsign == "" {
+		return nil, nil
+	}
+
 	var user User
 	err := r.db.Where("callsign = ?", callsign).First(&user).Error
 	if err != nil {
@@ -155,12 +160,28 @@ func (r *UserRepository) FindUserBySSOID(provider, ssoID string) (*User, error) 
 
 // CreateUser 创建用户
 func (r *UserRepository) CreateUser(user *User) error {
-	return r.db.Create(user).Error
+	if user != nil {
+		user.CallSign = NormalizeCallSign(user.CallSign)
+	}
+
+	err := r.db.Create(user).Error
+	if IsDuplicateColumnError(err, "callsign") {
+		return ErrCallSignConflict
+	}
+	return err
 }
 
 // UpdateUser 更新用户基本信息
 func (r *UserRepository) UpdateUser(user *User) error {
-	return r.db.Model(user).Updates(user).Error
+	if user != nil {
+		user.CallSign = NormalizeCallSign(user.CallSign)
+	}
+
+	err := r.db.Model(user).Updates(user).Error
+	if IsDuplicateColumnError(err, "callsign") {
+		return ErrCallSignConflict
+	}
+	return err
 }
 
 // UpdateUserOpenID 更新用户OpenID（解决GORM零值不更新问题）
@@ -180,7 +201,37 @@ func (r *UserRepository) UpdateUserAvatar(id int, avatar string) error {
 
 // UpdateUserCallSign 更新用户呼号
 func (r *UserRepository) UpdateUserCallSign(id int, callsign string) error {
-	return r.db.Model(&User{}).Where("id = ?", id).Update("callsign", callsign).Error
+	callsign = NormalizeCallSign(callsign)
+	err := r.db.Model(&User{}).Where("id = ?", id).Update("callsign", callsign).Error
+	if IsDuplicateColumnError(err, "callsign") {
+		return ErrCallSignConflict
+	}
+	return err
+}
+
+// IsCallSignAvailable 检查呼号是否可用。
+func (r *UserRepository) IsCallSignAvailable(callsign string, excludeUserID int) (bool, error) {
+	return isCallSignAvailable(r.db, callsign, excludeUserID)
+}
+
+// UpdateUserCallSignChecked 更新用户呼号并统一执行唯一性校验。
+func (r *UserRepository) UpdateUserCallSignChecked(id int, callsign string) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		available, err := isCallSignAvailable(tx, callsign, id)
+		if err != nil {
+			return err
+		}
+		if !available {
+			return ErrCallSignConflict
+		}
+
+		normalized := NormalizeCallSign(callsign)
+		err = tx.Model(&User{}).Where("id = ?", id).Update("callsign", normalized).Error
+		if IsDuplicateColumnError(err, "callsign") {
+			return ErrCallSignConflict
+		}
+		return err
+	})
 }
 
 // UpdateUserRoles 更新用户角色
@@ -414,6 +465,24 @@ func (r *UserRepository) GetApprovedUserCount() (int64, error) {
 	var count int64
 	err := r.db.Model(&User{}).Where("status = 1 AND approval_status = 1").Count(&count).Error
 	return count, err
+}
+
+func isCallSignAvailable(db *gorm.DB, callsign string, excludeUserID int) (bool, error) {
+	normalized := NormalizeCallSign(callsign)
+	if normalized == "" {
+		return true, nil
+	}
+
+	query := db.Model(&User{}).Where("callsign = ?", normalized)
+	if excludeUserID > 0 {
+		query = query.Where("id <> ?", excludeUserID)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count == 0, nil
 }
 
 // GetUsersByIDs 批量获取用户信息（用于解决 N+1 查询问题）

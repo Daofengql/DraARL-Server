@@ -275,6 +275,7 @@ func Register(c *gin.Context) {
 	}
 
 	repo := gormdb.NewUserRepository()
+	req.CallSign = gormdb.NormalizeCallSign(req.CallSign)
 
 	// 检查用户名是否已存在
 	existing, _ := repo.GetUserByName(req.Username)
@@ -288,8 +289,15 @@ func Register(c *gin.Context) {
 
 	// 检查呼号是否已存在
 	if req.CallSign != "" {
-		existingCallSign, _ := repo.GetUserByCallSign(req.CallSign)
-		if existingCallSign != nil {
+		available, err := repo.IsCallSignAvailable(req.CallSign, 0)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "校验呼号失败",
+			})
+			return
+		}
+		if !available {
 			c.JSON(http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "呼号已被使用",
@@ -390,6 +398,13 @@ func Register(c *gin.Context) {
 	}
 
 	if err := repo.CreateUser(user); err != nil {
+		if err == gormdb.ErrCallSignConflict {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
 		log.Printf("创建用户失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -601,6 +616,7 @@ func CreateUser(c *gin.Context) {
 	}
 
 	repo := gormdb.NewUserRepository()
+	req.CallSign = gormdb.NormalizeCallSign(req.CallSign)
 
 	// 检查用户名是否已存在
 	existing, _ := repo.GetUserByName(req.Username)
@@ -610,6 +626,24 @@ func CreateUser(c *gin.Context) {
 			"message": "用户名已存在",
 		})
 		return
+	}
+
+	if req.CallSign != "" {
+		available, err := repo.IsCallSignAvailable(req.CallSign, 0)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "校验呼号失败",
+			})
+			return
+		}
+		if !available {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
 	}
 
 	// 加密密码
@@ -631,11 +665,19 @@ func CreateUser(c *gin.Context) {
 		Name:     req.Username,
 		Password: string(hashedPassword),
 		NickName: nickname,
+		CallSign: req.CallSign,
 		Status:   1,
 		Roles:    "user", // 默认创建普通用户
 	}
 
 	if err := repo.CreateUser(user); err != nil {
+		if err == gormdb.ErrCallSignConflict {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建用户失败",
@@ -723,6 +765,8 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 
+	oldName := user.Name
+
 	// 只有主管理员（ID=1）可以修改 ID=1 的用户信息
 	if id == 1 && currentUserModel.ID != 1 {
 		c.JSON(http.StatusForbidden, gin.H{
@@ -782,9 +826,6 @@ func UpdateUser(c *gin.Context) {
 	if req.NickName != "" {
 		user.NickName = req.NickName
 	}
-	if req.CallSign != "" {
-		user.CallSign = req.CallSign
-	}
 	if req.Phone != "" {
 		user.Phone = req.Phone
 	}
@@ -802,6 +843,13 @@ func UpdateUser(c *gin.Context) {
 	}
 
 	if err := repo.UpdateUser(user); err != nil {
+		if err == gormdb.ErrCallSignConflict {
+			c.JSON(http.StatusConflict, gin.H{
+				"code":    409,
+				"message": "呼号已被使用",
+			})
+			return
+		}
 		log.Printf("更新用户失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -812,7 +860,10 @@ func UpdateUser(c *gin.Context) {
 
 	// 使用户缓存失效
 	if userCache := cache.GetUserCache(); userCache != nil {
-		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, oldName)
+		if user.Name != oldName {
+			_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
+		}
 	}
 
 	// 获取当前操作用户信息

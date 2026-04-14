@@ -15,7 +15,7 @@ type User struct {
 	Name           string     `gorm:"type:varchar(255);uniqueIndex;column:name" json:"name"`
 	Email          string     `gorm:"type:varchar(255);uniqueIndex;column:email" json:"email"`
 	EmailVerified  bool       `gorm:"type:tinyint(1);default:0;column:email_verified" json:"email_verified"`
-	CallSign       string     `gorm:"type:varchar(32);index;column:callsign" json:"callsign"`
+	CallSign       string     `gorm:"type:varchar(32);uniqueIndex:uk_users_callsign;column:callsign" json:"callsign"`
 	Gird           string     `gorm:"type:varchar(255);column:gird" json:"gird"`
 	Phone          string     `gorm:"type:varchar(32);index;column:phone" json:"phone"`
 	Password       string     `gorm:"type:varchar(255);column:password" json:"-"`
@@ -77,10 +77,10 @@ type Device struct {
 	ID           int       `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name         string    `gorm:"type:varchar(255);column:name" json:"name"`
 	DMRID        int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
-	SSID         uint8     `gorm:"type:tinyint unsigned;index:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
-	OwnerID      int       `gorm:"index:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
-	QTH          string    `gorm:"type:varchar(255);column:qth" json:"qth"`                         // 位置信息 (原 gird 字段)
-	LastOnlineIP string    `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`    // 设备最近一次上线时的客户端 IP
+	SSID         uint8     `gorm:"type:tinyint unsigned;uniqueIndex:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
+	OwnerID      int       `gorm:"uniqueIndex:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
+	QTH          string    `gorm:"type:varchar(255);column:qth" json:"qth"`                               // 位置信息 (原 gird 字段)
+	LastOnlineIP string    `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`          // 设备最近一次上线时的客户端 IP
 	DevModel     int       `gorm:"type:int;column:dev_model" json:"dev_model"`
 	GroupID      int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
 	Status       int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
@@ -467,6 +467,10 @@ func AutoMigrate() error {
 		log.Printf("[Migration Warning] 清理重复用户数据失败: %v", err)
 	}
 
+	// 1.1 在建立唯一索引前巡检呼号重复数据
+	logDuplicateCallSigns(db)
+	logDuplicateOwnerSSIDs(db)
+
 	// 2. 清理各大子表中的"孤儿数据" (Orphaned Records)
 	// 原理：子表的关联 ID 如果在主表 (如 users, public_groups) 中找不到了，就必须被抹除
 	cleanups := []struct {
@@ -527,9 +531,133 @@ func AutoMigrate() error {
 
 	// 阶段三：下线 group_members 历史设备级字段（仅保留成员资格语义）
 	pruneLegacyGroupMemberColumns(db)
+	if err := ensureExpectedUniqueIndexes(db); err != nil {
+		return err
+	}
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 	return nil
+}
+
+func ensureExpectedUniqueIndexes(db *gorm.DB) error {
+	if err := ensureMySQLUniqueIndex(db, "users", "uk_users_callsign", []string{"callsign"}); err != nil {
+		return err
+	}
+	if err := ensureMySQLUniqueIndex(db, "devices", "idx_owner_ssid", []string{"owner_id", "ssid"}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureMySQLUniqueIndex(db *gorm.DB, tableName, indexName string, columns []string) error {
+	currentDB := ""
+	if err := db.Raw("SELECT DATABASE()").Scan(&currentDB).Error; err != nil {
+		return fmt.Errorf("query current database for %s.%s failed: %w", tableName, indexName, err)
+	}
+	if strings.TrimSpace(currentDB) == "" {
+		return fmt.Errorf("current database is empty while checking %s.%s", tableName, indexName)
+	}
+
+	var rows []struct {
+		NonUnique int `gorm:"column:non_unique"`
+	}
+	err := db.Raw(`
+		SELECT non_unique
+		FROM information_schema.statistics
+		WHERE table_schema = ? AND table_name = ? AND index_name = ?
+		ORDER BY seq_in_index
+	`, currentDB, tableName, indexName).Scan(&rows).Error
+	if err != nil {
+		return fmt.Errorf("inspect index %s.%s failed: %w", tableName, indexName, err)
+	}
+
+	if len(rows) == 0 {
+		sql := fmt.Sprintf(
+			"CREATE UNIQUE INDEX `%s` ON `%s` (%s)",
+			indexName,
+			tableName,
+			quotedColumns(columns),
+		)
+		log.Printf("[Migration Info] 缺失唯一索引 %s.%s，正在创建", tableName, indexName)
+		if err := db.Exec(sql).Error; err != nil {
+			return fmt.Errorf("create unique index %s.%s failed: %w", tableName, indexName, err)
+		}
+		return nil
+	}
+
+	if rows[0].NonUnique == 0 {
+		return nil
+	}
+
+	sql := fmt.Sprintf(
+		"ALTER TABLE `%s` DROP INDEX `%s`, ADD UNIQUE INDEX `%s` (%s)",
+		tableName,
+		indexName,
+		indexName,
+		quotedColumns(columns),
+	)
+	log.Printf("[Migration Info] 索引 %s.%s 当前为非唯一，正在纠正为唯一索引", tableName, indexName)
+	if err := db.Exec(sql).Error; err != nil {
+		return fmt.Errorf("upgrade index %s.%s to unique failed: %w", tableName, indexName, err)
+	}
+	return nil
+}
+
+func quotedColumns(columns []string) string {
+	quoted := make([]string, 0, len(columns))
+	for _, col := range columns {
+		quoted = append(quoted, fmt.Sprintf("`%s`", col))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func logDuplicateCallSigns(db *gorm.DB) {
+	var rows []struct {
+		CallSign string `gorm:"column:callsign"`
+		Count    int64  `gorm:"column:cnt"`
+		UserIDs  string `gorm:"column:user_ids"`
+	}
+
+	sql := `
+		SELECT callsign, COUNT(*) AS cnt, GROUP_CONCAT(id ORDER BY id) AS user_ids
+		FROM users
+		GROUP BY callsign
+		HAVING COUNT(*) > 1
+	`
+	if err := db.Raw(sql).Scan(&rows).Error; err != nil {
+		log.Printf("[Migration Warning] 巡检重复 callsign 失败: %v", err)
+		return
+	}
+
+	for _, row := range rows {
+		log.Printf("[Migration Warning] users.callsign 重复: callsign=%q count=%d user_ids=%s",
+			row.CallSign, row.Count, row.UserIDs)
+	}
+}
+
+func logDuplicateOwnerSSIDs(db *gorm.DB) {
+	var rows []struct {
+		OwnerID int    `gorm:"column:owner_id"`
+		SSID    uint8  `gorm:"column:ssid"`
+		Count   int64  `gorm:"column:cnt"`
+		DevIDs  string `gorm:"column:device_ids"`
+	}
+
+	sql := `
+		SELECT owner_id, ssid, COUNT(*) AS cnt, GROUP_CONCAT(id ORDER BY id) AS device_ids
+		FROM devices
+		GROUP BY owner_id, ssid
+		HAVING COUNT(*) > 1
+	`
+	if err := db.Raw(sql).Scan(&rows).Error; err != nil {
+		log.Printf("[Migration Warning] 巡检重复 owner_id + ssid 失败: %v", err)
+		return
+	}
+
+	for _, row := range rows {
+		log.Printf("[Migration Warning] devices(owner_id, ssid) 重复: owner_id=%d ssid=%d count=%d device_ids=%s",
+			row.OwnerID, row.SSID, row.Count, row.DevIDs)
+	}
 }
 
 // pruneLegacyGroupMemberColumns 安全下线 group_members 历史字段：

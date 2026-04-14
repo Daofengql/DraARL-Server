@@ -128,7 +128,7 @@ export function getDefaultRadioConfig(): RadioConfigForm {
 }
 
 export function resolveFrequencyCardProfile(devModel: number, cardId?: string | null): FrequencyCardProfile | null {
-  const resolvedCardId = cardId || (devModel === 1 || devModel === 106 || devModel === 107 ? DEFAULT_FREQUENCY_CARD_ID : null)
+  const resolvedCardId = cardId || (devModel === 1 ? DEFAULT_FREQUENCY_CARD_ID : null)
   if (resolvedCardId === DEFAULT_FREQUENCY_CARD_ID) {
     return SA818_PROFILE
   }

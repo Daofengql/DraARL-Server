@@ -118,6 +118,7 @@
 ### `POST /api/auth/send-code`
 
 功能：发送邮箱验证码。用途 `purpose` 支持：
+
 - `register`
 - `login`
 - `reset_password`
@@ -218,6 +219,7 @@
 ## 8. SSO（Keycloak）
 
 ### `GET /api/sso/login`
+
 功能：获取 SSO 登录 URL。
 
 返回：
@@ -227,9 +229,11 @@
 ```
 
 ### `GET /api/sso/callback`
+
 功能：Keycloak 回调入口（服务端处理并重定向前端）。
 
 ### `POST /api/sso/exchange`
+
 功能：用一次性交换码换取 token（避免 URL 透传 token）。
 
 请求：
@@ -241,6 +245,7 @@
 返回：同 `login`。
 
 ### `GET /api/sso/status`（JWT）
+
 返回示例：
 
 ```json
@@ -248,7 +253,9 @@
 ```
 
 ### `POST /api/sso/bind`（JWT）
+
 功能：发起当前用户绑定 SSO。
 
 ### `DELETE /api/sso/unbind`（JWT）
+
 功能：解绑当前用户 SSO。

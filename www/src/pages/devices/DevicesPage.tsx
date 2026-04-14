@@ -21,12 +21,14 @@ import Lock from '@mui/icons-material/Lock'
 import Key from '@mui/icons-material/Key'
 import Settings from '@mui/icons-material/Settings'
 import AddLink from '@mui/icons-material/AddLink'
+import Tune from '@mui/icons-material/Tune'
 import { deviceService, groupService } from '../../services'
 import type { Device, Group } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { ParamConfigDialog } from '../../components/devices/ParamConfigDialog'
 import { DynamicCodeBindDialog } from '../../components/devices/DynamicCodeBindDialog'
 import { DevicePasswordDialog } from '../../components/devices/DevicePasswordDialog'
+import { PreConfigToolCard } from '../../components/devices/preconfig/PreConfigToolCard'
 import { GroupPickerDialog } from '../../components/groups/GroupPicker'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SearchBar } from '../../components/common/SearchBar'
@@ -71,6 +73,7 @@ export function DevicesPage() {
 
   // 设备密码对话框状态
   const [devicePasswordDialogOpen, setDevicePasswordDialogOpen] = useState(false)
+  const [preConfigToolOpen, setPreConfigToolOpen] = useState(false)
 
   useEffect(() => {
     loadDevices()
@@ -201,6 +204,15 @@ export function DevicesPage() {
             >
               设备密码
             </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Tune />}
+              onClick={() => setPreConfigToolOpen((prev) => !prev)}
+              color="info"
+            >
+              预配置工具
+            </Button>
           </Stack>
         }
       />
@@ -210,6 +222,11 @@ export function DevicesPage() {
           {error}
         </Alert>
       )}
+
+      <PreConfigToolCard
+        open={preConfigToolOpen}
+        onClose={() => setPreConfigToolOpen(false)}
+      />
 
       <Paper sx={{ mb: 2, p: 2 }}>
         <SearchBar

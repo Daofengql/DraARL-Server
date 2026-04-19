@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
@@ -282,6 +283,22 @@ type BindRequest struct {
 	DynamicCode string `json:"dynamic_code" binding:"required"`
 }
 
+type DynamicBindReplaceableDevice struct {
+	DeviceID     int    `json:"device_id"`
+	Name         string `json:"name"`
+	CallSign     string `json:"callsign"`
+	SSID         int    `json:"ssid"`
+	LastOnlineIP string `json:"last_online_ip,omitempty"`
+	OnlineTime   string `json:"online_time,omitempty"`
+}
+
+func listPendingConfiguredDynamicBindSSIDs(manager *udphub.PendingDeviceManager, userID uint, excludeMAC string) map[int]struct{} {
+	if manager == nil {
+		return make(map[int]struct{})
+	}
+	return manager.ListConfiguredSSIDsByUser(userID, excludeMAC)
+}
+
 func listUserUsedDynamicBindSSIDs(userID int, manager *udphub.PendingDeviceManager, excludeMAC string) (map[int]struct{}, error) {
 	repo := gormdb.NewDeviceRepository()
 	devices, err := repo.ListDevicesByOwnerID(userID)
@@ -294,13 +311,47 @@ func listUserUsedDynamicBindSSIDs(userID int, manager *udphub.PendingDeviceManag
 		used[int(device.SSID)] = struct{}{}
 	}
 
-	if manager != nil {
-		for ssid := range manager.ListConfiguredSSIDsByUser(uint(userID), excludeMAC) {
-			used[ssid] = struct{}{}
-		}
+	for ssid := range listPendingConfiguredDynamicBindSSIDs(manager, uint(userID), excludeMAC) {
+		used[ssid] = struct{}{}
 	}
 
 	return used, nil
+}
+
+func buildReplaceableDynamicBindDevices(devices []*gormdb.Device, pendingUsed map[int]struct{}, callSign string, isRuntimeActive func(ownerID int, ssid byte) bool) []DynamicBindReplaceableDevice {
+	replaceable := make([]DynamicBindReplaceableDevice, 0, len(devices))
+	for _, device := range devices {
+		if device == nil || !protocol.IsValidNormalSSID(device.SSID) {
+			continue
+		}
+		if device.ISOnline {
+			continue
+		}
+		if isRuntimeActive != nil && isRuntimeActive(device.OwnerID, device.SSID) {
+			continue
+		}
+		if _, exists := pendingUsed[int(device.SSID)]; exists {
+			continue
+		}
+
+		replaceable = append(replaceable, DynamicBindReplaceableDevice{
+			DeviceID:     device.ID,
+			Name:         device.Name,
+			CallSign:     callSign,
+			SSID:         int(device.SSID),
+			LastOnlineIP: device.LastOnlineIP,
+			OnlineTime:   device.OnlineTime.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	sort.Slice(replaceable, func(i, j int) bool {
+		if replaceable[i].SSID != replaceable[j].SSID {
+			return replaceable[i].SSID < replaceable[j].SSID
+		}
+		return replaceable[i].DeviceID < replaceable[j].DeviceID
+	})
+
+	return replaceable
 }
 
 func buildAvailableDynamicBindSSIDs(used map[int]struct{}) []int {
@@ -315,6 +366,35 @@ func buildAvailableDynamicBindSSIDs(used map[int]struct{}) []int {
 		available = append(available, ssid)
 	}
 	return available
+}
+
+func buildDynamicBindOptions(user *gormdb.User, manager *udphub.PendingDeviceManager, excludeMAC string) ([]int, int, []DynamicBindReplaceableDevice, error) {
+	repo := gormdb.NewDeviceRepository()
+	devices, err := repo.ListDevicesByOwnerID(user.ID)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+
+	pendingUsed := listPendingConfiguredDynamicBindSSIDs(manager, uint(user.ID), excludeMAC)
+	used := make(map[int]struct{}, len(devices)+len(pendingUsed))
+	for _, device := range devices {
+		if device == nil {
+			continue
+		}
+		used[int(device.SSID)] = struct{}{}
+	}
+	for ssid := range pendingUsed {
+		used[ssid] = struct{}{}
+	}
+
+	availableSSIDs := buildAvailableDynamicBindSSIDs(used)
+	recommendedSSID := 0
+	if len(availableSSIDs) > 0 {
+		recommendedSSID = availableSSIDs[0]
+	}
+
+	replaceableDevices := buildReplaceableDynamicBindDevices(devices, pendingUsed, user.CallSign, udphub.IsRuntimeNormalDeviceActive)
+	return availableSSIDs, recommendedSSID, replaceableDevices, nil
 }
 
 // BindDevice 用户输入动态码绑定设备
@@ -380,18 +460,13 @@ func BindDevice(c *gin.Context) {
 		return
 	}
 
-	usedSSIDs, err := listUserUsedDynamicBindSSIDs(user.ID, manager, device.MAC)
+	availableSSIDs, recommendedSSID, replaceableDevices, err := buildDynamicBindOptions(user, manager, device.MAC)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
-			"message": "获取可分配 SSID 失败",
+			"message": "获取动态绑定选项失败",
 		})
 		return
-	}
-	availableSSIDs := buildAvailableDynamicBindSSIDs(usedSSIDs)
-	recommendedSSID := 0
-	if len(availableSSIDs) > 0 {
-		recommendedSSID = availableSSIDs[0]
 	}
 
 	log.Printf("[DEVICE] 设备绑定成功: MAC=%s, User=%s", device.MAC, username)
@@ -406,19 +481,21 @@ func BindDevice(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{
-			"device_mac":       device.MAC,
-			"call_sign":        user.CallSign,
-			"message":          "绑定成功，请配置设备参数",
-			"available_ssids":  availableSSIDs,
-			"recommended_ssid": recommendedSSID,
+			"device_mac":          device.MAC,
+			"call_sign":           user.CallSign,
+			"message":             "绑定成功，请配置设备参数",
+			"available_ssids":     availableSSIDs,
+			"recommended_ssid":    recommendedSSID,
+			"replaceable_devices": replaceableDevices,
 		},
 	})
 }
 
 // SubmitConfigRequest 提交设备配置请求
 type SubmitConfigRequest struct {
-	DeviceMAC string `json:"device_mac" binding:"required"`
-	SSID      *int   `json:"ssid" binding:"required"`
+	DeviceMAC       string `json:"device_mac" binding:"required"`
+	SSID            *int   `json:"ssid"`
+	ReplaceDeviceID *int   `json:"replace_device_id,omitempty"`
 }
 
 func isValidDynamicBindSSID(ssid int) bool {
@@ -426,6 +503,56 @@ func isValidDynamicBindSSID(ssid int) bool {
 		return false
 	}
 	return protocol.IsValidNormalSSID(byte(ssid))
+}
+
+func resolveDynamicBindSelectedSSID(user *gormdb.User, manager *udphub.PendingDeviceManager, excludeMAC string, req SubmitConfigRequest) (int, *gormdb.Device, error) {
+	if req.ReplaceDeviceID != nil {
+		if *req.ReplaceDeviceID <= 0 {
+			return 0, nil, fmt.Errorf("无效的离线设备")
+		}
+
+		repo := gormdb.NewDeviceRepository()
+		device, err := repo.GetDeviceByID(*req.ReplaceDeviceID)
+		if err != nil {
+			return 0, nil, fmt.Errorf("校验离线设备失败")
+		}
+		if device == nil || device.OwnerID != user.ID {
+			return 0, nil, fmt.Errorf("所选离线设备已不存在，请重新选择")
+		}
+		if !protocol.IsValidNormalSSID(device.SSID) {
+			return 0, nil, fmt.Errorf("所选设备不是可复用的普通设备")
+		}
+		if device.ISOnline || udphub.IsRuntimeNormalDeviceActive(user.ID, device.SSID) {
+			return 0, nil, fmt.Errorf("所选设备当前在线，请先让旧设备离线")
+		}
+
+		pendingUsed := listPendingConfiguredDynamicBindSSIDs(manager, uint(user.ID), excludeMAC)
+		if _, exists := pendingUsed[int(device.SSID)]; exists {
+			return 0, nil, fmt.Errorf("所选离线设备已有其他待绑定配置，请稍后重试")
+		}
+		if req.SSID != nil && *req.SSID != int(device.SSID) {
+			return 0, nil, fmt.Errorf("SSID 与所选离线设备不一致，请重新选择")
+		}
+
+		return int(device.SSID), device, nil
+	}
+
+	if req.SSID == nil {
+		return 0, nil, fmt.Errorf("请选择新 SSID 或离线设备")
+	}
+	if !isValidDynamicBindSSID(*req.SSID) {
+		return 0, nil, fmt.Errorf("SSID 必须在 1-99 或 106-254 范围内")
+	}
+
+	usedSSIDs, err := listUserUsedDynamicBindSSIDs(user.ID, manager, excludeMAC)
+	if err != nil {
+		return 0, nil, fmt.Errorf("校验 SSID 失败")
+	}
+	if _, exists := usedSSIDs[*req.SSID]; exists {
+		return 0, nil, fmt.Errorf("SSID 已被当前用户占用，请选择其他 SSID")
+	}
+
+	return *req.SSID, nil, nil
 }
 
 // SubmitDeviceConfig 提交设备配置
@@ -440,20 +567,21 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	if req.SSID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-		})
-		return
-	}
-
-	if !isValidDynamicBindSSID(*req.SSID) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "SSID 必须在 1-99 或 106-254 范围内",
-		})
-		return
+	if req.ReplaceDeviceID == nil {
+		if req.SSID == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "请选择新 SSID 或离线设备",
+			})
+			return
+		}
+		if !isValidDynamicBindSSID(*req.SSID) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "SSID 必须在 1-99 或 106-254 范围内",
+			})
+			return
+		}
 	}
 
 	// 验证 MAC 地址格式
@@ -490,18 +618,11 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	usedSSIDs, err := listUserUsedDynamicBindSSIDs(user.ID, manager, mac)
+	selectedSSID, reusedDevice, err := resolveDynamicBindSelectedSSID(user, manager, mac, req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "校验 SSID 失败",
-		})
-		return
-	}
-	if _, exists := usedSSIDs[*req.SSID]; exists {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "SSID 已被当前用户占用，请选择其他 SSID",
+			"message": err.Error(),
 		})
 		return
 	}
@@ -544,7 +665,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 	config := &udphub.PendingDeviceConfig{
 		Username:       user.Name,
 		DevicePassword: devicePassword,
-		SSID:           *req.SSID,
+		SSID:           selectedSSID,
 		DMRID:          user.DMRID,
 	}
 
@@ -556,9 +677,14 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[DEVICE] 设备配置已保存: MAC=%s, User=%s, SSID=%d", mac, username, *req.SSID)
+	reuseDeviceID := 0
+	if reusedDevice != nil {
+		reuseDeviceID = reusedDevice.ID
+	}
+
+	log.Printf("[DEVICE] 设备配置已保存: MAC=%s, User=%s, SSID=%d, ReuseDeviceID=%d", mac, username, selectedSSID, reuseDeviceID)
 	oplog.AddLog(
-		fmt.Sprintf("提交设备绑定配置: mac=%s, ssid=%d, dmr_id=%d", mac, *req.SSID, user.DMRID),
+		fmt.Sprintf("提交设备绑定配置: mac=%s, ssid=%d, dmr_id=%d, reuse_device_id=%d", mac, selectedSSID, user.DMRID, reuseDeviceID),
 		"device_bind_config_submit",
 		user.ID,
 		user.Name,
@@ -569,6 +695,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 		"code": 200,
 		"data": gin.H{
 			"message": "配置已保存",
+			"ssid":    selectedSSID,
 			"udp_auth_info": gin.H{
 				"username":        user.Name,
 				"device_password": devicePassword,

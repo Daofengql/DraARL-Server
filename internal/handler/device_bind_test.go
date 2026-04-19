@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"testing"
 
+	gormdb "draarl/internal/gormdb"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -95,5 +97,34 @@ func TestBuildAvailableDynamicBindSSIDsFiltersUsedAndKeepsAscendingOrder(t *test
 		if ssid == 100 || ssid == 105 || ssid == 255 {
 			t.Fatalf("unexpected reserved ssid in available list: %d", ssid)
 		}
+	}
+}
+
+func TestBuildReplaceableDynamicBindDevicesFiltersOnlinePendingAndRuntimeActive(t *testing.T) {
+	devices := []*gormdb.Device{
+		{ID: 11, Name: "离线旧机", OwnerID: 7, SSID: 11, ISOnline: false, LastOnlineIP: "10.0.0.11"},
+		{ID: 12, Name: "在线设备", OwnerID: 7, SSID: 12, ISOnline: true},
+		{ID: 13, Name: "待绑定占用", OwnerID: 7, SSID: 13, ISOnline: false},
+		{ID: 14, Name: "运行时活跃", OwnerID: 7, SSID: 14, ISOnline: false},
+		{ID: 15, Name: "更高SSID", OwnerID: 7, SSID: 21, ISOnline: false},
+		{ID: 16, Name: "保留段", OwnerID: 7, SSID: 105, ISOnline: false},
+	}
+
+	pendingUsed := map[int]struct{}{
+		13: {},
+	}
+
+	got := buildReplaceableDynamicBindDevices(devices, pendingUsed, "BG7XXX", func(ownerID int, ssid byte) bool {
+		return ownerID == 7 && ssid == 14
+	})
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 replaceable devices, got %d", len(got))
+	}
+	if got[0].DeviceID != 11 || got[0].SSID != 11 || got[0].CallSign != "BG7XXX" {
+		t.Fatalf("unexpected first replaceable device: %#v", got[0])
+	}
+	if got[1].DeviceID != 15 || got[1].SSID != 21 {
+		t.Fatalf("unexpected second replaceable device: %#v", got[1])
 	}
 }

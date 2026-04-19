@@ -138,6 +138,14 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 	return count, err
 }
 
+// MarkAllDevicesOffline 在服务冷启动时统一清理历史在线状态。
+// 设计目标：服务异常退出后，避免数据库残留的 is_online=true 被新进程继续当作在线设备。
+func (r *DeviceRepository) MarkAllDevicesOffline() error {
+	return r.db.Model(&Device{}).
+		Where("is_online = ?", true).
+		Update("is_online", false).Error
+}
+
 // UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）
 func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime, lastOnlineIP string) error {
 	updates := map[string]interface{}{

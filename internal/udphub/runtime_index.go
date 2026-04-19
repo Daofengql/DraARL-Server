@@ -86,6 +86,10 @@ func findDeviceByOwnerSSIDFromMemory(ownerID int, ssid byte) *models.Device {
 	return devOwnerSSIDMap[getOwnerSSIDKey(ownerID, ssid)]
 }
 
+func IsRuntimeNormalDeviceActive(ownerID int, ssid byte) bool {
+	return isRecentlyActiveDevice(findDeviceByOwnerSSIDFromMemory(ownerID, ssid))
+}
+
 func isSameRuntimeDevice(a, b *models.Device) bool {
 	if a == nil || b == nil {
 		return false
@@ -123,6 +127,97 @@ func syncDeviceConnPool(pool *CurrentConnPool, dev *models.Device, addr *net.UDP
 	for _, existing := range pool.DevConnMap {
 		pool.DevConnList = append(pool.DevConnList, existing)
 	}
+}
+
+func rebuildDeviceConnList(pool *CurrentConnPool) {
+	if pool == nil {
+		return
+	}
+	pool.DevConnList = make([]*models.Device, 0, len(pool.DevConnMap))
+	for _, existing := range pool.DevConnMap {
+		if existing == nil {
+			continue
+		}
+		pool.DevConnList = append(pool.DevConnList, existing)
+	}
+}
+
+func removeDeviceFromGroupRuntime(gp *models.Group, dev *models.Device) {
+	if gp == nil || dev == nil {
+		return
+	}
+
+	if gp.DevMap != nil {
+		for id, existing := range gp.DevMap {
+			if existing == nil || isSameRuntimeDevice(existing, dev) {
+				delete(gp.DevMap, id)
+			}
+		}
+	}
+
+	if len(gp.DevList) > 0 {
+		filtered := gp.DevList[:0]
+		for _, id := range gp.DevList {
+			if id != dev.ID {
+				filtered = append(filtered, id)
+			}
+		}
+		gp.DevList = filtered
+	}
+
+	pool := getGroupConnPool(gp)
+	if pool == nil {
+		return
+	}
+	for key, existing := range pool.DevConnMap {
+		if existing == nil || isSameRuntimeDevice(existing, dev) {
+			delete(pool.DevConnMap, key)
+		}
+	}
+	rebuildDeviceConnList(pool)
+}
+
+func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
+	dev := findDeviceByOwnerSSIDFromMemory(ownerID, ssid)
+	if dev == nil {
+		runtimeDeviceMACStore.Delete(ownerID, ssid)
+		return false
+	}
+
+	delete(devOwnerSSIDMap, getOwnerSSIDKey(ownerID, ssid))
+	removeRuntimeUsernameKey(dev, dev.Username)
+	removeRuntimeCallSignKey(dev, dev.CallSign)
+	delete(onlineDevMap, dev.ID)
+	delete(onlineDevMapDraARL, dev.ID)
+	removeRuntimeDeviceMAC(dev)
+
+	dev.ISOnline = false
+	dev.UDPAddr = nil
+
+	for _, gp := range publicGroupMap {
+		removeDeviceFromGroupRuntime(gp, dev)
+	}
+
+	if cache := globalGroupCacheAtomic.Load(); cache != nil {
+		if groupCache, ok := cache.(map[int]*models.Group); ok {
+			for _, gp := range groupCache {
+				removeDeviceFromGroupRuntime(gp, dev)
+			}
+		}
+	}
+
+	userList.Range(func(_, value any) bool {
+		info, ok := value.(*UserInfo)
+		if !ok {
+			return true
+		}
+		for _, gp := range info.Groups {
+			removeDeviceFromGroupRuntime(gp, dev)
+		}
+		return true
+	})
+
+	return true
 }
 
 func sendHeartbeatReject(conn *net.UDPConn, packet *protocol.DraARLv1Packet, code byte, message string) {

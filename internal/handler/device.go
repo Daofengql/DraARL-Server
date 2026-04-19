@@ -475,6 +475,7 @@ func DeleteDevice(c *gin.Context) {
 			})
 			return
 		}
+		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
 
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()
@@ -550,6 +551,7 @@ func DeleteDevice(c *gin.Context) {
 			})
 			return
 		}
+		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
 
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()

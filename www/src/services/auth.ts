@@ -255,17 +255,27 @@ export interface BindDeviceResponse {
   message: string
   available_ssids: number[]
   recommended_ssid: number
+  replaceable_devices: Array<{
+    device_id: number
+    name: string
+    callsign: string
+    ssid: number
+    last_online_ip?: string
+    online_time?: string
+  }>
 }
 
 // 提交设备配置请求
 export interface SubmitDeviceConfigRequest {
   device_mac: string
-  ssid: number
+  ssid?: number
+  replace_device_id?: number
 }
 
 // 提交设备配置响应
 export interface SubmitDeviceConfigResponse {
   message: string
+  ssid?: number
   udp_auth_info: {
     username: string
     device_password: string

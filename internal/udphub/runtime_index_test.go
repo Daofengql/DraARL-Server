@@ -188,3 +188,98 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 		t.Fatalf("expected udp ghost callsign updated, got %#v", ghost)
 	}
 }
+
+func TestRemoveRuntimeDeviceCleansIndexesAndConnPools(t *testing.T) {
+	devOwnerSSIDMap = make(map[string]*models.Device)
+	devUsernameSSIDMap = make(map[string]*models.Device)
+	devCallsignSSIDMap = make(map[string]*models.Device)
+	onlineDevMap = make(map[int]*models.Device)
+	onlineDevMapDraARL = make(map[int]*models.Device)
+	publicGroupMap = make(map[int]*models.Group)
+	userList = sync.Map{}
+	runtimeDeviceMACStore = newDeviceMACStore()
+
+	dev := &models.Device{
+		ID:         19,
+		OwnerID:    42,
+		Username:   "alice",
+		CallSign:   "BG7OLD",
+		SSID:       19,
+		GroupID:    models.GroupIDPublicMin,
+		ISOnline:   true,
+		UDPAddr:    &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 23019},
+		MAC:        "AA:BB:CC:DD:EE:FF",
+		OnlineTime: time.Now(),
+	}
+	indexRuntimeDevice(dev)
+	onlineDevMap[dev.ID] = dev
+	onlineDevMapDraARL[dev.ID] = dev
+
+	makeGroup := func(id int) *models.Group {
+		return &models.Group{
+			ID:      id,
+			DevMap:  map[int]*models.Device{dev.ID: dev},
+			DevList: []int{dev.ID},
+			ConnPool: &CurrentConnPool{
+				DevConnMap: map[string]*models.Device{
+					dev.UDPAddr.String(): dev,
+				},
+				DevConnList: []*models.Device{dev},
+			},
+		}
+	}
+
+	publicGp := makeGroup(models.GroupIDPublicMin)
+	cacheGp := makeGroup(models.GroupIDPublicMin)
+	privateGp := makeGroup(models.GroupIDPrivate1)
+
+	publicGroupMap[publicGp.ID] = publicGp
+	globalGroupCacheAtomic.Store(map[int]*models.Group{cacheGp.ID: cacheGp})
+	userList.Store("BG7OLD", &UserInfo{
+		ID:       42,
+		Name:     "alice",
+		CallSign: "BG7OLD",
+		Groups: map[int]*models.Group{
+			privateGp.ID: privateGp,
+		},
+	})
+
+	if removed := RemoveRuntimeDevice(dev.OwnerID, dev.SSID); !removed {
+		t.Fatal("expected runtime device removal to report success")
+	}
+	if got := findDeviceByOwnerSSIDFromMemory(dev.OwnerID, dev.SSID); got != nil {
+		t.Fatalf("expected owner-ssid runtime index removed, got %#v", got)
+	}
+	if _, ok := devUsernameSSIDMap[protocol.GetUsernameSSID(dev.Username, dev.SSID)]; ok {
+		t.Fatal("expected username-ssid runtime index removed")
+	}
+	if _, ok := devCallsignSSIDMap[protocol.GetCallSignSSID(dev.CallSign, dev.SSID)]; ok {
+		t.Fatal("expected callsign-ssid runtime index removed")
+	}
+	if len(onlineDevMap) != 0 || len(onlineDevMapDraARL) != 0 {
+		t.Fatal("expected online maps cleared")
+	}
+	if runtimeDeviceMACStore.Get(dev.OwnerID, dev.SSID) != "" {
+		t.Fatal("expected runtime MAC mapping removed")
+	}
+	if dev.ISOnline || dev.UDPAddr != nil {
+		t.Fatalf("expected device marked offline and udp addr cleared, got online=%v addr=%v", dev.ISOnline, dev.UDPAddr)
+	}
+
+	for name, gp := range map[string]*models.Group{
+		"public":  publicGp,
+		"cache":   cacheGp,
+		"private": privateGp,
+	} {
+		if len(gp.DevMap) != 0 {
+			t.Fatalf("expected %s group DevMap cleared, got %#v", name, gp.DevMap)
+		}
+		if len(gp.DevList) != 0 {
+			t.Fatalf("expected %s group DevList cleared, got %#v", name, gp.DevList)
+		}
+		pool := gp.ConnPool.(*CurrentConnPool)
+		if len(pool.DevConnMap) != 0 || len(pool.DevConnList) != 0 {
+			t.Fatalf("expected %s group conn pool cleared, got map=%d list=%d", name, len(pool.DevConnMap), len(pool.DevConnList))
+		}
+	}
+}

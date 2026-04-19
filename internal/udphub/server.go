@@ -224,6 +224,14 @@ func StartDraARLServer(port int) error {
 	initPublicGroups()
 	initDeviceMACStore(config.Get())
 
+	// 冷启动时先清理数据库残留的在线态，避免异常退出后“幽灵在线”。
+	deviceRepo := gormdb.NewDeviceRepository()
+	if err := deviceRepo.MarkAllDevicesOffline(); err != nil {
+		log.Printf("[UDP] Reset persisted device online flags failed: %v", err)
+	} else {
+		log.Printf("[UDP] Reset persisted device online flags on startup")
+	}
+
 	// ==========================================
 	// 架构重构：启动全局群组缓存定时同步
 	// ==========================================
@@ -1370,6 +1378,12 @@ func refreshDeviceCache() {
 
 	updatedCount := 0
 	onlineSyncCount := 0
+	removedCount := 0
+
+	dbDeviceKeys := make(map[string]struct{}, len(dbDevices))
+	for _, dbDev := range dbDevices {
+		dbDeviceKeys[getOwnerSSIDKey(dbDev.OwnerID, dbDev.SSID)] = struct{}{}
+	}
 
 	// 用户仓库用于获取用户名/呼号
 	userRepo := gormdb.NewUserRepository()
@@ -1444,11 +1458,42 @@ func refreshDeviceCache() {
 		}
 	}
 
+	missingDevices := make([]*models.Device, 0)
+	for _, memDev := range devOwnerSSIDMap {
+		if memDev == nil {
+			continue
+		}
+		if _, exists := dbDeviceKeys[getOwnerSSIDKey(memDev.OwnerID, memDev.SSID)]; exists {
+			continue
+		}
+		missingDevices = append(missingDevices, memDev)
+	}
+	for _, missingDev := range missingDevices {
+		if RemoveRuntimeDevice(missingDev.OwnerID, missingDev.SSID) {
+			removedCount++
+		}
+	}
+	if removedCount > 0 {
+		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+			ctx := context.Background()
+			_ = deviceCache.InvalidateDeviceList(ctx)
+			for _, missingDev := range missingDevices {
+				_ = deviceCache.InvalidateDevice(ctx, missingDev.ID, missingDev.OwnerID, uint8(missingDev.SSID))
+				if missingDev.GroupID > 0 {
+					_ = deviceCache.InvalidateDevicesByGroup(ctx, missingDev.GroupID)
+				}
+			}
+		}
+	}
+
 	if updatedCount > 0 {
 		log.Printf("[CACHE] 设备属性同步完成，更新了 %d 个设备", updatedCount)
 	}
 	if onlineSyncCount > 0 {
 		log.Printf("[CACHE] 设备在线状态/IP 已同步到数据库，更新了 %d 个设备", onlineSyncCount)
+	}
+	if removedCount > 0 {
+		log.Printf("[CACHE] 已清理 %d 个数据库中已不存在的运行时设备", removedCount)
 	}
 }
 

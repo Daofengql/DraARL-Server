@@ -14,7 +14,11 @@ import {
   StepLabel,
   CircularProgress,
   IconButton,
+  FormControl,
+  FormControlLabel,
   MenuItem,
+  Radio,
+  RadioGroup,
 } from '@mui/material'
 import Visibility from '@mui/icons-material/Visibility'
 import VisibilityOff from '@mui/icons-material/VisibilityOff'
@@ -35,6 +39,8 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
   const [activeStep, setActiveStep] = useState(0)
   const [dynamicCode, setDynamicCode] = useState(['', '', '', '', '', ''])
   const [ssid, setSsid] = useState('')
+  const [selectionMode, setSelectionMode] = useState<'new' | 'replace'>('new')
+  const [replaceDeviceId, setReplaceDeviceId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -46,6 +52,8 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     setActiveStep(0)
     setDynamicCode(['', '', '', '', '', ''])
     setSsid('')
+    setSelectionMode('new')
+    setReplaceDeviceId('')
     setLoading(false)
     setError('')
     setBindResult(null)
@@ -110,6 +118,14 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     call_sign: string
     available_ssids: number[]
     recommended_ssid: number
+    replaceable_devices: Array<{
+      device_id: number
+      name: string
+      callsign: string
+      ssid: number
+      last_online_ip?: string
+      online_time?: string
+    }>
   } | null>(null)
 
   // 配置结果
@@ -147,12 +163,26 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
         return
       }
       setBindResult(result)
-      if (result.recommended_ssid > 0) {
-        setSsid(String(result.recommended_ssid))
-      } else if (result.available_ssids.length > 0) {
-        setSsid(String(result.available_ssids[0]))
+      const canUseNewSSID = result.available_ssids.length > 0
+      const canReplaceDevice = result.replaceable_devices.length > 0
+
+      if (canUseNewSSID) {
+        setSelectionMode('new')
+        if (result.recommended_ssid > 0) {
+          setSsid(String(result.recommended_ssid))
+        } else {
+          setSsid(String(result.available_ssids[0]))
+        }
+        setReplaceDeviceId('')
+      } else if (canReplaceDevice) {
+        const firstReplaceable = result.replaceable_devices[0]
+        setSelectionMode('replace')
+        setReplaceDeviceId(String(firstReplaceable.device_id))
+        setSsid(String(firstReplaceable.ssid))
       } else {
         setSsid('')
+        setSelectionMode('new')
+        setReplaceDeviceId('')
       }
       setActiveStep(1)
     } catch (error) {
@@ -169,15 +199,34 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
   // 步骤2：提交配置
   const handleSubmitConfig = async () => {
-    const ssidNum = parseInt(ssid, 10)
-    if (isNaN(ssidNum) || !isValidDynamicBindSSID(ssidNum)) {
-      setError(DYNAMIC_BIND_SSID_HINT)
-      return
-    }
-
     if (!bindResult) {
       setError('设备信息丢失，请重新绑定')
       return
+    }
+
+    const selectedReplaceableDevice = bindResult.replaceable_devices.find((device) => String(device.device_id) === replaceDeviceId)
+    const payload: {
+      device_mac: string
+      ssid?: number
+      replace_device_id?: number
+    } = {
+      device_mac: bindResult.device_mac,
+    }
+
+    if (selectionMode === 'replace') {
+      if (!selectedReplaceableDevice) {
+        setError('请选择要重上线的离线设备')
+        return
+      }
+      payload.replace_device_id = selectedReplaceableDevice.device_id
+      payload.ssid = selectedReplaceableDevice.ssid
+    } else {
+      const ssidNum = parseInt(ssid, 10)
+      if (isNaN(ssidNum) || !isValidDynamicBindSSID(ssidNum)) {
+        setError(DYNAMIC_BIND_SSID_HINT)
+        return
+      }
+      payload.ssid = ssidNum
     }
 
     setLoading(true)
@@ -185,10 +234,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     const requestSeq = requestSeqRef.current
 
     try {
-      const result = await deviceBindService.submitDeviceConfig({
-        device_mac: bindResult.device_mac,
-        ssid: ssidNum,
-      })
+      const result = await deviceBindService.submitDeviceConfig(payload)
       if (requestSeq !== requestSeqRef.current) {
         return
       }
@@ -209,7 +255,11 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
   // 渲染步骤内容
   const renderStepContent = () => {
     const availableSSIDs = bindResult?.available_ssids ?? []
-    const noAvailableSSID = availableSSIDs.length === 0
+    const replaceableDevices = bindResult?.replaceable_devices ?? []
+    const canUseNewSSID = availableSSIDs.length > 0
+    const canReplaceDevice = replaceableDevices.length > 0
+    const noBindableOption = !canUseNewSSID && !canReplaceDevice
+    const selectedReplaceableDevice = replaceableDevices.find((device) => String(device.device_id) === replaceDeviceId)
 
     switch (activeStep) {
       case 0:
@@ -276,30 +326,104 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
                 呼叫：<strong>{bindResult?.call_sign}</strong>
               </Typography>
             </Alert>
-            {noAvailableSSID ? (
+            {noBindableOption ? (
               <Alert severity="warning">
-                当前账号名下普通设备可分配的 SSID 已用完，请先释放已有设备 SSID 后再绑定。
+                当前没有可用的新 SSID，也没有可复用的离线设备，请先删除不再使用的设备，或让待重上线设备进入离线状态后再试。
               </Alert>
             ) : (
-              <TextField
-                label="SSID"
-                fullWidth
-                select
-                value={ssid}
-                onChange={(e) => {
-                  setSsid(e.target.value)
-                  setError('')
-                }}
-                disabled={loading}
-                error={!!error && activeStep === 1}
-                helperText={error && activeStep === 1 ? error : `已自动去重当前用户已有 SSID，默认选择最小可用值，共 ${availableSSIDs.length} 个可选`}
-              >
-                {availableSSIDs.map((value) => (
-                  <MenuItem key={value} value={String(value)}>
-                    {value}
-                  </MenuItem>
-                ))}
-              </TextField>
+              <Box>
+                {canUseNewSSID && canReplaceDevice && (
+                  <FormControl sx={{ mb: 2 }}>
+                    <RadioGroup
+                      row
+                      value={selectionMode}
+                      onChange={(e) => {
+                        const nextMode = e.target.value as 'new' | 'replace'
+                        setSelectionMode(nextMode)
+                        setError('')
+
+                        if (nextMode === 'new') {
+                          if (bindResult?.recommended_ssid && bindResult.recommended_ssid > 0) {
+                            setSsid(String(bindResult.recommended_ssid))
+                          } else if (availableSSIDs.length > 0) {
+                            setSsid(String(availableSSIDs[0]))
+                          }
+                          return
+                        }
+
+                        const firstReplaceable = selectedReplaceableDevice ?? replaceableDevices[0]
+                        if (firstReplaceable) {
+                          setReplaceDeviceId(String(firstReplaceable.device_id))
+                          setSsid(String(firstReplaceable.ssid))
+                        }
+                      }}
+                    >
+                      <FormControlLabel value="new" control={<Radio />} label="使用新 SSID" />
+                      <FormControlLabel value="replace" control={<Radio />} label="重上线离线设备" />
+                    </RadioGroup>
+                  </FormControl>
+                )}
+
+                {(selectionMode === 'new' || !canReplaceDevice) && canUseNewSSID && (
+                  <TextField
+                    label="SSID"
+                    fullWidth
+                    select
+                    value={ssid}
+                    onChange={(e) => {
+                      setSsid(e.target.value)
+                      setError('')
+                    }}
+                    disabled={loading}
+                    error={!!error && activeStep === 1}
+                    helperText={error && activeStep === 1 ? error : `推荐使用最小可用值；当前共 ${availableSSIDs.length} 个新 SSID 可选。`}
+                  >
+                    {availableSSIDs.map((value) => (
+                      <MenuItem key={value} value={String(value)}>
+                        {value}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                )}
+
+                {(selectionMode === 'replace' || !canUseNewSSID) && canReplaceDevice && (
+                  <>
+                    <TextField
+                      label="离线设备"
+                      fullWidth
+                      select
+                      value={replaceDeviceId}
+                      onChange={(e) => {
+                        const nextValue = e.target.value
+                        const nextDevice = replaceableDevices.find((device) => String(device.device_id) === nextValue)
+                        setReplaceDeviceId(nextValue)
+                        if (nextDevice) {
+                          setSsid(String(nextDevice.ssid))
+                        }
+                        setError('')
+                      }}
+                      disabled={loading}
+                      error={!!error && activeStep === 1}
+                      helperText={error && activeStep === 1 ? error : '选择离线设备后，会复用它的原 SSID 和数据库记录，不会新建设备。'}
+                    >
+                      {replaceableDevices.map((device) => (
+                        <MenuItem key={device.device_id} value={String(device.device_id)}>
+                          {`${device.callsign}-${device.ssid}${device.name ? ` / ${device.name}` : ''}${device.last_online_ip ? ` / ${device.last_online_ip}` : ''}`}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    {selectedReplaceableDevice && (
+                      <Alert severity="info" sx={{ mt: 2 }}>
+                        <Typography variant="body2">
+                          将复用 <strong>{selectedReplaceableDevice.callsign}-{selectedReplaceableDevice.ssid}</strong> 的设备记录
+                          {selectedReplaceableDevice.name ? `（${selectedReplaceableDevice.name}）` : ''}
+                          ，重上线后不会新建设备。
+                        </Typography>
+                      </Alert>
+                    )}
+                  </>
+                )}
+              </Box>
             )}
           </Box>
         )
@@ -384,7 +508,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
             <Button
               variant="contained"
               onClick={handleSubmitConfig}
-              disabled={loading || !bindResult?.available_ssids?.length}
+              disabled={loading || (!(bindResult?.available_ssids?.length) && !(bindResult?.replaceable_devices?.length))}
             >
               {loading ? <CircularProgress size={24} /> : '提交配置'}
             </Button>

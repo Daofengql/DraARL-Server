@@ -94,6 +94,7 @@ func (s *Server) setupRoutes() {
 
 		// 公开接口（无需认证）
 		api.GET("/public/relays", middleware.PublicRelaySearchRateLimit(), handler.PublicSearchRelays)
+		api.GET("/public/firmware/latest", handler.GetLatestFirmware)
 
 		// Keycloak SSO 路由（无需认证）
 		sso := api.Group("/sso")
@@ -335,6 +336,11 @@ func (s *Server) setupRoutes() {
 			admin.PUT("/assets/:id/move", assetHandler.MoveAsset)       // 移动资源
 			admin.POST("/assets/:id/replace", assetHandler.ReplaceFile) // 覆盖文件
 			admin.DELETE("/assets/:id", assetHandler.DeleteAsset)       // 删除资源
+
+			// 固件管理（管理员权限）
+			admin.GET("/firmware", handler.ListFirmware)
+			admin.POST("/firmware", handler.UploadFirmware)
+			admin.DELETE("/firmware/:id", handler.DeleteFirmware)
 
 			// 资源公开接口（前台下载中心使用）
 			api.GET("/assets/tree", assetHandler.GetAssetTree)           // 获取目录树

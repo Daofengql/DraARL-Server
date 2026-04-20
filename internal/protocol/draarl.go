@@ -541,6 +541,22 @@ func IsSelectableHardwareDevModel(devModel byte) bool {
 	return devModel == DraARLDevModelESP32Radio || devModel == DraARLDevModelESP32NoRadio
 }
 
+// FirmwareSupportedDevModels 支持固件升级的设备型号白名单
+var FirmwareSupportedDevModels = []byte{
+	DraARLDevModelESP32Radio,
+	DraARLDevModelESP32NoRadio,
+}
+
+// IsFirmwareSupportedDevModel 判断设备型号是否支持固件升级
+func IsFirmwareSupportedDevModel(devModel byte) bool {
+	for _, m := range FirmwareSupportedDevModels {
+		if m == devModel {
+			return true
+		}
+	}
+	return false
+}
+
 // GetDevModelName 获取设备型号名称
 func GetDevModelName(devModel byte) string {
 	switch devModel {

@@ -444,6 +444,25 @@ func (UserRadioPreset) TableName() string {
 	return "user_radio_presets"
 }
 
+// FirmwareRelease 固件发布模型
+type FirmwareRelease struct {
+	ID         int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	DevModel   int       `gorm:"not null;uniqueIndex:uk_devmodel_version,priority:1;column:dev_model" json:"dev_model"`
+	Version    string    `gorm:"type:varchar(64);not null;uniqueIndex:uk_devmodel_version,priority:2;column:version" json:"version"`
+	Changelog  string    `gorm:"type:text;column:changelog" json:"changelog"`
+	FileName   string    `gorm:"type:varchar(255);not null;column:file_name" json:"file_name"`
+	MinioPath  string    `gorm:"type:varchar(512);not null;column:minio_path" json:"minio_path"`
+	FileSize   int64     `gorm:"type:bigint;not null;column:file_size" json:"file_size"`
+	FileHash   string    `gorm:"type:varchar(128);not null;column:file_hash" json:"file_hash"`
+	IsLatest   bool      `gorm:"type:tinyint(1);not null;default:0;column:is_latest" json:"is_latest"`
+	CreatedBy  int       `gorm:"type:int;column:created_by" json:"created_by"`
+	CreateTime time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+}
+
+func (FirmwareRelease) TableName() string {
+	return "firmware_releases"
+}
+
 // AutoMigrate 自动清洗脏数据并迁移主结构与外键约束
 // 前置逻辑：
 // 1. 使用原生 SQL 优先清理违反外键原则的悬空记录。
@@ -523,6 +542,7 @@ func AutoMigrate() error {
 		&DeviceConfig{},
 		&Logbook{},
 		&UserRadioPreset{},
+		&FirmwareRelease{},
 	)
 
 	if err != nil {

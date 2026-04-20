@@ -15,6 +15,7 @@ import Mic from '@mui/icons-material/Mic'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import LinkIcon from '@mui/icons-material/Link'
+import SystemUpdate from '@mui/icons-material/SystemUpdate'
 import Folder from '@mui/icons-material/Folder'
 import Book from '@mui/icons-material/Book'
 import { useState, useEffect } from 'react'
@@ -53,6 +54,7 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/devices', label: '客户端', icon: <Devices /> },
       { path: '/admin/relays', label: '中继台', icon: <Radio /> },
       { path: '/admin/servers', label: '服务器', icon: <Dns /> },
+      { path: '/admin/firmware', label: '固件管理', icon: <SystemUpdate /> },
     ]
   },
   {
@@ -103,7 +105,7 @@ export function AdminLayout() {
   // 当路由变化时，如果焦点不在子菜单上，自动折叠
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
-    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers']
+    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers', '/admin/firmware']
     const groupPaths = ['/admin/groups', '/admin/group-links']
     const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']
 

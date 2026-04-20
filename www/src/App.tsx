@@ -35,6 +35,7 @@ const AdminDevicePage = lazy(() => import('./pages/admin/DevicePage').then(m => 
 const AdminGroupPage = lazy(() => import('./pages/admin/GroupPage').then(m => ({ default: m.AdminGroupPage })))
 const GroupLinkPage = lazy(() => import('./pages/admin/GroupLinkPage').then(m => ({ default: m.GroupLinkPage })))
 const AssetPage = lazy(() => import('./pages/admin/AssetPage').then(m => ({ default: m.AssetPage })))
+const FirmwarePage = lazy(() => import('./pages/admin/FirmwarePage').then(m => ({ default: m.FirmwarePage })))
 
 // 加载指示器包装组件
 const PageSuspense: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -158,6 +159,7 @@ function App() {
           <Route path="comm-records/platform" element={<PageSuspense><CommRecordsPage /></PageSuspense>} />
           <Route path="comm-records/logbook" element={<PageSuspense><LogbookPage /></PageSuspense>} />
           <Route path="assets" element={<PageSuspense><AssetPage /></PageSuspense>} />
+          <Route path="firmware" element={<PageSuspense><FirmwarePage /></PageSuspense>} />
           <Route path="settings" element={<PageSuspense><SiteConfigPage /></PageSuspense>} />
         </Route>
 

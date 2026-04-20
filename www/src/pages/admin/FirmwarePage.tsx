@@ -290,7 +290,7 @@ export function FirmwarePage() {
 
       {/* 删除确认 */}
       <ConfirmDialog
-        open={!!deleteTarget}
+        isOpen={!!deleteTarget}
         title="删除固件"
         message={`确定要删除 ${deleteTarget ? getDevModelName(deleteTarget.dev_model) : ''} 固件 v${deleteTarget?.version} 吗？此操作不可恢复。`}
         type="danger"

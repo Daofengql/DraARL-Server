@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"draarl/internal/firmwareversion"
 	gormdb "draarl/internal/gormdb"
 	"draarl/internal/protocol"
 	"draarl/pkg/minio"
@@ -222,6 +223,7 @@ func DeleteFirmware(c *gin.Context) {
 // GetLatestFirmware 获取指定型号的最新固件（公开接口）
 func GetLatestFirmware(c *gin.Context) {
 	devModelStr := c.Query("dev_model")
+	currentVersion := c.Query("current_version")
 	if devModelStr == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数必填"})
 		return
@@ -232,6 +234,10 @@ func GetLatestFirmware(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数无效"})
 		return
 	}
+	if currentVersion != "" && !semverRegex.MatchString(currentVersion) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "current_version 参数无效"})
+		return
+	}
 
 	repo := gormdb.GetFirmwareRepo()
 	fw, err := repo.GetLatestByDevModel(devModel)
@@ -239,6 +245,15 @@ func GetLatestFirmware(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": fmt.Sprintf("设备型号 %d 暂无可用固件", devModel),
+		})
+		return
+	}
+
+	if currentVersion != "" && !firmwareversion.IsNewerVersion(fw.Version, currentVersion) {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "当前已是最新版本",
+			"data":    nil,
 		})
 		return
 	}
@@ -261,6 +276,8 @@ func GetLatestFirmware(c *gin.Context) {
 			"file_name":    fw.FileName,
 			"file_size":    fw.FileSize,
 			"file_hash":    fw.FileHash,
+			"hash_algo":    "sha256",
+			"has_update":   true,
 			"download_url": downloadURL,
 			"create_time":  fw.CreateTime,
 		},

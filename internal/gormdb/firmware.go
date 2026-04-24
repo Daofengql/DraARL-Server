@@ -1,7 +1,10 @@
 package gormdb
 
 import (
+	"sort"
 	"sync"
+
+	"draarl/internal/firmwareversion"
 
 	"gorm.io/gorm"
 )
@@ -13,6 +16,44 @@ type FirmwareRepository struct {
 
 var firmwareRepoInstance *FirmwareRepository
 var firmwareRepoOnce sync.Once
+
+func selectLatestFirmwareRelease(list []FirmwareRelease) *FirmwareRelease {
+	if len(list) == 0 {
+		return nil
+	}
+
+	latestIndex := 0
+	for i := 1; i < len(list); i++ {
+		cmp := firmwareversion.CompareVersions(list[i].Version, list[latestIndex].Version)
+		if cmp > 0 || (cmp == 0 && list[i].CreateTime.After(list[latestIndex].CreateTime)) {
+			latestIndex = i
+		}
+	}
+
+	return &list[latestIndex]
+}
+
+func (r *FirmwareRepository) syncLatestFlagTx(tx *gorm.DB, devModel int) error {
+	var list []FirmwareRelease
+	if err := tx.Where("dev_model = ?", devModel).Find(&list).Error; err != nil {
+		return err
+	}
+
+	latest := selectLatestFirmwareRelease(list)
+	if latest == nil {
+		return nil
+	}
+
+	if err := tx.Model(&FirmwareRelease{}).
+		Where("dev_model = ?", devModel).
+		Update("is_latest", false).Error; err != nil {
+		return err
+	}
+
+	return tx.Model(&FirmwareRelease{}).
+		Where("id = ?", latest.ID).
+		Update("is_latest", true).Error
+}
 
 // GetFirmwareRepo 获取固件管理仓储实例
 func GetFirmwareRepo() *FirmwareRepository {
@@ -56,20 +97,55 @@ func (r *FirmwareRepository) GetByID(id int) (*FirmwareRelease, error) {
 
 // GetLatestByDevModel 获取指定型号的最新固件（is_latest = true）
 func (r *FirmwareRepository) GetLatestByDevModel(devModel int) (*FirmwareRelease, error) {
-	var fw FirmwareRelease
-	if err := r.db.Where("dev_model = ? AND is_latest = ?", devModel, true).First(&fw).Error; err != nil {
+	var list []FirmwareRelease
+	if err := r.db.Where("dev_model = ?", devModel).Find(&list).Error; err != nil {
 		return nil, err
 	}
+
+	latest := selectLatestFirmwareRelease(list)
+	if latest == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	fw := *latest
 	return &fw, nil
 }
 
 // GetAllLatest 获取所有型号的最新固件
 func (r *FirmwareRepository) GetAllLatest() ([]*FirmwareRelease, error) {
-	var list []*FirmwareRelease
-	if err := r.db.Where("is_latest = ?", true).Order("dev_model ASC").Find(&list).Error; err != nil {
+	var list []FirmwareRelease
+	if err := r.db.Order("dev_model ASC, create_time DESC").Find(&list).Error; err != nil {
 		return nil, err
 	}
-	return list, nil
+
+	latestByModel := make(map[int]FirmwareRelease)
+	models := make([]int, 0)
+
+	for i := range list {
+		fw := list[i]
+		existing, exists := latestByModel[fw.DevModel]
+		if !exists {
+			latestByModel[fw.DevModel] = fw
+			models = append(models, fw.DevModel)
+			continue
+		}
+
+		cmp := firmwareversion.CompareVersions(fw.Version, existing.Version)
+		if cmp > 0 || (cmp == 0 && fw.CreateTime.After(existing.CreateTime)) {
+			latestByModel[fw.DevModel] = fw
+		}
+	}
+
+	sort.Ints(models)
+
+	result := make([]*FirmwareRelease, 0, len(models))
+	for _, devModel := range models {
+		fw := latestByModel[devModel]
+		fwCopy := fw
+		result = append(result, &fwCopy)
+	}
+
+	return result, nil
 }
 
 // ExistsVersion 检查指定型号的版本号是否已存在
@@ -84,15 +160,10 @@ func (r *FirmwareRepository) ExistsVersion(devModel int, version string) (bool, 
 // Create 创建固件记录（事务内维护 is_latest 一致性）
 func (r *FirmwareRepository) Create(fw *FirmwareRelease) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 清除同型号的 is_latest 标记
-		if err := tx.Model(&FirmwareRelease{}).
-			Where("dev_model = ? AND is_latest = ?", fw.DevModel, true).
-			Update("is_latest", false).Error; err != nil {
+		if err := tx.Create(fw).Error; err != nil {
 			return err
 		}
-		// 新记录设为 is_latest
-		fw.IsLatest = true
-		return tx.Create(fw).Error
+		return r.syncLatestFlagTx(tx, fw.DevModel)
 	})
 }
 
@@ -108,17 +179,7 @@ func (r *FirmwareRepository) Delete(id int) (*FirmwareRelease, error) {
 			return err
 		}
 
-		// 如果被删除的是最新版本，提升次新版本
-		if fw.IsLatest {
-			var next FirmwareRelease
-			if err := tx.Where("dev_model = ?", fw.DevModel).
-				Order("create_time DESC").First(&next).Error; err == nil {
-				// 找到次新版本，设为最新
-				return tx.Model(&next).Update("is_latest", true).Error
-			}
-			// 没有更多记录，无需操作
-		}
-		return nil
+		return r.syncLatestFlagTx(tx, fw.DevModel)
 	})
 
 	if err != nil {

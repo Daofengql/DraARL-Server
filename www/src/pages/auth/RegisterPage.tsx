@@ -440,54 +440,58 @@ export function RegisterPage() {
                   disabled
                   helperText="邮箱地址已在上一步填写"
                 />
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, alignItems: { xs: 'stretch', sm: 'center' } }}>
                   <TextField
+                    fullWidth
                     label="图片验证码"
                     value={captchaCode}
                     onChange={(e) => setCaptchaCode(e.target.value)}
+                    sx={{ flex: 1, minWidth: 180 }}
+                  />
+                  <Box
+                    component="img"
+                    src={captchaImage}
+                    alt="验证码"
+                    onClick={getCaptcha}
+                    sx={{
+                      height: 64,
+                      width: { xs: '100%', sm: 180 },
+                      maxWidth: 180,
+                      cursor: 'pointer',
+                      borderRadius: 1,
+                      bgcolor: 'action.hover',
+                      objectFit: 'contain',
+                    }}
+                  />
+                </Box>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    label="邮箱验证码"
+                    value={emailCode}
+                    onChange={(e) => setEmailCode(e.target.value)}
                     sx={{ flex: 1 }}
                   />
-                      <Box
-                        component="img"
-                        src={captchaImage}
-                        alt="验证码"
-                        onClick={getCaptcha}
-                        sx={{
-                          height: 64,
-                          cursor: 'pointer',
-                          borderRadius: 1,
-                          bgcolor: 'action.hover',
-                        }}
-                      />
-                    </Box>
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                      <TextField
-                        label="邮箱验证码"
-                        value={emailCode}
-                        onChange={(e) => setEmailCode(e.target.value)}
-                        sx={{ flex: 1 }}
-                      />
-                      <Button
-                        variant="outlined"
-                        onClick={handleSendEmailCode}
-                        disabled={loading || countdown > 0 || !captchaCode}
-                        sx={{ minWidth: 120 }}
-                      >
-                        {countdown > 0 ? `${countdown}s` : '发送验证码'}
-                      </Button>
-                    </Box>
-                    {sessionId && (
-                      <Button
-                        variant="outlined"
-                        onClick={handleVerifyEmail}
-                        disabled={loading || !emailCode}
-                        fullWidth
-                      >
-                        验证邮箱
-                      </Button>
-                    )}
-                  </>
+                  <Button
+                    variant="outlined"
+                    onClick={handleSendEmailCode}
+                    disabled={loading || countdown > 0 || !captchaCode}
+                    sx={{ minWidth: 120 }}
+                  >
+                    {countdown > 0 ? `${countdown}s` : '发送验证码'}
+                  </Button>
+                </Box>
+                {sessionId && (
+                  <Button
+                    variant="outlined"
+                    onClick={handleVerifyEmail}
+                    disabled={loading || !emailCode}
+                    fullWidth
+                  >
+                    验证邮箱
+                  </Button>
                 )}
+              </>
+            )}
           </Box>
         )
       default:

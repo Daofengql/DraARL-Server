@@ -88,6 +88,18 @@ func InitDeviceRateLimiter() {
 				Window:      time.Minute,
 				Description: "同一 IP 每分钟 10 次",
 			},
+			"captcha-ip-burst": {
+				Key:         "ip",
+				Limit:       5,
+				Window:      10 * time.Second,
+				Description: "同一 IP 每 10 秒 5 次",
+			},
+			"captcha-ip-minute": {
+				Key:         "ip",
+				Limit:       30,
+				Window:      time.Minute,
+				Description: "同一 IP 每分钟 30 次",
+			},
 		},
 	}
 
@@ -416,6 +428,15 @@ func PublicRelaySearchRateLimit() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// CaptchaRateLimit 图片验证码接口限速中间件（IP 级）
+func CaptchaRateLimit() gin.HandlerFunc {
+	return DeviceRateLimit([]string{"captcha-ip-burst", "captcha-ip-minute"}, func(c *gin.Context) map[string]string {
+		return map[string]string{
+			"ip": c.ClientIP(),
+		}
+	})
 }
 
 // toString 将 interface{} 转换为字符串

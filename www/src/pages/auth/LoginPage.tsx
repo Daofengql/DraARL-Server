@@ -322,13 +322,14 @@ export function LoginPage() {
                 required
                 autoFocus
               />
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, alignItems: { xs: 'stretch', sm: 'center' }, mt: 2 }}>
                 <TextField
+                  fullWidth
                   label="图片验证码"
                   value={captchaCode}
                   onChange={(e) => setCaptchaCode(e.target.value)}
                   required
-                  sx={{ flex: 1 }}
+                  sx={{ flex: 1, minWidth: 180 }}
                 />
                 <Box
                   component="img"
@@ -337,9 +338,12 @@ export function LoginPage() {
                   onClick={getCaptcha}
                   sx={{
                     height: 64,
+                    width: { xs: '100%', sm: 180 },
+                    maxWidth: 180,
                     cursor: 'pointer',
                     borderRadius: 1,
                     bgcolor: 'action.hover',
+                    objectFit: 'contain',
                   }}
                 />
               </Box>

@@ -323,6 +323,15 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
 	}
 
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("APRS重启时发生panic: %v", r)
+			}
+		}()
+		aprs.RestartAPRSService()
+	}()
+
 	// 记录审计日志
 	oplog.AddLog(
 		fmt.Sprintf("更新系统信息配置: 平台名称=%s, 语言=%s", req.Name, req.Language),
@@ -335,7 +344,7 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
-		Message: "更新成功",
+		Message: "更新成功，APRS服务正在重启",
 	})
 }
 

@@ -83,7 +83,7 @@ func (s *Server) setupRoutes() {
 		}
 
 		// 验证码路由（无需认证）
-		api.GET("/captcha", handler.GetCaptcha)
+		api.GET("/captcha", middleware.CaptchaRateLimit(), handler.GetCaptcha)
 
 		// 平台信息（无需认证）
 		api.GET("/platform/info", handler.GetPlatformInfo)

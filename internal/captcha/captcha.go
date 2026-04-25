@@ -32,10 +32,10 @@ func Init() {
 
 	// 创建驱动配置
 	driver := &base64Captcha.DriverString{
-		Height:          80,
-		Width:           240,
-		NoiseCount:      5,
-		ShowLineOptions: base64Captcha.OptionShowSlimeLine | base64Captcha.OptionShowHollowLine,
+		Height:          64,
+		Width:           180,
+		NoiseCount:      1,
+		ShowLineOptions: base64Captcha.OptionShowSineLine,
 		Length:          5,
 		Source:          "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
 		BgColor:         nil, // 使用默认背景色

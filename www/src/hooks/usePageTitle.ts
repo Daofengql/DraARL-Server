@@ -13,6 +13,8 @@ const routeTitleMap: Record<string, string> = {
   '/groups': '我的群组',
   '/profile': '个人中心',
   '/comm-records': '通信记录',
+  '/relays': '中继台查询',
+  '/tools': '工具',
   '/docs': '技术支持',
   '/admin/dashboard': '仪表盘',
   '/admin/users': '用户管理',

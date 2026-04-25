@@ -33,7 +33,6 @@ import {
   Avatar,
   Popover,
 } from '@mui/material'
-import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import Search from '@mui/icons-material/Search'
@@ -79,7 +78,6 @@ export function UsersPage() {
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [formData, setFormData] = useState({
     username: '',
-    callsign: '',
     password: '',
     role: 'user',
   })
@@ -109,24 +107,13 @@ export function UsersPage() {
     }
   }
 
-  const handleOpenDialog = (user?: User) => {
-    if (user) {
-      setEditingUser(user)
-      setFormData({
-        username: user.username,
-        callsign: '',
-        password: '',
-        role: user.role,
-      })
-    } else {
-      setEditingUser(null)
-      setFormData({
-        username: '',
-        callsign: '',
-        password: '',
-        role: 'user',
-      })
-    }
+  const handleOpenDialog = (user: User) => {
+    setEditingUser(user)
+    setFormData({
+      username: user.username,
+      password: '',
+      role: user.role,
+    })
     setDialogOpen(true)
     setError('')
   }
@@ -137,32 +124,23 @@ export function UsersPage() {
   }
 
   const handleSave = async () => {
+    if (!editingUser) return
+
     try {
-      if (editingUser) {
-        const updateData: any = {
-          username: formData.username,
-        }
-        // 只有主管理员可以修改角色
-        if (isSuperAdmin()) {
-          updateData.role = formData.role
-        }
-        if (formData.password) {
-          await userService.changePassword(editingUser.id, {
-            old_password: '',
-            new_password: formData.password,
-          })
-        }
-        await userService.update(editingUser.id, updateData)
-      } else {
-        // 创建新用户时，默认角色为 user
-        const createData = {
-          username: formData.username,
-          callsign: formData.callsign,
-          password: formData.password,
-          role: 'user', // 默认创建普通用户
-        }
-        await userService.create(createData)
+      const updateData: any = {
+        username: formData.username,
       }
+      // 只有主管理员可以修改角色
+      if (isSuperAdmin()) {
+        updateData.role = formData.role
+      }
+      if (formData.password) {
+        await userService.changePassword(editingUser.id, {
+          old_password: '',
+          new_password: formData.password,
+        })
+      }
+      await userService.update(editingUser.id, updateData)
       handleCloseDialog()
       loadUsers()
     } catch (err: any) {
@@ -263,9 +241,6 @@ export function UsersPage() {
     <Box>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
         <Typography variant="h4" fontWeight={600}>用户管理</Typography>
-        <Button variant="contained" size="small" startIcon={<Add />} onClick={() => handleOpenDialog()}>
-          添加
-        </Button>
       </Box>
 
       {error && (
@@ -414,7 +389,7 @@ export function UsersPage() {
       </TableContainer>
 
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
-        <DialogTitle>{editingUser ? '编辑用户' : '添加用户'}</DialogTitle>
+        <DialogTitle>编辑用户</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <TextField
@@ -423,15 +398,6 @@ export function UsersPage() {
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
             />
-            {!editingUser && (
-              <TextField
-                label="呼号（可选）"
-                fullWidth
-                value={formData.callsign}
-                onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
-                helperText="创建后如需改呼号，请走操作证申请并等待管理员审批"
-              />
-            )}
             {/* 只有主管理员可以设置用户角色 */}
             {isSuperAdmin() && (
               <FormControl fullWidth>
@@ -450,12 +416,11 @@ export function UsersPage() {
               </FormControl>
             )}
             <TextField
-              label={editingUser ? '新密码（留空则不修改）' : '密码'}
+              label="新密码（留空则不修改）"
               type="password"
               fullWidth
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              required={!editingUser}
             />
           </Box>
         </DialogContent>

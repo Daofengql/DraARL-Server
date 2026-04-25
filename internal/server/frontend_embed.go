@@ -158,6 +158,10 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 			titleSuffix = " - 个人中心"
 		case "/comm-records":
 			titleSuffix = " - 通信记录"
+		case "/relays":
+			titleSuffix = " - 中继台查询"
+		case "/tools":
+			titleSuffix = " - 工具"
 		case "/docs":
 			titleSuffix = " - 技术支持"
 		case "/admin/dashboard":

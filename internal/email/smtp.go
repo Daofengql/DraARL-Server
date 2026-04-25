@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
+	"strings"
 
 	"draarl/internal/config"
 	"gopkg.in/gomail.v2"
@@ -110,6 +112,7 @@ func (s *SMTPService) SendMail(to, subject, body string) error {
 		d.SSL = true
 		tlsCfg := &tls.Config{
 			MinVersion: tls.VersionTLS12,
+			ServerName: smtpServerName(s.config.Host),
 		}
 
 		if s.config.InsecureSkipVerify {
@@ -129,4 +132,17 @@ func (s *SMTPService) SendMail(to, subject, body string) error {
 	}
 
 	return nil
+}
+
+func smtpServerName(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if trimmed == "" {
+		return ""
+	}
+
+	if splitHost, _, err := net.SplitHostPort(trimmed); err == nil {
+		return strings.Trim(splitHost, "[]")
+	}
+
+	return strings.Trim(trimmed, "[]")
 }

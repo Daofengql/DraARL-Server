@@ -22,7 +22,8 @@ import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { PublicPageLayout } from '../../components/layout'
 
-const steps = ['基本信息', '联系方式', '设置密码', '邮箱验证']
+const EMAIL_VERIFICATION_STEPS = ['基本信息', '联系方式', '设置密码', '邮箱验证']
+const BASIC_STEPS = ['基本信息', '联系方式', '设置密码']
 
 interface FormData {
   username: string
@@ -78,11 +79,21 @@ export function RegisterPage() {
   const logoUrl = config.systemInfo.logo_url
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
+  const requireEmailVerification = config.registration?.require_email_verification !== false
+  const steps = requireEmailVerification ? EMAIL_VERIFICATION_STEPS : BASIC_STEPS
 
   // 自动加载图片验证码
   useEffect(() => {
-    getCaptcha()
-  }, [])
+    if (requireEmailVerification) {
+      getCaptcha()
+    }
+  }, [requireEmailVerification])
+
+  useEffect(() => {
+    if (!requireEmailVerification && activeStep >= BASIC_STEPS.length) {
+      setActiveStep(BASIC_STEPS.length - 1)
+    }
+  }, [activeStep, requireEmailVerification])
 
   // 获取图片验证码
   const getCaptcha = async () => {
@@ -173,7 +184,7 @@ export function RegisterPage() {
         newErrors.confirmPassword = '两次输入的密码不一致'
         isValid = false
       }
-    } else if (step === 3) {
+    } else if (step === 3 && requireEmailVerification) {
       // 邮箱验证是必填的
       if (!emailVerified) {
         setError('请完成邮箱验证')
@@ -273,8 +284,8 @@ export function RegisterPage() {
       return
     }
 
-    // 邮箱必须验证通过
-    if (!emailVerified) {
+    // 需要邮箱验证时，必须验证通过
+    if (requireEmailVerification && !emailVerified) {
       setError('请先完成邮箱验证')
       setActiveStep(3)
       return
@@ -290,8 +301,8 @@ export function RegisterPage() {
         password: formData.password,
         nickname: formData.nickname || formData.username,
         email: formData.email,
-        session_id: sessionId,
-        email_code: emailCode,
+        session_id: requireEmailVerification ? sessionId : undefined,
+        email_code: requireEmailVerification ? emailCode : undefined,
       })
       // 保存设备密码并显示成功页面
       if (result?.device_password) {
@@ -377,7 +388,7 @@ export function RegisterPage() {
             />
             <Alert severity="info">
               <Typography variant="body2">
-                邮箱为必填项，用于账号验证和安全功能。手机号为可选项。
+                邮箱为必填项，用于账号安全和找回密码。手机号为可选项。
               </Typography>
             </Alert>
           </Box>

@@ -13,7 +13,7 @@ import (
 
 // SiteConfigRepository 站点配置仓储
 type SiteConfigRepository struct {
-	db    *gorm.DB
+	db   *gorm.DB
 	once sync.Once
 }
 
@@ -34,12 +34,13 @@ type SiteConfigValue interface{}
 
 // ConfigCategory 配置分类
 const (
-	CategoryICP        = "icp"
-	CategorySystem     = "system"
-	CategoryAPRS       = "aprs"
-	CategoryOpenAI     = "openai"
-	CategoryCommConfig = "comm_config"
-	CategorySMTP       = "smtp"
+	CategoryICP          = "icp"
+	CategorySystem       = "system"
+	CategoryAPRS         = "aprs"
+	CategoryOpenAI       = "openai"
+	CategoryCommConfig   = "comm_config"
+	CategorySMTP         = "smtp"
+	CategoryRegistration = "registration"
 )
 
 // ICPConfig ICP配置
@@ -49,11 +50,11 @@ type ICPConfig struct {
 
 // SystemInfoConfig 系统信息配置
 type SystemInfoConfig struct {
-	Name          string  `json:"name"`
-	NameShorthand string  `json:"nameshorthand"`
-	LogoURL       string  `json:"logo_url"`
-	FaviconURL    string  `json:"favicon_url"`
-	Language      string  `json:"language"`
+	Name          string `json:"name"`
+	NameShorthand string `json:"nameshorthand"`
+	LogoURL       string `json:"logo_url"`
+	FaviconURL    string `json:"favicon_url"`
+	Language      string `json:"language"`
 }
 
 // APRSConfig APRS配置
@@ -85,16 +86,21 @@ type CommSettingsConfig struct {
 	BatchUploadSec int  `json:"batch_upload_sec"`
 }
 
+// RegistrationConfig 注册相关配置
+type RegistrationConfig struct {
+	RequireEmailVerification bool `json:"require_email_verification"`
+}
+
 // SMTPConfig SMTP邮件配置
 type SMTPConfig struct {
-	Host        string `json:"host"`         // SMTP服务器地址
-	Port        int    `json:"port"`         // SMTP端口
-	UseSSL      bool   `json:"use_ssl"`      // 是否使用SSL
+	Host   string `json:"host"`    // SMTP服务器地址
+	Port   int    `json:"port"`    // SMTP端口
+	UseSSL bool   `json:"use_ssl"` // 是否使用SSL
 	// 仅用于本地调试。生产环境会强制拒绝该选项。
 	InsecureSkipVerify bool   `json:"insecure_skip_verify"` // 是否跳过 TLS 证书校验
-	SenderName  string `json:"sender_name"`  // 发件人昵称
-	SenderEmail string `json:"sender_email"` // 发件人邮箱
-	Password    string `json:"password"`     // 邮箱授权码
+	SenderName         string `json:"sender_name"`          // 发件人昵称
+	SenderEmail        string `json:"sender_email"`         // 发件人邮箱
+	Password           string `json:"password"`             // 邮箱授权码
 }
 
 // GetAll 获取所有配置
@@ -405,6 +411,45 @@ func (r *SiteConfigRepository) SetCommSettingsConfig(config CommSettingsConfig) 
 	return r.SetBatch(configs)
 }
 
+// GetRegistrationConfig 获取注册配置
+func (r *SiteConfigRepository) GetRegistrationConfig() (*RegistrationConfig, error) {
+	configs, err := r.GetByCategory(CategoryRegistration)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &RegistrationConfig{
+		RequireEmailVerification: true,
+	}
+
+	for _, config := range configs {
+		switch config.Key {
+		case "registration.require_email_verification":
+			result.RequireEmailVerification = config.Value != "false"
+		}
+	}
+
+	return result, nil
+}
+
+// SetRegistrationConfig 设置注册配置
+func (r *SiteConfigRepository) SetRegistrationConfig(config RegistrationConfig) error {
+	requireEmailVerificationStr := "false"
+	if config.RequireEmailVerification {
+		requireEmailVerificationStr = "true"
+	}
+
+	configs := []SiteConfig{
+		{
+			Key:         "registration.require_email_verification",
+			Value:       requireEmailVerificationStr,
+			Category:    CategoryRegistration,
+			Description: "注册时是否必须验证邮箱",
+		},
+	}
+	return r.SetBatch(configs)
+}
+
 // GetAllConfigMap 获取所有配置的map形式
 func (r *SiteConfigRepository) GetAllConfigMap() (map[string]string, error) {
 	configs, err := r.GetAll()
@@ -492,13 +537,13 @@ func (r *SiteConfigRepository) GetSMTPConfig() (*SMTPConfig, error) {
 	}
 
 	result := &SMTPConfig{
-		Host:        "smtp.qq.com",
-		Port:        465,
-		UseSSL:      true,
+		Host:               "smtp.qq.com",
+		Port:               465,
+		UseSSL:             true,
 		InsecureSkipVerify: false,
-		SenderName:  "DraARL麟链",
-		SenderEmail: "",
-		Password:    "",
+		SenderName:         "DraARL麟链",
+		SenderEmail:        "",
+		Password:           "",
 	}
 
 	for _, config := range configs {

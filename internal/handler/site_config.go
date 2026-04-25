@@ -114,6 +114,7 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 
 	var icpConfig *gormdb.ICPConfig
 	var systemConfig *gormdb.SystemInfoConfig
+	var registrationConfig *gormdb.RegistrationConfig
 	var err error
 
 	// 获取公开配置：ICP、SystemInfo（使用缓存）
@@ -143,6 +144,15 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 		return
 	}
 
+	registrationConfig, err = h.repo.GetRegistrationConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "获取配置失败",
+		})
+		return
+	}
+
 	// 获取 SSO 显示名称
 	ssoName := config.Get().Keycloak.Name
 	if ssoName == "" {
@@ -153,10 +163,11 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 		Code:    200,
 		Message: "获取成功",
 		Data: gin.H{
-			"icp":         icpConfig,
-			"systemInfo":  systemConfig,
-			"sso_enabled": config.Get().Keycloak.Enabled,
-			"sso_name":    ssoName,
+			"icp":          icpConfig,
+			"systemInfo":   systemConfig,
+			"registration": registrationConfig,
+			"sso_enabled":  config.Get().Keycloak.Enabled,
+			"sso_name":     ssoName,
 		},
 	})
 }
@@ -572,6 +583,85 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 		Code:    200,
 		Message: "获取成功",
 		Data:    config,
+	})
+}
+
+// GetRegistrationConfig 获取注册配置（管理员）
+func (h *SiteConfigHandler) GetRegistrationConfig(c *gin.Context) {
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "未授权",
+		})
+		return
+	}
+
+	_ = user // 路由已通过 RequireAdmin 中间件验证权限
+
+	config, err := h.repo.GetRegistrationConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "获取注册配置失败",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "获取成功",
+		Data:    config,
+	})
+}
+
+// UpdateRegistrationConfig 更新注册配置（管理员）
+func (h *SiteConfigHandler) UpdateRegistrationConfig(c *gin.Context) {
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{
+			Code:    401,
+			Message: "未授权",
+		})
+		return
+	}
+
+	userModel := user.(*gormdb.User)
+
+	var req gormdb.RegistrationConfig
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{
+			Code:    400,
+			Message: "请求参数错误",
+		})
+		return
+	}
+
+	if err := h.repo.SetRegistrationConfig(req); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "更新注册配置失败",
+		})
+		return
+	}
+
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateCategory(c.Request.Context(), gormdb.CategoryRegistration)
+		_ = configCache.InvalidateConfig(c.Request.Context(), "registration.require_email_verification")
+	}
+
+	oplog.AddLog(
+		fmt.Sprintf("更新注册配置: 邮箱验证必需=%t", req.RequireEmailVerification),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "更新成功",
 	})
 }
 

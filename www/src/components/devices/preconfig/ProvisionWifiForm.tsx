@@ -1,17 +1,13 @@
 import {
   Alert,
-  Box,
   Button,
   Card,
   CardContent,
   CardHeader,
-  FormControl,
   Grid,
   MenuItem,
-  Select,
   Stack,
   TextField,
-  Typography,
 } from '@mui/material'
 import Save from '@mui/icons-material/Save'
 import type { BleProvisionWifiConfig, BleProvisionWifiNetwork } from '../../../services/bleProvision'
@@ -92,8 +88,6 @@ export function ProvisionWifiForm({
     })
   }
 
-  const staticDisabled = disabled || value.dhcp
-
   return (
     <Card variant="outlined">
       <CardHeader
@@ -117,94 +111,101 @@ export function ProvisionWifiForm({
         <Stack spacing={2}>
           <Alert severity="info">{helperText}</Alert>
 
-          <Grid container spacing={2}>
-            <Grid size={{ xs: 12, md: 4 }}>
-              <Stack spacing={2}>
-                <TextField
-                  fullWidth
-                  label="SSID"
-                  value={value.manualSsid}
-                  onChange={(event) => {
-                    handleFieldChange('ssidMode', MANUAL_SSID_VALUE)
-                    handleFieldChange('manualSsid', event.target.value)
-                  }}
-                  disabled={disabled}
-                  helperText="请输入 2.4G WiFi 名称"
-                />
-                <TextField
-                  fullWidth
-                  label="PASSWORD"
-                  type="password"
-                  value={value.password}
-                  onChange={(event) => handleFieldChange('password', event.target.value)}
-                  disabled={disabled}
-                />
-                <FormControl fullWidth size="small">
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
-                    MODEL
-                  </Typography>
-                  <Select
-                    value={value.dhcp ? 'dhcp' : 'static'}
+          <Grid container spacing={2} alignItems="flex-start">
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField
+                fullWidth
+                select
+                size="small"
+                label="MODEL"
+                value={value.dhcp ? 'dhcp' : 'static'}
+                disabled={disabled}
+                onChange={(event) => handleFieldChange('dhcp', event.target.value === 'dhcp')}
+              >
+                <MenuItem value="dhcp">DHCP</MenuItem>
+                <MenuItem value="static">STATIC</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField
+                fullWidth
+                size="small"
+                label="SSID"
+                placeholder="请输入 2.4G WiFi 名称"
+                value={value.manualSsid}
+                onChange={(event) => {
+                  handleFieldChange('ssidMode', MANUAL_SSID_VALUE)
+                  handleFieldChange('manualSsid', event.target.value)
+                }}
+                disabled={disabled}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField
+                fullWidth
+                size="small"
+                label="PASSWORD"
+                type="password"
+                value={value.password}
+                onChange={(event) => handleFieldChange('password', event.target.value)}
+                disabled={disabled}
+              />
+            </Grid>
+
+            {!value.dhcp && (
+              <>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="IP"
+                    value={value.ip}
+                    onChange={(event) => handleFieldChange('ip', event.target.value)}
                     disabled={disabled}
-                    onChange={(event) => handleFieldChange('dhcp', event.target.value === 'dhcp')}
-                  >
-                    <MenuItem value="dhcp">DHCP</MenuItem>
-                    <MenuItem value="static">STATIC</MenuItem>
-                  </Select>
-                </FormControl>
-              </Stack>
-            </Grid>
-            <Grid size={{ xs: 12, md: 8 }}>
-              <Box sx={{ opacity: staticDisabled ? 0.6 : 1 }}>
-                <Grid container spacing={2}>
-                  <Grid size={{ xs: 12, md: 4 }}>
-                    <TextField
-                      fullWidth
-                      label="IP"
-                      value={value.ip}
-                      onChange={(event) => handleFieldChange('ip', event.target.value)}
-                      disabled={staticDisabled}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 12, md: 4 }}>
-                    <TextField
-                      fullWidth
-                      label="网关"
-                      value={value.gateway}
-                      onChange={(event) => handleFieldChange('gateway', event.target.value)}
-                      disabled={staticDisabled}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 12, md: 4 }}>
-                    <TextField
-                      fullWidth
-                      label="子网掩码"
-                      value={value.subnet}
-                      onChange={(event) => handleFieldChange('subnet', event.target.value)}
-                      disabled={staticDisabled}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 12, md: 6 }}>
-                    <TextField
-                      fullWidth
-                      label="DNS1"
-                      value={value.dns1}
-                      onChange={(event) => handleFieldChange('dns1', event.target.value)}
-                      disabled={staticDisabled}
-                    />
-                  </Grid>
-                  <Grid size={{ xs: 12, md: 6 }}>
-                    <TextField
-                      fullWidth
-                      label="DNS2"
-                      value={value.dns2}
-                      onChange={(event) => handleFieldChange('dns2', event.target.value)}
-                      disabled={staticDisabled}
-                    />
-                  </Grid>
+                  />
                 </Grid>
-              </Box>
-            </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="网关"
+                    value={value.gateway}
+                    onChange={(event) => handleFieldChange('gateway', event.target.value)}
+                    disabled={disabled}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="子网掩码"
+                    value={value.subnet}
+                    onChange={(event) => handleFieldChange('subnet', event.target.value)}
+                    disabled={disabled}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="DNS1"
+                    value={value.dns1}
+                    onChange={(event) => handleFieldChange('dns1', event.target.value)}
+                    disabled={disabled}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="DNS2"
+                    value={value.dns2}
+                    onChange={(event) => handleFieldChange('dns2', event.target.value)}
+                    disabled={disabled}
+                  />
+                </Grid>
+              </>
+            )}
           </Grid>
         </Stack>
       </CardContent>

@@ -51,8 +51,8 @@ type RegisterRequest struct {
 	Phone     string `json:"phone"` // 手机号可选
 	NickName  string `json:"nickname"`
 	Email     string `json:"email" binding:"required,email"` // 邮箱必填
-	SessionID string `json:"session_id" binding:"required"`  // 邮箱验证会话ID必填
-	EmailCode string `json:"email_code" binding:"required"`  // 邮箱验证码必填
+	SessionID string `json:"session_id"`                     // 邮箱验证会话ID
+	EmailCode string `json:"email_code"`                     // 邮箱验证码
 }
 
 // UserResponse 用户响应（用于中间件传递）
@@ -318,33 +318,7 @@ func Register(c *gin.Context) {
 		}
 	}
 
-	// 邮箱验证（必须）
-	mgr := email.GetVerificationManager()
-	session, err := mgr.Verify(req.SessionID, req.EmailCode)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "邮箱验证码错误或已过期",
-		})
-		return
-	}
-	// 验证用途是否正确
-	if session.Purpose != email.PurposeRegister {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "验证码用途不正确",
-		})
-		return
-	}
-	// 验证邮箱是否匹配
-	if session.Email != req.Email {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "邮箱地址不匹配",
-		})
-		return
-	}
-	// 再次检查邮箱是否已被注册（防止竞争条件）
+	// 检查邮箱是否已被注册
 	existingEmail, _ := repo.GetUserByEmail(req.Email)
 	if existingEmail != nil {
 		c.JSON(http.StatusConflict, gin.H{
@@ -353,8 +327,55 @@ func Register(c *gin.Context) {
 		})
 		return
 	}
-	// 删除验证会话
-	mgr.DeleteSession(req.SessionID)
+
+	registrationConfig, err := gormdb.GetSiteConfigRepo().GetRegistrationConfig()
+	if err != nil {
+		log.Printf("获取注册配置失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "获取注册配置失败",
+		})
+		return
+	}
+
+	emailVerified := false
+	if registrationConfig.RequireEmailVerification {
+		if req.SessionID == "" || req.EmailCode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "请完成邮箱验证",
+			})
+			return
+		}
+
+		mgr := email.GetVerificationManager()
+		session, err := mgr.Verify(req.SessionID, req.EmailCode)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "邮箱验证码错误或已过期",
+			})
+			return
+		}
+		// 验证用途是否正确
+		if session.Purpose != email.PurposeRegister {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "验证码用途不正确",
+			})
+			return
+		}
+		// 验证邮箱是否匹配
+		if session.Email != req.Email {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "邮箱地址不匹配",
+			})
+			return
+		}
+		mgr.DeleteSession(req.SessionID)
+		emailVerified = true
+	}
 
 	// 加密密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -391,7 +412,7 @@ func Register(c *gin.Context) {
 		CallSign:       req.CallSign,
 		Phone:          req.Phone,
 		Email:          req.Email,
-		EmailVerified:  true, // 邮箱已验证
+		EmailVerified:  emailVerified,
 		Status:         1,
 		ApprovalStatus: 0, // 待审核状态
 		Roles:          "user",
@@ -600,110 +621,6 @@ func GetUsers(c *gin.Context) {
 			"items":     items,
 			"page":      page,
 			"page_size": limit,
-		},
-	})
-}
-
-// CreateUser 创建用户（管理员）
-func CreateUser(c *gin.Context) {
-	var req RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-		})
-		return
-	}
-
-	repo := gormdb.NewUserRepository()
-	req.CallSign = gormdb.NormalizeCallSign(req.CallSign)
-
-	// 检查用户名是否已存在
-	existing, _ := repo.GetUserByName(req.Username)
-	if existing != nil {
-		c.JSON(http.StatusConflict, gin.H{
-			"code":    409,
-			"message": "用户名已存在",
-		})
-		return
-	}
-
-	if req.CallSign != "" {
-		available, err := repo.IsCallSignAvailable(req.CallSign, 0)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    500,
-				"message": "校验呼号失败",
-			})
-			return
-		}
-		if !available {
-			c.JSON(http.StatusConflict, gin.H{
-				"code":    409,
-				"message": "呼号已被使用",
-			})
-			return
-		}
-	}
-
-	// 加密密码
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "密码加密失败",
-		})
-		return
-	}
-
-	nickname := req.NickName
-	if nickname == "" {
-		nickname = req.Username
-	}
-
-	user := &gormdb.User{
-		Name:     req.Username,
-		Password: string(hashedPassword),
-		NickName: nickname,
-		CallSign: req.CallSign,
-		Status:   1,
-		Roles:    "user", // 默认创建普通用户
-	}
-
-	if err := repo.CreateUser(user); err != nil {
-		if err == gormdb.ErrCallSignConflict {
-			c.JSON(http.StatusConflict, gin.H{
-				"code":    409,
-				"message": "呼号已被使用",
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "创建用户失败",
-		})
-		return
-	}
-
-	// 获取当前操作用户信息
-	if username, exists := c.Get("username"); exists {
-		if currentUser, err := repo.GetUserByName(username.(string)); err == nil && currentUser != nil {
-			oplog.AddLog(
-				fmt.Sprintf("创建用户成功: %s (%s)", user.Name, user.CallSign),
-				"user_create",
-				currentUser.ID,
-				currentUser.Name,
-				currentUser.CallSign,
-				c.ClientIP(),
-			)
-		}
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    201,
-		"message": "创建成功",
-		"data": gin.H{
-			"id": user.ID,
 		},
 	})
 }

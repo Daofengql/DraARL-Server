@@ -10,6 +10,9 @@ export interface PublicConfig {
     logo_url: string
     language: string
   }
+  registration: {
+    require_email_verification: boolean
+  }
   sso_enabled: boolean
   sso_name: string
 }
@@ -21,6 +24,9 @@ const DEFAULT_CONFIG: PublicConfig = {
     nameshorthand: SITE_CONFIG.SHORT_NAME,
     logo_url: '',
     language: 'zh',
+  },
+  registration: {
+    require_email_verification: true,
   },
   sso_enabled: false,
   sso_name: 'SSO',

@@ -8,6 +8,9 @@ export interface PublicConfig {
     logo_url: string
     language: string
   }
+  registration: {
+    require_email_verification: boolean
+  }
   sso_enabled: boolean
   sso_name: string
 }

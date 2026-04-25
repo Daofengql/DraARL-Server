@@ -255,7 +255,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                     </MenuItem>
                     {PROVISION_DEVICE_PROFILES.map((profile) => (
                       <MenuItem key={profile.key} value={profile.key}>
-                        {profile.key} · {profile.label}
+                        {profile.label}
                       </MenuItem>
                     ))}
                   </Select>
@@ -263,7 +263,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
               </Grid>
               <Grid size={{ xs: 12, md: 8 }}>
                 <Alert severity="info">
-                  {selectedProfile?.description || '当前先开放 devmodel1，即 ESP32 链路盒子（1W 射频版）。'}
+                  {selectedProfile?.description || '当前先开放 ESP32 链路盒子（1W 射频版）。'}
                 </Alert>
               </Grid>
             </Grid>

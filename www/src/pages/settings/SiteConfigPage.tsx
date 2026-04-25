@@ -88,6 +88,11 @@ interface CommSettingsConfig {
   batch_upload_sec: number
 }
 
+// 注册设置配置
+interface RegistrationConfig {
+  require_email_verification: boolean
+}
+
 // SMTP配置
 interface SMTPConfig {
   host: string
@@ -264,6 +269,11 @@ export function SiteConfigPage() {
     batch_upload_sec: 10,
   })
 
+  // 注册设置配置
+  const [registration, setRegistration] = useState<RegistrationConfig>({
+    require_email_verification: true,
+  })
+
   // SMTP配置
   const [smtp, setSMTP] = useState<SMTPConfig>({
     host: 'smtp.qq.com',
@@ -296,12 +306,13 @@ export function SiteConfigPage() {
   const loadConfigs = async () => {
     try {
       // 并行获取所有配置
-      const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes, smtpRes] = await Promise.all([
+      const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes, registrationRes, smtpRes] = await Promise.all([
         apiClient.get<any>('/api/config/category/icp'),
         apiClient.get<any>('/api/config/category/system'),
         apiClient.get<any>('/api/config/aprs'),
         apiClient.get<any>('/api/config/openai'),
         apiClient.get<any>('/api/config/comm-settings'),
+        apiClient.get<any>('/api/config/registration'),
         apiClient.get<any>('/api/config/smtp'),
       ])
 
@@ -333,6 +344,11 @@ export function SiteConfigPage() {
       // 解析通信设置配置
       if (commSettingsRes.code === 200 && commSettingsRes.data) {
         setCommSettings(commSettingsRes.data)
+      }
+
+      // 解析注册设置
+      if (registrationRes.code === 200 && registrationRes.data) {
+        setRegistration(registrationRes.data)
       }
 
       // 解析SMTP配置
@@ -453,6 +469,19 @@ export function SiteConfigPage() {
       showMessage('success', '通信设置保存成功')
     } catch (err) {
       showMessage('error', '保存通信设置失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSaveRegistration = async () => {
+    setLoading(true)
+    try {
+      await apiClient.put('/api/config/registration', registration)
+      showMessage('success', '注册设置保存成功')
+      window.dispatchEvent(new CustomEvent('config-updated'))
+    } catch (err) {
+      showMessage('error', '保存注册设置失败')
     } finally {
       setLoading(false)
     }
@@ -627,7 +656,7 @@ export function SiteConfigPage() {
 
   // 加载操作日志当切换到操作日志标签页时
   useEffect(() => {
-    if (tabValue === 4) {
+    if (tabValue === 6) {
       loadOpLogs()
     }
   }, [tabValue, logPage, logRowsPerPage, eventType])
@@ -698,6 +727,7 @@ export function SiteConfigPage() {
           <Tab label="OpenAI" />
           <Tab label="通信设置" />
           <Tab label="SMTP配置" />
+          <Tab label="注册设置" />
           <Tab label="操作日志" />
         </Tabs>
 
@@ -1385,8 +1415,55 @@ export function SiteConfigPage() {
           </Box>
         </TabPanel>
 
-        {/* 操作日志标签页 */}
+        {/* 注册设置标签页 */}
         <TabPanel value={tabValue} index={5}>
+          <Box sx={{ px: 2, maxWidth: 600 }}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  注册设置
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  配置用户注册流程中的验证要求
+                </Typography>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={registration.require_email_verification}
+                        onChange={(e) => setRegistration({
+                          ...registration,
+                          require_email_verification: e.target.checked,
+                        })}
+                      />
+                    }
+                    label="注册时必须验证邮箱"
+                  />
+                  <Alert severity="info">
+                    关闭后，用户仍需填写邮箱地址，但注册流程不会要求发送和校验邮箱验证码。
+                  </Alert>
+                </Box>
+
+                <Divider sx={{ my: 3 }} />
+
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<Save />}
+                    onClick={handleSaveRegistration}
+                    disabled={loading}
+                  >
+                    保存
+                  </Button>
+                </Box>
+              </CardContent>
+            </Card>
+          </Box>
+        </TabPanel>
+
+        {/* 操作日志标签页 */}
+        <TabPanel value={tabValue} index={6}>
           <Box sx={{ px: 2 }}>
             <Card>
               <CardContent>

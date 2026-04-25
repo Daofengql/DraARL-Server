@@ -42,12 +42,6 @@ export const userService = {
     return res.data!
   },
 
-  // 创建用户
-  async create(data: Partial<User>): Promise<User> {
-    const res = await apiClient.post<{ code: number; message: string; data?: User }>('/api/users', data)
-    return res.data!
-  },
-
   // 更新用户
   async update(id: number, data: Partial<User>): Promise<User> {
     const res = await apiClient.put<{ code: number; message: string; data?: User }>(`/api/users/${id}`, data)

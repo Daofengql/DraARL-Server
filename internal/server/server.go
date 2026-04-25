@@ -165,7 +165,6 @@ func (s *Server) setupRoutes() {
 			admin.Use(middleware.RequireAdmin())
 			{
 				admin.GET("/users", handler.GetUsers)
-				admin.POST("/users", handler.CreateUser)
 				admin.PUT("/users/:id", handler.UpdateUser)
 				admin.DELETE("/users/:id", handler.DeleteUser)
 				admin.PUT("/users/:id/status", handler.UpdateUserStatus)
@@ -318,6 +317,8 @@ func (s *Server) setupRoutes() {
 			admin.PUT("/config/system", configHandler.UpdateSystemInfoConfig)
 			admin.PUT("/config/aprs", configHandler.UpdateAPRSConfig)
 			admin.PUT("/config/openai", configHandler.UpdateOpenAIConfig)
+			admin.GET("/config/registration", configHandler.GetRegistrationConfig)
+			admin.PUT("/config/registration", configHandler.UpdateRegistrationConfig)
 			admin.GET("/config/all", configHandler.GetAllConfigs)
 			admin.GET("/config/system", configHandler.GetSystemInfoConfig)
 			admin.GET("/config/aprs", configHandler.GetAPRSConfig)

@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="620" viewBox="0 0 1180 620" role="img" aria-labelledby="title desc">
+  <title id="title">DraARL 账号鉴权与权限分层图</title>
+  <desc id="desc">展示公开访问、登录、待审核、审核通过、管理员权限和 WebSocket Cookie 同步流程。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .box { fill: #fff; stroke: #cbd5e1; stroke-width: 1.5; rx: 12; }
+      .box-blue { fill: #eff6ff; stroke: #60a5fa; stroke-width: 1.5; rx: 12; }
+      .box-green { fill: #f0fdf4; stroke: #4ade80; stroke-width: 1.5; rx: 12; }
+      .box-yellow { fill: #fffbeb; stroke: #fbbf24; stroke-width: 1.5; rx: 12; }
+      .box-red { fill: #fef2f2; stroke: #f87171; stroke-width: 1.5; rx: 12; }
+      .title { font: 700 26px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 700 16px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #1e293b; }
+      .small { font: 13px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 12px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 6 5; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="1180" height="620"/>
+  <text class="title" x="44" y="54">账号鉴权与权限分层</text>
+
+  <rect class="box-blue" x="70" y="105" width="210" height="90"/>
+  <text class="label" x="100" y="139">公开访问</text>
+  <text class="small" x="100" y="164">首页、文档、中继查询</text>
+  <text class="small" x="100" y="185">登录、注册、验证码</text>
+
+  <rect class="box" x="370" y="105" width="210" height="90"/>
+  <text class="label" x="400" y="139">登录方式</text>
+  <text class="small" x="400" y="164">密码 / 邮箱验证码</text>
+  <text class="small" x="400" y="185">可选 Keycloak SSO</text>
+
+  <rect class="box" x="670" y="105" width="210" height="90"/>
+  <text class="label" x="700" y="139">登录态</text>
+  <text class="small" x="700" y="164">Access Token</text>
+  <text class="small" x="700" y="185">Refresh Token Cookie</text>
+
+  <rect class="box-yellow" x="70" y="285" width="230" height="104"/>
+  <text class="label" x="100" y="319">待审核用户</text>
+  <text class="small" x="100" y="344">可访问仪表盘、个人中心</text>
+  <text class="small" x="100" y="365">不能使用设备/群组/收发</text>
+
+  <rect class="box-green" x="370" y="285" width="230" height="104"/>
+  <text class="label" x="400" y="319">审核通过用户</text>
+  <text class="small" x="400" y="344">设备管理、群组管理</text>
+  <text class="small" x="400" y="365">在线收发、通信记录</text>
+
+  <rect class="box-red" x="670" y="285" width="230" height="104"/>
+  <text class="label" x="700" y="319">管理员</text>
+  <text class="small" x="700" y="344">后台管理、审批、配置</text>
+  <text class="small" x="700" y="365">可查看全局数据</text>
+
+  <rect class="box" x="950" y="105" width="180" height="90"/>
+  <text class="label" x="980" y="139">WebSocket</text>
+  <text class="small" x="980" y="164">同步 ws_token</text>
+  <text class="small" x="980" y="185">Cookie 鉴权</text>
+
+  <rect class="box" x="250" y="470" width="680" height="82"/>
+  <text class="label" x="282" y="503">接口权限层级</text>
+  <text class="small" x="282" y="528">Public → JWT → JWT + Approved → Admin → Admin/Owner</text>
+
+  <path class="arrow" d="M280 150 L370 150"/>
+  <path class="arrow" d="M580 150 L670 150"/>
+  <path class="arrow" d="M775 195 C775 240 185 240 185 285"/>
+  <path class="arrow" d="M775 195 C775 242 485 242 485 285"/>
+  <path class="arrow" d="M775 195 C775 242 785 242 785 285"/>
+  <path class="arrow dash" d="M880 150 L950 150"/>
+  <path class="arrow" d="M185 389 C185 435 310 438 360 470"/>
+  <path class="arrow" d="M485 389 L485 470"/>
+  <path class="arrow" d="M785 389 C785 435 710 438 710 470"/>
+
+  <text class="tiny" x="314" y="135">提交凭据</text>
+  <text class="tiny" x="604" y="135">签发 Token</text>
+  <text class="tiny" x="900" y="135">在线收发前同步</text>
+</svg>

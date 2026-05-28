@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">DraARL Server 系统架构图</title>
+  <desc id="desc">展示前端、HTTP API、WebSocket、UDP、数据库、缓存、对象存储和外部服务之间的关系。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; rx: 14; }
+      .zone { fill: #eef6ff; stroke: #93c5fd; stroke-width: 1.2; rx: 16; }
+      .zone2 { fill: #f0fdf4; stroke: #86efac; stroke-width: 1.2; rx: 16; }
+      .zone3 { fill: #fff7ed; stroke: #fdba74; stroke-width: 1.2; rx: 16; }
+      .title { font: 700 28px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 15px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .h2 { font: 700 18px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 15px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #1e293b; }
+      .small { font: 13px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 12px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .arrow-blue { stroke: #2563eb; stroke-width: 2.2; fill: none; marker-end: url(#arrowBlue); }
+      .arrow-green { stroke: #16a34a; stroke-width: 2.2; fill: none; marker-end: url(#arrowGreen); }
+      .arrow-orange { stroke: #ea580c; stroke-width: 2.2; fill: none; marker-end: url(#arrowOrange); }
+      .dash { stroke-dasharray: 6 5; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#ea580c"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="760"/>
+  <text class="title" x="48" y="56">DraARL Server 系统架构</text>
+  <text class="subtitle" x="48" y="84">Go 后端同时提供 HTTP API、WebSocket 和 UDP 实时通信；React 前端可开发运行或嵌入发布。</text>
+
+  <rect class="zone" x="48" y="122" width="330" height="560"/>
+  <text class="h2" x="72" y="154">访问端</text>
+  <rect class="panel" x="78" y="184" width="270" height="92"/>
+  <text class="label" x="104" y="218">React 前端</text>
+  <text class="small" x="104" y="242">公共页 / 用户控制台 / 管理后台</text>
+  <text class="tiny" x="104" y="263">Vite 开发或 Go embed 发布</text>
+  <rect class="panel" x="78" y="315" width="270" height="82"/>
+  <text class="label" x="104" y="348">浏览器在线收发</text>
+  <text class="small" x="104" y="372">WebSocket 幽灵设备 SSID=105</text>
+  <rect class="panel" x="78" y="436" width="270" height="82"/>
+  <text class="label" x="104" y="469">UDP 普通设备</text>
+  <text class="small" x="104" y="493">DraARLv1 / 设备密码 / SSID</text>
+  <rect class="panel" x="78" y="557" width="270" height="82"/>
+  <text class="label" x="104" y="590">UDP 客户端幽灵设备</text>
+  <text class="small" x="104" y="614">Android / iOS / Windows / macOS</text>
+
+  <rect class="zone2" x="455" y="122" width="410" height="560"/>
+  <text class="h2" x="479" y="154">DraARL Go 服务</text>
+  <rect class="panel" x="493" y="184" width="334" height="82"/>
+  <text class="label" x="519" y="217">Gin HTTP API</text>
+  <text class="small" x="519" y="241">/api/* 路由、鉴权、审批、管理接口</text>
+  <rect class="panel" x="493" y="302" width="334" height="82"/>
+  <text class="label" x="519" y="335">WebSocket 服务</text>
+  <text class="small" x="519" y="359">/ws，使用 ws_token Cookie 鉴权</text>
+  <rect class="panel" x="493" y="420" width="334" height="82"/>
+  <text class="label" x="519" y="453">UDP 服务</text>
+  <text class="small" x="519" y="477">心跳、语音、文本、配置、AT 透传</text>
+  <rect class="panel" x="493" y="538" width="334" height="98"/>
+  <text class="label" x="519" y="571">运行态通信核心</text>
+  <text class="small" x="519" y="595">设备索引、群组路由、半双工控制</text>
+  <text class="small" x="519" y="617">通信记录、缓存、APRS 服务</text>
+
+  <rect class="zone3" x="940" y="122" width="292" height="560"/>
+  <text class="h2" x="964" y="154">数据与外部服务</text>
+  <rect class="panel" x="970" y="184" width="232" height="72"/>
+  <text class="label" x="996" y="216">MySQL / MariaDB</text>
+  <text class="small" x="996" y="239">用户、设备、群组、记录、配置</text>
+  <rect class="panel" x="970" y="286" width="232" height="72"/>
+  <text class="label" x="996" y="318">Redis</text>
+  <text class="small" x="996" y="341">refresh token，失败降级内存</text>
+  <rect class="panel" x="970" y="388" width="232" height="72"/>
+  <text class="label" x="996" y="420">MinIO</text>
+  <text class="small" x="996" y="443">头像、资源、固件、音频文件</text>
+  <rect class="panel" x="970" y="490" width="232" height="72"/>
+  <text class="label" x="996" y="522">Keycloak</text>
+  <text class="small" x="996" y="545">可选 SSO 登录与绑定</text>
+  <rect class="panel" x="970" y="592" width="232" height="72"/>
+  <text class="label" x="996" y="624">APRS / GeoIP</text>
+  <text class="small" x="996" y="647">APRS 上报与 IP 归属地</text>
+
+  <path class="arrow-blue" d="M348 230 C398 230 431 225 493 225"/>
+  <text class="tiny" x="385" y="213">HTTP / JSON</text>
+  <path class="arrow-blue" d="M348 356 C410 356 430 343 493 343"/>
+  <text class="tiny" x="385" y="336">WebSocket</text>
+  <path class="arrow-green" d="M348 477 C414 477 431 462 493 462"/>
+  <text class="tiny" x="386" y="454">UDP</text>
+  <path class="arrow-green" d="M348 598 C405 598 432 488 493 480"/>
+  <text class="tiny" x="376" y="563">UDP</text>
+
+  <path class="arrow" d="M827 225 C876 225 911 220 970 220"/>
+  <path class="arrow" d="M827 240 C880 263 912 316 970 322"/>
+  <path class="arrow-orange" d="M827 343 C878 357 912 416 970 424"/>
+  <path class="arrow" d="M827 225 C890 300 913 520 970 526"/>
+  <path class="arrow" d="M827 587 C876 584 913 625 970 628"/>
+
+  <path class="arrow-green dash" d="M660 502 L660 538"/>
+  <text class="tiny" x="680" y="526">统一进入运行态路由</text>
+  <path class="arrow-green dash" d="M660 384 L660 538"/>
+  <path class="arrow-green dash" d="M660 266 L660 538"/>
+
+  <rect x="48" y="704" width="1184" height="34" rx="10" fill="#e2e8f0"/>
+  <text class="small" x="72" y="726">发布模式：前端可嵌入 Go 二进制；若启用 FrontendCDN，嵌入静态资源会同步到 MinIO 并由对象存储承载静态资产。</text>
+</svg>

@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="680" viewBox="0 0 1260 680" role="img" aria-labelledby="title desc">
+  <title id="title">DraARL 实时通信运行态流程图</title>
+  <desc id="desc">展示 UDP 设备、WebSocket 幽灵设备、协议解析、认证、群组路由、半双工控制和通信记录之间的关系。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .box { fill: #fff; stroke: #cbd5e1; stroke-width: 1.5; rx: 12; }
+      .orange { fill: #fff7ed; stroke: #fdba74; stroke-width: 1.5; rx: 12; }
+      .blue { fill: #eff6ff; stroke: #93c5fd; stroke-width: 1.5; rx: 12; }
+      .green { fill: #f0fdf4; stroke: #86efac; stroke-width: 1.5; rx: 12; }
+      .purple { fill: #f5f3ff; stroke: #c4b5fd; stroke-width: 1.5; rx: 12; }
+      .title { font: 700 26px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 700 16px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #1e293b; }
+      .small { font: 13px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 12px "Microsoft YaHei", "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .arrow-green { stroke: #16a34a; stroke-width: 2.2; fill: none; marker-end: url(#arrowGreen); }
+      .arrow-blue { stroke: #2563eb; stroke-width: 2.2; fill: none; marker-end: url(#arrowBlue); }
+      .dash { stroke-dasharray: 6 5; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="1260" height="680"/>
+  <text class="title" x="44" y="54">实时通信运行态流程</text>
+
+  <rect class="orange" x="70" y="118" width="220" height="88"/>
+  <text class="label" x="100" y="152">UDP 普通设备</text>
+  <text class="small" x="100" y="176">心跳 / Opus / 文本 / 配置</text>
+  <rect class="blue" x="70" y="275" width="220" height="88"/>
+  <text class="label" x="100" y="309">WebSocket 幽灵设备</text>
+  <text class="small" x="100" y="333">浏览器在线收发 SSID=105</text>
+  <rect class="orange" x="70" y="432" width="220" height="88"/>
+  <text class="label" x="100" y="466">UDP 幽灵/桥接器</text>
+  <text class="small" x="100" y="490">Android/iOS/Windows/桥软件</text>
+
+  <rect class="box" x="390" y="118" width="220" height="88"/>
+  <text class="label" x="420" y="152">协议解析</text>
+  <text class="small" x="420" y="176">DraARLv1 90 字节头</text>
+  <rect class="box" x="390" y="275" width="220" height="88"/>
+  <text class="label" x="420" y="309">WebSocket 连接态</text>
+  <text class="small" x="420" y="333">Cookie 鉴权 / 冲突检查</text>
+  <rect class="box" x="390" y="432" width="220" height="88"/>
+  <text class="label" x="420" y="466">设备认证</text>
+  <text class="small" x="420" y="490">设备密码 / JWT / 审核状态</text>
+
+  <rect class="green" x="710" y="118" width="245" height="88"/>
+  <text class="label" x="740" y="152">运行态索引</text>
+  <text class="small" x="740" y="176">owner_id + ssid / username</text>
+  <rect class="green" x="710" y="275" width="245" height="88"/>
+  <text class="label" x="740" y="309">群组消息路由</text>
+  <text class="small" x="740" y="333">普通群组 / 私有群组 / 互联组</text>
+  <rect class="green" x="710" y="432" width="245" height="88"/>
+  <text class="label" x="740" y="466">半双工与收发控制</text>
+  <text class="small" x="740" y="490">禁发 / 禁收 / 当前发言人</text>
+
+  <rect class="purple" x="1050" y="118" width="170" height="88"/>
+  <text class="label" x="1078" y="152">目标设备</text>
+  <text class="small" x="1078" y="176">UDP / WS 广播</text>
+  <rect class="purple" x="1050" y="275" width="170" height="88"/>
+  <text class="label" x="1078" y="309">通信记录</text>
+  <text class="small" x="1078" y="333">音频 / 时长 / 统计</text>
+  <rect class="purple" x="1050" y="432" width="170" height="88"/>
+  <text class="label" x="1078" y="466">外部存储</text>
+  <text class="small" x="1078" y="490">MySQL / MinIO</text>
+
+  <path class="arrow-green" d="M290 162 L390 162"/>
+  <path class="arrow-blue" d="M290 319 L390 319"/>
+  <path class="arrow-green" d="M290 476 L390 476"/>
+  <path class="arrow" d="M500 206 L500 275"/>
+  <path class="arrow" d="M500 363 L500 432"/>
+  <path class="arrow" d="M610 476 C650 476 670 162 710 162"/>
+  <path class="arrow" d="M610 319 L710 319"/>
+  <path class="arrow" d="M610 162 L710 162"/>
+  <path class="arrow-green" d="M832 206 L832 275"/>
+  <path class="arrow-green" d="M832 363 L832 432"/>
+  <path class="arrow-green" d="M955 476 C1000 476 1010 162 1050 162"/>
+  <path class="arrow" d="M955 319 L1050 319"/>
+  <path class="arrow dash" d="M1135 363 L1135 432"/>
+
+  <rect x="70" y="585" width="1150" height="42" rx="12" fill="#e2e8f0"/>
+  <text class="small" x="96" y="611">语音与文本进入同一群组路由；通信记录可按站点配置保存音频到 MinIO，并在 MySQL 中记录索引、时长和状态。</text>
+</svg>

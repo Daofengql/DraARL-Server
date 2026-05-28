@@ -16,6 +16,16 @@ markdown_extensions:
 
 nav:
   - 首页: index.md
+  - 使用与说明文档:
+      - 总览: usage/README.md
+      - 01. 部署与配置: usage/01-部署与配置.md
+      - 02. 账号、登录与权限: usage/02-账号登录与权限.md
+      - 03. 用户控制台: usage/03-用户控制台.md
+      - 04. 设备与群组: usage/04-设备与群组.md
+      - 05. 在线收发、通信记录与通联日志: usage/05-在线收发与通信记录.md
+      - 06. 管理员后台: usage/06-管理员后台.md
+      - 07. 设备接入与 API 快速对接: usage/07-设备接入与API快速对接.md
+      - 08. 运维与排障: usage/08-运维与排障.md
   - 协议文档: Protocol.md
   - API 文档:
       - 总览: api/README.md

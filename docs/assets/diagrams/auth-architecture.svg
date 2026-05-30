@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1565c0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1976d2;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="1000" height="50" fill="url(#grad1)" rx="8"/>
+  <text x="500" y="32" text-anchor="middle" fill="white" font-size="20" font-weight="bold">认证架构 - 三轨制认证体系</text>
+
+  <!-- 认证方式1: 普通设备 -->
+  <rect x="50" y="70" width="280" height="350" fill="white" rx="12" filter="url(#shadow)" stroke="#4caf50" stroke-width="3"/>
+  <rect x="50" y="70" width="280" height="45" fill="#4caf50" rx="12"/>
+  <rect x="50" y="95" width="280" height="20" fill="#4caf50"/>
+  <text x="190" y="100" text-anchor="middle" fill="white" font-size="16" font-weight="bold">普通设备认证</text>
+  
+  <text x="190" y="140" text-anchor="middle" fill="#666" font-size="12">SSID: 1-99, 106-254</text>
+  
+  <rect x="70" y="155" width="240" height="40" fill="#e8f5e9" rx="6"/>
+  <text x="190" y="180" text-anchor="middle" fill="#2e7d32" font-size="13">ESP32 链路盒子</text>
+  
+  <rect x="70" y="205" width="240" height="40" fill="#e8f5e9" rx="6"/>
+  <text x="190" y="230" text-anchor="middle" fill="#2e7d32" font-size="13">对讲桥接器 (南山/涛涛/HT)</text>
+  
+  <rect x="70" y="255" width="240" height="40" fill="#e8f5e9" rx="6"/>
+  <text x="190" y="280" text-anchor="middle" fill="#2e7d32" font-size="13">互联设备</text>
+
+  <line x1="70" y1="310" x2="290" y2="310" stroke="#e0e0e0" stroke-width="1"/>
+  
+  <text x="190" y="335" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">认证流程</text>
+  <text x="190" y="355" text-anchor="middle" fill="#666" font-size="11">1. 设备发送心跳包</text>
+  <text x="190" y="375" text-anchor="middle" fill="#666" font-size="11">2. AES解密设备密码</text>
+  <text x="190" y="395" text-anchor="middle" fill="#666" font-size="11">3. bcrypt验证哈希</text>
+
+  <rect x="70" y="375" width="240" height="30" fill="#fff3e0" rx="4" stroke="#ff9800" stroke-width="1"/>
+  <text x="190" y="395" text-anchor="middle" fill="#e65100" font-size="10">阶梯封禁: 4次失败→10s</text>
+
+  <!-- 认证方式2: 幽灵设备 -->
+  <rect x="360" y="70" width="280" height="350" fill="white" rx="12" filter="url(#shadow)" stroke="#2196f3" stroke-width="3"/>
+  <rect x="360" y="70" width="280" height="45" fill="#2196f3" rx="12"/>
+  <rect x="360" y="95" width="280" height="20" fill="#2196f3"/>
+  <text x="500" y="100" text-anchor="middle" fill="white" font-size="16" font-weight="bold">幽灵设备认证</text>
+  
+  <text x="500" y="140" text-anchor="middle" fill="#666" font-size="12">SSID: 101-105</text>
+  
+  <rect x="380" y="155" width="240" height="35" fill="#e3f2fd" rx="6"/>
+  <text x="500" y="177" text-anchor="middle" fill="#1565c0" font-size="12">Android (101) / iOS (102)</text>
+  
+  <rect x="380" y="200" width="240" height="35" fill="#e3f2fd" rx="6"/>
+  <text x="500" y="222" text-anchor="middle" fill="#1565c0" font-size="12">Windows (103) / macOS (104)</text>
+  
+  <rect x="380" y="245" width="240" height="35" fill="#e3f2fd" rx="6"/>
+  <text x="500" y="267" text-anchor="middle" fill="#1565c0" font-size="12">Web 浏览器 (105)</text>
+
+  <line x1="380" y1="295" x2="620" y2="295" stroke="#e0e0e0" stroke-width="1"/>
+  
+  <text x="500" y="320" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">认证流程</text>
+  <text x="500" y="340" text-anchor="middle" fill="#666" font-size="11">1. 客户端获取JWT Token</text>
+  <text x="500" y="360" text-anchor="middle" fill="#666" font-size="11">2. 发送Type=1认证包</text>
+  <text x="500" y="380" text-anchor="middle" fill="#666" font-size="11">3. 服务器验证Token</text>
+  <text x="500" y="400" text-anchor="middle" fill="#666" font-size="11">4. 注册幽灵设备</text>
+
+  <!-- 认证方式3: 动态码绑定 -->
+  <rect x="670" y="70" width="280" height="350" fill="white" rx="12" filter="url(#shadow)" stroke="#ff9800" stroke-width="3"/>
+  <rect x="670" y="70" width="280" height="45" fill="#ff9800" rx="12"/>
+  <rect x="670" y="95" width="280" height="20" fill="#ff9800"/>
+  <text x="810" y="100" text-anchor="middle" fill="white" font-size="16" font-weight="bold">动态码绑定</text>
+  
+  <text x="810" y="140" text-anchor="middle" fill="#666" font-size="12">新设备首次上线</text>
+  
+  <rect x="690" y="155" width="240" height="35" fill="#fff3e0" rx="6"/>
+  <text x="810" y="177" text-anchor="middle" fill="#e65100" font-size="12">无键盘/屏幕的设备</text>
+  
+  <rect x="690" y="200" width="240" height="35" fill="#fff3e0" rx="6"/>
+  <text x="810" y="222" text-anchor="middle" fill="#e65100" font-size="12">ESP32 首次配置</text>
+
+  <line x1="690" y1="250" x2="930" y2="250" stroke="#e0e0e0" stroke-width="1"/>
+  
+  <text x="810" y="275" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">绑定流程</text>
+  <text x="810" y="295" text-anchor="middle" fill="#666" font-size="11">1. 设备请求动态码 (6位)</text>
+  <text x="810" y="315" text-anchor="middle" fill="#666" font-size="11">2. 设备显示动态码</text>
+  <text x="810" y="335" text-anchor="middle" fill="#666" font-size="11">3. Web端输入动态码</text>
+  <text x="810" y="355" text-anchor="middle" fill="#666" font-size="11">4. 绑定到用户账号</text>
+  <text x="810" y="375" text-anchor="middle" fill="#666" font-size="11">5. 下发配置信息</text>
+
+  <rect x="690" y="385" width="240" height="25" fill="#ffebee" rx="4" stroke="#f44336" stroke-width="1"/>
+  <text x="810" y="402" text-anchor="middle" fill="#c62828" font-size="10">有效期: 60秒 | 单次使用</text>
+
+  <!-- 冲突处理 -->
+  <rect x="50" y="450" width="900" height="120" fill="white" rx="10" filter="url(#shadow)" stroke="#9c27b0" stroke-width="2"/>
+  <text x="500" y="480" text-anchor="middle" fill="#7b1fa2" font-size="16" font-weight="bold">在线冲突处理</text>
+  
+  <rect x="70" y="495" width="260" height="60" fill="#f3e5f5" rx="6"/>
+  <text x="200" y="520" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">普通UDP设备</text>
+  <text x="200" y="540" text-anchor="middle" fill="#666" font-size="10">同一用户同一SSID只允许一台在线</text>
+  <text x="200" y="545" text-anchor="middle" fill="#666" font-size="10">同MAC可快速重连</text>
+
+  <rect x="370" y="495" width="260" height="60" fill="#e3f2fd" rx="6"/>
+  <text x="500" y="520" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">幽灵设备 (App/PC)</text>
+  <text x="500" y="540" text-anchor="middle" fill="#666" font-size="10">同一用户同一平台只允许一个在线</text>
+  <text x="500" y="545" text-anchor="middle" fill="#666" font-size="10">新连接踢掉旧连接</text>
+
+  <rect x="670" y="495" width="260" height="60" fill="#fff3e0" rx="6"/>
+  <text x="800" y="520" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">WebSocket (Web)</text>
+  <text x="800" y="540" text-anchor="middle" fill="#666" font-size="10">同账号同平台只允许一个连接</text>
+  <text x="800" y="545" text-anchor="middle" fill="#666" font-size="10">互斥检查防止多开</text>
+
+  <!-- 安全机制 -->
+  <rect x="50" y="590" width="900" height="90" fill="white" rx="10" filter="url(#shadow)" stroke="#f44336" stroke-width="2"/>
+  <text x="500" y="620" text-anchor="middle" fill="#c62828" font-size="16" font-weight="bold">安全机制</text>
+  
+  <rect x="70" y="635" width="200" height="30" fill="#ffebee" rx="4"/>
+  <text x="170" y="655" text-anchor="middle" fill="#333" font-size="11">AES-256 设备密码加密</text>
+  
+  <rect x="290" y="635" width="200" height="30" fill="#ffebee" rx="4"/>
+  <text x="390" y="655" text-anchor="middle" fill="#333" font-size="11">bcrypt 密码哈希</text>
+  
+  <rect x="510" y="635" width="200" height="30" fill="#ffebee" rx="4"/>
+  <text x="610" y="655" text-anchor="middle" fill="#333" font-size="11">JWT Token 3小时过期</text>
+  
+  <rect x="730" y="635" width="200" height="30" fill="#ffebee" rx="4"/>
+  <text x="830" y="655" text-anchor="middle" fill="#333" font-size="11">HttpOnly Cookie</text>
+</svg>

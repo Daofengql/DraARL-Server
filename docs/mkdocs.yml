@@ -1,5 +1,5 @@
 ﻿site_name: DraARL Server Docs
-site_description: DraARL Server API and Protocol Documentation
+site_description: DraARL Server 完整文档 - 数字无线电高级应用实时链路平台
 site_url: ""
 docs_dir: .
 site_dir: ../site
@@ -7,15 +7,33 @@ site_dir: ../site
 theme:
   name: material
   language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+extra_css:
+  - assets/stylesheets/extra.css
 
 markdown_extensions:
   - tables
   - fenced_code
   - toc:
       permalink: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
 
 nav:
   - 首页: index.md
+  - 架构设计: 架构设计.md
+  - 数据字典: 数据字典.md
   - 使用与说明文档:
       - 总览: usage/README.md
       - 01. 部署与配置: usage/01-部署与配置.md
@@ -26,6 +44,8 @@ nav:
       - 06. 管理员后台: usage/06-管理员后台.md
       - 07. 设备接入与 API 快速对接: usage/07-设备接入与API快速对接.md
       - 08. 运维与排障: usage/08-运维与排障.md
+      - 09. 固件与OTA升级: usage/09-固件与OTA升级.md
+      - 10. APRS与位置服务: usage/10-APRS与位置服务.md
   - 协议文档: Protocol.md
   - API 文档:
       - 总览: api/README.md
@@ -39,3 +59,5 @@ nav:
       - 07. 资源上传与站点配置: api/07-资源上传与站点配置.md
       - 08. 运维与管理接口: api/08-运维与管理接口.md
       - 09. 完整路由索引: api/09-完整路由索引.md
+      - 10. WebSocket协议详解: api/10-WebSocket协议详解.md
+      - 11. 错误码与状态码: api/11-错误码与状态码.md

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 350" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="700" height="45" fill="#ff9800" rx="8"/>
+  <text x="350" y="30" text-anchor="middle" fill="white" font-size="18" font-weight="bold">OTA 升级流程</text>
+
+  <!-- ESP32 -->
+  <rect x="50" y="70" width="120" height="50" fill="white" rx="8" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <text x="110" y="100" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">ESP32</text>
+
+  <!-- 服务器 -->
+  <rect x="530" y="70" width="120" height="50" fill="white" rx="8" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
+  <text x="590" y="100" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">服务器</text>
+
+  <!-- 步骤1 -->
+  <rect x="200" y="80" width="300" height="30" fill="#e3f2fd" rx="4"/>
+  <text x="350" y="100" text-anchor="middle" fill="#1565c0" font-size="11">1. 查询最新固件</text>
+  <path d="M 170 95 L 200 95" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 500 95 L 530 95" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 响应 -->
+  <rect x="200" y="130" width="300" height="50" fill="#fff3e0" rx="4"/>
+  <text x="350" y="150" text-anchor="middle" fill="#e65100" font-size="11">2. 返回固件信息</text>
+  <text x="350" y="170" text-anchor="middle" fill="#666" font-size="9">version, download_url, file_hash, has_update</text>
+  <path d="M 530 155 L 500 155" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 200 155 L 170 155" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤3 -->
+  <rect x="200" y="200" width="300" height="30" fill="#e8f5e9" rx="4"/>
+  <text x="350" y="220" text-anchor="middle" fill="#2e7d32" font-size="11">3. 下载固件文件</text>
+  <path d="M 170 215 L 200 215" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 500 215 L 530 215" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- MinIO -->
+  <rect x="530" y="195" width="120" height="40" fill="#f1f3f8" rx="4" stroke="#9e9e9e" stroke-width="1" stroke-dasharray="5,5"/>
+  <text x="590" y="220" text-anchor="middle" fill="#666" font-size="10">MinIO</text>
+
+  <!-- 步骤4 -->
+  <rect x="200" y="250" width="300" height="30" fill="#fce4ec" rx="4"/>
+  <text x="350" y="270" text-anchor="middle" fill="#c62828" font-size="11">4. 验证 SHA-256 哈希</text>
+
+  <!-- 步骤5 -->
+  <rect x="200" y="300" width="300" height="30" fill="#e3f2fd" rx="4"/>
+  <text x="350" y="320" text-anchor="middle" fill="#1565c0" font-size="11">5. 写入 Flash 并重启</text>
+
+  <!-- 箭头向下 -->
+  <path d="M 350 120 L 350 130" stroke="#666" stroke-width="1" fill="none"/>
+  <path d="M 350 180 L 350 200" stroke="#666" stroke-width="1" fill="none"/>
+  <path d="M 350 230 L 350 250" stroke="#666" stroke-width="1" fill="none"/>
+  <path d="M 350 280 L 350 300" stroke="#666" stroke-width="1" fill="none"/>
+</svg>

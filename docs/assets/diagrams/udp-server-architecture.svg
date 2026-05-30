@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 750" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1565c0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1976d2;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="moduleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#e3f2fd;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#bbdefb;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="1100" height="50" fill="url(#titleGrad)" rx="8"/>
+  <text x="550" y="32" text-anchor="middle" fill="white" font-size="20" font-weight="bold">UDP 服务器核心架构</text>
+
+  <!-- 数据包接收 -->
+  <rect x="50" y="70" width="1000" height="90" fill="white" rx="10" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <text x="550" y="95" text-anchor="middle" fill="#1565c0" font-size="16" font-weight="bold">数据包接收层</text>
+  
+  <rect x="80" y="110" width="180" height="35" fill="#e3f2fd" rx="4"/>
+  <text x="170" y="132" text-anchor="middle" fill="#333" font-size="12">UDP Socket 监听</text>
+
+  <rect x="290" y="110" width="180" height="35" fill="#e3f2fd" rx="4"/>
+  <text x="380" y="132" text-anchor="middle" fill="#333" font-size="12">PROXY Protocol v2</text>
+
+  <rect x="500" y="110" width="180" height="35" fill="#e3f2fd" rx="4"/>
+  <text x="590" y="132" text-anchor="middle" fill="#333" font-size="12">限速器 (150pps)</text>
+
+  <rect x="710" y="110" width="160" height="35" fill="#e3f2fd" rx="4"/>
+  <text x="790" y="132" text-anchor="middle" fill="#333" font-size="12">包体校验 (800B)</text>
+
+  <rect x="900" y="110" width="130" height="35" fill="#e3f2fd" rx="4"/>
+  <text x="965" y="132" text-anchor="middle" fill="#333" font-size="12">协议解析</text>
+
+  <!-- 箭头 -->
+  <path d="M 550 160 L 550 185" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2"/>
+    </marker>
+  </defs>
+
+  <!-- 协议类型分发 -->
+  <rect x="250" y="185" width="600" height="50" fill="#fff3e0" rx="8" stroke="#ff9800" stroke-width="2"/>
+  <text x="550" y="215" text-anchor="middle" fill="#e65100" font-size="14" font-weight="bold">协议类型分发 (Type字段)</text>
+
+  <!-- 分支箭头 -->
+  <path d="M 350 235 L 200 280" stroke="#666" stroke-width="1.5" fill="none"/>
+  <path d="M 450 235 L 350 280" stroke="#666" stroke-width="1.5" fill="none"/>
+  <path d="M 550 235 L 550 280" stroke="#666" stroke-width="1.5" fill="none"/>
+  <path d="M 650 235 L 750 280" stroke="#666" stroke-width="1.5" fill="none"/>
+  <path d="M 750 235 L 900 280" stroke="#666" stroke-width="1.5" fill="none"/>
+
+  <!-- 认证模块 -->
+  <rect x="50" y="280" width="280" height="180" fill="url(#moduleGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="190" y="305" text-anchor="middle" fill="#1565c0" font-size="14" font-weight="bold">认证模块</text>
+  
+  <rect x="70" y="315" width="240" height="35" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="190" y="337" text-anchor="middle" fill="#333" font-size="11">Type=1: JWT认证 (幽灵设备)</text>
+  
+  <rect x="70" y="360" width="240" height="35" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="190" y="382" text-anchor="middle" fill="#333" font-size="11">Type=2: 心跳认证 (普通设备)</text>
+  
+  <rect x="70" y="405" width="240" height="35" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="190" y="427" text-anchor="middle" fill="#333" font-size="11">AES解密 + bcrypt验证</text>
+
+  <text x="190" y="455" text-anchor="middle" fill="#666" font-size="10">阶梯封禁: 10s→30s→60s→300s</text>
+
+  <!-- 幽灵设备管理 -->
+  <rect x="360" y="280" width="200" height="180" fill="url(#moduleGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="460" y="305" text-anchor="middle" fill="#1565c0" font-size="14" font-weight="bold">幽灵设备</text>
+  
+  <rect x="380" y="315" width="160" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="460" y="335" text-anchor="middle" fill="#333" font-size="11">Android (SSID=101)</text>
+  
+  <rect x="380" y="355" width="160" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="460" y="375" text-anchor="middle" fill="#333" font-size="11">iOS (SSID=102)</text>
+  
+  <rect x="380" y="395" width="160" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="460" y="415" text-anchor="middle" fill="#333" font-size="11">Windows (SSID=103)</text>
+  
+  <rect x="380" y="435" width="160" height="15" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="460" y="447" text-anchor="middle" fill="#333" font-size="9">JWT认证 | 内存管理</text>
+
+  <!-- 群组路由 -->
+  <rect x="590" y="280" width="200" height="180" fill="url(#moduleGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="690" y="305" text-anchor="middle" fill="#1565c0" font-size="14" font-weight="bold">群组路由</text>
+  
+  <rect x="610" y="315" width="160" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="690" y="335" text-anchor="middle" fill="#333" font-size="11">RCU模式群组缓存</text>
+  
+  <rect x="610" y="355" width="160" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="690" y="375" text-anchor="middle" fill="#333" font-size="11">虚拟互联组转发</text>
+  
+  <rect x="610" y="395" width="160" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="690" y="415" text-anchor="middle" fill="#333" font-size="11">群组成员查询</text>
+  
+  <rect x="610" y="435" width="160" height="15" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="690" y="447" text-anchor="middle" fill="#333" font-size="9">O(1) 索引查询</text>
+
+  <!-- 语音处理 -->
+  <rect x="820" y="280" width="230" height="180" fill="url(#moduleGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="935" y="305" text-anchor="middle" fill="#1565c0" font-size="14" font-weight="bold">语音处理</text>
+  
+  <rect x="840" y="315" width="190" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="935" y="335" text-anchor="middle" fill="#333" font-size="11">半双工仲裁 (900ms)</text>
+  
+  <rect x="840" y="355" width="190" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="935" y="375" text-anchor="middle" fill="#333" font-size="11">Opus 16K 转发</text>
+  
+  <rect x="840" y="395" width="190" height="30" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="935" y="415" text-anchor="middle" fill="#333" font-size="11">语音平滑发送</text>
+  
+  <rect x="840" y="435" width="190" height="15" fill="white" rx="4" stroke="#90caf9"/>
+  <text x="935" y="447" text-anchor="middle" fill="#333" font-size="9">60ms帧 | 2帧合并</text>
+
+  <!-- 箭头向下 -->
+  <path d="M 550 460 L 550 490" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 配置与绑定 -->
+  <rect x="50" y="490" width="500" height="120" fill="#f3e5f5" rx="10" filter="url(#shadow)" stroke="#9c27b0" stroke-width="2"/>
+  <text x="300" y="515" text-anchor="middle" fill="#7b1fa2" font-size="14" font-weight="bold">配置同步模块</text>
+  
+  <rect x="70" y="525" width="220" height="70" fill="white" rx="4" stroke="#ce93d8"/>
+  <text x="180" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">TLV配置同步</text>
+  <text x="180" y="562" text-anchor="middle" fill="#666" font-size="10">查询(0x01) | 下发/上报(0x02)</text>
+  <text x="180" y="577" text-anchor="middle" fill="#666" font-size="10">时间同步(0x03)</text>
+
+  <rect x="310" y="525" width="220" height="70" fill="white" rx="4" stroke="#ce93d8"/>
+  <text x="420" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">动态码绑定</text>
+  <text x="420" y="562" text-anchor="middle" fill="#666" font-size="10">6位动态码 | 60秒有效</text>
+  <text x="420" y="577" text-anchor="middle" fill="#666" font-size="10">MAC绑定 | 配置下发</text>
+
+  <rect x="580" y="490" width="470" height="120" fill="#e8f5e9" rx="10" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
+  <text x="815" y="515" text-anchor="middle" fill="#2e7d32" font-size="14" font-weight="bold">通信录制模块</text>
+  
+  <rect x="600" y="525" width="140" height="70" fill="white" rx="4" stroke="#81c784"/>
+  <text x="670" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">音频缓冲</text>
+  <text x="670" y="562" text-anchor="middle" fill="#666" font-size="10">会话聚合</text>
+  <text x="670" y="577" text-anchor="middle" fill="#666" font-size="10">超时检测</text>
+
+  <rect x="760" y="525" width="140" height="70" fill="white" rx="4" stroke="#81c784"/>
+  <text x="830" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">MinIO上传</text>
+  <text x="830" y="562" text-anchor="middle" fill="#666" font-size="10">批量上传</text>
+  <text x="830" y="577" text-anchor="middle" fill="#666" font-size="10">SHA-256校验</text>
+
+  <rect x="920" y="525" width="110" height="70" fill="white" rx="4" stroke="#81c784"/>
+  <text x="975" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">DB同步</text>
+  <text x="975" y="562" text-anchor="middle" fill="#666" font-size="10">记录写入</text>
+  <text x="975" y="577" text-anchor="middle" fill="#666" font-size="10">统计更新</text>
+
+  <!-- 箭头向下 -->
+  <path d="M 300 610 L 300 640" stroke="#9c27b0" stroke-width="2" fill="none" marker-end="url(#arrowPurple)"/>
+  <path d="M 815 610 L 815 640" stroke="#4caf50" stroke-width="2" fill="none" marker-end="url(#arrowGreen)"/>
+  <defs>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#9c27b0"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4caf50"/>
+    </marker>
+  </defs>
+
+  <!-- 数据存储 -->
+  <rect x="50" y="640" width="500" height="80" fill="white" rx="8" filter="url(#shadow)" stroke="#e0e0e0"/>
+  <text x="300" y="665" text-anchor="middle" fill="#333" font-size="14" font-weight="bold">设备配置存储</text>
+  <text x="300" y="685" text-anchor="middle" fill="#666" font-size="11">MySQL device_configs 表 | 内存缓存</text>
+  <text x="300" y="705" text-anchor="middle" fill="#666" font-size="11">配置项: rx_freq, tx_freq, sql_level, power_level, rf_guard_* 等</text>
+
+  <rect x="580" y="640" width="470" height="80" fill="white" rx="8" filter="url(#shadow)" stroke="#e0e0e0"/>
+  <text x="815" y="665" text-anchor="middle" fill="#333" font-size="14" font-weight="bold">音频文件存储</text>
+  <text x="815" y="685" text-anchor="middle" fill="#666" font-size="11">MinIO Bucket | comm_records 表</text>
+  <text x="815" y="705" text-anchor="middle" fill="#666" font-size="11">音频路径、时长、状态、设备/群组关联</text>
+
+  <!-- 图例 -->
+  <rect x="50" y="735" width="1000" height="0" fill="none"/>
+</svg>

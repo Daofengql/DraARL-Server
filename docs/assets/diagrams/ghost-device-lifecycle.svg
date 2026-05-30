@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 350" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="450" height="40" fill="#1565c0" rx="8"/>
+  <text x="225" y="27" text-anchor="middle" fill="white" font-size="16" font-weight="bold">幽灵设备生命周期</text>
+
+  <!-- 创建 -->
+  <rect x="50" y="60" width="350" height="80" fill="#e3f2fd" rx="8" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <text x="225" y="85" text-anchor="middle" fill="#1565c0" font-size="13" font-weight="bold">1. 创建 (WebSocket连接认证成功)</text>
+  
+  <rect x="100" y="95" width="100" height="35" fill="white" rx="4"/>
+  <text x="150" y="117" text-anchor="middle" fill="#333" font-size="10">SSID: 105</text>
+  
+  <rect x="250" y="95" width="100" height="35" fill="white" rx="4"/>
+  <text x="300" y="117" text-anchor="middle" fill="#333" font-size="10">DevModel: 105</text>
+
+  <!-- 箭头 -->
+  <path d="M 225 140 L 225 165" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 运行中 -->
+  <rect x="50" y="165" width="350" height="80" fill="#fff3e0" rx="8" filter="url(#shadow)" stroke="#ff9800" stroke-width="2"/>
+  <text x="225" y="190" text-anchor="middle" fill="#e65100" font-size="13" font-weight="bold">2. 运行中</text>
+  
+  <rect x="80" y="200" width="85" height="30" fill="white" rx="4"/>
+  <text x="122" y="220" text-anchor="middle" fill="#333" font-size="9">群组通信</text>
+  
+  <rect x="180" y="200" width="85" height="30" fill="white" rx="4"/>
+  <text x="222" y="220" text-anchor="middle" fill="#333" font-size="9">半双工仲裁</text>
+  
+  <rect x="280" y="200" width="85" height="30" fill="white" rx="4"/>
+  <text x="322" y="220" text-anchor="middle" fill="#333" font-size="9">心跳保活</text>
+
+  <!-- 箭头 -->
+  <path d="M 225 245 L 225 270" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 销毁 -->
+  <rect x="50" y="270" width="350" height="70" fill="#ffebee" rx="8" filter="url(#shadow)" stroke="#e53e3e" stroke-width="2"/>
+  <text x="225" y="295" text-anchor="middle" fill="#c53030" font-size="13" font-weight="bold">3. 销毁 (WebSocket断开)</text>
+  
+  <rect x="80" y="305" width="85" height="25" fill="white" rx="4"/>
+  <text x="122" y="322" text-anchor="middle" fill="#333" font-size="9">清理群组</text>
+  
+  <rect x="180" y="305" width="85" height="25" fill="white" rx="4"/>
+  <text x="222" y="322" text-anchor="middle" fill="#333" font-size="9">释放资源</text>
+  
+  <rect x="280" y="305" width="85" height="25" fill="white" rx="4"/>
+  <text x="322" y="322" text-anchor="middle" fill="#333" font-size="9">更新状态</text>
+</svg>

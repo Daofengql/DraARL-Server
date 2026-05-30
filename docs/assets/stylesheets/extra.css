@@ -1,0 +1,22 @@
+/* 把右侧目录挪到左侧 */
+.md-sidebar--primary {
+  display: none !important;
+}
+
+.md-sidebar--secondary {
+  order: -1 !important;
+  margin-left: 0 !important;
+  margin-right: auto !important;
+}
+
+.md-sidebar--secondary .md-sidebar__scrollwrap {
+  border-right: 1px solid rgba(0,0,0,0.05);
+  border-left: none;
+}
+
+/* 移动端隐藏 */
+@media screen and (max-width: 61.9375em) {
+  .md-sidebar--secondary {
+    display: none !important;
+  }
+}

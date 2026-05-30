@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 250" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="550" height="40" fill="#4caf50" rx="8"/>
+  <text x="275" y="27" text-anchor="middle" fill="white" font-size="16" font-weight="bold">普通设备认证流程 (设备密码)</text>
+
+  <!-- 设备 -->
+  <rect x="30" y="60" width="100" height="40" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="80" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">设备</text>
+
+  <!-- 服务器 -->
+  <rect x="420" y="60" width="100" height="40" fill="white" rx="8" stroke="#4caf50" stroke-width="2"/>
+  <text x="470" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">服务器</text>
+
+  <!-- 心跳认证 -->
+  <rect x="150" y="110" width="250" height="60" fill="#e3f2fd" rx="4"/>
+  <text x="275" y="130" text-anchor="middle" fill="#1565c0" font-size="11" font-weight="bold">Heartbeat (Type=2)</text>
+  <text x="275" y="148" text-anchor="middle" fill="#666" font-size="9">Username: "user1"</text>
+  <text x="275" y="162" text-anchor="middle" fill="#666" font-size="9">DevicePassword: "Abc12345"</text>
+  <path d="M 130 140 L 150 140" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 400 140 L 420 140" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 服务器处理 -->
+  <rect x="420" y="180" width="100" height="45" fill="#fff3e0" rx="4"/>
+  <text x="470" y="197" text-anchor="middle" fill="#e65100" font-size="8">1. 验证密码</text>
+  <text x="470" y="210" text-anchor="middle" fill="#e65100" font-size="8">2. 获取CallSign</text>
+  <text x="470" y="223" text-anchor="middle" fill="#e65100" font-size="8">3. 检查封禁</text>
+
+  <!-- 响应 -->
+  <rect x="150" y="235" width="250" height="30" fill="#e8f5e9" rx="4"/>
+  <text x="275" y="255" text-anchor="middle" fill="#2e7d32" font-size="10">CallSign: "BG1AAA" (服务器填充)</text>
+  <path d="M 420 250 L 400 250" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 150 250 L 130 250" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+</svg>

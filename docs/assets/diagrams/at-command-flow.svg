@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 280" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="600" height="40" fill="#9c27b0" rx="8"/>
+  <text x="300" y="27" text-anchor="middle" fill="white" font-size="16" font-weight="bold">AT 命令透传流程</text>
+
+  <!-- 客户端 -->
+  <rect x="30" y="60" width="100" height="40" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="80" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">客户端</text>
+
+  <!-- 服务器 -->
+  <rect x="250" y="60" width="100" height="40" fill="white" rx="8" stroke="#4caf50" stroke-width="2"/>
+  <text x="300" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">服务器</text>
+
+  <!-- 设备 -->
+  <rect x="470" y="60" width="100" height="40" fill="white" rx="8" stroke="#ff9800" stroke-width="2"/>
+  <text x="520" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">设备</text>
+
+  <!-- HTTP请求 -->
+  <rect x="150" y="120" width="80" height="25" fill="#e3f2fd" rx="4"/>
+  <text x="190" y="137" text-anchor="middle" fill="#1565c0" font-size="9">HTTP POST</text>
+  <path d="M 130 132 L 150 132" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 230 132 L 250 132" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- AT透传 -->
+  <rect x="360" y="155" width="90" height="25" fill="#fff3e0" rx="4"/>
+  <text x="405" y="172" text-anchor="middle" fill="#e65100" font-size="9">AT透传 Type=7</text>
+  <path d="M 350 167 L 360 167" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 450 167 L 470 167" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- AT响应 -->
+  <rect x="360" y="195" width="90" height="25" fill="#e8f5e9" rx="4"/>
+  <text x="405" y="212" text-anchor="middle" fill="#2e7d32" font-size="9">AT响应 Type=7</text>
+  <path d="M 470 207 L 450 207" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 360 207 L 350 207" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- HTTP响应 -->
+  <rect x="150" y="230" width="80" height="25" fill="#e8f5e9" rx="4"/>
+  <text x="190" y="247" text-anchor="middle" fill="#2e7d32" font-size="9">HTTP Response</text>
+  <path d="M 250 242 L 230 242" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 150 242 L 130 242" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+</svg>

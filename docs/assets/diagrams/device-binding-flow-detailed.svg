@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 550" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="800" height="40" fill="#ff9800" rx="8"/>
+  <text x="400" y="27" text-anchor="middle" fill="white" font-size="16" font-weight="bold">设备动态码绑定流程</text>
+
+  <!-- 新设备 -->
+  <rect x="30" y="60" width="100" height="40" fill="white" rx="8" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <text x="80" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">新设备</text>
+
+  <!-- 服务器 -->
+  <rect x="350" y="60" width="100" height="40" fill="white" rx="8" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
+  <text x="400" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">服务器</text>
+
+  <!-- Web用户 -->
+  <rect x="670" y="60" width="100" height="40" fill="white" rx="8" filter="url(#shadow)" stroke="#ff9800" stroke-width="2"/>
+  <text x="720" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">Web用户</text>
+
+  <!-- 步骤1: pre-check -->
+  <rect x="150" y="120" width="180" height="40" fill="#e3f2fd" rx="4"/>
+  <text x="240" y="137" text-anchor="middle" fill="#1565c0" font-size="10">1. pre-check</text>
+  <text x="240" y="152" text-anchor="middle" fill="#666" font-size="8">{ mac, username, password }</text>
+  <path d="M 130 140 L 150 140" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 330 140 L 350 140" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  
+  <rect x="150" y="170" width="180" height="25" fill="#e8f5e9" rx="4"/>
+  <text x="240" y="187" text-anchor="middle" fill="#2e7d32" font-size="9">← status: "need_bind"</text>
+  <path d="M 350 182 L 330 182" stroke="#4caf50" stroke-width="1" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 150 182 L 130 182" stroke="#4caf50" stroke-width="1" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤2: request-code -->
+  <rect x="150" y="210" width="180" height="40" fill="#fff3e0" rx="4"/>
+  <text x="240" y="227" text-anchor="middle" fill="#e65100" font-size="10">2. request-code</text>
+  <text x="240" y="242" text-anchor="middle" fill="#666" font-size="8">{ mac }</text>
+  <path d="M 130 230 L 150 230" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 330 230 L 350 230" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  
+  <rect x="150" y="260" width="180" height="25" fill="#e8f5e9" rx="4"/>
+  <text x="240" y="277" text-anchor="middle" fill="#2e7d32" font-size="9">← dynamic_code: "123456"</text>
+  <path d="M 350 272 L 330 272" stroke="#4caf50" stroke-width="1" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 150 272 L 130 272" stroke="#4caf50" stroke-width="1" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 设备显示 -->
+  <rect x="50" y="295" width="120" height="25" fill="#f3e5f5" rx="12"/>
+  <text x="110" y="312" text-anchor="middle" fill="#7b1fa2" font-size="9">设备显示: 123456</text>
+
+  <!-- 步骤3: bind -->
+  <rect x="470" y="320" width="180" height="40" fill="#e3f2fd" rx="4"/>
+  <text x="560" y="337" text-anchor="middle" fill="#1565c0" font-size="10">3. bind</text>
+  <text x="560" y="352" text-anchor="middle" fill="#666" font-size="8">{ dynamic_code: "123456" }</text>
+  <path d="M 670 340 L 650 340" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 470 340 L 450 340" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤4: submit-config -->
+  <rect x="470" y="375" width="180" height="40" fill="#fff3e0" rx="4"/>
+  <text x="560" y="392" text-anchor="middle" fill="#e65100" font-size="10">4. submit-config</text>
+  <text x="560" y="407" text-anchor="middle" fill="#666" font-size="8">{ device_mac, ssid }</text>
+  <path d="M 670 395 L 650 395" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 470 395 L 450 395" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤5: confirm-bind -->
+  <rect x="150" y="430" width="180" height="40" fill="#e8f5e9" rx="4"/>
+  <text x="240" y="447" text-anchor="middle" fill="#2e7d32" font-size="10">5. confirm-bind</text>
+  <text x="240" y="462" text-anchor="middle" fill="#666" font-size="8">{ mac } → 获取配置</text>
+  <path d="M 130 450 L 150 450" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 330 450 L 350 450" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 完成 -->
+  <rect x="30" y="490" width="740" height="40" fill="#4caf50" rx="8"/>
+  <text x="400" y="515" text-anchor="middle" fill="white" font-size="12" font-weight="bold">设备保存配置，准备 UDP 认证</text>
+</svg>

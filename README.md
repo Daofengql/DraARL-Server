@@ -1,506 +1,333 @@
-# DraARL-Server
+# DraARL Server
 
-**Digital Radio Advanced Application Real-time Link** - 数字无线电高级应用实时链路平台
+[![Release](https://img.shields.io/github/v/release/Daofengql/DraARL-Server?include_prereleases&label=release)](https://github.com/Daofengql/DraARL-Server/releases)
+[![Release Build](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml/badge.svg)](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml)
+[![Docs Deploy](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml/badge.svg)](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 
-DraARL 是一个专业的数字无线电实时通信平台，支持业余电台设备的语音通信、群组管理和用户认证。项目采用现代化的前后端分离架构，实现了完整的无线电通信管理平台。
+**Digital Radio Advanced Application Real-time Link**<br>
+面向业余无线电和自研数字电台设备的实时通信、设备管理、用户审核和运维管理平台。
 
-## 功能特性
+DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1 设备接入服务，前端使用 React + TypeScript + Material UI 提供公共页面、用户控制台和管理员后台。项目已经包含完整的 API 文档、协议文档、使用说明、架构图和数据字典。
 
-### 核心通信功能
+## 快速链接
 
-- **实时语音转发** - 基于UDP的低延迟语音通信，支持Opus 16K编码
-- **多设备群组通联** - 支持基础半双工语音模式
-- **服务器互联** - 跨服务器语音转发
-- **DraARLv1协议** - 自研设备通信协议
+| 类型 | 链接 |
+|------|------|
+| 在线站点 | [https://ptt.4l2.cn](https://ptt.4l2.cn) |
+| 在线内置文档 | [https://ptt.4l2.cn/docs](https://ptt.4l2.cn/docs) |
+| GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
+| 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
+| 最新 tag | [v1.1.4-alpha6](https://github.com/Daofengql/DraARL-Server/tree/v1.1.4-alpha6) |
+| 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
+| 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
+| 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
 
-### 设备管理
+## 文档入口
 
-- **多设备类型支持** - ESP32、Android、iOS、Windows、Web等
-- **双轨制认证** - 设备密码 + JWT Token灵活认证
-- **动态码绑定** - 新设备快速绑定流程
-- **远程配置同步** - 设备参数远程配置
+| 文档 | 说明 |
+|------|------|
+| [文档站首页](docs/index.md) | 推荐阅读顺序、文档目录、本地预览与自动发布说明 |
+| [架构设计](docs/架构设计.md) | 系统模块、数据流、部署形态和核心链路 |
+| [数据字典](docs/数据字典.md) | 数据库表、字段、索引和关系说明 |
+| [使用与说明文档](docs/usage/README.md) | 部署、账号、设备、群组、在线收发、后台、运维等功能说明 |
+| [设备接入指南](docs/usage/07-设备接入与API快速对接.md) | 设备绑定、认证、上报、配置同步和 API 快速对接 |
+| [固件与 OTA](docs/usage/09-固件与OTA升级.md) | 固件发布、版本规则、OTA 查询与下载流程 |
+| [APRS 与位置服务](docs/usage/10-APRS与位置服务.md) | APRS 配置、位置上报和地图展示说明 |
+| [DraARLv1 协议](docs/Protocol.md) | UDP 设备协议、报文结构、状态码和认证流程 |
+| [API 文档](docs/api/README.md) | HTTP API、WebSocket、错误码与完整路由索引 |
 
-### 用户管理
+## 核心能力
 
-- **多种登录方式** - 邮箱/密码登录、邮箱验证码登录、SSO单点登录
-- **用户审核机制** - 支持注册审核和操作证审核
-- **角色权限系统** - 管理员/普通用户分级管理
-
-### 群组管理
-
-- **公开群组** - 所有人可见、无需密码
-- **私有群组** - 需验证密码后加入
-- **虚拟互联组** - 跨群组互联
-
-### 数据统计
-
-- **通信记录** - 完整的通信历史记录和统计
-- **趋势分析** - 通信趋势图展示
-- **通联日志** - 个人通联记录管理
+- **实时语音与文本通信**：支持 UDP DraARLv1 设备、WebSocket 浏览器幽灵设备、PTT 控制、Opus 语音、半双工群组通信和通信记录。
+- **设备接入与管理**：支持设备密码、JWT、动态码绑定、设备 SSID、设备型号上报、远程参数配置、设备禁发/禁收、AT 控制和 SA818 频率配置。
+- **群组与互联**：支持公开群组、私有群组、群组成员管理、设备切组、虚拟互联组和跨群组语音转发。
+- **账号与审核**：支持账号密码、邮箱验证码、Keycloak SSO、JWT/refresh token、注册审核、操作证上传与审核。
+- **管理后台**：提供用户、设备、群组、中继台、服务器、资源中心、固件发布、站点配置、SMTP、APRS、OpenAI、缓存指标和操作日志管理。
+- **通联与记录**：支持平台发信记录、个人通联日志、统计趋势、音频存储和管理员侧全局查询。
+- **资源与发布**：支持 MinIO 对象存储、前端资源嵌入或 CDN 托管、GitHub Actions 多平台 Release，以及 MkDocs 文档自动发布到 EdgeOne Pages。
 
 ## 技术栈
 
-### 后端
-
-| 技术 | 版本 | 说明 |
-|------|------|------|
-| Go | 1.25+ | 主要开发语言 |
-| Gin | 1.12 | HTTP Web框架 |
-| GORM | 1.31 | ORM数据库框架 |
-| MySQL | 5.7+ | 主数据库 |
-| Redis | 6.0+ | 缓存（可选） |
-| MinIO | - | 对象存储 |
-| JWT | v5 | 用户认证 |
-| WebSocket | Gorilla | 实时通信 |
-
-### 前端
-
-| 技术 | 版本 | 说明 |
-|------|------|------|
-| React | 19.2 | UI框架 |
-| TypeScript | 5.9 | 类型安全 |
-| Vite | 7.3 | 构建工具 |
-| Material-UI | 7.3 | UI组件库 |
-| React Router | 7.13 | 路由管理 |
-| Recharts | 3.8 | 图表组件 |
-| Axios | - | HTTP客户端 |
+| 层级 | 技术 |
+|------|------|
+| 后端 | Go 1.25、Gin、GORM、Gorilla WebSocket |
+| 数据 | MySQL/MariaDB、Redis、MinIO |
+| 前端 | React 19、TypeScript 5.9、Vite 7、Material UI 7、React Router 7 |
+| 通信 | UDP DraARLv1、WebSocket、Opus、APRS |
+| 文档 | MkDocs、MkDocs Material |
+| 自动化 | GitHub Actions、EdgeOne Pages |
 
 ## 项目结构
 
-```
+```text
 DraARL-Server/
-├── cmd/                        # 应用入口
-│   └── udphub/                # UDP服务器主程序
-├── internal/                   # 内部包（私有代码）
-│   ├── aprs/                  # APRS协议支持
-│   ├── captcha/               # 验证码功能
-│   ├── common/                # 通用工具函数
-│   ├── config/                # 配置管理
-│   ├── db/                    # 数据库操作（原生SQL）
-│   ├── gormdb/                # GORM数据库操作
-│   ├── handler/               # HTTP处理器
-│   ├── middleware/            # 中间件
-│   ├── models/                # 数据模型
-│   ├── protocol/              # 协议实现
-│   ├── server/                # HTTP/WebSocket服务器
-│   ├── service/               # 业务逻辑层
-│   └── udphub/                # UDP服务器核心
-├── pkg/                        # 公共包
-│   ├── cache/                 # 缓存管理
-│   ├── crypto/                # 加密工具
-│   ├── jwt/                   # JWT认证
-│   ├── minio/                 # MinIO对象存储
-│   └── websocket/             # WebSocket支持
-├── www/                        # 前端项目
-│   ├── src/
-│   │   ├── components/        # 组件
-│   │   ├── pages/             # 页面
-│   │   ├── services/          # API服务
-│   │   └── types/             # 类型定义
-│   └── dist/                  # 构建输出
-├── test/                       # 测试代码
-├── docs/                       # 文档
-├── udphub.yaml                 # 配置文件
-├── Makefile                    # 构建脚本
-└── go.mod                      # Go模块定义
+├── cmd/udphub/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
+├── internal/
+│   ├── aprs/                # APRS 连接、配置和日志
+│   ├── auth/                # refresh token 存储，支持 Redis 与内存降级
+│   ├── captcha/             # 图形验证码
+│   ├── config/              # YAML 配置、默认值、Origin 校验
+│   ├── db/                  # 兼容旧逻辑的原生 SQL 数据访问
+│   ├── gormdb/              # GORM 模型、仓储和自动迁移
+│   ├── handler/             # HTTP API 处理器
+│   ├── middleware/          # 登录、审核、管理员、群组权限和限流中间件
+│   ├── protocol/            # DraARLv1 协议编解码和设备字段校验
+│   ├── server/              # Gin 路由、WebSocket、前端静态资源服务
+│   └── udphub/              # UDP 设备运行态、语音转发、群组互联和通信记录
+├── pkg/                     # JWT、缓存、MinIO、WebSocket、加密、GeoIP 等公共包
+├── www/                     # React 前端项目
+├── docs/                    # MkDocs 文档站、API 文档、协议文档和图表资源
+├── test/                    # Python 设备/协议测试工具
+├── .github/workflows/       # Release 与文档发布工作流
+├── udphub.yaml.example      # 配置模板
+├── Makefile                 # 常用构建、测试和运行命令
+└── README.md
 ```
 
-## 快速开始
-
-### 环境要求
+## 环境要求
 
 - Go 1.25+
 - Node.js 20+
-- MySQL 5.7+ / MariaDB 10.3+
-- Redis 6.0+（可选）
-- MinIO（可选，用于对象存储）
+- MySQL 5.7+ 或 MariaDB 10.3+
+- Redis 6.0+（推荐；不可用时 refresh token 会降级到内存存储）
+- MinIO（可选，用于资源、头像、通信录音、固件和前端 CDN）
+- Keycloak（可选，用于 SSO）
+- Python 3.11+（仅本地预览/构建 MkDocs 文档时需要）
 
-### 安装步骤
+## 快速开始
 
-1. **克隆项目**
+### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/your-repo/DraARL-Server.git
+git clone https://github.com/Daofengql/DraARL-Server.git
 cd DraARL-Server
 ```
 
-1. **安装后端依赖**
-
-```bash
-make deps
-```
-
-1. **安装前端依赖**
-
-```bash
-cd www
-npm install
-```
-
-1. **配置数据库**
-
-创建MySQL数据库：
+### 2. 准备数据库
 
 ```sql
 CREATE DATABASE draarl CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-1. **修改配置文件**
-
-复制并编辑 `udphub.yaml`：
-
-```yaml
-Database:
-    Host: "127.0.0.1"
-    Port: 3306
-    User: "draarl"
-    Password: "your_password"
-    DBName: "draarl"
-
-JWT:
-    Secret: "your-jwt-secret-key"
-
-DeviceAuth:
-    AESKey: "32-byte-aes-key-here"
-```
-
-1. **构建前端**
+### 3. 准备配置文件
 
 ```bash
+cp udphub.yaml.example udphub.yaml
+```
+
+至少需要检查以下配置：
+
+- `Database`：MySQL/MariaDB 连接信息。
+- `Redis`：refresh token 存储配置，生产环境建议启用。
+- `Web.Port`：后端 HTTP API 和前端静态资源端口。
+- `Web.FrontendURL` 与 `Web.AllowedOrigins`：登录回调、CORS 和 WebSocket Origin 白名单。
+- `JWT.Secret`：至少 32 字符；不符合要求时程序会自动生成并写回配置。
+- `DeviceAuth.AESKey`：16、24 或 32 字节；留空时程序会自动生成并写回配置。
+- `MinIO`：如需资源中心、头像、固件、通信录音或前端 CDN，需要配置。
+
+### 4. 安装依赖并构建前端
+
+```bash
+go mod download
+
 cd www
+npm ci
 npm run build
+cd ..
 ```
 
-1. **运行服务**
+### 5. 初始化数据库并启动
+
+首次部署或表结构变更后执行自动迁移：
 
 ```bash
-# 开发模式
-make run
-
-# 或者构建后运行
-make build
-./draarl -c udphub.yaml
+go run ./cmd/udphub -c udphub.yaml -auto-migrate
 ```
 
-### 开发模式
+后续正常启动：
 
-**启动前端开发服务器：**
+```bash
+go run ./cmd/udphub -c udphub.yaml
+```
+
+首次启动会自动创建管理员用户，并在控制台输出初始用户名和密码。登录后请立即修改密码。
+
+## 本地开发
+
+后端：
+
+```bash
+go run ./cmd/udphub -c udphub.yaml
+```
+
+前端：
 
 ```bash
 cd www
 npm run dev
 ```
 
-**启动后端服务：**
+Vite 开发服务器默认监听 `9001`，并把 `/api` 代理到 `http://localhost:9002`。如果本地 `Web.Port` 不是 `9002`，请同步调整 `www/vite.config.ts` 中的代理目标，或把本地后端端口设为 `9002`。
+
+常用开发命令：
 
 ```bash
-make run
-```
+go test ./...
+go fmt ./...
+go vet ./...
 
-访问 <http://localhost:5173> 进入前端开发页面。
-
-## 配置说明
-
-### 主配置文件 (udphub.yaml)
-
-```yaml
-# 系统配置
-System:
-    Host: "0.0.0.0"           # 监听地址
-    Port: "60050"             # UDP服务端口
-    LogPath: ""               # 日志文件路径
-    IPfile: ./udphub.ipdb     # IP数据库文件
-    ProxyProtocol: "v2"       # PROXY Protocol支持
-
-# 数据库配置
-Database:
-    Host: "127.0.0.1"
-    Port: 3306
-    User: "draarl"
-    Password: "your_password"
-    DBName: "draarl"
-    Charset: "utf8mb4"
-    Collate: "utf8mb4_unicode_ci"
-    MaxOpenConns: 25
-    MaxIdleConns: 5
-    MaxLifetime: 120
-
-# Web服务配置
-Web:
-    Host: "localhost"
-    Port: "9002"
-    FrontendURL: "http://localhost:5173"
-    FrontendCDN:
-        Enabled: false
-        ObjectPrefix: "frontend" # 实际会按版本写入如 frontend/v1.2.3/assets
-
-# Keycloak SSO配置（可选）
-Keycloak:
-    Enabled: false
-    Name: "SSO名称"
-    BaseURL: "https://sso.example.com"
-    Realm: "draarl"
-    ClientID: "draarl-frontend"
-    ClientSecret: "your-client-secret"
-    RedirectURI: "http://localhost:9002/api/sso/callback"
-
-# MinIO对象存储配置
-MinIO:
-    Endpoint: "localhost:9000"
-    AccessKey: "minioadmin"
-    SecretKey: "minioadmin"
-    UseSSL: false
-    Bucket: "draarl"
-    BasePath: "https://oss.example.com/draarl"
-
-# JWT认证配置
-JWT:
-    Secret: "your-jwt-secret"
-
-# 设备认证配置
-DeviceAuth:
-    AESKey: "32-byte-hex-string"  # AES-256加密密钥
-```
-
-### 前端环境变量
-
-创建 `www/.env.local` 文件：
-
-```env
-VITE_API_URL=http://localhost:9002
-VITE_WS_URL=ws://localhost:9002/ws
-```
-
-## API 文档
-
-### 认证相关
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/auth/login` | 用户登录 |
-| POST | `/api/auth/logout` | 用户登出 |
-| POST | `/api/auth/register` | 用户注册 |
-| POST | `/api/auth/email-login` | 邮箱验证码登录 |
-| POST | `/api/auth/send-code` | 发送邮箱验证码 |
-| POST | `/api/auth/reset-password` | 重置密码 |
-
-### 设备管理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/devices` | 获取设备列表 |
-| GET | `/api/devices/:id` | 获取设备详情 |
-| PUT | `/api/devices/:id` | 更新设备信息 |
-| DELETE | `/api/devices/:id` | 删除设备 |
-| GET | `/api/devices/:id/config` | 获取设备配置 |
-| PUT | `/api/devices/:id/config` | 更新设备配置 |
-| POST | `/api/devices/:id/config/sync` | 同步设备配置 |
-
-### 设备绑定
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/device/pre-check` | 设备预检查 |
-| POST | `/api/device/request-code` | 请求动态码 |
-| POST | `/api/device/confirm-bind` | 确认绑定 |
-| POST | `/api/device/bind` | 绑定设备 |
-
-### 群组管理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/groups` | 获取群组列表 |
-| POST | `/api/groups` | 创建群组 |
-| GET | `/api/groups/:id` | 获取群组详情 |
-| PUT | `/api/groups/:id` | 更新群组 |
-| DELETE | `/api/groups/:id` | 删除群组 |
-| GET | `/api/groups/:id/members` | 获取群组成员 |
-
-### 用户管理
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/users` | 获取用户列表（管理员） |
-| GET | `/api/users/:id` | 获取用户详情 |
-| PUT | `/api/users/:id` | 更新用户信息 |
-| DELETE | `/api/users/:id` | 删除用户 |
-| GET | `/api/me` | 获取当前用户信息 |
-| PUT | `/api/me` | 更新个人资料 |
-| PUT | `/api/me/password` | 修改密码 |
-
-### 通信记录
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/comm-records` | 获取通信记录 |
-| GET | `/api/comm-records/stats` | 通信统计 |
-| GET | `/api/comm-records/user-stats` | 用户统计 |
-| DELETE | `/api/comm-records/:id` | 删除记录 |
-
-### WebSocket
-
-| 路径 | 说明 |
-|------|------|
-| `/ws` | WebSocket连接端点 |
-
-## 构建部署
-
-### 使用 Makefile
-
-```bash
-# 显示所有可用命令
-make help
-
-# 构建当前平台
-make build
-
-# 构建Linux版本
-make build-linux
-
-# 构建ARM版本（树莓派）
-make build-arm
-
-# 构建ARM64版本
-make build-arm64
-
-# 构建Windows版本
-make build-windows
-
-# 运行测试
-make test
-
-# 代码格式化
-make fmt
-
-# 代码检查
-make vet
-```
-
-### 手动构建
-
-```bash
-# 构建后端
-go build -o draarl ./cmd/udphub
-
-# 构建前端
 cd www
+npm run lint
 npm run build
 ```
 
-### Docker 部署
+## 构建与部署
 
-```dockerfile
-FROM golang:1.25-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod download
-RUN go build -o draarl ./cmd/udphub
+### API 模式构建
 
-FROM alpine:latest
-WORKDIR /app
-COPY --from=builder /app/draarl .
-COPY --from=builder /app/udphub.yaml .
-CMD ["./draarl", "-c", "udphub.yaml"]
-```
-
-### Systemd 服务
-
-创建 `/etc/systemd/system/draarl.service`：
-
-```ini
-[Unit]
-Description=DraARL Server
-After=network.target mysql.service
-
-[Service]
-Type=simple
-User=draarl
-WorkingDirectory=/opt/draarl
-ExecStart=/opt/draarl/draarl -c /opt/draarl/udphub.yaml
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启动服务：
+默认构建不嵌入前端资源，适合 API 服务或本地开发：
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable draarl
-sudo systemctl start draarl
+go build -o draarl ./cmd/udphub
+./draarl -c udphub.yaml
 ```
 
-## 数据库模型
+### 嵌入前端构建
 
-### 核心表结构
+Release 工作流使用 `embed` 构建标签，将 `www/dist` 放入 `internal/server/web/dist` 后再编译：
 
-**users - 用户表**
+```bash
+cd www
+npm ci
+npm run build
+cd ..
 
-- id, name, email, password, device_password
-- callsign, dmrid, avatar, roles, status
-- approval_status, created_at, updated_at
-
-**devices - 设备表**
-
-- id, name, dmrid, ssid, owner_id
-- dev_model, group_id, status, is_certed
-- disable_send, disable_recv, is_online
-
-**groups - 群组表**
-
-- id, name, type, callsign, password
-- owner_id, status, is_virtual
-
-**group_members - 群组成员表**
-
-- id, group_id, user_id
-- is_verified, join_time, last_verify
-
-**comm_records - 通信记录表**
-
-- id, device_id, group_id
-- start_time, end_time, duration
-- voice_packets
-
-## 开发指南
-
-### 代码规范
-
-- Go代码遵循 [Effective Go](https://golang.org/doc/effective_go) 规范
-- 使用 `gofmt` 格式化代码
-- 使用 `go vet` 进行静态检查
-- TypeScript代码使用 ESLint 检查
-
-### 分支管理
-
-- `master` - 生产分支
-- `dev` - 开发分支
-- `feature/*` - 功能分支
-- `hotfix/*` - 热修复分支
-
-### 提交规范
-
+mkdir -p internal/server/web/dist
+cp -r www/dist/* internal/server/web/dist/
+go build -tags=embed -o draarl ./cmd/udphub
 ```
+
+Windows PowerShell 可将复制步骤替换为：
+
+```powershell
+New-Item -ItemType Directory -Force internal/server/web/dist
+Copy-Item -Recurse -Force www/dist/* internal/server/web/dist/
+go build -tags=embed -o draarl.exe ./cmd/udphub
+```
+
+### Makefile
+
+```bash
+make help
+make build
+make test
+make run
+```
+
+注意：当前 `Makefile` 的 `build/run` 目标是普通 Go 构建，不会自动执行前端构建，也不会加 `-tags=embed`。
+
+### 发布流程
+
+当前仓库的发布由 GitHub Actions 驱动：
+
+1. 推送形如 `v*.*.*` 的 tag。
+2. [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) 构建 Linux、Windows、macOS 的 amd64/arm64 产物并创建 GitHub Release。
+3. Release 成功后，[Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) 自动构建 MkDocs 并发布到 EdgeOne Pages。
+
+示例：
+
+```bash
+git tag -a v1.1.4-alpha7 -m "release: v1.1.4-alpha7"
+git push origin v1.1.4-alpha7
+```
+
+## 服务端口与入口
+
+| 类型 | 默认/常用端口 | 说明 |
+|------|---------------|------|
+| UDP 设备接入 | `60050` | DraARLv1 设备接入和语音转发 |
+| HTTP API / Web | `9000` 或本地开发常用 `9002` | Gin API、WebSocket、前端静态资源 |
+| Vite 开发服务器 | `9001` | 前端开发预览，代理 `/api` 到后端 |
+| WebSocket | `/ws` | 浏览器在线收发连接入口 |
+| API 前缀 | `/api` | HTTP API 统一前缀 |
+
+## 管理与运维
+
+常用命令：
+
+```bash
+# 查看版本
+./draarl -v
+
+# 打印关键配置
+./draarl -c udphub.yaml -p json
+
+# 重置管理员密码
+./draarl -c udphub.yaml -reset-admin-pass "new-password"
+
+# 执行数据库自动迁移
+./draarl -c udphub.yaml -auto-migrate
+```
+
+生产环境建议：
+
+- 固定并备份 `udphub.yaml` 中的 `JWT.Secret` 和 `DeviceAuth.AESKey`。
+- 配置真实的 `Web.FrontendURL` 和 `Web.AllowedOrigins`，避免 Release 模式下 Origin 校验失败。
+- 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
+- 使用 MinIO 保存头像、操作证、资源文件、通信录音和固件。
+- 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；如使用 frp 等代理，可按需开启 `System.ProxyProtocol`。
+- 首次上线后立即修改默认管理员密码，并检查注册审核、操作证审核和设备绑定策略。
+
+更多排障内容请阅读 [运维与排障](docs/usage/08-运维与排障.md)。
+
+## API 与协议
+
+README 不再维护大段接口清单，避免与实际路由漂移。请以文档站为准：
+
+- [API 总览](docs/api/README.md)
+- [完整路由索引](docs/api/09-完整路由索引.md)
+- [WebSocket 协议详解](docs/api/10-WebSocket协议详解.md)
+- [错误码与状态码](docs/api/11-错误码与状态码.md)
+- [DraARLv1 协议文档](docs/Protocol.md)
+
+## 文档预览
+
+```bash
+pip install -r docs/requirements.txt
+mkdocs serve -f docs/mkdocs.yml
+```
+
+访问 `http://127.0.0.1:8000` 预览文档站。
+
+静态构建：
+
+```bash
+mkdocs build -f docs/mkdocs.yml --strict
+```
+
+## 分支与提交
+
+- `master`：主分支和发布来源。
+- `dev`：开发分支。
+- `v*.*.*` tag：触发 Release 和后续文档发布。
+
+提交信息建议使用：
+
+```text
 feat: 新功能
-fix: 修复bug
+fix: 修复问题
 docs: 文档更新
-style: 代码格式调整
 refactor: 代码重构
 test: 测试相关
-chore: 构建/工具相关
+chore: 构建或工具调整
 ```
 
 ## 许可证
 
-[MIT License](LICENSE)
+本项目使用 [PolyForm Noncommercial License 1.0.0](LICENSE) 授权，并随附 [NOTICE](NOTICE) 中的 `Required Notice:` 声明。
 
-## 贡献
-
-欢迎提交 Issue 和 Pull Request。
-
-## 联系方式
-
-- 项目主页: <https://github.com/your-repo/DraARL-Server>
-- 问题反馈: <https://github.com/your-repo/DraARL-Server/issues>
+- 允许非商业目的下的学习、研究、运行、修改、二次开发和再分发。
+- 未经作者明确书面授权，不允许商业使用、收费销售、收费 SaaS、商业托管或商业集成。
+- 二次开发、fork、复制、再分发或派生作品必须保留原始仓库地址：`https://github.com/Daofengql/DraARL-Server`。
+- 中文说明请阅读 [LICENSE.zh-CN.md](LICENSE.zh-CN.md)，正式法律文本以英文 [LICENSE](LICENSE) 为准。

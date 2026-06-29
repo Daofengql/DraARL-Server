@@ -106,15 +106,11 @@ mkdocs build -f docs/mkdocs.yml
 ## 自动发布
 
 - GitHub Actions 工作流：`.github/workflows/docs-pages.yml`
-- 触发条件：`Release` 工作流成功完成后自动触发
-- 结果：自动构建并发布到 EdgeOne Pages（production 环境）
+- 触发条件：`master` 分支文档变更、手动触发，或 `Release` 工作流成功完成后自动触发
+- 结果：自动构建并发布到 GitHub Pages
+- 线上地址：[https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/)
 
-需要在 GitHub 仓库配置：
-
-- `Secrets`:
-  - `EDGEONE_API_TOKEN`
-- `Variables`:
-  - `EDGEONE_PAGES_PROJECT`（EdgeOne Pages 项目名，若不存在会自动创建）
+GitHub Pages 使用 GitHub Actions 作为发布源，不再需要 EdgeOne 的 token 或项目变量。
 
 ## 快速链接
 

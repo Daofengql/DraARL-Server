@@ -1,6 +1,13 @@
-name: Docs Deploy (EdgeOne Pages)
+name: Docs Deploy (GitHub Pages)
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-pages.yml'
+  workflow_dispatch:
   workflow_run:
     workflows:
       - Release
@@ -9,20 +16,22 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
-  group: edgeone-pages
+  group: github-pages
   cancel-in-progress: false
 
 jobs:
   build-docs:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -30,6 +39,9 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: docs/requirements.txt
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
       - name: Install docs dependencies
         run: |
@@ -40,32 +52,17 @@ jobs:
         run: mkdocs build -f docs/mkdocs.yml --strict
 
       - name: Upload Pages artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: mkdocs-site
           path: site
 
-  deploy-edgeone:
+  deploy-pages:
     needs: build-docs
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Download site artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: mkdocs-site
-          path: site
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.11.0'
-
-      - name: Validate EdgeOne config
-        run: |
-          [ -n "${{ secrets.EDGEONE_API_TOKEN }}" ] || (echo "Missing secret: EDGEONE_API_TOKEN" && exit 1)
-          [ -n "${{ vars.EDGEONE_PAGES_PROJECT }}" ] || (echo "Missing variable: EDGEONE_PAGES_PROJECT" && exit 1)
-
-      - name: Deploy to EdgeOne Pages
-        run: npx edgeone pages deploy site -n "${{ vars.EDGEONE_PAGES_PROJECT }}" -t "$EDGEONE_API_TOKEN" -e production
-        env:
-          EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

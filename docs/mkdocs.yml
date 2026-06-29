@@ -1,6 +1,6 @@
 ﻿site_name: DraARL Server Docs
 site_description: DraARL Server 完整文档 - 数字无线电高级应用实时链路平台
-site_url: ""
+site_url: "https://daofengql.github.io/DraARL-Server/"
 docs_dir: .
 site_dir: ../site
 

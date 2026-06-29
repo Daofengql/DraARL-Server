@@ -15,7 +15,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 类型 | 链接 |
 |------|------|
 | 在线站点 | [https://ptt.4l2.cn](https://ptt.4l2.cn) |
-| 在线内置文档 | [https://ptt.4l2.cn/docs](https://ptt.4l2.cn/docs) |
+| 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
 | 最新 tag | [v1.1.4-alpha6](https://github.com/Daofengql/DraARL-Server/tree/v1.1.4-alpha6) |
@@ -45,7 +45,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 - **账号与审核**：支持账号密码、邮箱验证码、Keycloak SSO、JWT/refresh token、注册审核、操作证上传与审核。
 - **管理后台**：提供用户、设备、群组、中继台、服务器、资源中心、固件发布、站点配置、SMTP、APRS、OpenAI、缓存指标和操作日志管理。
 - **通联与记录**：支持平台发信记录、个人通联日志、统计趋势、音频存储和管理员侧全局查询。
-- **资源与发布**：支持 MinIO 对象存储、前端资源嵌入或 CDN 托管、GitHub Actions 多平台 Release，以及 MkDocs 文档自动发布到 EdgeOne Pages。
+- **资源与发布**：支持 MinIO 对象存储、前端资源嵌入或 CDN 托管、GitHub Actions 多平台 Release，以及 MkDocs 文档自动发布到 GitHub Pages。
 
 ## 技术栈
 
@@ -56,7 +56,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 前端 | React 19、TypeScript 5.9、Vite 7、Material UI 7、React Router 7 |
 | 通信 | UDP DraARLv1、WebSocket、Opus、APRS |
 | 文档 | MkDocs、MkDocs Material |
-| 自动化 | GitHub Actions、EdgeOne Pages |
+| 自动化 | GitHub Actions、GitHub Pages |
 
 ## 项目结构
 
@@ -233,7 +233,7 @@ make run
 
 1. 推送形如 `v*.*.*` 的 tag。
 2. [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) 构建 Linux、Windows、macOS 的 amd64/arm64 产物并创建 GitHub Release。
-3. Release 成功后，[Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) 自动构建 MkDocs 并发布到 EdgeOne Pages。
+3. Release 成功后，[Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) 自动构建 MkDocs 并发布到 GitHub Pages。
 
 示例：
 

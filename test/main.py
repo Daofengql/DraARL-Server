@@ -273,7 +273,13 @@ class ClientPanel(ttk.LabelFrame):
             if self.client.connect():
                 self.is_connected = True
                 self.btn_connect.config(text="断开")
-                self.btn_ptt.config(state=tk.NORMAL, bg="white")
+                audio_enabled = getattr(self.client, "enable_audio", True)
+                self.btn_ptt.config(
+                    state=tk.NORMAL if audio_enabled else tk.DISABLED,
+                    bg="white" if audio_enabled else "lightgray"
+                )
+                if not audio_enabled:
+                    self.log("[系统] 音频不可用，PTT 已禁用；文字功能不受影响")
                 self.log("[系统] 已连接")
             else:
                 self.log("[系统] 连接失败")
@@ -296,6 +302,9 @@ class ClientPanel(ttk.LabelFrame):
     def on_ptt_press(self, event=None):
         """PTT 按下"""
         if not self.is_connected or not self.client:
+            return
+        if not getattr(self.client, "enable_audio", True):
+            self.log("[PTT] 音频不可用，未发送语音")
             return
         self.client.start_transmit()
         self.btn_ptt.config(bg="lightgreen")

@@ -30,6 +30,9 @@ export type StateChangeCallback = (state: AudioState) => void
 export class AudioCapture {
   private audioContext: AudioContext | null = null
   private mediaStream: MediaStream | null = null
+  private initPromise: Promise<void> | null = null
+  private startGeneration = 0
+  private destroyed = false
   private state: AudioState = 'idle'
   private onDataCallback: AudioDataCallback | null = null
   private onStateChangeCallback: StateChangeCallback | null = null
@@ -87,6 +90,10 @@ export class AudioCapture {
    * 初始化音频采集
    */
   async init(deviceId?: string): Promise<void> {
+    if (this.destroyed) {
+      throw new Error('AudioCapture has been destroyed')
+    }
+
     try {
       // 请求麦克风权限
       const constraints: MediaStreamConstraints = {
@@ -144,8 +151,36 @@ export class AudioCapture {
    * 开始采集
    */
   async start(): Promise<void> {
+    if (this.destroyed) {
+      throw new Error('AudioCapture has been destroyed')
+    }
+
+    const generation = ++this.startGeneration
+
     if (!this.audioContext || !this.mediaStream) {
-      await this.init()
+      if (!this.initPromise) {
+        this.initPromise = this.init().finally(() => {
+          this.initPromise = null
+        })
+      }
+
+      try {
+        await this.initPromise
+      } catch (error) {
+        if (this.destroyed) {
+          this.releaseAudioResources()
+        }
+        throw error
+      }
+    }
+
+    // PTT may have been released while getUserMedia or the WASM encoder was
+    // still initializing. A stale start must never create capture nodes.
+    if (generation !== this.startGeneration || this.destroyed) {
+      if (this.destroyed) {
+        this.releaseAudioResources()
+      }
+      return
     }
 
     if (this.state === 'capturing') {
@@ -194,6 +229,9 @@ export class AudioCapture {
    * 停止采集
    */
   stop(): void {
+    // Cancel start() even when initialization has not reached "capturing" yet.
+    this.startGeneration++
+
     if (this.state !== 'capturing') return
 
     this.setState('idle')
@@ -382,8 +420,13 @@ export class AudioCapture {
    * 销毁
    */
   destroy(): void {
+    this.destroyed = true
     this.stop()
 
+    this.releaseAudioResources()
+  }
+
+  private releaseAudioResources(): void {
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(track => track.stop())
       this.mediaStream = null

@@ -10,6 +10,12 @@ import (
 	"draarl/internal/models"
 )
 
+func newConnPool() *CurrentConnPool {
+	pool := &CurrentConnPool{DevConnMap: make(map[string]*models.Device)}
+	pool.storeConnList(make([]*models.Device, 0))
+	return pool
+}
+
 // initPublicGroups 初始化公共群组
 func initPublicGroups() {
 	// 创建默认群组 0
@@ -20,7 +26,7 @@ func initPublicGroups() {
 		DevMap:     make(map[int]*models.Device),
 		CreateTime: time.Now().Format("2006-01-02 15:04:05"),
 		UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
-		ConnPool:   &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ConnPool:   newConnPool(),
 	}
 
 	// 创建全网通群组 999
@@ -31,7 +37,7 @@ func initPublicGroups() {
 		DevMap:     make(map[int]*models.Device),
 		CreateTime: time.Now().Format("2006-01-02 15:04:05"),
 		UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
-		ConnPool:   &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ConnPool:   newConnPool(),
 	}
 
 	// 从数据库加载公共群组
@@ -44,7 +50,7 @@ func initPublicGroups() {
 
 	for _, gp := range groups {
 		newGroup := gp.ToModelGroup()
-		newGroup.ConnPool = &CurrentConnPool{DevConnMap: make(map[string]*models.Device)}
+		newGroup.ConnPool = newConnPool()
 		newGroup.DevMap = make(map[int]*models.Device)
 
 		publicGroupMap[newGroup.ID] = newGroup
@@ -95,7 +101,7 @@ func CreatePublicGroup(gp *models.Group) error {
 		CreateTime:        time.Now().Format("2006-01-02 15:04:05"),
 		UpdateTime:        time.Now().Format("2006-01-02 15:04:05"),
 		Note:              gp.Note,
-		ConnPool:          &CurrentConnPool{DevConnMap: make(map[string]*models.Device)},
+		ConnPool:          newConnPool(),
 		DevMap:            make(map[int]*models.Device),
 	}
 

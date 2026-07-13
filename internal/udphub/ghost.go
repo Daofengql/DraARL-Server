@@ -46,10 +46,14 @@ func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
 	key := getDeviceKey(device.Username, device.SSID)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	cacheChanged := false
 
 	if existing, exists := m.devices[key]; exists {
 		oldGroupID := existing.GroupID
+		cacheChanged = oldGroupID != device.GroupID ||
+			!sameUDPAddr(existing.UDPAddr, device.UDPAddr) ||
+			existing.ISOnline != device.ISOnline ||
+			existing.DisableRecv != device.DisableRecv
 		if oldGroupID != device.GroupID {
 			if groupMap, ok := m.groupDevices[oldGroupID]; ok {
 				delete(groupMap, key)
@@ -69,12 +73,15 @@ func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
 		existing.Priority = device.Priority
 		existing.Status = device.Status
 		existing.ISOnline = device.ISOnline
+		existing.DisableSend = device.DisableSend
+		existing.DisableRecv = device.DisableRecv
 		existing.UDPAddr = device.UDPAddr
 		existing.LastPacketTime = device.LastPacketTime
 		existing.OnlineTime = device.OnlineTime
 		device = existing
 	} else {
 		m.devices[key] = device
+		cacheChanged = true
 	}
 
 	if m.groupDevices[device.GroupID] == nil {
@@ -84,6 +91,10 @@ func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
 
 	log.Printf("[UDP-GHOST] 设备注册: %s (用户: %s, 呼号: %s, 群组: %d)",
 		key, device.Username, device.CallSign, device.GroupID)
+	m.mu.Unlock()
+	if cacheChanged {
+		InvalidateDomainReceiverCache()
+	}
 
 	return device
 }
@@ -115,6 +126,7 @@ func (m *UDPGhostManager) GetByUsername(username string) []*models.Device {
 }
 
 // GetByGroup 获取指定群组的 UDP 幽灵设备 (优化为 O(1) 复杂度)
+// 注意：返回新切片；热路径优先使用 ForEachOnlineByGroup 避免分配。
 func (m *UDPGhostManager) GetByGroup(groupID int) []*models.Device {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -135,14 +147,33 @@ func (m *UDPGhostManager) GetByGroup(groupID int) []*models.Device {
 	return devices
 }
 
+// ForEachOnlineByGroup 无分配遍历群组内在线幽灵设备。
+func (m *UDPGhostManager) ForEachOnlineByGroup(groupID int, fn func(*models.Device)) {
+	if fn == nil {
+		return
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	groupMap, exists := m.groupDevices[groupID]
+	if !exists || len(groupMap) == 0 {
+		return
+	}
+	for _, dev := range groupMap {
+		if dev != nil && dev.ISOnline {
+			fn(dev)
+		}
+	}
+}
+
 // Remove 移除指定的 UDP 幽灵设备
 func (m *UDPGhostManager) Remove(username string, ssid byte) {
 	key := getDeviceKey(username, ssid)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	removed := false
 
 	if dev, exists := m.devices[key]; exists {
+		removed = true
 		// 从主索引中移除
 		delete(m.devices, key)
 
@@ -158,15 +189,20 @@ func (m *UDPGhostManager) Remove(username string, ssid byte) {
 		log.Printf("[UDP-GHOST] 设备移除: %s (用户: %s, 呼号: %s)",
 			key, dev.Username, dev.CallSign)
 	}
+	m.mu.Unlock()
+	if removed {
+		InvalidateDomainReceiverCache()
+	}
 }
 
 // RemoveByUDPAddr 通过 UDP 地址移除设备（用于断开连接时清理）
 func (m *UDPGhostManager) RemoveByUDPAddr(addr string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	removed := false
 
 	for key, dev := range m.devices {
 		if dev.UDPAddr != nil && dev.UDPAddr.String() == addr {
+			removed = true
 			// 从主索引中移除
 			delete(m.devices, key)
 
@@ -180,6 +216,10 @@ func (m *UDPGhostManager) RemoveByUDPAddr(addr string) {
 
 			log.Printf("[UDP-GHOST] 设备断开: %s (地址: %s)", key, addr)
 		}
+	}
+	m.mu.Unlock()
+	if removed {
+		InvalidateDomainReceiverCache()
 	}
 }
 
@@ -234,11 +274,12 @@ func (m *UDPGhostManager) GetOnlineCount() int {
 // timeout: 超时时间（建议 20-30 秒）
 func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	removed := false
 
 	now := time.Now()
 	for key, dev := range m.devices {
 		if now.Sub(dev.LastPacketTime) > timeout {
+			removed = true
 			log.Printf("[UDP-GHOST] 设备超时下线: %s (用户: %s, 超时: %v)",
 				key, dev.Username, now.Sub(dev.LastPacketTime))
 
@@ -254,6 +295,10 @@ func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 			}
 		}
 	}
+	m.mu.Unlock()
+	if removed {
+		InvalidateDomainReceiverCache()
+	}
 }
 
 // UpdateActivity 更新设备活动时间
@@ -261,13 +306,18 @@ func (m *UDPGhostManager) UpdateActivity(username string, ssid byte, addr *net.U
 	key := getDeviceKey(username, ssid)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	cacheChanged := false
 
 	if dev, exists := m.devices[key]; exists {
 		dev.LastPacketTime = time.Now()
 		if addr != nil {
+			cacheChanged = !sameUDPAddr(dev.UDPAddr, addr)
 			dev.UDPAddr = addr
 		}
+	}
+	m.mu.Unlock()
+	if cacheChanged {
+		InvalidateDomainReceiverCache()
 	}
 }
 
@@ -276,15 +326,16 @@ func (m *UDPGhostManager) SetDeviceGroup(username string, ssid byte, groupID int
 	key := getDeviceKey(username, ssid)
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	dev, exists := m.devices[key]
 	if !exists {
+		m.mu.Unlock()
 		return fmt.Errorf("device not found: %s", key)
 	}
 
 	oldGroupID := dev.GroupID
 	if oldGroupID == groupID {
+		m.mu.Unlock()
 		return nil // 群组未变，直接返回
 	}
 
@@ -306,6 +357,8 @@ func (m *UDPGhostManager) SetDeviceGroup(username string, ssid byte, groupID int
 	m.groupDevices[groupID][key] = dev
 
 	log.Printf("[UDP-GHOST] 设备群组变更: %s (%d -> %d)", key, oldGroupID, groupID)
+	m.mu.Unlock()
+	InvalidateDomainReceiverCache()
 	return nil
 }
 

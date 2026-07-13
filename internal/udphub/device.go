@@ -43,9 +43,10 @@ func loadAllDevices() {
 		return
 	}
 
-	devOwnerSSIDMap = make(map[string]*models.Device, len(devices))
-	devUsernameSSIDMap = make(map[string]*models.Device, len(devices))
-	devCallsignSSIDMap = make(map[string]*models.Device, len(devices))
+	ownerMap := make(map[string]*models.Device, len(devices))
+	usernameMap := make(map[string]*models.Device, len(devices))
+	callsignMap := make(map[string]*models.Device, len(devices))
+	replaceRuntimeDeviceMaps(ownerMap, usernameMap, callsignMap)
 
 	// 批量获取所有用户信息（用于获取呼号）
 	userRepo := gormdb.NewUserRepository()
@@ -171,8 +172,7 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 
 // getDevice 获取设备
 func getDevice(callsign string, ssid byte) *models.Device {
-	callsignSSID := protocol.GetCallSignSSID(callsign, ssid)
-	if dev, ok := devCallsignSSIDMap[callsignSSID]; ok {
+	if dev := lookupDeviceByCallsignSSID(callsign, ssid); dev != nil {
 		return dev
 	}
 
@@ -184,7 +184,7 @@ func getDevice(callsign string, ssid byte) *models.Device {
 	}
 
 	dev := gormDev.ToModelDevice()
-	dev.CallSignSSID = callsignSSID
+	dev.CallSignSSID = protocol.GetCallSignSSID(callsign, ssid)
 
 	// 获取所有者信息填充 Username
 	if gormDev.OwnerID > 0 {
@@ -253,14 +253,12 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 		if oldGp, ok := publicGroupMap[dev.GroupID]; ok {
 			pool := getGroupConnPool(oldGp)
 			if pool != nil {
-				delete(pool.DevConnMap, dev.UDPAddr.String())
-
-				// 性能优化：预分配切片容量
-				list := make([]*models.Device, 0, len(pool.DevConnMap))
-				for _, vv := range pool.DevConnMap {
-					list = append(list, vv)
+				pool.mu.Lock()
+				if dev.UDPAddr != nil {
+					delete(pool.DevConnMap, dev.UDPAddr.String())
 				}
-				pool.DevConnList = list
+				rebuildDeviceConnListLocked(pool)
+				pool.mu.Unlock()
 			}
 
 			delete(oldGp.DevMap, dev.ID)
@@ -272,18 +270,17 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 				delete(oldGp.DevMap, dev.ID)
 				pool := getGroupConnPool(oldGp)
 				if pool != nil {
-					delete(pool.DevConnMap, dev.UDPAddr.String())
-
-					// 性能优化：预分配切片容量
-					list := make([]*models.Device, 0, len(pool.DevConnMap))
-					for _, vv := range pool.DevConnMap {
-						list = append(list, vv)
+					pool.mu.Lock()
+					if dev.UDPAddr != nil {
+						delete(pool.DevConnMap, dev.UDPAddr.String())
 					}
-					pool.DevConnList = list
+					rebuildDeviceConnListLocked(pool)
+					pool.mu.Unlock()
 				}
 			}
 		}
 	}
+	InvalidateDomainReceiverCache()
 
 	// 加入新群组
 	if groupID >= models.GroupIDPublicMin || groupID == 0 {
@@ -335,7 +332,7 @@ func checkDeviceOnline() {
 
 		onlineMap := make(map[int]*models.Device, 100)
 		t := time.Now()
-		totalStats.OnlineDevNumber = 0
+		onlineCount := 0
 
 		// 检查公共群组设备
 		for _, gp := range publicGroupMap {
@@ -344,6 +341,7 @@ func checkDeviceOnline() {
 
 			pool := getGroupConnPool(gp)
 			if pool != nil {
+				pool.mu.Lock()
 				for addrStr, dev := range pool.DevConnMap {
 					// 255 设备不参与在线统计
 					if dev.DevModel == models.DevModelFullNet || dev.SSID == models.SSIDServerMax {
@@ -408,14 +406,12 @@ func checkDeviceOnline() {
 					}
 				}
 
-				// 更新连接列表
+				// 更新连接列表快照
 				if change {
-					list := make([]*models.Device, 0, len(pool.DevConnMap))
-					for _, dev := range pool.DevConnMap {
-						list = append(list, dev)
-					}
-					pool.DevConnList = list
+					rebuildDeviceConnListLocked(pool)
+					InvalidateDomainReceiverCache()
 				}
+				pool.mu.Unlock()
 			}
 
 			// 【修复】更新本群组总设备数 = 实体硬件设备数 + 已审核幽灵设备准入总数
@@ -427,7 +423,7 @@ func checkDeviceOnline() {
 				gp.OnlineDevNumber += len(wsDevices)
 			}
 
-			totalStats.OnlineDevNumber += gp.OnlineDevNumber
+			onlineCount += gp.OnlineDevNumber
 		}
 
 		// 检查私有群组设备
@@ -438,6 +434,8 @@ func checkDeviceOnline() {
 
 				pool := getGroupConnPool(gp)
 				if pool != nil {
+					change := false
+					pool.mu.Lock()
 					for addrStr, dev := range pool.DevConnMap {
 						// 跳过特殊设备
 						if dev.DevModel == models.DevModelFullNet || dev.SSID == models.SSIDServerMax {
@@ -447,6 +445,7 @@ func checkDeviceOnline() {
 						// 检查地址变化
 						if dev.UDPAddr != nil && addrStr != dev.UDPAddr.String() {
 							delete(pool.DevConnMap, addrStr)
+							change = true
 							continue
 						}
 
@@ -463,6 +462,7 @@ func checkDeviceOnline() {
 								removeRuntimeDeviceMAC(dev)
 
 								delete(pool.DevConnMap, addrStr)
+								change = true
 								continue
 							}
 						}
@@ -472,6 +472,11 @@ func checkDeviceOnline() {
 							onlineMap[dev.ID] = dev
 						}
 					}
+					if change {
+						rebuildDeviceConnListLocked(pool)
+						InvalidateDomainReceiverCache()
+					}
+					pool.mu.Unlock()
 				}
 
 				// 【修复】更新私有群组总数 = 实体硬件设备数 + 已审核幽灵设备准入总数
@@ -483,12 +488,13 @@ func checkDeviceOnline() {
 					gp.OnlineDevNumber += len(wsDevices)
 				}
 
-				totalStats.OnlineDevNumber += gp.OnlineDevNumber
+				onlineCount += gp.OnlineDevNumber
 			}
 			return true
 		})
 
-		onlineDevMap = onlineMap
+		setOnlineDevMap(onlineMap)
+		setOnlineDevNumber(onlineCount)
 
 		// 【新增】UDP 幽灵设备超时检测
 		GlobalUDPGhostManager.CheckTimeout(offlineTimeout)
@@ -500,9 +506,9 @@ func checkDeviceOnline() {
 		// 【日志】输出在线设备统计信息
 		if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 			wsNormalCount, wsGhostCount := GlobalMessageRouter.wsManager.GetOnlineCount()
-			udpOnlineCount := totalStats.OnlineDevNumber - wsNormalCount - wsGhostCount
+			udpOnlineCount := onlineCount - wsNormalCount - wsGhostCount
 			log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 服务器总在线=%d",
-				udpOnlineCount, udpGhostOnline, wsNormalCount, wsGhostCount, totalStats.OnlineDevNumber+udpGhostOnline)
+				udpOnlineCount, udpGhostOnline, wsNormalCount, wsGhostCount, onlineCount+udpGhostOnline)
 		}
 	}
 }
@@ -521,13 +527,11 @@ func processLogBuffer() {
 
 // deviceAT 发送 AT 命令到设备
 func deviceAT(at *models.ATCommand) (*models.Device, error) {
-	usernameSSID := protocol.GetUsernameSSID(at.CallSign, at.SSID)
-	dev, ok := devUsernameSSIDMap[usernameSSID]
-	if !ok {
+	dev := lookupDeviceByUsernameSSID(at.CallSign, at.SSID)
+	if dev == nil {
 		// 向后兼容：尝试 callsign 索引
-		callsignSSID := protocol.GetCallSignSSID(at.CallSign, at.SSID)
-		dev, ok = devCallsignSSIDMap[callsignSSID]
-		if !ok {
+		dev = lookupDeviceByCallsignSSID(at.CallSign, at.SSID)
+		if dev == nil {
 			return nil, errors.New("device not found")
 		}
 	}
@@ -544,17 +548,22 @@ func deviceAT(at *models.ATCommand) (*models.Device, error) {
 
 // queryDeviceParm 查询设备参数
 func queryDeviceParm(callsignSSID string) (*models.Device, error) {
-	dev, ok := devCallsignSSIDMap[callsignSSID]
-	if !ok {
+	runtimeIndexMu.RLock()
+	dev := devCallsignSSIDMap[callsignSSID]
+	runtimeIndexMu.RUnlock()
+	if dev == nil {
 		return nil, errors.New("device not found")
 	}
+	return sendQueryDeviceParm(dev)
+}
 
+func sendQueryDeviceParm(dev *models.Device) (*models.Device, error) {
 	if globalConn != nil && dev.UDPAddr != nil {
+		// 兼容原逻辑：先发配置查询，再短暂等待
 		packet := protocol.EncodeDraARLv1(dev.Username, "", dev.SSID, protocol.DraARLTypeConfig, 0, 0, dev.CallSign, []byte{0x01})
 		globalConn.WriteToUDP(packet, dev.UDPAddr)
 		time.Sleep(300 * time.Millisecond)
 	}
-
 	return dev, nil
 }
 
@@ -669,18 +678,22 @@ func GetDevice(callsign string, ssid byte) *models.Device {
 // GetDeviceByID 根据 DeviceID 获取设备（公开函数，供 websocket 包调用）
 // 注意：由于呼号字段不唯一，此方法比 GetDevice 更可靠
 func GetDeviceByID(deviceID int) *models.Device {
-	// 先从 username 索引查找
-	for _, d := range devOwnerSSIDMap {
-		if d.ID == deviceID {
-			return d
+	var found *models.Device
+	rangeOwnerDevices(func(d *models.Device) {
+		if found == nil && d.ID == deviceID {
+			found = d
 		}
+	})
+	if found != nil {
+		return found
 	}
-
-	// 如果没找到，从 callsign 索引查找
-	for _, d := range devCallsignSSIDMap {
-		if d.ID == deviceID {
-			return d
+	rangeCallsignDevices(func(d *models.Device) {
+		if found == nil && d.ID == deviceID {
+			found = d
 		}
+	})
+	if found != nil {
+		return found
 	}
 
 	// ==========================================
@@ -715,12 +728,12 @@ func GetDeviceByID(deviceID int) *models.Device {
 
 // GetDeviceCount 获取设备总数
 func GetDeviceCount() int {
-	return len(devOwnerSSIDMap)
+	return runtimeOwnerDeviceCount()
 }
 
-// GetAllDevices 获取所有设备
+// GetAllDevices 获取所有设备（快照拷贝，避免外部并发写原 map）
 func GetAllDevices() map[string]*models.Device {
-	return devOwnerSSIDMap
+	return getOwnerDeviceMapSnapshot()
 }
 
 // ChangeDeviceGroupByID 通过设备ID更改设备群组（供 API 调用）
@@ -728,22 +741,19 @@ func ChangeDeviceGroupByID(deviceID int, newGroupID int) error {
 	// 在内存中查找设备
 	var dev *models.Device
 
-	// 先从 username 索引查找
-	for _, d := range devOwnerSSIDMap {
-		if d.ID == deviceID {
+	rangeOwnerDevices(func(d *models.Device) {
+		if dev == nil && d.ID == deviceID {
 			dev = d
-			break
 		}
-	}
+	})
 
 	// 如果没找到，从 callsign 索引查找
 	if dev == nil {
-		for _, d := range devCallsignSSIDMap {
-			if d.ID == deviceID {
+		rangeCallsignDevices(func(d *models.Device) {
+			if dev == nil && d.ID == deviceID {
 				dev = d
-				break
 			}
-		}
+		})
 	}
 
 	if dev == nil {
@@ -780,12 +790,8 @@ func SyncDeviceCommControlByID(deviceID int, disableSend, disableRecv bool) {
 	}
 
 	// 1) 两套主索引
-	for _, dev := range devOwnerSSIDMap {
-		apply(dev)
-	}
-	for _, dev := range devCallsignSSIDMap {
-		apply(dev)
-	}
+	rangeOwnerDevices(apply)
+	rangeCallsignDevices(apply)
 
 	// 2) 群组缓存中的连接池与设备映射（覆盖所有转发读取路径）
 	cache := globalGroupCacheAtomic.Load()
@@ -795,17 +801,11 @@ func SyncDeviceCommControlByID(deviceID int, disableSend, disableRecv bool) {
 				if gp == nil {
 					continue
 				}
-				for _, dev := range gp.DevMap {
-					apply(dev)
-				}
 				pool := getGroupConnPool(gp)
 				if pool == nil {
 					continue
 				}
-				for _, dev := range pool.DevConnMap {
-					apply(dev)
-				}
-				for _, dev := range pool.DevConnList {
+				for _, dev := range pool.snapshotConnList() {
 					apply(dev)
 				}
 			}
@@ -813,6 +813,7 @@ func SyncDeviceCommControlByID(deviceID int, disableSend, disableRecv bool) {
 	}
 
 	if updated > 0 {
+		InvalidateDomainReceiverCache()
 		log.Printf("[DEVICE] Device ID %d comm control synced in memory: disable_send=%v disable_recv=%v (refs=%d)", deviceID, disableSend, disableRecv, updated)
 	}
 }

@@ -14,6 +14,8 @@ const (
 	halfDuplexVoiceHoldTimeout = 900 * time.Millisecond
 	// 限制阻塞日志频率，避免并发争抢时刷屏。
 	halfDuplexBlockLogInterval = 2 * time.Second
+	// 半双工状态分片数，降低多群并发时的全局锁竞争。
+	halfDuplexShardCount = 32
 )
 
 type halfDuplexDomainState struct {
@@ -23,13 +25,28 @@ type halfDuplexDomainState struct {
 	lastBlockLogAt time.Time
 }
 
+type halfDuplexShard struct {
+	mu     sync.Mutex
+	states map[string]*halfDuplexDomainState
+}
+
 var (
-	halfDuplexMu sync.Mutex
-	// key: domainKey（同一转发域），value: 当前占用者状态
-	halfDuplexDomainStates = make(map[string]*halfDuplexDomainState)
+	halfDuplexShards [halfDuplexShardCount]halfDuplexShard
 	// key: groupID，value: domainKey（缓存群组到转发域映射，避免每包都做图遍历）
 	halfDuplexDomainKeyCache sync.Map
+	// key: domainKey，value: []int 连通域内群组 ID 快照（用于一帧多组转发）
+	halfDuplexDomainGroupsCache sync.Map
 )
+
+func init() {
+	for i := 0; i < halfDuplexShardCount; i++ {
+		halfDuplexShards[i].states = make(map[string]*halfDuplexDomainState)
+	}
+}
+
+func halfDuplexShardIndex(domainKey string) int {
+	return int(fnv32String(domainKey) & (halfDuplexShardCount - 1))
+}
 
 // tryAcquireHalfDuplex 严格半双工仲裁：
 // 同一转发域内同一时刻仅允许一个说话人发包，其他说话人语音包会被丢弃。
@@ -42,13 +59,14 @@ func tryAcquireHalfDuplex(groupID int, speakerID, speakerLabel string, ts time.T
 	}
 
 	domainKey := getHalfDuplexDomainKey(groupID)
+	shard := &halfDuplexShards[halfDuplexShardIndex(domainKey)]
 
-	halfDuplexMu.Lock()
-	defer halfDuplexMu.Unlock()
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
-	state, exists := halfDuplexDomainStates[domainKey]
+	state, exists := shard.states[domainKey]
 	if !exists {
-		halfDuplexDomainStates[domainKey] = &halfDuplexDomainState{
+		shard.states[domainKey] = &halfDuplexDomainState{
 			speakerID:    speakerID,
 			speakerLabel: speakerLabel,
 			lastVoiceAt:  ts,
@@ -85,16 +103,20 @@ func tryAcquireHalfDuplex(groupID int, speakerID, speakerLabel string, ts time.T
 // 注意：不主动清空活跃占用状态，避免定时刷新期间中断正在进行的发言。
 func resetHalfDuplexDomainCache() {
 	halfDuplexDomainKeyCache = sync.Map{}
+	halfDuplexDomainGroupsCache = sync.Map{}
 
 	// 仅回收明显过期的占用状态，防止状态表长期增长。
 	expireBefore := time.Now().Add(-3 * halfDuplexVoiceHoldTimeout)
-	halfDuplexMu.Lock()
-	for domainKey, state := range halfDuplexDomainStates {
-		if state.lastVoiceAt.Before(expireBefore) {
-			delete(halfDuplexDomainStates, domainKey)
+	for i := 0; i < halfDuplexShardCount; i++ {
+		shard := &halfDuplexShards[i]
+		shard.mu.Lock()
+		for domainKey, state := range shard.states {
+			if state.lastVoiceAt.Before(expireBefore) {
+				delete(shard.states, domainKey)
+			}
 		}
+		shard.mu.Unlock()
 	}
-	halfDuplexMu.Unlock()
 }
 
 func getHalfDuplexDomainKey(groupID int) string {
@@ -110,7 +132,23 @@ func getHalfDuplexDomainKey(groupID int) string {
 	for _, id := range ids {
 		halfDuplexDomainKeyCache.Store(id, domainKey)
 	}
+	// 缓存连通域群组列表，供转发路径一次取全量目标组。
+	halfDuplexDomainGroupsCache.Store(domainKey, append([]int(nil), ids...))
 	return domainKey
+}
+
+// GetHalfDuplexDomainGroupIDs 返回 groupID 所在连通域的全部群组 ID（已排序快照）。
+func GetHalfDuplexDomainGroupIDs(groupID int) []int {
+	domainKey := getHalfDuplexDomainKey(groupID)
+	if v, ok := halfDuplexDomainGroupsCache.Load(domainKey); ok {
+		if ids, ok := v.([]int); ok {
+			return ids
+		}
+	}
+	ids := collectHalfDuplexDomainGroupIDs(groupID)
+	sort.Ints(ids)
+	halfDuplexDomainGroupsCache.Store(domainKey, append([]int(nil), ids...))
+	return ids
 }
 
 // collectHalfDuplexDomainGroupIDs 计算一个群组可达的“语音转发连通域”。

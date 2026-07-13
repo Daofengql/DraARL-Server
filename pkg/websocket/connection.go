@@ -17,12 +17,12 @@ import (
 type ConnectionState int
 
 const (
-	StateDisconnected ConnectionState = iota // 已断开
-	StateConnecting                          // 连接中
-	StateAuthenticating                      // 认证中
-	StateOnline                              // 在线
-	StateDisconnecting                       // 断开中
-	StateReconnecting                        // 重连中
+	StateDisconnected   ConnectionState = iota // 已断开
+	StateConnecting                            // 连接中
+	StateAuthenticating                        // 认证中
+	StateOnline                                // 在线
+	StateDisconnecting                         // 断开中
+	StateReconnecting                          // 重连中
 )
 
 // String 返回连接状态的字符串表示
@@ -210,6 +210,7 @@ func (d *WSDevice) writerLoop() {
 
 // AsyncWrite 异步写入数据（非阻塞）
 // 返回值：true=投递成功，false=通道满（丢帧）
+// 入队时拷贝 data，调用方缓冲可立即复用/归还。
 func (d *WSDevice) AsyncWrite(messageType int, data []byte) bool {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
@@ -218,8 +219,11 @@ func (d *WSDevice) AsyncWrite(messageType int, data []byte) bool {
 		return false
 	}
 
+	payload := make([]byte, len(data))
+	copy(payload, data)
+
 	select {
-	case d.writeCh <- &writeRequest{messageType: messageType, data: data}:
+	case d.writeCh <- &writeRequest{messageType: messageType, data: payload}:
 		return true
 	default:
 		// 通道满，丢帧而不是阻塞
@@ -257,8 +261,8 @@ const shardCount = 32 // 分片数量，应为 2 的幂次方
 // connShard 连接分片，每个分片有独立的锁
 type connShard struct {
 	mu           sync.RWMutex
-	ghostDevices map[int]*WSDevice           // 幽灵设备 (key: userID)
-	connMap      map[string]*WSDevice        // 连接索引 (key: conn.RemoteAddr().String())
+	ghostDevices map[int]*WSDevice            // 幽灵设备 (key: userID)
+	connMap      map[string]*WSDevice         // 连接索引 (key: conn.RemoteAddr().String())
 	groupDevices map[int]map[string]*WSDevice // 群组索引
 }
 
@@ -270,8 +274,8 @@ type WSConnectionManager struct {
 	// 【优化】全局群组索引：独立锁，避免分片遍历
 	// key: groupID, value: map[deviceKey]*WSDevice
 	globalGroupIndex struct {
-		mu        sync.RWMutex
-		devices   map[int]map[string]*WSDevice
+		mu      sync.RWMutex
+		devices map[int]map[string]*WSDevice
 	}
 
 	// 配置

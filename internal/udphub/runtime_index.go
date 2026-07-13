@@ -16,6 +16,14 @@ func getOwnerSSIDKey(ownerID int, ssid byte) string {
 	return fmt.Sprintf("%d-%d", ownerID, ssid)
 }
 
+func usernameSSIDKey(username string, ssid byte) string {
+	return protocol.GetUsernameSSID(username, ssid)
+}
+
+func callsignSSIDKey(callsign string, ssid byte) string {
+	return protocol.GetCallSignSSID(callsign, ssid)
+}
+
 func sameUDPAddr(a, b *net.UDPAddr) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -51,15 +59,23 @@ func indexRuntimeDevice(dev *models.Device) {
 	if dev == nil {
 		return
 	}
+	runtimeIndexMu.Lock()
+	defer runtimeIndexMu.Unlock()
+	indexRuntimeDeviceLocked(dev)
+}
 
+func indexRuntimeDeviceLocked(dev *models.Device) {
+	if dev == nil {
+		return
+	}
 	if dev.OwnerID > 0 {
 		devOwnerSSIDMap[getOwnerSSIDKey(dev.OwnerID, dev.SSID)] = dev
 	}
 	if dev.Username != "" {
-		devUsernameSSIDMap[protocol.GetUsernameSSID(dev.Username, dev.SSID)] = dev
+		devUsernameSSIDMap[usernameSSIDKey(dev.Username, dev.SSID)] = dev
 	}
 	if dev.CallSign != "" {
-		dev.CallSignSSID = protocol.GetCallSignSSID(dev.CallSign, dev.SSID)
+		dev.CallSignSSID = callsignSSIDKey(dev.CallSign, dev.SSID)
 		devCallsignSSIDMap[dev.CallSignSSID] = dev
 	}
 	syncRuntimeDeviceMAC(dev)
@@ -69,21 +85,28 @@ func removeRuntimeUsernameKey(dev *models.Device, username string) {
 	if dev == nil || username == "" {
 		return
 	}
-	delete(devUsernameSSIDMap, protocol.GetUsernameSSID(username, dev.SSID))
+	runtimeIndexMu.Lock()
+	delete(devUsernameSSIDMap, usernameSSIDKey(username, dev.SSID))
+	runtimeIndexMu.Unlock()
 }
 
 func removeRuntimeCallSignKey(dev *models.Device, callsign string) {
 	if dev == nil || callsign == "" {
 		return
 	}
-	delete(devCallsignSSIDMap, protocol.GetCallSignSSID(callsign, dev.SSID))
+	runtimeIndexMu.Lock()
+	delete(devCallsignSSIDMap, callsignSSIDKey(callsign, dev.SSID))
+	runtimeIndexMu.Unlock()
 }
 
 func findDeviceByOwnerSSIDFromMemory(ownerID int, ssid byte) *models.Device {
 	if ownerID <= 0 {
 		return nil
 	}
-	return devOwnerSSIDMap[getOwnerSSIDKey(ownerID, ssid)]
+	runtimeIndexMu.RLock()
+	dev := devOwnerSSIDMap[getOwnerSSIDKey(ownerID, ssid)]
+	runtimeIndexMu.RUnlock()
+	return dev
 }
 
 func IsRuntimeNormalDeviceActive(ownerID int, ssid byte) bool {
@@ -107,39 +130,74 @@ func syncDeviceConnPool(pool *CurrentConnPool, dev *models.Device, addr *net.UDP
 	if pool == nil || dev == nil || addr == nil {
 		return
 	}
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
 	if pool.DevConnMap == nil {
 		pool.DevConnMap = make(map[string]*models.Device)
 	}
 
 	addrKey := addr.String()
+	// 热路径：同设备同地址已在池中时直接返回，避免心跳反复 rebuild/invalidate。
+	if existing, ok := pool.DevConnMap[addrKey]; ok && existing == dev {
+		return
+	}
+
+	membershipChanged := false
+	// 增量清理：仅移除同地址或同一设备的旧条目。
 	for key, existing := range pool.DevConnMap {
 		if existing == nil {
 			delete(pool.DevConnMap, key)
+			membershipChanged = true
 			continue
 		}
-		if key == addrKey || isSameRuntimeDevice(existing, dev) {
+		if key == addrKey {
+			if existing != dev {
+				membershipChanged = true
+			}
+			continue
+		}
+		if isSameRuntimeDevice(existing, dev) {
 			delete(pool.DevConnMap, key)
+			membershipChanged = true
 		}
 	}
 
-	pool.DevConnMap[addrKey] = dev
-	pool.DevConnList = make([]*models.Device, 0, len(pool.DevConnMap))
-	for _, existing := range pool.DevConnMap {
-		pool.DevConnList = append(pool.DevConnList, existing)
+	if prev, ok := pool.DevConnMap[addrKey]; !ok || prev != dev {
+		membershipChanged = true
 	}
+	pool.DevConnMap[addrKey] = dev
+
+	if !membershipChanged {
+		return
+	}
+	rebuildDeviceConnListLocked(pool)
+	// 仅真实成员/地址变化时失效域接收者缓存
+	InvalidateDomainReceiverCache()
 }
 
 func rebuildDeviceConnList(pool *CurrentConnPool) {
 	if pool == nil {
 		return
 	}
-	pool.DevConnList = make([]*models.Device, 0, len(pool.DevConnMap))
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	rebuildDeviceConnListLocked(pool)
+}
+
+func rebuildDeviceConnListLocked(pool *CurrentConnPool) {
+	if pool == nil {
+		return
+	}
+	list := make([]*models.Device, 0, len(pool.DevConnMap))
 	for _, existing := range pool.DevConnMap {
 		if existing == nil {
 			continue
 		}
-		pool.DevConnList = append(pool.DevConnList, existing)
+		list = append(list, existing)
 	}
+	pool.storeConnList(list)
 }
 
 func removeDeviceFromGroupRuntime(gp *models.Group, dev *models.Device) {
@@ -169,12 +227,15 @@ func removeDeviceFromGroupRuntime(gp *models.Group, dev *models.Device) {
 	if pool == nil {
 		return
 	}
+	pool.mu.Lock()
 	for key, existing := range pool.DevConnMap {
 		if existing == nil || isSameRuntimeDevice(existing, dev) {
 			delete(pool.DevConnMap, key)
 		}
 	}
-	rebuildDeviceConnList(pool)
+	rebuildDeviceConnListLocked(pool)
+	pool.mu.Unlock()
+	InvalidateDomainReceiverCache()
 }
 
 func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
@@ -184,11 +245,18 @@ func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
 		return false
 	}
 
+	runtimeIndexMu.Lock()
 	delete(devOwnerSSIDMap, getOwnerSSIDKey(ownerID, ssid))
-	removeRuntimeUsernameKey(dev, dev.Username)
-	removeRuntimeCallSignKey(dev, dev.CallSign)
+	if dev.Username != "" {
+		delete(devUsernameSSIDMap, usernameSSIDKey(dev.Username, dev.SSID))
+	}
+	if dev.CallSign != "" {
+		delete(devCallsignSSIDMap, callsignSSIDKey(dev.CallSign, dev.SSID))
+	}
 	delete(onlineDevMap, dev.ID)
 	delete(onlineDevMapDraARL, dev.ID)
+	runtimeIndexMu.Unlock()
+
 	removeRuntimeDeviceMAC(dev)
 
 	dev.ISOnline = false
@@ -263,21 +331,17 @@ func SyncUserCallSignChange(ownerID int, username, oldCallSign, newCallSign stri
 		seen[dev] = struct{}{}
 	}
 
-	for _, dev := range devOwnerSSIDMap {
-		collect(dev)
-	}
-	for _, dev := range devUsernameSSIDMap {
-		collect(dev)
-	}
-	for _, dev := range devCallsignSSIDMap {
-		collect(dev)
-	}
+	rangeOwnerDevices(collect)
+	rangeCallsignDevices(collect)
+	runtimeIndexMu.RLock()
 	for _, dev := range onlineDevMap {
 		collect(dev)
 	}
 	for _, dev := range onlineDevMapDraARL {
 		collect(dev)
 	}
+	runtimeIndexMu.RUnlock()
+
 	for _, gp := range publicGroupMap {
 		if gp == nil {
 			continue
@@ -285,17 +349,11 @@ func SyncUserCallSignChange(ownerID int, username, oldCallSign, newCallSign stri
 		if rewritten, changed := rewriteRuntimeAllowCallSignSSID(gp.AllowCallSignSSID, oldCallSign, newCallSign); changed {
 			gp.AllowCallSignSSID = rewritten
 		}
-		for _, dev := range gp.DevMap {
-			collect(dev)
-		}
 		pool := getGroupConnPool(gp)
 		if pool == nil {
 			continue
 		}
-		for _, dev := range pool.DevConnMap {
-			collect(dev)
-		}
-		for _, dev := range pool.DevConnList {
+		for _, dev := range pool.snapshotConnList() {
 			collect(dev)
 		}
 	}
@@ -320,12 +378,16 @@ func SyncUserCallSignChange(ownerID int, username, oldCallSign, newCallSign stri
 		})
 	}
 
+	runtimeIndexMu.Lock()
 	for dev := range seen {
-		removeRuntimeCallSignKey(dev, oldCallSign)
+		if oldCallSign != "" {
+			delete(devCallsignSSIDMap, callsignSSIDKey(oldCallSign, dev.SSID))
+		}
 		dev.CallSign = newCallSign
-		dev.CallSignSSID = protocol.GetCallSignSSID(newCallSign, dev.SSID)
+		dev.CallSignSSID = callsignSSIDKey(newCallSign, dev.SSID)
 		devCallsignSSIDMap[dev.CallSignSSID] = dev
 	}
+	runtimeIndexMu.Unlock()
 
 	GlobalUDPGhostManager.UpdateUserCallSign(ownerID, username, newCallSign)
 }

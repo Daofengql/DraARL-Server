@@ -39,14 +39,11 @@ var (
 	}
 
 	// ==========================================
-	// 限速器：IP+Port 维度的包速率限制
-	// 【前置逻辑说明】
+	// 限速器：IP+Port 维度的包速率限制（分片实现见 rate_limit.go）
 	// 原 25 包/秒 对抗恶意攻击很好，但如果是 FRP 隧道转发（所有设备共用一个 IP），
 	// 或者客户端网络卡顿后执行了"追赶发送"（瞬间连发3-4个包），极易被静默丢弃。
 	// 大包架构下丢包体验极差，放宽至 150，兼顾防 DDoS 与业务容错。
 	// ==========================================
-	rateLimiter     = make(map[string]*rateLimitEntry)
-	rateLimiterMu   sync.Mutex
 	rateLimitMaxPps = 150 // 每秒最大包数 (25 → 150)
 
 	// Username 索引的设备映射 (DraARLv1)
@@ -87,14 +84,13 @@ var (
 	// 用户列表 (sync.Map)
 	userList sync.Map
 
-	// 统计信息
+	// 统计信息（热路径用 atomic 更新，避免 data race）
 	totalStats = &models.ServerStats{}
+	// OnlineDevNumber 单独原子存储（int 字段不便直接 atomic）
+	totalStatsOnline int64
 
 	// 日志缓冲
 	logBuffer = make(chan *models.Device, 1000)
-
-	// 并发限制
-	limitChan = make(chan bool, 100)
 )
 
 // UserInfo 用户信息结构
@@ -106,9 +102,11 @@ type UserInfo struct {
 }
 
 // CurrentConnPool 当前连接池
+// DevConnList 通过 atomic.Value 做 RCU 快照，热路径只读、写路径整体替换。
 type CurrentConnPool struct {
+	mu            sync.Mutex
 	DevConnMap    map[string]*models.Device // key: UDPAddr.String()
-	DevConnList   []*models.Device
+	devConnList   atomic.Value              // stores []*models.Device
 	UDPAddr       *net.UDPAddr
 	LastVoiceTime time.Time
 	LastPriority  int
@@ -120,42 +118,29 @@ type rateLimitEntry struct {
 	timestamp int64 // Unix 秒
 }
 
-// checkRateLimit 检查 IP+Port 的包速率
-// 返回 true 表示允许通过，false 表示超限应丢弃
-func checkRateLimit(addr string) bool {
-	now := time.Now().Unix()
-
-	rateLimiterMu.Lock()
-	defer rateLimiterMu.Unlock()
-
-	entry, exists := rateLimiter[addr]
-	if !exists || entry.timestamp != now {
-		// 新条目或新的一秒，重置计数
-		rateLimiter[addr] = &rateLimitEntry{count: 1, timestamp: now}
-		return true
+// snapshotConnList 返回当前连接列表快照（只读，禁止修改返回切片）。
+func (p *CurrentConnPool) snapshotConnList() []*models.Device {
+	if p == nil {
+		return nil
 	}
-
-	// 同一秒内，检查是否超限
-	if entry.count >= rateLimitMaxPps {
-		return false
-	}
-
-	entry.count++
-	return true
-}
-
-// cleanupRateLimiter 定期清理过期的限速器条目（由调用方在适当时机调用）
-func cleanupRateLimiter() {
-	now := time.Now().Unix()
-
-	rateLimiterMu.Lock()
-	defer rateLimiterMu.Unlock()
-
-	for addr, entry := range rateLimiter {
-		if now-entry.timestamp > 5 { // 清理 5 秒前的条目
-			delete(rateLimiter, addr)
+	if v := p.devConnList.Load(); v != nil {
+		if list, ok := v.([]*models.Device); ok {
+			return list
 		}
 	}
+	// 兼容旧代码仍写 DevConnList 字段的路径（过渡期）
+	return nil
+}
+
+// storeConnList 原子替换连接列表快照。
+func (p *CurrentConnPool) storeConnList(list []*models.Device) {
+	if p == nil {
+		return
+	}
+	if list == nil {
+		list = make([]*models.Device, 0)
+	}
+	p.devConnList.Store(list)
 }
 
 func isUDPShuttingDown() bool {
@@ -249,22 +234,19 @@ func StartDraARLServer(port int) error {
 	// 初始化通信录制管理器
 	InitCommRecorder()
 
-	// 【修复爆音方案1】初始化批量发送器
-	InitBatchSender(conn)
+	// 大群并行 fan-out 发送（热路径优先）
+	InitFanoutSender(conn)
 
-	// 【修复爆音方案3】初始化语音平滑发送器
-	InitVoiceSmoother(conn)
+	// 域级接收者缓存
+	InitDomainReceiverCache()
 
-	// 处理数据包（响应关闭信号）
-	for {
-		select {
-		case <-udpShutdown:
-			log.Println("[UDP] 服务器正在关闭...")
-			return nil
-		case limitChan <- true:
-			go processDraARLConn(conn)
-		}
-	}
+	// 单/少 reader + worker 池，避免多 goroutine 争抢同一 socket
+	startUDPPipeline(conn)
+
+	// 等待关闭
+	<-udpShutdown
+	log.Println("[UDP] 服务器正在关闭...")
+	return nil
 }
 
 // StopUDPServer 停止 UDP 服务器
@@ -275,42 +257,22 @@ func StopUDPServer() {
 		// 关闭 UDP 连接（这会使阻塞的 ReadFromUDP 返回错误）
 		if globalConn != nil {
 			globalConn.Close()
-			globalConn = nil
 		}
+
+		// 等待收包流水线退出
+		stopUDPPipeline()
+
+		globalConn = nil
 
 		// 停止相关组件
 		StopCommRecorder()
-		StopBatchSender()
-		StopVoiceSmoother()
+		// BatchSender/VoiceSmoother 已从热路径移除，不再初始化
+		StopFanoutSender()
+		StopDomainReceiverCache()
 		StopTextMessageBuffer()
 
 		log.Println("[UDP] 服务器已关闭")
 	})
-}
-
-// processDraARLConn 处理 DraARLv1 UDP 连接
-func processDraARLConn(conn *net.UDPConn) {
-	defer func() { <-limitChan }()
-
-	// 获取 PROXY Protocol 配置
-	proxyProtocolEnabled := config.Get().System.ProxyProtocol == "v2"
-
-	for {
-		buf := packetPool.Get().([]byte)
-		n, remoteAddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			packetPool.Put(buf)
-			// 正常关闭连接时不记录错误日志（连接被主动关闭是预期的关闭行为）
-			if isClosedConnError(err) {
-				return
-			}
-			log.Printf("[ERROR] Read from UDP failed: %v", err)
-			return
-		}
-
-		processDraARLDatagram(conn, buf[:n], remoteAddr, proxyProtocolEnabled)
-		packetPool.Put(buf)
-	}
 }
 
 // isClosedConnError 检查是否为连接关闭错误
@@ -325,36 +287,6 @@ func isClosedConnError(err error) bool {
 		strings.Contains(errStr, "closed")
 }
 
-func processDraARLDatagram(conn *net.UDPConn, packetData []byte, remoteAddr *net.UDPAddr, proxyProtocolEnabled bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[PANIC] Recovered from panic while processing packet from %v: %v", remoteAddr, r)
-		}
-	}()
-
-	// 解析 PROXY Protocol 头部（如果启用）
-	realAddr := remoteAddr
-	if proxyProtocolEnabled {
-		var proxyInfo *ProxyProtocolInfo
-		var isProxyProtocol bool
-		proxyInfo, packetData, isProxyProtocol = ParseProxyProtocolV2(packetData)
-		if isProxyProtocol && proxyInfo != nil && proxyInfo.IsProxy {
-			realAddr = GetRealAddr(remoteAddr, proxyInfo)
-		}
-	}
-
-	// 处理 DraARLv1 数据包
-	if len(packetData) >= 4 &&
-		packetData[0] == 'D' &&
-		packetData[1] == 'r' &&
-		packetData[2] == 'a' &&
-		packetData[3] == 'A' {
-		processDraARLPacket(packetData, remoteAddr, realAddr, conn)
-		return
-	}
-	log.Printf("[DECODE] Unknown protocol from %v (real: %v): %s", remoteAddr, realAddr, string(packetData[:min(4, len(packetData))]))
-}
-
 // processDraARLPacket 处理 DraARLv1 数据包
 // remoteAddr: frp转发地址（用于发送响应）
 // realAddr: 真实客户端地址（用于识别设备）
@@ -364,10 +296,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 		return
 	}
 
-	// 【限速策略】IP+Port 维度，25 包/秒上限，静默丢弃
-	if !checkRateLimit(realAddr.String()) {
-		return
-	}
+	// 限速已在 udp reader 完成，避免 worker 侧重复计数/加锁
 
 	packet, err := protocol.NewDraARLv1Packet(remoteAddr, data)
 	if err != nil {
@@ -375,7 +304,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 		return
 	}
 
-	totalStats.PacketNumber++
+	atomicAddPacketNumber(1)
 	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 	incomingMAC := protocol.ExtractHeartbeatMAC(packet.DATA)
 
@@ -454,7 +383,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	// 已存在的设备，更新状态
 	dev.LastPacketTime = packet.TimeStamp
 	dev.Traffic += int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
-	totalStats.Traffic += int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
+	atomicAddTraffic(int64(protocol.DraARLv1HeaderSize + len(packet.DATA)))
 
 	// ==========================================
 	// 修复2：修正 GroupID 为 0 时导致数据包被静默丢弃的问题
@@ -494,9 +423,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*models.Device, bool) {
 	// 1. 如果 username 不为空，直接按 username-ssid 查找
 	if username != "" {
-		// 查普通设备
-		usernameSSID := protocol.GetUsernameSSID(username, ssid)
-		if dev, exists := devUsernameSSIDMap[usernameSSID]; exists {
+		if dev := lookupDeviceByUsernameSSID(username, ssid); dev != nil {
 			return dev, false
 		}
 
@@ -797,7 +724,7 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 		voiceIncrement = 180 // 最大不超过 180ms（3帧）
 	}
 	dev.VoiceTime += voiceIncrement
-	totalStats.VoiceTime += voiceIncrement
+	atomicAddVoiceTime(voiceIncrement)
 
 	dev.LastCtlEndTime = packet.TimeStamp
 
@@ -987,7 +914,7 @@ func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *
 	dev.LastVoiceEndTime = packet.TimeStamp
 
 	dev.VoiceTime += 20
-	totalStats.VoiceTime += 20
+	atomicAddVoiceTime(20)
 
 	dev.LastCtlEndTime = packet.TimeStamp
 
@@ -1002,165 +929,61 @@ func handleDraARLATCommand(packet *protocol.DraARLv1Packet, dev *models.Device) 
 
 // forwardDraARLVoice 转发 DraARLv1 语音
 func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, gp *models.Group) {
-	pool := gp.ConnPool.(*CurrentConnPool)
-
-	// 【核心修复】重编码数据包：清空 password，填充 callsign
-	refilledData := protocol.EncodeDraARLv1(
+	// 【核心优化】优先原地改写入站报文头（清 password、填 callsign），避免整包字段级重编码
+	refilledData := protocol.PrepareForwardPacket(
+		data,
 		dev.Username,
-		"", // 准入密码转发为空
+		dev.CallSign,
 		dev.SSID,
 		protocol.DraARLTypeOpus16K,
 		dev.DevModel,
 		dev.DMRID,
-		dev.CallSign, // 服务器填充呼号
-		packet.DATA,  // 原始语音数据
+		packet.DATA,
 	)
 
-	// 1. 在本群组内广播（UDP 普通设备）
-	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
+	// 1. 连通域一次 fan-out（本群 UDP + ghost + 互联组），避免多轮扫描
+	forwardVoiceDomain(dev, refilledData, gp.ID)
 
-	// 2. 【新增】转发给本群组的 UDP 幽灵设备
-	forwardToGhostDevices(dev.Username, dev.SSID, gp.ID, refilledData)
-
-	// 3. 检查该群组是否属于某个互联组，如果是，转发到互联组关联的其他群组
-	forwardVoiceToLinkedGroups(dev, refilledData, gp.ID)
-
-	// 4. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
-	BroadcastVoiceFromUDP(dev, refilledData, gp.ID)
-}
-
-// forwardToGhostDevices 转发数据包给 UDP 幽灵设备
-// sourceUsername: 源设备用户名
-// sourceSSID: 源设备 SSID
-// groupID: 目标群组 ID
-// data: 要转发的数据
-func forwardToGhostDevices(sourceUsername string, sourceSSID byte, groupID int, data []byte) {
-	conn := globalConn
-	if conn == nil {
-		return
-	}
-
-	ghosts := GlobalUDPGhostManager.GetByGroup(groupID)
-	if len(ghosts) == 0 {
-		return
-	}
-	for _, ghost := range ghosts {
-		// 跳过发送者自己
-		if ghost.Username == sourceUsername && ghost.SSID == sourceSSID {
-			continue
-		}
-		// 检查设备状态
-		if !ghost.ISOnline || ghost.UDPAddr == nil || ghost.DisableRecv {
-			continue
-		}
-		// 【前置逻辑说明：剥离批量/平滑缓冲，保障大包实时性】
-		// 在 60ms-180ms 巨型音频帧架构下，平滑器 (VoiceSmoother) 和批量器 (BatchSender)
-		// 反而会破坏原有的音频时间戳结构，造成瞬时大量吐包或无端延迟。
-		// 放弃排队，直接使用原生 UDP 发送，将 Jitter 交给接收端的 Opus 解码器处理。
-		conn.WriteToUDP(data, ghost.UDPAddr)
-	}
-}
-
-// forwardVoiceToLinkedGroups 将语音转发到互联组关联的其他群组
-func forwardVoiceToLinkedGroups(dev *models.Device, data []byte, sourceGroupID int) {
-	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
-	if len(targetGroupIDs) == 0 {
-		return // 不属于任何互联组，无需转发
-	}
-
-	for _, targetID := range targetGroupIDs {
-		// 获取目标群组的转发
-		if targetGroup, exists := GetGroupFromCache(targetID); exists {
-			pool := targetGroup.ConnPool.(*CurrentConnPool)
-
-			// 1. 发送给目标组的 UDP 普通设备（跨组不排除自己，因为源设备不在目标组）
-			forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
-
-			// 2. 【新增】转发给目标组的 UDP 幽灵设备
-			forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
-
-			// 3. 【核心修复】：跨虚拟组时，必须同步桥接给目标组的 WS 客户端！
-			// 否则 WS 客户端永远听不到其他实体组传来的 UDP 声音
-			BroadcastVoiceFromUDP(dev, data, targetID)
-		}
-	}
+	// 2. WebSocket：本群 + 连通域其它组（一次遍历域）
+	BroadcastVoiceFromUDPDomain(dev, refilledData, gp.ID)
+	protocol.ReleaseForwardPacket(refilledData)
 }
 
 // forwardDraARLMessage 转发 DraARLv1 文本消息
 func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
-	// 【核心修复】重编码数据包：清空 password，填充 callsign
-	refilledData := protocol.EncodeDraARLv1(
+	refilledData := protocol.PrepareForwardPacket(
+		data,
 		dev.Username,
-		"", // 准入密码转发为空
+		dev.CallSign,
 		dev.SSID,
 		protocol.DraARLTypeTextMessage,
 		dev.DevModel,
 		dev.DMRID,
-		dev.CallSign, // 服务器填充呼号
-		packet.DATA,  // 原始文本数据
+		packet.DATA,
 	)
 
-	// 1. 在本群组内广播（UDP 设备）
-	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
-
-	// 2. 【新增】转发给本群组的 UDP 幽灵设备
-	forwardToGhostDevices(dev.Username, dev.SSID, gp.ID, refilledData)
-
-	// 3. 跨虚拟组转发文本消息
-	forwardMessageToLinkedGroups(dev, refilledData, gp.ID)
-
-	// 4. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
-	BroadcastTextFromUDP(dev, refilledData, gp.ID)
-}
-
-// forwardMessageToLinkedGroups 将文本消息转发到互联组关联的其他群组
-func forwardMessageToLinkedGroups(dev *models.Device, data []byte, sourceGroupID int) {
-	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
-	if len(targetGroupIDs) == 0 {
-		return
-	}
-
-	for _, targetID := range targetGroupIDs {
-		if targetGroup, exists := GetGroupFromCache(targetID); exists {
-			pool := targetGroup.ConnPool.(*CurrentConnPool)
-
-			// 1. 发送给目标组的 UDP 设备
-			forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
-
-			// 2. 【新增】转发给目标组的 UDP 幽灵设备
-			forwardToGhostDevices(dev.Username, dev.SSID, targetID, data)
-
-			// 3. 【核心修复】：同步桥接文本消息给目标组的 WS 客户端！
-			BroadcastTextFromUDP(dev, data, targetID)
-		}
-	}
+	// 文本同样走连通域 UDP fan-out
+	forwardVoiceDomain(dev, refilledData, gp.ID)
+	BroadcastTextFromUDPDomain(dev, refilledData, gp.ID)
+	protocol.ReleaseForwardPacket(refilledData)
 }
 
 // forwardDraARLServerVoice 转发 DraARLv1 服务器互联语音
 func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, conn *net.UDPConn, gp *models.Group) {
-	pool := gp.ConnPool.(*CurrentConnPool)
-
-	// 【核心修复】重编码数据包：清空 password，填充 callsign
-	// 服务器互联语音使用 Type 6，保留原始 DATA 区域的扩展头信息
-	refilledData := protocol.EncodeDraARLv1(
+	refilledData := protocol.PrepareForwardPacket(
+		data,
 		dev.Username,
-		"", // 准入密码转发为空
+		dev.CallSign,
 		dev.SSID,
 		protocol.DraARLTypeServerVoice,
 		dev.DevModel,
 		dev.DMRID,
-		dev.CallSign, // 服务器填充呼号
-		packet.DATA,  // 原始语音数据（含扩展头）
+		packet.DATA,
 	)
 
-	// 1. 在本群组内广播（UDP 设备）
-	forwardToUDPDevices(pool.DevConnList, dev.ID, gp.ID, true, refilledData)
-
-	// 2. 跨虚拟组转发服务器语音
-	forwardVoiceToLinkedGroups(dev, refilledData, gp.ID)
-
-	// 3. 【关键修复】转发到 WebSocket 设备（UDP -> WS 桥梁）
-	BroadcastVoiceFromUDP(dev, refilledData, gp.ID)
+	forwardVoiceDomain(dev, refilledData, gp.ID)
+	BroadcastVoiceFromUDPDomain(dev, refilledData, gp.ID)
+	protocol.ReleaseForwardPacket(refilledData)
 }
 
 // min 返回两个整数中的较小值
@@ -1173,22 +996,10 @@ func min(a, b int) int {
 
 // ==========================================
 // 性能优化：设备转发辅助函数
-// 将多层嵌套 if 简化为组合条件，提高可读性和维护性
 // ==========================================
 
 // canForwardToDevice 检查是否可以转发数据到目标 UDP 设备
-// 参数说明：
-//   - target: 目标设备
-//   - sourceID: 源设备 ID（用于排除自己）
-//   - expectedGroupID: 期望的群组 ID（用于懒剔除）
-//   - skipSelf: 是否排除自己
 func canForwardToDevice(target *models.Device, sourceID int, expectedGroupID int, skipSelf bool) bool {
-	// 组合条件：只要满足任一条件就跳过
-	// 1. 排除自己（如果需要）
-	// 2. 群组不匹配（懒剔除）
-	// 3. 目标设备禁收
-	// 4. 目标设备离线
-	// 5. 目标地址无效
 	if skipSelf && target.ID == sourceID {
 		return false
 	}
@@ -1207,24 +1018,18 @@ func canForwardToDevice(target *models.Device, sourceID int, expectedGroupID int
 	return true
 }
 
-// forwardToUDPDevices 统一的 UDP 设备转发逻辑
-// 遍历设备列表，将数据转发给所有有效的目标设备
+// forwardToUDPDevices 统一的 UDP 设备转发逻辑（兼容旧调用；新热路径优先 forwardVoiceDomain）
 func forwardToUDPDevices(devices []*models.Device, sourceID int, expectedGroupID int, skipSelf bool, data []byte) {
-	conn := globalConn
-	if conn == nil {
+	if globalConn == nil || len(devices) == 0 {
 		return
 	}
-	seenAddr := make(map[string]struct{}, len(devices))
+	addrs := make([]*net.UDPAddr, 0, len(devices))
 	for _, target := range devices {
 		if canForwardToDevice(target, sourceID, expectedGroupID, skipSelf) {
-			addrKey := target.UDPAddr.String()
-			if _, exists := seenAddr[addrKey]; exists {
-				continue
-			}
-			seenAddr[addrKey] = struct{}{}
-			conn.WriteToUDP(data, target.UDPAddr)
+			addrs = append(addrs, target.UDPAddr)
 		}
 	}
+	writeUDPFanout(data, addrs)
 }
 
 // GetGlobalConn 获取全局 UDP 连接
@@ -1232,9 +1037,34 @@ func GetGlobalConn() *net.UDPConn {
 	return globalConn
 }
 
-// GetTotalStats 获取服务器统计信息
+// GetTotalStats 获取服务器统计信息（返回快照副本，避免并发读写）
 func GetTotalStats() *models.ServerStats {
-	return totalStats
+	return &models.ServerStats{
+		PacketNumber:    atomic.LoadInt64(&totalStats.PacketNumber),
+		VoiceTime:       atomic.LoadInt64(&totalStats.VoiceTime),
+		Traffic:         atomic.LoadInt64(&totalStats.Traffic),
+		OnlineDevNumber: int(atomic.LoadInt64(&totalStatsOnline)),
+	}
+}
+
+func atomicAddPacketNumber(n int64) {
+	atomic.AddInt64(&totalStats.PacketNumber, n)
+}
+
+func atomicAddTraffic(n int64) {
+	atomic.AddInt64(&totalStats.Traffic, n)
+}
+
+func atomicAddVoiceTime(n int64) {
+	atomic.AddInt64(&totalStats.VoiceTime, n)
+}
+
+func setOnlineDevNumber(n int) {
+	atomic.StoreInt64(&totalStatsOnline, int64(n))
+}
+
+func getOnlineDevNumber() int {
+	return int(atomic.LoadInt64(&totalStatsOnline))
 }
 
 // GetUserList 获取用户列表
@@ -1299,6 +1129,7 @@ func refreshGroupCache() {
 
 	// 性能优化：RCU 模式 - 构建新的 map，不阻塞读取
 	newGroupCache := make(map[int]*models.Group, len(dbGroups)+2)
+	receiverRoutingChanged := false
 
 	// 记录当前数据库中存在的群组 ID
 	validGroupIDs := make(map[int]bool, len(dbGroups)+2)
@@ -1315,6 +1146,9 @@ func refreshGroupCache() {
 		if existingGroup, exists := oldGroupCache[modelGroup.ID]; exists {
 			// 【关键操作】：如果存在，复制指针到新 map，并更新静态配置
 			// 注意：这里直接修改 existingGroup 的字段是安全的，因为指针不变
+			if existingGroup.Status != modelGroup.Status {
+				receiverRoutingChanged = true
+			}
 			existingGroup.Name = modelGroup.Name
 			existingGroup.Type = modelGroup.Type
 			existingGroup.CallSign = modelGroup.CallSign
@@ -1331,13 +1165,15 @@ func refreshGroupCache() {
 
 			newGroupCache[modelGroup.ID] = existingGroup
 		} else {
+			receiverRoutingChanged = true
 			// 【关键操作】：如果是不存在的新群组，初始化它的动态连接池
 			newGroup := modelGroup
 			// 性能优化：预分配连接池容量
-			newGroup.ConnPool = &CurrentConnPool{
-				DevConnMap:  make(map[string]*models.Device, 32),
-				DevConnList: make([]*models.Device, 0, 32),
+			pool := &CurrentConnPool{
+				DevConnMap: make(map[string]*models.Device, 32),
 			}
+			pool.storeConnList(make([]*models.Device, 0, 32))
+			newGroup.ConnPool = pool
 			newGroup.DevMap = make(map[int]*models.Device, 32)
 
 			newGroupCache[newGroup.ID] = newGroup
@@ -1352,6 +1188,7 @@ func refreshGroupCache() {
 			continue
 		}
 		// 数据库中已删除的群组，不复制到新缓存
+		receiverRoutingChanged = true
 		log.Printf("[CACHE] 群组 %d 已从数据库移除，清理缓存", id)
 	}
 
@@ -1360,6 +1197,9 @@ func refreshGroupCache() {
 
 	// 同时更新 publicGroupMap 以保持向后兼容
 	publicGroupMap = newGroupCache
+	if receiverRoutingChanged {
+		InvalidateDomainReceiverCache()
+	}
 
 	log.Printf("[CACHE] 群组状态同步完成，当前加载了 %d 个有效群组", len(newGroupCache))
 }
@@ -1379,6 +1219,7 @@ func refreshDeviceCache() {
 	updatedCount := 0
 	onlineSyncCount := 0
 	removedCount := 0
+	receiverRoutingChanged := false
 
 	dbDeviceKeys := make(map[string]struct{}, len(dbDevices))
 	for _, dbDev := range dbDevices {
@@ -1420,6 +1261,9 @@ func refreshDeviceCache() {
 
 		// 检查是否需要更新（包括禁发/禁收状态）
 		if memDev.GroupID != dbDev.GroupID || memDev.DisableSend != dbDev.DisableSend || memDev.DisableRecv != dbDev.DisableRecv || memDev.Priority != dbDev.Priority {
+			if memDev.GroupID != dbDev.GroupID || memDev.DisableRecv != dbDev.DisableRecv {
+				receiverRoutingChanged = true
+			}
 			memDev.GroupID = dbDev.GroupID
 			memDev.DisableSend = dbDev.DisableSend
 			memDev.DisableRecv = dbDev.DisableRecv
@@ -1457,9 +1301,12 @@ func refreshDeviceCache() {
 			}
 		}
 	}
+	if receiverRoutingChanged {
+		InvalidateDomainReceiverCache()
+	}
 
 	missingDevices := make([]*models.Device, 0)
-	for _, memDev := range devOwnerSSIDMap {
+	for _, memDev := range getOwnerDeviceMapSnapshot() {
 		if memDev == nil {
 			continue
 		}

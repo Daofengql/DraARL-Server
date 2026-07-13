@@ -124,18 +124,19 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 	onlineDevMap[dev.ID] = dev
 	onlineDevMapDraARL[dev.ID] = dev
 
+	pool := &CurrentConnPool{
+		DevConnMap: map[string]*models.Device{
+			dev.UDPAddr.String(): dev,
+		},
+	}
+	pool.storeConnList([]*models.Device{dev})
 	gp := &models.Group{
 		ID:                models.GroupIDPublicMin,
 		AllowCallSignSSID: "BG7OLD-7,OTHER-1",
 		DevMap: map[int]*models.Device{
 			dev.ID: dev,
 		},
-		ConnPool: &CurrentConnPool{
-			DevConnMap: map[string]*models.Device{
-				dev.UDPAddr.String(): dev,
-			},
-			DevConnList: []*models.Device{dev},
-		},
+		ConnPool: pool,
 	}
 	publicGroupMap[gp.ID] = gp
 
@@ -216,16 +217,17 @@ func TestRemoveRuntimeDeviceCleansIndexesAndConnPools(t *testing.T) {
 	onlineDevMapDraARL[dev.ID] = dev
 
 	makeGroup := func(id int) *models.Group {
-		return &models.Group{
-			ID:      id,
-			DevMap:  map[int]*models.Device{dev.ID: dev},
-			DevList: []int{dev.ID},
-			ConnPool: &CurrentConnPool{
-				DevConnMap: map[string]*models.Device{
-					dev.UDPAddr.String(): dev,
-				},
-				DevConnList: []*models.Device{dev},
+		pool := &CurrentConnPool{
+			DevConnMap: map[string]*models.Device{
+				dev.UDPAddr.String(): dev,
 			},
+		}
+		pool.storeConnList([]*models.Device{dev})
+		return &models.Group{
+			ID:       id,
+			DevMap:   map[int]*models.Device{dev.ID: dev},
+			DevList:  []int{dev.ID},
+			ConnPool: pool,
 		}
 	}
 
@@ -278,8 +280,9 @@ func TestRemoveRuntimeDeviceCleansIndexesAndConnPools(t *testing.T) {
 			t.Fatalf("expected %s group DevList cleared, got %#v", name, gp.DevList)
 		}
 		pool := gp.ConnPool.(*CurrentConnPool)
-		if len(pool.DevConnMap) != 0 || len(pool.DevConnList) != 0 {
-			t.Fatalf("expected %s group conn pool cleared, got map=%d list=%d", name, len(pool.DevConnMap), len(pool.DevConnList))
+		list := pool.snapshotConnList()
+		if len(pool.DevConnMap) != 0 || len(list) != 0 {
+			t.Fatalf("expected %s group conn pool cleared, got map=%d list=%d", name, len(pool.DevConnMap), len(list))
 		}
 	}
 }

@@ -51,6 +51,39 @@ func TestValidateAllowedOriginsRejectsMissingOriginsInRelease(t *testing.T) {
 	}
 }
 
+func TestLegacyMinIOConfigMigratesToStorage(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.LegacyMinIO = MinIOConfig{
+		Endpoint:  "minio.example.com",
+		AccessKey: "access",
+		SecretKey: "secret",
+		UseSSL:    true,
+		Bucket:    "draarl",
+		BasePath:  "https://cdn.example.com/draarl",
+	}
+
+	cfg.migrateLegacyStorageConfig()
+
+	if cfg.Storage.MinIO.Endpoint != "minio.example.com" || cfg.Storage.MinIO.AccessKey != "access" {
+		t.Fatalf("legacy MinIO config was not migrated: %+v", cfg.Storage.MinIO)
+	}
+	if cfg.LegacyMinIO.Endpoint != "" {
+		t.Fatal("legacy MinIO config should be cleared after migration")
+	}
+}
+
+func TestExplicitLocalDriverDoesNotMigrateLegacyMinIO(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.Storage.Driver = "local"
+	cfg.LegacyMinIO.Endpoint = "minio.example.com"
+
+	cfg.migrateLegacyStorageConfig()
+
+	if cfg.Storage.MinIO.Endpoint != "" {
+		t.Fatal("explicit local driver must not inherit legacy MinIO config")
+	}
+}
+
 func containsOrigin(origins []string, target string) bool {
 	for _, origin := range origins {
 		if origin == target {

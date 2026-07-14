@@ -7,6 +7,7 @@ import (
 	stdlog "log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"draarl/pkg/crypto"
 	"draarl/pkg/geoip"
 	"draarl/pkg/jwt"
+	"draarl/pkg/storage"
 )
 
 // 命令行参数
@@ -47,6 +49,9 @@ func main() {
 	showVersion := flag.Bool("v", false, "显示版本信息")
 	printConfig := flag.String("p", "", "打印配置信息")
 	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
+	migrateStorage := flag.String("migrate-storage", "", "迁移存储引擎，格式 from:to（如 minio:local），不启动主服务")
+	migrateDelete := flag.Bool("migrate-delete-source", false, "迁移成功并校验后删除源端对象（默认保留源端）")
+	migrateDryRun := flag.Bool("migrate-dry-run", false, "仅统计迁移计划，不实际写入目标端")
 	flag.Parse()
 
 	if *showVersion {
@@ -57,6 +62,12 @@ func main() {
 	// 如果只是重置密码，不需要启动服务
 	if *resetAdminPass != "" {
 		resetAdminPassword(*resetAdminPass, *configPath)
+		os.Exit(0)
+	}
+
+	// 存储迁移：纯命令行，不启动主服务
+	if *migrateStorage != "" {
+		migrateStorageEngine(*migrateStorage, *configPath, *migrateDelete, *migrateDryRun)
 		os.Exit(0)
 	}
 
@@ -311,6 +322,62 @@ func resetAdminPassword(newPassword, configPath string) {
 	fmt.Printf("用户名: %s\n", adminUser.Name)
 	fmt.Printf("新密码: %s\n", newPassword)
 	fmt.Println("========================================")
+}
+
+// migrateStorageEngine 在源/目标存储引擎间迁移对象（纯命令行，不启动主服务）。
+func migrateStorageEngine(spec, configPath string, deleteSource, dryRun bool) {
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		stdlog.Fatalf("迁移参数格式错误，应为 from:to（如 minio:local），已注册驱动: %v", storage.KnownDrivers())
+	}
+	from := strings.TrimSpace(parts[0])
+	to := strings.TrimSpace(parts[1])
+
+	// 加载配置（local 驱动需要 JWT.Secret 初始化签名；此处仅构造驱动，不启动服务）
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		stdlog.Fatalf("加载配置文件失败: %v", err)
+	}
+
+	fmt.Println("========================================")
+	fmt.Printf("存储迁移: %s -> %s\n", from, to)
+	fmt.Printf("模式: dry_run=%t, delete_source=%t\n", dryRun, deleteSource)
+	fmt.Println("========================================")
+
+	ctx, cancel := storage.MigrateBackgroundContext()
+	defer cancel()
+
+	// 支持 Ctrl+C 中断：已完成的对象不会丢失，重跑可续传
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-quit
+		stdlog.Println("收到中断信号，正在停止迁移（已完成对象不受影响，重跑可续传）...")
+		cancel()
+	}()
+
+	res, err := storage.Migrate(ctx, cfg, from, to, storage.MigrateOptions{
+		DryRun:       dryRun,
+		DeleteSource: deleteSource,
+	})
+	if res != nil {
+		fmt.Println("========================================")
+		fmt.Printf("扫描: %d\n", res.Scanned)
+		fmt.Printf("复制: %d (%d 字节)\n", res.Copied, res.BytesCopied)
+		fmt.Printf("跳过(已存在): %d\n", res.Skipped)
+		if deleteSource {
+			fmt.Printf("删除源端: %d\n", res.Deleted)
+		}
+		fmt.Printf("失败: %d\n", res.Failed)
+		fmt.Println("========================================")
+	}
+	if err != nil {
+		stdlog.Fatalf("迁移未完成: %v", err)
+	}
+	fmt.Println("迁移成功完成！")
+	if !deleteSource && !dryRun {
+		fmt.Println("提示: 源端对象已保留，确认无误后可手动清理或加 -migrate-delete-source 重跑。")
+	}
 }
 
 // initJWTSecret 初始化JWT密钥，如果不符合要求则自动生成并保存

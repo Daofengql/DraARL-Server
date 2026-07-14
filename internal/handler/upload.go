@@ -14,6 +14,7 @@ import (
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	"draarl/pkg/minio"
+	"draarl/pkg/storage"
 	ws "draarl/pkg/websocket"
 	"github.com/gin-gonic/gin"
 )
@@ -208,8 +209,12 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	userRepo := gormdb.NewUserRepository()
 	callsign := gormdb.NormalizeCallSign(c.PostForm("callsign"))
-	fileHeader, err := c.FormFile("file")
-	hasNewFile := err == nil
+	fileHeader, fileErr := c.FormFile("file")
+	objectKeyForm := strings.TrimSpace(c.PostForm("object_key"))
+	uploadTokenForm := strings.TrimSpace(c.PostForm("upload_token"))
+	hasMultipart := fileErr == nil
+	hasDirect := objectKeyForm != ""
+	hasNewFile := hasMultipart || hasDirect
 	oldCallSign := gormdb.NormalizeCallSign(user.CallSign)
 	callSignChanged := hasMeaningfulCallSignChange(oldCallSign, callsign)
 
@@ -231,8 +236,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		}
 	}
 
-	// 修复逻辑1：如果既没有传文件，也没有改呼号，才驳回。
-	// 这里统一使用标准化后的 oldCallSign，避免仅大小写差异时被误判为“有改动”。
+	// 既没有新文件也没有改呼号才驳回
 	if shouldRejectOperatorCertSubmission(hasNewFile, oldCallSign, callsign) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
@@ -247,25 +251,27 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	var objectName, fileName, contentType string
 	var fileSize int64
-	var oldPendingMinioPath string // 记录旧的待审核文件路径以便后续清理
+	var oldPendingMinioPath string
+	var uploadedNewObject bool // 本次新写入对象，失败时需清理
 
 	if pendingCert != nil {
 		oldPendingMinioPath = pendingCert.MinioPath
 	}
 
-	// 修复逻辑2：处理文件上传 or 尝试复用旧证书数据
-	if err == nil {
-		// 有新文件上传，执行常规校验和上传
-		if fileHeader.Size > 10*1024*1024 {
+	allowedTypes := map[string]bool{
+		"image/jpeg": true, "image/jpg": true, "image/png": true, "image/gif": true, "application/pdf": true,
+	}
+	maxCertSize := storage.MaxSizeForFileType("operator_cert")
+
+	switch {
+	case hasMultipart:
+		// 兼容 multipart 代理上传
+		if fileHeader.Size > maxCertSize {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
-				"message": "文件大小不能超过10MB",
+				"message": fmt.Sprintf("文件大小不能超过%dMB", maxCertSize/(1024*1024)),
 			})
 			return
-		}
-
-		allowedTypes := map[string]bool{
-			"image/jpeg": true, "image/jpg": true, "image/png": true, "image/gif": true, "application/pdf": true,
 		}
 		contentType = fileHeader.Header.Get("Content-Type")
 		if !allowedTypes[contentType] {
@@ -275,7 +281,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 			})
 			return
 		}
-
+		var err error
 		objectName, fileSize, err = minio.UploadMultipartFile(fileHeader, user.ID, "operator_cert")
 		if err != nil {
 			log.Printf("上传操作证失败: %v", err)
@@ -286,24 +292,70 @@ func UploadOperatorCertificate(c *gin.Context) {
 			return
 		}
 		fileName = fileHeader.Filename
+		uploadedNewObject = true
 
-	} else {
+	case hasDirect:
+		// 直传完成后提交 object_key
+		objectName = strings.TrimLeft(objectKeyForm, "/")
+		if uploadTokenForm == "" || !storage.IsStagingObjectKey(objectName, "operator_cert", user.ID) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "非法的上传授权或 object_key",
+			})
+			return
+		}
+		fileName = strings.TrimSpace(c.PostForm("file_name"))
+		if fileName == "" {
+			fileName = "operator_cert"
+		}
+		grant, storedContentType, err := storage.ValidateStagedUpload(
+			c.Request.Context(), uploadTokenForm, objectName, "operator_cert", user.ID,
+		)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "上传授权或对象校验失败",
+			})
+			return
+		}
+		contentType = grant.ContentType
+		if contentType == "" {
+			contentType = storedContentType
+		}
+		if !allowedTypes[contentType] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "非法的文件类型，只支持图片和PDF",
+			})
+			return
+		}
+		finalKey, err := storage.PromoteStagedUpload(c.Request.Context(), grant)
+		if err != nil {
+			log.Printf("提升操作证对象失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "完成文件上传失败",
+			})
+			return
+		}
+		objectName = finalKey
+		fileSize = grant.Size
+		uploadedNewObject = true
+
+	default:
 		// 没有新文件，尝试复用旧图片
 		if pendingCert != nil {
-			// 如果当前已经有待审核的操作证，复用它的图片
 			objectName = pendingCert.MinioPath
 			fileName = pendingCert.FileName
 			fileSize = pendingCert.FileSize
 			contentType = pendingCert.FileType
-			oldPendingMinioPath = "" // 标记为空，防止后面误删复用的图片
+			oldPendingMinioPath = ""
 		} else if activeCert != nil {
-			// 如果没有待审核的，复用已通过的图片
 			objectName = activeCert.MinioPath
 			fileName = activeCert.FileName
 			fileSize = activeCert.FileSize
 			contentType = activeCert.FileType
 		} else {
-			// 首次认证必须传图片
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "首次设置呼号必须上传操作证图片",
@@ -319,7 +371,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	// 写入或更新操作证待审核记录
 	cfg := config.Get()
-	bucket := cfg.MinIO.Bucket
+	bucket := cfg.Storage.MinIO.Bucket
 	if bucket == "" {
 		bucket = "draarl"
 	}
@@ -328,9 +380,8 @@ func UploadOperatorCertificate(c *gin.Context) {
 	if pendingCert != nil {
 		cert, err = certRepo.UpdatePendingCert(pendingCert.ID, requestedCallSign, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
-			// 发生错误时，如果本次传了新文件，清理掉
-			if fileHeader != nil {
-				minio.DeleteFile(c.Request.Context(), objectName)
+			if uploadedNewObject {
+				_ = minio.DeleteFile(c.Request.Context(), objectName)
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -339,14 +390,14 @@ func UploadOperatorCertificate(c *gin.Context) {
 			return
 		}
 		// 如果上传了新文件，清理掉被替换的旧待审核文件
-		if oldPendingMinioPath != "" {
-			minio.DeleteFile(c.Request.Context(), oldPendingMinioPath)
+		if oldPendingMinioPath != "" && oldPendingMinioPath != objectName {
+			_ = minio.DeleteFile(c.Request.Context(), oldPendingMinioPath)
 		}
 	} else {
 		cert, err = certRepo.CreatePendingCert(user.ID, requestedCallSign, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
-			if fileHeader != nil {
-				minio.DeleteFile(c.Request.Context(), objectName)
+			if uploadedNewObject {
+				_ = minio.DeleteFile(c.Request.Context(), objectName)
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -560,12 +611,12 @@ func UploadLogo(c *gin.Context) {
 		return
 	}
 
-	// 生成访问URL
+	// 生成访问URL（配置中存 object key，读时再解析）
 	fileURL := minio.GetFileURL(objectName)
 
-	// 更新站点配置中的 logo URL
+	// 更新站点配置中的 logo（存 object key，兼容旧绝对 URL）
 	siteConfigRepo := gormdb.GetSiteConfigRepo()
-	if err := siteConfigRepo.Set("system.logo_url", fileURL, "system", "站点Logo URL"); err != nil {
+	if err := siteConfigRepo.Set("system.logo_url", objectName, "system", "站点Logo URL"); err != nil {
 		log.Printf("更新Logo配置失败: %v", err)
 		// 配置更新失败不影响文件上传
 	}
@@ -658,12 +709,12 @@ func UploadFavicon(c *gin.Context) {
 		return
 	}
 
-	// 生成访问URL
+	// 生成访问URL（配置中存 object key，读时再解析）
 	fileURL := minio.GetFileURL(objectName)
 
-	// 更新站点配置中的 favicon URL
+	// 更新站点配置中的 favicon（存 object key，兼容旧绝对 URL）
 	siteConfigRepo := gormdb.GetSiteConfigRepo()
-	if err := siteConfigRepo.Set("system.favicon_url", fileURL, "system", "站点Favicon URL"); err != nil {
+	if err := siteConfigRepo.Set("system.favicon_url", objectName, "system", "站点Favicon URL"); err != nil {
 		log.Printf("更新Favicon配置失败: %v", err)
 		// 配置更新失败不影响文件上传
 	}

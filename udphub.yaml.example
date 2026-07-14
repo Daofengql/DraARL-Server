@@ -57,14 +57,20 @@ Keycloak:
     ClientSecret: ""                  # 客户端密钥(如需要)
     RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后端API）
 
-# MinIO 对象存储配置 (可选)
-MinIO:
-    Endpoint: "localhost:9000"        # MinIO服务地址
-    AccessKey: "minioadmin"           # Access Key
-    SecretKey: "minioadmin"           # Secret Key
-    UseSSL: false                     # 是否使用HTTPS
-    Bucket: "draarl"                 # 默认存储桶
-    BasePath: "/minio"                # URL访问基础路径
+# 统一存储配置（主块）
+# Driver 为空时：若 Storage.MinIO.Endpoint 非空 → minio，否则 local
+Storage:
+    Driver: ""                        # minio | local；空则自动推断
+    Local:
+        RootPath: "./data/storage"    # 本地磁盘根目录（已做路径穿越防护）
+        BaseURL: ""                   # 公开访问前缀，空则使用 /files
+    MinIO:
+        Endpoint: "localhost:9000"    # MinIO 服务地址（浏览器直传时需公网可达）
+        AccessKey: "minioadmin"       # Access Key
+        SecretKey: "minioadmin"       # Secret Key
+        UseSSL: false                 # 是否使用 HTTPS
+        Bucket: "draarl"             # 默认存储桶
+        BasePath: "/minio"            # URL 访问基础路径
 
 # 设备认证配置
 DeviceAuth:

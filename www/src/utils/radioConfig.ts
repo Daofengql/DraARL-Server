@@ -117,9 +117,6 @@ const SA818_PROFILE: FrequencyCardProfile = {
       'rf_guard_single_tx_limit_s',
       'rf_guard_window_s',
       'rf_guard_max_tx_in_window_s',
-      'adc_gain_db',
-      'adc_volume',
-      'dac_volume',
     ],
   },
 }

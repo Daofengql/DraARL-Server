@@ -85,6 +85,10 @@ export function supportsFrequencyConfig(devModel: number): boolean {
   return devModel === 1
 }
 
+export function supportsAudioConfig(devModel: number): boolean {
+  return devModel === 1 || devModel === 2
+}
+
 export function supportsSystemConfig(devModel: number): boolean {
   return !isPlatformOnlyDeviceModel(devModel)
 }

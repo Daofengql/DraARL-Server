@@ -170,6 +170,8 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x12 | adc_volume | 1 | uint8 | ADC 音量 (0-100) |
 | 0x13 | dac_volume | 1 | uint8 | DAC 音量 (0-100) |
 
+> `adc_gain_db / adc_volume / dac_volume` 是 ESP32 通用音频配置，适用于有射频版 (`DevModel=1`) 和无射频版 (`DevModel=2`)，不依赖 SA818 模块。
+
 ### 频率配置约定
 
 - `tx_freq / rx_freq` 保持手动输入，单位为 Hz。

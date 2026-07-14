@@ -19,6 +19,7 @@ import { deviceService, type DeviceConfig } from '../../services/device'
 import {
   getDevModelName,
   getDeviceConfigTabs,
+  supportsAudioConfig,
 } from '../../utils/deviceModel'
 import {
   bandwidthToLevel,
@@ -44,6 +45,7 @@ import {
 } from '../../utils/radioConfig'
 import { getErrorMessage } from '../../utils/errorMessage'
 import { FrequencyConfigCardContainer } from './frequency/FrequencyConfigCardContainer'
+import { AudioConfigCard } from './system/AudioConfigCard'
 
 interface ParamConfigDialogProps {
   open: boolean
@@ -164,33 +166,10 @@ export function ParamConfigDialog({
     }
   }, [open, deviceId, deviceName, deviceModel, loadConfig])
 
-  const handleSaveAndSync = async () => {
+  const saveAndSyncConfig = async (config: Partial<DeviceConfig>) => {
     if (!deviceId) return
     setSaving(true)
     try {
-      const config: Partial<DeviceConfig> = {
-        tx_freq: mhzToHz(radioConfig.txFreq),
-        rx_freq: radioConfig.sameFreq ? mhzToHz(radioConfig.txFreq) : mhzToHz(radioConfig.rxFreq),
-        tx_tone_mode: radioConfig.txTone.mode,
-        tx_tone_value: toneSelectionToToneValue(radioConfig.txTone),
-        rx_tone_mode: radioConfig.rxTone.mode,
-        rx_tone_value: toneSelectionToToneValue(radioConfig.rxTone),
-        tx_ctcss: toneSelectionToLegacyValue(radioConfig.txTone),
-        rx_ctcss: toneSelectionToLegacyValue(radioConfig.rxTone),
-        sql_level: String(normalizeSquelchLevel(radioConfig.squelch)),
-        power_level: powerToLevel(radioConfig.power),
-        tx_bandwidth: bandwidthToLevel(radioConfig.bandwidth),
-        rf_guard_enabled: radioConfig.rfGuardEnabled ? '1' : '0',
-        rf_guard_single_tx_limit_s: String(normalizeRfGuardSingleTxLimit(radioConfig.rfGuardSingleTxLimitS)),
-        rf_guard_window_s: String(normalizeRfGuardWindow(radioConfig.rfGuardWindowS)),
-        rf_guard_max_tx_in_window_s: String(
-          normalizeRfGuardMaxTxInWindow(radioConfig.rfGuardMaxTxInWindowS, radioConfig.rfGuardWindowS),
-        ),
-        adc_gain_db: String(normalizeAdcGainDb(radioConfig.adcGainDb)),
-        adc_volume: String(normalizeAudioVolume(radioConfig.adcVolume, ADC_VOLUME_DEFAULT)),
-        dac_volume: String(normalizeAudioVolume(radioConfig.dacVolume, DAC_VOLUME_DEFAULT)),
-      }
-
       await deviceService.updateConfig(deviceId, config)
 
       if (isOnline) {
@@ -207,6 +186,36 @@ export function ParamConfigDialog({
     } finally {
       setSaving(false)
     }
+  }
+
+  const handleSaveFrequencyAndSync = async () => {
+    await saveAndSyncConfig({
+      tx_freq: mhzToHz(radioConfig.txFreq),
+      rx_freq: radioConfig.sameFreq ? mhzToHz(radioConfig.txFreq) : mhzToHz(radioConfig.rxFreq),
+      tx_tone_mode: radioConfig.txTone.mode,
+      tx_tone_value: toneSelectionToToneValue(radioConfig.txTone),
+      rx_tone_mode: radioConfig.rxTone.mode,
+      rx_tone_value: toneSelectionToToneValue(radioConfig.rxTone),
+      tx_ctcss: toneSelectionToLegacyValue(radioConfig.txTone),
+      rx_ctcss: toneSelectionToLegacyValue(radioConfig.rxTone),
+      sql_level: String(normalizeSquelchLevel(radioConfig.squelch)),
+      power_level: powerToLevel(radioConfig.power),
+      tx_bandwidth: bandwidthToLevel(radioConfig.bandwidth),
+      rf_guard_enabled: radioConfig.rfGuardEnabled ? '1' : '0',
+      rf_guard_single_tx_limit_s: String(normalizeRfGuardSingleTxLimit(radioConfig.rfGuardSingleTxLimitS)),
+      rf_guard_window_s: String(normalizeRfGuardWindow(radioConfig.rfGuardWindowS)),
+      rf_guard_max_tx_in_window_s: String(
+        normalizeRfGuardMaxTxInWindow(radioConfig.rfGuardMaxTxInWindowS, radioConfig.rfGuardWindowS),
+      ),
+    })
+  }
+
+  const handleSaveAudioAndSync = async () => {
+    await saveAndSyncConfig({
+      adc_gain_db: String(normalizeAdcGainDb(radioConfig.adcGainDb)),
+      adc_volume: String(normalizeAudioVolume(radioConfig.adcVolume, ADC_VOLUME_DEFAULT)),
+      dac_volume: String(normalizeAudioVolume(radioConfig.dacVolume, DAC_VOLUME_DEFAULT)),
+    })
   }
 
   const handleSavePlatform = async () => {
@@ -279,9 +288,11 @@ export function ParamConfigDialog({
           )}
 
           {currentTab === 'system' && (
-            <Alert severity="info">
-              当前系统设置区域已按设备型号规则保留，但本轮没有新增系统级参数。`DevModel=2` 仅显示“系统设置 + 平台设置”，以便后续按型号继续扩展。
-            </Alert>
+            supportsAudioConfig(deviceModel) ? (
+              <AudioConfigCard value={radioConfig} onChange={setRadioConfig} />
+            ) : (
+              <Alert severity="info">当前设备型号暂无可配置的系统参数。</Alert>
+            )
           )}
 
           {currentTab === 'platform' && (
@@ -326,7 +337,17 @@ export function ParamConfigDialog({
         {currentTab === 'freq' && (
           <Button
             variant="contained"
-            onClick={handleSaveAndSync}
+            onClick={handleSaveFrequencyAndSync}
+            disabled={saving || loading}
+            startIcon={saving ? <CircularProgress size={20} /> : null}
+          >
+            {saving ? '保存中...' : (isOnline ? '保存并同步' : '保存配置')}
+          </Button>
+        )}
+        {currentTab === 'system' && supportsAudioConfig(deviceModel) && (
+          <Button
+            variant="contained"
+            onClick={handleSaveAudioAndSync}
             disabled={saving || loading}
             startIcon={saving ? <CircularProgress size={20} /> : null}
           >

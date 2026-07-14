@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"net"
 	"sync"
 	"time"
 )
@@ -25,21 +26,30 @@ func rateLimitShardIndex(addr string) int {
 	return int(fnv32String(addr) & (rateLimitShardCount - 1))
 }
 
-// checkRateLimit 检查 IP+Port 的包速率。
+// checkRateLimit 检查 IP 粗限速和 IP+Port 细限速。
 // 返回 true 表示允许通过，false 表示超限应丢弃。
 func checkRateLimit(addr string) bool {
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		if !checkRateLimitKey("ip:"+host, rateLimitMaxPps*4) {
+			return false
+		}
+	}
+	return checkRateLimitKey("addr:"+addr, rateLimitMaxPps)
+}
+
+func checkRateLimitKey(key string, maxPPS int) bool {
 	now := time.Now().Unix()
-	shard := &rateLimitShards[rateLimitShardIndex(addr)]
+	shard := &rateLimitShards[rateLimitShardIndex(key)]
 
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	entry, exists := shard.entries[addr]
+	entry, exists := shard.entries[key]
 	if !exists || entry.timestamp != now {
-		shard.entries[addr] = &rateLimitEntry{count: 1, timestamp: now}
+		shard.entries[key] = &rateLimitEntry{count: 1, timestamp: now}
 		return true
 	}
-	if entry.count >= rateLimitMaxPps {
+	if entry.count >= maxPPS {
 		return false
 	}
 	entry.count++

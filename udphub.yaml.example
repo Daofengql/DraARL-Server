@@ -72,6 +72,10 @@ Storage:
         Bucket: "draarl"             # 默认存储桶
         BasePath: "/minio"            # URL 访问基础路径
 
+# JWT 配置
+JWT:
+    Secret: ""                         # JWT 签名密钥，至少 32 字符；留空或过短时程序会自动生成并写入配置文件
+
 # 设备认证配置
 DeviceAuth:
     AESKey: ""                        # AES 加密密钥，用于设备密码加密存储

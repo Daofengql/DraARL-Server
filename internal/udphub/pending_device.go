@@ -44,15 +44,20 @@ type PendingDeviceManager struct {
 // 全局待绑定设备管理器
 var pendingDeviceManager *PendingDeviceManager
 
-// InitPendingDeviceManager 初始化待绑定设备管理器
-func InitPendingDeviceManager() {
-	pendingDeviceManager = &PendingDeviceManager{
+// newPendingDeviceManager 创建待绑定设备管理器。
+func newPendingDeviceManager() *PendingDeviceManager {
+	return &PendingDeviceManager{
 		byCode:        make(map[string]*PendingDevice),
 		byMAC:         make(map[string]*PendingDevice),
-		codeDuration:  60 * time.Second, // 动态码 60 秒有效期
+		codeDuration:  5 * time.Minute,  // 动态码 5 分钟有效期
 		bindDuration:  10 * time.Minute, // 绑定状态 10 分钟有效期
 		cleanupTicker: time.NewTicker(30 * time.Second),
 	}
+}
+
+// InitPendingDeviceManager 初始化待绑定设备管理器
+func InitPendingDeviceManager() {
+	pendingDeviceManager = newPendingDeviceManager()
 	go pendingDeviceManager.cleanup()
 }
 

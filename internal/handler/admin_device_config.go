@@ -117,6 +117,15 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	if req.RFGuardMaxTxInWindowS != nil {
 		configs[udphub.ConfigKeyRFGuardMaxTxInWindowS] = *req.RFGuardMaxTxInWindowS
 	}
+	if req.ADCGainDB != nil {
+		configs[udphub.ConfigKeyADCGainDB] = *req.ADCGainDB
+	}
+	if req.ADCVolume != nil {
+		configs[udphub.ConfigKeyADCVolume] = *req.ADCVolume
+	}
+	if req.DACVolume != nil {
+		configs[udphub.ConfigKeyDACVolume] = *req.DACVolume
+	}
 
 	if len(configs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{

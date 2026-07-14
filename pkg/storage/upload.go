@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,6 +33,44 @@ func UploadMultipartFile(fileHeader *multipart.FileHeader, _ int, fileType strin
 		return "", 0, fmt.Errorf("上传文件失败: %w", err)
 	}
 	return objectName, fileHeader.Size, nil
+}
+
+// DetectMultipartContentType reads a small prefix and returns Go's detected content type.
+func DetectMultipartContentType(fileHeader *multipart.FileHeader) (string, error) {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer file.Close()
+
+	return detectContentType(file)
+}
+
+// DetectObjectContentType reads a stored object prefix and returns Go's detected content type.
+func DetectObjectContentType(ctx context.Context, objectName string) (string, error) {
+	file, err := Open(ctx, objectName)
+	if err != nil {
+		return "", fmt.Errorf("打开对象失败: %w", err)
+	}
+	defer file.Close()
+
+	return detectContentType(file)
+}
+
+func detectContentType(r io.Reader) (string, error) {
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return "", err
+	}
+	if n == 0 {
+		return "", fmt.Errorf("空文件")
+	}
+	return http.DetectContentType(buf[:n]), nil
+}
+
+func IsAllowedContentType(contentType string, allowed map[string]bool) bool {
+	return allowed[strings.ToLower(strings.TrimSpace(contentType))]
 }
 
 // UploadAvatar 上传处理后的头像。

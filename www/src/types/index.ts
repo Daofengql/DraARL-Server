@@ -35,6 +35,8 @@ export interface User {
 export interface LoginRequest {
   username: string
   password: string
+  captcha_id?: string
+  captcha_code?: string
 }
 
 export interface LoginResponse {

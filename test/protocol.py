@@ -306,6 +306,9 @@ class TLVType:
     RF_GUARD_WINDOW_S = 0x0E          # 统计窗口 (2 bytes, big-endian uint16 秒)
     RF_GUARD_MAX_TX_IN_WINDOW_S = 0x0F # 窗口内累计发射上限 (2 bytes, big-endian uint16 秒)
     TIMESTAMP = 0x10    # 时间戳 (8 bytes, big-endian int64 Unix毫秒)
+    ADC_GAIN_DB = 0x11  # ADC 增益 (1 byte, uint8 0-24 dB)
+    ADC_VOLUME = 0x12   # ADC 音量 (1 byte, uint8 0-100)
+    DAC_VOLUME = 0x13   # DAC 音量 (1 byte, uint8 0-100)
 
 # TLV Type 到配置键名的映射
 TLV_TYPE_TO_KEY = {
@@ -325,6 +328,9 @@ TLV_TYPE_TO_KEY = {
     TLVType.RF_GUARD_WINDOW_S: "rf_guard_window_s",
     TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "rf_guard_max_tx_in_window_s",
     TLVType.TIMESTAMP: "timestamp",
+    TLVType.ADC_GAIN_DB: "adc_gain_db",
+    TLVType.ADC_VOLUME: "adc_volume",
+    TLVType.DAC_VOLUME: "dac_volume",
 }
 
 # 配置键名到 TLV Type 的映射
@@ -348,6 +354,9 @@ TLV_LENGTH = {
     TLVType.RF_GUARD_WINDOW_S: 2,
     TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: 2,
     TLVType.TIMESTAMP: 8,
+    TLVType.ADC_GAIN_DB: 1,
+    TLVType.ADC_VOLUME: 1,
+    TLVType.DAC_VOLUME: 1,
 }
 
 TONE_MODE_TO_BYTE = {
@@ -431,7 +440,10 @@ def _encode_tlv_value(tlv_type: int, value: str) -> bytes:
             ctcss = 0.0
         return struct.pack('>f', ctcss)
 
-    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH, TLVType.RF_GUARD_ENABLED):
+    elif tlv_type in (
+        TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH,
+        TLVType.RF_GUARD_ENABLED, TLVType.ADC_GAIN_DB, TLVType.ADC_VOLUME, TLVType.DAC_VOLUME,
+    ):
         # 1 byte, uint8
         try:
             val = int(value)
@@ -527,7 +539,10 @@ def _decode_tlv_value(tlv_type: int, data: bytes) -> str:
         ctcss = struct.unpack('>f', data[:4])[0]
         return f"{ctcss:.1f}"
 
-    elif tlv_type in (TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH, TLVType.RF_GUARD_ENABLED):
+    elif tlv_type in (
+        TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH,
+        TLVType.RF_GUARD_ENABLED, TLVType.ADC_GAIN_DB, TLVType.ADC_VOLUME, TLVType.DAC_VOLUME,
+    ):
         if len(data) != 1:
             return "0"
         return str(data[0])

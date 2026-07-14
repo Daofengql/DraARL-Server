@@ -44,6 +44,9 @@ const (
 	TLVTypeRFGuardWindowS        byte = 0x0E // 统计窗口 (2 bytes, big-endian uint16 秒)
 	TLVTypeRFGuardMaxTxInWindowS byte = 0x0F // 窗口内累计发射上限 (2 bytes, big-endian uint16 秒)
 	TLVTypeTimestamp             byte = 0x10 // 时间戳 (8 bytes, big-endian int64 Unix毫秒)
+	TLVTypeADCGainDB             byte = 0x11 // ADC 增益 (1 byte, uint8 0-24 dB)
+	TLVTypeADCVolume             byte = 0x12 // ADC 音量 (1 byte, uint8 0-100)
+	TLVTypeDACVolume             byte = 0x13 // DAC 音量 (1 byte, uint8 0-100)
 )
 
 // 配置键名映射 (TLV Type -> 数据库 Key)
@@ -64,6 +67,9 @@ var tlvTypeToKeyMap = map[byte]string{
 	TLVTypeRFGuardWindowS:        ConfigKeyRFGuardWindowS,
 	TLVTypeRFGuardMaxTxInWindowS: ConfigKeyRFGuardMaxTxInWindowS,
 	TLVTypeTimestamp:             "timestamp",
+	TLVTypeADCGainDB:             ConfigKeyADCGainDB,
+	TLVTypeADCVolume:             ConfigKeyADCVolume,
+	TLVTypeDACVolume:             ConfigKeyDACVolume,
 }
 
 // 配置键名反向映射 (数据库 Key -> TLV Type)
@@ -84,6 +90,9 @@ var keyToTlvTypeMap = map[string]byte{
 	ConfigKeyRFGuardWindowS:        TLVTypeRFGuardWindowS,
 	ConfigKeyRFGuardMaxTxInWindowS: TLVTypeRFGuardMaxTxInWindowS,
 	"timestamp":                    TLVTypeTimestamp,
+	ConfigKeyADCGainDB:             TLVTypeADCGainDB,
+	ConfigKeyADCVolume:             TLVTypeADCVolume,
+	ConfigKeyDACVolume:             TLVTypeDACVolume,
 }
 
 var managedConfigKeys = []string{
@@ -102,6 +111,9 @@ var managedConfigKeys = []string{
 	ConfigKeyRFGuardSingleTxLimitS,
 	ConfigKeyRFGuardWindowS,
 	ConfigKeyRFGuardMaxTxInWindowS,
+	ConfigKeyADCGainDB,
+	ConfigKeyADCVolume,
+	ConfigKeyDACVolume,
 	"timestamp",
 }
 
@@ -124,6 +136,9 @@ var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
 		ConfigKeyRFGuardSingleTxLimitS: {},
 		ConfigKeyRFGuardWindowS:        {},
 		ConfigKeyRFGuardMaxTxInWindowS: {},
+		ConfigKeyADCGainDB:             {},
+		ConfigKeyADCVolume:             {},
+		ConfigKeyDACVolume:             {},
 	},
 }
 
@@ -177,6 +192,9 @@ var tlvLengthMap = map[byte]int{
 	TLVTypeRFGuardWindowS:        2,
 	TLVTypeRFGuardMaxTxInWindowS: 2,
 	TLVTypeTimestamp:             8,
+	TLVTypeADCGainDB:             1,
+	TLVTypeADCVolume:             1,
+	TLVTypeDACVolume:             1,
 }
 
 // DeviceConfig 设备配置结构体（用于内存表示）
@@ -192,6 +210,9 @@ type DeviceConfig struct {
 	RFGuardSingleTxLimitS uint16  // 单次发射上限 (秒)
 	RFGuardWindowS        uint16  // 统计窗口 (秒)
 	RFGuardMaxTxInWindowS uint16  // 窗口内累计发射上限 (秒)
+	ADCGainDB             uint8   // ADC 增益 (0-24 dB，3 dB 步进)
+	ADCVolume             uint8   // ADC 音量 (0-100)
+	DACVolume             uint8   // DAC 音量 (0-100)
 }
 
 // ==========================================
@@ -268,7 +289,8 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 		binary.BigEndian.PutUint32(buf, math.Float32bits(float32(ctcss)))
 		return buf, true
 
-	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled:
+	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled,
+		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume:
 		// 1 byte, uint8
 		var val uint8
 		if _, err := fmt.Sscanf(value, "%d", &val); err != nil {
@@ -385,7 +407,8 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 		}
 		return fmt.Sprintf("%.1f", ctcss), true
 
-	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled:
+	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled,
+		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume:
 		// 1 byte, uint8
 		if len(data) != 1 {
 			return "", false

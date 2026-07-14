@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"time"
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
@@ -193,11 +194,15 @@ func RequestCode(c *gin.Context) {
 	}
 
 	log.Printf("[DEVICE] 生成动态码: MAC=%s, Code=%s", mac, device.Code)
+	expiresIn := int((time.Until(device.CodeExpires) + time.Second - 1) / time.Second)
+	if expiresIn < 0 {
+		expiresIn = 0
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{
 			"dynamic_code": device.Code,
-			"expires_in":   60,
+			"expires_in":   expiresIn,
 		},
 	})
 }

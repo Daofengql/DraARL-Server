@@ -22,6 +22,9 @@ const (
 	ConfigKeyRFGuardSingleTxLimitS = "rf_guard_single_tx_limit_s"
 	ConfigKeyRFGuardWindowS        = "rf_guard_window_s"
 	ConfigKeyRFGuardMaxTxInWindowS = "rf_guard_max_tx_in_window_s"
+	ConfigKeyADCGainDB             = "adc_gain_db"
+	ConfigKeyADCVolume             = "adc_volume"
+	ConfigKeyDACVolume             = "dac_volume"
 	RFGuardSingleTxLimitMinS       = 1
 	RFGuardSingleTxLimitMaxS       = 1800
 	RFGuardWindowMinS              = 5
@@ -31,6 +34,14 @@ const (
 	RFGuardSingleTxLimitDefaultS   = 30
 	RFGuardWindowDefaultS          = 300
 	RFGuardMaxTxInWindowDefaultS   = 60
+	ADCGainMinDB                   = 0
+	ADCGainMaxDB                   = 24
+	ADCGainStepDB                  = 3
+	ADCGainDefaultDB               = 18
+	AudioVolumeMin                 = 0
+	AudioVolumeMax                 = 100
+	ADCVolumeDefault               = 100
+	DACVolumeDefault               = 80
 )
 
 var dcsTonePattern = regexp.MustCompile(`^(\d{3})([NI])$`)
@@ -79,6 +90,15 @@ func NormalizeDeviceConfigs(configs map[string]string) map[string]string {
 	}
 	if value, ok := normalized[ConfigKeyRFGuardMaxTxInWindowS]; ok {
 		normalized[ConfigKeyRFGuardMaxTxInWindowS] = normalizeRFGuardMaxTxInWindow(value, windowValue)
+	}
+	if value, ok := normalized[ConfigKeyADCGainDB]; ok {
+		normalized[ConfigKeyADCGainDB] = normalizeADCGainDB(value)
+	}
+	if value, ok := normalized[ConfigKeyADCVolume]; ok {
+		normalized[ConfigKeyADCVolume] = normalizeAudioVolume(value, ADCVolumeDefault)
+	}
+	if value, ok := normalized[ConfigKeyDACVolume]; ok {
+		normalized[ConfigKeyDACVolume] = normalizeAudioVolume(value, DACVolumeDefault)
 	}
 
 	return normalized
@@ -316,6 +336,35 @@ func normalizeRFDuration(raw string, defaultValue, minValue, maxValue int) strin
 	}
 	if value > maxValue {
 		value = maxValue
+	}
+	return strconv.Itoa(value)
+}
+
+func normalizeADCGainDB(raw string) string {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		value = ADCGainDefaultDB
+	}
+	if value < ADCGainMinDB {
+		value = ADCGainMinDB
+	}
+	if value > ADCGainMaxDB {
+		value = ADCGainMaxDB
+	}
+	value = ((value + ADCGainStepDB/2) / ADCGainStepDB) * ADCGainStepDB
+	return strconv.Itoa(value)
+}
+
+func normalizeAudioVolume(raw string, defaultValue int) string {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		value = defaultValue
+	}
+	if value < AudioVolumeMin {
+		value = AudioVolumeMin
+	}
+	if value > AudioVolumeMax {
+		value = AudioVolumeMax
 	}
 	return strconv.Itoa(value)
 }

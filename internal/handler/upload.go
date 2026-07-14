@@ -273,15 +273,15 @@ func UploadOperatorCertificate(c *gin.Context) {
 			})
 			return
 		}
-		contentType = fileHeader.Header.Get("Content-Type")
-		if !allowedTypes[contentType] {
+		detectedContentType, err := storage.DetectMultipartContentType(fileHeader)
+		if err != nil || !storage.IsAllowedContentType(detectedContentType, allowedTypes) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的文件类型，只支持图片和PDF",
 			})
 			return
 		}
-		var err error
+		contentType = detectedContentType
 		objectName, fileSize, err = minio.UploadMultipartFile(fileHeader, user.ID, "operator_cert")
 		if err != nil {
 			log.Printf("上传操作证失败: %v", err)
@@ -322,13 +322,16 @@ func UploadOperatorCertificate(c *gin.Context) {
 		if contentType == "" {
 			contentType = storedContentType
 		}
-		if !allowedTypes[contentType] {
+		detectedContentType, err := storage.DetectObjectContentType(c.Request.Context(), objectName)
+		if err != nil || !storage.IsAllowedContentType(detectedContentType, allowedTypes) {
+			_ = storage.Delete(c.Request.Context(), objectName)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的文件类型，只支持图片和PDF",
 			})
 			return
 		}
+		contentType = detectedContentType
 		finalKey, err := storage.PromoteStagedUpload(c.Request.Context(), grant)
 		if err != nil {
 			log.Printf("提升操作证对象失败: %v", err)

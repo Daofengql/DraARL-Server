@@ -34,6 +34,15 @@ func TestPrepareForwardPacketRewritesHeader(t *testing.T) {
 	ReleaseForwardPacket(out)
 }
 
+func TestDecodeRejectsLengthMismatch(t *testing.T) {
+	packet := EncodeDraARLv1("user1", "secretpwd", 7, DraARLTypeHeartbeat, 1, 12345, "", nil)
+	packet[5]++
+	var decoded DraARLv1Packet
+	if err := decoded.Decode(packet); err == nil {
+		t.Fatal("expected length mismatch to be rejected")
+	}
+}
+
 func TestPrepareForwardPacketFallbackEncode(t *testing.T) {
 	payload := []byte{9, 8, 7}
 	out := PrepareForwardPacket([]byte("bad"), "u", "CS", 3, DraARLTypeTextMessage, 2, 1, payload)

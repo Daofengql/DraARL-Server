@@ -112,18 +112,36 @@ export function LoginPage() {
     }
   }
 
+  const handleLoginModeChange = (_: React.SyntheticEvent, value: number) => {
+    setLoginMode(value)
+    setError('')
+    setCaptchaCode('')
+    getCaptcha()
+  }
+
   // 密码登录
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (!captchaCode) {
+      setError('请输入图片验证码')
+      return
+    }
     setLoading(true)
 
     try {
-      const response = await authService.login({ username, password })
+      const response = await authService.login({
+        username,
+        password,
+        captcha_id: captchaId,
+        captcha_code: captchaCode,
+      })
       authService.saveAuth(response.token, response.user)
       navigate('/dashboard')
     } catch (err: any) {
       setError(err.response?.data?.message || '登录失败，请检查用户名和密码')
+      setCaptchaCode('')
+      getCaptcha()
     } finally {
       setLoading(false)
     }
@@ -162,6 +180,7 @@ export function LoginPage() {
       }, 1000)
     } catch (err: any) {
       setError(err.response?.data?.message || '发送验证码失败')
+      setCaptchaCode('')
       getCaptcha()
     } finally {
       setLoading(false)
@@ -267,7 +286,7 @@ export function LoginPage() {
           {/* 登录方式切换 */}
           <Tabs
             value={loginMode}
-            onChange={(_, v) => setLoginMode(v)}
+            onChange={handleLoginModeChange}
             variant="fullWidth"
             sx={{ mb: 3 }}
           >
@@ -296,6 +315,31 @@ export function LoginPage() {
                 margin="normal"
                 required
               />
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, alignItems: { xs: 'stretch', sm: 'center' }, mt: 2 }}>
+                <TextField
+                  fullWidth
+                  label="图片验证码"
+                  value={captchaCode}
+                  onChange={(e) => setCaptchaCode(e.target.value)}
+                  required
+                  sx={{ flex: 1, minWidth: 180 }}
+                />
+                <Box
+                  component="img"
+                  src={captchaImage}
+                  alt="验证码"
+                  onClick={getCaptcha}
+                  sx={{
+                    height: 64,
+                    width: { xs: '100%', sm: 180 },
+                    maxWidth: 180,
+                    cursor: 'pointer',
+                    borderRadius: 1,
+                    bgcolor: 'action.hover',
+                    objectFit: 'contain',
+                  }}
+                />
+              </Box>
               <Button
                 fullWidth
                 type="submit"

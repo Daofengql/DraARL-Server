@@ -309,7 +309,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
             )}
             {!error && (
               <Typography variant="body2" color="text.secondary" align="center">
-                动态码有效期为60秒
+                动态码有效期为5分钟
               </Typography>
             )}
           </Box>

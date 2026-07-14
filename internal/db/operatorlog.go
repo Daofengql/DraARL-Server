@@ -2,7 +2,6 @@ package db
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 	"time"
 )
@@ -26,42 +25,6 @@ type OperatorLog struct {
 	Operator   string    `json:"operator" db:"operator"`
 	OperatorID int       `json:"operator_id" db:"operator_id"`
 	Note       string    `json:"note" db:"note"`
-}
-
-// GetOperatorLog 获取操作日志列表
-func (r *OperatorLogRepository) GetOperatorLog(where string, page string) ([]*OperatorLog, int) {
-	logList := make([]*OperatorLog, 0)
-
-	query := fmt.Sprintf(`SELECT id, timestamp, content, event_type, operator, operator_id
-		FROM operator_log %v ORDER BY id DESC %v`, where, page)
-
-	rows, err := r.db.Query(query)
-	if err != nil {
-		log.Println("查询操作日志记录错误: ", err)
-		return nil, 0
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		l := &OperatorLog{}
-		err = rows.Scan(&l.ID, &l.Timestamp, &l.Content, &l.EventType, &l.Operator, &l.OperatorID)
-		if err != nil {
-			log.Println("select operator_log err:", err, query)
-			continue
-		}
-		logList = append(logList, l)
-	}
-
-	var t int
-	q := fmt.Sprintf("SELECT count(*) as total FROM operator_log %v", where)
-	row := r.db.QueryRow(q)
-	err = row.Scan(&t)
-	if err != nil {
-		log.Println("查询操作日志记录total错误 err:", err, t)
-		return nil, 0
-	}
-
-	return logList, t
 }
 
 // AddOperatorLog 添加操作日志
@@ -107,17 +70,42 @@ func (r *OperatorLogRepository) BatchCreate(logs []*OperatorLog) error {
 func (r *OperatorLogRepository) Query(userID int, page, limit int, operation string) ([]*OperatorLog, int, error) {
 	offset := (page - 1) * limit
 
-	where := " WHERE 1=1"
+	where := "WHERE 1=1"
+	args := make([]interface{}, 0, 2)
 	if userID > 0 {
-		where += fmt.Sprintf(" AND operator_id = %d", userID)
+		where += " AND operator_id = ?"
+		args = append(args, userID)
 	}
 	if operation != "" {
-		where += fmt.Sprintf(" AND event_type = '%s'", operation)
+		where += " AND event_type = ?"
+		args = append(args, operation)
 	}
 
-	pageStr := fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
+	logs := make([]*OperatorLog, 0)
+	queryArgs := append(append([]interface{}{}, args...), limit, offset)
+	rows, err := r.db.Query(`SELECT id, timestamp, content, event_type, operator, operator_id
+		FROM operator_log `+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, queryArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
 
-	logs, total := r.GetOperatorLog(where, pageStr)
+	for rows.Next() {
+		l := &OperatorLog{}
+		if err := rows.Scan(&l.ID, &l.Timestamp, &l.Content, &l.EventType, &l.Operator, &l.OperatorID); err != nil {
+			log.Println("select operator_log err:", err)
+			continue
+		}
+		logs = append(logs, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	var total int
+	if err := r.db.QueryRow("SELECT count(*) as total FROM operator_log "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 
 	return logs, total, nil
 }

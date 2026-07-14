@@ -174,6 +174,9 @@ func (p *DraARLv1Packet) Decode(data []byte) error {
 
 	// 解析 Length (4-5)
 	p.Length = binary.BigEndian.Uint16(data[4:6])
+	if int(p.Length) != len(data) {
+		return fmt.Errorf("invalid packet length: header=%d actual=%d", p.Length, len(data))
+	}
 
 	// 解析 Username (6-37)
 	p.Username = string(bytes.TrimRight(data[6:38], "\x00"))

@@ -203,11 +203,12 @@ func TestBuildConfigSnapshotForOverwriteFillsMissingKeys(t *testing.T) {
 	}
 }
 
-func TestAudioConfigsAreLimitedToSA818Profile(t *testing.T) {
+func TestAudioConfigsAreSupportedByESP32Profiles(t *testing.T) {
 	configs := map[string]string{
 		ConfigKeyADCGainDB: "20",
 		ConfigKeyADCVolume: "90",
 		ConfigKeyDACVolume: "80",
+		"rx_freq":          "439500000",
 	}
 
 	sa818Configs := filterConfigsForDevice(&models.Device{
@@ -222,7 +223,12 @@ func TestAudioConfigsAreLimitedToSA818Profile(t *testing.T) {
 	noRadioConfigs := filterConfigsForDevice(&models.Device{
 		DevModel: protocol.DraARLDevModelESP32NoRadio,
 	}, configs)
-	if len(noRadioConfigs) != 0 {
-		t.Fatalf("expected audio configs to be filtered for non-SA818 model, got %#v", noRadioConfigs)
+	if noRadioConfigs[ConfigKeyADCGainDB] != "21" ||
+		noRadioConfigs[ConfigKeyADCVolume] != "90" ||
+		noRadioConfigs[ConfigKeyDACVolume] != "80" {
+		t.Fatalf("expected normalized audio configs for no-radio ESP32 profile, got %#v", noRadioConfigs)
+	}
+	if _, ok := noRadioConfigs["rx_freq"]; ok {
+		t.Fatalf("expected RF config to remain filtered for no-radio ESP32 profile, got %#v", noRadioConfigs)
 	}
 }

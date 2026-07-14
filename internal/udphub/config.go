@@ -117,7 +117,10 @@ var managedConfigKeys = []string{
 	"timestamp",
 }
 
-const deviceConfigProfileSA818 = "sa818-radio-v1"
+const (
+	deviceConfigProfileSA818             = "sa818-radio-v1"
+	deviceConfigProfileESP32NoRadioAudio = "esp32-no-radio-audio-v1"
+)
 
 var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
 	deviceConfigProfileSA818: {
@@ -140,16 +143,25 @@ var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
 		ConfigKeyADCVolume:             {},
 		ConfigKeyDACVolume:             {},
 	},
+	deviceConfigProfileESP32NoRadioAudio: {
+		ConfigKeyADCGainDB: {},
+		ConfigKeyADCVolume: {},
+		ConfigKeyDACVolume: {},
+	},
 }
 
 func resolveDeviceConfigProfile(dev *models.Device) string {
 	if dev == nil {
 		return ""
 	}
-	if dev.DevModel == protocol.DraARLDevModelESP32Radio {
+	switch dev.DevModel {
+	case protocol.DraARLDevModelESP32Radio:
 		return deviceConfigProfileSA818
+	case protocol.DraARLDevModelESP32NoRadio:
+		return deviceConfigProfileESP32NoRadioAudio
+	default:
+		return ""
 	}
-	return ""
 }
 
 func filterConfigsForDevice(dev *models.Device, configs map[string]string) map[string]string {

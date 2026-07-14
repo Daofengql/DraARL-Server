@@ -213,13 +213,16 @@ func StopCommRecorder() {
 	// 性能优化：先停止文本消息缓冲区
 	StopTextMessageBuffer()
 
+	// 停止异步录制 worker 并排空队列
+	stopCommRecordWorker()
+
 	if globalCommRecorder != nil {
 		globalCommRecorder.Stop()
 		globalCommRecorder = nil
 	}
 }
 
-// RecordCommPacket 录制通信数据包（全局接口）
+// RecordCommPacket 录制通信数据包（全局接口，异步入队，不阻塞转发热路径）
 // 传入的 audioData 是 Opus 编码数据，直接存储为 .opus 文件
 // deviceID: 设备ID，正数为普通设备，负数为幽灵设备
 func RecordCommPacket(
@@ -229,9 +232,11 @@ func RecordCommPacket(
 	userID *uint,
 	audioData []byte,
 ) {
-	if globalCommRecorder != nil {
-		globalCommRecorder.RecordPacket(deviceID, deviceSSID, groupID, userID, audioData)
+	if globalCommRecorder == nil || len(audioData) == 0 {
+		return
 	}
+	// 异步录制：拷贝 payload 后投递有界队列，满则丢弃录制不堵转发
+	enqueueCommRecord(deviceID, deviceSSID, groupID, userID, audioData)
 }
 
 // ReloadCommSettings 重新加载通信设置

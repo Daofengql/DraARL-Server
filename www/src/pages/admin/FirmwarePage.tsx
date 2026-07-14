@@ -1,9 +1,9 @@
-import { useState, useEffect, type FormEvent } from 'react'
+import { useCallback, useState, useEffect, type FormEvent } from 'react'
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Chip, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, Button, TextField, Stack, Alert, Tooltip, TablePagination,
-  FormControl, InputLabel, Select, MenuItem, FormControlLabel, Switch,
+  FormControl, InputLabel, Select, MenuItem, LinearProgress,
 } from '@mui/material'
 import Delete from '@mui/icons-material/Delete'
 import Refresh from '@mui/icons-material/Refresh'
@@ -39,6 +39,7 @@ export function FirmwarePage() {
   // 上传弹窗
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [formModel, setFormModel] = useState<number>(1)
   const [formVersion, setFormVersion] = useState('')
   const [formChangelog, setFormChangelog] = useState('')
@@ -48,7 +49,7 @@ export function FirmwarePage() {
   // 删除确认
   const [deleteTarget, setDeleteTarget] = useState<FirmwareRelease | null>(null)
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -64,9 +65,9 @@ export function FirmwarePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [filterModel, page, rowsPerPage])
 
-  useEffect(() => { fetchData() }, [page, rowsPerPage, filterModel])
+  useEffect(() => { fetchData() }, [fetchData])
 
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault()
@@ -74,6 +75,7 @@ export function FirmwarePage() {
     if (!SEMVER_RE.test(formVersion)) { setVersionError('版本号格式无效，如 1.0.0 或 1.0.0-beta.1'); return }
 
     setUploading(true)
+    setUploadProgress(0)
     setError(null)
     try {
       await uploadFirmware({
@@ -81,6 +83,7 @@ export function FirmwarePage() {
         dev_model: formModel,
         version: formVersion,
         changelog: formChangelog || undefined,
+        onProgress: setUploadProgress,
       })
       setSuccess('固件上传成功')
       setUploadOpen(false)
@@ -90,6 +93,7 @@ export function FirmwarePage() {
       setError(err.message || '上传失败')
     } finally {
       setUploading(false)
+      setUploadProgress(0)
     }
   }
 
@@ -222,12 +226,12 @@ export function FirmwarePage() {
       </TableContainer>
 
       {/* 上传弹窗 */}
-      <Dialog open={uploadOpen} onClose={() => setUploadOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={uploadOpen} onClose={() => !uploading && setUploadOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>上传固件</DialogTitle>
         <form onSubmit={handleUpload}>
           <DialogContent>
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <FormControl size="small" fullWidth required>
+              <FormControl size="small" fullWidth required disabled={uploading}>
                 <InputLabel>设备型号</InputLabel>
                 <Select value={formModel} label="设备型号" onChange={(e) => setFormModel(e.target.value as number)}>
                   {FIRMWARE_MODELS.map(m => (
@@ -249,6 +253,7 @@ export function FirmwarePage() {
                 size="small"
                 fullWidth
                 required
+                disabled={uploading}
               />
 
               <TextField
@@ -259,11 +264,12 @@ export function FirmwarePage() {
                 fullWidth
                 multiline
                 rows={3}
+                disabled={uploading}
               />
 
-              <Button variant="outlined" component="label" startIcon={<Upload />}>
+              <Button variant="outlined" component="label" startIcon={<Upload />} disabled={uploading}>
                 {formFile ? formFile.name : '选择固件文件'}
-                <input type="file" hidden onChange={(e) => setFormFile(e.target.files?.[0] || null)} />
+                <input type="file" hidden disabled={uploading} onChange={(e) => setFormFile(e.target.files?.[0] || null)} />
               </Button>
               {formFile && (
                 <Typography variant="caption" color="text.secondary">
@@ -273,16 +279,24 @@ export function FirmwarePage() {
                   )}
                 </Typography>
               )}
+              {uploading && (
+                <Box>
+                  <LinearProgress variant="determinate" value={uploadProgress} />
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    上传中 {uploadProgress}%
+                  </Typography>
+                </Box>
+              )}
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setUploadOpen(false)}>取消</Button>
+            <Button onClick={() => setUploadOpen(false)} disabled={uploading}>取消</Button>
             <Button
               type="submit"
               variant="contained"
               disabled={uploading || !formFile || !formVersion || !!versionError || (formFile?.size ?? 0) > 16 * 1024 * 1024}
             >
-              {uploading ? '上传中...' : '上传'}
+              {uploading ? `上传中 ${uploadProgress}%` : '上传'}
             </Button>
           </DialogActions>
         </form>

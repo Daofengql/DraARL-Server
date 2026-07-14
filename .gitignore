@@ -59,6 +59,9 @@ uploads/
 tmp/
 temp/
 
+# Local storage root (Storage.Local.RootPath 默认 ./data/storage)
+/data/
+
 # Build output
 bin/
 build/

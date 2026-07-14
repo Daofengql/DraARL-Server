@@ -84,15 +84,6 @@ export function CommRecordsPage() {
   const isAdminPage = location.pathname.startsWith('/admin/')
   const showUserFilter = isAdminPage
 
-  useEffect(() => {
-    loadRecords()
-    if (showUserFilter) {
-      loadUsers()
-    }
-    loadDevices()
-    loadGroups()
-  }, [page, rowsPerPage, filterUserId, filterDeviceId, filterGroupId])
-
   // 组件卸载时停止播放
   useEffect(() => {
     return () => {
@@ -100,7 +91,7 @@ export function CommRecordsPage() {
     }
   }, [])
 
-  const loadRecords = async () => {
+  const loadRecords = useCallback(async () => {
     setLoading(true)
     try {
       const params: Record<string, unknown> = {
@@ -126,7 +117,16 @@ export function CommRecordsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [filterDeviceId, filterGroupId, filterUserId, isAdminPage, page, rowsPerPage])
+
+  useEffect(() => {
+    loadRecords()
+    if (showUserFilter) {
+      loadUsers()
+    }
+    loadDevices()
+    loadGroups()
+  }, [loadRecords, showUserFilter])
 
   const loadUsers = async () => {
     try {
@@ -208,8 +208,14 @@ export function CommRecordsPage() {
         throw new Error('无音频数据')
       }
 
-      // 构建 URL
-      const audioUrl = record.audio_url || `/api/minio/${record.audio_path}`
+      // 构建 URL（后端 audio_url 已解析；兼容历史绝对路径）
+      const audioUrl = record.audio_url
+        || (record.audio_path?.startsWith('http') || record.audio_path?.startsWith('/')
+          ? record.audio_path
+          : '')
+      if (!audioUrl) {
+        throw new Error('无音频数据')
+      }
 
       // 使用 Opus 播放器播放
       await opusPlayer.play(audioUrl, () => {
@@ -234,7 +240,14 @@ export function CommRecordsPage() {
     }
 
     try {
-      const audioUrl = record.audio_url || `/api/minio/${record.audio_path}`
+      const audioUrl = record.audio_url
+        || (record.audio_path?.startsWith('http') || record.audio_path?.startsWith('/')
+          ? record.audio_path
+          : '')
+      if (!audioUrl) {
+        setError('无音频数据')
+        return
+      }
 
       // 解码并转换为 WAV
       const wavBlob = await getWavBlobFromOpusUrl(audioUrl)

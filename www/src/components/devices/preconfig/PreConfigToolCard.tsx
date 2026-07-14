@@ -108,7 +108,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
       setWifiHelperText(WIFI_SCAN_DEFAULT_HINT)
       void disconnect().catch(() => undefined)
     }
-  }, [open])
+  }, [open, disconnect])
 
   const handleClose = () => {
     onClose()

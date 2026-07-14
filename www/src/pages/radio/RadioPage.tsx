@@ -7,45 +7,22 @@ import {
   Box,
   Typography,
   IconButton,
-  Select,
-  MenuItem,
-  FormControl,
-  Chip,
-  Avatar,
-  Paper,
   TextField,
-  Fab,
-  Slider,
-  Tooltip,
   Drawer,
-  List,
-  ListItem,
-  ListItemIcon,
-  ListItemText,
-  Divider,
-  CircularProgress,
   Alert,
   Button,
-  useTheme,
-  useMediaQuery,
 } from '@mui/material'
-import type { SelectChangeEvent } from '@mui/material'
 import MicIcon from '@mui/icons-material/Mic'
-import MicOffIcon from '@mui/icons-material/MicOff'
 import VolumeUpIcon from '@mui/icons-material/VolumeUp'
 import VolumeOffIcon from '@mui/icons-material/VolumeOff'
 import SendIcon from '@mui/icons-material/Send'
-import GroupIcon from '@mui/icons-material/Group'
 import HeadsetIcon from '@mui/icons-material/Headset'
 import KeyboardIcon from '@mui/icons-material/Keyboard'
 import RecordIcon from '@mui/icons-material/FiberManualRecord'
-import CloseIcon from '@mui/icons-material/Close'
 
 import { useAuth } from '../../hooks/useAuth'
 import {
-  RadioService,
   getRadioService,
-  destroyRadioService,
 } from '../../services/radioService'
 import { messageSyncService } from '../../services/radio/messageSync'
 import type {
@@ -174,8 +151,6 @@ const stateTexts: Record<WSConnectionState, string> = {
 }
 
 export const RadioPage: React.FC = () => {
-  const theme = useTheme()
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const styles = useStyles()
 
   // 认证
@@ -193,7 +168,6 @@ export const RadioPage: React.FC = () => {
   const [groups, setGroups] = useState<RadioGroup[]>([])
   const [currentGroupId, setCurrentGroupId] = useState<number>(999)
   const [messages, setMessages] = useState<RadioMessage[]>([])
-  const [onlineDevices, setOnlineDevices] = useState<any[]>([])
 
   // UI 状态
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('voice')
@@ -240,7 +214,7 @@ export const RadioPage: React.FC = () => {
           setConnectionState(state)
         })
 
-        radioService.on('voiceStateChange', (state, callsign) => {
+        radioService.on('voiceStateChange', (state, _callsign) => {
           setVoiceState(state)
         })
 
@@ -301,7 +275,7 @@ export const RadioPage: React.FC = () => {
       // 清理
       radioService.disconnect()
     }
-  }, [user, token])
+  }, [user, token, radioService])
 
   // 激活音频权限
   const handleActivateAudio = useCallback(async () => {
@@ -489,12 +463,6 @@ export const RadioPage: React.FC = () => {
   const toggleMute = () => {
     const newMuted = !config.muted
     radioService.setMuted(newMuted)
-    setConfig(radioService.getConfig())
-  }
-
-  // 音量变化
-  const handleVolumeChange = (_: Event, value: number | number[]) => {
-    radioService.setVolume(value as number)
     setConfig(radioService.getConfig())
   }
 

@@ -194,20 +194,21 @@ export function DashboardPage() {
         comm_duration: commStatsData.total_duration || 0,
       })
       setCommTrend(commTrendData)
-    } catch (err) {
+    } catch {
       setError('获取统计数据失败')
     } finally {
       setLoading(false)
     }
   }
 
+  // Load the initial snapshot once; fetchingRef also prevents StrictMode duplicate requests.
   useEffect(() => {
     // 防止 StrictMode 双重请求
     if (fetchingRef.current) return
     fetchingRef.current = true
 
     fetchMyStats()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const displayName = cachedUser?.nickname || cachedUser?.username || '用户'
 

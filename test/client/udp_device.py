@@ -76,6 +76,13 @@ class UDPDeviceClient(BaseClient):
             self.pyaudio_inst = None
             self.opus_encoder = None
             self.opus_decoder = None
+            missing = []
+            if not PYAUDIO_AVAILABLE:
+                missing.append("pyaudio")
+            if not OPUS_AVAILABLE:
+                missing.append("opuslib")
+            if enable_audio and missing:
+                self.log(f"[音频不可用] 缺少依赖: {', '.join(missing)}，PTT 已禁用")
 
         # 设备配置（模拟设备参数）
         self.device_config = {

@@ -25,6 +25,7 @@ import (
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
 	miniohelper "draarl/pkg/minio"
+	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 	minioapi "github.com/minio/minio-go/v7"
@@ -85,12 +86,16 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 
 	assetBaseURL := "/"
 	if cfg != nil && cfg.Web.FrontendCDN.Enabled {
-		cdnBaseURL, err := ensureFrontendAssetsInMinIO(webStaticFS, cfg)
-		if err != nil {
-			log.Printf("Frontend CDN sync failed, fallback to embedded assets: %v", err)
+		if storage.ResolveDriver(cfg) != storage.DriverMinIO {
+			log.Printf("Frontend CDN enabled but storage driver is not minio, fallback to embedded assets")
 		} else {
-			assetBaseURL = normalizeAssetBaseURL(cdnBaseURL)
-			log.Printf("Frontend static assets served by MinIO: %s", assetBaseURL)
+			cdnBaseURL, err := ensureFrontendAssetsInMinIO(webStaticFS, cfg)
+			if err != nil {
+				log.Printf("Frontend CDN sync failed, fallback to embedded assets: %v", err)
+			} else {
+				assetBaseURL = normalizeAssetBaseURL(cdnBaseURL)
+				log.Printf("Frontend static assets served by MinIO: %s", assetBaseURL)
+			}
 		}
 	}
 
@@ -135,7 +140,7 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 					siteName = systemConfig.Name
 				}
 				if systemConfig.FaviconURL != "" {
-					faviconURL = systemConfig.FaviconURL
+					faviconURL = storage.ResolveAssetURL(systemConfig.FaviconURL)
 				}
 			}
 		}
@@ -253,7 +258,7 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 	ctx, cancel := context.WithTimeout(context.Background(), frontendCDNSyncTimeout)
 	defer cancel()
 
-	bucket := cfg.MinIO.Bucket
+	bucket := cfg.Storage.MinIO.Bucket
 	if bucket == "" {
 		bucket = "draarl"
 	}

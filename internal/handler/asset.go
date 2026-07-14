@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	oplog "draarl/internal/log"
 	"draarl/pkg/cache"
 	"draarl/pkg/minio"
+	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -1116,6 +1118,123 @@ func (h *AssetHandler) GetDownloadURL(c *gin.Context) {
 			"size":         asset.Size,
 			"mime_type":    asset.MimeType,
 			"download_url": downloadURL,
+		},
+	})
+}
+
+// CompleteUpload 直传完成后落库。
+// POST /api/assets/complete
+func (h *AssetHandler) CompleteUpload(c *gin.Context) {
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{Code: 401, Message: "未授权"})
+		return
+	}
+	userModel := user.(*gormdb.User)
+
+	var req struct {
+		ParentID    uint   `json:"parent_id" binding:"required"`
+		Name        string `json:"name"`
+		Remark      string `json:"remark"`
+		ObjectKey   string `json:"object_key" binding:"required"`
+		UploadToken string `json:"upload_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "请求参数错误"})
+		return
+	}
+
+	objectKey := strings.TrimLeft(req.ObjectKey, "/")
+	if !storage.IsStagingObjectKey(objectKey, "assets", userModel.ID) {
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "非法的 object_key"})
+		return
+	}
+
+	parent, err := h.repo.GetByID(req.ParentID)
+	if err != nil || parent == nil || !parent.IsFolder() {
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "父目录不存在或不是文件夹"})
+		return
+	}
+
+	displayName := req.Name
+	if displayName == "" {
+		displayName = path.Base(objectKey)
+	}
+	exists2, err := h.repo.ExistsByName(displayName, &req.ParentID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "上传文件失败"})
+		return
+	}
+	if exists2 {
+		c.JSON(http.StatusConflict, Response{Code: 409, Message: "同名资源已存在"})
+		return
+	}
+
+	grant, contentType, err := storage.ValidateStagedUpload(
+		c.Request.Context(), req.UploadToken, objectKey, "assets", userModel.ID,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "上传授权或对象校验失败"})
+		return
+	}
+	size := grant.Size
+	mimeType := grant.ContentType
+	if mimeType == "" {
+		mimeType = contentType
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	finalKey, err := storage.PromoteStagedUpload(c.Request.Context(), grant)
+	if err != nil {
+		log.Printf("提升资源对象失败: %v", err)
+		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "完成文件上传失败"})
+		return
+	}
+
+	asset := &gormdb.Asset{
+		ParentID: &req.ParentID,
+		Name:     displayName,
+		Type:     "file",
+		Path:     finalKey,
+		Size:     size,
+		MimeType: mimeType,
+		Remark:   req.Remark,
+	}
+	if err := h.repo.Create(asset); err != nil {
+		_ = storage.Delete(c.Request.Context(), finalKey)
+		log.Printf("创建资源记录失败: %v", err)
+		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "上传文件失败"})
+		return
+	}
+
+	parentPath, _ := h.repo.GetPath(req.ParentID)
+	oplog.AddLog(
+		fmt.Sprintf("上传文件(直传): %s (位置: %s, 大小: %d 字节)", displayName, parentPath, size),
+		"asset_upload",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+	h.invalidateAssetCache(c.Request.Context(), &req.ParentID)
+
+	c.JSON(http.StatusOK, Response{
+		Code:    200,
+		Message: "上传成功",
+		Data: AssetResponse{
+			ID:          asset.ID,
+			ParentID:    asset.ParentID,
+			Name:        asset.Name,
+			Type:        asset.Type,
+			Path:        asset.Path,
+			Size:        asset.Size,
+			MimeType:    asset.MimeType,
+			Remark:      asset.Remark,
+			SortOrder:   asset.SortOrder,
+			DownloadURL: minio.GetFileURL(asset.Path),
+			CreatedAt:   asset.CreatedAt.Format("2006-01-02 15:04:05"),
+			UpdatedAt:   asset.UpdatedAt.Format("2006-01-02 15:04:05"),
 		},
 	})
 }

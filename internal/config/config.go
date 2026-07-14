@@ -20,6 +20,15 @@ var configFilePath string
 var configMu sync.RWMutex
 var releaseBuild atomic.Bool
 
+type MinIOConfig struct {
+	Endpoint  string `yaml:"Endpoint" json:"endpoint"`
+	AccessKey string `yaml:"AccessKey" json:"access_key"`
+	SecretKey string `yaml:"SecretKey" json:"secret_key"`
+	UseSSL    bool   `yaml:"UseSSL" json:"use_ssl"`
+	Bucket    string `yaml:"Bucket" json:"bucket"`
+	BasePath  string `yaml:"BasePath" json:"base_path"`
+}
+
 // SetReleaseBuild 设置是否为 release 构建产物。
 func SetReleaseBuild(release bool) {
 	releaseBuild.Store(release)
@@ -91,15 +100,17 @@ type Configuration struct {
 		RedirectURI  string `yaml:"RedirectURI" json:"redirect_uri"`   // http://localhost:9000/callback
 	} `yaml:"Keycloak" json:"keycloak"`
 
-	// MinIO 对象存储配置
-	MinIO struct {
-		Endpoint  string `yaml:"Endpoint" json:"endpoint"`    // localhost:9000
-		AccessKey string `yaml:"AccessKey" json:"access_key"` // minioadmin
-		SecretKey string `yaml:"SecretKey" json:"secret_key"` // minioadmin
-		UseSSL    bool   `yaml:"UseSSL" json:"use_ssl"`       // 是否使用HTTPS
-		Bucket    string `yaml:"Bucket" json:"bucket"`        // 默认存储桶
-		BasePath  string `yaml:"BasePath" json:"base_path"`   // URL基础路径
-	} `yaml:"MinIO" json:"minio"`
+	// Storage 存储主配置（Driver 为空时按 Storage.MinIO.Endpoint 推断）
+	Storage struct {
+		Driver string `yaml:"Driver" json:"driver"` // minio | local；后续可扩展 oss/cos/r2
+		Local  struct {
+			RootPath string `yaml:"RootPath" json:"root_path"`
+			BaseURL  string `yaml:"BaseURL" json:"base_url"`
+		} `yaml:"Local" json:"local"`
+		MinIO MinIOConfig `yaml:"MinIO" json:"minio"`
+	} `yaml:"Storage" json:"storage"`
+	// LegacyMinIO is read only for upgrading configurations created before Storage was introduced.
+	LegacyMinIO MinIOConfig `yaml:"MinIO,omitempty" json:"-"`
 
 	// JWT 配置
 	JWT struct {
@@ -172,6 +183,8 @@ func Load(configPath string) (*Configuration, error) {
 
 // SetDefaults 设置默认配置值
 func (c *Configuration) SetDefaults() error {
+	c.migrateLegacyStorageConfig()
+
 	// 数据库默认值
 	if c.Database.Port == 0 {
 		c.Database.Port = 3306
@@ -220,9 +233,15 @@ func (c *Configuration) SetDefaults() error {
 		c.Web.FrontendCDN.ObjectPrefix = "frontend"
 	}
 
-	// 规范化 MinIO BasePath：去除尾部斜杠，避免 URL 拼接时产生双斜杠
-	if c.MinIO.BasePath != "" {
-		c.MinIO.BasePath = strings.TrimRight(c.MinIO.BasePath, "/")
+	// 存储默认值
+	if strings.TrimSpace(c.Storage.Local.RootPath) == "" {
+		c.Storage.Local.RootPath = "./data/storage"
+	}
+	if c.Storage.Local.BaseURL != "" {
+		c.Storage.Local.BaseURL = strings.TrimRight(c.Storage.Local.BaseURL, "/")
+	}
+	if c.Storage.MinIO.BasePath != "" {
+		c.Storage.MinIO.BasePath = strings.TrimRight(c.Storage.MinIO.BasePath, "/")
 	}
 
 	// AES 密钥默认值：如果不符合要求则自动生成并写入配置文件
@@ -239,6 +258,16 @@ func (c *Configuration) SetDefaults() error {
 	}
 
 	return nil
+}
+
+func (c *Configuration) migrateLegacyStorageConfig() {
+	if strings.EqualFold(strings.TrimSpace(c.Storage.Driver), "local") {
+		return
+	}
+	if strings.TrimSpace(c.Storage.MinIO.Endpoint) == "" && strings.TrimSpace(c.LegacyMinIO.Endpoint) != "" {
+		c.Storage.MinIO = c.LegacyMinIO
+		c.LegacyMinIO = MinIOConfig{}
+	}
 }
 
 // JWTSecretMinLength JWT密钥最小长度

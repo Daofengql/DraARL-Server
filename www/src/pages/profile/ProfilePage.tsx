@@ -175,11 +175,12 @@ export function ProfilePage() {
   const [newEmailCountdown, setNewEmailCountdown] = useState(0)
   const [changingEmail, setChangingEmail] = useState(false)
 
+  // Profile, certificate, and SSO state are loaded once when this page mounts.
   useEffect(() => {
     loadUserInfo()
     loadCertificate()
     loadSSOStatus()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 监听来自 SSO 绑定窗口的消息
   useEffect(() => {
@@ -187,7 +188,7 @@ export function ProfilePage() {
       // 安全检查：确保消息来自可信源
       if (event.origin !== window.location.origin) return
 
-      const { type, success, error } = event.data || {}
+      const { type, error } = event.data || {}
 
       if (type === 'SSO_BIND_SUCCESS') {
         setSsoBindLoading(false)
@@ -402,18 +403,6 @@ export function ProfilePage() {
     } catch {
       showMessage('error', '获取验证码失败')
     }
-  }
-
-  const handleOpenEmailDialog = () => {
-    setEmailDialogOpen(true)
-    setEmailStep(user?.email && user?.email_verified ? 'old' : 'new')
-    setNewEmail('')
-    setEmailCaptchaCode('')
-    setOldEmailCode('')
-    setNewEmailCode('')
-    setOldSessionId('')
-    setNewSessionId('')
-    getEmailCaptcha()
   }
 
   const handleSendOldEmailCode = async () => {

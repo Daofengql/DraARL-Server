@@ -148,10 +148,11 @@ export function AdminGroupPage() {
     setSelectedUser(null)
   }
 
+  // Pagination refreshes immediately; keyword changes are handled by the debounced effect below.
   useEffect(() => {
     fetchGroups()
     loadUsers()
-  }, [page, rowsPerPage])
+  }, [page, rowsPerPage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadUsers = async () => {
     try {
@@ -162,6 +163,7 @@ export function AdminGroupPage() {
     }
   }
 
+  // Keep keyword debounce separate so page resets do not schedule a duplicate request.
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       if (page === 0) {
@@ -171,7 +173,7 @@ export function AdminGroupPage() {
       }
     }, 500)
     return () => clearTimeout(timeoutId)
-  }, [searchKeyword])
+  }, [searchKeyword]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
     setPage(0)

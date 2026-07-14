@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import {
   Box,
   Paper,
@@ -35,7 +35,6 @@ import Terminal from '@mui/icons-material/Terminal'
 import CloudUpload from '@mui/icons-material/CloudUpload'
 import Delete from '@mui/icons-material/Delete'
 import Search from '@mui/icons-material/Search'
-import Info from '@mui/icons-material/Info'
 import PhoneInTalk from '@mui/icons-material/PhoneInTalk'
 import MyLocation from '@mui/icons-material/MyLocation'
 import { apiClient } from '../../services/api'
@@ -227,8 +226,6 @@ export function SiteConfigPage() {
   const [tabValue, setTabValue] = useState(0)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [loading, setLoading] = useState(false)
-  const [uploadingLogo, setUploadingLogo] = useState(false)
-  const [uploadingFavicon, setUploadingFavicon] = useState(false)
 
   // 系统信息配置
   const [systemInfo, setSystemInfo] = useState<SystemInfoConfig>({
@@ -299,11 +296,12 @@ export function SiteConfigPage() {
   const [eventType, setEventType] = useState('')
   const [opLogsLoading, setOpLogsLoading] = useState(false)
 
-  useEffect(() => {
-    loadConfigs()
+  const showMessage = useCallback((type: 'success' | 'error', text: string) => {
+    setMessage({ type, text })
+    setTimeout(() => setMessage(null), 3000)
   }, [])
 
-  const loadConfigs = async () => {
+  const loadConfigs = useCallback(async () => {
     try {
       // 并行获取所有配置
       const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes, registrationRes, smtpRes] = await Promise.all([
@@ -359,12 +357,11 @@ export function SiteConfigPage() {
       console.error('Failed to load configs:', err)
       showMessage('error', '加载配置失败')
     }
-  }
+  }, [showMessage])
 
-  const showMessage = (type: 'success' | 'error', text: string) => {
-    setMessage({ type, text })
-    setTimeout(() => setMessage(null), 3000)
-  }
+  useEffect(() => {
+    loadConfigs()
+  }, [loadConfigs])
 
   const handleSaveSystemInfo = async () => {
     setLoading(true)
@@ -381,7 +378,7 @@ export function SiteConfigPage() {
       showMessage('success', '系统信息保存成功')
       // 通知Header刷新
       window.dispatchEvent(new CustomEvent('config-updated'))
-    } catch (err) {
+    } catch {
       showMessage('error', '保存系统信息失败')
     } finally {
       setLoading(false)
@@ -403,7 +400,7 @@ export function SiteConfigPage() {
     try {
       await apiClient.put('/api/config/aprs', aprs)
       showMessage('success', 'APRS配置保存成功')
-    } catch (err) {
+    } catch {
       showMessage('error', '保存APRS配置失败')
     } finally {
       setLoading(false)
@@ -455,7 +452,7 @@ export function SiteConfigPage() {
     try {
       await apiClient.put('/api/config/openai', openai)
       showMessage('success', 'OpenAI配置保存成功')
-    } catch (err) {
+    } catch {
       showMessage('error', '保存OpenAI配置失败')
     } finally {
       setLoading(false)
@@ -467,7 +464,7 @@ export function SiteConfigPage() {
     try {
       await apiClient.put('/api/config/comm-settings', commSettings)
       showMessage('success', '通信设置保存成功')
-    } catch (err) {
+    } catch {
       showMessage('error', '保存通信设置失败')
     } finally {
       setLoading(false)
@@ -480,7 +477,7 @@ export function SiteConfigPage() {
       await apiClient.put('/api/config/registration', registration)
       showMessage('success', '注册设置保存成功')
       window.dispatchEvent(new CustomEvent('config-updated'))
-    } catch (err) {
+    } catch {
       showMessage('error', '保存注册设置失败')
     } finally {
       setLoading(false)
@@ -492,7 +489,7 @@ export function SiteConfigPage() {
     try {
       await apiClient.put('/api/config/smtp', smtp)
       showMessage('success', 'SMTP配置保存成功')
-    } catch (err) {
+    } catch {
       showMessage('error', '保存SMTP配置失败')
     } finally {
       setLoading(false)
@@ -537,7 +534,6 @@ export function SiteConfigPage() {
       return
     }
 
-    setUploadingLogo(true)
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -557,7 +553,6 @@ export function SiteConfigPage() {
       console.error('Failed to upload logo:', err)
       showMessage('error', 'Logo上传失败')
     } finally {
-      setUploadingLogo(false)
       // 重置input
       if (logoInputRef.current) {
         logoInputRef.current.value = ''
@@ -603,7 +598,6 @@ export function SiteConfigPage() {
       return
     }
 
-    setUploadingFavicon(true)
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -623,7 +617,6 @@ export function SiteConfigPage() {
       console.error('Failed to upload favicon:', err)
       showMessage('error', 'Favicon上传失败')
     } finally {
-      setUploadingFavicon(false)
       // 重置input
       if (faviconInputRef.current) {
         faviconInputRef.current.value = ''
@@ -654,15 +647,8 @@ export function SiteConfigPage() {
     }
   }, [tabValue])
 
-  // 加载操作日志当切换到操作日志标签页时
-  useEffect(() => {
-    if (tabValue === 6) {
-      loadOpLogs()
-    }
-  }, [tabValue, logPage, logRowsPerPage, eventType])
-
   // 加载操作日志
-  const loadOpLogs = async () => {
+  const loadOpLogs = useCallback(async () => {
     setOpLogsLoading(true)
     try {
       const data = await logService.getList({
@@ -678,7 +664,14 @@ export function SiteConfigPage() {
     } finally {
       setOpLogsLoading(false)
     }
-  }
+  }, [eventType, logPage, logRowsPerPage])
+
+  // 加载操作日志当切换到操作日志标签页时
+  useEffect(() => {
+    if (tabValue === 6) {
+      loadOpLogs()
+    }
+  }, [tabValue, loadOpLogs])
 
   // 同步两个卡片的高度
   useEffect(() => {

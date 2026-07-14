@@ -1,4 +1,5 @@
 import { apiClient } from './api'
+import { directUpload } from './storageUpload'
 
 export interface FirmwareRelease {
   id: number
@@ -47,14 +48,19 @@ export async function uploadFirmware(data: {
   dev_model: number
   version: string
   changelog?: string
+  onProgress?: (percent: number) => void
 }): Promise<FirmwareRelease> {
-  const formData = new FormData()
-  formData.append('file', data.file)
-  formData.append('dev_model', data.dev_model.toString())
-  formData.append('version', data.version)
-  if (data.changelog) formData.append('changelog', data.changelog)
-  const res = await apiClient.postFormData<ApiResponse<FirmwareRelease>>('/api/firmware', formData)
+  const uploaded = await directUpload(data.file, 'firmware', data.onProgress)
+  const res = await apiClient.post<ApiResponse<FirmwareRelease>>('/api/firmware/complete', {
+    dev_model: data.dev_model,
+    version: data.version,
+    changelog: data.changelog || undefined,
+    object_key: uploaded.object_key,
+    file_name: data.file.name,
+    upload_token: uploaded.upload_token,
+  })
   if (res.code !== 200) throw new Error(res.message || '上传固件失败')
+  data.onProgress?.(100)
   return res.data
 }
 

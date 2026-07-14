@@ -13,7 +13,7 @@ import (
 	"draarl/internal/gormdb"
 	"draarl/internal/handler"
 	"draarl/internal/middleware"
-	"draarl/pkg/minio"
+	"draarl/pkg/storage"
 	ws "draarl/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -52,10 +52,9 @@ func New(cfg *config.Configuration) *Server {
 
 	s.setupRoutes()
 
-	// 前端 CDN 模式会在 setupFrontend 中同步初始化 MinIO。
-	// 其他情况仍按原有方式后台初始化，避免阻塞主服务启动。
-	if !minio.IsEnabled() {
-		minio.StartInitMinIOInBackground()
+	// 初始化对象存储（local 同步；minio 后台重试）。FrontendCDN 可能在 setupFrontend 中同步初始化 minio。
+	if !storage.IsEnabled() {
+		storage.StartInitInBackground(cfg)
 	}
 
 	return s
@@ -65,9 +64,15 @@ func (s *Server) setupRoutes() {
 	// 前端静态文件服务（根据编译标签选择嵌入模式或磁盘模式）
 	setupFrontend(s.engine, s.config)
 
+	// 本地存储文件服务
+	s.engine.GET("/files/*key", handler.ServeLocalFile)
+
 	// API 路由
 	api := s.engine.Group("/api")
 	{
+		// 本地存储直传（token 鉴权，无需 JWT）
+		api.PUT("/storage/put", handler.StorageDirectPut)
+
 		// 认证路由（无需 JWT）
 		auth := api.Group("/auth")
 		{
@@ -140,6 +145,9 @@ func (s *Server) setupRoutes() {
 
 			// 文件上传（所有认证用户可访问，用于头像上传）
 			protected.POST("/upload/file", handler.UploadFile)
+
+			// 存储直传
+			protected.POST("/storage/presign-put", handler.PresignPut)
 
 			// 操作证相关（所有认证用户可访问）
 			protected.POST("/upload/operator-certificate", handler.UploadOperatorCertificate)
@@ -332,7 +340,8 @@ func (s *Server) setupRoutes() {
 			assetHandler := handler.NewAssetHandler()
 			admin.GET("/assets", assetHandler.GetAssets)                // 获取资源列表
 			admin.POST("/assets/folder", assetHandler.CreateFolder)     // 创建文件夹
-			admin.POST("/assets/upload", assetHandler.UploadFile)       // 上传文件
+			admin.POST("/assets/upload", assetHandler.UploadFile)       // 上传文件（multipart 兼容）
+			admin.POST("/assets/complete", assetHandler.CompleteUpload) // 直传完成后落库
 			admin.PUT("/assets/:id", assetHandler.UpdateAsset)          // 更新资源（重命名、备注）
 			admin.PUT("/assets/:id/move", assetHandler.MoveAsset)       // 移动资源
 			admin.POST("/assets/:id/replace", assetHandler.ReplaceFile) // 覆盖文件
@@ -341,6 +350,7 @@ func (s *Server) setupRoutes() {
 			// 固件管理（管理员权限）
 			admin.GET("/firmware", handler.ListFirmware)
 			admin.POST("/firmware", handler.UploadFirmware)
+			admin.POST("/firmware/complete", handler.CompleteFirmwareUpload)
 			admin.DELETE("/firmware/:id", handler.DeleteFirmware)
 
 			// 资源公开接口（前台下载中心使用）
@@ -490,7 +500,8 @@ func originGuardMiddleware(allowedOriginSet map[string]struct{}) gin.HandlerFunc
 			return
 		}
 
-		if hasTokenLikeQuery(c.Request.URL.RawQuery) {
+		isLocalStoragePut := c.Request.Method == http.MethodPut && c.Request.URL.Path == "/api/storage/put"
+		if hasTokenLikeQuery(c.Request.URL.RawQuery) && !isLocalStoragePut {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "token_query_not_allowed",

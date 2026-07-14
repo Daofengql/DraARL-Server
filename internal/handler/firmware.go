@@ -4,15 +4,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"draarl/internal/firmwareversion"
 	gormdb "draarl/internal/gormdb"
 	"draarl/internal/protocol"
 	"draarl/pkg/minio"
+	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -192,6 +195,108 @@ func ListFirmware(c *gin.Context) {
 			"page_size": pageSize,
 		},
 	})
+}
+
+// CompleteFirmwareUpload 直传完成后落库。
+// POST /api/firmware/complete
+func CompleteFirmwareUpload(c *gin.Context) {
+	var req struct {
+		DevModel    int    `json:"dev_model" binding:"required"`
+		Version     string `json:"version" binding:"required"`
+		Changelog   string `json:"changelog"`
+		ObjectKey   string `json:"object_key" binding:"required"`
+		FileName    string `json:"file_name" binding:"required"`
+		UploadToken string `json:"upload_token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
+		return
+	}
+	if !protocol.IsFirmwareSupportedDevModel(byte(req.DevModel)) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": fmt.Sprintf("设备型号 %d 不支持固件升级", req.DevModel)})
+		return
+	}
+	if !semverRegex.MatchString(req.Version) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "版本号格式无效"})
+		return
+	}
+	objectKey := strings.TrimLeft(req.ObjectKey, "/")
+	userValue, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
+		return
+	}
+	user := userValue.(*gormdb.User)
+	if !storage.IsStagingObjectKey(objectKey, "firmware", user.ID) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "非法的 object_key"})
+		return
+	}
+
+	repo := gormdb.GetFirmwareRepo()
+	exists, err := repo.ExistsVersion(req.DevModel, req.Version)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查版本号失败"})
+		return
+	}
+	if exists {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": fmt.Sprintf("设备型号 %d 已存在版本 %s", req.DevModel, req.Version)})
+		return
+	}
+
+	grant, _, err := storage.ValidateStagedUpload(
+		c.Request.Context(), req.UploadToken, objectKey, "firmware", user.ID,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传授权或对象校验失败"})
+		return
+	}
+
+	finalKey, err := storage.PromoteStagedUpload(c.Request.Context(), grant)
+	if err != nil {
+		log.Printf("提升固件对象失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "完成固件上传失败"})
+		return
+	}
+
+	reader, err := storage.Open(c.Request.Context(), finalKey)
+	if err != nil {
+		_ = storage.Delete(c.Request.Context(), finalKey)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取最终固件文件失败"})
+		return
+	}
+	defer reader.Close()
+
+	hasher := sha256.New()
+	written, err := io.Copy(hasher, io.LimitReader(reader, maxFirmwareSize+1))
+	if err != nil {
+		_ = storage.Delete(c.Request.Context(), finalKey)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取固件文件失败"})
+		return
+	}
+	if written > maxFirmwareSize {
+		_ = storage.Delete(c.Request.Context(), finalKey)
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "文件大小超过限制"})
+		return
+	}
+	fileHash := hex.EncodeToString(hasher.Sum(nil))
+
+	fw := &gormdb.FirmwareRelease{
+		DevModel:  req.DevModel,
+		Version:   req.Version,
+		Changelog: req.Changelog,
+		FileName:  req.FileName,
+		MinioPath: finalKey,
+		FileSize:  written,
+		FileHash:  fileHash,
+		CreatedBy: user.ID,
+	}
+	if err := repo.Create(fw); err != nil {
+		_ = storage.Delete(c.Request.Context(), finalKey)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "固件上传成功", "data": fw})
 }
 
 // DeleteFirmware 删除固件（管理员权限）

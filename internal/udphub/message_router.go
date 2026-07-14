@@ -165,24 +165,24 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		opusData,
 	)
 
-	// 获取群组连接池
-	pool, ok := group.ConnPool.(*CurrentConnPool)
-	if !ok {
+	// 获取群组连接池（存在性已在上方校验）
+	if _, ok := group.ConnPool.(*CurrentConnPool); !ok {
 		return
 	}
 
-	// 1. 发送给普通 UDP 设备
-	// 注意：UDP ghost 设备走独立的 forwardToGhostDevices 路径，避免同组双发导致重音
-	forwardToNonGhostUDPDevices(pool.DevConnList, 0, groupID, false, voicePacket)
+	// 1-2. 连通域 UDP fan-out（普通设备 + ghost + 互联）
+	// 构造临时 source 设备视图供排除与身份使用
+	srcDev := &models.Device{
+		ID:       source.GetDeviceID(),
+		Username: source.GetUsername(),
+		SSID:     source.GetSSID(),
+		CallSign: source.GetCallSign(),
+		OwnerID:  source.GetUserID(),
+	}
+	forwardVoiceDomain(srcDev, voicePacket, groupID)
 
-	// 2. 【核心修复：补全 WS 到 UDP Ghost 的桥接】
-	// 前置逻辑说明：之前的代码由于缺少这行，导致 WS 网页端说话，UDP JWT 幽灵客户端永远听不见。
-	forwardToGhostDevices(source.GetUsername(), source.GetSSID(), groupID, voicePacket)
-
-	// 3. 转发到互联组 (复用这个标准语音包)
-	r.routeServerVoiceToLinkedGroups(source, voicePacket, groupID)
-
-	// 4. 【新增】转发到同组和互联组的其他 WS 客户端
+	// 3. 互联组 WS 已包含在 RouteVoiceToWSClients
+	// 4. 转发到同组和互联组的其他 WS 客户端
 	r.RouteVoiceToWSClients(source, voicePacket, groupID)
 }
 
@@ -210,96 +210,18 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 		textData,
 	)
 
-	pool, ok := group.ConnPool.(*CurrentConnPool)
-	if !ok {
-		return
+	// 文本：连通域 UDP fan-out
+	srcDev := &models.Device{
+		ID:       source.GetDeviceID(),
+		Username: source.GetUsername(),
+		SSID:     source.GetSSID(),
+		CallSign: source.GetCallSign(),
+		OwnerID:  source.GetUserID(),
 	}
-
-	// 注意：UDP ghost 设备走独立的 forwardToGhostDevices 路径，避免同组双发
-	forwardToNonGhostUDPDevices(pool.DevConnList, 0, groupID, false, textPacket)
-
-	// 【核心修复：补全 WS 到 UDP Ghost 的文本消息桥接】
-	forwardToGhostDevices(source.GetUsername(), source.GetSSID(), groupID, textPacket)
-
-	// 转发到互联组
-	r.routeTextToLinkedGroups(source, textPacket, groupID)
+	forwardVoiceDomain(srcDev, textPacket, groupID)
 
 	// 【新增】转发到同组和互联组的其他 WS 客户端
 	r.RouteTextToWSClients(source, textPacket, groupID)
-}
-
-// forwardToNonGhostUDPDevices 仅转发到普通 UDP 设备（排除 UDP ghost）
-// 用于 WS -> UDP 同组转发，避免与 forwardToGhostDevices 双路径重叠导致重复发包。
-func forwardToNonGhostUDPDevices(devices []*models.Device, sourceID int, expectedGroupID int, skipSelf bool, data []byte) {
-	conn := GetGlobalConn()
-	if conn == nil {
-		return
-	}
-
-	for _, target := range devices {
-		if target == nil || protocol.IsGhostSSID(target.SSID) {
-			continue
-		}
-		if canForwardToDevice(target, sourceID, expectedGroupID, skipSelf) {
-			conn.WriteToUDP(data, target.UDPAddr)
-		}
-	}
-}
-
-// routeServerVoiceToLinkedGroups 转发服务器互联语音到关联群组
-// 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
-func (r *MessageRouter) routeServerVoiceToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
-	if GetGlobalConn() == nil {
-		return
-	}
-
-	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
-	if len(targetGroupIDs) == 0 {
-		return
-	}
-
-	for _, targetID := range targetGroupIDs {
-		targetGroup, exists := GetGroupFromCache(targetID)
-		if !exists {
-			continue
-		}
-
-		pool, ok := targetGroup.ConnPool.(*CurrentConnPool)
-		if !ok {
-			continue
-		}
-
-		// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteVoiceToWSClients 处理
-		forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
-	}
-}
-
-// routeTextToLinkedGroups 转发文本消息到关联群组
-// 【修复逻辑】剥离了 WebSocket 的冗余转发，当前函数仅专注处理跨组的 UDP 设备投递
-func (r *MessageRouter) routeTextToLinkedGroups(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
-	if GetGlobalConn() == nil {
-		return
-	}
-
-	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
-	if len(targetGroupIDs) == 0 {
-		return
-	}
-
-	for _, targetID := range targetGroupIDs {
-		targetGroup, exists := GetGroupFromCache(targetID)
-		if !exists {
-			continue
-		}
-
-		pool, ok := targetGroup.ConnPool.(*CurrentConnPool)
-		if !ok {
-			continue
-		}
-
-		// 仅转发到目标组的 UDP 设备，WS 设备的转发统一交由 RouteTextToWSClients 处理
-		forwardToUDPDevices(pool.DevConnList, 0, targetID, false, data)
-	}
 }
 
 // GlobalMessageRouter 全局消息路由器
@@ -342,97 +264,117 @@ func BroadcastTextToUDP(source interfaces.WSDeviceInterface, textData []byte, gr
 	}
 }
 
-// BroadcastVoiceFromUDP 广播 UDP 语音到 WebSocket 设备（便捷函数）
+// BroadcastVoiceFromUDP 广播 UDP 语音到 WebSocket 设备（单群）
 func BroadcastVoiceFromUDP(source *models.Device, data []byte, groupID int) {
 	if GlobalMessageRouter != nil {
 		GlobalMessageRouter.RouteVoiceFromUDP(source, data, groupID)
 	}
 }
 
-// BroadcastTextFromUDP 广播 UDP 文本消息到 WebSocket 设备（便捷函数）
+// BroadcastTextFromUDP 广播 UDP 文本消息到 WebSocket 设备（单群）
 func BroadcastTextFromUDP(source *models.Device, data []byte, groupID int) {
 	if GlobalMessageRouter != nil {
 		GlobalMessageRouter.RouteTextFromUDP(source, data, groupID)
 	}
 }
 
-// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客户端端
-// 【新增】解决 WS JWT 客户端之间无法互相转发的问题
+// BroadcastVoiceFromUDPDomain 将 UDP 语音转发到连通域内所有群组的 WS 客户端（一次取域）。
+func BroadcastVoiceFromUDPDomain(source *models.Device, data []byte, sourceGroupID int) {
+	if GlobalMessageRouter == nil || GlobalMessageRouter.wsManager == nil || source == nil {
+		return
+	}
+	r := GlobalMessageRouter
+	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
+	if len(domainGroups) == 0 {
+		domainGroups = []int{sourceGroupID}
+	}
+	for _, gid := range domainGroups {
+		if gp, ok := GetGroupFromCache(gid); ok && gp != nil && gp.Status != 1 {
+			continue
+		}
+		r.wsManager.ForEachDeviceByGroup(gid, func(device interfaces.WSDeviceInterface) {
+			if !device.IsGhost() && device.GetDeviceID() == source.ID {
+				return
+			}
+			if device.IsDisabledRecv() {
+				return
+			}
+			_ = r.wsManager.SendToDevice(device, data, 2)
+		})
+	}
+}
+
+// BroadcastTextFromUDPDomain 将 UDP 文本转发到连通域内所有群组的 WS 客户端。
+func BroadcastTextFromUDPDomain(source *models.Device, data []byte, sourceGroupID int) {
+	if GlobalMessageRouter == nil || GlobalMessageRouter.wsManager == nil || source == nil {
+		return
+	}
+	r := GlobalMessageRouter
+	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
+	if len(domainGroups) == 0 {
+		domainGroups = []int{sourceGroupID}
+	}
+	for _, gid := range domainGroups {
+		if gp, ok := GetGroupFromCache(gid); ok && gp != nil && gp.Status != 1 {
+			continue
+		}
+		r.wsManager.ForEachDeviceByGroup(gid, func(device interfaces.WSDeviceInterface) {
+			if !device.IsGhost() && device.GetDeviceID() == source.ID {
+				return
+			}
+			if device.IsDisabledRecv() {
+				return
+			}
+			_ = r.wsManager.SendToDevice(device, data, 2)
+		})
+	}
+}
+
+// RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客户端
 func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	if r.wsManager == nil {
 		return
 	}
-
-	// 1. 转发到同组的其他 WS 客户端
-	r.wsManager.ForEachDeviceByGroup(sourceGroupID, func(device interfaces.WSDeviceInterface) {
-		// 跳过发送者自己（通过 UserID 判断，因为 WS 客户端都是幽灵设备）
-		if device.IsGhost() && device.GetUserID() == source.GetUserID() {
-			return
-		}
-
-		// 检查目标设备是否禁收
-		if device.IsDisabledRecv() {
-			return
-		}
-
-		_ = r.wsManager.SendToDevice(device, data, 2)
-	})
-
-	// 2. 转发到互联组的 WS 客户端
-	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
-	for _, targetID := range targetGroupIDs {
-		// 检查目标群组状态
-		targetGroup, exists := GetGroupFromCache(targetID)
-		if !exists || targetGroup.Status != 1 {
+	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
+	if len(domainGroups) == 0 {
+		domainGroups = []int{sourceGroupID}
+	}
+	for _, targetID := range domainGroups {
+		if targetGroup, exists := GetGroupFromCache(targetID); exists && targetGroup.Status != 1 {
 			continue
 		}
-
-		// 专注负责目标组 WS 客户端的下发
 		r.wsManager.ForEachDeviceByGroup(targetID, func(device interfaces.WSDeviceInterface) {
+			if device.IsGhost() && device.GetUserID() == source.GetUserID() && device.GetSSID() == source.GetSSID() {
+				return
+			}
 			if device.IsDisabledRecv() {
 				return
 			}
-
 			_ = r.wsManager.SendToDevice(device, data, 2)
 		})
 	}
 }
 
 // RouteTextToWSClients 转发 WebSocket 文本消息到同组和互联组的其他 WS 客户端
-// 【新增】解决 WS JWT 客户端之间无法互相转发的问题
 func (r *MessageRouter) RouteTextToWSClients(source interfaces.WSDeviceInterface, data []byte, sourceGroupID int) {
 	if r.wsManager == nil {
 		return
 	}
-
-	// 1. 转发到同组的其他 WS 客户端
-	r.wsManager.ForEachDeviceByGroup(sourceGroupID, func(device interfaces.WSDeviceInterface) {
-		// 跳过发送者自己
-		if device.IsGhost() && device.GetUserID() == source.GetUserID() {
-			return
-		}
-
-		if device.IsDisabledRecv() {
-			return
-		}
-
-		_ = r.wsManager.SendToDevice(device, data, 2)
-	})
-
-	// 2. 转发到互联组的 WS 客户端
-	targetGroupIDs := GetLinkedTargetGroups(sourceGroupID)
-	for _, targetID := range targetGroupIDs {
-		targetGroup, exists := GetGroupFromCache(targetID)
-		if !exists || targetGroup.Status != 1 {
+	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
+	if len(domainGroups) == 0 {
+		domainGroups = []int{sourceGroupID}
+	}
+	for _, targetID := range domainGroups {
+		if targetGroup, exists := GetGroupFromCache(targetID); exists && targetGroup.Status != 1 {
 			continue
 		}
-
-		// 专注负责目标组 WS 客户端的下发
 		r.wsManager.ForEachDeviceByGroup(targetID, func(device interfaces.WSDeviceInterface) {
+			if device.IsGhost() && device.GetUserID() == source.GetUserID() && device.GetSSID() == source.GetSSID() {
+				return
+			}
 			if device.IsDisabledRecv() {
 				return
 			}
-
 			_ = r.wsManager.SendToDevice(device, data, 2)
 		})
 	}

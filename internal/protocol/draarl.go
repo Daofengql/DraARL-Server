@@ -8,8 +8,17 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// forwardPacketPool 复用转发改写缓冲。调用方在 fan-out 完成后应 ReleaseForwardPacket。
+var forwardPacketPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, DraARLv1MaxPacketSize)
+		return &b
+	},
+}
 
 // DraARLv1 协议版本标识
 const DraARLVersion = "DraA"
@@ -260,6 +269,93 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	}
 
 	return packet
+}
+
+// RewriteForwardHeader 在已有完整报文上改写转发头字段：
+// 清空设备密码、填充呼号，并可选覆盖 Type/DevModel/SSID/DMRID/Username。
+// 返回缓冲可能来自 pool；热路径 fan-out 完成后调用 ReleaseForwardPacket。
+// 若 src 非法则返回 nil，调用方应回退到 EncodeDraARLv1。
+func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetType, devModel byte, dmrid uint32) []byte {
+	if len(src) < DraARLv1HeaderSize {
+		return nil
+	}
+	if src[0] != 'D' || src[1] != 'r' || src[2] != 'a' || src[3] != 'A' {
+		return nil
+	}
+
+	p := forwardPacketPool.Get().(*[]byte)
+	out := *p
+	if cap(out) < len(src) {
+		// 旧缓冲太小：归还后重新分配
+		*p = (*p)[:0]
+		forwardPacketPool.Put(p)
+		out = make([]byte, len(src))
+	} else {
+		out = out[:len(src)]
+	}
+	copy(out, src)
+
+	// Username (6-37)
+	for i := 6; i < 38; i++ {
+		out[i] = 0
+	}
+	usernameBytes := []byte(username)
+	if len(usernameBytes) > 32 {
+		usernameBytes = usernameBytes[:32]
+	}
+	copy(out[6:38], usernameBytes)
+
+	// DevicePassword (38-47) 转发时必须清空
+	for i := 38; i < 48; i++ {
+		out[i] = 0
+	}
+
+	out[48] = packetType
+	out[49] = devModel
+	out[50] = ssid
+	uint24ToBytes(dmrid, out[51:54])
+
+	// CallSign (54-85)
+	for i := 54; i < 86; i++ {
+		out[i] = 0
+	}
+	callsignBytes := []byte(callsign)
+	if len(callsignBytes) > 32 {
+		callsignBytes = callsignBytes[:32]
+	}
+	copy(out[54:86], callsignBytes)
+
+	// 长度字段保持与实际一致
+	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
+	return out
+}
+
+// ReleaseForwardPacket 归还 PrepareForwardPacket/RewriteForwardHeader 使用的缓冲。
+// 对非 pool / 超大切片安全忽略。
+func ReleaseForwardPacket(b []byte) {
+	if b == nil {
+		return
+	}
+	c := cap(b)
+	if c < DraARLv1HeaderSize || c > 8192 {
+		return
+	}
+	b = b[:0]
+	forwardPacketPool.Put(&b)
+}
+
+// PrepareForwardPacket 优先基于入站完整报文做头字段改写；失败时回退完整编码。
+// 返回值在 fan-out 完成后应调用 ReleaseForwardPacket（Encode 回退分配也可安全调用）。
+func PrepareForwardPacket(src []byte, username, callsign string, ssid, packetType, devModel byte, dmrid uint32, payload []byte) []byte {
+	if payload == nil {
+		payload = []byte{}
+	}
+	if len(src) == DraARLv1HeaderSize+len(payload) {
+		if rewritten := RewriteForwardHeader(src, username, callsign, ssid, packetType, devModel, dmrid); rewritten != nil {
+			return rewritten
+		}
+	}
+	return EncodeDraARLv1(username, "", ssid, packetType, devModel, dmrid, callsign, payload)
 }
 
 // EncodeHeartbeatResponse 编码心跳响应包（填充 CallSign）

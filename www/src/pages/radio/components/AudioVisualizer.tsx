@@ -15,7 +15,6 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   isSending,
 }) => {
   const theme = useTheme()
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const animationRef = useRef<number | null>(null)
   const [bars, setBars] = useState<number[]>(Array(30).fill(2))
 
@@ -26,19 +25,13 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       return
     }
 
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
     let frame = 0
 
     const animate = () => {
       frame++
 
       // 生成随机波形
-      const newBars = bars.map((_, i) => {
+      const newBars = Array.from({ length: 30 }, (_, i) => {
         const baseHeight = isActive ? 8 : 2
         const variation = isActive ? Math.sin(frame * 0.1 + i * 0.3) * 10 + Math.random() * 8 : 0
         return Math.max(2, baseHeight + variation)

@@ -11,6 +11,7 @@ import (
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/pkg/cache"
+	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -107,7 +108,16 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 	})
 }
 
-// GetPublicConfigs 获取公开配置（不需要登录）
+func resolveSystemInfoURLs(cfg *gormdb.SystemInfoConfig) *gormdb.SystemInfoConfig {
+	if cfg == nil {
+		return nil
+	}
+	out := *cfg
+	out.LogoURL = storage.ResolveAssetURL(cfg.LogoURL)
+	out.FaviconURL = storage.ResolveAssetURL(cfg.FaviconURL)
+	return &out
+}
+
 func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 	ctx := c.Request.Context()
 	configCache := cache.GetConfigCache()
@@ -164,7 +174,7 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 		Message: "获取成功",
 		Data: gin.H{
 			"icp":          icpConfig,
-			"systemInfo":   systemConfig,
+			"systemInfo":   resolveSystemInfoURLs(systemConfig),
 			"registration": registrationConfig,
 			"sso_enabled":  config.Get().Keycloak.Enabled,
 			"sso_name":     ssoName,
@@ -591,7 +601,7 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "获取成功",
-		Data:    config,
+		Data:    resolveSystemInfoURLs(config),
 	})
 }
 

@@ -1,4 +1,5 @@
 import { apiClient } from './api';
+import { directUpload } from './storageUpload';
 
 export interface Asset {
   id: number;
@@ -73,25 +74,29 @@ export const createFolder = async (data: CreateFolderRequest): Promise<Asset> =>
   return res.data;
 };
 
-// 上传文件
-export const uploadFile = async (file: File, parentId: number, name?: string, remark?: string): Promise<Asset> => {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('parent_id', parentId.toString());
-  if (name) {
-    formData.append('name', name);
-  }
-  if (remark) {
-    formData.append('remark', remark);
-  }
-
-  const res = await apiClient.postFormData<{ code: number; message: string; data: Asset }>(
-    '/api/assets/upload',
-    formData
+// 上传文件（固定直传：presign → PUT → complete）
+export const uploadFile = async (
+  file: File,
+  parentId: number,
+  name?: string,
+  remark?: string,
+  onProgress?: (percent: number) => void,
+): Promise<Asset> => {
+  const uploaded = await directUpload(file, 'assets', onProgress);
+  const res = await apiClient.post<{ code: number; message: string; data: Asset }>(
+    '/api/assets/complete',
+    {
+      parent_id: parentId,
+      name: name || file.name,
+      remark: remark || undefined,
+      object_key: uploaded.object_key,
+      upload_token: uploaded.upload_token,
+    },
   );
   if (res.code !== 200) {
     throw new Error(res.message || '上传文件失败');
   }
+  onProgress?.(100);
   return res.data;
 };
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   BleProvisioningClient,
   createEmptyProvisionConfig,
@@ -19,51 +19,37 @@ const EMPTY_STATUS: BleProvisionStatus = {
 }
 
 export function useBleProvisioning() {
-  const clientRef = useRef<BleProvisioningClient | null>(null)
   const [status, setStatus] = useState<BleProvisionStatus>(EMPTY_STATUS)
-
-  const ensureClient = () => {
-    if (!clientRef.current) {
-      clientRef.current = new BleProvisioningClient({
-        onStatusChange: setStatus,
-        onDisconnect: () => setStatus(EMPTY_STATUS),
-      })
-    }
-    return clientRef.current
-  }
+  const [client] = useState(() => new BleProvisioningClient({
+    onStatusChange: setStatus,
+    onDisconnect: () => setStatus(EMPTY_STATUS),
+  }))
 
   useEffect(() => {
     return () => {
-      const client = clientRef.current
-      clientRef.current = null
-      if (client) {
-        void client.disconnect(false)
-      }
+      void client.disconnect(false)
     }
-  }, [])
+  }, [client])
+
+  const disconnect = useCallback(async () => {
+    await client.disconnect()
+  }, [client])
 
   return {
-    supported: ensureClient().supported,
+    supported: client.supported,
     status,
     connect: async () => {
-      const client = ensureClient()
       await client.connect()
       return client.getStatus()
     },
-    disconnect: async () => {
-      const client = clientRef.current
-      if (!client) {
-        return
-      }
-      await client.disconnect()
-    },
-    refreshStatus: async () => ensureClient().refreshStatus(),
-    authenticate: async (dynamicCode: string) => ensureClient().authenticate(dynamicCode),
-    loadConfig: async (): Promise<BleProvisionConfig> => ensureClient().loadConfig(),
+    disconnect,
+    refreshStatus: async () => client.refreshStatus(),
+    authenticate: async (dynamicCode: string) => client.authenticate(dynamicCode),
+    loadConfig: async (): Promise<BleProvisionConfig> => client.loadConfig(),
     scanWifi: async (): Promise<{ networks: BleProvisionWifiNetwork[]; partial: boolean; scanInProgress: boolean }> =>
-      ensureClient().scanWifi(),
-    saveWifi: async (config: BleProvisionWifiConfig) => ensureClient().saveWifi(config),
-    saveServer: async (config: BleProvisionServerConfig) => ensureClient().saveServer(config),
+      client.scanWifi(),
+    saveWifi: async (config: BleProvisionWifiConfig) => client.saveWifi(config),
+    saveServer: async (config: BleProvisionServerConfig) => client.saveServer(config),
     createEmptyConfig: (): BleProvisionConfig => createEmptyProvisionConfig(),
   }
 }

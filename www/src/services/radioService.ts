@@ -143,7 +143,7 @@ async function opusFramesToWav(frames: Uint8Array[]): Promise<Blob> {
         try {
           const decoded = decoder.decodeFrame(frame)
           decodedFrames.push(decoded.channelData[0])
-        } catch (e) {
+        } catch {
           // 静默忽略解码失败的帧
         }
       }
@@ -605,7 +605,7 @@ export class RadioService {
    * 设置 SSID
    * @deprecated JWT 认证设备 SSID 固定为 105，此方法不再有效
    */
-  setSSID(ssid: number): void {
+  setSSID(_ssid: number): void {
     console.warn('[RadioService] setSSID is deprecated: JWT devices use fixed SSID 105')
   }
 
@@ -637,7 +637,7 @@ export class RadioService {
    * 获取历史消息
    * @deprecated 不再从本地缓存获取，改由页面组件调用 messageSyncService
    */
-  async getHistoryMessages(groupId?: number): Promise<RadioMessage[]> {
+  async getHistoryMessages(_groupId?: number): Promise<RadioMessage[]> {
     // 不再从 IndexedDB 获取，返回空数组
     // 历史消息由页面组件通过 messageSyncService 获取
     return []
@@ -657,7 +657,7 @@ export class RadioService {
       this.currentVoiceUsername = ''
 
       return true
-    } catch (error) {
+    } catch {
       return false
     }
   }
@@ -713,7 +713,7 @@ export class RadioService {
   /**
    * 处理心跳包
    */
-  private handleHeartbeat(packet: DraARLPacket): void {
+  private handleHeartbeat(_packet: DraARLPacket): void {
     // 心跳包中可能包含服务器状态信息
     // 可以用于更新在线设备列表等
   }
@@ -721,7 +721,7 @@ export class RadioService {
   /**
    * 处理语音包
    */
-  private handleVoicePacket(packet: DraARLPacket, rawData: ArrayBuffer): void {
+  private handleVoicePacket(packet: DraARLPacket, _rawData: ArrayBuffer): void {
     // 更新说话人
     this.updateSpeaker(packet.callsign, packet.ssid)
 
@@ -757,7 +757,7 @@ export class RadioService {
   /**
    * 处理服务器互联语音包
    */
-  private handleServerVoicePacket(packet: DraARLPacket, rawData: ArrayBuffer): void {
+  private handleServerVoicePacket(packet: DraARLPacket, _rawData: ArrayBuffer): void {
     // 服务器互联语音包的 DATA 区域包含原始发送方信息
     // 前 32 字节：原始用户名
     // 32-64 字节：原始呼号

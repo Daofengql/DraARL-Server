@@ -2,7 +2,7 @@
  * 群组选择器组件
  */
 
-import React, { useState, useEffect } from 'react'
+import React from 'react'
 import {
   FormControl,
   Select,

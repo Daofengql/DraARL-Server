@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useState, useEffect, useRef, type ReactNode } from 'react'
 import { apiClient } from '../services'
 import { SITE_CONFIG } from '../config/site'
 
@@ -49,7 +49,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(() => !globalConfig)
   const mounted = useRef(true)
 
-  const fetchConfig = async () => {
+  const fetchConfig = useCallback(async () => {
     // 如果已有全局缓存，直接使用
     if (globalConfig) {
       setConfig(globalConfig)
@@ -82,14 +82,14 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     })()
 
     return pendingRequest
-  }
+  }, [])
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     globalConfig = null
     pendingRequest = null
     setLoading(true)
     await fetchConfig()
-  }
+  }, [fetchConfig])
 
   useEffect(() => {
     mounted.current = true // StrictMode 重新执行时重置
@@ -97,7 +97,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     return () => {
       mounted.current = false
     }
-  }, [])
+  }, [fetchConfig])
 
   // 监听配置更新事件
   useEffect(() => {
@@ -108,7 +108,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('config-updated', handleConfigUpdate)
     }
-  }, [])
+  }, [refresh])
 
   return (
     <ConfigContext.Provider value={{ config, loading, refresh }}>

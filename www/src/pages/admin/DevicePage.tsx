@@ -64,11 +64,12 @@ export function AdminDevicePage() {
   const [paramDialogOpen, setParamDialogOpen] = useState(false)
   const [paramDevice, setParamDevice] = useState<Device | null>(null)
 
+  // Reference data is loaded once; searches and mutations refresh explicitly.
   useEffect(() => {
     loadDevices()
     loadGroups()
     loadUsers()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadDevices = async () => {
     setLoading(true)

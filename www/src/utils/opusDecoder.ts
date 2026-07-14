@@ -308,7 +308,7 @@ export class OpusPlayer {
     if (this.sourceNode) {
       try {
         this.sourceNode.stop()
-      } catch (e) {
+      } catch {
         // 忽略已停止的错误
       }
       this.sourceNode.disconnect()

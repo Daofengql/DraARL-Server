@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Box,
   Paper,
@@ -107,11 +107,7 @@ export function LogsPage() {
   const [eventType, setEventType] = useState('')
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    loadLogs()
-  }, [page, rowsPerPage, eventType])
-
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     setLoading(true)
     try {
       const data = await logService.getList({
@@ -127,7 +123,11 @@ export function LogsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [eventType, page, rowsPerPage])
+
+  useEffect(() => {
+    loadLogs()
+  }, [loadLogs])
 
   const handleSearch = () => {
     setPage(0)

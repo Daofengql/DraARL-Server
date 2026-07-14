@@ -74,7 +74,6 @@ export function syncWifiFormWithNetworks(
 
 export function ProvisionWifiForm({
   value,
-  networks,
   disabled,
   loading,
   helperText,

@@ -54,13 +54,15 @@ export function CertificateApprovalsPage() {
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null)
 
+  // Pagination refreshes every tab; tab switches refresh only the selected tab below.
   useEffect(() => {
     loadAllTabData()
-  }, [page, rowsPerPage])
+  }, [page, rowsPerPage]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Deliberately depends only on the selected tab to avoid duplicate pagination requests.
   useEffect(() => {
     loadTabData(tabValue)
-  }, [tabValue])
+  }, [tabValue]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAllTabData = async () => {
     setLoading(true)

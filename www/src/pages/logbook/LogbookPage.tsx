@@ -155,12 +155,6 @@ interface RadioPresetListResponse {
   data: RadioPreset[]
 }
 
-interface RadioPresetResponse {
-  code: number
-  message: string
-  data: RadioPreset
-}
-
 // 时间转换工具函数
 // UTC 转 BJT：UTC + 8小时 = BJT
 const utcToBjt = (utcTime: string): string => {
@@ -195,13 +189,6 @@ const bjtToUtc = (bjtTime: string): string => {
 const getCurrentUtcTime = (): string => {
   // 返回带秒的格式：YYYY-MM-DD HH:MM:SS
   return new Date().toISOString().slice(0, 19).replace('T', ' ')
-}
-
-// 获取当前BJT时间
-const getCurrentBjtTime = (): string => {
-  const now = new Date()
-  const bjtDate = new Date(now.getTime() + 8 * 60 * 60 * 1000)
-  return bjtDate.toISOString().slice(0, 19).replace('T', ' ')
 }
 
 // 通信模式选项
@@ -292,7 +279,6 @@ export function LogbookPage() {
   // 弹窗状态
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [viewDialogOpen, setViewDialogOpen] = useState(false)
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
   const [currentEntry, setCurrentEntry] = useState<LogbookEntry | null>(null)
 
@@ -385,10 +371,6 @@ export function LogbookPage() {
     setAppliedFilters({ ...searchFilters })
     setPage(1) // 重置到第一页
   }
-
-  // 是否有活动的筛选条件（输入框中）
-  const hasInputFilters = searchFilters.startTime || searchFilters.endTime ||
-    searchFilters.callsign || searchFilters.frequency || searchFilters.mode || searchFilters.username
 
   // 是否有已应用的筛选条件
   const hasActiveFilters = appliedFilters.startTime || appliedFilters.endTime ||
@@ -1269,17 +1251,6 @@ function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets,
       ...prev,
       time_utc: getCurrentUtcTime(),
     }))
-  }
-
-  // 处理同频/中继切换
-  const handleFreqModeChange = (same: boolean) => {
-    setIsRepeater(!same)
-    if (same) {
-      setFormData(prev => ({
-        ...prev,
-        rx_frequency: prev.tx_frequency,
-      }))
-    }
   }
 
   // 处理发射频率变化

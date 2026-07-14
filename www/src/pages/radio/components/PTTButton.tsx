@@ -38,16 +38,6 @@ const pulse = keyframes`
   }
 `
 
-// 呼吸动画
-const breathe = keyframes`
-  0%, 100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
-  }
-`
-
 export const PTTButton: React.FC<PTTButtonProps> = ({
   isPressed,
   onMouseDown,

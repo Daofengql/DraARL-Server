@@ -77,15 +77,17 @@ export function ApprovalsPage() {
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null)
 
+  // Pagination refreshes every tab; tab switches refresh only the selected tab below.
   useEffect(() => {
     // 初始化时一次性加载所有状态的数据
     loadAllTabData()
-  }, [page, rowsPerPage])
+  }, [page, rowsPerPage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 当切换标签时，重新加载对应标签的数据（使用当前页码）
+  // Deliberately depends only on the selected tab to avoid duplicate pagination requests.
   useEffect(() => {
     loadTabData(tabValue)
-  }, [tabValue])
+  }, [tabValue]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAllTabData = async () => {
     setLoading(true)

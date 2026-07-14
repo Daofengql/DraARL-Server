@@ -73,15 +73,23 @@ export const authService = {
     return res.data!
   },
 
-  // 上传操作证（file 可选，用于纯呼号更新场景）
+  // 上传操作证（file 可选，用于纯呼号更新；有文件时固定直传）
   async uploadOperatorCertificate(file?: File, callsign?: string): Promise<OperatorCertificateUpload> {
     const formData = new FormData()
-    if (file) {
-      formData.append('file', file)
-    }
     if (callsign) {
       formData.append('callsign', callsign)
     }
+
+    if (file) {
+      const { directUpload } = await import('./storageUpload')
+      const uploaded = await directUpload(file, 'operator_cert')
+      formData.append('object_key', uploaded.object_key)
+      formData.append('upload_token', uploaded.upload_token)
+      formData.append('file_name', file.name)
+      formData.append('content_type', uploaded.content_type)
+      formData.append('file_size', String(uploaded.size))
+    }
+
     const res = await apiClient.post<BackendResponse<OperatorCertificateUpload>>('/api/upload/operator-certificate', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })

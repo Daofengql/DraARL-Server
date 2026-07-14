@@ -16,9 +16,9 @@ DraARL 支持 ESP32 设备的固件远程升级（OTA），管理员可上传固
 
 ### 上传固件
 
-管理员可通过后台上传固件文件到 MinIO。
+管理员可通过后台上传固件。前端走预签名直传（`POST /api/storage/presign-put` → PUT staging 对象 → `POST /api/firmware/complete`），complete 请求需回传 `upload_token`；服务端校验授权和实际大小、重算 SHA-256，再提升为不可变 final 对象。仍兼容旧的 multipart 代理接口。
 
-**接口**: `POST /api/firmware`
+**接口**: `POST /api/firmware`（multipart 代理） / `POST /api/firmware/complete`（直传落库）
 
 **请求**:
 ```http

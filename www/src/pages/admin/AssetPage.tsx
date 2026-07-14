@@ -77,6 +77,8 @@ export function AssetPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploadFileName, setUploadFileName] = useState('')
   const [uploadFileRemark, setUploadFileRemark] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [editName, setEditName] = useState('')
   const [editRemark, setEditRemark] = useState('')
 
@@ -184,16 +186,31 @@ export function AssetPage() {
       setSnackbar({ open: true, message: '请选择文件', severity: 'error' })
       return
     }
+    if (currentFolderId == null) {
+      setSnackbar({ open: true, message: '请先进入文件夹再上传', severity: 'error' })
+      return
+    }
+    setUploading(true)
+    setUploadProgress(0)
     try {
-      await uploadFile(selectedFile, currentFolderId!, uploadFileName.trim() || undefined, uploadFileRemark.trim() || undefined)
+      await uploadFile(
+        selectedFile,
+        currentFolderId,
+        uploadFileName.trim() || undefined,
+        uploadFileRemark.trim() || undefined,
+        setUploadProgress,
+      )
       setSnackbar({ open: true, message: '上传成功', severity: 'success' })
       setUploadDialogOpen(false)
       setSelectedFile(null)
       setUploadFileName('')
       setUploadFileRemark('')
+      setUploadProgress(0)
       loadAssets()
     } catch (err: any) {
       setSnackbar({ open: true, message: err.message || '上传失败', severity: 'error' })
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -534,14 +551,15 @@ export function AssetPage() {
       </Dialog>
 
       {/* 上传文件对话框 */}
-      <Dialog open={uploadDialogOpen} onClose={() => setUploadDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={uploadDialogOpen} onClose={() => !uploading && setUploadDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>上传文件</DialogTitle>
         <DialogContent>
-          <Button variant="outlined" component="label" fullWidth sx={{ py: 3, mb: 2 }}>
+          <Button variant="outlined" component="label" fullWidth sx={{ py: 3, mb: 2 }} disabled={uploading}>
             {selectedFile ? selectedFile.name : '选择文件'}
             <input
               type="file"
               hidden
+              disabled={uploading}
               onChange={(e) => {
                 const file = e.target.files?.[0]
                 if (file) {
@@ -559,6 +577,7 @@ export function AssetPage() {
             onChange={(e) => setUploadFileName(e.target.value)}
             sx={{ mb: 2 }}
             helperText="不填写则使用原文件名"
+            disabled={uploading}
           />
           <TextField
             margin="dense"
@@ -568,12 +587,21 @@ export function AssetPage() {
             rows={2}
             value={uploadFileRemark}
             onChange={(e) => setUploadFileRemark(e.target.value)}
+            disabled={uploading}
           />
+          {uploading && (
+            <Box sx={{ mt: 2 }}>
+              <LinearProgress variant="determinate" value={uploadProgress} />
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                上传中 {uploadProgress}%
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setUploadDialogOpen(false)}>取消</Button>
-          <Button variant="contained" onClick={handleUploadFile} disabled={!selectedFile}>
-            上传
+          <Button onClick={() => setUploadDialogOpen(false)} disabled={uploading}>取消</Button>
+          <Button variant="contained" onClick={handleUploadFile} disabled={!selectedFile || uploading}>
+            {uploading ? `上传中 ${uploadProgress}%` : '上传'}
           </Button>
         </DialogActions>
       </Dialog>

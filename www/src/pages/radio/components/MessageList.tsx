@@ -25,6 +25,10 @@ import { opusPlayer } from '../../../utils/opusDecoder'
 
 // 缓存配置
 const MAX_CACHE_SIZE = 500 // 最大缓存用户数
+const VOICE_WAVEFORM_HEIGHTS = Array.from(
+  { length: 20 },
+  (_, index) => 4 + ((index * 7 + 3) % 17)
+)
 
 interface MessageListProps {
   messages: RadioMessage[]
@@ -219,10 +223,7 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
   const animationFrameRef = useRef<number>(0)
   const styles = useStaticStyles()
 
-  // 生成随机波形（使用 useMemo 缓存）
-  const bars = useMemo(() =>
-    Array.from({ length: 20 }, () => Math.random() * 16 + 4),
-  [])
+  const bars = VOICE_WAVEFORM_HEIGHTS
 
   const playBlobAudio = useCallback(async (blob: Blob) => {
     const arrayBuffer = await blob.arrayBuffer()
@@ -265,7 +266,8 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
   }, [onPlayStateChange])
 
   const playUrlAudio = useCallback(async (url: string) => {
-    const audioUrl = url.startsWith('http') ? url : `/api/minio/${url}`
+    // 后端返回完整 URL 或站点相对路径（如 /files/...）；不再拼接已废弃的 /api/minio/
+    const audioUrl = url
 
     await opusPlayer.play(audioUrl, () => {
       setIsPlaying(false)
@@ -326,7 +328,7 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
       if (sourceNodeRef.current) {
         try {
           sourceNodeRef.current.stop()
-        } catch (e) {
+        } catch {
           // 忽略
         }
       }
@@ -336,7 +338,7 @@ const VoiceMessage = memo(function VoiceMessage({ duration, isPlayed, isSelf, au
       if (audioContextRef.current) {
         try {
           audioContextRef.current.close()
-        } catch (e) {
+        } catch {
           // 忽略
         }
       }
@@ -528,6 +530,14 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
   ({ messages, currentCallsign, currentSSID, loading, currentUser, hasMore, isLoadingMore, onLoadMore, onVoicePlayStateChange }, ref) => {
     const styles = useStaticStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
+    const setScrollElement = useCallback((node: HTMLDivElement | null) => {
+      scrollRef.current = node
+      if (typeof ref === 'function') {
+        ref(node)
+      } else if (ref) {
+        ref.current = node
+      }
+    }, [ref])
 
     // 使用状态触发重渲染（替代 forceUpdate）
     const [cacheVersion, setCacheVersion] = useState(0)
@@ -579,7 +589,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
         })
         // 使用状态更新触发重渲染
         setCacheVersion(v => v + 1)
-      } catch (error) {
+      } catch {
         userInfoCache.set(key, {})
       }
     }, [])
@@ -682,6 +692,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
 
     // 预计算消息项数据（使用 useMemo 优化，包含 cacheVersion 触发更新）
     const messageItems = useMemo(() => {
+      void cacheVersion
       return messages.map((message, index) => {
         const isMatchCallsign = String(message.senderCallsign).toUpperCase() === String(currentCallsign).toUpperCase()
         const isMatchSSID = String(message.senderSSID) === String(currentSSID)
@@ -743,7 +754,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     }
 
     return (
-      <Box ref={scrollRef} sx={styles.root} onScroll={handleScroll}>
+      <Box ref={setScrollElement} sx={styles.root} onScroll={handleScroll}>
         {/* 加载更多指示器 */}
         {hasMore && (
           <Box sx={{ textAlign: 'center', py: 1 }}>

@@ -1,4 +1,4 @@
-import { Box, Paper, TextField, Typography } from '@mui/material'
+import { Box, Divider, FormControlLabel, Paper, Switch, TextField, Typography } from '@mui/material'
 import {
   ADC_GAIN_MAX_DB,
   ADC_GAIN_MIN_DB,
@@ -15,9 +15,10 @@ import {
 interface AudioConfigCardProps {
   value: RadioConfigForm
   onChange: (next: RadioConfigForm) => void
+  showIOPolarity: boolean
 }
 
-export function AudioConfigCard({ value, onChange }: AudioConfigCardProps) {
+export function AudioConfigCard({ value, onChange, showIOPolarity }: AudioConfigCardProps) {
   const updateAudioNumber = (
     field: 'adcGainDb' | 'adcVolume' | 'dacVolume',
     rawValue: string,
@@ -71,6 +72,34 @@ export function AudioConfigCard({ value, onChange }: AudioConfigCardProps) {
           helperText={`${AUDIO_VOLUME_MIN}-${AUDIO_VOLUME_MAX}`}
         />
       </Box>
+      {showIOPolarity && (
+        <>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            GPIO 极性
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 0, sm: 3 } }}>
+            <FormControlLabel
+              control={(
+                <Switch
+                  checked={value.sqlActiveHigh}
+                  onChange={(event) => onChange({ ...value, sqlActiveHigh: event.target.checked })}
+                />
+              )}
+              label="SQL 高电平触发"
+            />
+            <FormControlLabel
+              control={(
+                <Switch
+                  checked={value.pttActiveHigh}
+                  onChange={(event) => onChange({ ...value, pttActiveHigh: event.target.checked })}
+                />
+              )}
+              label="PTT 高电平发送"
+            />
+          </Box>
+        </>
+      )}
     </Paper>
   )
 }

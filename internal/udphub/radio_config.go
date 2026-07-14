@@ -25,6 +25,8 @@ const (
 	ConfigKeyADCGainDB             = "adc_gain_db"
 	ConfigKeyADCVolume             = "adc_volume"
 	ConfigKeyDACVolume             = "dac_volume"
+	ConfigKeySQLActiveHigh         = "sql_active_high"
+	ConfigKeyPTTActiveHigh         = "ptt_active_high"
 	RFGuardSingleTxLimitMinS       = 1
 	RFGuardSingleTxLimitMaxS       = 1800
 	RFGuardWindowMinS              = 5
@@ -42,6 +44,8 @@ const (
 	AudioVolumeMax                 = 100
 	ADCVolumeDefault               = 100
 	DACVolumeDefault               = 80
+	SQLActiveHighDefault           = false
+	PTTActiveHighDefault           = false
 )
 
 var dcsTonePattern = regexp.MustCompile(`^(\d{3})([NI])$`)
@@ -99,6 +103,12 @@ func NormalizeDeviceConfigs(configs map[string]string) map[string]string {
 	}
 	if value, ok := normalized[ConfigKeyDACVolume]; ok {
 		normalized[ConfigKeyDACVolume] = normalizeAudioVolume(value, DACVolumeDefault)
+	}
+	if value, ok := normalized[ConfigKeySQLActiveHigh]; ok {
+		normalized[ConfigKeySQLActiveHigh] = normalizeActiveHigh(value, SQLActiveHighDefault)
+	}
+	if value, ok := normalized[ConfigKeyPTTActiveHigh]; ok {
+		normalized[ConfigKeyPTTActiveHigh] = normalizeActiveHigh(value, PTTActiveHighDefault)
 	}
 
 	return normalized
@@ -367,6 +377,20 @@ func normalizeAudioVolume(raw string, defaultValue int) string {
 		value = AudioVolumeMax
 	}
 	return strconv.Itoa(value)
+}
+
+func normalizeActiveHigh(raw string, defaultValue bool) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "1", "true", "high", "active_high":
+		return "1"
+	case "0", "false", "low", "active_low":
+		return "0"
+	default:
+		if defaultValue {
+			return "1"
+		}
+		return "0"
+	}
 }
 
 func toneModeToByte(mode string) byte {

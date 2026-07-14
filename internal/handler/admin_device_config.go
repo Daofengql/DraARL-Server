@@ -126,6 +126,12 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	if req.DACVolume != nil {
 		configs[udphub.ConfigKeyDACVolume] = *req.DACVolume
 	}
+	if req.SQLActiveHigh != nil {
+		configs[udphub.ConfigKeySQLActiveHigh] = *req.SQLActiveHigh
+	}
+	if req.PTTActiveHigh != nil {
+		configs[udphub.ConfigKeyPTTActiveHigh] = *req.PTTActiveHigh
+	}
 
 	if len(configs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{

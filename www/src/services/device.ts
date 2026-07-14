@@ -226,4 +226,6 @@ export interface DeviceConfig {
   adc_gain_db?: string                 // ADC 增益 (0-24 dB)
   adc_volume?: string                  // ADC 音量 (0-100)
   dac_volume?: string                  // DAC 音量 (0-100)
+  sql_active_high?: string             // SQL 触发极性 (0=低有效, 1=高有效)
+  ptt_active_high?: string             // PTT 激活极性 (0=低有效, 1=高有效)
 }

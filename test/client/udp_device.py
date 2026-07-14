@@ -519,6 +519,8 @@ class UDPDeviceClient(BaseClient):
                 TLVType.ADC_GAIN_DB: "adc_gain_db",
                 TLVType.ADC_VOLUME: "adc_volume",
                 TLVType.DAC_VOLUME: "dac_volume",
+                TLVType.SQL_ACTIVE_HIGH: "sql_active_high",
+                TLVType.PTT_ACTIVE_HIGH: "ptt_active_high",
             }.get(tlv_type, str(tlv_type))
             result[name] = value
         return result
@@ -544,5 +546,7 @@ class UDPDeviceClient(BaseClient):
             "adc_gain_db": TLVType.ADC_GAIN_DB,
             "adc_volume": TLVType.ADC_VOLUME,
             "dac_volume": TLVType.DAC_VOLUME,
+            "sql_active_high": TLVType.SQL_ACTIVE_HIGH,
+            "ptt_active_high": TLVType.PTT_ACTIVE_HIGH,
         }
         return mapping.get(key, 0)

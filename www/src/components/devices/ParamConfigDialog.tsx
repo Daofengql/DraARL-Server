@@ -20,6 +20,7 @@ import {
   getDevModelName,
   getDeviceConfigTabs,
   supportsAudioConfig,
+  supportsBoardIOPolarityConfig,
 } from '../../utils/deviceModel'
 import {
   bandwidthToLevel,
@@ -34,6 +35,7 @@ import {
   normalizeSquelchLevel,
   normalizeAdcGainDb,
   normalizeAudioVolume,
+  normalizeActiveHigh,
   normalizeRfGuardEnabled,
   normalizeRfGuardMaxTxInWindow,
   normalizeRfGuardSingleTxLimit,
@@ -124,6 +126,8 @@ export function ParamConfigDialog({
         adcGainDb: normalizeAdcGainDb(Number(config.adc_gain_db)),
         adcVolume: normalizeAudioVolume(Number(config.adc_volume), ADC_VOLUME_DEFAULT),
         dacVolume: normalizeAudioVolume(Number(config.dac_volume), DAC_VOLUME_DEFAULT),
+        sqlActiveHigh: normalizeActiveHigh(config.sql_active_high),
+        pttActiveHigh: normalizeActiveHigh(config.ptt_active_high),
       })
     } catch (error) {
       if (loadRequestRef.current !== requestId) {
@@ -215,6 +219,10 @@ export function ParamConfigDialog({
       adc_gain_db: String(normalizeAdcGainDb(radioConfig.adcGainDb)),
       adc_volume: String(normalizeAudioVolume(radioConfig.adcVolume, ADC_VOLUME_DEFAULT)),
       dac_volume: String(normalizeAudioVolume(radioConfig.dacVolume, DAC_VOLUME_DEFAULT)),
+      ...(supportsBoardIOPolarityConfig(deviceModel) ? {
+        sql_active_high: radioConfig.sqlActiveHigh ? '1' : '0',
+        ptt_active_high: radioConfig.pttActiveHigh ? '1' : '0',
+      } : {}),
     })
   }
 
@@ -289,7 +297,11 @@ export function ParamConfigDialog({
 
           {currentTab === 'system' && (
             supportsAudioConfig(deviceModel) ? (
-              <AudioConfigCard value={radioConfig} onChange={setRadioConfig} />
+              <AudioConfigCard
+                value={radioConfig}
+                onChange={setRadioConfig}
+                showIOPolarity={supportsBoardIOPolarityConfig(deviceModel)}
+              />
             ) : (
               <Alert severity="info">当前设备型号暂无可配置的系统参数。</Alert>
             )

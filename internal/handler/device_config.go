@@ -99,6 +99,8 @@ type UpdateDeviceConfigRequest struct {
 	ADCGainDB             *string `json:"adc_gain_db"`                 // ADC 增益 (0-24 dB)
 	ADCVolume             *string `json:"adc_volume"`                  // ADC 音量 (0-100)
 	DACVolume             *string `json:"dac_volume"`                  // DAC 音量 (0-100)
+	SQLActiveHigh         *string `json:"sql_active_high"`             // SQL 触发极性 (0=低有效, 1=高有效)
+	PTTActiveHigh         *string `json:"ptt_active_high"`             // PTT 激活极性 (0=低有效, 1=高有效)
 }
 
 // UpdateDeviceConfig 更新设备配置
@@ -213,6 +215,12 @@ func UpdateDeviceConfig(c *gin.Context) {
 	}
 	if req.DACVolume != nil {
 		configs[udphub.ConfigKeyDACVolume] = *req.DACVolume
+	}
+	if req.SQLActiveHigh != nil {
+		configs[udphub.ConfigKeySQLActiveHigh] = *req.SQLActiveHigh
+	}
+	if req.PTTActiveHigh != nil {
+		configs[udphub.ConfigKeyPTTActiveHigh] = *req.PTTActiveHigh
 	}
 
 	if len(configs) == 0 {

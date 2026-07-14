@@ -307,6 +307,8 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x11 | adc_gain_db | 1 | uint8 | ADC 增益 (0-24 dB，按最近的 3 dB 档位应用) |
 | 0x12 | adc_volume | 1 | uint8 | ADC 音量 (0-100) |
 | 0x13 | dac_volume | 1 | uint8 | DAC 音量 (0-100) |
+| 0x14 | sql_active_high | 1 | uint8 | SQL 触发极性 (0=低电平触发, 1=高电平触发，仅 DevModel 2) |
+| 0x15 | ptt_active_high | 1 | uint8 | PTT 激活极性 (0=低电平发送, 1=高电平发送，仅 DevModel 2) |
 
 > `adc_gain_db / adc_volume / dac_volume` 是 ESP32 通用音频配置，适用于有射频版 (`DevModel=1`) 和无射频版 (`DevModel=2`)，不依赖 SA818 模块。
 

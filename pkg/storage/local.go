@@ -61,7 +61,7 @@ func (s *localStorage) resolvePath(key string) (string, error) {
 		return "", fmt.Errorf("非法对象键")
 	}
 	// 统一为 / 分隔，去掉前导 /
-	clean := strings.TrimLeft(filepath.ToSlash(key), "/")
+	clean := strings.TrimLeft(strings.ReplaceAll(key, "\\", "/"), "/")
 	if clean == "" || clean == "." {
 		return "", fmt.Errorf("非法对象键")
 	}

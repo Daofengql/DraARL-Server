@@ -45,7 +45,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
           # 关闭默认缓存，避免跨平台编译时的一些潜在问题
           cache: false
 

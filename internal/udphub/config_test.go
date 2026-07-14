@@ -1,6 +1,11 @@
 package udphub
 
-import "testing"
+import (
+	"testing"
+
+	"draarl/internal/models"
+	"draarl/internal/protocol"
+)
 
 func TestNormalizeDeviceConfigsDoesNotHydrateNewToneFieldsFromLegacyOnly(t *testing.T) {
 	configs := NormalizeDeviceConfigs(map[string]string{
@@ -12,6 +17,9 @@ func TestNormalizeDeviceConfigsDoesNotHydrateNewToneFieldsFromLegacyOnly(t *test
 		ConfigKeyRFGuardSingleTxLimitS: "9999",
 		ConfigKeyRFGuardWindowS:        "1",
 		ConfigKeyRFGuardMaxTxInWindowS: "9999",
+		ConfigKeyADCGainDB:             "20",
+		ConfigKeyADCVolume:             "-1",
+		ConfigKeyDACVolume:             "999",
 	})
 
 	if _, ok := configs[ConfigKeyRxToneMode]; ok {
@@ -38,6 +46,15 @@ func TestNormalizeDeviceConfigsDoesNotHydrateNewToneFieldsFromLegacyOnly(t *test
 	if configs[ConfigKeyRFGuardMaxTxInWindowS] != "5" {
 		t.Fatalf("expected rf guard max tx in window clamp to window size 5, got %q", configs[ConfigKeyRFGuardMaxTxInWindowS])
 	}
+	if configs[ConfigKeyADCGainDB] != "21" {
+		t.Fatalf("expected adc gain 20 dB to normalize to 21 dB, got %q", configs[ConfigKeyADCGainDB])
+	}
+	if configs[ConfigKeyADCVolume] != "0" {
+		t.Fatalf("expected adc volume to clamp to 0, got %q", configs[ConfigKeyADCVolume])
+	}
+	if configs[ConfigKeyDACVolume] != "100" {
+		t.Fatalf("expected dac volume to clamp to 100, got %q", configs[ConfigKeyDACVolume])
+	}
 }
 
 func TestEncodeDecodeTLVSupportsDigitalToneCompatibility(t *testing.T) {
@@ -55,6 +72,9 @@ func TestEncodeDecodeTLVSupportsDigitalToneCompatibility(t *testing.T) {
 		ConfigKeyRFGuardSingleTxLimitS: "45",
 		ConfigKeyRFGuardWindowS:        "600",
 		ConfigKeyRFGuardMaxTxInWindowS: "90",
+		ConfigKeyADCGainDB:             "20",
+		ConfigKeyADCVolume:             "75",
+		ConfigKeyDACVolume:             "80",
 	}
 
 	encoded, _ := encodeTLV(original)
@@ -95,6 +115,15 @@ func TestEncodeDecodeTLVSupportsDigitalToneCompatibility(t *testing.T) {
 	}
 	if decoded[ConfigKeyRFGuardMaxTxInWindowS] != "90" {
 		t.Fatalf("expected rf guard max tx in window to round-trip as 90, got %q", decoded[ConfigKeyRFGuardMaxTxInWindowS])
+	}
+	if decoded[ConfigKeyADCGainDB] != "21" {
+		t.Fatalf("expected normalized adc gain to round-trip as 21, got %q", decoded[ConfigKeyADCGainDB])
+	}
+	if decoded[ConfigKeyADCVolume] != "75" {
+		t.Fatalf("expected adc volume to round-trip as 75, got %q", decoded[ConfigKeyADCVolume])
+	}
+	if decoded[ConfigKeyDACVolume] != "80" {
+		t.Fatalf("expected dac volume to round-trip as 80, got %q", decoded[ConfigKeyDACVolume])
 	}
 }
 
@@ -162,5 +191,38 @@ func TestBuildConfigSnapshotForOverwriteFillsMissingKeys(t *testing.T) {
 	}
 	if snapshot[ConfigKeyRFGuardMaxTxInWindowS] != "60" {
 		t.Fatalf("expected missing rf guard max tx in window to fallback to 60, got %q", snapshot[ConfigKeyRFGuardMaxTxInWindowS])
+	}
+	if snapshot[ConfigKeyADCGainDB] != "18" {
+		t.Fatalf("expected missing adc gain to fallback to 18, got %q", snapshot[ConfigKeyADCGainDB])
+	}
+	if snapshot[ConfigKeyADCVolume] != "100" {
+		t.Fatalf("expected missing adc volume to fallback to 100, got %q", snapshot[ConfigKeyADCVolume])
+	}
+	if snapshot[ConfigKeyDACVolume] != "80" {
+		t.Fatalf("expected missing dac volume to fallback to 80, got %q", snapshot[ConfigKeyDACVolume])
+	}
+}
+
+func TestAudioConfigsAreLimitedToSA818Profile(t *testing.T) {
+	configs := map[string]string{
+		ConfigKeyADCGainDB: "20",
+		ConfigKeyADCVolume: "90",
+		ConfigKeyDACVolume: "80",
+	}
+
+	sa818Configs := filterConfigsForDevice(&models.Device{
+		DevModel: protocol.DraARLDevModelESP32Radio,
+	}, configs)
+	if sa818Configs[ConfigKeyADCGainDB] != "21" ||
+		sa818Configs[ConfigKeyADCVolume] != "90" ||
+		sa818Configs[ConfigKeyDACVolume] != "80" {
+		t.Fatalf("expected normalized audio configs for SA818 profile, got %#v", sa818Configs)
+	}
+
+	noRadioConfigs := filterConfigsForDevice(&models.Device{
+		DevModel: protocol.DraARLDevModelESP32NoRadio,
+	}, configs)
+	if len(noRadioConfigs) != 0 {
+		t.Fatalf("expected audio configs to be filtered for non-SA818 model, got %#v", noRadioConfigs)
 	}
 }

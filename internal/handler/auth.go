@@ -85,6 +85,14 @@ func Login(c *gin.Context) {
 
 	log.Printf("登录请求: username=%s", req.Username)
 
+	if !VerifyCaptchaCode(req.CaptchaID, req.CaptchaCode) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "图片验证码错误或已过期",
+		})
+		return
+	}
+
 	// 使用 GORM 查询用户（支持用户名或邮箱）
 	repo := gormdb.NewUserRepository()
 	user, err := repo.GetUserByNameOrEmail(req.Username)
@@ -548,6 +556,8 @@ func GetUsers(c *gin.Context) {
 
 	if limit <= 0 {
 		limit = 20
+	} else if limit > 100 {
+		limit = 100
 	}
 	if page <= 0 {
 		page = 1

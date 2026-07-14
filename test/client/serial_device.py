@@ -105,6 +105,9 @@ class SerialClient(BaseClient):
             TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "30",
             TLVType.RF_GUARD_WINDOW_S: "300",
             TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "60",
+            TLVType.ADC_GAIN_DB: "18",
+            TLVType.ADC_VOLUME: "100",
+            TLVType.DAC_VOLUME: "80",
         }
 
         # 配置更新回调
@@ -609,6 +612,9 @@ class SerialClient(BaseClient):
                 TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "rf_guard_single_tx_limit_s",
                 TLVType.RF_GUARD_WINDOW_S: "rf_guard_window_s",
                 TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "rf_guard_max_tx_in_window_s",
+                TLVType.ADC_GAIN_DB: "adc_gain_db",
+                TLVType.ADC_VOLUME: "adc_volume",
+                TLVType.DAC_VOLUME: "dac_volume",
             }.get(tlv_type, str(tlv_type))
             result[name] = value
         return result
@@ -631,5 +637,8 @@ class SerialClient(BaseClient):
             "rf_guard_single_tx_limit_s": TLVType.RF_GUARD_SINGLE_TX_LIMIT_S,
             "rf_guard_window_s": TLVType.RF_GUARD_WINDOW_S,
             "rf_guard_max_tx_in_window_s": TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S,
+            "adc_gain_db": TLVType.ADC_GAIN_DB,
+            "adc_volume": TLVType.ADC_VOLUME,
+            "dac_volume": TLVType.DAC_VOLUME,
         }
         return mapping.get(key, 0)

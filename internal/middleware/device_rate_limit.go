@@ -35,9 +35,8 @@ type DeviceRateLimiter struct {
 // 全局限速器
 var deviceRateLimiter *DeviceRateLimiter
 
-// InitDeviceRateLimiter 初始化设备接口限速器
-func InitDeviceRateLimiter() {
-	deviceRateLimiter = &DeviceRateLimiter{
+func newDeviceRateLimiter() *DeviceRateLimiter {
+	return &DeviceRateLimiter{
 		limits: make(map[string]*RateLimitEntry),
 		rules: map[string]RateLimitRule{
 			"pre-check-ip": {
@@ -54,15 +53,15 @@ func InitDeviceRateLimiter() {
 			},
 			"request-code-ip": {
 				Key:         "ip",
-				Limit:       1,
-				Window:      10 * time.Second,
-				Description: "同一 IP 每 10 秒 1 次",
+				Limit:       30,
+				Window:      time.Minute,
+				Description: "同一 IP 每分钟 30 次",
 			},
 			"request-code-mac": {
 				Key:         "mac",
-				Limit:       1,
+				Limit:       10,
 				Window:      time.Minute,
-				Description: "同一 MAC 每分钟 1 次",
+				Description: "同一 MAC 每分钟 10 次",
 			},
 			"confirm-bind-mac": {
 				Key:         "mac",
@@ -72,9 +71,9 @@ func InitDeviceRateLimiter() {
 			},
 			"bind-user": {
 				Key:         "user",
-				Limit:       5,
+				Limit:       20,
 				Window:      time.Minute,
-				Description: "同一用户每分钟 5 次",
+				Description: "同一用户每分钟 20 次",
 			},
 			"submit-config-user": {
 				Key:         "user",
@@ -102,7 +101,11 @@ func InitDeviceRateLimiter() {
 			},
 		},
 	}
+}
 
+// InitDeviceRateLimiter 初始化设备接口限速器
+func InitDeviceRateLimiter() {
+	deviceRateLimiter = newDeviceRateLimiter()
 	// 启动清理协程
 	go deviceRateLimiter.cleanup()
 }

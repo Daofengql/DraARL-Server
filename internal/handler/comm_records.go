@@ -753,7 +753,8 @@ func GetUserCommTrend(c *gin.Context) {
 	}
 
 	// 计算30天前的日期
-	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+	thirtyDaysAgoTime := time.Now().AddDate(0, 0, -30)
+	thirtyDaysAgo := thirtyDaysAgoTime.Format("2006-01-02")
 
 	var trends []DailyCommStats
 
@@ -764,7 +765,7 @@ func GetUserCommTrend(c *gin.Context) {
 		Select(`DATE_FORMAT(cr.start_time, '%Y-%m-%d') as date, COUNT(cr.id) as count, COALESCE(SUM(cr.duration_ms), 0) as duration`).
 		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
 		Where("d.owner_id = ? OR cr.user_id = ?", user.ID, user.ID).
-		Where("DATE_FORMAT(cr.start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
+		Where("cr.start_time >= ?", thirtyDaysAgoTime).
 		Group("DATE_FORMAT(cr.start_time, '%Y-%m-%d')").
 		Order("date ASC").
 		Scan(&trends).Error
@@ -817,14 +818,15 @@ func GetSystemCommStats(c *gin.Context) {
 // GetSystemCommTrend 获取系统近30天通信趋势（管理员）
 func GetSystemCommTrend(c *gin.Context) {
 	// 计算30天前的日期
-	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).Format("2006-01-02")
+	thirtyDaysAgoTime := time.Now().AddDate(0, 0, -30)
+	thirtyDaysAgo := thirtyDaysAgoTime.Format("2006-01-02")
 
 	var trends []DailyCommStats
 
 	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
 	err := gormdb.Get().Table("comm_records").
 		Select(`DATE_FORMAT(start_time, '%Y-%m-%d') as date, COUNT(id) as count, COALESCE(SUM(duration_ms), 0) as duration`).
-		Where("DATE_FORMAT(start_time, '%Y-%m-%d') >= ?", thirtyDaysAgo).
+		Where("start_time >= ?", thirtyDaysAgoTime).
 		Group("DATE_FORMAT(start_time, '%Y-%m-%d')").
 		Order("date ASC").
 		Scan(&trends).Error

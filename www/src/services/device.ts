@@ -223,4 +223,7 @@ export interface DeviceConfig {
   rf_guard_single_tx_limit_s?: string // 单次发射上限 (秒)
   rf_guard_window_s?: string          // 统计窗口 (秒)
   rf_guard_max_tx_in_window_s?: string // 窗口内累计发射上限 (秒)
+  adc_gain_db?: string                 // ADC 增益 (0-24 dB)
+  adc_volume?: string                  // ADC 音量 (0-100)
+  dac_volume?: string                  // DAC 音量 (0-100)
 }

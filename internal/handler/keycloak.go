@@ -118,20 +118,12 @@ func GetSSOID(openID string, provider string) string {
 // FindUserBySSOID 查找绑定指定SSO的用户
 func FindUserBySSOID(provider, ssoID string) *gormdb.User {
 	repo := gormdb.NewUserRepository()
-	users, _, err := repo.ListUsers(1000, 1) // 获取用户列表
+	user, err := repo.FindUserBySSOID(provider, ssoID)
 	if err != nil {
+		log.Printf("查找 SSO 绑定用户失败: provider=%s err=%v", provider, err)
 		return nil
 	}
-
-	targetBinding := fmt.Sprintf("%s:%s", provider, ssoID)
-
-	for _, user := range users {
-		if strings.Contains(user.OpenID, targetBinding) {
-			return user
-		}
-	}
-
-	return nil
+	return user
 }
 
 // ============== State 管理 ==============

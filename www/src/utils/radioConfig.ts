@@ -12,6 +12,14 @@ export const RF_GUARD_ENABLED_DEFAULT = true
 export const RF_GUARD_SINGLE_TX_LIMIT_DEFAULT_S = 30
 export const RF_GUARD_WINDOW_DEFAULT_S = 300
 export const RF_GUARD_MAX_TX_IN_WINDOW_DEFAULT_S = 60
+export const ADC_GAIN_MIN_DB = 0
+export const ADC_GAIN_MAX_DB = 24
+export const ADC_GAIN_STEP_DB = 3
+export const ADC_GAIN_DEFAULT_DB = 18
+export const AUDIO_VOLUME_MIN = 0
+export const AUDIO_VOLUME_MAX = 100
+export const ADC_VOLUME_DEFAULT = 100
+export const DAC_VOLUME_DEFAULT = 80
 
 export interface ToneSelection {
   mode: ToneMode
@@ -31,6 +39,9 @@ export interface RadioConfigForm {
   rfGuardSingleTxLimitS: number
   rfGuardWindowS: number
   rfGuardMaxTxInWindowS: number
+  adcGainDb: number
+  adcVolume: number
+  dacVolume: number
 }
 
 export interface FrequencyCardCapabilities {
@@ -106,6 +117,9 @@ const SA818_PROFILE: FrequencyCardProfile = {
       'rf_guard_single_tx_limit_s',
       'rf_guard_window_s',
       'rf_guard_max_tx_in_window_s',
+      'adc_gain_db',
+      'adc_volume',
+      'dac_volume',
     ],
   },
 }
@@ -124,6 +138,9 @@ export function getDefaultRadioConfig(): RadioConfigForm {
     rfGuardSingleTxLimitS: RF_GUARD_SINGLE_TX_LIMIT_DEFAULT_S,
     rfGuardWindowS: RF_GUARD_WINDOW_DEFAULT_S,
     rfGuardMaxTxInWindowS: RF_GUARD_MAX_TX_IN_WINDOW_DEFAULT_S,
+    adcGainDb: ADC_GAIN_DEFAULT_DB,
+    adcVolume: ADC_VOLUME_DEFAULT,
+    dacVolume: DAC_VOLUME_DEFAULT,
   }
 }
 
@@ -265,6 +282,21 @@ export function normalizeSquelchLevel(level: number): number {
     return 0
   }
   return Math.max(0, Math.min(8, Math.round(level)))
+}
+
+export function normalizeAdcGainDb(level: number): number {
+  if (!Number.isFinite(level)) {
+    return ADC_GAIN_DEFAULT_DB
+  }
+  const clamped = Math.max(ADC_GAIN_MIN_DB, Math.min(ADC_GAIN_MAX_DB, Math.round(level)))
+  return Math.round(clamped / ADC_GAIN_STEP_DB) * ADC_GAIN_STEP_DB
+}
+
+export function normalizeAudioVolume(level: number, defaultValue: number): number {
+  if (!Number.isFinite(level)) {
+    return defaultValue
+  }
+  return Math.max(AUDIO_VOLUME_MIN, Math.min(AUDIO_VOLUME_MAX, Math.round(level)))
 }
 
 export function normalizeRfGuardEnabled(value?: string | boolean): boolean {

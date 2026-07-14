@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"draarl/internal/common"
 	"draarl/internal/config"
@@ -28,6 +29,7 @@ type Server struct {
 func New(cfg *config.Configuration) *Server {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	engine.Use(securityHeadersMiddleware())
 	engine.Use(accessLogMiddleware())
 
 	allowedOrigins := cfg.GetAllowedOrigins()
@@ -442,8 +444,12 @@ func initSiteConfigs(cfg *config.Configuration) {
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%s", s.config.Web.Port)
 	s.server = &http.Server{
-		Addr:    addr,
-		Handler: s.engine,
+		Addr:              addr,
+		Handler:           s.engine,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("HTTP 服务器启动在 %s", addr)
@@ -523,6 +529,16 @@ func abortOriginNotAllowed(c *gin.Context) {
 		"code":    403,
 		"message": "origin_not_allowed",
 	})
+}
+
+func securityHeadersMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+		c.Writer.Header().Set("X-Frame-Options", "DENY")
+		c.Writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Writer.Header().Set("Permissions-Policy", "camera=(), geolocation=(self), microphone=(self)")
+		c.Next()
+	}
 }
 
 func requestSourceOrigin(c *gin.Context) (string, bool) {

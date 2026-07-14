@@ -56,3 +56,26 @@ func TestCaptchaRateLimitRejectsFrequentRequests(t *testing.T) {
 		t.Fatalf("expected third request to be rate limited, got %d", recorder.Code)
 	}
 }
+
+func TestDynamicCodeRateLimitDefaults(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	tests := []struct {
+		name   string
+		limit  int
+		window time.Duration
+	}{
+		{name: "request-code-ip", limit: 30, window: time.Minute},
+		{name: "request-code-mac", limit: 10, window: time.Minute},
+		{name: "bind-user", limit: 20, window: time.Minute},
+	}
+
+	for _, tt := range tests {
+		rule, ok := limiter.rules[tt.name]
+		if !ok {
+			t.Fatalf("missing rate limit rule %q", tt.name)
+		}
+		if rule.Limit != tt.limit || rule.Window != tt.window {
+			t.Errorf("rule %q = %d/%s, want %d/%s", tt.name, rule.Limit, rule.Window, tt.limit, tt.window)
+		}
+	}
+}

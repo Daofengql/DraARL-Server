@@ -23,12 +23,16 @@ import {
 import {
   bandwidthToLevel,
   buildToneSelection,
+  ADC_VOLUME_DEFAULT,
+  DAC_VOLUME_DEFAULT,
   getDefaultRadioConfig,
   hzToMHz,
   levelToBandwidth,
   levelToPower,
   mhzToHz,
   normalizeSquelchLevel,
+  normalizeAdcGainDb,
+  normalizeAudioVolume,
   normalizeRfGuardEnabled,
   normalizeRfGuardMaxTxInWindow,
   normalizeRfGuardSingleTxLimit,
@@ -115,6 +119,9 @@ export function ParamConfigDialog({
           Number(config.rf_guard_max_tx_in_window_s),
           Number(config.rf_guard_window_s),
         ),
+        adcGainDb: normalizeAdcGainDb(Number(config.adc_gain_db)),
+        adcVolume: normalizeAudioVolume(Number(config.adc_volume), ADC_VOLUME_DEFAULT),
+        dacVolume: normalizeAudioVolume(Number(config.dac_volume), DAC_VOLUME_DEFAULT),
       })
     } catch (error) {
       if (loadRequestRef.current !== requestId) {
@@ -179,6 +186,9 @@ export function ParamConfigDialog({
         rf_guard_max_tx_in_window_s: String(
           normalizeRfGuardMaxTxInWindow(radioConfig.rfGuardMaxTxInWindowS, radioConfig.rfGuardWindowS),
         ),
+        adc_gain_db: String(normalizeAdcGainDb(radioConfig.adcGainDb)),
+        adc_volume: String(normalizeAudioVolume(radioConfig.adcVolume, ADC_VOLUME_DEFAULT)),
+        dac_volume: String(normalizeAudioVolume(radioConfig.dacVolume, DAC_VOLUME_DEFAULT)),
       }
 
       await deviceService.updateConfig(deviceId, config)

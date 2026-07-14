@@ -96,6 +96,9 @@ type UpdateDeviceConfigRequest struct {
 	RFGuardSingleTxLimitS *string `json:"rf_guard_single_tx_limit_s"`  // 单次发射上限 (秒)
 	RFGuardWindowS        *string `json:"rf_guard_window_s"`           // 统计窗口 (秒)
 	RFGuardMaxTxInWindowS *string `json:"rf_guard_max_tx_in_window_s"` // 窗口内累计发射上限 (秒)
+	ADCGainDB             *string `json:"adc_gain_db"`                 // ADC 增益 (0-24 dB)
+	ADCVolume             *string `json:"adc_volume"`                  // ADC 音量 (0-100)
+	DACVolume             *string `json:"dac_volume"`                  // DAC 音量 (0-100)
 }
 
 // UpdateDeviceConfig 更新设备配置
@@ -201,6 +204,15 @@ func UpdateDeviceConfig(c *gin.Context) {
 	}
 	if req.RFGuardMaxTxInWindowS != nil {
 		configs[udphub.ConfigKeyRFGuardMaxTxInWindowS] = *req.RFGuardMaxTxInWindowS
+	}
+	if req.ADCGainDB != nil {
+		configs[udphub.ConfigKeyADCGainDB] = *req.ADCGainDB
+	}
+	if req.ADCVolume != nil {
+		configs[udphub.ConfigKeyADCVolume] = *req.ADCVolume
+	}
+	if req.DACVolume != nil {
+		configs[udphub.ConfigKeyDACVolume] = *req.DACVolume
 	}
 
 	if len(configs) == 0 {

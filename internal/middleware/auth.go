@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	gormdb "draarl/internal/gormdb"
 	"draarl/pkg/jwt"
+
+	"github.com/gin-gonic/gin"
 )
 
 // AuthMiddleware JWT 认证中间件
@@ -52,26 +53,8 @@ func AuthMiddleware() gin.HandlerFunc {
 		c.Set("username", claims.Username)
 		c.Set("roles", claims.Roles)
 
-		c.Next()
-	}
-}
-
-// RequireAdmin 要求管理员权限的中间件
-func RequireAdmin() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		username, exists := c.Get("username")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "未认证",
-			})
-			c.Abort()
-			return
-		}
-
-		// 从数据库获取用户信息
 		repo := gormdb.NewUserRepository()
-		user, err := repo.GetUserByName(username.(string))
+		user, err := repo.GetUserByName(claims.Username)
 		if err != nil {
 			log.Printf("获取用户信息失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -81,8 +64,46 @@ func RequireAdmin() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-
 		if user == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "用户不存在",
+			})
+			c.Abort()
+			return
+		}
+		if user.Status != 1 {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    403,
+				"message": "用户已被禁用",
+			})
+			c.Abort()
+			return
+		}
+
+		c.Set("user", user)
+		c.Set("user_id", user.ID)
+		c.Set("user_callsign", user.CallSign)
+
+		c.Next()
+	}
+}
+
+// RequireAdmin 要求管理员权限的中间件
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		_, exists := c.Get("username")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "未认证",
+			})
+			c.Abort()
+			return
+		}
+
+		user, ok := c.Get("user")
+		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "用户不存在",
@@ -101,8 +122,6 @@ func RequireAdmin() gin.HandlerFunc {
 			return
 		}
 
-		// 将完整的用户信息存入 context
-		c.Set("user", user)
 		c.Next()
 	}
 }
@@ -111,7 +130,7 @@ func RequireAdmin() gin.HandlerFunc {
 // 用于限制待审核用户操作设备和群组
 func RequireApproved() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		username, exists := c.Get("username")
+		_, exists := c.Get("username")
 		if !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
@@ -121,20 +140,9 @@ func RequireApproved() gin.HandlerFunc {
 			return
 		}
 
-		// 从数据库获取用户信息
-		repo := gormdb.NewUserRepository()
-		user, err := repo.GetUserByName(username.(string))
-		if err != nil {
-			log.Printf("获取用户信息失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    500,
-				"message": "获取用户信息失败",
-			})
-			c.Abort()
-			return
-		}
-
-		if user == nil {
+		userValue, ok := c.Get("user")
+		user, ok := userValue.(*gormdb.User)
+		if !ok || user == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "用户不存在",
@@ -152,7 +160,7 @@ func RequireApproved() gin.HandlerFunc {
 					"message": "您的账号正在审核中，请等待管理员审核通过后再操作",
 					"data": gin.H{
 						"approval_status": user.ApprovalStatus,
-						"review_note":    user.ReviewNote,
+						"review_note":     user.ReviewNote,
 					},
 				})
 				c.Abort()
@@ -181,17 +189,20 @@ func hasRole(user interface{}, role string) bool {
 // 在 AuthMiddleware 之后使用，会查询数据库获取 user_id 并存入 context
 func LoadUserInfo() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		username, exists := c.Get("username")
+		_, exists := c.Get("username")
 		if !exists {
 			c.Next()
 			return
 		}
 
-		// 从数据库获取用户信息
-		repo := gormdb.NewUserRepository()
-		user, err := repo.GetUserByName(username.(string))
-		if err != nil || user == nil {
-			c.Next()
+		userValue, ok := c.Get("user")
+		user, ok := userValue.(*gormdb.User)
+		if !ok || user == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"code":    401,
+				"message": "用户不存在",
+			})
+			c.Abort()
 			return
 		}
 

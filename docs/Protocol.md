@@ -304,6 +304,9 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x0E | rf_guard_window_s | 2 | big-endian uint16 | 统计窗口 (秒, 5-3600) |
 | 0x0F | rf_guard_max_tx_in_window_s | 2 | big-endian uint16 | 窗口内累计发射上限 (秒, 1-window_s) |
 | 0x10 | timestamp | 8 | big-endian int64 | Unix 时间戳 (毫秒) |
+| 0x11 | adc_gain_db | 1 | uint8 | ADC 增益 (0-24 dB，按最近的 3 dB 档位应用) |
+| 0x12 | adc_volume | 1 | uint8 | ADC 音量 (0-100) |
+| 0x13 | dac_volume | 1 | uint8 | DAC 音量 (0-100) |
 
 ### 频率配置约定
 
@@ -651,7 +654,7 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 设备请求生成动态码：
 
 - 服务器生成 6 位数字动态码
-- 动态码有效期 60 秒
+- 动态码有效期 5 分钟
 - 设备在屏幕/LED 上显示动态码
 
 **步骤 3：用户绑定 (bind)**
@@ -679,7 +682,7 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 #### 安全机制
 
 - **动态码单次使用**：绑定成功后动态码立即失效
-- **有效期限制**：动态码 60 秒过期，绑定状态 10 分钟过期
+- **有效期限制**：动态码 5 分钟过期，绑定状态 10 分钟过期
 - **限速保护**：各接口均有独立的限速策略
 - **账号状态校验**：用户必须已审核通过才能绑定设备
 

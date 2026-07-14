@@ -57,6 +57,20 @@ func TestShouldPresignUpload(t *testing.T) {
 	}
 }
 
+func TestDetectContentTypeAndAllowedList(t *testing.T) {
+	contentType, err := detectContentType(bytes.NewReader([]byte("%PDF-1.7\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"application/pdf": true}
+	if !IsAllowedContentType(contentType, allowed) {
+		t.Fatalf("expected %s to be allowed", contentType)
+	}
+	if IsAllowedContentType("text/plain; charset=utf-8", allowed) {
+		t.Fatal("text/plain should not be allowed")
+	}
+}
+
 func TestKnownDrivers(t *testing.T) {
 	drivers := KnownDrivers()
 	found := map[string]bool{}

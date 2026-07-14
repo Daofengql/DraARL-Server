@@ -132,7 +132,7 @@
 
   <rect x="310" y="525" width="220" height="70" fill="white" rx="4" stroke="#ce93d8"/>
   <text x="420" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">动态码绑定</text>
-  <text x="420" y="562" text-anchor="middle" fill="#666" font-size="10">6位动态码 | 60秒有效</text>
+  <text x="420" y="562" text-anchor="middle" fill="#666" font-size="10">6位动态码 | 5分钟有效</text>
   <text x="420" y="577" text-anchor="middle" fill="#666" font-size="10">MAC绑定 | 配置下发</text>
 
   <rect x="580" y="490" width="470" height="120" fill="#e8f5e9" rx="10" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>

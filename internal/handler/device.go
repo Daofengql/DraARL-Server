@@ -61,6 +61,8 @@ func GetDevices(c *gin.Context) {
 
 	if limit <= 0 {
 		limit = 20
+	} else if limit > 100 {
+		limit = 100
 	}
 	if page <= 0 {
 		page = 1

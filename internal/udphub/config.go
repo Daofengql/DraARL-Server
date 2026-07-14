@@ -47,6 +47,8 @@ const (
 	TLVTypeADCGainDB             byte = 0x11 // ADC 增益 (1 byte, uint8 0-24 dB)
 	TLVTypeADCVolume             byte = 0x12 // ADC 音量 (1 byte, uint8 0-100)
 	TLVTypeDACVolume             byte = 0x13 // DAC 音量 (1 byte, uint8 0-100)
+	TLVTypeSQLActiveHigh         byte = 0x14 // SQL 触发极性 (1 byte, uint8 0=低有效,1=高有效)
+	TLVTypePTTActiveHigh         byte = 0x15 // PTT 激活极性 (1 byte, uint8 0=低有效,1=高有效)
 )
 
 // 配置键名映射 (TLV Type -> 数据库 Key)
@@ -70,6 +72,8 @@ var tlvTypeToKeyMap = map[byte]string{
 	TLVTypeADCGainDB:             ConfigKeyADCGainDB,
 	TLVTypeADCVolume:             ConfigKeyADCVolume,
 	TLVTypeDACVolume:             ConfigKeyDACVolume,
+	TLVTypeSQLActiveHigh:         ConfigKeySQLActiveHigh,
+	TLVTypePTTActiveHigh:         ConfigKeyPTTActiveHigh,
 }
 
 // 配置键名反向映射 (数据库 Key -> TLV Type)
@@ -93,6 +97,8 @@ var keyToTlvTypeMap = map[string]byte{
 	ConfigKeyADCGainDB:             TLVTypeADCGainDB,
 	ConfigKeyADCVolume:             TLVTypeADCVolume,
 	ConfigKeyDACVolume:             TLVTypeDACVolume,
+	ConfigKeySQLActiveHigh:         TLVTypeSQLActiveHigh,
+	ConfigKeyPTTActiveHigh:         TLVTypePTTActiveHigh,
 }
 
 var managedConfigKeys = []string{
@@ -114,6 +120,8 @@ var managedConfigKeys = []string{
 	ConfigKeyADCGainDB,
 	ConfigKeyADCVolume,
 	ConfigKeyDACVolume,
+	ConfigKeySQLActiveHigh,
+	ConfigKeyPTTActiveHigh,
 	"timestamp",
 }
 
@@ -144,9 +152,11 @@ var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
 		ConfigKeyDACVolume:             {},
 	},
 	deviceConfigProfileESP32NoRadioAudio: {
-		ConfigKeyADCGainDB: {},
-		ConfigKeyADCVolume: {},
-		ConfigKeyDACVolume: {},
+		ConfigKeyADCGainDB:     {},
+		ConfigKeyADCVolume:     {},
+		ConfigKeyDACVolume:     {},
+		ConfigKeySQLActiveHigh: {},
+		ConfigKeyPTTActiveHigh: {},
 	},
 }
 
@@ -207,6 +217,8 @@ var tlvLengthMap = map[byte]int{
 	TLVTypeADCGainDB:             1,
 	TLVTypeADCVolume:             1,
 	TLVTypeDACVolume:             1,
+	TLVTypeSQLActiveHigh:         1,
+	TLVTypePTTActiveHigh:         1,
 }
 
 // DeviceConfig 设备配置结构体（用于内存表示）
@@ -225,6 +237,8 @@ type DeviceConfig struct {
 	ADCGainDB             uint8   // ADC 增益 (0-24 dB，3 dB 步进)
 	ADCVolume             uint8   // ADC 音量 (0-100)
 	DACVolume             uint8   // DAC 音量 (0-100)
+	SQLActiveHigh         uint8   // SQL 触发极性 (0=低有效,1=高有效)
+	PTTActiveHigh         uint8   // PTT 激活极性 (0=低有效,1=高有效)
 }
 
 // ==========================================
@@ -302,7 +316,8 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 		return buf, true
 
 	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled,
-		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume:
+		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume,
+		TLVTypeSQLActiveHigh, TLVTypePTTActiveHigh:
 		// 1 byte, uint8
 		var val uint8
 		if _, err := fmt.Sscanf(value, "%d", &val); err != nil {
@@ -420,7 +435,8 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 		return fmt.Sprintf("%.1f", ctcss), true
 
 	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled,
-		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume:
+		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume,
+		TLVTypeSQLActiveHigh, TLVTypePTTActiveHigh:
 		// 1 byte, uint8
 		if len(data) != 1 {
 			return "", false

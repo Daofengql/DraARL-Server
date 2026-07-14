@@ -20,6 +20,8 @@ func TestNormalizeDeviceConfigsDoesNotHydrateNewToneFieldsFromLegacyOnly(t *test
 		ConfigKeyADCGainDB:             "20",
 		ConfigKeyADCVolume:             "-1",
 		ConfigKeyDACVolume:             "999",
+		ConfigKeySQLActiveHigh:         "invalid",
+		ConfigKeyPTTActiveHigh:         "true",
 	})
 
 	if _, ok := configs[ConfigKeyRxToneMode]; ok {
@@ -55,6 +57,12 @@ func TestNormalizeDeviceConfigsDoesNotHydrateNewToneFieldsFromLegacyOnly(t *test
 	if configs[ConfigKeyDACVolume] != "100" {
 		t.Fatalf("expected dac volume to clamp to 100, got %q", configs[ConfigKeyDACVolume])
 	}
+	if configs[ConfigKeySQLActiveHigh] != "0" {
+		t.Fatalf("expected invalid sql polarity to fallback low, got %q", configs[ConfigKeySQLActiveHigh])
+	}
+	if configs[ConfigKeyPTTActiveHigh] != "1" {
+		t.Fatalf("expected high ptt polarity to normalize to 1, got %q", configs[ConfigKeyPTTActiveHigh])
+	}
 }
 
 func TestEncodeDecodeTLVSupportsDigitalToneCompatibility(t *testing.T) {
@@ -75,6 +83,8 @@ func TestEncodeDecodeTLVSupportsDigitalToneCompatibility(t *testing.T) {
 		ConfigKeyADCGainDB:             "20",
 		ConfigKeyADCVolume:             "75",
 		ConfigKeyDACVolume:             "80",
+		ConfigKeySQLActiveHigh:         "1",
+		ConfigKeyPTTActiveHigh:         "0",
 	}
 
 	encoded, _ := encodeTLV(original)
@@ -124,6 +134,9 @@ func TestEncodeDecodeTLVSupportsDigitalToneCompatibility(t *testing.T) {
 	}
 	if decoded[ConfigKeyDACVolume] != "80" {
 		t.Fatalf("expected dac volume to round-trip as 80, got %q", decoded[ConfigKeyDACVolume])
+	}
+	if decoded[ConfigKeySQLActiveHigh] != "1" || decoded[ConfigKeyPTTActiveHigh] != "0" {
+		t.Fatalf("expected gpio polarities to round-trip as sql=1 ptt=0, got sql=%q ptt=%q", decoded[ConfigKeySQLActiveHigh], decoded[ConfigKeyPTTActiveHigh])
 	}
 }
 
@@ -201,14 +214,19 @@ func TestBuildConfigSnapshotForOverwriteFillsMissingKeys(t *testing.T) {
 	if snapshot[ConfigKeyDACVolume] != "80" {
 		t.Fatalf("expected missing dac volume to fallback to 80, got %q", snapshot[ConfigKeyDACVolume])
 	}
+	if snapshot[ConfigKeySQLActiveHigh] != "0" || snapshot[ConfigKeyPTTActiveHigh] != "0" {
+		t.Fatalf("expected missing gpio polarities to default low, got sql=%q ptt=%q", snapshot[ConfigKeySQLActiveHigh], snapshot[ConfigKeyPTTActiveHigh])
+	}
 }
 
 func TestAudioConfigsAreSupportedByESP32Profiles(t *testing.T) {
 	configs := map[string]string{
-		ConfigKeyADCGainDB: "20",
-		ConfigKeyADCVolume: "90",
-		ConfigKeyDACVolume: "80",
-		"rx_freq":          "439500000",
+		ConfigKeyADCGainDB:     "20",
+		ConfigKeyADCVolume:     "90",
+		ConfigKeyDACVolume:     "80",
+		ConfigKeySQLActiveHigh: "1",
+		ConfigKeyPTTActiveHigh: "1",
+		"rx_freq":              "439500000",
 	}
 
 	sa818Configs := filterConfigsForDevice(&models.Device{
@@ -219,13 +237,18 @@ func TestAudioConfigsAreSupportedByESP32Profiles(t *testing.T) {
 		sa818Configs[ConfigKeyDACVolume] != "80" {
 		t.Fatalf("expected normalized audio configs for SA818 profile, got %#v", sa818Configs)
 	}
+	if _, ok := sa818Configs[ConfigKeySQLActiveHigh]; ok {
+		t.Fatalf("expected gpio polarity configs to be filtered for SA818 profile, got %#v", sa818Configs)
+	}
 
 	noRadioConfigs := filterConfigsForDevice(&models.Device{
 		DevModel: protocol.DraARLDevModelESP32NoRadio,
 	}, configs)
 	if noRadioConfigs[ConfigKeyADCGainDB] != "21" ||
 		noRadioConfigs[ConfigKeyADCVolume] != "90" ||
-		noRadioConfigs[ConfigKeyDACVolume] != "80" {
+		noRadioConfigs[ConfigKeyDACVolume] != "80" ||
+		noRadioConfigs[ConfigKeySQLActiveHigh] != "1" ||
+		noRadioConfigs[ConfigKeyPTTActiveHigh] != "1" {
 		t.Fatalf("expected normalized audio configs for no-radio ESP32 profile, got %#v", noRadioConfigs)
 	}
 	if _, ok := noRadioConfigs["rx_freq"]; ok {

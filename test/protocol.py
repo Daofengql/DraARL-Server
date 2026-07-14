@@ -309,6 +309,8 @@ class TLVType:
     ADC_GAIN_DB = 0x11  # ADC 增益 (1 byte, uint8 0-24 dB)
     ADC_VOLUME = 0x12   # ADC 音量 (1 byte, uint8 0-100)
     DAC_VOLUME = 0x13   # DAC 音量 (1 byte, uint8 0-100)
+    SQL_ACTIVE_HIGH = 0x14  # SQL 触发极性 (1 byte, 0=低有效, 1=高有效)
+    PTT_ACTIVE_HIGH = 0x15  # PTT 激活极性 (1 byte, 0=低有效, 1=高有效)
 
 # TLV Type 到配置键名的映射
 TLV_TYPE_TO_KEY = {
@@ -331,6 +333,8 @@ TLV_TYPE_TO_KEY = {
     TLVType.ADC_GAIN_DB: "adc_gain_db",
     TLVType.ADC_VOLUME: "adc_volume",
     TLVType.DAC_VOLUME: "dac_volume",
+    TLVType.SQL_ACTIVE_HIGH: "sql_active_high",
+    TLVType.PTT_ACTIVE_HIGH: "ptt_active_high",
 }
 
 # 配置键名到 TLV Type 的映射
@@ -357,6 +361,8 @@ TLV_LENGTH = {
     TLVType.ADC_GAIN_DB: 1,
     TLVType.ADC_VOLUME: 1,
     TLVType.DAC_VOLUME: 1,
+    TLVType.SQL_ACTIVE_HIGH: 1,
+    TLVType.PTT_ACTIVE_HIGH: 1,
 }
 
 TONE_MODE_TO_BYTE = {
@@ -443,6 +449,7 @@ def _encode_tlv_value(tlv_type: int, value: str) -> bytes:
     elif tlv_type in (
         TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH,
         TLVType.RF_GUARD_ENABLED, TLVType.ADC_GAIN_DB, TLVType.ADC_VOLUME, TLVType.DAC_VOLUME,
+        TLVType.SQL_ACTIVE_HIGH, TLVType.PTT_ACTIVE_HIGH,
     ):
         # 1 byte, uint8
         try:
@@ -542,6 +549,7 @@ def _decode_tlv_value(tlv_type: int, data: bytes) -> str:
     elif tlv_type in (
         TLVType.SQL_LEVEL, TLVType.POWER_LEVEL, TLVType.TX_BANDWIDTH,
         TLVType.RF_GUARD_ENABLED, TLVType.ADC_GAIN_DB, TLVType.ADC_VOLUME, TLVType.DAC_VOLUME,
+        TLVType.SQL_ACTIVE_HIGH, TLVType.PTT_ACTIVE_HIGH,
     ):
         if len(data) != 1:
             return "0"

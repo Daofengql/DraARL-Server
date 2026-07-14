@@ -20,6 +20,8 @@ export const AUDIO_VOLUME_MIN = 0
 export const AUDIO_VOLUME_MAX = 100
 export const ADC_VOLUME_DEFAULT = 100
 export const DAC_VOLUME_DEFAULT = 80
+export const SQL_ACTIVE_HIGH_DEFAULT = false
+export const PTT_ACTIVE_HIGH_DEFAULT = false
 
 export interface ToneSelection {
   mode: ToneMode
@@ -42,6 +44,8 @@ export interface RadioConfigForm {
   adcGainDb: number
   adcVolume: number
   dacVolume: number
+  sqlActiveHigh: boolean
+  pttActiveHigh: boolean
 }
 
 export interface FrequencyCardCapabilities {
@@ -138,6 +142,8 @@ export function getDefaultRadioConfig(): RadioConfigForm {
     adcGainDb: ADC_GAIN_DEFAULT_DB,
     adcVolume: ADC_VOLUME_DEFAULT,
     dacVolume: DAC_VOLUME_DEFAULT,
+    sqlActiveHigh: SQL_ACTIVE_HIGH_DEFAULT,
+    pttActiveHigh: PTT_ACTIVE_HIGH_DEFAULT,
   }
 }
 
@@ -294,6 +300,21 @@ export function normalizeAudioVolume(level: number, defaultValue: number): numbe
     return defaultValue
   }
   return Math.max(AUDIO_VOLUME_MIN, Math.min(AUDIO_VOLUME_MAX, Math.round(level)))
+}
+
+export function normalizeActiveHigh(value?: string | boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  switch (String(value ?? '').trim().toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'high':
+    case 'active_high':
+      return true
+    default:
+      return false
+  }
 }
 
 export function normalizeRfGuardEnabled(value?: string | boolean): boolean {

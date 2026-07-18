@@ -76,6 +76,7 @@ var (
 	// ==========================================
 	globalGroupCacheAtomic atomic.Value // 存储 map[int]*models.Group
 	groupCacheMutex        sync.RWMutex // 仅用于写操作保护
+	groupRuntimeMu         sync.RWMutex // 保护群组动态成员、设备列表和统计字段
 
 	// QTH 映射
 	qthMap    = make(map[string]string)
@@ -385,13 +386,12 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	dev.Traffic += int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
 	atomicAddTraffic(int64(protocol.DraARLv1HeaderSize + len(packet.DATA)))
 
-	// ==========================================
-	// 修复2：修正 GroupID 为 0 时导致数据包被静默丢弃的问题
-	// ==========================================
 	targetGroupID := dev.GroupID
 	if targetGroupID == 0 {
-		targetGroupID = models.GroupIDPublicMin // 如果读出为 0，映射到默认的公共群组(999)
-		dev.GroupID = targetGroupID             // 同步修正设备内存状态
+		// 未分组设备保持在线且允许心跳/配置管理，但不进入任何语音、文本
+		// 或互联转发域。绝不能再把 0 隐式映射成公共群组。
+		handleNonForwardingDevicePacket(packet, data, dev, conn, realAddr, isGhost)
+		return
 	}
 
 	// ==========================================
@@ -402,16 +402,34 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	if exists {
 		// 检查群组是否已禁用（Status != 1）
 		if gp.Status != 1 {
-			// 群组已禁用，静默丢弃数据包（避免语音包持续发送时刷屏日志）
+			// 群组禁用只停止业务转发；心跳与配置管理仍需可用，方便用户
+			// 在设备管理中把在线设备切换到其他群组。
+			handleNonForwardingDevicePacket(packet, data, dev, conn, realAddr, isGhost)
 			return
 		}
 		parseDraARL(packet, data, dev, conn, gp, realAddr, isGhost)
 	} else {
-		// 找不到对应的群组实例
-		// 可能是数据库中删除了该群组，或者设备被分配了一个错误的群组 ID
-		if packet.Type != protocol.DraARLTypeHeartbeat {
-			log.Printf("[ROUTING] 路由丢弃: 设备 %s 请求的群组 ID: %d 不存在", dev.Username, targetGroupID)
-		}
+		// 缓存刷新窗口或历史悬空 group_id 不应中断设备心跳；在群组
+		// 恢复可用前仅关闭业务转发。
+		handleNonForwardingDevicePacket(packet, data, dev, conn, realAddr, isGhost)
+	}
+}
+
+func handleNonForwardingDevicePacket(
+	packet *protocol.DraARLv1Packet,
+	data []byte,
+	dev *models.Device,
+	conn *net.UDPConn,
+	realAddr *net.UDPAddr,
+	isGhost bool,
+) {
+	switch packet.Type {
+	case protocol.DraARLTypeHeartbeat:
+		handleDraARLHeartbeat(packet, data, dev, conn, nil, realAddr, isGhost)
+	case protocol.DraARLTypeConfig:
+		handleDraARLConfig(packet, dev)
+	case protocol.DraARLTypeATPassThrough:
+		handleDraARLATCommand(packet, dev)
 	}
 }
 
@@ -537,7 +555,6 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 			packet.Username, packet.SSID, packet.DevModel)
 		reportedDevModel = protocol.DraARLDevModelUnknown
 	}
-
 	newDevice := &models.Device{
 		Username: packet.Username,
 		CallSign: authResult.CallSign,
@@ -549,12 +566,15 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		MAC:          incomingMAC,
 		Priority:     100,
 		Status:       0,
-		GroupID:      models.GroupIDPrivate1, // 默认加入群组1（避免 999 在部分库中缺失导致外键失败）
+		GroupID:      0,
 		LastOnlineIP: realAddr.IP.String(),
 	}
 
-	// 保存设备到数据库
-	dev, err := addDevice(newDevice)
+	// 保存设备到数据库。默认群组解析位于“确认不存在”之后，已有设备重连
+	// 始终保留设备自己的 group_id，不会再次继承用户默认值。
+	dev, err := addDevice(newDevice, func() int {
+		return resolveAvailableNewDeviceDefaultGroup(authResult.User)
+	})
 	if err != nil {
 		log.Printf("[DEVICE] Add device failed: %v, %v", err, packet.Username)
 		return
@@ -582,20 +602,78 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		dev.LastOnlineIP = realAddr.IP.String()
 		indexRuntimeDevice(dev)
 
-		// 加入群组
-		if gp, ok := publicGroupMap[dev.GroupID]; ok {
-			gp.DevMap[dev.ID] = dev
-
-			pool := gp.ConnPool.(*CurrentConnPool)
-			syncDeviceConnPool(pool, dev, packet.UDPAddr)
-
-			// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
-			response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
-			conn.WriteToUDP(response, packet.UDPAddr)
+		// 默认群组为空时只登记并保持在线，不进入任何转发池。
+		if gp, ok := GetGroupFromCache(dev.GroupID); dev.GroupID > 0 && ok {
+			attachRuntimeDeviceToGroup(gp, dev)
 			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, 群组: %d)",
 				packet.Username, dev.Name, realAddr, dev.GroupID)
+		} else if dev.GroupID == 0 {
+			log.Printf("[ONLINE] %s 的设备 %d 已登记为未分组状态，不参与转发", packet.Username, dev.ID)
+		} else {
+			// 已有设备可能在群组缓存切换的极短窗口内重连。保持在线并响应
+			// 心跳，但在目标群组可用前不把它挂入任何转发池。
+			log.Printf("[ONLINE] 设备 %d 的群组 %d 暂不在运行时缓存中，本次不参与转发", dev.ID, dev.GroupID)
+		}
+
+		// 登记成功与是否已加入转发池无关；三种状态都必须响应首个心跳。
+		response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
+		if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
+			log.Printf("[ONLINE] 发送设备 %d 首次心跳响应失败: %v", dev.ID, err)
 		}
 	}
+}
+
+func resolveAvailableNewDeviceDefaultGroup(user *gormdb.User) int {
+	groupID := resolveNewDeviceDefaultGroup(user)
+	if groupID <= 0 {
+		return 0
+	}
+	if group, ok := GetGroupFromCache(groupID); ok && runtimeGroupAllowsNewDevice(group) {
+		return groupID
+	}
+
+	// 群组刚创建或服务正在刷新缓存时，先同步一次再登记设备。
+	// 若仍不可用则安全回退为空组，避免写入一个当前无法参与转发的默认值。
+	RefreshGroupCache()
+	if group, ok := GetGroupFromCache(groupID); ok && runtimeGroupAllowsNewDevice(group) {
+		return groupID
+	}
+	log.Printf("[DEVICE] 新设备默认群组 %d 在运行时不可用，回退为未分组", groupID)
+	return 0
+}
+
+func runtimeGroupAllowsNewDevice(group *models.Group) bool {
+	return group != nil && group.Status == 1 && !group.IsVirtual &&
+		(group.Type == models.GroupTypeRelay || group.Type == models.GroupTypeReserved)
+}
+
+func resolveNewDeviceDefaultGroup(user *gormdb.User) int {
+	if user == nil {
+		return 0
+	}
+	userRepo := gormdb.NewUserRepository()
+	groupID, err := userRepo.GetUserDefaultDeviceGroupID(user.ID)
+	if err != nil || groupID <= 0 {
+		return 0
+	}
+	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	if err != nil || group == nil || group.Status != 1 || group.IsVirtual || (group.Type != 1 && group.Type != 2) {
+		if err == nil {
+			_ = userRepo.SetUserDefaultDeviceGroupID(user.ID, 0)
+		}
+		return 0
+	}
+	if group.Type == 2 && !user.HasRole("admin") && group.OwerID != user.ID {
+		member, memberErr := gormdb.NewGroupMemberRepository().GetVerifiedMemberByGroupAndUser(group.ID, user.ID)
+		if memberErr != nil {
+			return 0
+		}
+		if member == nil {
+			_ = userRepo.SetUserDefaultDeviceGroupID(user.ID, 0)
+			return 0
+		}
+	}
+	return group.ID
 }
 
 // parseDraARL 解析并处理 DraARLv1 报文
@@ -682,10 +760,14 @@ func buildUDPSpeakerIdentity(dev *models.Device, packet *protocol.DraARLv1Packet
 	return speakerID, speakerLabel
 }
 
+func canSendFromDevice(dev *models.Device) bool {
+	return dev != nil && !dev.DisableSend
+}
+
 // handleDraARLVoice 处理 DraARLv1 语音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
-	if dev.DisableSend {
+	if !canSendFromDevice(dev) {
 		return
 	}
 
@@ -807,9 +889,10 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		dev.Loged = true
 	}
 
-	// 加入连接池（使用 frp 转发地址）
-	pool := gp.ConnPool.(*CurrentConnPool)
-	syncDeviceConnPool(pool, dev, packet.UDPAddr)
+	// 未分组设备没有连接池，但仍需正常响应心跳并保持在线可管理。
+	if gp != nil {
+		syncDeviceConnPool(getGroupConnPool(gp), dev, packet.UDPAddr)
+	}
 
 	// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
 	response := protocol.EncodeHeartbeatResponse(packet, dev.CallSign)
@@ -825,12 +908,16 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 
 		// 日志区分幽灵设备和普通设备
+		groupID := 0
+		if gp != nil {
+			groupID = gp.ID
+		}
 		if isGhost {
 			log.Printf("[ONLINE] UDP幽灵设备 %s-%d 已上线 (地址: %v, 群组: %d, 型号: %d)",
-				dev.Username, dev.SSID, realAddr, gp.ID, dev.DevModel)
+				dev.Username, dev.SSID, realAddr, groupID, dev.DevModel)
 		} else {
 			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
-				dev.Username, dev.Name, realAddr, dev.QTH, gp.ID, dev.DevModel)
+				dev.Username, dev.Name, realAddr, dev.QTH, groupID, dev.DevModel)
 
 			// 【配置同步】普通设备上线时同步配置
 			// 仅对普通 UDP 设备进行配置同步（幽灵设备使用 WebSocket API）
@@ -869,6 +956,9 @@ func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
 
 // handleDraARLTextMessage 处理 DraARLv1 文本消息
 func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
+	if !canSendFromDevice(dev) {
+		return
+	}
 	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool), gp)
 
 	// 【文本消息记录】直接写入数据库
@@ -892,7 +982,7 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 // handleDraARLServerVoice 处理 DraARLv1 服务器互联语音
 func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
-	if dev.DisableSend {
+	if !canSendFromDevice(dev) {
 		return
 	}
 
@@ -1074,7 +1164,7 @@ func GetUserList() *sync.Map {
 
 // GetPublicGroupMap 获取公共群组映射
 func GetPublicGroupMap() map[int]*models.Group {
-	return publicGroupMap
+	return GetAllGroupsFromCache()
 }
 
 // ==========================================
@@ -1111,6 +1201,9 @@ func StartGroupCacheSync() {
 // 核心原则：只更新静态配置属性，绝对不碰动态连接池(ConnPool)
 // 性能优化：使用 RCU 模式，构建新 map 后原子替换，避免阻塞读取
 func refreshGroupCache() {
+	groupCacheMutex.Lock()
+	defer groupCacheMutex.Unlock()
+
 	repo := gormdb.NewGroupRepository()
 	dbGroups, err := repo.ListGroups()
 	if err != nil {
@@ -1134,8 +1227,7 @@ func refreshGroupCache() {
 	// 记录当前数据库中存在的群组 ID
 	validGroupIDs := make(map[int]bool, len(dbGroups)+2)
 
-	// 【关键修复】公共群组 0 和 999 始终有效
-	validGroupIDs[0] = true
+	// 协议级公共群组 999 始终有效；0 仅表示设备未分组，不是群组对象。
 	validGroupIDs[models.GroupIDPublicMin] = true
 
 	for _, dbGroup := range dbGroups {
@@ -1144,26 +1236,19 @@ func refreshGroupCache() {
 
 		// 检查群组是否已经在内存中
 		if existingGroup, exists := oldGroupCache[modelGroup.ID]; exists {
-			// 【关键操作】：如果存在，复制指针到新 map，并更新静态配置
-			// 注意：这里直接修改 existingGroup 的字段是安全的，因为指针不变
+			// RCU 发布前构建新静态对象，避免原地修改已被并发读者持有的群组。
+			// 动态设备集合与连接池继续复用，在线设备不会因配置刷新而断开。
 			if existingGroup.Status != modelGroup.Status {
 				receiverRoutingChanged = true
 			}
-			existingGroup.Name = modelGroup.Name
-			existingGroup.Type = modelGroup.Type
-			existingGroup.CallSign = modelGroup.CallSign
-			existingGroup.Password = modelGroup.Password
-			existingGroup.AllowCallSignSSID = modelGroup.AllowCallSignSSID
-			existingGroup.OwerID = modelGroup.OwerID
-			existingGroup.MasterServer = modelGroup.MasterServer
-			existingGroup.SlaveServer = modelGroup.SlaveServer
-			existingGroup.Status = modelGroup.Status
-			existingGroup.IsVirtual = modelGroup.IsVirtual
-			existingGroup.Note = modelGroup.Note
-			existingGroup.UpdateTime = modelGroup.UpdateTime
-			// 注意：ConnPool 和 DevMap 保持不变
-
-			newGroupCache[modelGroup.ID] = existingGroup
+			groupRuntimeMu.RLock()
+			modelGroup.DevMap = existingGroup.DevMap
+			modelGroup.DevList = append([]int(nil), existingGroup.DevList...)
+			modelGroup.OnlineDevNumber = existingGroup.OnlineDevNumber
+			modelGroup.TotalDevNumber = existingGroup.TotalDevNumber
+			groupRuntimeMu.RUnlock()
+			modelGroup.ConnPool = existingGroup.ConnPool
+			newGroupCache[modelGroup.ID] = modelGroup
 		} else {
 			receiverRoutingChanged = true
 			// 【关键操作】：如果是不存在的新群组，初始化它的动态连接池
@@ -1178,6 +1263,24 @@ func refreshGroupCache() {
 
 			newGroupCache[newGroup.ID] = newGroup
 			log.Printf("[CACHE] 新群组已加载: %d - %s", newGroup.ID, newGroup.Name)
+		}
+	}
+	// 999 是协议级系统群组，即使历史数据库没有对应行也必须保留。
+	// 旧实现只把它标为 valid，却没有复制到 newGroupCache，首次刷新后会丢失。
+	if _, exists := newGroupCache[models.GroupIDPublicMin]; !exists {
+		if existing, ok := oldGroupCache[models.GroupIDPublicMin]; ok && existing != nil {
+			newGroupCache[models.GroupIDPublicMin] = existing
+		} else {
+			newGroupCache[models.GroupIDPublicMin] = &models.Group{
+				ID:         models.GroupIDPublicMin,
+				Name:       "全网互联",
+				Type:       models.GroupTypeRelay,
+				Status:     1,
+				DevMap:     make(map[int]*models.Device),
+				CreateTime: time.Now().Format("2006-01-02 15:04:05"),
+				UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
+				ConnPool:   newConnPool(),
+			}
 		}
 	}
 
@@ -1259,12 +1362,20 @@ func refreshDeviceCache() {
 			}
 		}
 
-		// 检查是否需要更新（包括禁发/禁收状态）
-		if memDev.GroupID != dbDev.GroupID || memDev.DisableSend != dbDev.DisableSend || memDev.DisableRecv != dbDev.DisableRecv || memDev.Priority != dbDev.Priority {
-			if memDev.GroupID != dbDev.GroupID || memDev.DisableRecv != dbDev.DisableRecv {
+		// 群组变化必须走统一的 detach/attach 流程，不能只修改 GroupID 字段，
+		// 否则旧连接池仍会继续向该设备转发。
+		if memDev.GroupID != dbDev.GroupID {
+			if _, err := changeDeviceGroup(memDev, dbDev.GroupID); err != nil {
+				log.Printf("[CACHE] 同步设备 %d 群组 %d -> %d 失败: %v", memDev.ID, memDev.GroupID, dbDev.GroupID, err)
+			} else {
+				receiverRoutingChanged = true
+				updatedCount++
+			}
+		}
+		if memDev.DisableSend != dbDev.DisableSend || memDev.DisableRecv != dbDev.DisableRecv || memDev.Priority != dbDev.Priority {
+			if memDev.DisableRecv != dbDev.DisableRecv {
 				receiverRoutingChanged = true
 			}
-			memDev.GroupID = dbDev.GroupID
 			memDev.DisableSend = dbDev.DisableSend
 			memDev.DisableRecv = dbDev.DisableRecv
 			memDev.Priority = dbDev.Priority
@@ -1342,6 +1453,12 @@ func refreshDeviceCache() {
 	if removedCount > 0 {
 		log.Printf("[CACHE] 已清理 %d 个数据库中已不存在的运行时设备", removedCount)
 	}
+}
+
+// RefreshDeviceCache 从数据库重新同步设备动态属性和运行时索引。用于数据库
+// 已提交、但单设备增量同步失败时立即自愈，而不是等待后台轮询。
+func RefreshDeviceCache() {
+	refreshDeviceCache()
 }
 
 // GetGroupFromCache 从缓存中获取群组（线程安全）

@@ -205,6 +205,7 @@ func removeDeviceFromGroupRuntime(gp *models.Group, dev *models.Device) {
 		return
 	}
 
+	groupRuntimeMu.Lock()
 	if gp.DevMap != nil {
 		for id, existing := range gp.DevMap {
 			if existing == nil || isSameRuntimeDevice(existing, dev) {
@@ -222,6 +223,7 @@ func removeDeviceFromGroupRuntime(gp *models.Group, dev *models.Device) {
 		}
 		gp.DevList = filtered
 	}
+	groupRuntimeMu.Unlock()
 
 	pool := getGroupConnPool(gp)
 	if pool == nil {
@@ -262,16 +264,8 @@ func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
 	dev.ISOnline = false
 	dev.UDPAddr = nil
 
-	for _, gp := range publicGroupMap {
+	for _, gp := range GetAllGroupsFromCache() {
 		removeDeviceFromGroupRuntime(gp, dev)
-	}
-
-	if cache := globalGroupCacheAtomic.Load(); cache != nil {
-		if groupCache, ok := cache.(map[int]*models.Group); ok {
-			for _, gp := range groupCache {
-				removeDeviceFromGroupRuntime(gp, dev)
-			}
-		}
 	}
 
 	userList.Range(func(_, value any) bool {
@@ -293,26 +287,6 @@ func sendHeartbeatReject(conn *net.UDPConn, packet *protocol.DraARLv1Packet, cod
 		return
 	}
 	conn.WriteToUDP(protocol.EncodeHeartbeatRejectResponse(packet, code, message), packet.UDPAddr)
-}
-
-func rewriteRuntimeAllowCallSignSSID(raw, oldCallSign, newCallSign string) (string, bool) {
-	if raw == "" {
-		return raw, false
-	}
-
-	oldPrefix := oldCallSign + "-"
-	parts := strings.Split(raw, ",")
-	changed := false
-	for i, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if oldCallSign != "" && strings.HasPrefix(trimmed, oldPrefix) {
-			parts[i] = newCallSign + trimmed[len(oldCallSign):]
-			changed = true
-			continue
-		}
-		parts[i] = trimmed
-	}
-	return strings.Join(parts, ","), changed
 }
 
 // SyncUserCallSignChange 在呼号审批真正落库后，同步 UDP 运行时索引与展示字段。
@@ -342,12 +316,9 @@ func SyncUserCallSignChange(ownerID int, username, oldCallSign, newCallSign stri
 	}
 	runtimeIndexMu.RUnlock()
 
-	for _, gp := range publicGroupMap {
+	for _, gp := range GetAllGroupsFromCache() {
 		if gp == nil {
 			continue
-		}
-		if rewritten, changed := rewriteRuntimeAllowCallSignSSID(gp.AllowCallSignSSID, oldCallSign, newCallSign); changed {
-			gp.AllowCallSignSSID = rewritten
 		}
 		pool := getGroupConnPool(gp)
 		if pool == nil {

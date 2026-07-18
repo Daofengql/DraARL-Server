@@ -83,24 +83,22 @@ func loadAllDevices() {
 
 		indexRuntimeDevice(modelDev)
 
-		// 加入群组
-		if gp, ok := publicGroupMap[modelDev.GroupID]; ok {
-			gp.DevMap[modelDev.ID] = modelDev
-			gp.DevList = append(gp.DevList, modelDev.ID)
-		} else {
-			// 如果群组不存在，加入默认群组
-			if gp0, ok := publicGroupMap[0]; ok {
-				gp0.DevMap[modelDev.ID] = modelDev
-				gp0.DevList = append(gp0.DevList, modelDev.ID)
+		// group_id=0 表示设备已登记但未分组，不进入任何转发池。
+		if modelDev.GroupID > 0 {
+			gp, ok := GetGroupFromCache(modelDev.GroupID)
+			if !ok {
+				continue
 			}
+			attachRuntimeDeviceToGroup(gp, modelDev)
 		}
 	}
 
 	log.Printf("Loaded %d devices from database", len(devices))
 }
 
-// addDevice 添加新设备（如果已存在则从数据库加载）
-func addDevice(dev *models.Device) (*models.Device, error) {
+// addDevice 添加新设备（如果已存在则从数据库加载）。resolveInitialGroup
+// 只会在确认数据库中尚无该设备后调用，确保用户默认群组仅继承一次。
+func addDevice(dev *models.Device, resolveInitialGroup func() int) (*models.Device, error) {
 	repo := gormdb.NewDeviceRepository()
 	unlock := lockDeviceRegistration(dev.OwnerID, dev.SSID)
 	defer unlock()
@@ -126,6 +124,9 @@ func addDevice(dev *models.Device) (*models.Device, error) {
 	}
 
 	// 设备不存在，创建新设备
+	if resolveInitialGroup != nil {
+		dev.GroupID = resolveInitialGroup()
+	}
 	gormDev := gormdb.FromModelDevice(dev)
 	gormDev.CreateTime = time.Now()
 	gormDev.UpdateTime = time.Now()
@@ -229,78 +230,91 @@ func getDeviceByDMRID(dmrid uint32) *models.Device {
 	return dev
 }
 
-// changeDeviceGroup 更改设备群组
+func removeDeviceID(ids []int, deviceID int) []int {
+	result := ids[:0]
+	for _, id := range ids {
+		if id != deviceID {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func detachRuntimeDeviceFromGroup(gp *models.Group, dev *models.Device) {
+	if gp == nil || dev == nil {
+		return
+	}
+	groupRuntimeMu.Lock()
+	delete(gp.DevMap, dev.ID)
+	gp.DevList = removeDeviceID(gp.DevList, dev.ID)
+	groupRuntimeMu.Unlock()
+	if pool := getGroupConnPool(gp); pool != nil {
+		pool.mu.Lock()
+		for key, existing := range pool.DevConnMap {
+			if isSameRuntimeDevice(existing, dev) {
+				delete(pool.DevConnMap, key)
+			}
+		}
+		rebuildDeviceConnListLocked(pool)
+		pool.mu.Unlock()
+	}
+}
+
+func attachRuntimeDeviceToGroup(gp *models.Group, dev *models.Device) {
+	if gp == nil || dev == nil {
+		return
+	}
+	groupRuntimeMu.Lock()
+	if gp.DevMap == nil {
+		gp.DevMap = make(map[int]*models.Device)
+	}
+	gp.DevMap[dev.ID] = dev
+	found := false
+	for _, id := range gp.DevList {
+		if id == dev.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		gp.DevList = append(gp.DevList, dev.ID)
+	}
+	groupRuntimeMu.Unlock()
+	if dev.ISOnline && dev.UDPAddr != nil {
+		syncDeviceConnPool(getGroupConnPool(gp), dev, dev.UDPAddr)
+	}
+}
+
+// changeDeviceGroup 更改设备群组。groupID=0 表示退出所有转发域。
+// 全部实体群组统一从全局缓存读取，不再依赖已废弃的 userList 私有群组副本。
 func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
-	// 检查目标群组是否允许此设备加入
-	if gp, ok := publicGroupMap[groupID]; ok {
-		if len(gp.AllowCallSignSSID) > 0 {
-			allowed := strings.Split(gp.AllowCallSignSSID, ",")
-			found := false
-			for _, a := range allowed {
-				if a == dev.CallSignSSID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return "", errors.New("group does not allow this callsign")
-			}
+	if dev == nil || groupID < 0 {
+		return "", errors.New("invalid device or group")
+	}
+
+	var targetGroup *models.Group
+	if groupID > 0 {
+		var ok bool
+		targetGroup, ok = GetGroupFromCache(groupID)
+		if !ok || targetGroup == nil {
+			return "", errors.New("group not found")
+		}
+		if targetGroup.Status != 1 {
+			return "", errors.New("group disabled")
 		}
 	}
 
-	// 从原群组删除
-	if dev.GroupID >= models.GroupIDPublicMin || dev.GroupID == 0 {
-		if oldGp, ok := publicGroupMap[dev.GroupID]; ok {
-			pool := getGroupConnPool(oldGp)
-			if pool != nil {
-				pool.mu.Lock()
-				if dev.UDPAddr != nil {
-					delete(pool.DevConnMap, dev.UDPAddr.String())
-				}
-				rebuildDeviceConnListLocked(pool)
-				pool.mu.Unlock()
-			}
-
-			delete(oldGp.DevMap, dev.ID)
-		}
-	} else {
-		// 从私有群组删除
-		if u, ok := userList.Load(dev.CallSign); ok {
-			if oldGp, ok := u.(*UserInfo).Groups[dev.GroupID]; ok {
-				delete(oldGp.DevMap, dev.ID)
-				pool := getGroupConnPool(oldGp)
-				if pool != nil {
-					pool.mu.Lock()
-					if dev.UDPAddr != nil {
-						delete(pool.DevConnMap, dev.UDPAddr.String())
-					}
-					rebuildDeviceConnListLocked(pool)
-					pool.mu.Unlock()
-				}
-			}
-		}
+	if oldGroup, ok := GetGroupFromCache(dev.GroupID); ok {
+		detachRuntimeDeviceFromGroup(oldGroup, dev)
 	}
+	dev.GroupID = groupID
+	if targetGroup == nil {
+		InvalidateDomainReceiverCache()
+		return "未分组", nil
+	}
+	attachRuntimeDeviceToGroup(targetGroup, dev)
 	InvalidateDomainReceiverCache()
-
-	// 加入新群组
-	if groupID >= models.GroupIDPublicMin || groupID == 0 {
-		if gp, ok := publicGroupMap[groupID]; ok {
-			dev.GroupID = groupID
-			gp.DevMap[dev.ID] = dev
-			return fmt.Sprintf("%d%s", gp.ID, gp.Name), nil
-		}
-		return "", errors.New("group not found")
-	} else {
-		// 私有群组
-		if u, ok := userList.Load(dev.CallSign); ok {
-			if gp, ok := u.(*UserInfo).Groups[groupID]; ok {
-				gp.DevMap[dev.ID] = dev
-				dev.GroupID = groupID
-				return fmt.Sprintf("%d%s", gp.ID, gp.Name), nil
-			}
-		}
-		return "", errors.New("private group not found")
-	}
+	return fmt.Sprintf("%d%s", targetGroup.ID, targetGroup.Name), nil
 }
 
 // checkDeviceOnline 检查设备在线状态
@@ -335,9 +349,9 @@ func checkDeviceOnline() {
 		onlineCount := 0
 
 		// 检查公共群组设备
-		for _, gp := range publicGroupMap {
+		for _, gp := range GetAllGroupsFromCache() {
 			change := false
-			gp.OnlineDevNumber = 0
+			groupOnlineCount := 0
 
 			pool := getGroupConnPool(gp)
 			if pool != nil {
@@ -378,7 +392,7 @@ func checkDeviceOnline() {
 								if timeSinceLastPacket < offlineTimeout+reconnectGrace {
 									log.Printf("[GRACE] Device %v-%v in reconnection grace period, waiting... (%v since last packet)",
 										dev.CallSign, dev.SSID, timeSinceLastPacket)
-									gp.OnlineDevNumber++
+									groupOnlineCount++
 									onlineMap[dev.ID] = dev
 									continue
 								}
@@ -401,7 +415,7 @@ func checkDeviceOnline() {
 
 					// 设备在线
 					if dev.ISOnline {
-						gp.OnlineDevNumber++
+						groupOnlineCount++
 						onlineMap[dev.ID] = dev
 					}
 				}
@@ -415,22 +429,24 @@ func checkDeviceOnline() {
 			}
 
 			// 【修复】更新本群组总设备数 = 实体硬件设备数 + 已审核幽灵设备准入总数
-			gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
-
 			// 【修复】从 WS 管理器中获取本群组的 WS 在线设备，并叠加到在线总数中
 			if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 				wsDevices := GlobalMessageRouter.wsManager.GetDevicesByGroup(gp.ID)
-				gp.OnlineDevNumber += len(wsDevices)
+				groupOnlineCount += len(wsDevices)
 			}
 
-			onlineCount += gp.OnlineDevNumber
+			groupRuntimeMu.Lock()
+			gp.OnlineDevNumber = groupOnlineCount
+			gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
+			groupRuntimeMu.Unlock()
+			onlineCount += groupOnlineCount
 		}
 
 		// 检查私有群组设备
 		userList.Range(func(k, v any) bool {
 			u := v.(*UserInfo)
 			for _, gp := range u.Groups {
-				gp.OnlineDevNumber = 0
+				groupOnlineCount := 0
 
 				pool := getGroupConnPool(gp)
 				if pool != nil {
@@ -468,7 +484,7 @@ func checkDeviceOnline() {
 						}
 
 						if dev.ISOnline {
-							gp.OnlineDevNumber++
+							groupOnlineCount++
 							onlineMap[dev.ID] = dev
 						}
 					}
@@ -480,15 +496,17 @@ func checkDeviceOnline() {
 				}
 
 				// 【修复】更新私有群组总数 = 实体硬件设备数 + 已审核幽灵设备准入总数
-				gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
-
 				// 【修复】叠加本群组的 WS 在线设备
 				if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 					wsDevices := GlobalMessageRouter.wsManager.GetDevicesByGroup(gp.ID)
-					gp.OnlineDevNumber += len(wsDevices)
+					groupOnlineCount += len(wsDevices)
 				}
 
-				onlineCount += gp.OnlineDevNumber
+				groupRuntimeMu.Lock()
+				gp.OnlineDevNumber = groupOnlineCount
+				gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
+				groupRuntimeMu.Unlock()
+				onlineCount += groupOnlineCount
 			}
 			return true
 		})
@@ -649,7 +667,7 @@ func bytesTrimRight(b []byte, cut byte) []byte {
 func getGroupListForDevice(packet []byte) []byte {
 	groupList := make([]string, 0)
 
-	for _, v := range publicGroupMap {
+	for _, v := range GetAllGroupsFromCache() {
 		groupList = append(groupList, fmt.Sprintf("%d,%s", v.ID, v.Name))
 	}
 

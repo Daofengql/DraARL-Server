@@ -32,21 +32,19 @@ func (d *Device) ToModelDevice() *models.Device {
 // ToModelGroup 将 GORM Group 转换为 models.Group
 func (g *Group) ToModelGroup() *models.Group {
 	return &models.Group{
-		ID:                g.ID,
-		Name:              g.Name,
-		Type:              g.Type,
-		CallSign:          g.CallSign,
-		Password:          g.Password,
-		AllowCallSignSSID: g.AllowCallSignSSID,
-		OwerID:            g.OwerID,
-		MasterServer:      g.MasterServer,
-		SlaveServer:       g.SlaveServer,
-		Status:            g.Status,
-		IsVirtual:         g.IsVirtual,
-		Note:              g.Note,
-		CreateTime:        g.CreateTime.Format("2006-01-02 15:04:05"),
-		UpdateTime:        g.UpdateTime.Format("2006-01-02 15:04:05"),
-		DevMap:            make(map[int]*models.Device),
+		ID:           g.ID,
+		Name:         g.Name,
+		Type:         g.Type,
+		Password:     g.Password,
+		OwerID:       g.OwerID,
+		MasterServer: g.MasterServer,
+		SlaveServer:  g.SlaveServer,
+		Status:       g.Status,
+		IsVirtual:    g.IsVirtual,
+		Note:         g.Note,
+		CreateTime:   g.CreateTime.Format("2006-01-02 15:04:05"),
+		UpdateTime:   g.UpdateTime.Format("2006-01-02 15:04:05"),
+		DevMap:       make(map[int]*models.Device),
 	}
 }
 
@@ -78,18 +76,16 @@ func FromModelDevice(d *models.Device) *Device {
 // FromModelGroup 从 models.Group 转换为 GORM Group
 func FromModelGroup(g *models.Group) *Group {
 	return &Group{
-		ID:                g.ID,
-		Name:              g.Name,
-		Type:              g.Type,
-		CallSign:          g.CallSign,
-		Password:          g.Password,
-		AllowCallSignSSID: g.AllowCallSignSSID,
-		OwerID:            g.OwerID,
-		MasterServer:      g.MasterServer,
-		SlaveServer:       g.SlaveServer,
-		Status:            g.Status,
-		IsVirtual:         g.IsVirtual,
-		Note:              g.Note,
+		ID:           g.ID,
+		Name:         g.Name,
+		Type:         g.Type,
+		Password:     g.Password,
+		OwerID:       g.OwerID,
+		MasterServer: g.MasterServer,
+		SlaveServer:  g.SlaveServer,
+		Status:       g.Status,
+		IsVirtual:    g.IsVirtual,
+		Note:         g.Note,
 	}
 }
 

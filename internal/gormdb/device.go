@@ -4,7 +4,10 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+var ErrDeviceNotInGroup = errors.New("device is no longer in the expected group")
 
 // DeviceRepository 设备仓库
 type DeviceRepository struct {
@@ -95,6 +98,47 @@ func (r *DeviceRepository) UpdateDeviceFields(id int, fields map[string]interfac
 	return r.db.Model(&Device{}).Where("id = ?", id).Updates(fields).Error
 }
 
+// UpdateDeviceCommControlInGroup 原子更新当前仍属于指定群组的设备收发状态。
+// 行锁保证群主校验与更新期间设备不能并发切换群组。
+func (r *DeviceRepository) UpdateDeviceCommControlInGroup(
+	deviceID, groupID int,
+	disableSend, disableRecv *bool,
+) (before, after *Device, err error) {
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		var device Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&device, deviceID).Error; err != nil {
+			return err
+		}
+		if device.GroupID != groupID {
+			return ErrDeviceNotInGroup
+		}
+
+		original := device
+		updates := make(map[string]interface{}, 2)
+		if disableSend != nil {
+			updates["disable_send"] = *disableSend
+			device.DisableSend = *disableSend
+		}
+		if disableRecv != nil {
+			updates["disable_recv"] = *disableRecv
+			device.DisableRecv = *disableRecv
+		}
+		if len(updates) > 0 {
+			result := tx.Model(&Device{}).
+				Where("id = ? AND group_id = ?", deviceID, groupID).
+				Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+		}
+
+		before = &original
+		after = &device
+		return nil
+	})
+	return before, after, err
+}
+
 // DeleteDeviceByID 删除设备（仅删除设备记录，不清理关联数据）
 // 注意： 请使用 DeleteDeviceWithCascade 进行完整的级联删除
 func (r *DeviceRepository) DeleteDeviceByID(id int) error {
@@ -110,8 +154,9 @@ func (r *DeviceRepository) DeleteDeviceWithCascade(id int) error {
 			return err
 		}
 
-		// 2. 清除通信记录中的设备引用（将 device_id 设为 NULL，保留记录用于统计）
-		if err := tx.Model(&CommRecord{}).Where("device_id = ?", id).Update("device_id", nil).Error; err != nil {
+		// 2. 清除通信记录中的设备引用。CommRecord.DeviceID 为非空字段，
+		// 协议约定 0 表示无普通设备引用（幽灵/历史记录），因此不能写 NULL。
+		if err := tx.Model(&CommRecord{}).Where("device_id = ?", id).Update("device_id", 0).Error; err != nil {
 			return err
 		}
 

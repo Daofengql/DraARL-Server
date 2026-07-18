@@ -149,6 +149,14 @@ func GetRadioGroupDevices(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
 		return
 	}
+	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		return
+	}
+	if _, ok := requireGroupViewAccess(c, group); !ok {
+		return
+	}
 
 	devices := make([]RadioDeviceResponse, 0)
 	seenDevices := make(map[string]bool) // 用于去重
@@ -225,20 +233,21 @@ func UpdateRadioGroup(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
+	userID := currentUser.ID
 
-	// 验证群组是否存在
-	group, exists := udphub.GetGroupFromCache(req.GroupID)
-	if !exists {
+	// 群组必须存在于数据库、处于启用状态且不是虚拟互联组。
+	group, err := gormdb.NewGroupRepository().GetGroupByID(req.GroupID)
+	if err != nil || group == nil || group.Status != 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "目标群组不存在或未激活"})
 		return
 	}
-	_ = group // 避免未使用变量警告
+	if _, ok := requireGroupViewAccess(c, group); !ok {
+		return
+	}
 
 	// 如果未指定 dev_model，默认为 Web (105)
 	devModel := byte(req.DevModel)
@@ -340,25 +349,25 @@ func UpdateRadioGroup(c *gin.Context) {
 // 此接口专门为 Radio 页面设计，返回包含 WS 设备的实时统计
 // 只返回用户有权限访问的群组（公开群组 + 用户已验证的私有群组）
 func GetRadioGroupStats(c *gin.Context) {
-	// 获取当前用户
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
+	userID := currentUser.ID
 
 	// 获取用户有权限访问的群组 ID 列表
-	memberRepo := gormdb.NewGroupMemberRepository()
-	members, err := memberRepo.ListGroupsByUser(userID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
-		return
-	}
-
 	// 构建用户有权限的群组 ID 集合
 	accessibleGroupIDs := make(map[int]bool)
-	for _, m := range members {
-		accessibleGroupIDs[m.GroupID] = true
+	if !isAdminUser(currentUser) {
+		memberRepo := gormdb.NewGroupMemberRepository()
+		members, err := memberRepo.ListGroupsByUser(userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
+			return
+		}
+		for _, m := range members {
+			accessibleGroupIDs[m.GroupID] = true
+		}
 	}
 
 	// 获取所有群组统计
@@ -369,7 +378,7 @@ func GetRadioGroupStats(c *gin.Context) {
 	for _, s := range allStats {
 		// 公开群组（type=1）对所有用户可见
 		// 私有群组（type=2）只对已验证用户可见
-		if s.Type == 1 || accessibleGroupIDs[s.ID] {
+		if s.Type == groupTypePublic || isAdminUser(currentUser) || s.OwnerID == userID || accessibleGroupIDs[s.ID] {
 			result = append(result, gin.H{
 				"id":                s.ID,
 				"name":              s.Name,

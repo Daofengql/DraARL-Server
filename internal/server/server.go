@@ -179,6 +179,10 @@ func (s *Server) setupRoutes() {
 				admin.DELETE("/users/:id", handler.DeleteUser)
 				admin.PUT("/users/:id/status", handler.UpdateUserStatus)
 				admin.GET("/users/:id", handler.GetUserDetail)
+				admin.GET("/admin/users/:id/device-password", handler.AdminGetUserDevicePassword)
+				// 放在 /auth 路径下，使浏览器携带限定为 /api/auth 的 refresh cookie，
+				// 切换成功时可以吊销当前管理员会话。
+				admin.POST("/auth/switch-login/:id", handler.AdminSwitchLogin)
 
 				// 用户审批相关
 				admin.GET("/approvals/pending", handler.GetPendingApprovals)
@@ -200,6 +204,9 @@ func (s *Server) setupRoutes() {
 				admin.PUT("/admin/logbooks/:id", handler.AdminUpdateLogbook)
 				admin.DELETE("/admin/logbooks/:id", handler.AdminDeleteLogbook)
 				admin.DELETE("/admin/logbooks/batch", handler.AdminBatchDeleteLogbooks)
+
+				// 管理员群组管理使用独立的全量视角，避免复用普通用户可见性过滤。
+				admin.GET("/admin/groups", handler.GetAdminGroups)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）
@@ -216,7 +223,10 @@ func (s *Server) setupRoutes() {
 				approved.GET("/devices", handler.GetDevices)
 				approved.GET("/devices/list", handler.GetDevices) // 兼容旧接口
 				approved.GET("/device/get", handler.GetDevice)
+				approved.GET("/devices/:id", handler.GetDevice)
 				approved.GET("/device/qths", handler.GetDeviceQTHs)
+				approved.GET("/user/device-default-group", handler.GetDeviceDefaultGroup)
+				approved.PUT("/user/device-default-group", handler.UpdateDeviceDefaultGroup)
 				approved.PUT("/devices/:id", handler.UpdateDevice)
 				approved.DELETE("/devices/:id", handler.DeleteDevice)
 				approved.POST("/device/changegroup", handler.ChangeDeviceGroup)
@@ -255,12 +265,14 @@ func (s *Server) setupRoutes() {
 				groupOwner.Use(middleware.RequireAdminOrOwner())
 				{
 					groupOwner.PUT("/groups/:id", handler.UpdateGroup)
-					groupOwner.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
 					groupOwner.DELETE("/groups/:id", handler.DeleteGroup)
-					groupOwner.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
 					// 踢出设备
 					groupOwner.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
+					groupOwner.PUT("/groups/:id/devices/:deviceId/comm-control", handler.UpdateGroupDeviceCommControl)
 				}
+				// 兼容旧接口没有 :id 路径参数，处理器从 JSON/query 读取 ID 并自行执行同等权限校验。
+				approved.POST("/group/update", handler.UpdateGroup)
+				approved.POST("/group/delete", handler.DeleteGroup)
 			}
 
 			// 虚拟互联组管理（需要管理员权限）

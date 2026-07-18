@@ -114,20 +114,18 @@ func (d *Device) BeforeCreate(tx *gorm.DB) error {
 
 // Group 群组模型
 type Group struct {
-	ID                int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name              string    `gorm:"type:varchar(255);column:name" json:"name"`
-	Type              int       `gorm:"type:int;column:type" json:"type"`
-	CallSign          string    `gorm:"type:varchar(255);column:call_sign" json:"callsign"`
-	Password          string    `gorm:"type:varchar(255);column:password" json:"password"`
-	AllowCallSignSSID string    `gorm:"type:text;column:allow_callsign_ssid" json:"allow_callsign_ssid"`
-	OwerID            int       `gorm:"type:int;index:idx_ower_id;column:ower_id" json:"ower_id"` // 性能优化：添加索引，加速按所有者查询
-	MasterServer      int       `gorm:"type:int;column:master_server" json:"master_server"`
-	SlaveServer       int       `gorm:"type:int;column:slave_server" json:"slave_server"`
-	Status            int       `gorm:"type:int;default:1;column:status" json:"status"`
-	IsVirtual         bool      `gorm:"type:tinyint(1);default:0;column:is_virtual" json:"is_virtual"` // 是否为虚拟互联组
-	CreateTime        time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime        time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	Note              string    `gorm:"type:text;column:note" json:"note"`
+	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name         string    `gorm:"type:varchar(255);column:name" json:"name"`
+	Type         int       `gorm:"type:int;column:type" json:"type"`
+	Password     string    `gorm:"type:varchar(255);column:password" json:"-"`
+	OwerID       int       `gorm:"type:int;index:idx_ower_id;column:ower_id" json:"ower_id"` // 性能优化：添加索引，加速按所有者查询
+	MasterServer int       `gorm:"type:int;column:master_server" json:"master_server"`
+	SlaveServer  int       `gorm:"type:int;column:slave_server" json:"slave_server"`
+	Status       int       `gorm:"type:int;default:1;column:status" json:"status"`
+	IsVirtual    bool      `gorm:"type:tinyint(1);default:0;column:is_virtual" json:"is_virtual"` // 是否为虚拟互联组
+	CreateTime   time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime   time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Note         string    `gorm:"type:text;column:note" json:"note"`
 
 	// 关联
 	Devices []*Device `gorm:"-" json:"devices,omitempty"`
@@ -141,8 +139,8 @@ func (Group) TableName() string {
 // GroupLink 群组互联关联模型
 type GroupLink struct {
 	ID            int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	LinkGroupID   int       `gorm:"not null;uniqueIndex:uk_link_target,priority:1;column:link_group_id" json:"link_group_id"`     // 互联组ID
-	TargetGroupID int       `gorm:"not null;uniqueIndex:uk_link_target,priority:2;column:target_group_id" json:"target_group_id"` // 目标群组ID
+	LinkGroupID   int       `gorm:"not null;index:idx_group_links_link;column:link_group_id" json:"link_group_id"`            // 互联组ID
+	TargetGroupID int       `gorm:"not null;uniqueIndex:uk_group_links_target;column:target_group_id" json:"target_group_id"` // 一个实体群组只能属于一个互联组
 	CreatedAt     time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
 
@@ -354,7 +352,7 @@ func (a *Asset) IsFile() bool {
 type UserDevicePreference struct {
 	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
 	UserID      int       `gorm:"not null;uniqueIndex:uk_user_devmodel;column:user_id" json:"user_id"`     // 用户ID，外键关联 users表
-	DevModel    uint8     `gorm:"not null;uniqueIndex:uk_user_devmodel;column:dev_model" json:"dev_model"` // 设备型号: 101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web
+	DevModel    uint8     `gorm:"not null;uniqueIndex:uk_user_devmodel;column:dev_model" json:"dev_model"` // 偏好类型: 0=新普通设备默认群组；101-105=各客户端平台
 	LastGroupID int       `gorm:"default:0;column:last_group_id" json:"last_group_id"`                     // 该平台最后使用的群组ID
 	CreatedAt   time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt   time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
@@ -501,6 +499,7 @@ func AutoMigrate() error {
 		{"组成员(无用户)", "DELETE FROM group_members WHERE user_id NOT IN (SELECT id FROM users)"},
 		{"群互联(源群丢失)", "DELETE FROM group_links WHERE link_group_id NOT IN (SELECT id FROM public_groups)"},
 		{"群互联(目标丢失)", "DELETE FROM group_links WHERE target_group_id NOT IN (SELECT id FROM public_groups)"},
+		{"群互联(目标重复)", "DELETE gl1 FROM group_links gl1 INNER JOIN group_links gl2 ON gl1.target_group_id = gl2.target_group_id AND gl1.id > gl2.id"},
 		{"设备(无所有者)", "DELETE FROM devices WHERE owner_id NOT IN (SELECT id FROM users)"},
 		{"日志(无所有者)", "DELETE FROM logbooks WHERE user_id NOT IN (SELECT id FROM users)"},
 		{"设备配置(无设备)", "DELETE FROM device_configs WHERE device_id NOT IN (SELECT id FROM devices)"},
@@ -554,8 +553,56 @@ func AutoMigrate() error {
 	if err := ensureExpectedUniqueIndexes(db); err != nil {
 		return err
 	}
+	// 只有显式执行 AutoMigrate 时才移除群组自身呼号遗留列；正常启动
+	// 不运行本函数，因此仍可兼容保留 call_sign 的旧表。
+	if err := dropLegacyGroupCallSignColumn(db); err != nil {
+		return err
+	}
+	if err := dropLegacyGroupAllowCallSignSSIDColumn(db); err != nil {
+		return err
+	}
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
+	return nil
+}
+
+// dropLegacyGroupAllowCallSignSSIDColumn 删除已停用的设备准入白名单列。
+// 非空历史配置必须先由管理员明确清理，避免迁移静默丢失仍在使用的数据。
+func dropLegacyGroupAllowCallSignSSIDColumn(db *gorm.DB) error {
+	migrator := db.Migrator()
+	if !migrator.HasTable(Group{}.TableName()) || !migrator.HasColumn(&Group{}, "allow_callsign_ssid") {
+		log.Println("[Migration Info] public_groups.allow_callsign_ssid 不存在，跳过遗留列清理")
+		return nil
+	}
+
+	var configured int64
+	if err := db.Table(Group{}.TableName()).
+		Where("TRIM(COALESCE(allow_callsign_ssid, '')) <> ''").
+		Count(&configured).Error; err != nil {
+		return fmt.Errorf("inspect legacy public_groups.allow_callsign_ssid failed: %w", err)
+	}
+	if configured > 0 {
+		return fmt.Errorf("refusing to drop public_groups.allow_callsign_ssid: %d group(s) still have non-empty legacy configuration", configured)
+	}
+	if err := migrator.DropColumn(&Group{}, "allow_callsign_ssid"); err != nil {
+		return fmt.Errorf("drop legacy public_groups.allow_callsign_ssid failed: %w", err)
+	}
+	log.Println("[Migration Success] 已删除 public_groups.allow_callsign_ssid 遗留列")
+	return nil
+}
+
+// dropLegacyGroupCallSignColumn 删除已停用的群组自身呼号列。
+// 仅由显式的 AutoMigrate 调用；表或列不存在时视为已经完成。
+func dropLegacyGroupCallSignColumn(db *gorm.DB) error {
+	migrator := db.Migrator()
+	if !migrator.HasTable(Group{}.TableName()) || !migrator.HasColumn(&Group{}, "call_sign") {
+		log.Println("[Migration Info] public_groups.call_sign 不存在，跳过遗留列清理")
+		return nil
+	}
+	if err := migrator.DropColumn(&Group{}, "call_sign"); err != nil {
+		return fmt.Errorf("drop legacy public_groups.call_sign failed: %w", err)
+	}
+	log.Println("[Migration Success] 已删除 public_groups.call_sign 遗留列")
 	return nil
 }
 
@@ -564,6 +611,9 @@ func ensureExpectedUniqueIndexes(db *gorm.DB) error {
 		return err
 	}
 	if err := ensureMySQLUniqueIndex(db, "devices", "idx_owner_ssid", []string{"owner_id", "ssid"}); err != nil {
+		return err
+	}
+	if err := ensureMySQLUniqueIndex(db, "group_links", "uk_group_links_target", []string{"target_group_id"}); err != nil {
 		return err
 	}
 	return nil

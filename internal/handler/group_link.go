@@ -393,17 +393,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 		return
 	}
 
-	// 删除所有关联关系
-	linkRepo := gormdb.NewGroupLinkRepository()
-	if err := linkRepo.DeleteLinksByLinkGroup(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "删除关联关系失败",
-		})
-		return
-	}
-
-	// 删除群组
+	// 群组和全部关联关系由同一仓库事务删除，不能先在事务外删除关联。
 	if err := repo.DeleteGroupWithCascade(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -563,10 +553,10 @@ func AddGroupLinkTarget(c *gin.Context) {
 		})
 		return
 	}
-	if targetGroup.IsVirtual {
+	if targetGroup.IsVirtual || !isSupportedGroupType(targetGroup.Type) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "不能关联另一个虚拟互联组",
+			"message": "只能关联公开或私有的实体群组",
 		})
 		return
 	}
@@ -730,8 +720,9 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 	})
 }
 
-// GetAvailableTargetGroups 获取可关联的群组列表（仅管理员）
-// 返回所有非虚拟的公开群组，供管理员选择关联
+// GetAvailableTargetGroups 获取可关联的群组列表（仅管理员）。
+// 公开和私有实体群组都可以作为互联目标；虚拟群组和已经被其他
+// 互联组占用的实体群组不会返回。
 func GetAvailableTargetGroups(c *gin.Context) {
 	// 获取当前登录用户
 	username, _ := c.Get("username")
@@ -754,9 +745,9 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		return
 	}
 
-	// 获取所有公开群组（非虚拟）
+	// 获取所有实体群组（公开 + 私有，排除虚拟互联组）。
 	repo := gormdb.NewGroupRepository()
-	groups, err := repo.ListPublicGroups()
+	groups, err := repo.ListGroupsExcludeVirtual()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

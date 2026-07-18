@@ -86,16 +86,6 @@ func TestShouldRejectNormalDeviceConflict(t *testing.T) {
 	}
 }
 
-func TestRewriteRuntimeAllowCallSignSSID(t *testing.T) {
-	rewritten, changed := rewriteRuntimeAllowCallSignSSID(" BG7OLD-1 , BG7OLD-105,OTHER-3 ", "BG7OLD", "BG7NEW")
-	if !changed {
-		t.Fatal("expected allow_callsign_ssid rewrite to report changed")
-	}
-	if rewritten != "BG7NEW-1,BG7NEW-105,OTHER-3" {
-		t.Fatalf("unexpected rewritten whitelist: %q", rewritten)
-	}
-}
-
 func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 	devOwnerSSIDMap = make(map[string]*models.Device)
 	devUsernameSSIDMap = make(map[string]*models.Device)
@@ -131,14 +121,14 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 	}
 	pool.storeConnList([]*models.Device{dev})
 	gp := &models.Group{
-		ID:                models.GroupIDPublicMin,
-		AllowCallSignSSID: "BG7OLD-7,OTHER-1",
+		ID: models.GroupIDPublicMin,
 		DevMap: map[int]*models.Device{
 			dev.ID: dev,
 		},
 		ConnPool: pool,
 	}
 	publicGroupMap[gp.ID] = gp
+	globalGroupCacheAtomic.Store(publicGroupMap)
 
 	userList.Store("BG7OLD", &UserInfo{
 		ID:       42,
@@ -168,10 +158,6 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 	if got := devCallsignSSIDMap[protocol.GetCallSignSSID("BG7NEW", dev.SSID)]; got != dev {
 		t.Fatal("expected new callsign-ssid runtime index rebuilt")
 	}
-	if gp.AllowCallSignSSID != "BG7NEW-7,OTHER-1" {
-		t.Fatalf("expected whitelist rewritten, got %q", gp.AllowCallSignSSID)
-	}
-
 	value, ok := userList.Load("BG7NEW")
 	if !ok {
 		t.Fatal("expected userList new callsign key")
@@ -231,12 +217,11 @@ func TestRemoveRuntimeDeviceCleansIndexesAndConnPools(t *testing.T) {
 		}
 	}
 
-	publicGp := makeGroup(models.GroupIDPublicMin)
 	cacheGp := makeGroup(models.GroupIDPublicMin)
 	privateGp := makeGroup(models.GroupIDPrivate1)
 
-	publicGroupMap[publicGp.ID] = publicGp
-	globalGroupCacheAtomic.Store(map[int]*models.Group{cacheGp.ID: cacheGp})
+	publicGroupMap = map[int]*models.Group{cacheGp.ID: cacheGp}
+	globalGroupCacheAtomic.Store(publicGroupMap)
 	userList.Store("BG7OLD", &UserInfo{
 		ID:       42,
 		Name:     "alice",
@@ -269,7 +254,6 @@ func TestRemoveRuntimeDeviceCleansIndexesAndConnPools(t *testing.T) {
 	}
 
 	for name, gp := range map[string]*models.Group{
-		"public":  publicGp,
 		"cache":   cacheGp,
 		"private": privateGp,
 	} {

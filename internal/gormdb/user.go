@@ -3,6 +3,8 @@ package gormdb
 import (
 	"errors"
 
+	"draarl/internal/models"
+
 	"gorm.io/gorm"
 )
 
@@ -256,12 +258,36 @@ func (r *UserRepository) DeleteUser(id int) error {
 	return r.db.Delete(&User{}, id).Error
 }
 
-// DeleteUserWithCascade 删除用户及其所有关联数据（事务级联删除）
-// 包括： devices, group_members, operator_certs, logbooks,
-// user_device_preferences, user_radio_presets
-func (r *UserRepository) DeleteUserWithCascade(id int) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 1. 删除用户的设备
+type DeleteUserCascadeResult struct {
+	DeletedDevices []*Device
+	MovedDevices   []*Device
+	OwnedGroupIDs  []int
+}
+
+// DeleteUserWithCascade 删除用户及其所有关联数据（事务级联删除），并返回
+// 需要在事务提交后同步运行时与缓存的设备/群组清单。
+func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult, error) {
+	result := &DeleteUserCascadeResult{
+		DeletedDevices: make([]*Device, 0),
+		MovedDevices:   make([]*Device, 0),
+		OwnedGroupIDs:  make([]int, 0),
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("owner_id = ?", id).Find(&result.DeletedDevices).Error; err != nil {
+			return err
+		}
+		deletedDeviceIDs := make([]int, 0, len(result.DeletedDevices))
+		for _, device := range result.DeletedDevices {
+			deletedDeviceIDs = append(deletedDeviceIDs, device.ID)
+		}
+		if len(deletedDeviceIDs) > 0 {
+			if err := tx.Where("device_id IN ?", deletedDeviceIDs).Delete(&DeviceConfig{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&CommRecord{}).Where("device_id IN ?", deletedDeviceIDs).Update("device_id", 0).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Where("owner_id = ?", id).Delete(&Device{}).Error; err != nil {
 			return err
 		}
@@ -279,24 +305,31 @@ func (r *UserRepository) DeleteUserWithCascade(id int) error {
 
 		// 4. 删除用户拥有的群组（如果是群组所有者）- 批量操作优化
 		// 获取用户拥有的所有群组ID
-		var ownedGroupIDs []int
-		if err := tx.Model(&Group{}).Where("ower_id = ?", id).Pluck("id", &ownedGroupIDs).Error; err != nil {
+		if err := tx.Model(&Group{}).Where("ower_id = ?", id).Pluck("id", &result.OwnedGroupIDs).Error; err != nil {
 			return err
 		}
 
-		if len(ownedGroupIDs) > 0 {
+		if len(result.OwnedGroupIDs) > 0 {
+			if err := tx.Where("group_id IN ?", result.OwnedGroupIDs).Find(&result.MovedDevices).Error; err != nil {
+				return err
+			}
 			// 批量删除群组成员
-			if err := tx.Where("group_id IN ?", ownedGroupIDs).Delete(&GroupMember{}).Error; err != nil {
+			if err := tx.Where("group_id IN ?", result.OwnedGroupIDs).Delete(&GroupMember{}).Error; err != nil {
 				return err
 			}
 			// 批量删除群组互联关系
-			if err := tx.Where("link_group_id IN ? OR target_group_id IN ?", ownedGroupIDs, ownedGroupIDs).
+			if err := tx.Where("link_group_id IN ? OR target_group_id IN ?", result.OwnedGroupIDs, result.OwnedGroupIDs).
 				Delete(&GroupLink{}).Error; err != nil {
 				return err
 			}
-			// 批量清除设备中的群组引用
-			if err := tx.Model(&Device{}).Where("group_id IN ?", ownedGroupIDs).
-				Update("group_id", nil).Error; err != nil {
+			// 其他用户留在这些群组中的设备迁移到默认公共群组。
+			if err := tx.Model(&Device{}).Where("group_id IN ?", result.OwnedGroupIDs).
+				Update("group_id", models.GroupIDPublicMin).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&UserDevicePreference{}).
+				Where("last_group_id IN ?", result.OwnedGroupIDs).
+				Update("last_group_id", 0).Error; err != nil {
 				return err
 			}
 			// 批量删除群组
@@ -332,6 +365,10 @@ func (r *UserRepository) DeleteUserWithCascade(id int) error {
 
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // AddOperatorLog 添加操作日志
@@ -527,6 +564,11 @@ func (r *UserRepository) UpdateUserEmail(id int, email string) error {
 // 用户设备偏好设置相关方法
 // ==========================================
 
+// UserPreferenceModelDefaultDevice 使用现有 user_device_preferences 表中的
+// dev_model=0 保存“新普通设备默认群组”。101-105 等真实客户端型号仍保留
+// 各平台最后使用群组的原有语义，因此无需新增表或字段。
+const UserPreferenceModelDefaultDevice uint8 = 0
+
 // GetUserDevicePreference 获取用户指定平台的设备偏好设置
 func (r *UserRepository) GetUserDevicePreference(userID int, devModel uint8) (*UserDevicePreference, error) {
 	var pref UserDevicePreference
@@ -549,6 +591,29 @@ func (r *UserRepository) UpsertUserDevicePreference(userID int, devModel uint8, 
 		"user_id":   userID,
 		"dev_model": devModel,
 	}).Error
+}
+
+// GetUserDefaultDeviceGroupID 获取用户为“新登记普通设备”设置的默认群组。
+// 返回 0 表示未设置；调用方必须把它解释为未分组，而不是公共群组。
+func (r *UserRepository) GetUserDefaultDeviceGroupID(userID int) (int, error) {
+	pref, err := r.GetUserDevicePreference(userID, UserPreferenceModelDefaultDevice)
+	if err != nil {
+		return 0, err
+	}
+	if pref == nil || pref.LastGroupID <= 0 {
+		return 0, nil
+	}
+	return pref.LastGroupID, nil
+}
+
+// SetUserDefaultDeviceGroupID 设置新普通设备的默认群组。groupID<=0 时删除
+// 该偏好记录，使“未设置”保持为真正的空值语义。
+func (r *UserRepository) SetUserDefaultDeviceGroupID(userID, groupID int) error {
+	if groupID <= 0 {
+		return r.db.Where("user_id = ? AND dev_model = ?", userID, UserPreferenceModelDefaultDevice).
+			Delete(&UserDevicePreference{}).Error
+	}
+	return r.UpsertUserDevicePreference(userID, UserPreferenceModelDefaultDevice, groupID)
 }
 
 // GetUserLastGroupID 获取用户指定平台的最后群组ID

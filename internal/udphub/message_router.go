@@ -188,6 +188,9 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 
 // RouteTextToUDP 转发 WebSocket 文本消息到 UDP 设备
 func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, textData []byte, groupID int) {
+	if source == nil || source.IsDisabledSend() {
+		return
+	}
 	conn := GetGlobalConn()
 	if conn == nil {
 		return

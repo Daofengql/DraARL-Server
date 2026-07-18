@@ -20,5 +20,5 @@
 - 本文档优先使用“推荐新路径”，同时标注兼容旧路径。
 - 接口统一返回 `code/message/data`，但少量历史接口（AT 控制）返回业务码 `20000/20001`。
 - WebSocket 鉴权使用 `HttpOnly Cookie(ws_token)`，不支持 URL 透传 token。
-- 收发控制（`disable_send`/`disable_recv`）仅支持设备级：统一由 `devices` 表与 `PUT /api/devices/:id` 维护。
-- 群组维度接口 `PUT /api/groups/:id/devices/:deviceId` 已下线，仅保留 `DELETE /api/groups/:id/devices/:deviceId`（踢出设备）。
+- 收发控制（`disable_send`/`disable_recv`）是设备级状态，由 `devices` 表统一维护；设备所有者/管理员使用 `PUT /api/devices/:id`，当前群主/管理员可使用群组设备收发控制接口。
+- 群组不提供设备准入白名单或永久封禁；群主的临时收发控制在设备切换群组后仍然生效，设备所有者可自行恢复。

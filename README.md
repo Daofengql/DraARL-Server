@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 最新 tag | [v1.1.4-alpha6](https://github.com/Daofengql/DraARL-Server/tree/v1.1.4-alpha6) |
+| 最新版本 | `v1.1.4-alpha10` |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
@@ -145,6 +145,10 @@ cd ..
 go run ./cmd/udphub -c udphub.yaml -auto-migrate
 ```
 
+群组自身呼号和设备准入白名单已停用。正常启动会兼容并忽略旧的
+`public_groups.call_sign`、`public_groups.allow_callsign_ssid` 列；显式执行
+`-auto-migrate` 时会安全删除遗留列。若准入白名单仍有非空配置，迁移会中止并要求先人工确认清理。
+
 后续正常启动：
 
 ```bash
@@ -238,8 +242,8 @@ make run
 示例：
 
 ```bash
-git tag -a v1.1.4-alpha7 -m "release: v1.1.4-alpha7"
-git push origin v1.1.4-alpha7
+git tag -a v1.1.4-alpha10 -m "release: v1.1.4-alpha10"
+git push origin v1.1.4-alpha10
 ```
 
 ## 服务端口与入口

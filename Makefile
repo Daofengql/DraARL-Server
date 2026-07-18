@@ -1,7 +1,8 @@
 # Makefile for draarl
 
 BINARY_NAME=draarl
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION_FILE=$(strip $(shell cat VERSION 2>/dev/null))
+VERSION?=$(if $(VERSION_FILE),$(VERSION_FILE),dev)
 BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-X draarl/internal/buildinfo.Version=$(VERSION) -X draarl/internal/buildinfo.BuildTime=$(BUILD_TIME)"
 

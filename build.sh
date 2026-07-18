@@ -9,13 +9,15 @@ set -e
 
 BINARY_NAME="DraARL"
 
-if [ -z "$1" ]; then
-    echo "Usage: $0 <version>"
-    echo "Example: $0 v1.2.3"
+VERSION="${1:-}"
+if [ -z "$VERSION" ] && [ -f VERSION ]; then
+    VERSION=$(tr -d '\r\n' < VERSION)
+fi
+if [ -z "$VERSION" ]; then
+    echo "No version argument provided and VERSION file is missing or empty."
+    echo "Usage: $0 [version]"
     exit 1
 fi
-
-VERSION="$1"
 
 # Get build time
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

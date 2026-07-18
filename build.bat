@@ -8,12 +8,13 @@ REM ==========================================
 
 set BINARY_NAME=DraARL.exe
 
-if "%~1"=="" (
-    echo Usage: %~nx0 ^<version^>
-    echo Example: %~nx0 v1.2.3
+set VERSION=%~1
+if not defined VERSION if exist VERSION set /p VERSION=<VERSION
+if not defined VERSION (
+    echo No version argument provided and VERSION file is missing or empty.
+    echo Usage: %~nx0 [version]
     exit /b 1
 )
-set VERSION=%~1
 
 for /f "tokens=*" %%i in ('powershell -Command "Get-Date -Format yyyy-MM-ddTHH:mm:ssZ"') do set BUILD_TIME=%%i
 if not defined BUILD_TIME set BUILD_TIME=unknown

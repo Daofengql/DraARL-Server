@@ -18,8 +18,38 @@ export const userService = {
     keyword?: string
     role?: string
   }): Promise<ListResponse<User>> {
-    const res = await apiClient.get<BackendResponse<ListResponse<User>>>('/api/users', { params })
+    const query = params ? {
+      ...params,
+      limit: params.page_size,
+      page_size: undefined,
+    } : undefined
+    const res = await apiClient.get<BackendResponse<ListResponse<User>>>('/api/users', { params: query })
     return res.data || { items: [], total: 0, page: 1, page_size: 10 }
+  },
+
+  // 自动翻页获取全部用户，供后台列表及用户引用字段使用。
+  async listAll(): Promise<User[]> {
+    const pageSize = 100
+    const result: User[] = []
+    let page = 1
+    let total = Number.POSITIVE_INFINITY
+
+    while (result.length < total) {
+      const current = await this.getList({ page, page_size: pageSize })
+      result.push(...current.items)
+      total = current.total
+      if (current.items.length === 0 || current.items.length < pageSize) break
+      page += 1
+    }
+    return result
+  },
+
+  // 管理员按需揭示指定用户的设备准入密码。
+  async getDevicePassword(id: number): Promise<{ device_password: string; is_new: boolean }> {
+    const res = await apiClient.get<BackendResponse<{ device_password: string; is_new: boolean }>>(
+      `/api/admin/users/${id}/device-password`
+    )
+    return res.data!
   },
 
   // 获取用户公开信息（任何登录用户可访问）

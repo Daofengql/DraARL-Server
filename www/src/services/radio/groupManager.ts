@@ -8,7 +8,6 @@ import type { RadioGroup } from '../../types/radio'
 export interface GroupInfo {
   id: number
   name: string
-  callsign?: string
   type: number
   status: number
   ownerId?: number
@@ -45,7 +44,6 @@ class GroupManagerService {
       const groups: GroupWithOnline[] = rawGroups.map((g: any) => ({
         id: g.id,
         name: g.name,
-        callsign: g.callsign,
         type: g.type,
         status: g.status,
         ownerId: g.ower_id,
@@ -90,7 +88,6 @@ class GroupManagerService {
         const group: GroupWithOnline = {
           id: g.id,
           name: g.name,
-          callsign: g.callsign,
           type: g.type,
           status: g.status,
           ownerId: g.ower_id,
@@ -179,7 +176,6 @@ class GroupManagerService {
       return rawGroups.map((g: any) => ({
         id: g.id,
         name: g.name,
-        callsign: g.callsign,
         type: g.type,
         status: g.status,
         ownerId: g.ower_id,
@@ -262,7 +258,6 @@ export function toRadioGroup(group: GroupWithOnline): RadioGroup {
   return {
     id: group.id,
     name: group.name,
-    callsign: group.callsign,
     type: group.type,
     status: group.status,
     onlineCount: group.onlineCount,

@@ -88,7 +88,6 @@ export interface RadioMessage {
 export interface RadioGroup {
   id: number
   name: string
-  callsign?: string
   type: number
   status: number
   onlineCount: number // 在线设备数

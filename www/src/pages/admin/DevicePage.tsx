@@ -90,7 +90,7 @@ export function AdminDevicePage() {
 
   const loadGroups = async () => {
     try {
-      const data = await groupService.list()
+      const data = await groupService.listAll({ admin: true })
       setGroups(data)
     } catch (err) {
       console.error('Failed to load groups:', err)
@@ -99,8 +99,8 @@ export function AdminDevicePage() {
 
   const loadUsers = async () => {
     try {
-      const data = await userService.getList()
-      setUsers(data.items || data)
+      const data = await userService.listAll()
+      setUsers(data)
     } catch (err) {
       console.error('Failed to load users:', err)
     }
@@ -318,7 +318,7 @@ export function AdminDevicePage() {
                         onClick={() => handleOpenSwitchDialog(device)}
                         endIcon={group?.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
                       >
-                        {group?.name || '无群组'}
+                        {group?.name || (device.group_id === 0 ? '未分组' : '群组 ' + device.group_id + ' 不可用')}
                       </Button>
                     </TableCell>
                     <TableCell align="center">
@@ -396,6 +396,8 @@ export function AdminDevicePage() {
           currentGroupId={switchingDevice.group_id}
           onSelect={handleSwitchGroup}
           title="切换设备群组"
+          adminMode
+          showSearchTab={false}
         />
       )}
 

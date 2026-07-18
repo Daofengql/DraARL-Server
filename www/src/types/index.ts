@@ -100,11 +100,9 @@ export interface DeviceQTH {
 export interface Group {
   id: number
   name: string
-  type: number  // 1=公开, 2=私有
-  callsign?: string
-  password?: string
-  allow_callsign_ssid?: string
-  ower_id?: number
+	type: number  // 1=公开, 2=私有
+	password?: string
+	ower_id?: number
   ower_callsign?: string
   ower_name?: string     // 群组创建者名称
   devlist?: string

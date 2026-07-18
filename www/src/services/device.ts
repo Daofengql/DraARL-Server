@@ -75,15 +75,47 @@ export const deviceService = {
     keyword?: string
     group_id?: number
   }): Promise<ListResponse<Device>> {
-    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[]; total: number }>>('/api/devices', { params })
+    const query = params ? {
+      ...params,
+      limit: params.page_size,
+      page_size: undefined,
+    } : undefined
+    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[]; total: number }>>('/api/devices', { params: query })
     const items = (res.data?.items || []).map(normalizeDevice)
     return { items, total: res.data?.total || 0, page: params?.page || 1, page_size: params?.page_size || 10 }
   },
 
   // 获取设备列表（兼容旧接口）
   async list(): Promise<Device[]> {
-    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[] }>>('/api/devices')
-    return (res.data?.items || []).map(normalizeDevice)
+    return this.listAll()
+  },
+
+  async listAll(): Promise<Device[]> {
+    const pageSize = 100
+    const result: Device[] = []
+    let page = 1
+    let total = Number.POSITIVE_INFINITY
+
+    while (result.length < total) {
+      const current = await this.getList({ page, page_size: pageSize })
+      result.push(...current.items)
+      total = current.total
+      if (current.items.length === 0 || current.items.length < pageSize) break
+      page += 1
+    }
+    return result
+  },
+
+  async getDefaultGroup(): Promise<number | null> {
+    const res = await apiClient.get<BackendResponse<{ group_id: number | null }>>('/api/user/device-default-group')
+    return res.data?.group_id ?? null
+  },
+
+  async setDefaultGroup(groupId: number | null): Promise<number | null> {
+    const res = await apiClient.put<BackendResponse<{ group_id: number | null }>>('/api/user/device-default-group', {
+      group_id: groupId,
+    })
+    return res.data?.group_id ?? null
   },
 
   // 获取单个设备

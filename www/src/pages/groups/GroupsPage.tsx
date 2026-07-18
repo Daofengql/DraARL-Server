@@ -35,12 +35,13 @@ import Logout from '@mui/icons-material/Logout'
 import Person from '@mui/icons-material/Person'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
+import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import { groupService, userService } from '../../services'
 import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
-import { GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
+import { GroupDeviceManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function GroupsPage() {
   // const navigate = useNavigate() // 移除了冗余的路由跳转
@@ -62,6 +63,7 @@ export function GroupsPage() {
   const [editingGroup, setEditingGroup] = useState<Group | null>(null) // 新增：当前正在编辑的群组
   const [joiningGroup, setJoiningGroup] = useState<Group | null>(null)
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
+  const [managedGroup, setManagedGroup] = useState<Group | null>(null)
   const [searchResults, setSearchResults] = useState<Group[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchKeywordInput, setSearchKeywordInput] = useState('')
@@ -69,7 +71,6 @@ export function GroupsPage() {
   const [formData, setFormData] = useState({
     name: '',
     type: 1,
-    callsign: '',
     password: '',
     status: 1,
     note: '',
@@ -169,7 +170,7 @@ export function GroupsPage() {
     setConfirmDialog({
       open: true,
       title: '退出群组',
-      message: `确定要退出群组 "${group.name}" 吗？这会将您在该群组的设备移至默认群组。`,
+      message: `确定要退出群组 "${group.name}" 吗？这会将您在该群组的设备移至系统公共群组 999。`,
       type: 'warning',
       onConfirm: async () => {
         try {
@@ -185,7 +186,7 @@ export function GroupsPage() {
   // Open add dialog
   const handleOpenAdd = () => {
     setEditingGroup(null)
-    setFormData({ name: '', type: 1, callsign: '', password: '', status: 1, note: '' })
+    setFormData({ name: '', type: 1, password: '', status: 1, note: '' })
     setDialogOpen(true)
   }
 
@@ -195,7 +196,6 @@ export function GroupsPage() {
     setFormData({
       name: group.name,
       type: group.type,
-      callsign: group.callsign || '',
       password: '', // Don't show password when editing
       status: group.status ?? 1,
       note: group.note || '',
@@ -304,7 +304,6 @@ export function GroupsPage() {
           )}
         </Stack>
       </TableCell>
-      <TableCell>{group.callsign || '-'}</TableCell>
       <TableCell>
         {group.ower_id ? (
           <Box
@@ -362,6 +361,11 @@ export function GroupsPage() {
         )}
         {group.is_owner && (
           <>
+            <Tooltip title="管理设备">
+              <IconButton size="small" onClick={() => setManagedGroup(group)}>
+                <SettingsInputAntenna fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="编辑">
               <IconButton size="small" onClick={() => handleOpenEdit(group)}>
                 <Edit fontSize="small" />
@@ -416,7 +420,6 @@ export function GroupsPage() {
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
                 <TableCell>群组名称</TableCell>
-                <TableCell>呼号</TableCell>
                 <TableCell width={100}>拥有者</TableCell>
                 <TableCell width={120}>设备数量</TableCell>
                 <TableCell width={100}>状态</TableCell>
@@ -426,9 +429,9 @@ export function GroupsPage() {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
               ) : publicGroups.length === 0 ? (
-                <TableRow><TableCell colSpan={8} align="center">暂无公开群组</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">暂无公开群组</TableCell></TableRow>
               ) : (
                 publicGroups.map(renderGroupRow)
               )}
@@ -452,7 +455,6 @@ export function GroupsPage() {
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
                 <TableCell>群组名称</TableCell>
-                <TableCell>呼号</TableCell>
                 <TableCell width={100}>拥有者</TableCell>
                 <TableCell width={120}>设备数量</TableCell>
                 <TableCell width={100}>状态</TableCell>
@@ -462,9 +464,9 @@ export function GroupsPage() {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
               ) : privateGroups.length === 0 ? (
-                <TableRow><TableCell colSpan={8} align="center">暂未加入任何私有群组</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">暂未加入任何私有群组</TableCell></TableRow>
               ) : (
                 privateGroups.map(renderGroupRow)
               )}
@@ -579,7 +581,6 @@ export function GroupsPage() {
                 </MenuItem>
               </Select>
             </FormControl>
-            <TextField label="呼号标识（可选）" fullWidth value={formData.callsign} onChange={(e) => setFormData({ ...formData, callsign: e.target.value })} />
             {/* Only show password field for private groups */}
             {formData.type === GROUP_TYPE_PRIVATE && (
               <TextField
@@ -622,6 +623,13 @@ export function GroupsPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <GroupDeviceManagementDialog
+        open={Boolean(managedGroup)}
+        group={managedGroup}
+        onClose={() => setManagedGroup(null)}
+        onChanged={() => void loadGroups()}
+      />
 
       {/* 用户详情弹窗 */}
       <UserDetailPopover

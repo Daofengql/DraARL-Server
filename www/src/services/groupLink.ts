@@ -32,7 +32,7 @@ export const groupLinkService = {
     return res.data?.items || []
   },
 
-  // 获取可用的目标群组列表（非虚拟的公开群组）
+  // 获取可用的目标群组列表（公开和私有的非虚拟群组）
   async getAvailableTargetGroups(): Promise<Group[]> {
     const res = await apiClient.get<BackendResponse<{ items: Group[] }>>('/api/group-links/available-targets')
     if (res.code !== 200) {

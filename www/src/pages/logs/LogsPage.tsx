@@ -27,6 +27,7 @@ const EVENT_TYPES = [
   { value: '', label: '全部' },
   { value: 'login', label: '登录' },
   { value: 'logout', label: '登出' },
+  { value: 'admin_switch_login', label: '管理员切换登录' },
   { value: 'login_failed', label: '登录失败' },
   { value: 'register', label: '注册' },
   { value: 'user_create', label: '创建用户' },
@@ -64,6 +65,7 @@ const EVENT_TYPES = [
 const EVENT_TYPE_COLORS: Record<string, any> = {
   login: 'info',
   logout: 'default',
+  admin_switch_login: 'warning',
   login_failed: 'error',
   register: 'success',
   user_create: 'success',

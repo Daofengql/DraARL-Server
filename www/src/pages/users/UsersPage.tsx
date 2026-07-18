@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Box,
   Paper,
@@ -44,6 +44,9 @@ import Cake from '@mui/icons-material/Cake'
 import LocationOn from '@mui/icons-material/LocationOn'
 import Badge from '@mui/icons-material/Badge'
 import CalendarToday from '@mui/icons-material/CalendarToday'
+import Visibility from '@mui/icons-material/Visibility'
+import VisibilityOff from '@mui/icons-material/VisibilityOff'
+import SwitchAccount from '@mui/icons-material/SwitchAccount'
 import { userService } from '../../services'
 import { authService } from '../../services'
 import type { User } from '../../types'
@@ -72,10 +75,14 @@ export function UsersPage() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [devicePasswords, setDevicePasswords] = useState<Record<number, string>>({})
+  const [passwordLoading, setPasswordLoading] = useState<Record<number, boolean>>({})
+  const passwordRequestGeneration = useRef(0)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [detailAnchorEl, setDetailAnchorEl] = useState<HTMLElement | null>(null)
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
+  const [switchingUserId, setSwitchingUserId] = useState<number | null>(null)
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -97,13 +104,50 @@ export function UsersPage() {
 
   const loadUsers = async () => {
     setLoading(true)
+    passwordRequestGeneration.current += 1
+    setDevicePasswords({})
+    setPasswordLoading({})
     try {
-      const data = await userService.getList()
-      setUsers(data.items || data)
+      const data = await userService.listAll()
+      setUsers(data)
     } catch (err) {
       console.error('Failed to load users:', err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleToggleDevicePassword = async (user: User) => {
+    if (passwordLoading[user.id]) return
+    if (devicePasswords[user.id] !== undefined) {
+      setDevicePasswords((current) => {
+        const next = { ...current }
+        delete next[user.id]
+        return next
+      })
+      return
+    }
+
+    const requestGeneration = passwordRequestGeneration.current
+    setPasswordLoading((current) => ({ ...current, [user.id]: true }))
+    try {
+      const result = await userService.getDevicePassword(user.id)
+      if (requestGeneration !== passwordRequestGeneration.current) return
+      setDevicePasswords((current) => ({ ...current, [user.id]: result.device_password }))
+      if (result.is_new) {
+        setError('用户 ' + user.username + ' 的旧设备密码不可恢复，系统已生成新密码')
+      }
+    } catch (err: any) {
+      if (requestGeneration !== passwordRequestGeneration.current) return
+      setError(err.response?.data?.message || '读取设备密码失败')
+    } finally {
+      if (requestGeneration === passwordRequestGeneration.current) {
+        setPasswordLoading((current) => {
+          const next = { ...current }
+          delete next[user.id]
+          return next
+        })
+      }
     }
   }
 
@@ -197,6 +241,27 @@ export function UsersPage() {
     })
   }
 
+  const handleSwitchLogin = (user: User) => {
+    setConfirmDialog({
+      open: true,
+      title: '切换登录用户',
+      message: `确定要退出当前管理员会话，并直接以用户“${user.username}”登录吗？切换后如需返回管理员账号，必须重新登录。`,
+      type: 'warning',
+      onConfirm: async () => {
+        setSwitchingUserId(user.id)
+        setError('')
+        try {
+          const session = await authService.switchLogin(user.id)
+          authService.saveAuth(session.token, session.user)
+          window.location.replace('/dashboard')
+        } catch (err: any) {
+          setError(err.response?.data?.message || '切换登录用户失败')
+          setSwitchingUserId(null)
+        }
+      },
+    })
+  }
+
   const handleOpenUserDetail = (event: React.MouseEvent<HTMLElement>, user: User) => {
     setSelectedUser(user)
     setDetailAnchorEl(event.currentTarget)
@@ -271,6 +336,7 @@ export function UsersPage() {
               <TableCell>ID</TableCell>
               <TableCell>用户名</TableCell>
               <TableCell>呼号</TableCell>
+              <TableCell>设备密码</TableCell>
               <TableCell>角色</TableCell>
               <TableCell>状态</TableCell>
               <TableCell>创建时间</TableCell>
@@ -280,13 +346,13 @@ export function UsersPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   加载中...
                 </TableCell>
               </TableRow>
             ) : paginatedUsers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   暂无数据
                 </TableCell>
               </TableRow>
@@ -321,6 +387,34 @@ export function UsersPage() {
                   </TableCell>
                   <TableCell>{user.callsign || '-'}</TableCell>
                   <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontFamily: 'monospace',
+                          minWidth: 88,
+                          letterSpacing: devicePasswords[user.id] ? 0 : 1,
+                        }}
+                      >
+                        {devicePasswords[user.id] ?? '********'}
+                      </Typography>
+                      <Tooltip title={devicePasswords[user.id] !== undefined ? '隐藏设备密码' : '查看设备密码'}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => handleToggleDevicePassword(user)}
+                            disabled={Boolean(passwordLoading[user.id])}
+                            aria-label={devicePasswords[user.id] !== undefined ? '隐藏设备密码' : '查看设备密码'}
+                          >
+                            {devicePasswords[user.id] !== undefined
+                              ? <VisibilityOff fontSize="small" />
+                              : <Visibility fontSize="small" />}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Box>
+                  </TableCell>
+                  <TableCell>
                     <Chip
                       label={user.role === 'admin' ? '管理员' : '普通用户'}
                       size="small"
@@ -341,8 +435,22 @@ export function UsersPage() {
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', gap: 0.5 }}>
+                      {user.id !== currentUserId && user.id !== 1 && user.status === 1 && (
+                        <Tooltip title="以该用户身份登录">
+                          <span>
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              onClick={() => handleSwitchLogin(user)}
+                              disabled={switchingUserId !== null}
+                            >
+                              <SwitchAccount fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
                       <Tooltip title="编辑">
-                        <IconButton size="small" onClick={() => handleOpenDialog(user)}>
+                        <IconButton size="small" onClick={() => handleOpenDialog(user)} disabled={switchingUserId !== null}>
                           <Edit fontSize="small" />
                         </IconButton>
                       </Tooltip>
@@ -351,7 +459,7 @@ export function UsersPage() {
                           size="small"
                           onClick={() => handleToggleStatus(user)}
                           color={user.status === 1 ? 'warning' : 'success'}
-                          disabled={user.id === 1}
+                          disabled={user.id === 1 || switchingUserId !== null}
                         >
                           {user.status === 1 ? <Block fontSize="small" /> : <CheckCircle fontSize="small" />}
                         </IconButton>
@@ -361,7 +469,7 @@ export function UsersPage() {
                           size="small"
                           color="error"
                           onClick={() => handleDelete(user.id)}
-                          disabled={user.id === 1}
+                          disabled={user.id === 1 || switchingUserId !== null}
                         >
                           <Delete fontSize="small" />
                         </IconButton>

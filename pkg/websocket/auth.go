@@ -145,7 +145,17 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	}
 	if lastGroupID != models.GroupIDPublicMin {
 		group, groupErr := gormdb.NewGroupRepository().GetGroupByID(lastGroupID)
-		if groupErr != nil || !canUseGroupForWebGhost(lastGroupID, group) {
+		isVerifiedMember := false
+		if groupErr == nil && group != nil && group.Status == 1 && !group.IsVirtual &&
+			group.Type == 2 && !user.HasRole("admin") && group.OwerID != user.ID {
+			member, memberErr := gormdb.NewGroupMemberRepository().GetVerifiedMemberByGroupAndUser(group.ID, user.ID)
+			if memberErr != nil {
+				groupErr = memberErr
+			} else {
+				isVerifiedMember = member != nil
+			}
+		}
+		if groupErr != nil || !canUseGroupForWebGhost(user, lastGroupID, group, isVerifiedMember) {
 			log.Printf("[WS-AUTH] 用户 %d 的群组偏好 %d 已失效，回退默认群组", user.ID, lastGroupID)
 			lastGroupID = models.GroupIDPublicMin
 		}
@@ -156,14 +166,18 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	return result
 }
 
-func canUseGroupForWebGhost(groupID int, group *gormdb.Group) bool {
+func canUseGroupForWebGhost(user *gormdb.User, groupID int, group *gormdb.Group, isVerifiedMember bool) bool {
+	if user == nil || groupID <= 0 {
+		return false
+	}
 	if groupID == models.GroupIDPublicMin {
 		return true
 	}
-	return groupID > 0 &&
-		group != nil &&
-		group.ID == groupID &&
-		group.Status == 1 &&
-		!group.IsVirtual &&
-		(group.Type == 1 || group.Type == 2)
+	if group == nil || group.ID != groupID || group.Status != 1 || group.IsVirtual {
+		return false
+	}
+	if group.Type == 1 {
+		return true
+	}
+	return group.Type == 2 && (user.HasRole("admin") || group.OwerID == user.ID || isVerifiedMember)
 }

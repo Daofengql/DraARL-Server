@@ -65,11 +65,31 @@ func TestCreateGhostDeviceRefreshesExistingConnectionGroup(t *testing.T) {
 }
 
 func TestCanUseGroupForWebGhost(t *testing.T) {
-	if !canUseGroupForWebGhost(models.GroupIDPublicMin, nil) {
+	user := &gormdb.User{ID: 9, Roles: "user"}
+	admin := &gormdb.User{ID: 10, Roles: "admin"}
+	if !canUseGroupForWebGhost(user, models.GroupIDPublicMin, nil, false) {
 		t.Fatal("system group 999 must remain valid without a database row")
 	}
-	if !canUseGroupForWebGhost(4, &gormdb.Group{ID: 4, Type: 1, Status: 1}) {
+	if canUseGroupForWebGhost(nil, models.GroupIDPublicMin, nil, false) {
+		t.Fatal("missing user must not have a valid initial group")
+	}
+	if !canUseGroupForWebGhost(user, 4, &gormdb.Group{ID: 4, Type: 1, Status: 1}, false) {
 		t.Fatal("enabled entity group should be valid")
+	}
+	privateGroup := &gormdb.Group{ID: 4, Type: 2, Status: 1, OwerID: 20}
+	if canUseGroupForWebGhost(user, 4, privateGroup, false) {
+		t.Fatal("unverified user must not restore a private-group preference")
+	}
+	if !canUseGroupForWebGhost(user, 4, privateGroup, true) {
+		t.Fatal("verified member should restore a private-group preference")
+	}
+	ownedPrivateGroup := *privateGroup
+	ownedPrivateGroup.OwerID = user.ID
+	if !canUseGroupForWebGhost(user, 4, &ownedPrivateGroup, false) {
+		t.Fatal("group owner should restore a private-group preference")
+	}
+	if !canUseGroupForWebGhost(admin, 4, privateGroup, false) {
+		t.Fatal("administrator should restore a private-group preference")
 	}
 	for name, group := range map[string]*gormdb.Group{
 		"missing":     nil,
@@ -79,7 +99,7 @@ func TestCanUseGroupForWebGhost(t *testing.T) {
 		"wrong id":    {ID: 5, Type: 1, Status: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if canUseGroupForWebGhost(4, group) {
+			if canUseGroupForWebGhost(user, 4, group, true) {
 				t.Fatal("invalid group must fall back to 999")
 			}
 		})

@@ -200,7 +200,10 @@ func (r *GroupRepository) ListVirtualGroups() ([]*Group, error) {
 // ListGroupsExcludeVirtual 获取所有群组（排除虚拟互联组）
 func (r *GroupRepository) ListGroupsExcludeVirtual() ([]*Group, error) {
 	var groups []*Group
-	err := r.db.Where("type IN ? AND (is_virtual = ? OR is_virtual IS NULL)", []int{1, 2}, false).Order("id DESC").Find(&groups).Error
+	err := r.db.
+		Where("type IN ? AND status = ? AND (is_virtual = ? OR is_virtual IS NULL)", []int{1, 2}, 1, false).
+		Order("id DESC").
+		Find(&groups).Error
 	return groups, err
 }
 

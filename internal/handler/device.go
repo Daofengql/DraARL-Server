@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
@@ -19,6 +20,7 @@ import (
 type DeviceListRequest struct {
 	Limit    int    `json:"limit"`
 	Page     int    `json:"page"`
+	Keyword  string `json:"keyword"`
 	CallSign string `json:"callsign"`
 	GroupID  string `json:"group_id"`
 	IsOnline bool   `json:"isonline"`
@@ -55,7 +57,8 @@ func GetDevices(c *gin.Context) {
 	// 获取查询参数
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	callsign := c.Query("callsign")
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	callsign := strings.TrimSpace(c.Query("callsign"))
 	groupID := c.Query("group_id")
 	_ = c.Query("isonline") == "true" // TODO: 实现在线状态过滤
 
@@ -84,7 +87,14 @@ func GetDevices(c *gin.Context) {
 	repo := gormdb.NewDeviceRepository()
 
 	// 根据查询条件选择不同的查询方法（全部使用数据库分页）
-	if callsign != "" {
+	if keyword != "" {
+		// 后台搜索框按设备名称或所有者呼号模糊匹配，并保持数据库层分页。
+		ownerID := 0
+		if !isAdmin {
+			ownerID = currentUser.ID
+		}
+		devices, total, err = repo.ListDevicesByKeywordPaginated(keyword, ownerID, limit, page)
+	} else if callsign != "" {
 		// 按呼号搜索（数据库层分页）
 		ownerID := 0
 		if !isAdmin {

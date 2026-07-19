@@ -13,6 +13,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func canUseGroupAsLinkTarget(group *gormdb.Group) bool {
+	return group != nil &&
+		group.Status == 1 &&
+		!group.IsVirtual &&
+		isSupportedGroupType(group.Type)
+}
+
+func filterAvailableGroupLinkTargets(groups []*gormdb.Group, occupied map[int]struct{}) []*gormdb.Group {
+	available := make([]*gormdb.Group, 0, len(groups))
+	for _, group := range groups {
+		if !canUseGroupAsLinkTarget(group) {
+			continue
+		}
+		if _, exists := occupied[group.ID]; exists {
+			continue
+		}
+		available = append(available, group)
+	}
+	return available
+}
+
 // CreateVirtualGroupRequest 创建虚拟互联组请求
 type CreateVirtualGroupRequest struct {
 	Name   string `json:"name" binding:"required"`
@@ -544,7 +565,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 		return
 	}
 
-	// 验证目标群组是否存在且不是虚拟组
+	// 写入端必须独立校验目标，不能依赖候选列表阻止非法 ID 直提。
 	targetGroup, err := groupRepo.GetGroupByID(req.TargetGroupID)
 	if err != nil || targetGroup == nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -553,10 +574,10 @@ func AddGroupLinkTarget(c *gin.Context) {
 		})
 		return
 	}
-	if targetGroup.IsVirtual || !isSupportedGroupType(targetGroup.Type) {
+	if !canUseGroupAsLinkTarget(targetGroup) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "只能关联公开或私有的实体群组",
+			"message": "只能关联已启用的公开或私有实体群组",
 		})
 		return
 	}
@@ -771,17 +792,7 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		linkedTargetSet[id] = struct{}{}
 	}
 
-	// 过滤掉虚拟组和已被占用的实体组
-	availableGroups := make([]*gormdb.Group, 0)
-	for _, g := range groups {
-		if g.IsVirtual {
-			continue
-		}
-		if _, occupied := linkedTargetSet[g.ID]; occupied {
-			continue
-		}
-		availableGroups = append(availableGroups, g)
-	}
+	availableGroups := filterAvailableGroupLinkTargets(groups, linkedTargetSet)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

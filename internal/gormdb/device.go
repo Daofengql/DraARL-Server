@@ -273,6 +273,32 @@ func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID in
 // 以下方法支持数据库层面分页（解决内存分页性能问题）
 // ============================================================
 
+// ListDevicesByKeywordPaginated 按设备名称或所有者呼号模糊搜索并分页。
+// LEFT JOIN 保证历史上没有有效所有者关联的设备仍可按设备名称检索。
+func (r *DeviceRepository) ListDevicesByKeywordPaginated(keyword string, ownerID int, limit, page int) ([]*Device, int64, error) {
+	var devices []*Device
+	var total int64
+
+	offset := (page - 1) * limit
+	like := "%" + keyword + "%"
+	query := r.db.Model(&Device{}).
+		Joins("LEFT JOIN users ON devices.owner_id = users.id").
+		Where("devices.name LIKE ? OR users.callsign LIKE ?", like, like)
+
+	if ownerID > 0 {
+		query = query.Where("devices.owner_id = ?", ownerID)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := query.Select("devices.*").Order("devices.id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return devices, total, nil
+}
+
 // ListDevicesByCallSignPaginated 按呼号搜索设备并分页（数据库层分页）
 func (r *DeviceRepository) ListDevicesByCallSignPaginated(callsign string, ownerID int, limit, page int) ([]*Device, int64, error) {
 	var devices []*Device

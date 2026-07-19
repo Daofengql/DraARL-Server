@@ -81,7 +81,7 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 		manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
 
 		// 同时创建 GhostDevice 并建立与 WSDevice 的关联
-		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
+		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, authResult.GroupID)
 
 		return device, authResult
 	}
@@ -143,8 +143,27 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 		log.Printf("[WS-AUTH] 获取用户 %d 的群组偏好失败: %v，使用默认群组", user.ID, err)
 		lastGroupID = models.GroupIDPublicMin
 	}
+	if lastGroupID != models.GroupIDPublicMin {
+		group, groupErr := gormdb.NewGroupRepository().GetGroupByID(lastGroupID)
+		if groupErr != nil || !canUseGroupForWebGhost(lastGroupID, group) {
+			log.Printf("[WS-AUTH] 用户 %d 的群组偏好 %d 已失效，回退默认群组", user.ID, lastGroupID)
+			lastGroupID = models.GroupIDPublicMin
+		}
+	}
 	result.GroupID = lastGroupID
 
 	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s) group-%d", user.ID, user.CallSign, result.GroupID)
 	return result
+}
+
+func canUseGroupForWebGhost(groupID int, group *gormdb.Group) bool {
+	if groupID == models.GroupIDPublicMin {
+		return true
+	}
+	return groupID > 0 &&
+		group != nil &&
+		group.ID == groupID &&
+		group.Status == 1 &&
+		!group.IsVirtual &&
+		(group.Type == 1 || group.Type == 2)
 }

@@ -62,7 +62,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 
 ```text
 DraARL-Server/
-├── cmd/udphub/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
+├── cmd/draarl/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
 ├── internal/
 │   ├── aprs/                # APRS 连接、配置和日志
 │   ├── auth/                # refresh token 存储，支持 Redis 与内存降级
@@ -80,7 +80,7 @@ DraARL-Server/
 ├── docs/                    # MkDocs 文档站、API 文档、协议文档和图表资源
 ├── test/                    # Python 设备/协议测试工具
 ├── .github/workflows/       # Release 与文档发布工作流
-├── udphub.yaml.example      # 配置模板
+├── config.yaml.example      # 配置模板
 ├── Makefile                 # 常用构建、测试和运行命令
 └── README.md
 ```
@@ -113,7 +113,7 @@ CREATE DATABASE draarl CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ### 3. 准备配置文件
 
 ```bash
-cp udphub.yaml.example udphub.yaml
+cp config.yaml.example config.yaml
 ```
 
 至少需要检查以下配置：
@@ -142,7 +142,7 @@ cd ..
 首次部署或表结构变更后执行自动迁移：
 
 ```bash
-go run ./cmd/udphub -c udphub.yaml -auto-migrate
+go run ./cmd/draarl -c config.yaml -auto-migrate
 ```
 
 群组自身呼号和设备准入白名单已停用。正常启动会兼容并忽略旧的
@@ -152,7 +152,7 @@ go run ./cmd/udphub -c udphub.yaml -auto-migrate
 后续正常启动：
 
 ```bash
-go run ./cmd/udphub -c udphub.yaml
+go run ./cmd/draarl -c config.yaml
 ```
 
 首次启动会自动创建管理员用户，并在控制台输出初始用户名和密码。登录后请立即修改密码。
@@ -162,7 +162,7 @@ go run ./cmd/udphub -c udphub.yaml
 后端：
 
 ```bash
-go run ./cmd/udphub -c udphub.yaml
+go run ./cmd/draarl -c config.yaml
 ```
 
 前端：
@@ -193,8 +193,8 @@ npm run build
 默认构建不嵌入前端资源，适合 API 服务或本地开发：
 
 ```bash
-go build -o draarl ./cmd/udphub
-./draarl -c udphub.yaml
+go build -o draarl ./cmd/draarl
+./draarl -c config.yaml
 ```
 
 ### 嵌入前端构建
@@ -209,7 +209,7 @@ cd ..
 
 mkdir -p internal/server/web/dist
 cp -r www/dist/* internal/server/web/dist/
-go build -tags=embed -o draarl ./cmd/udphub
+go build -tags=embed -o draarl ./cmd/draarl
 ```
 
 Windows PowerShell 可将复制步骤替换为：
@@ -217,7 +217,7 @@ Windows PowerShell 可将复制步骤替换为：
 ```powershell
 New-Item -ItemType Directory -Force internal/server/web/dist
 Copy-Item -Recurse -Force www/dist/* internal/server/web/dist/
-go build -tags=embed -o draarl.exe ./cmd/udphub
+go build -tags=embed -o draarl.exe ./cmd/draarl
 ```
 
 ### Makefile
@@ -265,18 +265,18 @@ git push origin v1.1.4-alpha10
 ./draarl -v
 
 # 打印关键配置
-./draarl -c udphub.yaml -p json
+./draarl -c config.yaml -p json
 
 # 重置管理员密码
-./draarl -c udphub.yaml -reset-admin-pass "new-password"
+./draarl -c config.yaml -reset-admin-pass "new-password"
 
 # 执行数据库自动迁移
-./draarl -c udphub.yaml -auto-migrate
+./draarl -c config.yaml -auto-migrate
 ```
 
 生产环境建议：
 
-- 固定并备份 `udphub.yaml` 中的 `JWT.Secret` 和 `DeviceAuth.AESKey`。
+- 固定并备份 `config.yaml` 中的 `JWT.Secret` 和 `DeviceAuth.AESKey`。
 - 配置真实的 `Web.FrontendURL` 和 `Web.AllowedOrigins`，避免 Release 模式下 Origin 校验失败。
 - 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
 - 使用 MinIO 保存头像、操作证、资源文件、通信录音和固件。

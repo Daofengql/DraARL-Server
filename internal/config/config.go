@@ -20,6 +20,8 @@ var configFilePath string
 var configMu sync.RWMutex
 var releaseBuild atomic.Bool
 
+const DefaultConfigFileName = "config.yaml"
+
 type MinIOConfig struct {
 	Endpoint  string `yaml:"Endpoint" json:"endpoint"`
 	AccessKey string `yaml:"AccessKey" json:"access_key"`
@@ -156,12 +158,12 @@ func Load(configPath string) (*Configuration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("get config filepath err: %w", err)
 		}
-		configPath = filepath.Join(dir, "udphub.yaml")
+		configPath = filepath.Join(dir, DefaultConfigFileName)
 	}
 
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("udphub.yaml open err: %w", err)
+		return nil, fmt.Errorf("config file open err: %w", err)
 	}
 
 	cfg := &Configuration{}

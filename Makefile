@@ -29,23 +29,23 @@ all: fmt vet build
 
 ## build: Build the application
 build:
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v ./cmd/udphub
+	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v ./cmd/draarl
 
 ## build-windows: Build for Windows
 build-windows:
-	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_windows_x86_64.exe -v ./cmd/udphub
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_windows_x86_64.exe -v ./cmd/draarl
 
 ## build-linux: Build for Linux
 build-linux:
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_linux_x86_64 -v ./cmd/udphub
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_linux_x86_64 -v ./cmd/draarl
 
 ## build-arm: Build for ARM (Raspberry Pi)
 build-arm:
-	GOOS=linux GOARCH=arm $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_linux_arm -v ./cmd/udphub
+	GOOS=linux GOARCH=arm $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_linux_arm -v ./cmd/draarl
 
 ## build-arm64: Build for ARM64
 build-arm64:
-	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_linux_arm64 -v ./cmd/udphub
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME)_linux_arm64 -v ./cmd/draarl
 
 ## clean: Clean build files
 clean:
@@ -77,12 +77,12 @@ vet:
 
 ## run: Run the application
 run:
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v ./cmd/udphub
-	./$(BINARY_NAME) -c udphub.yaml
+	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v ./cmd/draarl
+	./$(BINARY_NAME) -c config.yaml
 
 ## install: Install the application
 install:
-	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v ./cmd/udphub
+	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) -v ./cmd/draarl
 
 ## help: Show this help message
 help:

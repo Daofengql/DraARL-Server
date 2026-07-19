@@ -144,7 +144,7 @@ Authorization: Bearer <token>
 
 ```yaml
 System:
-    IPfile: ./udphub.ipdb  # IP地址库文件路径
+    IPfile: ./ipinfo.ipdb  # IP地址库文件路径
 ```
 
 **查询结果**:

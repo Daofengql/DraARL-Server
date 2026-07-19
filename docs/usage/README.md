@@ -62,7 +62,7 @@ DraARL Server 是一个面向业余无线电场景的实时通信与管理平台
 
 本文档主要依据以下文件整理：
 
-- `cmd/udphub/main.go`
+- `cmd/draarl/main.go`
 - `internal/server/server.go`
 - `internal/server/frontend_embed.go`
 - `internal/config/config.go`

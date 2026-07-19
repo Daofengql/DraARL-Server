@@ -2,6 +2,12 @@ package config
 
 import "testing"
 
+func TestDefaultConfigFileName(t *testing.T) {
+	if DefaultConfigFileName != "config.yaml" {
+		t.Fatalf("default config file = %q, want config.yaml", DefaultConfigFileName)
+	}
+}
+
 func TestGetAllowedOriginsIncludesFrontendURL(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.Web.AllowedOrigins = []string{

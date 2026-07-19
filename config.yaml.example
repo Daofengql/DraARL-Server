@@ -1,12 +1,12 @@
 # DraARL 配置文件模板
-# 复制此文件为 udphub.yaml 并根据实际情况修改配置
+# 复制此文件为 config.yaml 并根据实际情况修改配置
 
 # 系统配置
 System:
     Host: ""                   # 监听地址，空则监听所有网卡
     Port: "60050"              # UDP服务端口
     LogPath: ""                # 日志文件路径，空则不输出文件
-    IPfile: ./udphub.ipdb      # IP数据库文件路径
+    IPfile: ./ipinfo.ipdb      # IP数据库文件路径
     ProxyProtocol: ""          # PROXY Protocol 版本: "v2" 启用, 留空禁用。启用后可从 frp 等代理获取真实客户端 IP
 
 # MySQL数据库配置

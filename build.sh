@@ -7,7 +7,7 @@
 
 set -e
 
-BINARY_NAME="DraARL"
+BINARY_NAME="draarl"
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ] && [ -f VERSION ]; then
@@ -51,7 +51,7 @@ cp -r www/dist internal/server/web/dist
 echo ""
 echo "[4/4] Building backend with embedded frontend..."
 export CGO_ENABLED=0
-go build -ldflags="-s -w -X draarl/internal/buildinfo.Version=$VERSION -X draarl/internal/buildinfo.BuildTime=$BUILD_TIME -X draarl/internal/buildinfo.Release=true" -tags=embed -o "$BINARY_NAME" ./cmd/udphub
+go build -ldflags="-s -w -X draarl/internal/buildinfo.Version=$VERSION -X draarl/internal/buildinfo.BuildTime=$BUILD_TIME -X draarl/internal/buildinfo.Release=true" -tags=embed -o "$BINARY_NAME" ./cmd/draarl
 
 if [ $? -eq 0 ]; then
     echo ""

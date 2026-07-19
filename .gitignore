@@ -4,11 +4,11 @@
 *.dll
 *.so
 *.dylib
-udphub.arm
-udphub.arm64
-draarl
-draarl_test
-draarl_*
+draarl.arm
+draarl.arm64
+/draarl
+/draarl_test
+/draarl_*
 old/
 .claude/
 __pycache__
@@ -36,10 +36,9 @@ vendor/
 .DS_Store
 
 # Configuration files (may contain sensitive data)
-udphub.yaml
 *.yaml
 *.yml
-!udphub.yaml.example
+!config.yaml.example
 !*.example.yaml
 !*.example.yml
 !docs/mkdocs.yml

@@ -197,7 +197,7 @@ func (r *GroupRepository) ListVirtualGroups() ([]*Group, error) {
 	return groups, err
 }
 
-// ListGroupsExcludeVirtual 获取所有群组（排除虚拟互联组）
+// ListGroupsExcludeVirtual 获取所有已启用的实体群组（排除虚拟互联组）
 func (r *GroupRepository) ListGroupsExcludeVirtual() ([]*Group, error) {
 	var groups []*Group
 	err := r.db.

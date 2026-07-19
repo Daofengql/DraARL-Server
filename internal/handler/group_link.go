@@ -742,7 +742,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 }
 
 // GetAvailableTargetGroups 获取可关联的群组列表（仅管理员）。
-// 公开和私有实体群组都可以作为互联目标；虚拟群组和已经被其他
+// 已启用的公开和私有实体群组都可以作为互联目标；禁用、虚拟和已经被其他
 // 互联组占用的实体群组不会返回。
 func GetAvailableTargetGroups(c *gin.Context) {
 	// 获取当前登录用户
@@ -766,7 +766,7 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		return
 	}
 
-	// 获取所有实体群组（公开 + 私有，排除虚拟互联组）。
+	// 获取所有已启用实体群组（公开 + 私有，排除虚拟互联组）。
 	repo := gormdb.NewGroupRepository()
 	groups, err := repo.ListGroupsExcludeVirtual()
 	if err != nil {

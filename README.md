@@ -29,6 +29,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 |------|------|
 | [文档站首页](docs/index.md) | 推荐阅读顺序、文档目录、本地预览与自动发布说明 |
 | [架构设计](docs/架构设计.md) | 系统模块、数据流、部署形态和核心链路 |
+| [UDP 单机转发压力测试](docs/UDP单机转发压力测试.md) | 大规模设备 fan-out 实测、瓶颈分析和容量建议 |
 | [数据字典](docs/数据字典.md) | 数据库表、字段、索引和关系说明 |
 | [使用与说明文档](docs/usage/README.md) | 部署、账号、设备、群组、在线收发、后台、运维等功能说明 |
 | [设备接入指南](docs/usage/07-设备接入与API快速对接.md) | 设备绑定、认证、上报、配置同步和 API 快速对接 |
@@ -78,7 +79,7 @@ DraARL-Server/
 ├── pkg/                     # JWT、缓存、MinIO、WebSocket、加密、GeoIP 等公共包
 ├── www/                     # React 前端项目
 ├── docs/                    # MkDocs 文档站、API 文档、协议文档和图表资源
-├── test/                    # Python 设备/协议测试工具
+├── test/                    # Python 设备/协议测试工具和 Go 压测命令
 ├── .github/workflows/       # Release 与文档发布工作流
 ├── config.yaml.example      # 配置模板
 ├── Makefile                 # 常用构建、测试和运行命令

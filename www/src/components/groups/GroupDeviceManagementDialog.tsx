@@ -16,7 +16,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -27,6 +26,7 @@ import Refresh from '@mui/icons-material/Refresh'
 import Restore from '@mui/icons-material/Restore'
 import { groupService } from '../../services/group'
 import type { Device, Group } from '../../types'
+import { getDevModelName } from '../../utils/deviceModel'
 import { getErrorMessage } from '../../utils/errorMessage'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { OnlineIndicator } from '../common/OnlineIndicator'
@@ -50,7 +50,6 @@ export function GroupDeviceManagementDialog({
   const [loading, setLoading] = useState(false)
   const [savingDeviceId, setSavingDeviceId] = useState<number | null>(null)
   const [error, setError] = useState('')
-  const [reason, setReason] = useState('')
   const [deviceToKick, setDeviceToKick] = useState<Device | null>(null)
   const busy = savingDeviceId !== null
 
@@ -69,7 +68,6 @@ export function GroupDeviceManagementDialog({
 
   useEffect(() => {
     if (!open) return
-    setReason('')
     void loadDevices()
   }, [open, loadDevices])
 
@@ -81,10 +79,7 @@ export function GroupDeviceManagementDialog({
     setSavingDeviceId(device.id)
     setError('')
     try {
-      const updated = await groupService.updateDeviceCommControl(group.id, device.id, {
-        ...changes,
-        reason: reason.trim() || undefined,
-      })
+      const updated = await groupService.updateDeviceCommControl(group.id, device.id, changes)
       setDevices((current) => current.map((item) => (
         item.id === device.id
           ? { ...item, disable_send: updated.disable_send, disable_recv: updated.disable_recv }
@@ -136,16 +131,7 @@ export function GroupDeviceManagementDialog({
             <Alert severity="info" sx={{ mb: 1.5 }}>
               收发控制作用于设备本身，切换群组后仍然生效；设备所有者排除干扰后可以自行恢复。
             </Alert>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
-              <TextField
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                label="操作原因（可选）"
-                placeholder="例如：疑似持续发射"
-                size="small"
-                inputProps={{ maxLength: 500 }}
-                fullWidth
-              />
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
               <Tooltip title="刷新设备列表">
                 <span>
                   <IconButton onClick={() => void loadDevices()} disabled={loading || busy}>
@@ -153,7 +139,7 @@ export function GroupDeviceManagementDialog({
                   </IconButton>
                 </span>
               </Tooltip>
-            </Stack>
+            </Box>
           </Box>
 
           {error && <Alert severity="error" onClose={() => setError('')} sx={{ m: 2 }}>{error}</Alert>}
@@ -176,13 +162,17 @@ export function GroupDeviceManagementDialog({
                 ) : devices.length === 0 ? (
                   <TableRow><TableCell colSpan={6} align="center" sx={{ py: 5 }}>暂无设备</TableCell></TableRow>
                 ) : devices.map((device) => {
+                  const callsign = device.callsign || device.owner_callsign || '-'
+                  const fullyPaused = Boolean(device.disable_send && device.disable_recv)
                   return (
                     <TableRow key={device.id} hover>
                       <TableCell>
                         <Typography variant="body2" fontWeight={500}>{device.name || `设备 ${device.id}`}</Typography>
-                        <Typography variant="caption" color="text.secondary">型号 {device.dev_model ?? device.model ?? 0}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {getDevModelName(device.dev_model ?? device.model ?? 0)}
+                        </Typography>
                       </TableCell>
-                      <TableCell>{device.callsign}-{device.ssid}</TableCell>
+                      <TableCell>{callsign}-{device.ssid}</TableCell>
                       <TableCell>
                         <Stack direction="row" spacing={0.75} alignItems="center">
                           <OnlineIndicator online={Boolean(device.is_online || device.online)} />
@@ -194,7 +184,7 @@ export function GroupDeviceManagementDialog({
                           checked={Boolean(device.disable_send)}
                           disabled={busy}
                           onChange={(_, checked) => void updateCommControl(device, { disable_send: checked })}
-                          inputProps={{ 'aria-label': `${device.callsign}-${device.ssid} 禁止发送` }}
+                          inputProps={{ 'aria-label': `${callsign}-${device.ssid} 禁止发送` }}
                         />
                       </TableCell>
                       <TableCell align="center">
@@ -202,30 +192,25 @@ export function GroupDeviceManagementDialog({
                           checked={Boolean(device.disable_recv)}
                           disabled={busy}
                           onChange={(_, checked) => void updateCommControl(device, { disable_recv: checked })}
-                          inputProps={{ 'aria-label': `${device.callsign}-${device.ssid} 禁止接收` }}
+                          inputProps={{ 'aria-label': `${callsign}-${device.ssid} 禁止接收` }}
                         />
                       </TableCell>
                       <TableCell align="right">
-                        <Tooltip title="暂停双向通信">
+                        <Tooltip title={fullyPaused ? '恢复正常通信' : '暂停双向通信'}>
                           <span>
                             <IconButton
                               size="small"
-                              disabled={busy || (Boolean(device.disable_send) && Boolean(device.disable_recv))}
-                              onClick={() => void updateCommControl(device, { disable_send: true, disable_recv: true })}
+                              color={fullyPaused ? 'success' : 'default'}
+                              disabled={busy}
+                              aria-label={fullyPaused ? '恢复正常通信' : '暂停双向通信'}
+                              onClick={() => void updateCommControl(device, {
+                                disable_send: !fullyPaused,
+                                disable_recv: !fullyPaused,
+                              })}
                             >
-                              <PauseCircleOutline fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                        <Tooltip title="恢复正常通信">
-                          <span>
-                            <IconButton
-                              size="small"
-                              color="success"
-                              disabled={busy || (!device.disable_send && !device.disable_recv)}
-                              onClick={() => void updateCommControl(device, { disable_send: false, disable_recv: false })}
-                            >
-                              <Restore fontSize="small" />
+                              {fullyPaused
+                                ? <Restore fontSize="small" />
+                                : <PauseCircleOutline fontSize="small" />}
                             </IconButton>
                           </span>
                         </Tooltip>

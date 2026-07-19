@@ -294,11 +294,11 @@ export function GroupsPage() {
   // 渲染群组表格行
   const renderGroupRow = (group: Group) => (
     <TableRow key={group.id} hover sx={{ opacity: group.status === 0 ? 0.5 : 1 }}>
-      <TableCell width={60}>{group.id}</TableCell>
+      <TableCell>{group.id}</TableCell>
       <TableCell>
-        <Stack direction="row" alignItems="center" spacing={1}>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
           <GroupTypeIcon type={group.type} />
-          <Typography fontWeight={500}>{group.name}</Typography>
+          <Typography fontWeight={500} noWrap>{group.name}</Typography>
           {group.status === 0 && (
             <Chip label="已禁用" size="small" color="error" sx={{ fontSize: '0.7rem', height: 20 }} />
           )}
@@ -338,7 +338,7 @@ export function GroupsPage() {
       <TableCell>
         <Typography
           sx={{
-            maxWidth: 150,
+            maxWidth: '100%',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -347,7 +347,7 @@ export function GroupsPage() {
           {group.note || '-'}
         </Typography>
       </TableCell>
-      <TableCell align="right" width={120}>
+      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
         {group.type === GROUP_TYPE_PRIVATE && group.is_joined && !group.is_owner && (
           <IconButton
             size="small"
@@ -415,16 +415,16 @@ export function GroupsPage() {
           </Stack>
         </Box>
         <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
-          <Table stickyHeader sx={{ minWidth: 700 }}>
+          <Table stickyHeader sx={{ minWidth: 1000, tableLayout: 'fixed' }}>
             <TableHead>
               <TableRow>
-                <TableCell width={60}>ID</TableCell>
-                <TableCell>群组名称</TableCell>
-                <TableCell width={100}>拥有者</TableCell>
-                <TableCell width={120}>设备数量</TableCell>
-                <TableCell width={100}>状态</TableCell>
-                <TableCell>备注</TableCell>
-                <TableCell align="right" width={120}>操作</TableCell>
+                <TableCell width="6%">ID</TableCell>
+                <TableCell width="36%">群组名称</TableCell>
+                <TableCell width="14%">拥有者</TableCell>
+                <TableCell width="12%">设备数量</TableCell>
+                <TableCell width="10%">状态</TableCell>
+                <TableCell width="8%">备注</TableCell>
+                <TableCell align="right" width="14%">操作</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -450,16 +450,16 @@ export function GroupsPage() {
           </Stack>
         </Box>
         <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
-          <Table stickyHeader sx={{ minWidth: 700 }}>
+          <Table stickyHeader sx={{ minWidth: 1000, tableLayout: 'fixed' }}>
             <TableHead>
               <TableRow>
-                <TableCell width={60}>ID</TableCell>
-                <TableCell>群组名称</TableCell>
-                <TableCell width={100}>拥有者</TableCell>
-                <TableCell width={120}>设备数量</TableCell>
-                <TableCell width={100}>状态</TableCell>
-                <TableCell>备注</TableCell>
-                <TableCell align="right" width={120}>操作</TableCell>
+                <TableCell width="6%">ID</TableCell>
+                <TableCell width="36%">群组名称</TableCell>
+                <TableCell width="14%">拥有者</TableCell>
+                <TableCell width="12%">设备数量</TableCell>
+                <TableCell width="10%">状态</TableCell>
+                <TableCell width="8%">备注</TableCell>
+                <TableCell align="right" width="14%">操作</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>

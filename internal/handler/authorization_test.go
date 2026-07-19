@@ -300,7 +300,7 @@ func TestUpdateGroupRequestDistinguishesOmittedAndEmptyFields(t *testing.T) {
 
 func TestUpdateGroupDeviceCommControlRequestPreservesPartialUpdates(t *testing.T) {
 	var request UpdateGroupDeviceCommControlRequest
-	if err := json.Unmarshal([]byte(`{"disable_send":true,"reason":" test "}`), &request); err != nil {
+	if err := json.Unmarshal([]byte(`{"disable_send":true}`), &request); err != nil {
 		t.Fatalf("unmarshal communication control request: %v", err)
 	}
 	if request.DisableSend == nil || !*request.DisableSend {
@@ -308,9 +308,6 @@ func TestUpdateGroupDeviceCommControlRequestPreservesPartialUpdates(t *testing.T
 	}
 	if request.DisableRecv != nil {
 		t.Fatal("omitted disable_recv must remain nil")
-	}
-	if request.Reason != " test " {
-		t.Fatalf("reason = %q, want original request value", request.Reason)
 	}
 }
 

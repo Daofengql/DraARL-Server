@@ -529,10 +529,10 @@ func (r *UserRepository) GetUsersByIDs(ids []int) ([]*User, error) {
 
 // UserBriefInfo 用户简要信息（用于关联查询）
 type UserBriefInfo struct {
-	ID       int    `json:"id"`
-	CallSign string `json:"callsign"`
-	NickName string `json:"nickname"`
-	Name     string `json:"name"`
+	ID       int    `gorm:"column:id" json:"id"`
+	CallSign string `gorm:"column:callsign" json:"callsign"`
+	NickName string `gorm:"column:nickname" json:"nickname"`
+	Name     string `gorm:"column:name" json:"name"`
 }
 
 // GetUserBriefByIDs 批量获取用户简要信息（只查询必要字段）

@@ -686,19 +686,20 @@ func GetGroupDevices(c *gin.Context) {
 		}
 
 		devices = append(devices, gin.H{
-			"id":           d.ID,
-			"name":         d.Name,
-			"callsign":     callsign,
-			"ssid":         d.SSID,
-			"dev_model":    d.DevModel,
-			"group_id":     d.GroupID,
-			"status":       d.Status,
-			"priority":     d.Priority,
-			"is_online":    d.ISOnline,
-			"disable_send": d.DisableSend,
-			"disable_recv": d.DisableRecv,
-			"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":             d.ID,
+			"name":           d.Name,
+			"callsign":       callsign,
+			"owner_callsign": callsign,
+			"ssid":           d.SSID,
+			"dev_model":      d.DevModel,
+			"group_id":       d.GroupID,
+			"status":         d.Status,
+			"priority":       d.Priority,
+			"is_online":      d.ISOnline,
+			"disable_send":   d.DisableSend,
+			"disable_recv":   d.DisableRecv,
+			"create_time":    d.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":    d.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -714,9 +715,8 @@ func GetGroupDevices(c *gin.Context) {
 
 // UpdateGroupDeviceCommControlRequest 仅更新设备级禁发/禁收状态。
 type UpdateGroupDeviceCommControlRequest struct {
-	DisableSend *bool  `json:"disable_send"`
-	DisableRecv *bool  `json:"disable_recv"`
-	Reason      string `json:"reason"`
+	DisableSend *bool `json:"disable_send"`
+	DisableRecv *bool `json:"disable_recv"`
 }
 
 // UpdateGroupDeviceCommControl 允许管理员或当前群主临时控制组内普通设备收发。
@@ -741,12 +741,6 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "至少需要设置一项收发状态"})
 		return
 	}
-	reason := strings.TrimSpace(req.Reason)
-	if len([]rune(reason)) > 500 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "操作原因不能超过500个字符"})
-		return
-	}
-
 	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
 	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
@@ -806,17 +800,13 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 	if owner, ownerErr := gormdb.NewUserRepository().GetUserByID(after.OwnerID); ownerErr == nil && owner != nil {
 		ownerCallSign = owner.CallSign
 	}
-	reasonText := ""
-	if reason != "" {
-		reasonText = fmt.Sprintf(", reason=%q", reason)
-	}
 	source := "group_owner"
 	if isAdminUser(currentUser) {
 		source = "admin"
 	}
 	oplog.AddLog(
 		fmt.Sprintf(
-			"群组设备收发控制: source=%s, group_id=%d, group_name=%q, device_id=%d, owner_id=%d, callsign_ssid=%s-%d, disable_send=%t->%t, disable_recv=%t->%t%s",
+			"群组设备收发控制: source=%s, group_id=%d, group_name=%q, device_id=%d, owner_id=%d, callsign_ssid=%s-%d, disable_send=%t->%t, disable_recv=%t->%t",
 			source,
 			groupID,
 			group.Name,
@@ -828,7 +818,6 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 			after.DisableSend,
 			before.DisableRecv,
 			after.DisableRecv,
-			reasonText,
 		),
 		"group_device_comm_control",
 		currentUser.ID,

@@ -209,7 +209,7 @@ export const groupService = {
   async updateDeviceCommControl(
     groupId: number,
     deviceId: number,
-    data: { disable_send?: boolean; disable_recv?: boolean; reason?: string },
+    data: { disable_send?: boolean; disable_recv?: boolean },
   ): Promise<{ device_id: number; group_id: number; disable_send: boolean; disable_recv: boolean }> {
     const res = await apiClient.put<BackendResponse<{
       device_id: number

@@ -8,8 +8,8 @@ import (
 )
 
 func TestIdentitySpaceSupportsMaximumClientCount(t *testing.T) {
-	seen := make(map[string]struct{}, 9000)
-	for i := 0; i < 9000; i++ {
+	seen := make(map[string]struct{}, maxBenchClients)
+	for i := 0; i < maxBenchClients; i++ {
 		identity := identityForIndex(i)
 		if !protocol.IsValidNormalSSID(identity.ssid) {
 			t.Fatalf("client %d received reserved SSID %d", i, identity.ssid)
@@ -30,10 +30,11 @@ func TestIdentitySpaceSupportsMaximumClientCount(t *testing.T) {
 
 func TestUsersForClients(t *testing.T) {
 	tests := map[int]int{
-		1:    1,
-		248:  1,
-		249:  2,
-		9000: 37,
+		1:               1,
+		248:             1,
+		249:             2,
+		9000:            37,
+		maxBenchClients: 81,
 	}
 	for clients, want := range tests {
 		if got := usersForClients(clients); got != want {

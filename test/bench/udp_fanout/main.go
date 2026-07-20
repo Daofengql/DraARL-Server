@@ -29,12 +29,13 @@ import (
 )
 
 const (
-	benchPrefix    = "__draarl_udp_bench_"
-	benchGroupName = "__draarl_udp_fanout_bench__"
-	benchPassword  = "Bench123"
-	devicesPerUser = 248
-	heartbeatEvery = 2 * time.Second
-	benchLockName  = "draarl_udp_fanout_bench"
+	benchPrefix     = "__draarl_udp_bench_"
+	benchGroupName  = "__draarl_udp_fanout_bench__"
+	benchPassword   = "Bench123"
+	devicesPerUser  = 248
+	maxBenchClients = 20000
+	heartbeatEvery  = 2 * time.Second
+	benchLockName   = "draarl_udp_fanout_bench"
 )
 
 var (
@@ -108,7 +109,6 @@ func run() (runErr error) {
 	if err != nil {
 		return err
 	}
-
 	cfg, err := config.Load(opts.configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -171,7 +171,6 @@ func run() (runErr error) {
 	if err != nil {
 		return fmt.Errorf("resolve UDP server: %w", err)
 	}
-
 	serverMeter, err := newProcessMeter("server", opts.serverPID)
 	if err != nil {
 		return fmt.Errorf("open server process %d: %w", opts.serverPID, err)
@@ -338,8 +337,8 @@ func parseOptions() (options, error) {
 		}
 		opts.levels = append(opts.levels, level)
 	}
-	if len(opts.levels) == 0 || opts.levels[len(opts.levels)-1] > 9000 {
-		return opts, fmt.Errorf("client levels must end between 2 and 9000")
+	if len(opts.levels) == 0 || opts.levels[len(opts.levels)-1] > maxBenchClients {
+		return opts, fmt.Errorf("client levels must end between 2 and %d", maxBenchClients)
 	}
 	if opts.groups < 1 || opts.groups > 32 {
 		return opts, fmt.Errorf("groups must be between 1 and 32")
@@ -532,18 +531,18 @@ func connectRange(server *net.UDPAddr, start, end int) ([]*benchClient, error) {
 }
 
 func connectClient(server *net.UDPAddr, identity benchIdentity) (*benchClient, error) {
+	client := &benchClient{
+		identity: identity,
+		server:   server,
+		authCh:   make(chan struct{}),
+		stopCh:   make(chan struct{}),
+	}
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: identity.ip, Port: 0})
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", identity.ip, err)
 	}
 	_ = conn.SetReadBuffer(256 * 1024)
-	client := &benchClient{
-		identity: identity,
-		conn:     conn,
-		server:   server,
-		authCh:   make(chan struct{}),
-		stopCh:   make(chan struct{}),
-	}
+	client.conn = conn
 	client.wg.Add(1)
 	go client.readLoop()
 
@@ -627,7 +626,9 @@ func (c *benchClient) close() {
 	}
 	c.stopOnce.Do(func() {
 		close(c.stopCh)
-		_ = c.conn.Close()
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
 	})
 	c.wg.Wait()
 }

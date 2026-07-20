@@ -27,17 +27,31 @@ func newProcessMeter(name string, pid int) (*processMeter, error) {
 func (m *processMeter) close() {}
 
 func (m *processMeter) sample() (processSample, error) {
-	schedData, err := os.ReadFile(filepath.Join(m.procDir, "schedstat"))
+	taskDir := filepath.Join(m.procDir, "task")
+	tasks, err := os.ReadDir(taskDir)
 	if err != nil {
-		return processSample{}, fmt.Errorf("read %s process schedstat: %w", m.name, err)
+		return processSample{}, fmt.Errorf("read %s process tasks: %w", m.name, err)
 	}
-	schedFields := strings.Fields(string(schedData))
-	if len(schedFields) < 1 {
-		return processSample{}, fmt.Errorf("invalid %s process schedstat", m.name)
-	}
-	cpuNanos, err := strconv.ParseInt(schedFields[0], 10, 64)
-	if err != nil {
-		return processSample{}, fmt.Errorf("parse %s process CPU time: %w", m.name, err)
+	var cpuNanos int64
+	for _, task := range tasks {
+		schedData, readErr := os.ReadFile(filepath.Join(taskDir, task.Name(), "schedstat"))
+		if readErr != nil {
+			// A thread can exit between ReadDir and ReadFile. The remaining live
+			// threads still provide a useful process sample.
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return processSample{}, fmt.Errorf("read %s thread %s schedstat: %w", m.name, task.Name(), readErr)
+		}
+		schedFields := strings.Fields(string(schedData))
+		if len(schedFields) < 1 {
+			return processSample{}, fmt.Errorf("invalid %s thread %s schedstat", m.name, task.Name())
+		}
+		threadNanos, parseErr := strconv.ParseInt(schedFields[0], 10, 64)
+		if parseErr != nil {
+			return processSample{}, fmt.Errorf("parse %s thread %s CPU time: %w", m.name, task.Name(), parseErr)
+		}
+		cpuNanos += threadNanos
 	}
 
 	statusData, err := os.ReadFile(filepath.Join(m.procDir, "status"))

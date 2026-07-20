@@ -15,7 +15,7 @@
 - 必须显式传入 `-confirm-test-data`。
 - 同一数据库一次只能运行一个实例，工具通过 MySQL advisory lock 阻止并发执行。
 - 启动时先清理同前缀的遗留测试数据，结束时再次清理。
-- `-packet-type 5` 会触发真实录音流程，仅允许在本地存储驱动下使用，以便准确删除测试录音。
+- `-packet-type 5` 会走真实普通语音路径；仅允许在本地存储驱动下使用，以便准确删除可能生成的测试录音。只有站点通信录制设置 `comm.enabled=true` 时才会实际落盘，关闭时录音清理数为 0 属正常结果。
 - 中断进程可能来不及执行清理；重新运行时使用 `-cleanup-only`。
 - 每个模拟设备绑定不同的 `127.x.x.x` 回环地址，使服务端的同 IP DDoS 限速不会掩盖转发表性能。
 
@@ -60,7 +60,7 @@ go build -o ./bin/udp-fanout-bench ./test/bench/udp_fanout
 | `-config` | `config.yaml` | 服务端配置文件 |
 | `-server` | `127.0.0.1:60050` | UDP 服务地址 |
 | `-server-pid` | 无 | DraARL Server PID，正式测试必填 |
-| `-levels` | `100,500,1000,2000,4000` | 递增的总客户端数，最大 9000 |
+| `-levels` | `100,500,1000,2000,4000` | 递增的总客户端数，最大 20000 |
 | `-groups` | `1` | 独立群组数，也是同时发言者数量 |
 | `-duration` | `10s` | 每档测量时间 |
 | `-interval` | `120ms` | 每个发言者的语音包间隔 |
@@ -74,7 +74,7 @@ go build -o ./bin/udp-fanout-bench ./test/bench/udp_fanout
 - `expected/received/loss_pct`：理论下行包数、实收包数和丢包率。
 - `output_pps/output_mbps`：服务端实际下行包速和 DraARLv1 应用层带宽。
 - `latency_*`：数据包发送时间到本地接收时间，不含真实网络 RTT。
-- `server_cpu_cores`：服务进程消耗的 CPU 核数，例如 `1.20` 表示约 1.2 个逻辑核。
+- `server_cpu_cores`：服务进程全部 OS 线程消耗的 CPU 核数，例如 `1.20` 表示约 1.2 个逻辑核。
 - `server_rss_mb`：服务进程 RSS。
 
 工具在丢包率超过 5% 后停止更高档位，避免继续制造不具代表性的过载流量。

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +50,7 @@ type routeTestBroadcast struct {
 }
 
 type routeTestWSManager struct {
+	mu         sync.Mutex
 	devices    []*routeTestWSDevice
 	deliveries map[string][][]byte
 	broadcasts []routeTestBroadcast
@@ -62,6 +64,8 @@ func newRouteTestWSManager(devices ...*routeTestWSDevice) *routeTestWSManager {
 }
 
 func (m *routeTestWSManager) GetDevicesByGroup(groupID int) []interfaces.WSDeviceInterface {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	result := make([]interfaces.WSDeviceInterface, 0, len(m.devices))
 	for _, device := range m.devices {
 		if device != nil && device.groupID == groupID {
@@ -72,6 +76,8 @@ func (m *routeTestWSManager) GetDevicesByGroup(groupID int) []interfaces.WSDevic
 }
 
 func (m *routeTestWSManager) BroadcastToGroups(groupIDs []int, data []byte, messageType int, filter interfaces.WSBroadcastFilter) (sent, dropped int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.broadcasts = append(m.broadcasts, routeTestBroadcast{
 		groups:      append([]int(nil), groupIDs...),
 		data:        append([]byte(nil), data...),
@@ -107,6 +113,8 @@ func (m *routeTestWSManager) BroadcastToGroups(groupIDs []int, data []byte, mess
 func (m *routeTestWSManager) GetDeliveryStats() map[string]int64 { return nil }
 
 func (m *routeTestWSManager) GetOnlineCount() (normalCount, ghostCount int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, device := range m.devices {
 		if device == nil {
 			continue
@@ -118,6 +126,19 @@ func (m *routeTestWSManager) GetOnlineCount() (normalCount, ghostCount int) {
 		}
 	}
 	return normalCount, ghostCount
+}
+
+func (m *routeTestWSManager) resetDeliveries() {
+	m.mu.Lock()
+	m.deliveries = make(map[string][][]byte)
+	m.broadcasts = nil
+	m.mu.Unlock()
+}
+
+func (m *routeTestWSManager) deliveryCount(identifier string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.deliveries[identifier])
 }
 
 var (
@@ -149,8 +170,16 @@ type routeTestEnv struct {
 }
 
 func listenRouteTestUDP(t *testing.T) *net.UDPConn {
+	return listenRouteTestUDPNetwork(t, "udp4")
+}
+
+func listenRouteTestUDPNetwork(t *testing.T, network string) *net.UDPConn {
 	t.Helper()
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	ip := net.IPv4(127, 0, 0, 1)
+	if network == "udp6" {
+		ip = net.IPv6loopback
+	}
+	conn, err := net.ListenUDP(network, &net.UDPAddr{IP: ip})
 	if err != nil {
 		t.Fatalf("listen UDP route endpoint: %v", err)
 	}
@@ -159,8 +188,12 @@ func listenRouteTestUDP(t *testing.T) *net.UDPConn {
 }
 
 func newRouteTestEndpoint(t *testing.T, id, groupID int, username, callsign string, ssid byte) routeTestEndpoint {
+	return newRouteTestEndpointNetwork(t, "udp4", id, groupID, username, callsign, ssid)
+}
+
+func newRouteTestEndpointNetwork(t *testing.T, network string, id, groupID int, username, callsign string, ssid byte) routeTestEndpoint {
 	t.Helper()
-	conn := listenRouteTestUDP(t)
+	conn := listenRouteTestUDPNetwork(t, network)
 	return routeTestEndpoint{
 		conn: conn,
 		device: &models.Device{
@@ -199,6 +232,10 @@ func clearRouteTestHalfDuplexState() {
 }
 
 func setupRouteTest(t *testing.T, baseGroupID int, linked bool) *routeTestEnv {
+	return setupRouteTestNetwork(t, "udp4", baseGroupID, linked)
+}
+
+func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked bool) *routeTestEnv {
 	t.Helper()
 	StopFanoutSender()
 	StopDomainReceiverCache()
@@ -211,11 +248,11 @@ func setupRouteTest(t *testing.T, baseGroupID int, linked bool) *routeTestEnv {
 		groupC:  baseGroupID + 2,
 		virtual: baseGroupID + 100,
 	}
-	env.serverConn = listenRouteTestUDP(t)
-	env.udpA1 = newRouteTestEndpoint(t, baseGroupID+10, env.groupA, "udp-source", "BG7UDPS", 7)
-	env.udpA2 = newRouteTestEndpoint(t, baseGroupID+11, env.groupA, "udp-a-target", "BG7UDPA", 8)
-	env.udpB = newRouteTestEndpoint(t, baseGroupID+12, env.groupB, "udp-b-target", "BG7UDPB", 9)
-	env.udpC = newRouteTestEndpoint(t, baseGroupID+13, env.groupC, "udp-c-target", "BG7UDPC", 10)
+	env.serverConn = listenRouteTestUDPNetwork(t, network)
+	env.udpA1 = newRouteTestEndpointNetwork(t, network, baseGroupID+10, env.groupA, "udp-source", "BG7UDPS", 7)
+	env.udpA2 = newRouteTestEndpointNetwork(t, network, baseGroupID+11, env.groupA, "udp-a-target", "BG7UDPA", 8)
+	env.udpB = newRouteTestEndpointNetwork(t, network, baseGroupID+12, env.groupB, "udp-b-target", "BG7UDPB", 9)
+	env.udpC = newRouteTestEndpointNetwork(t, network, baseGroupID+13, env.groupC, "udp-c-target", "BG7UDPC", 10)
 
 	groups := map[int]*models.Group{
 		env.groupA: newRouteTestGroup(env.groupA, env.udpA1, env.udpA2),
@@ -471,4 +508,246 @@ func TestRouteWSVoiceToUDPAcrossVirtualGroupEndToEnd(t *testing.T) {
 	assertNoRouteTestPacket(t, env.udpC.conn)
 	assertRouteTestFanoutSent(t, 3)
 	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+}
+
+func TestRouteVoiceIPv6AcrossVirtualGroupEndToEnd(t *testing.T) {
+	t.Run("UDP to UDP and WS", func(t *testing.T) {
+		env := setupRouteTestNetwork(t, "udp6", 55000, true)
+		payload := []byte{0x41, 0x42, 0x43, 0x44}
+		want := routeTestUDPVoice(t, env, payload)
+
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+		assertNoRouteTestPacket(t, env.udpA1.conn)
+		assertNoRouteTestPacket(t, env.udpC.conn)
+		assertRouteTestFanoutSent(t, 2)
+		assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+	})
+
+	t.Run("WS to UDP and WS", func(t *testing.T) {
+		env := setupRouteTestNetwork(t, "udp6", 55100, true)
+		payload := []byte{0x45, 0x46, 0x47, 0x48}
+		want := routeTestWSVoice(env, payload)
+
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA1.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+		assertNoRouteTestPacket(t, env.udpC.conn)
+		assertRouteTestFanoutSent(t, 3)
+		assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+	})
+}
+
+func TestContinuousVoiceAppliesCommControlToNextFrame(t *testing.T) {
+	t.Run("disable receive and restore", func(t *testing.T) {
+		env := setupRouteTest(t, 56000, false)
+		first := routeTestUDPVoice(t, env, []byte{1})
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), first, []byte{1})
+
+		SyncDeviceCommControlByID(env.udpA2.device.ID, false, true)
+		routeTestUDPVoice(t, env, []byte{2})
+		assertNoRouteTestPacket(t, env.udpA2.conn)
+
+		SyncDeviceCommControlByID(env.udpA2.device.ID, false, false)
+		third := routeTestUDPVoice(t, env, []byte{3})
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), third, []byte{3})
+	})
+
+	t.Run("disable sender", func(t *testing.T) {
+		env := setupRouteTest(t, 57000, false)
+		first := routeTestUDPVoice(t, env, []byte{1})
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), first, []byte{1})
+		env.wsManager.resetDeliveries()
+
+		SyncDeviceCommControlByID(env.udpA1.device.ID, true, false)
+		routeTestUDPVoice(t, env, []byte{2})
+		assertNoRouteTestPacket(t, env.udpA2.conn)
+		if len(env.wsManager.broadcasts) != 0 {
+			t.Fatalf("disabled sender still broadcast %d WS frames", len(env.wsManager.broadcasts))
+		}
+	})
+}
+
+func TestContinuousVoiceDropsOldTargetsAfterRuntimeChanges(t *testing.T) {
+	t.Run("group switch", func(t *testing.T) {
+		env := setupRouteTest(t, 58000, false)
+		first := routeTestUDPVoice(t, env, []byte{1})
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), first, []byte{1})
+
+		if _, err := changeDeviceGroup(env.udpA2.device, env.groupC); err != nil {
+			t.Fatalf("switch receiver group: %v", err)
+		}
+		routeTestUDPVoice(t, env, []byte{2})
+		assertNoRouteTestPacket(t, env.udpA2.conn)
+	})
+
+	t.Run("offline removal", func(t *testing.T) {
+		env := setupRouteTest(t, 59000, false)
+		indexRuntimeDevice(env.udpA2.device)
+		first := routeTestUDPVoice(t, env, []byte{1})
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), first, []byte{1})
+
+		if !RemoveRuntimeDevice(env.udpA2.device.OwnerID, env.udpA2.device.SSID) {
+			t.Fatal("runtime receiver was not removed")
+		}
+		routeTestUDPVoice(t, env, []byte{2})
+		assertNoRouteTestPacket(t, env.udpA2.conn)
+	})
+
+	t.Run("link removal", func(t *testing.T) {
+		env := setupRouteTest(t, 60000, true)
+		first := routeTestUDPVoice(t, env, []byte{1})
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), first, []byte{1})
+		env.wsManager.resetDeliveries()
+
+		globalGroupLinkCache.Lock()
+		globalGroupLinkCache.targetToLinks = make(map[int][]int)
+		globalGroupLinkCache.linkToTargets = make(map[int][]int)
+		globalGroupLinkCache.targetToPeers = make(map[int][]int)
+		globalGroupLinkCache.Unlock()
+		resetHalfDuplexDomainCache()
+		InvalidateDomainReceiverCache()
+
+		routeTestUDPVoice(t, env, []byte{2})
+		assertNoRouteTestPacket(t, env.udpB.conn)
+		if got := env.wsManager.deliveryCount("ws-b"); got != 0 {
+			t.Fatalf("unlinked WS target received %d frames", got)
+		}
+	})
+}
+
+func TestLargeRuntimeDeviceChurnKeepsReceiverSnapshotsConsistent(t *testing.T) {
+	const deviceCount = 2000
+	const groupA = 61000
+	const groupB = 61001
+
+	StopFanoutSender()
+	StopDomainReceiverCache()
+	clearDomainReceiverCacheForTest()
+	clearRouteTestHalfDuplexState()
+	first := newRouteTestGroup(groupA)
+	second := newRouteTestGroup(groupB)
+	globalGroupCacheAtomic.Store(map[int]*models.Group{groupA: first, groupB: second})
+	oldGhostManager := GlobalUDPGhostManager
+	GlobalUDPGhostManager = &UDPGhostManager{devices: make(map[string]*models.Device), groupDevices: make(map[int]map[string]*models.Device)}
+	t.Cleanup(func() {
+		StopDomainReceiverCache()
+		clearDomainReceiverCacheForTest()
+		clearRouteTestHalfDuplexState()
+		globalGroupCacheAtomic.Store(map[int]*models.Group{})
+		GlobalUDPGhostManager = oldGhostManager
+		runtimeIndexMu.Lock()
+		devOwnerSSIDMap = make(map[string]*models.Device)
+		devUsernameSSIDMap = make(map[string]*models.Device)
+		devCallsignSSIDMap = make(map[string]*models.Device)
+		onlineDevMap = make(map[int]*models.Device)
+		onlineDevMapDraARL = make(map[int]*models.Device)
+		runtimeIndexMu.Unlock()
+	})
+
+	devices := make([]*models.Device, deviceCount)
+	originalAddrs := make([]net.UDPAddr, deviceCount)
+	for i := range devices {
+		addr := net.UDPAddr{IP: net.IPv4(127, byte(i/65536), byte(i/256), byte(i)), Port: 10000 + i}
+		dev := &models.Device{
+			ID: 70000 + i, OwnerID: 80000 + i, Username: "churn-" + string(rune(i+1)),
+			SSID: byte(i%99 + 1), GroupID: groupA, ISOnline: true,
+			UDPAddr: &addr,
+		}
+		devices[i] = dev
+		originalAddrs[i] = addr
+		attachRuntimeDeviceToGroup(first, dev)
+		indexRuntimeDevice(dev)
+	}
+	if got := len(getDomainReceiverEntries(groupA)); got != deviceCount {
+		t.Fatalf("initial receiver count = %d, want %d", got, deviceCount)
+	}
+
+	for i, dev := range devices {
+		switch i % 4 {
+		case 0:
+			SyncDeviceCommControlByID(dev.ID, false, true)
+		case 1:
+			if _, err := changeDeviceGroup(dev, groupB); err != nil {
+				t.Fatalf("switch churn device %d: %v", dev.ID, err)
+			}
+		case 2:
+			if !RemoveRuntimeDevice(dev.OwnerID, dev.SSID) {
+				t.Fatalf("remove churn device %d", dev.ID)
+			}
+		}
+	}
+	if got := len(getDomainReceiverEntries(groupA)); got != deviceCount/4 {
+		t.Fatalf("post-churn group A receivers = %d, want %d", got, deviceCount/4)
+	}
+	if got := len(getDomainReceiverEntries(groupB)); got != deviceCount/4 {
+		t.Fatalf("post-churn group B receivers = %d, want %d", got, deviceCount/4)
+	}
+
+	for i, dev := range devices {
+		if i%4 == 0 {
+			SyncDeviceCommControlByID(dev.ID, false, false)
+		}
+	}
+	if got := len(getDomainReceiverEntries(groupA)); got != deviceCount/2 {
+		t.Fatalf("restored group A receivers = %d, want %d", got, deviceCount/2)
+	}
+
+	// 让已离线的四分之一设备重新上线，验证运行时索引、连接池和快照都能恢复。
+	for i, dev := range devices {
+		if i%4 != 2 {
+			continue
+		}
+		dev.ISOnline = true
+		dev.UDPAddr = &originalAddrs[i]
+		dev.GroupID = groupA
+		indexRuntimeDevice(dev)
+		attachRuntimeDeviceToGroup(first, dev)
+	}
+	if got := len(getDomainReceiverEntries(groupA)); got != deviceCount*3/4 {
+		t.Fatalf("re-online group A receivers = %d, want %d", got, deviceCount*3/4)
+	}
+	t.Logf("devices=%d final_group_a_receivers=%d final_group_b_receivers=%d", deviceCount, len(getDomainReceiverEntries(groupA)), len(getDomainReceiverEntries(groupB)))
+}
+
+func TestMixedUDPAndWSVoiceLoadKeepsDomainsOrdered(t *testing.T) {
+	env := setupRouteTest(t, 62000, false)
+	const frameCount = 128
+
+	for sequence := 0; sequence < frameCount; sequence++ {
+		routeTestUDPVoice(t, env, []byte{0xa1, byte(sequence)})
+		env.router.RouteVoiceToUDP(env.wsC, []byte{0xc1, byte(sequence)}, env.groupC)
+		// 1ms 仍远高于实际语音帧速率，同时避免把这个正确性用例
+		// 变成已经单独验证过的 64 帧队列过载淘汰测试。
+		time.Sleep(time.Millisecond)
+	}
+
+	readSequence := func(conn *net.UDPConn, marker byte) {
+		for want := 0; want < frameCount; want++ {
+			raw := readRouteTestPacket(t, conn)
+			var packet protocol.DraARLv1Packet
+			if err := packet.Decode(raw); err != nil {
+				t.Fatalf("decode mixed route packet: %v", err)
+			}
+			if !bytes.Equal(packet.DATA, []byte{marker, byte(want)}) {
+				t.Fatalf("mixed route marker=%x sequence=%x, want marker=%x sequence=%x", packet.DATA[0], packet.DATA[1], marker, want)
+			}
+			if packet.DevicePassword != "" {
+				t.Fatalf("mixed route password = %q", packet.DevicePassword)
+			}
+		}
+	}
+	readSequence(env.udpA2.conn, 0xa1)
+	readSequence(env.udpC.conn, 0xc1)
+	assertNoRouteTestPacket(t, env.udpA1.conn)
+	assertNoRouteTestPacket(t, env.udpB.conn)
+	assertRouteTestFanoutSent(t, frameCount*2)
+
+	if got := env.wsManager.deliveryCount("ws-a"); got != frameCount {
+		t.Fatalf("mixed UDP->WS deliveries = %d, want %d", got, frameCount)
+	}
+	if got := env.wsManager.deliveryCount("ws-c"); got != 0 {
+		t.Fatalf("mixed WS source received its own frames: %d", got)
+	}
+	t.Logf("udp_frames=%d ws_frames=%d udp_fanout_packets=%d ws_deliveries=%d", frameCount, frameCount, frameCount*2, env.wsManager.deliveryCount("ws-a"))
 }

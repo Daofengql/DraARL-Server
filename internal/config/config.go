@@ -31,6 +31,15 @@ type MinIOConfig struct {
 	BasePath  string `yaml:"BasePath" json:"base_path"`
 }
 
+type UDPConfig struct {
+	SendWorkers      int `yaml:"SendWorkers" json:"send_workers"`
+	IngressWorkers   int `yaml:"IngressWorkers" json:"ingress_workers"`
+	FrameQueueSize   int `yaml:"FrameQueueSize" json:"frame_queue_size"`
+	MaxFrameAgeMS    int `yaml:"MaxFrameAgeMS" json:"max_frame_age_ms"`
+	ReadBufferBytes  int `yaml:"ReadBufferBytes" json:"read_buffer_bytes"`
+	WriteBufferBytes int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
+}
+
 // SetReleaseBuild 设置是否为 release 构建产物。
 func SetReleaseBuild(release bool) {
 	releaseBuild.Store(release)
@@ -50,6 +59,8 @@ type Configuration struct {
 		IPFile        string `yaml:"IPfile" json:"ipfile"`
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
+
+	UDP UDPConfig `yaml:"UDP" json:"udp"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -187,6 +198,25 @@ func Load(configPath string) (*Configuration, error) {
 func (c *Configuration) SetDefaults() error {
 	c.migrateLegacyStorageConfig()
 
+	if c.UDP.SendWorkers < 0 {
+		c.UDP.SendWorkers = 0
+	}
+	if c.UDP.IngressWorkers < 0 {
+		c.UDP.IngressWorkers = 0
+	}
+	if c.UDP.FrameQueueSize <= 0 {
+		c.UDP.FrameQueueSize = 64
+	}
+	if c.UDP.MaxFrameAgeMS <= 0 {
+		c.UDP.MaxFrameAgeMS = 120
+	}
+	if c.UDP.ReadBufferBytes <= 0 {
+		c.UDP.ReadBufferBytes = 4 * 1024 * 1024
+	}
+	if c.UDP.WriteBufferBytes <= 0 {
+		c.UDP.WriteBufferBytes = 4 * 1024 * 1024
+	}
+
 	// 数据库默认值
 	if c.Database.Port == 0 {
 		c.Database.Port = 3306
@@ -315,6 +345,13 @@ func Get() *Configuration {
 	if Config == nil {
 		panic("config not loaded, call Load() first")
 	}
+	return Config
+}
+
+// TryGet 返回当前配置；配置尚未加载时返回 nil，便于底层组件和单元测试安全取默认值。
+func TryGet() *Configuration {
+	configMu.RLock()
+	defer configMu.RUnlock()
 	return Config
 }
 

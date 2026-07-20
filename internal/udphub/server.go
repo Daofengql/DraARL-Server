@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,9 +64,6 @@ var (
 	authedUserCache = make(map[string]*DeviceAuthResult)
 	authCacheMutex  sync.RWMutex
 
-	// 服务器映射
-	serverMap = make(map[int]*models.Server)
-
 	// 公共群组映射 (保留用于向后兼容)
 	publicGroupMap = make(map[int]*models.Group)
 
@@ -77,10 +75,6 @@ var (
 	globalGroupCacheAtomic atomic.Value // 存储 map[int]*models.Group
 	groupCacheMutex        sync.RWMutex // 仅用于写操作保护
 	groupRuntimeMu         sync.RWMutex // 保护群组动态成员、设备列表和统计字段
-
-	// QTH 映射
-	qthMap    = make(map[string]string)
-	qthMapNew = make(map[string]models.QTH)
 
 	// 用户列表 (sync.Map)
 	userList sync.Map
@@ -175,19 +169,32 @@ func StartUDPServer(port int) error {
 
 // StartDraARLServer 启动 DraARLv1 协议的 UDP 服务器
 func StartDraARLServer(port int) error {
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
+	network := "udp"
+	host := ""
+	if cfg := config.TryGet(); cfg != nil {
+		host = strings.TrimSpace(cfg.System.Host)
+		if ip := net.ParseIP(host); ip != nil {
+			if ip.To4() != nil {
+				network = "udp4"
+			} else {
+				network = "udp6"
+			}
+		}
+	}
+	addr, err := net.ResolveUDPAddr(network, net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return fmt.Errorf("resolve UDP address failed: %w", err)
 	}
 
-	conn, err := net.ListenUDP("udp", addr)
+	conn, err := net.ListenUDP(network, addr)
 	if err != nil {
 		return fmt.Errorf("listen UDP failed: %w", err)
 	}
+	configureUDPSocketBuffers(conn)
 
 	globalConn = conn
 	udpShutdown = make(chan struct{})
-	log.Printf("DraARLv1 UDP server started on port %d", port)
+	log.Printf("DraARLv1 UDP server started on %s (%s)", conn.LocalAddr(), network)
 
 	// 启动认证失败记录清理器
 	StartAuthCleaner()
@@ -253,7 +260,15 @@ func StartDraARLServer(port int) error {
 // StopUDPServer 停止 UDP 服务器
 func StopUDPServer() {
 	udpShutdownOnce.Do(func() {
-		close(udpShutdown)
+		// StartDraARLServer can fail before creating the shutdown channel
+		// (for example when the configured port is already in use). Keep the
+		// process-level shutdown path idempotent instead of panicking there.
+		if udpShutdown == nil && globalConn == nil {
+			return
+		}
+		if udpShutdown != nil {
+			close(udpShutdown)
+		}
 
 		// 关闭 UDP 连接（这会使阻塞的 ReadFromUDP 返回错误）
 		if globalConn != nil {
@@ -299,15 +314,18 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 
 	// 限速已在 udp reader 完成，避免 worker 侧重复计数/加锁
 
-	packet, err := protocol.NewDraARLv1Packet(remoteAddr, data)
+	packet, err := protocol.NewDraARLv1RoutingPacket(remoteAddr, data)
 	if err != nil {
 		log.Printf("[DECODE] DraARLv1 decode error from %v: %v", realAddr, err)
 		return
 	}
+	defer protocol.ReleaseDraARLv1RoutingPacket(packet)
 
 	atomicAddPacketNumber(1)
-	usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
-	incomingMAC := protocol.ExtractHeartbeatMAC(packet.DATA)
+	incomingMAC := ""
+	if packet.Type == protocol.DraARLTypeHeartbeat {
+		incomingMAC = protocol.ExtractHeartbeatMAC(packet.DATA)
+	}
 
 	// ==========================================
 	// 【新增】JWT 认证包处理 (Type=1)
@@ -333,7 +351,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 
 	if dev == nil {
 		// 新设备，需要先认证
-		handleNewDraARLDevice(packet, realAddr, conn, usernameSSID, incomingMAC)
+		handleNewDraARLDevice(packet, realAddr, conn, protocol.GetUsernameSSID(packet.Username, packet.SSID), incomingMAC)
 		return
 	}
 
@@ -341,6 +359,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	// 已存在设备的处理
 	// ==========================================
 	if packet.Type == protocol.DraARLTypeHeartbeat {
+		usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 		currentAddr := ""
 		if packet.UDPAddr != nil {
 			currentAddr = packet.UDPAddr.String()
@@ -714,10 +733,10 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 	}
 }
 
-// buildUDPSpeakerIdentity 为 UDP 设备构造半双工仲裁使用的说话人身份。
-func buildUDPSpeakerIdentity(dev *models.Device, packet *protocol.DraARLv1Packet) (speakerID string, speakerLabel string) {
+// buildUDPSpeaker 构造无分配的半双工仲裁键；标签只在限频日志实际输出时格式化。
+func buildUDPSpeaker(dev *models.Device, packet *protocol.DraARLv1Packet) halfDuplexSpeaker {
 	if dev == nil {
-		return "", ""
+		return halfDuplexSpeaker{}
 	}
 
 	ssid := dev.SSID
@@ -736,28 +755,28 @@ func buildUDPSpeakerIdentity(dev *models.Device, packet *protocol.DraARLv1Packet
 			labelBase = packet.Username
 		}
 	}
-	if labelBase == "" && dev.UDPAddr != nil {
-		labelBase = dev.UDPAddr.String()
-	}
 	if labelBase == "" {
 		labelBase = "unknown"
 	}
-	speakerLabel = fmt.Sprintf("%s-%d", labelBase, ssid)
 
+	var key uint64
 	switch {
 	case dev.ID > 0:
-		speakerID = fmt.Sprintf("udp_dev:%d", dev.ID)
+		key = 0x4000000000000000 | uint64(uint32(dev.ID))
+	case dev.OwnerID > 0:
+		key = 0x5000000000000000 | uint64(uint32(dev.OwnerID))<<8 | uint64(ssid)
 	case dev.Username != "":
-		speakerID = fmt.Sprintf("udp_user:%s:%d", dev.Username, ssid)
+		key = 0x6000000000000000 | uint64(fnv32String(dev.Username))<<8 | uint64(ssid)
 	case packet != nil && packet.Username != "":
-		speakerID = fmt.Sprintf("udp_user:%s:%d", packet.Username, ssid)
+		key = 0x6000000000000000 | uint64(fnv32String(packet.Username))<<8 | uint64(ssid)
 	case dev.UDPAddr != nil:
-		speakerID = fmt.Sprintf("udp_addr:%s:%d", dev.UDPAddr.String(), ssid)
+		if addr, ok := udpAddrPort(dev.UDPAddr); ok {
+			key = 0x7000000000000000 | (hashAddrPort(addr) & 0x0fffffffffffffff)
+		}
 	default:
-		speakerID = fmt.Sprintf("udp_ssid:%d", ssid)
+		key = 0x7000000000000000 | uint64(ssid)
 	}
-
-	return speakerID, speakerLabel
+	return halfDuplexSpeaker{key: key, labelBase: labelBase, ssid: ssid}
 }
 
 func canSendFromDevice(dev *models.Device) bool {
@@ -771,8 +790,7 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 		return
 	}
 
-	speakerID, speakerLabel := buildUDPSpeakerIdentity(dev, packet)
-	if !tryAcquireHalfDuplex(gp.ID, speakerID, speakerLabel, packet.TimeStamp) {
+	if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
 		return
 	}
 
@@ -986,8 +1004,7 @@ func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *
 		return
 	}
 
-	speakerID, speakerLabel := buildUDPSpeakerIdentity(dev, packet)
-	if !tryAcquireHalfDuplex(gp.ID, speakerID, speakerLabel, packet.TimeStamp) {
+	if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
 		return
 	}
 
@@ -1082,44 +1099,6 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// ==========================================
-// 性能优化：设备转发辅助函数
-// ==========================================
-
-// canForwardToDevice 检查是否可以转发数据到目标 UDP 设备
-func canForwardToDevice(target *models.Device, sourceID int, expectedGroupID int, skipSelf bool) bool {
-	if skipSelf && target.ID == sourceID {
-		return false
-	}
-	if target.GroupID != expectedGroupID {
-		return false
-	}
-	if target.DisableRecv {
-		return false
-	}
-	if !target.ISOnline {
-		return false
-	}
-	if target.UDPAddr == nil {
-		return false
-	}
-	return true
-}
-
-// forwardToUDPDevices 统一的 UDP 设备转发逻辑（兼容旧调用；新热路径优先 forwardVoiceDomain）
-func forwardToUDPDevices(devices []*models.Device, sourceID int, expectedGroupID int, skipSelf bool, data []byte) {
-	if globalConn == nil || len(devices) == 0 {
-		return
-	}
-	addrs := make([]*net.UDPAddr, 0, len(devices))
-	for _, target := range devices {
-		if canForwardToDevice(target, sourceID, expectedGroupID, skipSelf) {
-			addrs = append(addrs, target.UDPAddr)
-		}
-	}
-	writeUDPFanout(data, addrs)
 }
 
 // GetGlobalConn 获取全局 UDP 连接
@@ -1312,8 +1291,7 @@ func refreshGroupCache() {
 // 同时将内存中的在线状态同步回数据库，供 Web 端查询
 func refreshDeviceCache() {
 	repo := gormdb.NewDeviceRepository()
-	// 获取所有设备（使用较大的 limit 来获取全部）
-	dbDevices, _, err := repo.ListDevices(10000, 1)
+	dbDevices, err := repo.ListAllDevices()
 	if err != nil {
 		log.Printf("[CACHE] 从数据库加载设备失败: %v", err)
 		return
@@ -1329,9 +1307,7 @@ func refreshDeviceCache() {
 		dbDeviceKeys[getOwnerSSIDKey(dbDev.OwnerID, dbDev.SSID)] = struct{}{}
 	}
 
-	// 用户仓库用于获取用户名/呼号
-	userRepo := gormdb.NewUserRepository()
-	userCache := make(map[int]*gormdb.User)
+	userCache := loadDeviceOwnerCache(dbDevices)
 
 	for _, dbDev := range dbDevices {
 		memDev := findDeviceByOwnerSSIDFromMemory(dbDev.OwnerID, dbDev.SSID)
@@ -1340,14 +1316,7 @@ func refreshDeviceCache() {
 		}
 
 		if dbDev.OwnerID > 0 {
-			owner, ok := userCache[dbDev.OwnerID]
-			if !ok {
-				if user, err := userRepo.GetUserByID(dbDev.OwnerID); err == nil && user != nil {
-					owner = user
-				}
-				userCache[dbDev.OwnerID] = owner
-			}
-
+			owner := userCache[dbDev.OwnerID]
 			if owner != nil {
 				if memDev.Username != owner.Name {
 					removeRuntimeUsernameKey(memDev, memDev.Username)

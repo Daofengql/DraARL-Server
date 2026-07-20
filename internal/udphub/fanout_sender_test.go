@@ -5,6 +5,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -27,6 +28,22 @@ func newUDPTestPair(t *testing.T) (*net.UDPConn, *net.UDPConn, *net.UDPAddr) {
 	return sender, receiver, receiver.LocalAddr().(*net.UDPAddr)
 }
 
+func enqueueTestFrame(sender *FanoutSender, payload []byte, addr *net.UDPAddr) bool {
+	ap, ok := udpAddrPort(addr)
+	if !ok || sender == nil || len(sender.writers) == 0 {
+		return false
+	}
+	entry := domainReceiverEntry{addr: ap}
+	partitions := make([][]domainReceiverEntry, len(sender.writers))
+	index := addrPortShard(ap, len(sender.writers))
+	partitions[index] = append(partitions[index], entry)
+	snap := &domainReceiverSnap{
+		entries: []domainReceiverEntry{entry}, partitions: partitions,
+		workers: len(sender.writers), gen: atomic.LoadUint64(&domainReceiverGen),
+	}
+	return sender.enqueueDomainFrame(payload, snap, 0, "", 0)
+}
+
 func TestFanoutSenderPreservesOrderPerAddress(t *testing.T) {
 	senderConn, receiverConn, receiverAddr := newUDPTestPair(t)
 	sender := newFanoutSender(senderConn, 4, 4096)
@@ -36,7 +53,7 @@ func TestFanoutSenderPreservesOrderPerAddress(t *testing.T) {
 	for seq := 0; seq < packetCount; seq++ {
 		payload := make([]byte, 4)
 		binary.BigEndian.PutUint32(payload, uint32(seq))
-		if !sender.enqueueFrame(payload, []*net.UDPAddr{receiverAddr}) {
+		if !enqueueTestFrame(sender, payload, receiverAddr) {
 			t.Fatalf("packet %d was not accepted", seq)
 		}
 	}
@@ -72,7 +89,7 @@ func TestFanoutSenderConcurrentStop(t *testing.T) {
 			<-start
 			payload := []byte{byte(id)}
 			for j := 0; j < 2000; j++ {
-				sender.enqueueFrame(payload, []*net.UDPAddr{receiverAddr})
+				enqueueTestFrame(sender, payload, receiverAddr)
 				if j%32 == 0 {
 					runtime.Gosched()
 				}
@@ -85,7 +102,55 @@ func TestFanoutSenderConcurrentStop(t *testing.T) {
 	sender.stop()
 	producers.Wait()
 
-	if sender.enqueueFrame([]byte{1}, []*net.UDPAddr{receiverAddr}) {
+	if enqueueTestFrame(sender, []byte{1}, receiverAddr) {
 		t.Fatal("stopped sender accepted a new frame")
+	}
+}
+
+func TestFanoutSenderWritersKeepServerSourcePort(t *testing.T) {
+	senderConn, receiverConn, receiverAddr := newUDPTestPair(t)
+	sender := newFanoutSender(senderConn, 4, 64)
+	defer sender.stop()
+
+	if len(sender.writers) < 2 {
+		t.Skip("platform did not provide duplicated UDP descriptors")
+	}
+	serverPort := senderConn.LocalAddr().(*net.UDPAddr).Port
+	for index := range sender.writers {
+		payload := []byte{byte(index)}
+		if _, err := sender.writers[index].conn.WriteToUDP(payload, receiverAddr); err != nil {
+			t.Fatalf("writer %d send: %v", index, err)
+		}
+	}
+
+	if err := receiverConn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	buf := make([]byte, 8)
+	for range sender.writers {
+		_, source, err := receiverConn.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatalf("receive duplicated-writer packet: %v", err)
+		}
+		if source.Port != serverPort {
+			t.Fatalf("source port = %d, want listener port %d", source.Port, serverPort)
+		}
+	}
+}
+
+func TestEnqueueLatestFrameEvictsWholeOldestFrame(t *testing.T) {
+	queue := make(chan fanoutFrameJob, 2)
+	queue <- fanoutFrameJob{data: []byte{1}}
+	queue <- fanoutFrameJob{data: []byte{2}}
+
+	accepted, evicted := enqueueLatestFrame(queue, fanoutFrameJob{data: []byte{3}})
+	if !accepted || !evicted {
+		t.Fatalf("accepted=%v evicted=%v", accepted, evicted)
+	}
+	if got := (<-queue).data[0]; got != 2 {
+		t.Fatalf("oldest retained frame = %d, want 2", got)
+	}
+	if got := (<-queue).data[0]; got != 3 {
+		t.Fatalf("fresh frame = %d, want 3", got)
 	}
 }

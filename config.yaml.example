@@ -9,6 +9,15 @@ System:
     IPfile: ./ipinfo.ipdb      # IP数据库文件路径
     ProxyProtocol: ""          # PROXY Protocol 版本: "v2" 启用, 留空禁用。启用后可从 frp 等代理获取真实客户端 IP
 
+# UDP 转发性能配置。SendWorkers/IngressWorkers 为 0 时按 CPU 自动选择。
+UDP:
+    SendWorkers: 0             # 并发发送 FD 数，自动值最多 8；手动值范围 1-32
+    IngressWorkers: 0          # 按设备身份分片的处理 worker，自动值最多 16
+    FrameQueueSize: 64         # 发送队列按完整帧计数；满时淘汰最旧帧
+    MaxFrameAgeMS: 120         # 超过该排队时间的实时帧不再发送
+    ReadBufferBytes: 4194304   # 请求的 UDP 接收缓冲（实际值以启动日志/指标为准）
+    WriteBufferBytes: 4194304  # 请求的 UDP 发送缓冲（实际值以启动日志/指标为准）
+
 # MySQL数据库配置
 Database:
     Host: "127.0.0.1"

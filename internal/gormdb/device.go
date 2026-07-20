@@ -39,6 +39,15 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*Device, int64, error
 	return devices, total, nil
 }
 
+// ListAllDevices 返回运行时路由缓存需要的完整设备集合，不设置分页硬上限。
+func (r *DeviceRepository) ListAllDevices() ([]*Device, error) {
+	var devices []*Device
+	if err := r.db.Order("id DESC").Find(&devices).Error; err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
 // ListDevicesByGroupID 获取指定群组的设备列表
 func (r *DeviceRepository) ListDevicesByGroupID(groupID int) ([]*Device, error) {
 	var devices []*Device

@@ -1,7 +1,6 @@
 package udphub
 
 import (
-	"fmt"
 	"log"
 	"time"
 
@@ -31,9 +30,24 @@ func (r *MessageRouter) SetWSManager(wsManager interfaces.WSManagerInterface) {
 	r.wsManager = wsManager
 }
 
-func buildWSSpeakerIdentity(source interfaces.WSDeviceInterface) (speakerID string, speakerLabel string) {
+func activeDomainGroupIDs(sourceGroupID int) []int {
+	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
+	if len(domainGroups) == 0 {
+		domainGroups = []int{sourceGroupID}
+	}
+	active := make([]int, 0, len(domainGroups))
+	for _, groupID := range domainGroups {
+		if group, ok := GetGroupFromCache(groupID); ok && group != nil && group.Status != 1 {
+			continue
+		}
+		active = append(active, groupID)
+	}
+	return active
+}
+
+func buildWSSpeaker(source interfaces.WSDeviceInterface) halfDuplexSpeaker {
 	if source == nil {
-		return "", ""
+		return halfDuplexSpeaker{}
 	}
 
 	labelBase := source.GetCallSign()
@@ -41,82 +55,19 @@ func buildWSSpeakerIdentity(source interfaces.WSDeviceInterface) (speakerID stri
 		labelBase = source.GetUsername()
 	}
 	if labelBase == "" {
-		labelBase = source.GetIdentifier()
-	}
-	if labelBase == "" {
 		labelBase = "ws-unknown"
 	}
-	speakerLabel = fmt.Sprintf("%s-%d", labelBase, source.GetSSID())
 
+	var key uint64
 	switch {
 	case source.GetDeviceID() > 0:
-		speakerID = fmt.Sprintf("ws_dev:%d", source.GetDeviceID())
+		key = 0x1000000000000000 | uint64(uint32(source.GetDeviceID()))
 	case source.GetUserID() > 0:
-		speakerID = fmt.Sprintf("ws_user:%d:%d", source.GetUserID(), source.GetSSID())
+		key = 0x2000000000000000 | uint64(uint32(source.GetUserID()))<<8 | uint64(source.GetSSID())
 	default:
-		speakerID = fmt.Sprintf("ws_id:%s:%d", source.GetIdentifier(), source.GetSSID())
+		key = 0x3000000000000000 | uint64(fnv32String(source.GetIdentifier()))<<8 | uint64(source.GetSSID())
 	}
-
-	return speakerID, speakerLabel
-}
-
-// RouteVoiceFromUDP 转发 UDP 语音到 WebSocket 设备
-// 当 UDP 设备发送语音时，转发到同组的所有 WebSocket 设备
-func (r *MessageRouter) RouteVoiceFromUDP(source *models.Device, data []byte, groupID int) {
-	if r.wsManager == nil {
-		log.Println("[ROUTE_ERR] UDP -> WS 转发失败: wsManager 未初始化 (init() 可能未执行)")
-		return
-	}
-
-	r.wsManager.ForEachDeviceByGroup(groupID, func(device interfaces.WSDeviceInterface) {
-		// 不转发给自己（如果是普通设备）
-		if !device.IsGhost() && device.GetDeviceID() == source.ID {
-			return
-		}
-
-		// 检查目标设备是否禁收
-		if device.IsDisabledRecv() {
-			return
-		}
-
-		// 发送语音数据
-		_ = r.wsManager.SendToDevice(device, data, 2) // 2 = websocket.BinaryMessage
-	})
-}
-
-// RouteTextFromUDP 转发 UDP 文本消息到 WebSocket 设备
-func (r *MessageRouter) RouteTextFromUDP(source *models.Device, data []byte, groupID int) {
-	if r.wsManager == nil {
-		return
-	}
-
-	r.wsManager.ForEachDeviceByGroup(groupID, func(device interfaces.WSDeviceInterface) {
-		// 不转发给自己
-		if !device.IsGhost() && device.GetDeviceID() == source.ID {
-			return
-		}
-
-		if device.IsDisabledRecv() {
-			return
-		}
-
-		_ = r.wsManager.SendToDevice(device, data, 2)
-	})
-}
-
-// RouteServerVoiceFromUDP 转发 UDP 服务器互联语音到 WebSocket 设备
-func (r *MessageRouter) RouteServerVoiceFromUDP(source *models.Device, data []byte, groupID int) {
-	if r.wsManager == nil {
-		return
-	}
-
-	r.wsManager.ForEachDeviceByGroup(groupID, func(device interfaces.WSDeviceInterface) {
-		if device.IsDisabledRecv() {
-			return
-		}
-
-		_ = r.wsManager.SendToDevice(device, data, 2)
-	})
+	return halfDuplexSpeaker{key: key, labelBase: labelBase, ssid: source.GetSSID()}
 }
 
 // RouteVoiceToUDP 转发 WebSocket 语音到 UDP 设备
@@ -144,8 +95,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		return
 	}
 
-	speakerID, speakerLabel := buildWSSpeakerIdentity(source)
-	if !tryAcquireHalfDuplex(groupID, speakerID, speakerLabel, time.Now()) {
+	if !tryAcquireHalfDuplex(groupID, buildWSSpeaker(source), time.Now()) {
 		return
 	}
 
@@ -267,44 +217,15 @@ func BroadcastTextToUDP(source interfaces.WSDeviceInterface, textData []byte, gr
 	}
 }
 
-// BroadcastVoiceFromUDP 广播 UDP 语音到 WebSocket 设备（单群）
-func BroadcastVoiceFromUDP(source *models.Device, data []byte, groupID int) {
-	if GlobalMessageRouter != nil {
-		GlobalMessageRouter.RouteVoiceFromUDP(source, data, groupID)
-	}
-}
-
-// BroadcastTextFromUDP 广播 UDP 文本消息到 WebSocket 设备（单群）
-func BroadcastTextFromUDP(source *models.Device, data []byte, groupID int) {
-	if GlobalMessageRouter != nil {
-		GlobalMessageRouter.RouteTextFromUDP(source, data, groupID)
-	}
-}
-
 // BroadcastVoiceFromUDPDomain 将 UDP 语音转发到连通域内所有群组的 WS 客户端（一次取域）。
 func BroadcastVoiceFromUDPDomain(source *models.Device, data []byte, sourceGroupID int) {
 	if GlobalMessageRouter == nil || GlobalMessageRouter.wsManager == nil || source == nil {
 		return
 	}
-	r := GlobalMessageRouter
-	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
-	if len(domainGroups) == 0 {
-		domainGroups = []int{sourceGroupID}
-	}
-	for _, gid := range domainGroups {
-		if gp, ok := GetGroupFromCache(gid); ok && gp != nil && gp.Status != 1 {
-			continue
-		}
-		r.wsManager.ForEachDeviceByGroup(gid, func(device interfaces.WSDeviceInterface) {
-			if !device.IsGhost() && device.GetDeviceID() == source.ID {
-				return
-			}
-			if device.IsDisabledRecv() {
-				return
-			}
-			_ = r.wsManager.SendToDevice(device, data, 2)
-		})
-	}
+	GlobalMessageRouter.wsManager.BroadcastToGroups(
+		activeDomainGroupIDs(sourceGroupID), data, 2,
+		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID},
+	)
 }
 
 // BroadcastTextFromUDPDomain 将 UDP 文本转发到连通域内所有群组的 WS 客户端。
@@ -312,25 +233,10 @@ func BroadcastTextFromUDPDomain(source *models.Device, data []byte, sourceGroupI
 	if GlobalMessageRouter == nil || GlobalMessageRouter.wsManager == nil || source == nil {
 		return
 	}
-	r := GlobalMessageRouter
-	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
-	if len(domainGroups) == 0 {
-		domainGroups = []int{sourceGroupID}
-	}
-	for _, gid := range domainGroups {
-		if gp, ok := GetGroupFromCache(gid); ok && gp != nil && gp.Status != 1 {
-			continue
-		}
-		r.wsManager.ForEachDeviceByGroup(gid, func(device interfaces.WSDeviceInterface) {
-			if !device.IsGhost() && device.GetDeviceID() == source.ID {
-				return
-			}
-			if device.IsDisabledRecv() {
-				return
-			}
-			_ = r.wsManager.SendToDevice(device, data, 2)
-		})
-	}
+	GlobalMessageRouter.wsManager.BroadcastToGroups(
+		activeDomainGroupIDs(sourceGroupID), data, 2,
+		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID},
+	)
 }
 
 // RouteVoiceToWSClients 转发 WebSocket 语音到同组和互联组的其他 WS 客户端
@@ -338,24 +244,10 @@ func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterfac
 	if r.wsManager == nil {
 		return
 	}
-	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
-	if len(domainGroups) == 0 {
-		domainGroups = []int{sourceGroupID}
-	}
-	for _, targetID := range domainGroups {
-		if targetGroup, exists := GetGroupFromCache(targetID); exists && targetGroup.Status != 1 {
-			continue
-		}
-		r.wsManager.ForEachDeviceByGroup(targetID, func(device interfaces.WSDeviceInterface) {
-			if device.IsGhost() && device.GetUserID() == source.GetUserID() && device.GetSSID() == source.GetSSID() {
-				return
-			}
-			if device.IsDisabledRecv() {
-				return
-			}
-			_ = r.wsManager.SendToDevice(device, data, 2)
-		})
-	}
+	r.wsManager.BroadcastToGroups(
+		activeDomainGroupIDs(sourceGroupID), data, 2,
+		interfaces.WSBroadcastFilter{ExcludeUserID: source.GetUserID(), ExcludeSSID: source.GetSSID()},
+	)
 }
 
 // RouteTextToWSClients 转发 WebSocket 文本消息到同组和互联组的其他 WS 客户端
@@ -363,22 +255,8 @@ func (r *MessageRouter) RouteTextToWSClients(source interfaces.WSDeviceInterface
 	if r.wsManager == nil {
 		return
 	}
-	domainGroups := GetHalfDuplexDomainGroupIDs(sourceGroupID)
-	if len(domainGroups) == 0 {
-		domainGroups = []int{sourceGroupID}
-	}
-	for _, targetID := range domainGroups {
-		if targetGroup, exists := GetGroupFromCache(targetID); exists && targetGroup.Status != 1 {
-			continue
-		}
-		r.wsManager.ForEachDeviceByGroup(targetID, func(device interfaces.WSDeviceInterface) {
-			if device.IsGhost() && device.GetUserID() == source.GetUserID() && device.GetSSID() == source.GetSSID() {
-				return
-			}
-			if device.IsDisabledRecv() {
-				return
-			}
-			_ = r.wsManager.SendToDevice(device, data, 2)
-		})
-	}
+	r.wsManager.BroadcastToGroups(
+		activeDomainGroupIDs(sourceGroupID), data, 2,
+		interfaces.WSBroadcastFilter{ExcludeUserID: source.GetUserID(), ExcludeSSID: source.GetSSID()},
+	)
 }

@@ -37,7 +37,7 @@ func getGroupConnPool(gp *models.Group) *CurrentConnPool {
 // loadAllDevices 从数据库加载所有设备
 func loadAllDevices() {
 	repo := gormdb.NewDeviceRepository()
-	devices, _, err := repo.ListDevices(10000, 1)
+	devices, err := repo.ListAllDevices()
 	if err != nil {
 		log.Printf("Load devices from database failed: %v", err)
 		return
@@ -48,18 +48,7 @@ func loadAllDevices() {
 	callsignMap := make(map[string]*models.Device, len(devices))
 	replaceRuntimeDeviceMaps(ownerMap, usernameMap, callsignMap)
 
-	// 批量获取所有用户信息（用于获取呼号）
-	userRepo := gormdb.NewUserRepository()
-	userCache := make(map[int]*gormdb.User)
-	for _, dev := range devices {
-		if dev.OwnerID > 0 {
-			if _, ok := userCache[dev.OwnerID]; !ok {
-				if user, err := userRepo.GetUserByID(dev.OwnerID); err == nil && user != nil {
-					userCache[dev.OwnerID] = user
-				}
-			}
-		}
-	}
+	userCache := loadDeviceOwnerCache(devices)
 
 	for _, dev := range devices {
 		// 转换为 models.Device
@@ -94,6 +83,37 @@ func loadAllDevices() {
 	}
 
 	log.Printf("Loaded %d devices from database", len(devices))
+}
+
+func loadDeviceOwnerCache(devices []*gormdb.Device) map[int]*gormdb.User {
+	ownerSet := make(map[int]struct{}, len(devices))
+	for _, dev := range devices {
+		if dev != nil && dev.OwnerID > 0 {
+			ownerSet[dev.OwnerID] = struct{}{}
+		}
+	}
+	ownerIDs := make([]int, 0, len(ownerSet))
+	for ownerID := range ownerSet {
+		ownerIDs = append(ownerIDs, ownerID)
+	}
+
+	cache := make(map[int]*gormdb.User, len(ownerIDs))
+	userRepo := gormdb.NewUserRepository()
+	const batchSize = 1000
+	for start := 0; start < len(ownerIDs); start += batchSize {
+		end := min(start+batchSize, len(ownerIDs))
+		users, err := userRepo.GetUsersByIDs(ownerIDs[start:end])
+		if err != nil {
+			log.Printf("[CACHE] batch load device owners failed: %v", err)
+			continue
+		}
+		for _, user := range users {
+			if user != nil {
+				cache[user.ID] = user
+			}
+		}
+	}
+	return cache
 }
 
 // addDevice 添加新设备（如果已存在则从数据库加载）。resolveInitialGroup

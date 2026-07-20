@@ -27,35 +27,44 @@ func (a *WSManagerAdapter) GetDevicesByGroup(groupID int) []interfaces.WSDeviceI
 	return result
 }
 
-// ForEachDeviceByGroup 遍历指定群组的在线设备（避免额外接口切片转换）
-func (a *WSManagerAdapter) ForEachDeviceByGroup(groupID int, fn func(interfaces.WSDeviceInterface)) {
-	if a == nil || a.manager == nil || fn == nil {
-		return
+// BroadcastToGroups 为整次广播只复制一份 payload，各连接队列共享只读引用。
+func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messageType int, filter interfaces.WSBroadcastFilter) (sent, dropped int) {
+	if a == nil || a.manager == nil || len(groupIDs) == 0 || len(data) == 0 {
+		return 0, 0
 	}
-	devices := a.manager.GetDevicesByGroup(groupID)
-	for _, d := range devices {
-		fn(d)
+	var payload *sharedWritePayload
+	defer func() {
+		if payload != nil {
+			payload.release()
+		}
+	}()
+	for _, groupID := range groupIDs {
+		for _, device := range a.manager.GetDevicesByGroup(groupID) {
+			if device == nil || device.DisableRecv {
+				continue
+			}
+			if filter.ExcludeDeviceID != 0 && !device.IsGhost() && device.GetDeviceID() == filter.ExcludeDeviceID {
+				continue
+			}
+			if filter.ExcludeUserID != 0 && device.IsGhost() &&
+				device.UserID == filter.ExcludeUserID && device.SSID == filter.ExcludeSSID {
+				continue
+			}
+			if payload == nil {
+				payload = newSharedWritePayload(data)
+			}
+			if device.asyncWriteShared(messageType, payload) {
+				sent++
+			} else {
+				dropped++
+			}
+		}
 	}
+	return sent, dropped
 }
 
-// SendToDevice 向设备发送数据（异步非阻塞）
-// 优化：
-// 1. 直接使用传入的 device 引用，消除二次查找
-// 2. 使用异步写通道，避免同步阻塞
-// 3. 通道满时丢帧而非阻塞整条转发链路
-func (a *WSManagerAdapter) SendToDevice(device interfaces.WSDeviceInterface, data []byte, messageType int) error {
-	if device.IsGhost() {
-		// 直接类型断言，消除二次查找
-		wsDevice, ok := device.(*WSDevice)
-		if !ok {
-			return nil // 类型断言失败，静默忽略
-		}
-		// 异步非阻塞投递
-		if !wsDevice.AsyncWrite(messageType, data) {
-			// 通道满丢帧，但不返回错误（实时语音丢帧优于阻塞）
-		}
-	}
-	return nil
+func (a *WSManagerAdapter) GetDeliveryStats() map[string]int64 {
+	return getWSDeliveryStats()
 }
 
 // GetOnlineCount 获取在线设备数量

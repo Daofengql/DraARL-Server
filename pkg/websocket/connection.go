@@ -104,7 +104,40 @@ type WSDevice struct {
 // writeRequest 写请求结构
 type writeRequest struct {
 	messageType int
-	data        []byte
+	payload     *sharedWritePayload
+}
+
+type sharedWritePayload struct {
+	data []byte
+	refs atomic.Int32
+}
+
+var (
+	wsFramesCopied  atomic.Int64
+	wsBytesCopied   atomic.Int64
+	wsWritesQueued  atomic.Int64
+	wsWritesDropped atomic.Int64
+	wsWritesDrained atomic.Int64
+)
+
+func newSharedWritePayload(data []byte) *sharedWritePayload {
+	payload := &sharedWritePayload{data: append([]byte(nil), data...)}
+	payload.refs.Store(1)
+	wsFramesCopied.Add(1)
+	wsBytesCopied.Add(int64(len(data)))
+	return payload
+}
+
+func (p *sharedWritePayload) retain() {
+	if p != nil {
+		p.refs.Add(1)
+	}
+}
+
+func (p *sharedWritePayload) release() {
+	if p != nil && p.refs.Add(-1) == 0 {
+		p.data = nil
+	}
 }
 
 const writeChSize = 64 // 写通道缓冲大小，约 4 秒的音频帧 (63ms * 64 ≈ 4s)
@@ -188,21 +221,58 @@ func (d *WSDevice) StartWriter() {
 	d.writeOnce.Do(func() {
 		d.writeCh = make(chan *writeRequest, writeChSize)
 		d.closeCh = make(chan struct{})
-		go d.writerLoop()
+		go d.writerLoop(d.writeCh, d.closeCh)
 	})
 }
 
 // writerLoop writer goroutine 主循环
 // 所有写操作都通过此 goroutine 串行执行，避免写锁竞争
-func (d *WSDevice) writerLoop() {
+func (d *WSDevice) writerLoop(writeCh chan *writeRequest, closeCh <-chan struct{}) {
+	defer d.finishWriter(writeCh)
 	for {
 		select {
-		case req := <-d.writeCh:
-			if err := d.Conn.WriteMessage(req.messageType, req.data); err != nil {
+		case req, ok := <-writeCh:
+			if !ok {
+				return
+			}
+			if req == nil || req.payload == nil {
+				continue
+			}
+			err := d.Conn.WriteMessage(req.messageType, req.payload.data)
+			req.payload.release()
+			wsWritesDrained.Add(1)
+			if err != nil {
 				log.Printf("[WS] Async write failed for %s: %v", d.GetIdentifier(), err)
 				return
 			}
-		case <-d.closeCh:
+		case <-closeCh:
+			return
+		}
+	}
+}
+
+func (d *WSDevice) finishWriter(writeCh chan *writeRequest) {
+	d.writeMu.Lock()
+	if d.writeCh == writeCh {
+		close(writeCh)
+		d.writeCh = nil
+	}
+	d.writeMu.Unlock()
+	drainWriteRequests(writeCh)
+}
+
+func drainWriteRequests(writeCh <-chan *writeRequest) {
+	for {
+		select {
+		case req, ok := <-writeCh:
+			if !ok {
+				return
+			}
+			if req != nil && req.payload != nil {
+				req.payload.release()
+				wsWritesDrained.Add(1)
+			}
+		default:
 			return
 		}
 	}
@@ -212,23 +282,42 @@ func (d *WSDevice) writerLoop() {
 // 返回值：true=投递成功，false=通道满（丢帧）
 // 入队时拷贝 data，调用方缓冲可立即复用/归还。
 func (d *WSDevice) AsyncWrite(messageType int, data []byte) bool {
+	payload := newSharedWritePayload(data)
+	accepted := d.asyncWriteShared(messageType, payload)
+	payload.release()
+	return accepted
+}
+
+func (d *WSDevice) asyncWriteShared(messageType int, payload *sharedWritePayload) bool {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 
-	if d.writeCh == nil {
+	if d.writeCh == nil || payload == nil {
+		wsWritesDropped.Add(1)
 		return false
 	}
-
-	payload := make([]byte, len(data))
-	copy(payload, data)
-
+	payload.retain()
 	select {
-	case d.writeCh <- &writeRequest{messageType: messageType, data: payload}:
+	case d.writeCh <- &writeRequest{messageType: messageType, payload: payload}:
+		wsWritesQueued.Add(1)
 		return true
 	default:
-		// 通道满，丢帧而不是阻塞
-		log.Printf("[WS] Write channel full for %s, dropping frame", d.GetIdentifier())
+		payload.release()
+		wsWritesDropped.Add(1)
 		return false
+	}
+}
+
+func getWSDeliveryStats() map[string]int64 {
+	queued := wsWritesQueued.Load()
+	drained := wsWritesDrained.Load()
+	return map[string]int64{
+		"frames_copied":  wsFramesCopied.Load(),
+		"bytes_copied":   wsBytesCopied.Load(),
+		"writes_queued":  queued,
+		"writes_dropped": wsWritesDropped.Load(),
+		"writes_drained": drained,
+		"writes_pending": queued - drained,
 	}
 }
 

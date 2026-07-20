@@ -1,12 +1,14 @@
 """
-UDP 普通设备客户端（使用设备密码认证）
+Python 串口模拟客户端（通过 COM 口直接发送数据包）
+用于与 4G 透传模块通信
 """
 
-import socket
+import serial
+import serial.tools.list_ports
 import struct
 import time
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 
 try:
     import pyaudio
@@ -21,7 +23,7 @@ except ImportError:
     OPUS_AVAILABLE = False
 
 from .base import BaseClient, ClientState
-from protocol import (
+from ..protocol import (
     PacketType, DevModel, encode_packet, DraARLv1Packet,
     parse_merged_opus_frames, build_merged_opus_frames,
     ConfigType, TLVType, KEY_TO_TLV_TYPE, encode_tlv, decode_tlv,
@@ -30,19 +32,19 @@ from protocol import (
 )
 
 
-class UDPDeviceClient(BaseClient):
+class SerialClient(BaseClient):
     """
-    UDP 普通设备客户端
-    使用设备密码进行认证（心跳包）
+    串口客户端
+    通过串口直接发送 DraARLv1 协议包
     """
 
     def __init__(
         self,
-        server_ip: str,
-        server_port: int,
-        username: str,
-        device_password: str,
-        ssid: int,
+        port: str,
+        baudrate: int = 921600,
+        username: str = "",
+        device_password: str = "",
+        ssid: int = 1,
         mac: str = "",
         dmrid: int = 0,
         dev_model: int = DevModel.WINDOWS,
@@ -51,7 +53,8 @@ class UDPDeviceClient(BaseClient):
     ):
         super().__init__(log_callback)
 
-        self.server_addr = (server_ip, server_port)
+        self.port = port
+        self.baudrate = baudrate
         self.username = username
         self.device_password = device_password
         self.ssid = ssid
@@ -61,8 +64,12 @@ class UDPDeviceClient(BaseClient):
         self.enable_audio = enable_audio and PYAUDIO_AVAILABLE and OPUS_AVAILABLE
         self.last_heartbeat_status = HeartbeatStatus.SUCCESS
 
-        # 网络
-        self.sock: Optional[socket.socket] = None
+        # 调试日志
+        self.log(f"[调试] pyaudio可用: {PYAUDIO_AVAILABLE}, opuslib可用: {OPUS_AVAILABLE}")
+        self.log(f"[调试] enable_audio参数: {enable_audio}, 最终enable_audio: {self.enable_audio}")
+
+        # 串口
+        self.serial_conn: Optional[serial.Serial] = None
 
         # GPS
         self.gps_lat = 0.0
@@ -76,28 +83,25 @@ class UDPDeviceClient(BaseClient):
             self.pyaudio_inst = None
             self.opus_encoder = None
             self.opus_decoder = None
-            missing = []
             if not PYAUDIO_AVAILABLE:
-                missing.append("pyaudio")
-            if not OPUS_AVAILABLE:
-                missing.append("opuslib")
-            if enable_audio and missing:
-                self.log(f"[音频不可用] 缺少依赖: {', '.join(missing)}，PTT 已禁用")
+                self.log("[音频] pyaudio 未安装，音频功能禁用")
+            elif not OPUS_AVAILABLE:
+                self.log("[音频] opuslib 未安装，音频功能禁用")
 
-        # 设备配置（模拟设备参数）
+        # 设备配置
         self.device_config = {
-            TLVType.RX_FREQ: "439500000",      # 接收频率 Hz
-            TLVType.TX_FREQ: "439500000",      # 发射频率 Hz
-            TLVType.RX_CTCSS: "0",             # 接收亚音
-            TLVType.TX_CTCSS: "0",             # 发射亚音
-            TLVType.SQL_LEVEL: "3",            # 静噪等级
-            TLVType.POWER_LEVEL: "3",          # 功率等级（高）
-            TLVType.TX_BANDWIDTH: "2",         # 发射带宽（宽带）
-            TLVType.RX_TONE_MODE: "off",       # 接收亚音类型
-            TLVType.RX_TONE_VALUE: "0",        # 接收亚音值
-            TLVType.TX_TONE_MODE: "off",       # 发射亚音类型
-            TLVType.TX_TONE_VALUE: "0",        # 发射亚音值
-            TLVType.RF_GUARD_ENABLED: "1",     # 发射保护开关
+            TLVType.RX_FREQ: "439500000",
+            TLVType.TX_FREQ: "439500000",
+            TLVType.RX_CTCSS: "0",
+            TLVType.TX_CTCSS: "0",
+            TLVType.SQL_LEVEL: "3",
+            TLVType.POWER_LEVEL: "3",
+            TLVType.TX_BANDWIDTH: "2",
+            TLVType.RX_TONE_MODE: "off",
+            TLVType.RX_TONE_VALUE: "0",
+            TLVType.TX_TONE_MODE: "off",
+            TLVType.TX_TONE_VALUE: "0",
+            TLVType.RF_GUARD_ENABLED: "1",
             TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "30",
             TLVType.RF_GUARD_WINDOW_S: "300",
             TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "60",
@@ -109,6 +113,15 @@ class UDPDeviceClient(BaseClient):
         # 配置更新回调
         self.config_update_callback: Optional[Callable[[dict], None]] = None
 
+        # 接收缓冲区
+        self.recv_buffer = bytearray()
+
+    @staticmethod
+    def list_ports() -> List[str]:
+        """列出可用串口"""
+        ports = serial.tools.list_ports.comports()
+        return [p.device for p in ports]
+
     def _init_audio(self):
         """初始化音频引擎"""
         self.pyaudio_inst = pyaudio.PyAudio()
@@ -116,37 +129,60 @@ class UDPDeviceClient(BaseClient):
         self.channels = 1
         self.rate = 16000
 
-        # 60ms 帧时长 + 2 帧合并发送
         self.frame_duration_ms = 60
-        self.chunk_size = int(self.rate * self.frame_duration_ms / 1000)  # 960 samples
-        self.frames_per_packet = 2
+        self.chunk_size = int(self.rate * self.frame_duration_ms / 1000)
+        self.frames_per_packet = 4  # 串口使用4帧合一发送
         self.frame_accumulator = []
 
         self.opus_encoder = opuslib.Encoder(self.rate, self.channels, opuslib.APPLICATION_VOIP)
         self.opus_decoder = opuslib.Decoder(self.rate, self.channels)
 
-        self.log(f"[音频] Opus 16kHz, 60ms帧, 2帧合并")
+        self.log(f"[音频] Opus 16kHz, 60ms帧, 4帧合一")
+
+    def start_transmit(self):
+        """开始发射（PTT按下）"""
+        if not self.running:
+            self.log("[警告] 未连接，无法发射")
+            return
+        self.is_transmitting = True
+        self.log(">>> [开始发射]")
+
+    def stop_transmit(self):
+        """停止发射（PTT释放）"""
+        self.is_transmitting = False
+        # 清空音频帧累积器
+        if hasattr(self, 'frame_accumulator'):
+            self.frame_accumulator = []
+        self.log("<<< [停止发射]")
 
     def connect(self) -> bool:
-        """连接服务器"""
+        """连接串口"""
         try:
             self._set_state(ClientState.CONNECTING)
 
-            # 创建 UDP socket
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.settimeout(1.0)
+            # 打开串口
+            self.serial_conn = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=1.0
+            )
+
+            self.log(f"[串口] 已打开 {self.port} @ {self.baudrate}")
 
             self.running = True
 
             # 启动接收线程
-            self._start_thread(self._receive_loop, "UDP-Receiver")
+            self._start_thread(self._receive_loop, "Serial-Receiver")
 
             # 启动心跳线程
-            self._start_thread(self._heartbeat_loop, "UDP-Heartbeat")
+            self._start_thread(self._heartbeat_loop, "Serial-Heartbeat")
 
             # 启动音频采集线程
             if self.enable_audio:
-                self._start_thread(self._transmit_loop, "UDP-Transmit")
+                self._start_thread(self._transmit_loop, "Serial-Transmit")
 
             # 发送首次心跳进行认证
             self._set_state(ClientState.AUTHENTICATING)
@@ -167,27 +203,27 @@ class UDPDeviceClient(BaseClient):
     def disconnect(self):
         """断开连接"""
         if not self.running:
-            return  # 防止重复断开
+            return
 
         self.running = False
         self.authenticated = False
         self._set_state(ClientState.DISCONNECTED)
 
-        # 先关闭 socket，解除 recvfrom 阻塞
-        if self.sock:
+        # 关闭串口
+        if self.serial_conn:
             try:
-                self.sock.close()
+                self.serial_conn.close()
             except:
                 pass
-            self.sock = None
+            self.serial_conn = None
 
-        # 等待线程结束（最多等待 2 秒）
+        # 等待线程结束
         for t in self._threads[:]:
             if t.is_alive():
                 t.join(timeout=0.5)
         self._threads.clear()
 
-        # 最后关闭音频
+        # 关闭音频
         if self.pyaudio_inst:
             try:
                 self.pyaudio_inst.terminate()
@@ -197,7 +233,7 @@ class UDPDeviceClient(BaseClient):
 
     def _send_heartbeat(self):
         """发送心跳包"""
-        if not self.sock:
+        if not self.serial_conn or not self.serial_conn.is_open:
             return
 
         # 心跳 DATA：前 24 字节 GPS，可选追加 MAC 文本
@@ -213,7 +249,11 @@ class UDPDeviceClient(BaseClient):
             data=gps_data
         )
 
-        self.sock.sendto(packet, self.server_addr)
+        try:
+            self.serial_conn.write(packet)
+            self.serial_conn.flush()
+        except Exception as e:
+            self.log(f"[发送错误] {e}")
 
     def _heartbeat_loop(self):
         """心跳循环"""
@@ -236,55 +276,21 @@ class UDPDeviceClient(BaseClient):
 
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(4096)
-                if len(data) < 90:
-                    continue
+                # 读取串口数据
+                if self.serial_conn and self.serial_conn.is_open:
+                    data = self.serial_conn.read(4096)
+                    if not data:
+                        continue
 
-                packet = DraARLv1Packet.decode(data)
-                if not packet:
-                    continue
+                    # 添加到缓冲区
+                    self.recv_buffer.extend(data)
 
-                if self._handle_heartbeat_packet(packet):
-                    last_sender = None
-                    continue
+                    # 尝试解析完整包
+                    self._process_buffer(stream_out, last_sender)
 
-                # 语音数据
-                if packet.packet_type == PacketType.OPUS_16K and packet.data:
-                    if self.is_transmitting:
-                        continue  # 半双工防回音
-
-                    sender_info = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
-                    if last_sender != sender_info:
-                        self.log(f"[接收] {sender_info} 正在发言...")
-                        last_sender = sender_info
-
-                    if stream_out and self.opus_decoder:
-                        try:
-                            frames = parse_merged_opus_frames(packet.data)
-                            for frame in frames:
-                                pcm = self.opus_decoder.decode(frame, self.chunk_size)
-                                stream_out.write(pcm)
-                        except Exception as e:
-                            self.log(f"[音频解码错误] {e}")
-
-                # 文本消息
-                elif packet.packet_type == PacketType.TEXT_MESSAGE and packet.data:
-                    msg = packet.data.decode('utf-8', errors='replace')
-                    sender = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
-                    self.log(f"[文字] {sender}: {msg}")
-
-                # 重置发言者
-                elif packet.packet_type in [PacketType.CONTROL, PacketType.HEARTBEAT]:
-                    last_sender = None
-
-                # Config 配置包
-                elif packet.packet_type == PacketType.CONFIG and packet.data:
-                    self._handle_config_packet(packet.data)
-
-            except socket.timeout:
-                continue
-            except OSError:
-                # socket 被关闭时会发生此错误
+            except serial.SerialException as e:
+                if self.running:
+                    self.log(f"[串口错误] {e}")
                 break
             except Exception as e:
                 if self.running:
@@ -294,12 +300,88 @@ class UDPDeviceClient(BaseClient):
             stream_out.stop_stream()
             stream_out.close()
 
+    def _process_buffer(self, stream_out, last_sender):
+        """处理接收缓冲区"""
+        while len(self.recv_buffer) >= 90:
+            # 查找包头 "DraA"
+            header_pos = -1
+            for i in range(len(self.recv_buffer) - 3):
+                if self.recv_buffer[i:i+4] == b'DraA':
+                    header_pos = i
+                    break
+
+            if header_pos < 0:
+                # 没找到包头，清空缓冲区（保留最后3字节防止截断）
+                if len(self.recv_buffer) > 3:
+                    self.recv_buffer = self.recv_buffer[-3:]
+                return
+
+            # 丢弃包头之前的数据
+            if header_pos > 0:
+                self.recv_buffer = self.recv_buffer[header_pos:]
+
+            # 检查是否有足够数据读取长度
+            if len(self.recv_buffer) < 6:
+                return
+
+            # 读取包长度
+            packet_len = struct.unpack('>H', self.recv_buffer[4:6])[0]
+
+            # 检查是否收到完整包
+            if len(self.recv_buffer) < packet_len:
+                return
+
+            # 提取完整包
+            raw_packet = bytes(self.recv_buffer[:packet_len])
+            self.recv_buffer = self.recv_buffer[packet_len:]
+
+            # 解析包
+            packet = DraARLv1Packet.decode(raw_packet)
+            if not packet:
+                continue
+
+            if self._handle_heartbeat_packet(packet):
+                last_sender = None
+                continue
+
+            # 语音数据
+            if packet.packet_type == PacketType.OPUS_16K and packet.data:
+                if self.is_transmitting:
+                    continue
+
+                sender_info = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
+                if last_sender != sender_info:
+                    self.log(f"[接收] {sender_info} 正在发言...")
+                    last_sender = sender_info
+
+                if stream_out and self.opus_decoder:
+                    try:
+                        frames = parse_merged_opus_frames(packet.data)
+                        for frame in frames:
+                            pcm = self.opus_decoder.decode(frame, self.chunk_size)
+                            stream_out.write(pcm)
+                    except Exception as e:
+                        self.log(f"[音频解码错误] {e}")
+
+            # 文本消息
+            elif packet.packet_type == PacketType.TEXT_MESSAGE and packet.data:
+                msg = packet.data.decode('utf-8', errors='replace')
+                sender = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
+                self.log(f"[文字] {sender}: {msg}")
+
+            # 重置发言者
+            elif packet.packet_type in [PacketType.CONTROL, PacketType.HEARTBEAT]:
+                last_sender = None
+
+            # Config 配置包
+            elif packet.packet_type == PacketType.CONFIG and packet.data:
+                self._handle_config_packet(packet.data)
+
     def _handle_heartbeat_packet(self, packet: DraARLv1Packet) -> bool:
-        """处理心跳响应与拒绝响应。"""
+        """处理心跳成功/拒绝响应。"""
         if packet.packet_type != PacketType.HEARTBEAT:
             return False
 
-        # 优先判断首次认证成功：服务端会回填 callsign。
         if packet.callsign and not self.authenticated:
             self.callsign = packet.callsign
             self.authenticated = True
@@ -308,7 +390,6 @@ class UDPDeviceClient(BaseClient):
             self.log(f"[认证成功] 呼号: {packet.callsign}")
             return True
 
-        # 拒绝响应：DATA[0] 是状态码，且 callsign 为空。
         if not packet.callsign and packet.data:
             status = packet.data[0]
             if status in (
@@ -368,7 +449,10 @@ class UDPDeviceClient(BaseClient):
 
     def _send_merged_audio(self):
         """发送合并的音频帧"""
-        if not self.sock or not self.frame_accumulator:
+        if not self.serial_conn or not self.serial_conn.is_open:
+            self.log("[发送] 串口未打开")
+            return
+        if not self.frame_accumulator:
             return
 
         frames = self.frame_accumulator[:self.frames_per_packet]
@@ -386,7 +470,12 @@ class UDPDeviceClient(BaseClient):
             data=merged
         )
 
-        self.sock.sendto(packet, self.server_addr)
+        try:
+            self.serial_conn.write(packet)
+            self.serial_conn.flush()
+            self.log(f"[音频发送] {len(packet)} 字节")
+        except Exception as e:
+            self.log(f"[发送错误] {e}")
 
     def send_heartbeat(self):
         """手动发送心跳"""
@@ -394,7 +483,7 @@ class UDPDeviceClient(BaseClient):
 
     def send_text(self, text: str):
         """发送文本消息"""
-        if not self.sock or not self.authenticated:
+        if not self.serial_conn or not self.serial_conn.is_open or not self.authenticated:
             self.log("[错误] 未连接")
             return
 
@@ -408,8 +497,12 @@ class UDPDeviceClient(BaseClient):
             data=text.encode('utf-8')
         )
 
-        self.sock.sendto(packet, self.server_addr)
-        self.log(f"[文字发出] {text}")
+        try:
+            self.serial_conn.write(packet)
+            self.serial_conn.flush()
+            self.log(f"[文字发出] {text}")
+        except Exception as e:
+            self.log(f"[发送错误] {e}")
 
     def set_gps(self, lat: float, lon: float, alt: float = 0.0):
         """设置 GPS 位置"""
@@ -428,12 +521,10 @@ class UDPDeviceClient(BaseClient):
             config_type = result.get("type")
 
             if config_type == "query":
-                # 服务器查询配置，回复当前配置
                 self.log(f"[Config] 收到配置查询，回复当前配置")
                 self._send_config_report()
 
             elif config_type == "set":
-                # 服务器下发配置，更新本地配置
                 configs = result.get("configs", {})
                 self.log(f"[Config] 收到配置下发: {configs}")
                 for key, value in configs.items():
@@ -441,12 +532,10 @@ class UDPDeviceClient(BaseClient):
                     if tlv_type and tlv_type in self.device_config:
                         self.device_config[tlv_type] = value
                 self.log(f"[Config] 配置已更新")
-                # 触发配置更新回调
                 if self.config_update_callback:
                     self.config_update_callback(self.get_device_config())
 
             elif config_type == "time_sync":
-                # 时间同步（ACK）- 解析时间戳
                 timestamp = result.get("timestamp", 0)
                 if timestamp:
                     from datetime import datetime
@@ -457,11 +546,10 @@ class UDPDeviceClient(BaseClient):
             self.log(f"[Config] 解析错误: {e}")
 
     def _send_config_report(self):
-        """发送配置上报包（响应查询）"""
-        if not self.sock:
+        """发送配置上报包"""
+        if not self.serial_conn or not self.serial_conn.is_open:
             return
 
-        # 将 device_config (TLVType -> value) 转换为字符串 key 格式
         config_for_packet = self.get_device_config()
 
         packet = encode_packet(
@@ -474,12 +562,16 @@ class UDPDeviceClient(BaseClient):
             data=build_config_set_packet(config_for_packet)
         )
 
-        self.sock.sendto(packet, self.server_addr)
-        self.log(f"[Config] 已上报配置")
+        try:
+            self.serial_conn.write(packet)
+            self.serial_conn.flush()
+            self.log(f"[Config] 已上报配置")
+        except Exception as e:
+            self.log(f"[Config] 发送错误: {e}")
 
     def send_config_query(self):
         """发送配置查询请求"""
-        if not self.sock or not self.authenticated:
+        if not self.serial_conn or not self.serial_conn.is_open or not self.authenticated:
             self.log("[错误] 未连接")
             return
 
@@ -493,11 +585,15 @@ class UDPDeviceClient(BaseClient):
             data=build_config_query_packet()
         )
 
-        self.sock.sendto(packet, self.server_addr)
-        self.log("[Config] 已发送配置查询")
+        try:
+            self.serial_conn.write(packet)
+            self.serial_conn.flush()
+            self.log("[Config] 已发送配置查询")
+        except Exception as e:
+            self.log(f"[Config] 发送错误: {e}")
 
     def get_device_config(self) -> dict:
-        """获取当前设备配置（人类可读格式）"""
+        """获取当前设备配置"""
         result = {}
         for tlv_type, value in self.device_config.items():
             name = {

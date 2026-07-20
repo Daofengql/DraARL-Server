@@ -1,5 +1,5 @@
 """
-基础客户端类
+Python 模拟客户端基础类
 """
 
 import threading

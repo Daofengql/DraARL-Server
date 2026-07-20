@@ -1,5 +1,5 @@
 """
-DraARLv1 协议定义和编解码
+Python 模拟客户端使用的 DraARLv1 协议定义和编解码
 """
 
 import struct

@@ -1,5 +1,5 @@
 """
-工具模块
+Python 模拟客户端工具模块
 """
 
 from .jwt_gen import generate_jwt, parse_jwt, get_username_from_token

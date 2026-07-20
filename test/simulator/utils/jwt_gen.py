@@ -1,5 +1,5 @@
 """
-JWT Token 生成工具
+Python 模拟客户端的 JWT Token 生成工具
 """
 
 import time

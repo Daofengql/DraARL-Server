@@ -1,5 +1,5 @@
 """
-客户端模块
+Python 模拟客户端模块
 """
 
 from .base import BaseClient, ClientState

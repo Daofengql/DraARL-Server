@@ -1,5 +1,5 @@
 """
-DraARL 调试客户端
+DraARL Python 模拟客户端
 支持 UDP普通设备、UDP JWT 两种连接方式
 """
 
@@ -10,15 +10,23 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
-# 添加当前目录到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from client.udp_device import UDPDeviceClient
-from client.udp_jwt import UDPJWTClient
-from client.serial_device import SerialClient
-from protocol import DevModel, get_dev_model_name
-from utils.jwt_gen import generate_jwt
-from utils.http_client import HTTPClient
+# 直接运行脚本时，从 test 目录导入独立的 simulator 包；作为模块运行时使用相对导入。
+if __package__:
+    from .client.udp_device import UDPDeviceClient
+    from .client.udp_jwt import UDPJWTClient
+    from .client.serial_device import SerialClient
+    from .protocol import DevModel, get_dev_model_name
+    from .utils.jwt_gen import generate_jwt
+    from .utils.http_client import HTTPClient
+else:
+    test_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, test_dir)
+    from simulator.client.udp_device import UDPDeviceClient
+    from simulator.client.udp_jwt import UDPJWTClient
+    from simulator.client.serial_device import SerialClient
+    from simulator.protocol import DevModel, get_dev_model_name
+    from simulator.utils.jwt_gen import generate_jwt
+    from simulator.utils.http_client import HTTPClient
 
 
 

@@ -1,5 +1,5 @@
 """
-DraARL 调试客户端
+DraARL Python 模拟客户端
 """
 
 from .protocol import *

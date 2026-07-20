@@ -1,5 +1,5 @@
 """
-UDP JWT 客户端（使用 JWT Token 认证）
+Python UDP JWT 模拟客户端（使用 JWT Token 认证）
 """
 
 import socket
@@ -21,7 +21,7 @@ except ImportError:
     OPUS_AVAILABLE = False
 
 from .base import BaseClient, ClientState
-from protocol import (
+from ..protocol import (
     PacketType, DevModel, encode_packet, DraARLv1Packet,
     parse_merged_opus_frames, build_merged_opus_frames,
     JWTAuthStatus, is_ghost_dev_model, get_ghost_ssid, get_dev_model_name

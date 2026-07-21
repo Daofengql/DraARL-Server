@@ -563,48 +563,6 @@ func processLogBuffer() {
 	}
 }
 
-// deviceAT 发送 AT 命令到设备
-func deviceAT(at *models.ATCommand) (*models.Device, error) {
-	dev := lookupDeviceByUsernameSSID(at.CallSign, at.SSID)
-	if dev == nil {
-		// 向后兼容：尝试 callsign 索引
-		dev = lookupDeviceByCallsignSSID(at.CallSign, at.SSID)
-		if dev == nil {
-			return nil, errors.New("device not found")
-		}
-	}
-
-	atCommand := append([]byte{at.Type}, []byte(at.ATcommand+"="+at.Data+"\r\n")...)
-	packet := protocol.EncodeDraARLv1(dev.Username, "", at.SSID, protocol.DraARLTypeATPassThrough, models.DevModelServer, dev.DMRID, dev.CallSign, atCommand)
-
-	if globalConn != nil && dev.UDPAddr != nil {
-		globalConn.WriteToUDP(packet, dev.UDPAddr)
-	}
-
-	return dev, nil
-}
-
-// queryDeviceParm 查询设备参数
-func queryDeviceParm(callsignSSID string) (*models.Device, error) {
-	runtimeIndexMu.RLock()
-	dev := devCallsignSSIDMap[callsignSSID]
-	runtimeIndexMu.RUnlock()
-	if dev == nil {
-		return nil, errors.New("device not found")
-	}
-	return sendQueryDeviceParm(dev)
-}
-
-func sendQueryDeviceParm(dev *models.Device) (*models.Device, error) {
-	if globalConn != nil && dev.UDPAddr != nil {
-		// 兼容原逻辑：先发配置查询，再短暂等待
-		packet := protocol.EncodeDraARLv1(dev.Username, "", dev.SSID, protocol.DraARLTypeConfig, 0, 0, dev.CallSign, []byte{0x01})
-		globalConn.WriteToUDP(packet, dev.UDPAddr)
-		time.Sleep(300 * time.Millisecond)
-	}
-	return dev, nil
-}
-
 // decodeControlPacket 解析控制数据包
 func decodeControlPacket(data []byte) map[string]string {
 	result := make(map[string]string)
@@ -637,38 +595,6 @@ func decodeControlPacket(data []byte) map[string]string {
 	}
 
 	return result
-}
-
-// decodeATPacket 解析 AT 数据包
-func decodeATPacket(callsign string, ssid byte, data []byte) *models.ATCommand {
-	at := &models.ATCommand{CallSign: callsign, SSID: ssid}
-
-	if len(data) < 2 {
-		log.Printf("AT command error: %s %d %v", callsign, ssid, data)
-		return at
-	}
-
-	at.Type = data[0]
-
-	if at.Type == 0x02 {
-		// 解析多条 AT 命令响应
-		lines := strings.Split(string(data[1:]), "\r\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "DraARL") {
-				at.Data = line
-				continue
-			}
-
-			kv := strings.SplitN(line, "=", 2)
-			if len(kv) == 2 {
-				if at.ATcommand == "" {
-					at.ATcommand = kv[0]
-				}
-			}
-		}
-	}
-
-	return at
 }
 
 // bytesTrim 去除字节中的 null 和回车

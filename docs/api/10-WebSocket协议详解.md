@@ -54,13 +54,13 @@ WebSocket 使用 HttpOnly Cookie 进行认证，不支持 URL query 传 token。
 
 | Type | 值 | 说明 | 方向 |
 |------|-----|------|------|
-| Control | 0 | 控制指令 | 双向 |
-| JWTAuth | 1 | JWT认证 | 客户端→服务器 |
+| JWTAuth | 1 | JWT 认证（UDP 使用，WebSocket 不接收） | - |
 | Heartbeat | 2 | 心跳 | 客户端→服务器 |
-| Config | 3 | 设备配置 | 双向 |
+| Config | 3 | 设备配置（UDP 使用，WebSocket 不接收） | - |
 | TextMessage | 4 | 文本消息 | 双向 |
 | Opus16K | 5 | Opus语音 | 双向 |
-| ServerVoice | 6 | 服务器互联语音 | 服务器→客户端 |
+
+WebSocket 上行当前只处理 Type `2`、`4`、`5`。
 
 ## 语音通信
 

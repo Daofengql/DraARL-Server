@@ -99,16 +99,12 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		return
 	}
 
-	// 【前置逻辑说明】
-	// 这里是解决 UDP 客户端收不到声音的最关键一步。
-	// 我们必须放弃使用 EncodeServerVoice (会打包成 Type 6)，因为普通硬件终端不解析互联包扩展头。
-	// 改为调用 EncodeDraARLv1 并指定 Type 为 protocol.DraARLTypeOpus16K (即协议中的 Type 5)，
-	// 这样下发的就是 标准、纯净的 16K 语音流包，所有客户端都能正常解码播放。
+	// WebSocket 与 UDP 共用 Type 5 标准 Opus 16K 语音包。
 	voicePacket := protocol.EncodeDraARLv1(
 		source.GetUsername(),
 		"", // 准入密码转发为空
 		source.GetSSID(),
-		protocol.DraARLTypeOpus16K, // 【核心修改】使用 Type 5：标准 Opus 16K 语音
+		protocol.DraARLTypeOpus16K,
 		source.GetDevModel(),
 		0, // DMRID
 		source.GetCallSign(),

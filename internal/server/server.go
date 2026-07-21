@@ -232,12 +232,6 @@ func (s *Server) setupRoutes() {
 				approved.POST("/device/changegroup", handler.ChangeDeviceGroup)
 				approved.PUT("/devices/:id/group", handler.ChangeDeviceGroup) // RESTful 风格
 
-				// 设备 AT 命令和参数
-				approved.POST("/device/at", handler.DeviceAT)
-				approved.POST("/device/query", handler.QueryDeviceParm)
-				approved.POST("/device/change", handler.ChangeDeviceParm)
-				approved.POST("/device/change1w", handler.Change1W)
-				approved.POST("/device/change2w", handler.Change2W)
 				approved.GET("/device/qth", handler.GetDevice) // 兼容旧接口
 
 				// 设备配置同步 API（UDP 普通设备）

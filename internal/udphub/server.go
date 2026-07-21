@@ -447,8 +447,6 @@ func handleNonForwardingDevicePacket(
 		handleDraARLHeartbeat(packet, data, dev, conn, nil, realAddr, isGhost)
 	case protocol.DraARLTypeConfig:
 		handleDraARLConfig(packet, dev)
-	case protocol.DraARLTypeATPassThrough:
-		handleDraARLATCommand(packet, dev)
 	}
 }
 
@@ -700,10 +698,6 @@ func resolveNewDeviceDefaultGroup(user *gormdb.User) int {
 // isGhost: 是否为 UDP 幽灵设备
 func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
 	switch packet.Type {
-	case protocol.DraARLTypeControl:
-		// 控制指令
-		log.Printf("Received DraARLv1 control command: %v", packet)
-
 	case protocol.DraARLTypeOpus16K:
 		// 语音消息 (Opus 16K)
 		handleDraARLVoice(packet, data, dev, conn, gp)
@@ -719,14 +713,6 @@ func parseDraARL(packet *protocol.DraARLv1Packet, data []byte, dev *models.Devic
 	case protocol.DraARLTypeTextMessage:
 		// 文本消息
 		handleDraARLTextMessage(packet, data, dev, conn, gp)
-
-	case protocol.DraARLTypeServerVoice:
-		// 服务器互联语音
-		handleDraARLServerVoice(packet, data, dev, conn, gp)
-
-	case protocol.DraARLTypeATPassThrough:
-		// AT 透传
-		handleDraARLATCommand(packet, dev)
 
 	default:
 		log.Printf("Unknown DraARLv1 packet type: %d, %v", packet.Type, packet)
@@ -997,43 +983,6 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 	}
 }
 
-// handleDraARLServerVoice 处理 DraARLv1 服务器互联语音
-func handleDraARLServerVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	// 检查设备是否被禁发
-	if !canSendFromDevice(dev) {
-		return
-	}
-
-	if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
-		return
-	}
-
-	// 【前置逻辑说明】同上，服务器互联语音也使用 600ms 阈值
-	td := packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds()
-	if td > 600 {
-		dev.LastVoiceBeginTime = packet.TimeStamp
-		logBuffer <- dev
-		dev.Loged = true
-	}
-	dev.Loged = false
-
-	dev.LastVoiceDuration = int(packet.TimeStamp.Sub(dev.LastVoiceBeginTime).Milliseconds())
-	dev.LastVoiceEndTime = packet.TimeStamp
-
-	dev.VoiceTime += 20
-	atomicAddVoiceTime(20)
-
-	dev.LastCtlEndTime = packet.TimeStamp
-
-	forwardDraARLServerVoice(packet, dev, data, conn, gp)
-}
-
-// handleDraARLATCommand 处理 DraARLv1 AT 命令
-func handleDraARLATCommand(packet *protocol.DraARLv1Packet, dev *models.Device) {
-	at := decodeATPacket(dev.CallSign, dev.SSID, packet.DATA)
-	dev.LastATcommand = at
-}
-
 // forwardDraARLVoice 转发 DraARLv1 语音
 func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, gp *models.Group) {
 	// 【核心优化】优先原地改写入站报文头（清 password、填 callsign），避免整包字段级重编码
@@ -1072,24 +1021,6 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 	// 文本同样走连通域 UDP fan-out
 	forwardVoiceDomain(dev, refilledData, gp.ID)
 	BroadcastTextFromUDPDomain(dev, refilledData, gp.ID)
-	protocol.ReleaseForwardPacket(refilledData)
-}
-
-// forwardDraARLServerVoice 转发 DraARLv1 服务器互联语音
-func forwardDraARLServerVoice(packet *protocol.DraARLv1Packet, dev *models.Device, data []byte, conn *net.UDPConn, gp *models.Group) {
-	refilledData := protocol.PrepareForwardPacket(
-		data,
-		dev.Username,
-		dev.CallSign,
-		dev.SSID,
-		protocol.DraARLTypeServerVoice,
-		dev.DevModel,
-		dev.DMRID,
-		packet.DATA,
-	)
-
-	forwardVoiceDomain(dev, refilledData, gp.ID)
-	BroadcastVoiceFromUDPDomain(dev, refilledData, gp.ID)
 	protocol.ReleaseForwardPacket(refilledData)
 }
 

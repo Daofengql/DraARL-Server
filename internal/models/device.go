@@ -48,7 +48,6 @@ type Device struct {
 	LastCtlDuration    int               `json:"last_ctl_duration"`
 	UDPSocket          *net.UDPConn      `json:"-"`
 	CallSignSSID       string            `json:"callsign_ssid"`
-	LastATcommand      *ATCommand        `json:"last_at_command,omitempty"`
 	Username           string            `json:"username"` // 运行时字段：从认证结果获取，用于索引
 	MAC                string            `json:"mac"`      // 运行时字段：设备上报的 MAC，用于快速重连判定
 
@@ -62,20 +61,4 @@ type Device struct {
 // GetCallSignSSID returns the combined callsign and SSID
 func (d *Device) GetCallSignSSID() string {
 	return d.CallSign + "-" + string(rune(d.SSID))
-}
-
-// ATCommand AT指令
-type ATCommand struct {
-	CallSign  string `json:"callsign"`
-	SSID      byte   `json:"ssid"`
-	Type      byte   `json:"type"`
-	ATcommand string `json:"at_command"`
-	Data      string `json:"data"`
-}
-
-// ControlPacket 控制数据包
-type ControlPacket struct {
-	CallSign string `json:"callsign"`
-	SSID     byte   `json:"ssid"`
-	Data     []byte `json:"data"`
 }

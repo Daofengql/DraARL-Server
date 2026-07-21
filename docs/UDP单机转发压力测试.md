@@ -230,29 +230,31 @@ Linux 过载档里 DraARL 约占 1.85 核，压测端约占 1.45 核，此外还
 
 ## 复现
 
+当前 bench 固定使用 Type 5，以下命令用于复测当前正式语音路径。
+
 单组 120ms 分档：
 
 ```bash
-go run ./test/bench/udp_fanout -confirm-test-data -server-pid <PID> -levels 3000,5000,6000,8000,9000 -duration 10s -interval 120ms -packet-type 6
+go run ./test/bench/udp_fanout -confirm-test-data -server-pid <PID> -levels 3000,5000,6000,8000,9000 -duration 10s -interval 120ms
 ```
 
 单组高包速：
 
 ```bash
-go run ./test/bench/udp_fanout -confirm-test-data -server-pid <PID> -levels 9000 -duration 10s -interval 45ms -packet-type 6
+go run ./test/bench/udp_fanout -confirm-test-data -server-pid <PID> -levels 9000 -duration 10s -interval 45ms
 ```
 
 Linux 4C8G 的 30 秒零丢包边界复测：
 
 ```bash
 ulimit -n 200000
-./udp_fanout -confirm-test-data -server-pid <PID> -levels 9000 -duration 30s -interval 20ms -packet-type 6
+./udp_fanout -confirm-test-data -server-pid <PID> -levels 9000 -duration 30s -interval 20ms
 ```
 
 5 个群组、每组 1000 台、Type 5 和录音：
 
 ```bash
-go run ./test/bench/udp_fanout -confirm-test-data -server-pid <PID> -groups 5 -levels 5000 -duration 15s -interval 120ms -packet-type 5
+go run ./test/bench/udp_fanout -confirm-test-data -server-pid <PID> -groups 5 -levels 5000 -duration 15s -interval 120ms
 ```
 
 Type 5 只有在站点通信录制设置 `comm.enabled=true` 时才会实际落盘；关闭时仍可测完整普通语音转发，但录音数应为 0。具体参数、安全说明和异常中断后的清理方式见 `test/bench/udp_fanout/README.md`。

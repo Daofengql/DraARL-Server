@@ -51,7 +51,6 @@ type options struct {
 	duration    time.Duration
 	interval    time.Duration
 	payload     int
-	packetType  byte
 	settle      time.Duration
 	groups      int
 	confirm     bool
@@ -78,12 +77,11 @@ type benchClient struct {
 }
 
 type stageMetrics struct {
-	id         uint64
-	packetType byte
-	received   atomic.Uint64
-	latencyUS  atomic.Uint64
-	maxUS      atomic.Uint64
-	buckets    [12]atomic.Uint64
+	id        uint64
+	received  atomic.Uint64
+	latencyUS atomic.Uint64
+	maxUS     atomic.Uint64
+	buckets   [12]atomic.Uint64
 }
 
 type processSample struct {
@@ -144,8 +142,8 @@ func run() (runErr error) {
 
 	localStorage := storage.ResolveDriver(cfg) == storage.DriverLocal
 	localRoot := storage.LocalRootPath(cfg)
-	if opts.packetType == protocol.DraARLTypeOpus16K && !localStorage {
-		return errors.New("packet-type=5 requires local storage so benchmark recordings can be cleaned; use packet-type=6 with remote storage")
+	if !localStorage {
+		return errors.New("UDP fan-out benchmark requires local storage so Type 5 recordings can be cleaned")
 	}
 	cleanupStale := func() error {
 		var cleanupErr error
@@ -197,15 +195,13 @@ func run() (runErr error) {
 		activeStage.Store(nil)
 		closeClients(clients)
 		var cleanupErr error
-		if opts.packetType == protocol.DraARLTypeOpus16K {
-			fmt.Println("WAIT recording pipeline flush (42s)")
-			time.Sleep(42 * time.Second)
-			removed, err := cleanupBenchAudioFiles(db, localRoot)
-			if err != nil {
-				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup benchmark audio files: %w", err))
-			} else {
-				fmt.Printf("CLEANUP recording files removed=%d\n", removed)
-			}
+		fmt.Println("WAIT recording pipeline flush (42s)")
+		time.Sleep(42 * time.Second)
+		removed, err := cleanupBenchAudioFiles(db, localRoot)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup benchmark audio files: %w", err))
+		} else {
+			fmt.Printf("CLEANUP recording files removed=%d\n", removed)
 		}
 		if err := cleanupBenchData(db); err != nil {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup benchmark data: %w", err))
@@ -246,7 +242,7 @@ func run() (runErr error) {
 			settle = 3 * time.Second
 		}
 		time.Sleep(settle)
-		warmUp(clients[:opts.groups], opts.packetType, opts.payload)
+		warmUp(clients[:opts.groups], opts.payload)
 
 		result, loss := runStage(clients, opts, serverMeter, loadMeter, uint64(levelIndex+1))
 		fmt.Println(result)
@@ -305,7 +301,6 @@ func cleanupBenchAudioFiles(db *sql.DB, root string) (int, error) {
 
 func parseOptions() (options, error) {
 	var rawLevels string
-	var packetType int
 	opts := options{}
 	flag.StringVar(&opts.configPath, "config", "config.yaml", "DraARL config path")
 	flag.StringVar(&opts.serverAddr, "server", "127.0.0.1:60050", "UDP server address")
@@ -314,7 +309,6 @@ func parseOptions() (options, error) {
 	flag.DurationVar(&opts.duration, "duration", 10*time.Second, "measurement duration per level")
 	flag.DurationVar(&opts.interval, "interval", 120*time.Millisecond, "voice packet interval")
 	flag.IntVar(&opts.payload, "payload", 320, "voice payload bytes")
-	flag.IntVar(&packetType, "packet-type", int(protocol.DraARLTypeServerVoice), "5=normal voice, 6=core server voice")
 	flag.DurationVar(&opts.settle, "settle", 3*time.Second, "settling time after adding clients")
 	flag.IntVar(&opts.groups, "groups", 1, "independent groups and simultaneous speakers")
 	flag.BoolVar(&opts.confirm, "confirm-test-data", false, "confirm temporary MySQL rows may be created and deleted")
@@ -354,10 +348,6 @@ func parseOptions() (options, error) {
 	if opts.payload < 32 || opts.payload+protocol.DraARLv1HeaderSize > protocol.DraARLv1MaxPacketSize {
 		return opts, fmt.Errorf("payload must be between 32 and %d bytes", protocol.DraARLv1MaxPacketSize-protocol.DraARLv1HeaderSize)
 	}
-	if packetType != int(protocol.DraARLTypeOpus16K) && packetType != int(protocol.DraARLTypeServerVoice) {
-		return opts, fmt.Errorf("packet-type must be 5 or 6")
-	}
-	opts.packetType = byte(packetType)
 	return opts, nil
 }
 
@@ -604,7 +594,7 @@ func (c *benchClient) readLoop() {
 			continue
 		}
 		metrics := activeStage.Load()
-		if metrics == nil || packetType != metrics.packetType || n < protocol.DraARLv1HeaderSize+32 {
+		if metrics == nil || packetType != protocol.DraARLTypeOpus16K || n < protocol.DraARLv1HeaderSize+32 {
 			continue
 		}
 		payload := buf[protocol.DraARLv1HeaderSize:n]
@@ -648,10 +638,10 @@ func closeClients(clients []*benchClient) {
 	wg.Wait()
 }
 
-func warmUp(sources []*benchClient, packetType byte, payloadSize int) {
+func warmUp(sources []*benchClient, payloadSize int) {
 	for i := 0; i < 8; i++ {
 		for sourceIndex, source := range sources {
-			packet := buildVoicePacket(source.identity, packetType, payloadSize, 0, uint64(i*len(sources)+sourceIndex))
+			packet := buildVoicePacket(source.identity, payloadSize, 0, uint64(i*len(sources)+sourceIndex))
 			_, _ = source.conn.WriteToUDP(packet, source.server)
 		}
 		time.Sleep(120 * time.Millisecond)
@@ -660,7 +650,7 @@ func warmUp(sources []*benchClient, packetType byte, payloadSize int) {
 }
 
 func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *processMeter, stageID uint64) (string, float64) {
-	metrics := &stageMetrics{id: stageID, packetType: opts.packetType}
+	metrics := &stageMetrics{id: stageID}
 	activeStage.Store(metrics)
 	time.Sleep(200 * time.Millisecond)
 
@@ -685,7 +675,7 @@ func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *proc
 	for now := start; now.Before(deadline); now = time.Now() {
 		for groupIndex := 0; groupIndex < opts.groups; groupIndex++ {
 			source := clients[groupIndex]
-			packet := buildVoicePacket(source.identity, opts.packetType, opts.payload, stageID, sent)
+			packet := buildVoicePacket(source.identity, opts.payload, stageID, sent)
 			if _, err := source.conn.WriteToUDP(packet, source.server); err == nil {
 				sent++
 				expected += uint64(groupSizes[groupIndex] - 1)
@@ -724,13 +714,13 @@ func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *proc
 	inputPPS := float64(sent) / opts.duration.Seconds()
 	outputMbps := outputPPS * float64(packetBytes) * 8 / 1_000_000
 	return fmt.Sprintf("RESULT clients=%d groups=%d senders=%d type=%d packet_bytes=%d interval=%s sent=%d input_pps=%.1f expected=%d received=%d loss_pct=%.4f output_pps=%.0f output_mbps=%.2f latency_avg_ms=%.3f latency_p95_le_ms=%.3f latency_max_ms=%.3f server_cpu_cores=%.2f server_machine_cpu_pct=%.2f server_rss_mb=%.1f server_peak_rss_mb=%.1f loadgen_cpu_cores=%.2f loadgen_rss_mb=%.1f wall=%s",
-		len(clients), opts.groups, opts.groups, opts.packetType, packetBytes, opts.interval, sent, inputPPS, expected, received, loss,
+		len(clients), opts.groups, opts.groups, protocol.DraARLTypeOpus16K, packetBytes, opts.interval, sent, inputPPS, expected, received, loss,
 		outputPPS, outputMbps, avgLatency, p95, maxLatency,
 		serverResult.corePercent/100, serverResult.machinePct, serverResult.rssMB, serverResult.peakRSSMB,
 		loadResult.corePercent/100, loadResult.rssMB, elapsed.Round(time.Millisecond)), loss
 }
 
-func buildVoicePacket(identity benchIdentity, packetType byte, payloadSize int, stageID, sequence uint64) []byte {
+func buildVoicePacket(identity benchIdentity, payloadSize int, stageID, sequence uint64) []byte {
 	payload := make([]byte, payloadSize)
 	copy(payload[:8], packetMarker[:])
 	binary.BigEndian.PutUint64(payload[8:16], stageID)
@@ -739,7 +729,7 @@ func buildVoicePacket(identity benchIdentity, packetType byte, payloadSize int, 
 	for i := 32; i < len(payload); i++ {
 		payload[i] = byte(i + int(sequence))
 	}
-	return protocol.EncodeDraARLv1(identity.username, benchPassword, identity.ssid, packetType,
+	return protocol.EncodeDraARLv1(identity.username, benchPassword, identity.ssid, protocol.DraARLTypeOpus16K,
 		protocol.DraARLDevModelESP32NoRadio, identity.dmrid, "", payload)
 }
 

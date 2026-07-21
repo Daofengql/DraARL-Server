@@ -54,51 +54,11 @@ DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 DraARL 平台的�
 
 | 值 | 常量名 | 说明 | DATA 内容 |
 |----|--------|------|-----------|
-| 0 | TypeControl | 控制指令 | 控制命令数据（见 [控制指令格式](#控制指令格式-typecontrol)）|
 | 1 | TypeJWTAuth | JWT 认证 | JWT Token 字符串（见 [JWT 认证包格式](#jwt-认证包格式)）|
 | 2 | TypeHeartbeat | 心跳包 | 可选携带 GPS 位置信息，并可在 DATA 末尾追加 MAC |
 | 3 | TypeConfig | 设备配置 | TLV 格式配置数据（见 [Config 包协议](#config-包协议)）|
 | 4 | TypeTextMessage | 文本消息 | UTF-8 编码文本（见 [文本消息格式](#文本消息格式-typetextmessage)）|
 | 5 | TypeOpus16K | Opus 16K 语音 | Opus 16kHz 编码语音帧 |
-| 6 | TypeServerVoice | 服务器互联语音 | 见 [服务器互联语音格式](#服务器互联语音格式) |
-| 7 | TypeATPassThrough | AT 透传 | AT 命令透传（见 [AT 透传格式](#at-透传格式-typeatpassthrough)）|
-
----
-
-## 控制指令格式 (TypeControl)
-
-当 Type = 0 (TypeControl) 时，用于设备与服务器之间的控制命令交互。
-
-### 控制命令类型
-
-| DATA[0] | 命令名 | 方向 | 说明 |
-|---------|--------|------|------|
-| 0x01 | PTT Start | 设备→服务器 | PTT 按下，开始发射 |
-| 0x02 | PTT Stop | 设备→服务器 | PTT 松开，停止发射 |
-| 0x03 | Query Status | 双向 | 查询设备/服务器状态 |
-| 0x04 | Status Response | 双向 | 状态响应 |
-| 0x05 | Reboot | 服务器→设备 | 远程重启设备 |
-| 0x06 | Factory Reset | 服务器→设备 | 恢复出厂设置 |
-
-### DATA 格式
-
-```
-+--------+--------+--------+
-| 0      | 1      | 2+     |
-| CmdID  | Status | Payload|
-| 1B     | 1B     | 变长   |
-+--------+--------+--------+
-```
-
-| 偏移 | 长度 | 字段名 | 说明 |
-|------|------|--------|------|
-| 0 | 1B | CommandID | 控制命令类型 |
-| 1 | 1B | Status | 状态码（0=成功，非0=错误） |
-| 2 | 变长 | Payload | 可选负载数据 |
-
-### PTT 控制流程
-
-![PTT控制流程](assets/diagrams/ptt-control-flow.svg)
 
 ---
 
@@ -153,53 +113,6 @@ DATA = [0x03, 系统消息UTF-8字节...]
         │     └── 紧急系统消息内容
         └─ Flags = 0x03 (Urgent + System)
 ```
-
----
-
-## AT 透传格式 (TypeATPassThrough)
-
-当 Type = 7 (TypeATPassThrough) 时，用于设备与服务器之间的 AT 命令透传。主要用于远程设备管理和调试。
-
-### AT 命令类型
-
-| 命令前缀 | 说明 | 示例 |
-|----------|------|------|
-| `AT+` | 标准 AT 命令 | `AT+VERSION?` |
-| `AT+CFG` | 配置查询/设置 | `AT+CFG=FREQ,439500000` |
-| `AT+RST` | 设备重启 | `AT+RST` |
-| `AT+INFO` | 设备信息查询 | `AT+INFO` |
-
-### DATA 格式
-
-```
-+--------+--------+
-| 0      | 1+     |
-| Result | Data   |
-| 1B     | 变长   |
-+--------+--------+
-```
-
-| 偏移 | 长度 | 字段名 | 说明 |
-|------|------|--------|------|
-| 0 | 1B | Result | 结果码（0=成功，非0=错误） |
-| 1 | 变长 | Data | AT 命令字符串或响应数据 |
-
-### AT 命令流程
-
-![AT命令透传流程](assets/diagrams/at-command-flow.svg)
-
-### 支持的 AT 命令列表
-
-| 命令 | 说明 | 响应示例 |
-|------|------|----------|
-| `AT+VERSION?` | 查询固件版本 | `OK\nv1.2.3` |
-| `AT+INFO` | 查询设备信息 | `OK\nModel:ESP32\nSN:xxx` |
-| `AT+CFG` | 查询所有配置 | `OK\nrx_freq:439500000\n...` |
-| `AT+CFG=KEY,VALUE` | 设置配置项 | `OK` |
-| `AT+RST` | 重启设备 | `OK` |
-| `AT+SCAN` | 扫描可用频率 | `OK\n439.500,439.750,...` |
-
----
 
 ## 设备型号
 
@@ -543,25 +456,6 @@ DATA = [0x03, 0x00, ts(8 bytes)]
 - 从 DATA 起始位置开始，按 `2B 长度 + 帧数据` 循环尝试解析
 - 若首个长度字段非法（`0`、`>1000`、或越界），回退为单帧格式
 - 若已成功解析出至少 1 帧，后续出现非法长度时停止继续解析并保留已解析帧
-
-### 服务器互联语音格式 (TypeServerVoice)
-
-当 Type = 6 (TypeServerVoice) 时，DATA 区域前 68 字节用于存储原始发送方信息：
-
-```
-+--------+--------+--------+--------+
-| 0-31   | 32-63  | 64-67  | 68+    |
-|OrigUser|OrigCall|OrigIP  | Voice  |
-| 32B    | 32B    | 4B     | 变长    |
-+--------+--------+--------+--------+
-```
-
-| 偏移 | 长度 | 字段名 | 说明 |
-|------|------|--------|------|
-| 0 | 32B | OriginalUsername | 原始发送方用户名 |
-| 32 | 32B | OriginalCallSign | 原始发送方呼号 |
-| 64 | 4B | OriginalIP | 原始服务器 IP |
-| 68 | 变长 | VoiceData | 实际语音数据 |
 
 ### 心跳包扩展格式
 

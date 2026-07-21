@@ -138,14 +138,11 @@ Content-Type: application/json
 
 | Type | 说明 |
 |---:|---|
-| `0` | 控制指令 |
 | `1` | JWT 认证包 |
 | `2` | 心跳包 |
 | `3` | 设备配置 |
 | `4` | 文本消息 |
 | `5` | Opus 16K 语音 |
-| `6` | 服务器互联语音 |
-| `7` | AT 透传 |
 
 更完整协议说明见：[DraARLv1 协议文档](../Protocol.md)。
 
@@ -197,4 +194,3 @@ ws.binaryType = 'arraybuffer';
 | POST | `/api/devices/:id/config/sync` | JWT+Approved | 下发设备配置。 |
 | GET | `/api/public/firmware/latest` | Public | 查询指定型号最新固件。 |
 | GET | `/ws` | Cookie(ws_token) | WebSocket 实时通联。 |
-

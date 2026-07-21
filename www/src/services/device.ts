@@ -176,32 +176,6 @@ export const deviceService = {
     await apiClient.post<BackendResponse<unknown>>('/api/device/changegroup', data)
   },
 
-  // 执行AT命令
-  async executeAT(data: { device_id: number; command: string }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/at', data)
-  },
-
-  // 查询设备参数
-  async query(data: { device_id: number; param: string }): Promise<any> {
-    const res = await apiClient.post<BackendResponse<any>>('/api/device/query', data)
-    return res.data
-  },
-
-  // 修改设备参数
-  async change(data: { device_id: number; params: Record<string, any> }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/change', data)
-  },
-
-  // 修改1W模块参数
-  async change1W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/change1w', data)
-  },
-
-  // 修改2W模块参数
-  async change2W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/change2w', data)
-  },
-
   // 切换设备群组
   async switchGroup(
     deviceId: number,

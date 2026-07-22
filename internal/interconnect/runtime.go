@@ -75,6 +75,7 @@ type EdgeRuntimeConfig struct {
 type EdgeRuntime struct {
 	Client  *NodeClient
 	Gateway *EdgeGateway
+	closed  chan struct{}
 }
 
 func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
@@ -100,11 +101,35 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 		client.Close()
 		return nil, err
 	}
-	return &EdgeRuntime{Client: client, Gateway: gateway}, nil
+	runtime := &EdgeRuntime{Client: client, Gateway: gateway, closed: make(chan struct{})}
+	go runtime.heartbeatLoop()
+	return runtime, nil
+}
+func (r *EdgeRuntime) heartbeatLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	instanceID := fmt.Sprintf("%s-%d", r.Client.Session.NodeID, r.Client.Session.ConnectedAt.UnixNano())
+	for {
+		select {
+		case <-r.closed:
+			return
+		case <-ticker.C:
+			snapshot := r.Gateway.projection.Snapshot()
+			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: instanceID, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: r.Client.DataMetrics(), ProjectionVersion: snapshot.Version})
+			env := NewEnvelope(SubtypeNodeHeartbeat, r.Client.Session.NodeID, r.Client.Session.SessionID, randomUint64(), payload)
+			env.ClusterEpoch, env.ProjectionVersion, env.Flags = snapshot.ClusterEpoch, snapshot.Version, FlagControl
+			_ = r.Client.SendEnvelope(env)
+		}
+	}
 }
 func (r *EdgeRuntime) Close() {
 	if r == nil {
 		return
+	}
+	select {
+	case <-r.closed:
+	default:
+		close(r.closed)
 	}
 	if r.Gateway != nil {
 		_ = r.Gateway.Close()

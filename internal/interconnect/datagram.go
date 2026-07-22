@@ -77,6 +77,7 @@ func (s *NodeDatagramServer) readLoop() {
 			if env.Expired(time.Now(), s.cfg.MaxAge) {
 				continue
 			}
+			session.DataMetrics.AddIn(n)
 			session.BindDataAddr(addr)
 			s.cfg.OnDatagram(session, env, addr)
 			break
@@ -120,6 +121,7 @@ type NodeDatagramClient struct {
 	center  *net.UDPAddr
 	session *NodeSession
 	keyMu   sync.RWMutex
+	Metrics Metrics
 }
 
 func DialNodeDatagram(ctx context.Context, addr string, session *NodeSession) (*NodeDatagramClient, error) {
@@ -137,7 +139,21 @@ func DialNodeDatagram(ctx context.Context, addr string, session *NodeSession) (*
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetReadDeadline(deadline)
 	}
-	return &NodeDatagramClient{conn: conn, center: center, session: session}, nil
+	client := &NodeDatagramClient{conn: conn, center: center, session: session}
+	// Bind the edge's actual UDP/NAT endpoint before it has any relay traffic.
+	// This lets the centre send a first downstream frame to a receive-only edge.
+	env := NewEnvelope(SubtypeNodeHeartbeat, session.NodeID, session.SessionID, randomUint64(), nil)
+	env.KeyEpoch = session.KeyEpoch
+	wire, err := env.Marshal(session.Key)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if _, err := conn.WriteToUDP(wire, center); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return client, nil
 }
 func (c *NodeDatagramClient) LocalAddr() net.Addr {
 	if c == nil || c.conn == nil {
@@ -154,6 +170,9 @@ func (c *NodeDatagramClient) Send(env Envelope) error {
 		return err
 	}
 	_, err = c.conn.WriteToUDP(data, c.center)
+	if err == nil {
+		c.Metrics.AddOut(len(data))
+	}
 	return err
 }
 func (c *NodeDatagramClient) Receive(ctx context.Context) (Envelope, *net.UDPAddr, error) {
@@ -171,6 +190,7 @@ func (c *NodeDatagramClient) Receive(ctx context.Context) (Envelope, *net.UDPAdd
 		c.keyMu.RUnlock()
 		env, err := Unmarshal(buf[:n], key)
 		if err == nil && env.NodeSessionID == c.session.SessionID && env.SourceNodeID != "" {
+			c.Metrics.AddIn(n)
 			return env, addr, nil
 		}
 	}

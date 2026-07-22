@@ -23,13 +23,14 @@ type ClusterManager struct {
 	dataServer     *NodeDatagramServer
 	messageID      atomic.Uint64
 	metrics        map[string]*Metrics
+	status         map[string]NodeHeartbeat
 }
 
 func NewClusterManager(epoch uint64) *ClusterManager {
 	if epoch == 0 {
 		epoch = uint64(time.Now().UnixNano())
 	}
-	return &ClusterManager{epoch: epoch, projection: NewProjection(epoch), nodes: make(map[string]*NodeSession), nodeProjection: make(map[string]*Projection), domainNodes: make(map[uint64]map[string]struct{}), metrics: make(map[string]*Metrics)}
+	return &ClusterManager{epoch: epoch, projection: NewProjection(epoch), nodes: make(map[string]*NodeSession), nodeProjection: make(map[string]*Projection), domainNodes: make(map[uint64]map[string]struct{}), metrics: make(map[string]*Metrics), status: make(map[string]NodeHeartbeat)}
 }
 func (m *ClusterManager) AttachServer(server *NodeServer) {
 	m.mu.Lock()
@@ -55,6 +56,17 @@ func (m *ClusterManager) Metrics(nodeID string) *Metrics {
 		m.metrics[nodeID] = &Metrics{}
 	}
 	return m.metrics[nodeID]
+}
+func (m *ClusterManager) UpdateNodeHeartbeat(nodeID string, heartbeat NodeHeartbeat) {
+	m.mu.Lock()
+	m.status[nodeID] = heartbeat
+	m.mu.Unlock()
+}
+func (m *ClusterManager) NodeHeartbeat(nodeID string) (NodeHeartbeat, bool) {
+	m.mu.RLock()
+	heartbeat, ok := m.status[nodeID]
+	m.mu.RUnlock()
+	return heartbeat, ok
 }
 
 func (m *ClusterManager) OnConnect(session *NodeSession) {
@@ -138,6 +150,68 @@ func (m *ClusterManager) UpsertNodeRoute(nodeID string, route DeviceRoute) error
 	return nil
 }
 
+// SetNodeRoute publishes one authoritative route change to one edge. Each
+// edge has its own contiguous projection version, so unrelated nodes cannot
+// create version holes in this node's stream.
+func (m *ClusterManager) SetNodeRoute(nodeID string, route DeviceRoute) error {
+	m.mu.Lock()
+	if nodeID == "" || route.SessionID == 0 {
+		m.mu.Unlock()
+		return errors.New("node route identity is incomplete")
+	}
+	projection := m.nodeProjection[nodeID]
+	if projection == nil {
+		projection = NewProjection(m.epoch)
+		m.nodeProjection[nodeID] = projection
+	}
+	base := projection.Version
+	delta := NewRouteDelta(m.epoch, base, base+1, []DeltaOperation{{Kind: "upsert", Route: &route}})
+	if err := projection.ApplyDelta(delta); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if m.projection.Devices == nil {
+		m.projection.Devices = make(map[uint64]DeviceRoute)
+	}
+	m.projection.Devices[route.SessionID] = route
+	server := m.server
+	m.mu.Unlock()
+	m.RebuildDomainNodes()
+	if server == nil {
+		return nil
+	}
+	payload, _ := EncodeJSON(delta)
+	env := NewEnvelope(SubtypeRouteDelta, "center", 0, m.NextMessageID(), payload)
+	env.ClusterEpoch, env.ProjectionVersion, env.Flags = delta.ClusterEpoch, delta.NewVersion, FlagControl|FlagAck
+	return server.SendEnvelope(nodeID, env)
+}
+
+func (m *ClusterManager) RemoveNodeRoute(nodeID string, sessionID uint64) error {
+	m.mu.Lock()
+	projection := m.nodeProjection[nodeID]
+	if projection == nil {
+		m.mu.Unlock()
+		return errors.New("node projection not found")
+	}
+	base := projection.Version
+	delta := NewRouteDelta(m.epoch, base, base+1, []DeltaOperation{{Kind: "remove", SessionID: sessionID}})
+	if err := projection.ApplyDelta(delta); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	delete(m.projection.Devices, sessionID)
+	server := m.server
+	m.mu.Unlock()
+	m.RebuildDomainNodes()
+	if server == nil {
+		return nil
+	}
+	payload, _ := EncodeJSON(delta)
+	env := NewEnvelope(SubtypeRouteDelta, "center", 0, m.NextMessageID(), payload)
+	env.ClusterEpoch, env.ProjectionVersion, env.Flags = delta.ClusterEpoch, delta.NewVersion, FlagControl|FlagAck
+	return server.SendEnvelope(nodeID, env)
+}
+
 func (m *ClusterManager) ApplyRouteDelta(delta RouteDelta) error {
 	m.mu.Lock()
 	if delta.ClusterEpoch != m.epoch {
@@ -147,13 +221,6 @@ func (m *ClusterManager) ApplyRouteDelta(delta RouteDelta) error {
 	if err := m.projection.ApplyDelta(delta); err != nil {
 		m.mu.Unlock()
 		return err
-	}
-	for nodeID, projection := range m.nodeProjection {
-		if err := projection.ApplyDelta(delta); err != nil {
-			// A node projection may intentionally be partial; rebuild it from a
-			// snapshot instead of applying an incompatible global delta.
-			_ = nodeID
-		}
 	}
 	m.version = delta.NewVersion
 	m.mu.Unlock()

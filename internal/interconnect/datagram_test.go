@@ -27,12 +27,15 @@ func TestNodeDatagramAuthenticatesSession(t *testing.T) {
 	if err := client.Send(env); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-received:
-		if string(got.Payload) != "voice" {
-			t.Fatalf("payload=%q", got.Payload)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case got := <-received:
+			if string(got.Payload) == "voice" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("datagram not received")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("datagram not received")
 	}
 }

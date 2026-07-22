@@ -97,6 +97,7 @@ type NodeSession struct {
 	writeMu       sync.Mutex
 	dataMu        sync.RWMutex
 	dataAddr      *net.UDPAddr
+	DataMetrics   Metrics
 }
 
 func (s *NodeSession) Send(msg ControlMessage) error {
@@ -459,6 +460,12 @@ func (c *NodeClient) SetDatagramHandler(handler func(Envelope)) {
 	c.callbackMu.Lock()
 	c.cfg.OnDatagram = handler
 	c.callbackMu.Unlock()
+}
+func (c *NodeClient) DataMetrics() MetricsSnapshot {
+	if c.datagram == nil {
+		return MetricsSnapshot{}
+	}
+	return c.datagram.Metrics.Snapshot()
 }
 func (c *NodeClient) Close() error {
 	if c.conn == nil {

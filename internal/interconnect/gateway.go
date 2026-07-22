@@ -61,9 +61,14 @@ func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
 	if msg.Kind == controlHeartbeat {
 		var heartbeat NodeHeartbeat
 		if DecodeJSON(msg.Payload, &heartbeat) == nil {
-			g.mu.Lock()
-			g.metrics[session.NodeID] = g.cluster.Metrics(session.NodeID)
-			g.mu.Unlock()
+			if g.cluster != nil {
+				g.cluster.UpdateNodeHeartbeat(session.NodeID, heartbeat)
+			}
+			if g.cluster != nil {
+				g.mu.Lock()
+				g.metrics[session.NodeID] = g.cluster.Metrics(session.NodeID)
+				g.mu.Unlock()
+			}
 		}
 	}
 }
@@ -97,7 +102,7 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 			g.deviceSessions[response.Grant.SessionID] = session.NodeID
 			g.mu.Unlock()
 			if g.cluster != nil {
-				_ = g.cluster.UpsertNodeRoute(session.NodeID, response.Grant.Route())
+				_ = g.cluster.SetNodeRoute(session.NodeID, response.Grant.Route())
 			}
 		}
 		payload, _ := EncodeJSON(response)
@@ -188,6 +193,11 @@ func (g *EdgeGateway) Addr() net.Addr {
 	}
 	return g.conn.LocalAddr()
 }
+func (g *EdgeGateway) ConnectionCount() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return len(g.sessions)
+}
 func (g *EdgeGateway) Close() error {
 	select {
 	case <-g.closed:
@@ -216,6 +226,7 @@ func (g *EdgeGateway) readLoop() {
 		g.handleDevicePacket(data, addr)
 	}
 }
+func (g *EdgeGateway) MetricsSnapshot() MetricsSnapshot { return g.metrics.Snapshot() }
 func (g *EdgeGateway) identity(packet *protocol.DraARLv1Packet) string {
 	return fmt.Sprintf("%s-%d", packet.Username, packet.SSID)
 }

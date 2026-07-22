@@ -77,6 +77,53 @@ type DeviceSessionReport struct {
 }
 
 const (
+	SpeakerLeaseActionClaim   = "claim"
+	SpeakerLeaseActionGrant   = "grant"
+	SpeakerLeaseActionDeny    = "deny"
+	SpeakerLeaseActionRelease = "release"
+)
+
+// SpeakerLeaseControl is carried only over the authenticated TLS control
+// plane. Durations are relative so centre and edge clocks need not agree.
+type SpeakerLeaseControl struct {
+	Action           string `json:"action"`
+	RequestID        uint64 `json:"request_id,omitempty"`
+	SessionID        uint64 `json:"session_id"`
+	SessionEpoch     uint64 `json:"session_epoch"`
+	DomainID         uint64 `json:"domain_id"`
+	LeaseID          uint64 `json:"lease_id,omitempty"`
+	TTLMillis        int64  `json:"ttl_ms,omitempty"`
+	RetryAfterMillis int64  `json:"retry_after_ms,omitempty"`
+}
+
+func (m SpeakerLeaseControl) Validate() error {
+	if m.SessionID == 0 || m.SessionEpoch == 0 || m.DomainID == 0 {
+		return errors.New("speaker lease identity is incomplete")
+	}
+	switch m.Action {
+	case SpeakerLeaseActionClaim:
+		if m.RequestID == 0 || m.TTLMillis != 0 || m.RetryAfterMillis != 0 {
+			return errors.New("invalid speaker lease claim")
+		}
+	case SpeakerLeaseActionGrant:
+		if m.RequestID == 0 || m.LeaseID == 0 || m.TTLMillis <= 0 || m.RetryAfterMillis != 0 {
+			return errors.New("invalid speaker lease grant")
+		}
+	case SpeakerLeaseActionDeny:
+		if m.RequestID == 0 || m.TTLMillis != 0 || m.RetryAfterMillis < 0 {
+			return errors.New("invalid speaker lease denial")
+		}
+	case SpeakerLeaseActionRelease:
+		if m.LeaseID == 0 || m.TTLMillis != 0 || m.RetryAfterMillis != 0 {
+			return errors.New("invalid speaker lease release")
+		}
+	default:
+		return errors.New("unknown speaker lease action")
+	}
+	return nil
+}
+
+const (
 	DeviceConfigKindSync   = "sync"
 	DeviceConfigKindReport = "report"
 	DeviceConfigKindDown   = "down"
@@ -248,13 +295,14 @@ func DecodeJSON(data []byte, value any) error {
 	return json.Unmarshal(data, value)
 }
 
-const relayHeaderSize = 34
+const relayHeaderSize = 42
 
 type RelayFrame struct {
 	SessionID                 uint64
 	SessionEpoch              uint64
 	DomainID                  uint64
 	RequiredProjectionVersion uint64
+	SpeakerLeaseID            uint64
 	InnerPacket               []byte
 }
 
@@ -270,8 +318,9 @@ func (f RelayFrame) MarshalBinary() ([]byte, error) {
 	binary.BigEndian.PutUint64(out[8:16], f.SessionEpoch)
 	binary.BigEndian.PutUint64(out[16:24], f.DomainID)
 	binary.BigEndian.PutUint64(out[24:32], f.RequiredProjectionVersion)
-	binary.BigEndian.PutUint16(out[32:34], uint16(len(f.InnerPacket)))
-	copy(out[34:], f.InnerPacket)
+	binary.BigEndian.PutUint64(out[32:40], f.SpeakerLeaseID)
+	binary.BigEndian.PutUint16(out[40:42], uint16(len(f.InnerPacket)))
+	copy(out[42:], f.InnerPacket)
 	return out, nil
 }
 func UnmarshalRelayFrame(data []byte) (RelayFrame, error) {
@@ -279,7 +328,7 @@ func UnmarshalRelayFrame(data []byte) (RelayFrame, error) {
 	if len(data) < relayHeaderSize {
 		return f, errors.New("relay frame too short")
 	}
-	n := int(binary.BigEndian.Uint16(data[32:34]))
+	n := int(binary.BigEndian.Uint16(data[40:42]))
 	if n < DraARLHeaderSize || n > 800 || relayHeaderSize+n != len(data) {
 		return f, fmt.Errorf("invalid relay inner length %d", n)
 	}
@@ -287,6 +336,7 @@ func UnmarshalRelayFrame(data []byte) (RelayFrame, error) {
 	f.SessionEpoch = binary.BigEndian.Uint64(data[8:16])
 	f.DomainID = binary.BigEndian.Uint64(data[16:24])
 	f.RequiredProjectionVersion = binary.BigEndian.Uint64(data[24:32])
-	f.InnerPacket = append([]byte(nil), data[34:]...)
+	f.SpeakerLeaseID = binary.BigEndian.Uint64(data[32:40])
+	f.InnerPacket = append([]byte(nil), data[42:]...)
 	return f, nil
 }

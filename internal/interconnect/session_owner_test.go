@@ -114,6 +114,9 @@ func TestLocalRelayValidatesAuthorityPolicyAndInnerPacket(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := protocol.EncodeDraARLv1("alice", "", 1, protocol.DraARLTypeOpus16K, protocol.DraARLDevModelESP32NoRadio, 0, "BG5ABC", []byte{1})
+	if !gateway.AcquireLocalVoice(*grant) {
+		t.Fatal("valid local speaker did not acquire the domain")
+	}
 	if err := gateway.RelayLocalDevice(*grant, valid); err != nil {
 		t.Fatalf("valid local relay failed: %v", err)
 	}

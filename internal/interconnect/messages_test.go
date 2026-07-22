@@ -86,7 +86,7 @@ func TestProjectionSnapshotChunksAndCommits(t *testing.T) {
 func TestRelayFrameRoundTrip(t *testing.T) {
 	inner := make([]byte, 90)
 	copy(inner, "DraA")
-	f := RelayFrame{SessionID: 1, SessionEpoch: 2, DomainID: 3, RequiredProjectionVersion: 4, InnerPacket: inner}
+	f := RelayFrame{SessionID: 1, SessionEpoch: 2, DomainID: 3, RequiredProjectionVersion: 4, SpeakerLeaseID: 5, InnerPacket: inner}
 	wire, err := f.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestRelayFrameRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SessionID != f.SessionID || got.DomainID != f.DomainID || len(got.InnerPacket) != 90 {
+	if got.SessionID != f.SessionID || got.DomainID != f.DomainID || got.SpeakerLeaseID != f.SpeakerLeaseID || len(got.InnerPacket) != 90 {
 		t.Fatalf("relay mismatch: %#v", got)
 	}
 }

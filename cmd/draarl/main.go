@@ -250,6 +250,9 @@ func main() {
 			Authorize: func(source udphub.CenterLocalSource) bool {
 				return centerRuntime.Gateway.AuthorizeLocalDevice(localSourceGrant(&source))
 			},
+			AcquireVoice: func(source udphub.CenterLocalSource) bool {
+				return centerRuntime.Gateway.AcquireLocalVoice(localSourceGrant(&source))
+			},
 			RemoteOwner: centerRuntime.Gateway.IdentityOwnedByRemote,
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {
 				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)

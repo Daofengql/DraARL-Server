@@ -45,6 +45,7 @@ type CenterGateway struct {
 	configClose    sync.Once
 	configLoopOnce sync.Once
 	configWG       sync.WaitGroup
+	speaker        *SpeakerLeaseManager
 }
 
 type deviceSessionOwner struct {
@@ -100,6 +101,7 @@ func NewCenterGateway(cluster *ClusterManager, auth DeviceAuthHandler, activator
 		cluster: cluster, auth: auth, activate: activate,
 		deviceSessions: make(map[uint64]deviceSessionOwner), activeDevices: make(map[string]uint64), activeByID: make(map[int]uint64), deviceEpochs: make(map[string]uint64), metrics: make(map[string]*Metrics),
 		configPending: make(map[uint64]*pendingDeviceConfigDelivery), configUpCache: make(map[deviceConfigCacheKey]cachedDeviceConfigResult), configClosed: make(chan struct{}),
+		speaker: NewSpeakerLeaseManager(),
 	}
 }
 func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
@@ -159,6 +161,9 @@ func (g *CenterGateway) OnConnect(session *NodeSession) {
 	}
 }
 func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
+	if g.speaker != nil {
+		g.speaker.ReleaseNode(session.NodeID, session.SessionID)
+	}
 	g.ownershipMu.Lock()
 	currentSession := true
 	if g.cluster != nil {
@@ -205,6 +210,9 @@ func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
 	}
 }
 func (g *CenterGateway) OnDatagram(session *NodeSession, env Envelope, _ *net.UDPAddr) {
+	if env.Subtype == SubtypeSpeakerLease {
+		return
+	}
 	g.handleEnvelope(session, env)
 }
 func (g *CenterGateway) OnEnvelope(session *NodeSession, env Envelope) {
@@ -258,6 +266,12 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		case DeviceConfigKindResult:
 			g.finishDeviceConfigDelivery(session, message)
 		}
+	case SubtypeSpeakerLease:
+		var message SpeakerLeaseControl
+		if DecodeJSON(env.Payload, &message) != nil || message.Validate() != nil {
+			return
+		}
+		g.handleSpeakerLease(session, message)
 	case SubtypeRelayUpstream:
 		frame, err := UnmarshalRelayFrame(env.Payload)
 		if err != nil {
@@ -284,6 +298,13 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		}
 		// Node payload is never authoritative for routing or permissions.
 		frame.DomainID = route.DomainID
+		if frame.InnerPacket[48] == protocol.DraARLTypeOpus16K {
+			if g.speaker == nil || !g.speaker.AcceptFrame(session.NodeID, session.SessionID, frame, time.Now()) {
+				return
+			}
+		} else if frame.SpeakerLeaseID != 0 {
+			return
+		}
 		if g.cluster != nil {
 			_ = g.cluster.Relay(session.NodeID, frame)
 		}
@@ -310,6 +331,45 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 			g.handleDeviceSessionReport(session, report)
 		}
 	}
+}
+
+func (g *CenterGateway) handleSpeakerLease(session *NodeSession, message SpeakerLeaseControl) {
+	if session == nil || g.speaker == nil {
+		return
+	}
+	if message.Action == SpeakerLeaseActionRelease {
+		g.speaker.Release(session.NodeID, session.SessionID, message)
+		return
+	}
+	if message.Action != SpeakerLeaseActionClaim {
+		return
+	}
+	eligible := false
+	if g.cluster != nil {
+		g.mu.RLock()
+		owner, ok := g.deviceSessions[message.SessionID]
+		g.mu.RUnlock()
+		if ok && owner.NodeID == session.NodeID && owner.ControlSessionID == session.SessionID && owner.SessionEpoch == message.SessionEpoch {
+			route, routeOK := g.cluster.ResolveRoute(message.SessionID)
+			eligible = routeOK && route.SessionEpoch == message.SessionEpoch && route.DomainID == message.DomainID && !route.DisableSend
+		}
+	}
+	response := message
+	response.Action = SpeakerLeaseActionDeny
+	response.LeaseID = 0
+	response.TTLMillis = 0
+	response.RetryAfterMillis = 0
+	if eligible {
+		response = g.speaker.Claim(session.NodeID, session.SessionID, message, time.Now())
+	}
+	payload, err := EncodeJSON(response)
+	if err != nil || g.server == nil || g.cluster == nil {
+		return
+	}
+	env := NewEnvelope(SubtypeSpeakerLease, "center", 0, g.cluster.NextMessageID(), payload)
+	env.ClusterEpoch = g.cluster.Epoch()
+	env.Flags = FlagControl | FlagAck
+	_ = g.server.SendEnvelope(session.NodeID, env)
 }
 
 func (g *CenterGateway) handleDeviceConfigUp(session *NodeSession, env Envelope, message DeviceConfigControl) {
@@ -774,6 +834,7 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 		}
 		next := grant.Route()
 		if route != next {
+			g.releaseSpeakerForRouteChange(route, next)
 			return g.cluster.SetNodeRoute(session.NodeID, next)
 		}
 		return nil
@@ -882,6 +943,7 @@ func (g *CenterGateway) ActivateLocalDevice(grant *DeviceGrant) error {
 		}
 		next := grant.Route()
 		if route != next {
+			g.releaseSpeakerForRouteChange(route, next)
 			return g.cluster.SetNodeRoute(CenterLocalNodeID, next)
 		}
 		return nil
@@ -952,10 +1014,36 @@ func (g *CenterGateway) RelayLocalDevice(grant DeviceGrant, inner []byte) error 
 	if !protocol.RelayInnerIdentityMatches(inner, route.Username, route.CallSign, route.SSID) {
 		return errors.New("local relay identity mismatch")
 	}
+	leaseID := uint64(0)
+	if inner[48] == protocol.DraARLTypeOpus16K {
+		var allowed bool
+		leaseID, allowed = g.speaker.CurrentLocal(route.SessionID, route.SessionEpoch, route.DomainID, time.Now())
+		if !allowed {
+			return errors.New("local speaker lease is not active")
+		}
+	}
 	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
 		SessionID: route.SessionID, SessionEpoch: route.SessionEpoch, DomainID: route.DomainID,
-		InnerPacket: inner,
+		SpeakerLeaseID: leaseID, InnerPacket: inner,
 	})
+}
+
+func (g *CenterGateway) AcquireLocalVoice(grant DeviceGrant) bool {
+	if g.cluster == nil || g.speaker == nil || grant.SessionID == 0 || grant.SessionEpoch == 0 {
+		return false
+	}
+	g.mu.RLock()
+	owner, ok := g.deviceSessions[grant.SessionID]
+	g.mu.RUnlock()
+	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != grant.SessionEpoch {
+		return false
+	}
+	route, ok := g.cluster.ResolveRoute(grant.SessionID)
+	if !ok || route.SessionEpoch != grant.SessionEpoch || route.DomainID == 0 || route.DisableSend {
+		return false
+	}
+	_, allowed := g.speaker.AcquireLocal(route.SessionID, route.SessionEpoch, route.DomainID, time.Now())
+	return allowed
 }
 
 func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {
@@ -991,12 +1079,24 @@ func (g *CenterGateway) RevokeLocalDevice(sessionID, sessionEpoch uint64) bool {
 }
 
 func (g *CenterGateway) removeOwnerMapsLocked(sessionID uint64, owner deviceSessionOwner) {
+	if g.speaker != nil {
+		g.speaker.ReleaseSession(sessionID, owner.SessionEpoch)
+	}
 	delete(g.deviceSessions, sessionID)
 	if g.activeDevices[owner.Identity] == sessionID {
 		delete(g.activeDevices, owner.Identity)
 	}
 	if owner.DeviceID > 0 && g.activeByID[owner.DeviceID] == sessionID {
 		delete(g.activeByID, owner.DeviceID)
+	}
+}
+
+func (g *CenterGateway) releaseSpeakerForRouteChange(current, next DeviceRoute) {
+	if g.speaker == nil {
+		return
+	}
+	if current.SessionEpoch != next.SessionEpoch || current.DomainID != next.DomainID || next.DomainID == 0 || next.DisableSend {
+		g.speaker.ReleaseSession(current.SessionID, current.SessionEpoch)
 	}
 }
 
@@ -1074,8 +1174,10 @@ func (g *CenterGateway) UpdateActiveDeviceRoute(deviceID, groupID int, domainID 
 	if !ok || route.SessionEpoch != owner.SessionEpoch || route.DeviceID != deviceID {
 		return false, nil
 	}
+	currentRoute := route
 	route.GroupID, route.DomainID = groupID, domainID
 	route.DisableSend, route.DisableRecv = disableSend, disableRecv
+	g.releaseSpeakerForRouteChange(currentRoute, route)
 	return true, g.cluster.SetNodeRoute(owner.NodeID, route)
 }
 
@@ -1097,8 +1199,10 @@ func (g *CenterGateway) UpdateActiveIdentityRoute(ownerID int, ssid byte, groupI
 	if !ok || route.SessionEpoch != owner.SessionEpoch {
 		return false, nil
 	}
+	currentRoute := route
 	route.GroupID, route.DomainID = groupID, domainID
 	route.DisableSend, route.DisableRecv = disableSend, disableRecv
+	g.releaseSpeakerForRouteChange(currentRoute, route)
 	return true, g.cluster.SetNodeRoute(owner.NodeID, route)
 }
 
@@ -1181,7 +1285,9 @@ func (g *CenterGateway) RefreshActiveDeviceDomains(resolve func(groupID int) uin
 		if route.DomainID == domainID {
 			continue
 		}
+		currentRoute := route
 		route.DomainID = domainID
+		g.releaseSpeakerForRouteChange(currentRoute, route)
 		if err := g.cluster.SetNodeRoute(owner.NodeID, route); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -1218,6 +1324,7 @@ type EdgeGateway struct {
 	downstreamMu      sync.Mutex
 	pendingDownstream []pendingDownstreamFrame
 	downstreamWake    chan struct{}
+	speakerDomains    map[uint64]*edgeSpeakerState
 	reportSession     func(DeviceSessionReport)
 	renewSession      func(DeviceSessionRenewRequest)
 }
@@ -1276,6 +1383,25 @@ type pendingDownstreamFrame struct {
 	frame    RelayFrame
 }
 
+type edgeBufferedVoice struct {
+	grant      DeviceGrant
+	inner      []byte
+	receivedAt time.Time
+}
+
+type edgeSpeakerState struct {
+	sessionID      uint64
+	sessionEpoch   uint64
+	leaseID        uint64
+	expiresAt      time.Time
+	lastVoiceAt    time.Time
+	pendingRequest uint64
+	pendingSince   time.Time
+	blockedUntil   time.Time
+	fallback       bool
+	buffered       []edgeBufferedVoice
+}
+
 const edgeAuthRequestTimeout = 5 * time.Second
 
 const maxEdgePendingDeviceConfigs = 256
@@ -1296,7 +1422,8 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 		listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64),
 		pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64),
 		pendingConfigUp: make(map[uint64]*pendingDeviceConfigUp), configDownResults: make(map[uint64]cachedDeviceConfigResult),
-		closed: make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second, localGrace: 15 * time.Second, downstreamMaxAge: 200 * time.Millisecond, downstreamWake: make(chan struct{}, 1),
+		speakerDomains: make(map[uint64]*edgeSpeakerState),
+		closed:         make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second, localGrace: 15 * time.Second, downstreamMaxAge: 200 * time.Millisecond, downstreamWake: make(chan struct{}, 1),
 	}
 	if client != nil {
 		gateway.control.Store(newEdgeControlLink(client, nil))
@@ -1309,9 +1436,10 @@ func (g *EdgeGateway) Start() error {
 		return err
 	}
 	g.endpoint = endpoint
-	g.cleanerWG.Add(2)
+	g.cleanerWG.Add(3)
 	go g.sessionCleanerLoop()
 	go g.downstreamBarrierLoop()
+	go g.speakerLeaseCleanerLoop()
 	return nil
 }
 
@@ -1332,6 +1460,7 @@ func (g *EdgeGateway) attachControl(client *NodeClient, peer *NodeDatagramPeer) 
 	}
 	g.disconnectedAt.Store(0)
 	g.clearPendingControlRequests()
+	g.clearSpeakerStates()
 	if peer != nil {
 		if err := peer.Bind(); err != nil {
 			g.detachControl(client, time.Now())
@@ -1351,6 +1480,7 @@ func (g *EdgeGateway) detachControl(client *NodeClient, now time.Time) bool {
 			g.disconnectedAt.Store(now.UnixMilli())
 			g.clearPendingControlRequests()
 			g.clearPendingDownstream()
+			g.clearSpeakerStates()
 			return true
 		}
 	}
@@ -1364,6 +1494,12 @@ func (g *EdgeGateway) clearPendingControlRequests() {
 	clear(g.renewingSessions)
 	clear(g.pendingConfigUp)
 	clear(g.configDownResults)
+	g.mu.Unlock()
+}
+
+func (g *EdgeGateway) clearSpeakerStates() {
+	g.mu.Lock()
+	clear(g.speakerDomains)
 	g.mu.Unlock()
 }
 
@@ -1522,12 +1658,20 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	}
 	inner := protocol.PrepareForwardPacket(data, grant.Username, grant.CallSign, grant.SSID, packet.Type, grant.DevModel, grant.DMRID, packet.DATA)
 	defer protocol.ReleaseForwardPacket(inner)
+	if packet.Type == protocol.DraARLTypeOpus16K {
+		g.handleEdgeVoice(grant, inner, now)
+		return
+	}
 	g.localFanout(grant.SessionID, grant.DomainID, inner)
+	g.sendEdgeRelay(grant, inner, 0)
+}
+
+func (g *EdgeGateway) sendEdgeRelay(grant DeviceGrant, inner []byte, leaseID uint64) {
 	link := g.currentControl(true)
 	if link == nil {
 		return
 	}
-	frame := RelayFrame{SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, InnerPacket: inner}
+	frame := RelayFrame{SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, SpeakerLeaseID: leaseID, InnerPacket: inner}
 	payload, err := frame.MarshalBinary()
 	if err != nil {
 		return
@@ -1535,9 +1679,275 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	env := NewEnvelope(SubtypeRelayUpstream, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
 	env.ProjectionVersion = frame.RequiredProjectionVersion
 	if link.peer != nil {
-		_ = link.peer.Send(env)
+		err = link.peer.Send(env)
 	} else {
-		_ = link.client.SendEnvelope(env)
+		err = link.client.SendEnvelope(env)
+	}
+	if err != nil {
+		g.metrics.AddError()
+	}
+}
+
+func (g *EdgeGateway) handleEdgeVoice(grant DeviceGrant, inner []byte, now time.Time) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	link := g.currentControl(true)
+	if link == nil {
+		if g.allowFallbackVoice(grant, now) {
+			g.localFanout(grant.SessionID, grant.DomainID, inner)
+		}
+		return
+	}
+
+	var claim *SpeakerLeaseControl
+	leaseID := uint64(0)
+	deliver := false
+	g.mu.Lock()
+	session := g.sessions[grant.SessionID]
+	if session == nil || session.Grant.SessionEpoch != grant.SessionEpoch || session.Grant.DomainID != grant.DomainID || session.Grant.DisableSend || grant.DomainID == 0 {
+		g.mu.Unlock()
+		return
+	}
+	state := g.speakerDomains[grant.DomainID]
+	if state != nil && state.leaseID != 0 {
+		active := !state.fallback && now.Before(state.expiresAt) && now.Sub(state.lastVoiceAt) <= SpeakerLeaseIdleTimeout
+		if active && state.sessionID == grant.SessionID && state.sessionEpoch == grant.SessionEpoch {
+			state.lastVoiceAt = now
+			leaseID, deliver = state.leaseID, true
+			if state.pendingRequest == 0 && state.expiresAt.Sub(now) <= SpeakerLeaseRenewBefore {
+				requestID := g.nextRequest.Add(1)
+				state.pendingRequest, state.pendingSince = requestID, now
+				message := SpeakerLeaseControl{Action: SpeakerLeaseActionClaim, RequestID: requestID, SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, LeaseID: state.leaseID}
+				claim = &message
+			}
+			g.mu.Unlock()
+			if claim != nil {
+				g.sendSpeakerClaim(link, *claim)
+			}
+			if deliver {
+				g.deliverEdgeVoice(grant, inner, leaseID)
+			}
+			return
+		}
+		if active {
+			g.mu.Unlock()
+			g.metrics.AddDrop()
+			return
+		}
+		delete(g.speakerDomains, grant.DomainID)
+		state = nil
+	}
+	if state != nil && state.pendingRequest != 0 {
+		buffered := false
+		if state.sessionID == grant.SessionID && state.sessionEpoch == grant.SessionEpoch && len(state.buffered) < 2 && now.Sub(state.pendingSince) <= SpeakerClaimTimeout {
+			state.buffered = append(state.buffered, edgeBufferedVoice{grant: grant, inner: append([]byte(nil), inner...), receivedAt: now})
+			buffered = true
+		}
+		g.mu.Unlock()
+		if !buffered {
+			g.metrics.AddDrop()
+		}
+		return
+	}
+	if state != nil && now.Before(state.blockedUntil) {
+		g.mu.Unlock()
+		g.metrics.AddDrop()
+		return
+	}
+	requestID := g.nextRequest.Add(1)
+	state = &edgeSpeakerState{
+		sessionID: grant.SessionID, sessionEpoch: grant.SessionEpoch,
+		pendingRequest: requestID, pendingSince: now, lastVoiceAt: now,
+		buffered: []edgeBufferedVoice{{grant: grant, inner: append([]byte(nil), inner...), receivedAt: now}},
+	}
+	g.speakerDomains[grant.DomainID] = state
+	message := SpeakerLeaseControl{Action: SpeakerLeaseActionClaim, RequestID: requestID, SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID}
+	g.mu.Unlock()
+	g.sendSpeakerClaim(link, message)
+}
+
+func (g *EdgeGateway) sendSpeakerClaim(link *edgeControlLink, message SpeakerLeaseControl) {
+	if link == nil || link.client == nil || message.Validate() != nil {
+		return
+	}
+	payload, err := EncodeJSON(message)
+	if err == nil {
+		env := NewEnvelope(SubtypeSpeakerLease, link.client.Session.NodeID, link.client.Session.SessionID, message.RequestID, payload)
+		env.Flags = FlagControl | FlagAck
+		err = link.client.SendEnvelope(env)
+	}
+	if err == nil {
+		return
+	}
+	g.metrics.AddError()
+	g.mu.Lock()
+	state := g.speakerDomains[message.DomainID]
+	if state != nil && state.pendingRequest == message.RequestID {
+		state.pendingRequest = 0
+		state.pendingSince = time.Time{}
+		if state.leaseID == 0 {
+			state.buffered = nil
+			state.blockedUntil = time.Now().Add(50 * time.Millisecond)
+		}
+	}
+	g.mu.Unlock()
+}
+
+func (g *EdgeGateway) finishSpeakerLease(message SpeakerLeaseControl, now time.Time) bool {
+	if message.Action != SpeakerLeaseActionGrant && message.Action != SpeakerLeaseActionDeny {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	frames := make([]edgeBufferedVoice, 0, 2)
+	g.mu.Lock()
+	state := g.speakerDomains[message.DomainID]
+	if state == nil || state.pendingRequest != message.RequestID || state.sessionID != message.SessionID || state.sessionEpoch != message.SessionEpoch {
+		g.mu.Unlock()
+		return false
+	}
+	session := g.sessions[message.SessionID]
+	if session == nil || session.Grant.SessionEpoch != message.SessionEpoch || session.Grant.DomainID != message.DomainID || session.Grant.DisableSend {
+		delete(g.speakerDomains, message.DomainID)
+		g.mu.Unlock()
+		return false
+	}
+	if message.Action == SpeakerLeaseActionDeny {
+		retry := time.Duration(message.RetryAfterMillis) * time.Millisecond
+		if retry < 50*time.Millisecond {
+			retry = 50 * time.Millisecond
+		}
+		if retry > SpeakerLeaseTTL {
+			retry = SpeakerLeaseTTL
+		}
+		dropped := len(state.buffered)
+		g.speakerDomains[message.DomainID] = &edgeSpeakerState{sessionID: message.SessionID, sessionEpoch: message.SessionEpoch, blockedUntil: now.Add(retry)}
+		g.mu.Unlock()
+		if dropped > 0 {
+			g.metrics.AddDropBulk(uint64(dropped))
+		}
+		return true
+	}
+	ttl := time.Duration(message.TTLMillis) * time.Millisecond
+	if ttl <= 0 {
+		delete(g.speakerDomains, message.DomainID)
+		g.mu.Unlock()
+		return false
+	}
+	if ttl > 2*SpeakerLeaseTTL {
+		ttl = 2 * SpeakerLeaseTTL
+	}
+	frames = append(frames, state.buffered...)
+	state.buffered = nil
+	state.leaseID = message.LeaseID
+	state.expiresAt = now.Add(ttl)
+	state.lastVoiceAt = now
+	state.pendingRequest = 0
+	state.pendingSince = time.Time{}
+	state.blockedUntil = time.Time{}
+	state.fallback = false
+	g.mu.Unlock()
+	for _, frame := range frames {
+		if now.Sub(frame.receivedAt) <= SpeakerClaimTimeout {
+			g.deliverEdgeVoice(frame.grant, frame.inner, message.LeaseID)
+		} else {
+			g.metrics.AddDrop()
+		}
+	}
+	return true
+}
+
+func (g *EdgeGateway) deliverEdgeVoice(grant DeviceGrant, inner []byte, leaseID uint64) {
+	if leaseID == 0 {
+		return
+	}
+	g.mu.RLock()
+	session := g.sessions[grant.SessionID]
+	state := g.speakerDomains[grant.DomainID]
+	valid := session != nil && session.Grant.SessionEpoch == grant.SessionEpoch && session.Grant.DomainID == grant.DomainID && !session.Grant.DisableSend &&
+		state != nil && !state.fallback && state.sessionID == grant.SessionID && state.sessionEpoch == grant.SessionEpoch && state.leaseID == leaseID
+	if valid {
+		grant = session.Grant
+	}
+	g.mu.RUnlock()
+	if !valid {
+		return
+	}
+	g.localFanout(grant.SessionID, grant.DomainID, inner)
+	g.sendEdgeRelay(grant, inner, leaseID)
+}
+
+func (g *EdgeGateway) allowFallbackVoice(grant DeviceGrant, now time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	session := g.sessions[grant.SessionID]
+	if session == nil || session.Grant.SessionEpoch != grant.SessionEpoch || session.Grant.DomainID != grant.DomainID || session.Grant.DisableSend || grant.DomainID == 0 {
+		return false
+	}
+	state := g.speakerDomains[grant.DomainID]
+	if state == nil || !state.fallback || now.Sub(state.lastVoiceAt) > SpeakerLeaseIdleTimeout {
+		g.speakerDomains[grant.DomainID] = &edgeSpeakerState{sessionID: grant.SessionID, sessionEpoch: grant.SessionEpoch, lastVoiceAt: now, fallback: true}
+		return true
+	}
+	if state.sessionID != grant.SessionID || state.sessionEpoch != grant.SessionEpoch {
+		return false
+	}
+	state.lastVoiceAt = now
+	return true
+}
+
+func (g *EdgeGateway) speakerLeaseCleanerLoop() {
+	defer g.cleanerWG.Done()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.closed:
+			return
+		case now := <-ticker.C:
+			g.expireSpeakerStates(now)
+		}
+	}
+}
+
+func (g *EdgeGateway) expireSpeakerStates(now time.Time) {
+	dropped := 0
+	g.mu.Lock()
+	for domainID, state := range g.speakerDomains {
+		if state.fallback && now.Sub(state.lastVoiceAt) > SpeakerLeaseIdleTimeout {
+			delete(g.speakerDomains, domainID)
+			continue
+		}
+		if state.pendingRequest != 0 && now.Sub(state.pendingSince) > SpeakerClaimTimeout {
+			dropped += len(state.buffered)
+			state.buffered = nil
+			state.pendingRequest = 0
+			state.pendingSince = time.Time{}
+			if state.leaseID == 0 {
+				state.blockedUntil = now.Add(50 * time.Millisecond)
+			}
+		}
+		if state.leaseID != 0 && (!now.Before(state.expiresAt) || now.Sub(state.lastVoiceAt) > SpeakerLeaseIdleTimeout) {
+			delete(g.speakerDomains, domainID)
+			continue
+		}
+		if state.leaseID == 0 && state.pendingRequest == 0 && !state.blockedUntil.IsZero() && !now.Before(state.blockedUntil) {
+			delete(g.speakerDomains, domainID)
+		}
+	}
+	g.mu.Unlock()
+	if dropped > 0 {
+		g.metrics.AddDropBulk(uint64(dropped))
+	}
+}
+
+func (g *EdgeGateway) removeSpeakerSessionLocked(sessionID, sessionEpoch uint64) {
+	for domainID, state := range g.speakerDomains {
+		if state.sessionID == sessionID && (sessionEpoch == 0 || state.sessionEpoch == sessionEpoch) {
+			delete(g.speakerDomains, domainID)
+		}
 	}
 }
 
@@ -1809,6 +2219,7 @@ func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, n
 		return DeviceSessionReport{}
 	}
 	delete(g.sessions, sessionID)
+	g.removeSpeakerSessionLocked(sessionID, session.Grant.SessionEpoch)
 	key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
 	if g.byIdentity[key] == sessionID {
 		delete(g.byIdentity, key)
@@ -1921,6 +2332,12 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 		case DeviceConfigKindResult:
 			g.finishDeviceConfigUp(message)
 		}
+	case SubtypeSpeakerLease:
+		var message SpeakerLeaseControl
+		if DecodeJSON(env.Payload, &message) != nil || message.Validate() != nil {
+			return
+		}
+		g.finishSpeakerLease(message, time.Now())
 	case SubtypeRouteDelta:
 		var delta RouteDelta
 		if DecodeJSON(env.Payload, &delta) != nil {
@@ -2044,6 +2461,7 @@ func (g *EdgeGateway) revokeSession(revoke DeviceSessionRevoke) bool {
 		return false
 	}
 	delete(g.sessions, revoke.SessionID)
+	g.removeSpeakerSessionLocked(revoke.SessionID, revoke.SessionEpoch)
 	key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
 	if g.byIdentity[key] == revoke.SessionID {
 		delete(g.byIdentity, key)
@@ -2079,12 +2497,18 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	key := fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
 	g.mu.Lock()
 	if existing := g.sessions[grant.SessionID]; existing != nil {
+		if existing.Grant.SessionEpoch != grant.SessionEpoch || existing.Grant.DomainID != grant.DomainID || grant.DisableSend {
+			g.removeSpeakerSessionLocked(grant.SessionID, existing.Grant.SessionEpoch)
+		}
 		existing.Grant = grant
 		existing.Addr = session.Addr
 		existing.RealAddr = session.RealAddr
 		existing.LastSeen = session.LastSeen
 	} else {
 		if previousID := g.byIdentity[key]; previousID != 0 && previousID != grant.SessionID {
+			if previous := g.sessions[previousID]; previous != nil {
+				g.removeSpeakerSessionLocked(previousID, previous.Grant.SessionEpoch)
+			}
 			delete(g.sessions, previousID)
 			g.removePendingDeviceConfigsLocked(previousID)
 		}
@@ -2111,13 +2535,16 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 		return
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	for id, session := range g.sessions {
 		if route, ok := p.Devices[id]; ok {
+			if session.Grant.SessionEpoch != route.SessionEpoch || session.Grant.DomainID != route.DomainID || route.DisableSend {
+				g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
+			}
 			session.Grant.DisableSend, session.Grant.DisableRecv = route.DisableSend, route.DisableRecv
 			session.Grant.GroupID, session.Grant.DomainID = route.GroupID, route.DomainID
 			session.Grant.SessionEpoch = route.SessionEpoch
 		} else {
+			g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
 			delete(g.sessions, id)
 			g.removePendingDeviceConfigsLocked(id)
 			key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
@@ -2126,6 +2553,7 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 			}
 		}
 	}
+	g.mu.Unlock()
 }
 func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
 	g.mu.RLock()

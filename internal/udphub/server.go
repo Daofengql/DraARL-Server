@@ -831,7 +831,11 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 		return
 	}
 
-	if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
+	if CenterInterconnectActive() {
+		if !AcquireCenterLocalDeviceVoice(dev) {
+			return
+		}
+	} else if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
 		return
 	}
 

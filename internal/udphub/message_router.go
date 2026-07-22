@@ -95,7 +95,11 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		return
 	}
 
-	if !tryAcquireHalfDuplex(groupID, buildWSSpeaker(source), time.Now()) {
+	if CenterInterconnectActive() {
+		if !AcquireCenterLocalWSVoice(source, groupID) {
+			return
+		}
+	} else if !tryAcquireHalfDuplex(groupID, buildWSSpeaker(source), time.Now()) {
 		return
 	}
 

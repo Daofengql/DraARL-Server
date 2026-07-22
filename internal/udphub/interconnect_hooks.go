@@ -30,12 +30,13 @@ type CenterLocalSource struct {
 }
 
 type CenterInterconnectHooks struct {
-	Activate    func(*CenterLocalSource) error
-	Authorize   func(CenterLocalSource) bool
-	RemoteOwner func(ownerID int, ssid byte) bool
-	Relay       func(CenterLocalSource, []byte) error
-	SendConfig  func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
-	Revoke      func(CenterLocalSource)
+	Activate     func(*CenterLocalSource) error
+	Authorize    func(CenterLocalSource) bool
+	AcquireVoice func(CenterLocalSource) bool
+	RemoteOwner  func(ownerID int, ssid byte) bool
+	Relay        func(CenterLocalSource, []byte) error
+	SendConfig   func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
+	Revoke       func(CenterLocalSource)
 }
 
 var centerInterconnectBridge struct {
@@ -116,6 +117,21 @@ func CenterLocalDeviceAuthoritative(dev *models.Device) bool {
 		return true
 	}
 	return dev != nil && hooks.Authorize(centerSourceFromDevice(dev))
+}
+
+func AcquireCenterLocalDeviceVoice(dev *models.Device) bool {
+	hooks := centerHooks()
+	if hooks.AcquireVoice == nil {
+		return true
+	}
+	if dev == nil || dev.InterconnectSessionID == 0 {
+		return false
+	}
+	source := centerSourceFromDevice(dev)
+	if source.DomainID == 0 || source.DisableSend || (hooks.Authorize != nil && !hooks.Authorize(source)) {
+		return false
+	}
+	return hooks.AcquireVoice(source)
 }
 
 func RevokeCenterLocalDevice(dev *models.Device) {
@@ -199,6 +215,18 @@ func AuthorizeCenterLocalWS(source interfaces.WSDeviceInterface, groupID int) bo
 	}
 	source.SetInterconnectSession(local.SessionID, local.SessionEpoch)
 	return true
+}
+
+func AcquireCenterLocalWSVoice(source interfaces.WSDeviceInterface, groupID int) bool {
+	hooks := centerHooks()
+	if hooks.AcquireVoice == nil {
+		return true
+	}
+	local := centerSourceFromWS(source, groupID)
+	if local.SessionID == 0 || local.DomainID == 0 || local.DisableSend || (hooks.Authorize != nil && !hooks.Authorize(local)) {
+		return false
+	}
+	return hooks.AcquireVoice(local)
 }
 
 func RevokeCenterLocalWS(source interfaces.WSDeviceInterface) {

@@ -40,6 +40,22 @@ type UDPConfig struct {
 	WriteBufferBytes int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
 }
 
+// InterconnectConfig controls the optional centre-side Type 0 node services.
+// It is ignored unless Enabled is true, preserving existing single-node startup.
+type InterconnectConfig struct {
+	Enabled              bool   `yaml:"Enabled" json:"enabled"`
+	ControlListen        string `yaml:"ControlListen" json:"control_listen"`
+	DataListen           string `yaml:"DataListen" json:"data_listen"`
+	TLSCertFile          string `yaml:"TLSCertFile" json:"tls_cert_file"`
+	TLSKeyFile           string `yaml:"TLSKeyFile" json:"tls_key_file"`
+	TLSClientCAFile      string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
+	AllowSelfSigned      bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
+	RegistrationTokenTTL int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
+	// NodeTokens is a development/bootstrap map. Production deployments should
+	// replace it with hashed, rotatable credentials managed by the admin API.
+	NodeTokens map[string]string `yaml:"NodeTokens" json:"node_tokens"`
+}
+
 // SetReleaseBuild 设置是否为 release 构建产物。
 func SetReleaseBuild(release bool) {
 	releaseBuild.Store(release)
@@ -60,7 +76,8 @@ type Configuration struct {
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
 
-	UDP UDPConfig `yaml:"UDP" json:"udp"`
+	UDP          UDPConfig          `yaml:"UDP" json:"udp"`
+	Interconnect InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -215,6 +232,15 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.UDP.WriteBufferBytes <= 0 {
 		c.UDP.WriteBufferBytes = 4 * 1024 * 1024
+	}
+	if strings.TrimSpace(c.Interconnect.ControlListen) == "" {
+		c.Interconnect.ControlListen = ":60100"
+	}
+	if strings.TrimSpace(c.Interconnect.DataListen) == "" {
+		c.Interconnect.DataListen = ":60101"
+	}
+	if c.Interconnect.RegistrationTokenTTL <= 0 {
+		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60
 	}
 
 	// 数据库默认值

@@ -22,6 +22,7 @@ const (
 	NodeDataHeaderSize       = 53
 	NodeHeaderSize           = DraARLHeaderSize + NodeDataHeaderSize
 	NodeMaxDatagramSize      = 1400
+	NodeMaxControlSize       = 65535
 )
 
 const (
@@ -70,14 +71,14 @@ func NewEnvelope(subtype byte, sourceNode string, sessionID, messageID uint64, p
 	return Envelope{Version: NodeProtocolVersion, Subtype: subtype, SourceNodeID: sourceNode, NodeSessionID: sessionID, MessageID: messageID, SentAtMillis: time.Now().UnixMilli(), Payload: payload}
 }
 
-func (e Envelope) validateForEncode() error {
+func (e Envelope) validateForEncode(maxSize int) error {
 	if len(e.SourceNodeID) == 0 || len(e.SourceNodeID) > NodeIDSize {
 		return fmt.Errorf("node id must be 1..%d bytes", NodeIDSize)
 	}
 	if e.Version != NodeProtocolVersion {
 		return fmt.Errorf("unsupported node protocol version %d", e.Version)
 	}
-	if len(e.Payload) > NodeMaxDatagramSize-NodeHeaderSize-NodeAuthTagSize {
+	if maxSize < NodeHeaderSize+NodeAuthTagSize || len(e.Payload) > maxSize-NodeHeaderSize-NodeAuthTagSize {
 		return errors.New("node payload exceeds datagram limit")
 	}
 	if e.HopCount > 2 {
@@ -93,10 +94,18 @@ func (e Envelope) validateForEncode() error {
 // decoder intentionally rejects it; only this authenticated node decoder may
 // inspect its DATA region. HMAC-SHA256 covers the full header and payload.
 func (e Envelope) Marshal(key []byte) ([]byte, error) {
+	return e.marshal(key, NodeMaxDatagramSize)
+}
+
+func (e Envelope) MarshalControl(key []byte) ([]byte, error) {
+	return e.marshal(key, NodeMaxControlSize)
+}
+
+func (e Envelope) marshal(key []byte, maxSize int) ([]byte, error) {
 	if len(key) < 8 {
 		return nil, errors.New("node session key is too short")
 	}
-	if err := e.validateForEncode(); err != nil {
+	if err := e.validateForEncode(maxSize); err != nil {
 		return nil, err
 	}
 	out := make([]byte, NodeHeaderSize+len(e.Payload)+NodeAuthTagSize)
@@ -126,11 +135,19 @@ func (e Envelope) Marshal(key []byte) ([]byte, error) {
 }
 
 func Unmarshal(data, key []byte) (Envelope, error) {
+	return unmarshal(data, key, NodeMaxDatagramSize)
+}
+
+func UnmarshalControl(data, key []byte) (Envelope, error) {
+	return unmarshal(data, key, NodeMaxControlSize)
+}
+
+func unmarshal(data, key []byte, maxSize int) (Envelope, error) {
 	var e Envelope
 	if len(key) < 8 {
 		return e, errors.New("node session key is too short")
 	}
-	if len(data) < NodeHeaderSize+NodeAuthTagSize || len(data) > NodeMaxDatagramSize {
+	if len(data) < NodeHeaderSize+NodeAuthTagSize || len(data) > maxSize {
 		return e, errors.New("invalid node packet size")
 	}
 	if string(data[:4]) != NodeMagic {
@@ -172,7 +189,7 @@ func Unmarshal(data, key []byte) (Envelope, error) {
 	e.HopCount = data[offset+44]
 	e.KeyEpoch = binary.BigEndian.Uint32(data[offset+45 : offset+49])
 	payloadLen := int(binary.BigEndian.Uint32(data[offset+49 : offset+53]))
-	if payloadLen > NodeMaxDatagramSize-NodeHeaderSize-NodeAuthTagSize || NodeHeaderSize+payloadLen+NodeAuthTagSize != len(data) {
+	if payloadLen > maxSize-NodeHeaderSize-NodeAuthTagSize || NodeHeaderSize+payloadLen+NodeAuthTagSize != len(data) {
 		return e, errors.New("invalid node payload length")
 	}
 	e.Payload = append([]byte(nil), data[NodeHeaderSize:NodeHeaderSize+payloadLen]...)

@@ -161,6 +161,17 @@ func GetHalfDuplexDomainGroupIDs(groupID int) []int {
 	return ids
 }
 
+// GetCommunicationDomainID returns a stable opaque ID for the current linked
+// group domain. It is shared with Type 0 grants so centre and edge make the
+// same local/remote routing decision without sharing database state.
+func GetCommunicationDomainID(groupID int) uint64 {
+	key := getHalfDuplexDomainKey(groupID)
+	if key == "" {
+		return 0
+	}
+	return uint64(fnv32String(key))
+}
+
 // collectHalfDuplexDomainGroupIDs 计算一个群组可达的“语音转发连通域”。
 // 同一连通域内应共享半双工占用状态，不同域互不影响。
 func collectHalfDuplexDomainGroupIDs(groupID int) []int {

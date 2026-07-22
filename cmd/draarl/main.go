@@ -20,6 +20,7 @@ import (
 	"draarl/internal/config"
 	"draarl/internal/db"
 	gormdb "draarl/internal/gormdb"
+	"draarl/internal/interconnect"
 	oplog "draarl/internal/log"
 	"draarl/internal/middleware"
 	"draarl/internal/server"
@@ -46,6 +47,8 @@ func main() {
 
 	// 解析命令行参数
 	configPath := flag.String("c", "", "配置文件路径")
+	edgeMode := flag.Bool("edge", false, "以无数据库边缘节点模式启动")
+	interconnectMode := flag.Bool("interconnect", false, "以无数据库边缘节点模式启动（edge 别名）")
 	showVersion := flag.Bool("v", false, "显示版本信息")
 	printConfig := flag.String("p", "", "打印配置信息")
 	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
@@ -53,6 +56,12 @@ func main() {
 	migrateDelete := flag.Bool("migrate-delete-source", false, "迁移成功并校验后删除源端对象（默认保留源端）")
 	migrateDryRun := flag.Bool("migrate-dry-run", false, "仅统计迁移计划，不实际写入目标端")
 	flag.Parse()
+	if *edgeMode || *interconnectMode {
+		if err := runEdgeMode(*configPath); err != nil {
+			stdlog.Fatalf("边缘节点启动失败: %v", err)
+		}
+		return
+	}
 
 	if *showVersion {
 		fmt.Printf("DraARL version %s (build time: %s)\n", buildinfo.VersionString(), buildinfo.BuildTimeString())
@@ -199,6 +208,16 @@ func main() {
 			stdlog.Printf("UDP 服务器启动失败: %v", err)
 		}
 	}()
+
+	var centerRuntime *interconnect.CenterRuntime
+	if cfg.Interconnect.Enabled {
+		centerRuntime, err = startCenterInterconnect(cfg)
+		if err != nil {
+			stdlog.Fatalf("启动中心节点互联服务失败: %v", err)
+		}
+		defer centerRuntime.Close()
+		stdlog.Printf("Type 0 节点服务已启动: control=%s data=%s", cfg.Interconnect.ControlListen, cfg.Interconnect.DataListen)
+	}
 
 	// 启动 APRS 服务（配置从数据库加载）
 	stdlog.Println("正在启动 APRS 服务...")

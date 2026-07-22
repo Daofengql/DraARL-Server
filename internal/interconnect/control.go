@@ -44,6 +44,7 @@ type ControlMessage struct {
 	Key       string          `json:"key,omitempty"`
 	MessageID uint64          `json:"message_id,omitempty"`
 	Payload   json.RawMessage `json:"payload,omitempty"`
+	Packet    string          `json:"packet,omitempty"`
 	Error     string          `json:"error,omitempty"`
 }
 
@@ -132,6 +133,7 @@ type NodeServerConfig struct {
 	ValidateToken func(nodeID, token string) bool
 	OnConnect     func(*NodeSession)
 	OnMessage     func(*NodeSession, ControlMessage)
+	OnEnvelope    func(*NodeSession, Envelope)
 	OnDisconnect  func(*NodeSession, error)
 }
 
@@ -231,6 +233,21 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		if msg.Kind == controlHeartbeat {
 			session.Touch()
 		}
+		if msg.Kind == "type0" {
+			wire, decodeErr := base64.RawStdEncoding.DecodeString(msg.Packet)
+			if decodeErr != nil {
+				continue
+			}
+			env, decodeErr := UnmarshalControl(wire, session.Key)
+			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.SourceNodeID != session.NodeID || env.Expired(time.Now(), 30*time.Second) {
+				continue
+			}
+			session.Touch()
+			if s.cfg.OnEnvelope != nil {
+				s.cfg.OnEnvelope(session, env)
+			}
+			continue
+		}
 		if s.cfg.OnMessage != nil {
 			s.cfg.OnMessage(session, msg)
 		}
@@ -255,6 +272,21 @@ func (s *NodeServer) Send(nodeID string, msg ControlMessage) error {
 	}
 	return session.Send(msg)
 }
+func (s *NodeServer) SendEnvelope(nodeID string, env Envelope) error {
+	session, ok := s.Session(nodeID)
+	if !ok {
+		return errors.New("node is offline")
+	}
+	env.NodeSessionID, env.KeyEpoch = session.SessionID, session.KeyEpoch
+	if env.SourceNodeID == "" {
+		env.SourceNodeID = "center"
+	}
+	wire, err := env.MarshalControl(session.Key)
+	if err != nil {
+		return err
+	}
+	return session.Send(ControlMessage{Kind: "type0", Packet: base64.RawStdEncoding.EncodeToString(wire), MessageID: env.MessageID})
+}
 func (s *NodeServer) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
@@ -275,18 +307,23 @@ func (s *NodeSession) Close() error {
 
 type NodeClientConfig struct {
 	CenterAddr   string
+	DataAddr     string
 	TLSConfig    *tls.Config
 	NodeID       string
 	Token        string
 	OnMessage    func(ControlMessage)
+	OnEnvelope   func(Envelope)
+	OnDatagram   func(Envelope)
 	OnDisconnect func(error)
 }
 type NodeClient struct {
-	cfg     NodeClientConfig
-	conn    net.Conn
-	Session *NodeSession
-	closed  chan struct{}
-	writeMu sync.Mutex
+	cfg        NodeClientConfig
+	conn       net.Conn
+	Session    *NodeSession
+	closed     chan struct{}
+	writeMu    sync.Mutex
+	datagram   *NodeDatagramClient
+	callbackMu sync.RWMutex
 }
 
 func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
@@ -323,6 +360,15 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	_ = conn.SetDeadline(time.Time{})
 	client.Session = &NodeSession{NodeID: response.NodeID, SessionID: response.SessionID, KeyEpoch: response.KeyEpoch, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
 	client.Session.Touch()
+	if cfg.DataAddr != "" {
+		datagram, datagramErr := DialNodeDatagram(ctx, cfg.DataAddr, client.Session)
+		if datagramErr != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("dial node data plane: %w", datagramErr)
+		}
+		client.datagram = datagram
+		go client.datagramLoop()
+	}
 	go client.readLoop()
 	return client, nil
 }
@@ -343,8 +389,29 @@ func (c *NodeClient) readLoop() {
 		if msg.Kind == controlHeartbeat {
 			c.Session.Touch()
 		}
-		if c.cfg.OnMessage != nil {
-			c.cfg.OnMessage(msg)
+		if msg.Kind == "type0" {
+			wire, decodeErr := base64.RawStdEncoding.DecodeString(msg.Packet)
+			if decodeErr != nil {
+				continue
+			}
+			env, decodeErr := UnmarshalControl(wire, c.Session.Key)
+			if decodeErr != nil || env.NodeSessionID != c.Session.SessionID || env.Expired(time.Now(), 30*time.Second) {
+				continue
+			}
+			c.Session.Touch()
+			c.callbackMu.RLock()
+			handler := c.cfg.OnEnvelope
+			c.callbackMu.RUnlock()
+			if handler != nil {
+				handler(env)
+			}
+			continue
+		}
+		c.callbackMu.RLock()
+		handler := c.cfg.OnMessage
+		c.callbackMu.RUnlock()
+		if handler != nil {
+			handler(msg)
 		}
 	}
 }
@@ -353,9 +420,52 @@ func (c *NodeClient) Send(msg ControlMessage) error {
 	defer c.writeMu.Unlock()
 	return writeControlMessage(c.conn, msg)
 }
+func (c *NodeClient) SendEnvelope(env Envelope) error {
+	if c.Session == nil {
+		return errors.New("node client is not authenticated")
+	}
+	env.SourceNodeID, env.NodeSessionID, env.KeyEpoch = c.Session.NodeID, c.Session.SessionID, c.Session.KeyEpoch
+	wire, err := env.MarshalControl(c.Session.Key)
+	if err != nil {
+		return err
+	}
+	if (env.Subtype == SubtypeRelayUpstream || env.Subtype == SubtypeRelayDownstream) && c.datagram != nil {
+		return c.datagram.Send(env)
+	}
+	return c.Send(ControlMessage{Kind: "type0", Packet: base64.RawStdEncoding.EncodeToString(wire), MessageID: env.MessageID})
+}
+func (c *NodeClient) datagramLoop() {
+	for {
+		env, _, err := c.datagram.Receive(context.Background())
+		if err != nil {
+			return
+		}
+		c.callbackMu.RLock()
+		datagramHandler, envelopeHandler := c.cfg.OnDatagram, c.cfg.OnEnvelope
+		c.callbackMu.RUnlock()
+		if datagramHandler != nil {
+			datagramHandler(env)
+		} else if envelopeHandler != nil {
+			envelopeHandler(env)
+		}
+	}
+}
+func (c *NodeClient) SetEnvelopeHandler(handler func(Envelope)) {
+	c.callbackMu.Lock()
+	c.cfg.OnEnvelope = handler
+	c.callbackMu.Unlock()
+}
+func (c *NodeClient) SetDatagramHandler(handler func(Envelope)) {
+	c.callbackMu.Lock()
+	c.cfg.OnDatagram = handler
+	c.callbackMu.Unlock()
+}
 func (c *NodeClient) Close() error {
 	if c.conn == nil {
 		return nil
+	}
+	if c.datagram != nil {
+		_ = c.datagram.Close()
 	}
 	return c.conn.Close()
 }

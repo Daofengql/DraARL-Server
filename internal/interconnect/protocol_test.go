@@ -46,3 +46,19 @@ func TestEnvelopeRejectsOversizeAndOldFrame(t *testing.T) {
 		t.Fatalf("expected expired packet, decoded=%v err=%v", decoded, err)
 	}
 }
+
+func TestControlEnvelopeAllowsBoundedSnapshotLargerThanUDP(t *testing.T) {
+	e := NewEnvelope(SubtypeRouteSnapshotChunk, "center", 1, 2, make([]byte, 48<<10))
+	key := []byte("control-key")
+	if _, err := e.Marshal(key); err == nil {
+		t.Fatal("large snapshot unexpectedly fit UDP envelope")
+	}
+	wire, err := e.MarshalControl(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalControl(wire, key)
+	if err != nil || len(decoded.Payload) != 48<<10 {
+		t.Fatalf("control snapshot decode failed: size=%d err=%v", len(decoded.Payload), err)
+	}
+}

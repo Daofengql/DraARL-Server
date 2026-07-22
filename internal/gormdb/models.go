@@ -74,29 +74,30 @@ func (u *User) GetRoles() []string {
 
 // Device 设备模型
 type Device struct {
-	CurrentEntryNodeID string     `gorm:"type:varchar(64);index;column:current_entry_node_id" json:"current_entry_node_id"`
-	LastEntryNodeID    string     `gorm:"type:varchar(64);index;column:last_entry_node_id" json:"last_entry_node_id"`
-	LastEntryAt        *time.Time `gorm:"type:datetime;column:last_entry_at" json:"last_entry_at,omitempty"`
-	EntryMode          string     `gorm:"type:varchar(16);column:entry_mode" json:"entry_mode"`
-	ID                 int        `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name               string     `gorm:"type:varchar(255);column:name" json:"name"`
-	DMRID              int64      `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
-	SSID               uint8      `gorm:"type:tinyint unsigned;uniqueIndex:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
-	OwnerID            int        `gorm:"uniqueIndex:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
-	QTH                string     `gorm:"type:varchar(255);column:qth" json:"qth"`                               // 位置信息 (原 gird 字段)
-	LastOnlineIP       string     `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`          // 设备最近一次上线时的客户端 IP
-	DevModel           int        `gorm:"type:int;column:dev_model" json:"dev_model"`
-	GroupID            int        `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
-	Status             int8       `gorm:"type:tinyint;default:1;column:status" json:"status"`
-	IsCerted           bool       `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
-	Priority           int        `gorm:"type:int;default:100;column:priority" json:"priority"`
-	DisableSend        bool       `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
-	DisableRecv        bool       `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
-	ISOnline           bool       `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
-	OnlineTime         time.Time  `gorm:"type:datetime;column:online_time" json:"online_time"`
-	Note               string     `gorm:"type:text;column:note" json:"note"`
-	CreateTime         time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime         time.Time  `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	CurrentEntryNodeID    string     `gorm:"type:varchar(64);index;column:current_entry_node_id" json:"current_entry_node_id"`
+	CurrentEntrySessionID uint64     `gorm:"type:bigint unsigned;index;column:current_entry_session_id" json:"-"`
+	LastEntryNodeID       string     `gorm:"type:varchar(64);index;column:last_entry_node_id" json:"last_entry_node_id"`
+	LastEntryAt           *time.Time `gorm:"type:datetime;column:last_entry_at" json:"last_entry_at,omitempty"`
+	EntryMode             string     `gorm:"type:varchar(16);column:entry_mode" json:"entry_mode"`
+	ID                    int        `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Name                  string     `gorm:"type:varchar(255);column:name" json:"name"`
+	DMRID                 int64      `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
+	SSID                  uint8      `gorm:"type:tinyint unsigned;uniqueIndex:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
+	OwnerID               int        `gorm:"uniqueIndex:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
+	QTH                   string     `gorm:"type:varchar(255);column:qth" json:"qth"`                               // 位置信息 (原 gird 字段)
+	LastOnlineIP          string     `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`          // 设备最近一次上线时的客户端 IP
+	DevModel              int        `gorm:"type:int;column:dev_model" json:"dev_model"`
+	GroupID               int        `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
+	Status                int8       `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	IsCerted              bool       `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
+	Priority              int        `gorm:"type:int;default:100;column:priority" json:"priority"`
+	DisableSend           bool       `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
+	DisableRecv           bool       `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
+	ISOnline              bool       `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
+	OnlineTime            time.Time  `gorm:"type:datetime;column:online_time" json:"online_time"`
+	Note                  string     `gorm:"type:text;column:note" json:"note"`
+	CreateTime            time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime            time.Time  `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
 
 	// 关联定义：配置与 User 表的外键约束。
 	// 当引用的 User 被删除时，数据库引擎会自动连带删除该 OwnerID 下的所有 Device 记录。
@@ -183,7 +184,16 @@ type Server struct {
 	UDPPort                    int        `gorm:"type:int" json:"udp_port"`
 	NodeID                     *string    `gorm:"type:varchar(64);uniqueIndex;column:node_id" json:"node_id,omitempty"`
 	DisplayName                string     `gorm:"type:varchar(255);column:display_name" json:"display_name"`
-	NodeTokenHash              string     `gorm:"type:varchar(128);column:node_token_hash" json:"-"`
+	NodeTokenHash              string     `gorm:"type:char(64);column:node_token_hash" json:"-"`
+	NodeRegistrationTokenHash  string     `gorm:"type:char(64);column:node_registration_token_hash" json:"-"`
+	NodeRegistrationExpiresAt  *time.Time `gorm:"type:datetime;column:node_registration_expires_at" json:"node_registration_expires_at,omitempty"`
+	NodeRegisteredAt           *time.Time `gorm:"type:datetime;column:node_registered_at" json:"node_registered_at,omitempty"`
+	NodeCredentialEpoch        uint32     `gorm:"type:int unsigned;default:0;column:node_credential_epoch" json:"node_credential_epoch"`
+	NodeInstanceID             string     `gorm:"type:varchar(128);column:node_instance_id" json:"node_instance_id,omitempty"`
+	NodeRemoteAddr             string     `gorm:"type:varchar(255);column:node_remote_addr" json:"node_remote_addr,omitempty"`
+	NodeControlSessionID       uint64     `gorm:"type:bigint unsigned;column:node_control_session_id" json:"-"`
+	NodeProjectionVersion      uint64     `gorm:"type:bigint unsigned;column:node_projection_version" json:"node_projection_version"`
+	NodeAckedProjectionVersion uint64     `gorm:"type:bigint unsigned;column:node_acked_projection_version" json:"node_acked_projection_version"`
 	NodeLastSeenAt             *time.Time `gorm:"type:datetime;column:node_last_seen_at" json:"node_last_seen_at,omitempty"`
 	NodeConnectionCount        int        `gorm:"type:int;column:node_connection_count" json:"node_connection_count"`
 	NodeDeviceInPackets        uint64     `gorm:"type:bigint unsigned;column:node_device_in_packets" json:"node_device_in_packets"`

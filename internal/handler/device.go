@@ -50,6 +50,10 @@ type DeviceInfo struct {
 	OnlineTime           string `json:"online_time,omitempty"`
 	CreateTime           string `json:"create_time,omitempty"`
 	UpdateTime           string `json:"update_time,omitempty"`
+	EntryNodeID          string `json:"entry_node_id,omitempty"`
+	EntryNodeName        string `json:"entry_node_name,omitempty"`
+	EntryMode            string `json:"entry_mode,omitempty"`
+	EntrySeenAt          string `json:"entry_seen_at,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -158,6 +162,21 @@ func GetDevices(c *gin.Context) {
 	// 批量查询用户简要信息
 	userCache := cache.GetUserCache()
 	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+	nodeIDs := make([]string, 0, len(devices))
+	seenNodeIDs := make(map[string]struct{}, len(devices))
+	for _, d := range devices {
+		nodeID := d.LastEntryNodeID
+		if d.ISOnline && d.CurrentEntryNodeID != "" {
+			nodeID = d.CurrentEntryNodeID
+		}
+		if nodeID != "" && nodeID != "center" {
+			if _, exists := seenNodeIDs[nodeID]; !exists {
+				seenNodeIDs[nodeID] = struct{}{}
+				nodeIDs = append(nodeIDs, nodeID)
+			}
+		}
+	}
+	nodeNames, _ := gormdb.NewServerRepository().GetNodeNames(nodeIDs)
 
 	// 转换为响应格式
 	items := make([]*DeviceInfo, 0, len(devices))
@@ -180,6 +199,18 @@ func GetDevices(c *gin.Context) {
 			CreateTime:           d.CreateTime.Format("2006-01-02 15:04:05"),
 			UpdateTime:           d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
+		entryNodeID := d.LastEntryNodeID
+		if d.ISOnline && d.CurrentEntryNodeID != "" {
+			entryNodeID = d.CurrentEntryNodeID
+		}
+		if isAdmin {
+			info.EntryNodeID = entryNodeID
+		}
+		info.EntryMode = d.EntryMode
+		if d.LastEntryAt != nil {
+			info.EntrySeenAt = d.LastEntryAt.Format("2006-01-02 15:04:05")
+		}
+		info.EntryNodeName = resolveEntryNodeName(entryNodeID, nodeNames)
 
 		// 从批量查询结果中获取设备所有者信息
 		if d.OwnerID > 0 {
@@ -223,6 +254,23 @@ func GetDevices(c *gin.Context) {
 			"page_size": limit,
 		},
 	})
+}
+
+func resolveEntryNodeName(nodeID string, names map[string]string) string {
+	switch nodeID {
+	case "":
+		return ""
+	case "center":
+		return "中心直连"
+	}
+	if name := strings.TrimSpace(names[nodeID]); name != "" {
+		return name
+	}
+	short := nodeID
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	return "已删除节点（" + short + "）"
 }
 
 // GetDevice 获取单个设备
@@ -297,6 +345,22 @@ func GetDevice(c *gin.Context) {
 			callsign = owner.CallSign
 		}
 	}
+	entryNodeID := device.LastEntryNodeID
+	if device.ISOnline && device.CurrentEntryNodeID != "" {
+		entryNodeID = device.CurrentEntryNodeID
+	}
+	nodeNames := map[string]string{}
+	if entryNodeID != "" && entryNodeID != "center" {
+		nodeNames, _ = gormdb.NewServerRepository().GetNodeNames([]string{entryNodeID})
+	}
+	entrySeenAt := ""
+	if device.LastEntryAt != nil {
+		entrySeenAt = device.LastEntryAt.Format("2006-01-02 15:04:05")
+	}
+	entryNodeIDResponse := ""
+	if isAdminUser(currentUser) {
+		entryNodeIDResponse = entryNodeID
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -317,6 +381,10 @@ func GetDevice(c *gin.Context) {
 			"note":                    device.Note,
 			"create_time":             device.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time":             device.UpdateTime.Format("2006-01-02 15:04:05"),
+			"entry_node_id":           entryNodeIDResponse,
+			"entry_node_name":         resolveEntryNodeName(entryNodeID, nodeNames),
+			"entry_mode":              device.EntryMode,
+			"entry_seen_at":           entrySeenAt,
 		},
 	})
 }

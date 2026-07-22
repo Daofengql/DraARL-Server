@@ -144,7 +144,7 @@ func TestEnqueueLatestFrameEvictsWholeOldestFrame(t *testing.T) {
 	queue <- fanoutFrameJob{data: []byte{2}}
 
 	accepted, evicted := enqueueLatestFrame(queue, fanoutFrameJob{data: []byte{3}})
-	if !accepted || !evicted {
+	if !accepted || evicted == nil || evicted.data[0] != 1 {
 		t.Fatalf("accepted=%v evicted=%v", accepted, evicted)
 	}
 	if got := (<-queue).data[0]; got != 2 {
@@ -152,5 +152,58 @@ func TestEnqueueLatestFrameEvictsWholeOldestFrame(t *testing.T) {
 	}
 	if got := (<-queue).data[0]; got != 3 {
 		t.Fatalf("fresh frame = %d, want 3", got)
+	}
+}
+
+func TestFanoutCompletionCountsOnlySuccessfulSocketWrites(t *testing.T) {
+	senderConn, receiverConn, receiverAddr := newUDPTestPair(t)
+	sender := newFanoutSender(senderConn, 2, 8)
+	defer sender.stop()
+	ap, ok := udpAddrPort(receiverAddr)
+	if !ok {
+		t.Fatal("receiver address is not usable")
+	}
+	partitions := make([][]domainReceiverEntry, len(sender.writers))
+	partitions[addrPortShard(ap, len(sender.writers))] = []domainReceiverEntry{{addr: ap}}
+	completed := make(chan fanoutWriteResult, 1)
+	if !sender.enqueue(fanoutFrameJob{data: []byte{1, 2, 3}, partitions: partitions, enqueuedAt: time.Now(), onComplete: func(result fanoutWriteResult) { completed <- result }}) {
+		t.Fatal("fan-out frame was rejected")
+	}
+	_ = receiverConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 8)
+	if n, _, err := receiverConn.ReadFromUDP(buf); err != nil || n != 3 {
+		t.Fatalf("receive fan-out payload: n=%d err=%v", n, err)
+	}
+	select {
+	case result := <-completed:
+		if result.attempted != 1 || result.sent != 1 || result.errors != 0 || result.dropped != 0 {
+			t.Fatalf("unexpected completion result: %#v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("fan-out completion was not reported")
+	}
+}
+
+func TestStaleFanoutCompletionReportsDroppedTargets(t *testing.T) {
+	senderConn, _, receiverAddr := newUDPTestPair(t)
+	sender := newFanoutSenderWithMaxAge(senderConn, 2, 8, time.Millisecond)
+	defer sender.stop()
+	ap, ok := udpAddrPort(receiverAddr)
+	if !ok {
+		t.Fatal("receiver address is not usable")
+	}
+	partitions := make([][]domainReceiverEntry, len(sender.writers))
+	partitions[addrPortShard(ap, len(sender.writers))] = []domainReceiverEntry{{addr: ap}}
+	completed := make(chan fanoutWriteResult, 1)
+	if !sender.enqueue(fanoutFrameJob{data: []byte{1}, partitions: partitions, enqueuedAt: time.Now().Add(-time.Second), onComplete: func(result fanoutWriteResult) { completed <- result }}) {
+		t.Fatal("stale frame was not accepted for dispatcher accounting")
+	}
+	select {
+	case result := <-completed:
+		if result.sent != 0 || result.dropped != 1 {
+			t.Fatalf("unexpected stale completion result: %#v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("stale fan-out completion was not reported")
 	}
 }

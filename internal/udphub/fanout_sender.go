@@ -22,6 +22,7 @@ type fanoutFrameJob struct {
 	enqueuedAt  time.Time
 	snapshotGen uint64
 	validateGen bool
+	onComplete  func(fanoutWriteResult)
 }
 
 type fanoutWorkerJob struct {
@@ -33,6 +34,7 @@ type fanoutWorkerJob struct {
 type fanoutWriteResult struct {
 	attempted  int64
 	sent       int64
+	dropped    int64
 	errors     int64
 	noBuffer   int64
 	wouldBlock int64
@@ -262,10 +264,16 @@ func (s *FanoutSender) dispatcher() {
 		if s.frameExpired(frame) || (frame.validateGen && frame.snapshotGen != atomic.LoadUint64(&domainReceiverGen)) {
 			atomic.AddInt64(&s.framesStale, 1)
 			atomic.AddInt64(&s.framesDropped, 1)
+			if frame.onComplete != nil {
+				frame.onComplete(fanoutWriteResult{dropped: countFrameTargets(frame)})
+			}
 			continue
 		}
 		started := time.Now()
-		s.dispatchFrame(frame)
+		result := s.dispatchFrame(frame)
+		if frame.onComplete != nil {
+			frame.onComplete(result)
+		}
 		elapsed := time.Since(started).Nanoseconds()
 		atomic.AddInt64(&s.dispatchNanos, elapsed)
 		updateMaxInt64(&s.maxDispatchNanos, elapsed)
@@ -273,11 +281,23 @@ func (s *FanoutSender) dispatcher() {
 	}
 }
 
+func countFrameTargets(frame fanoutFrameJob) int64 {
+	var count int64
+	for i := range frame.partitions {
+		for target := range frame.partitions[i] {
+			if !isSourceTarget(&frame.partitions[i][target], frame.sourceID, frame.sourceUser, frame.sourceSSID) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 func (s *FanoutSender) frameExpired(frame fanoutFrameJob) bool {
 	return s.maxFrameAge > 0 && time.Since(frame.enqueuedAt) > s.maxFrameAge
 }
 
-func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) {
+func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) fanoutWriteResult {
 	resultCh := make(chan fanoutWriteResult, len(s.writers))
 	jobs := 0
 	for index, targets := range frame.partitions {
@@ -293,6 +313,7 @@ func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) {
 		result := <-resultCh
 		total.attempted += result.attempted
 		total.sent += result.sent
+		total.dropped += result.dropped
 		total.errors += result.errors
 		total.noBuffer += result.noBuffer
 		total.wouldBlock += result.wouldBlock
@@ -304,6 +325,7 @@ func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) {
 	atomic.AddInt64(&s.noBufferErrors, total.noBuffer)
 	atomic.AddInt64(&s.wouldBlockErrors, total.wouldBlock)
 	atomic.AddInt64(&s.tooLargeErrors, total.tooLarge)
+	return total
 }
 
 func partitionHasTarget(targets []domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte) bool {
@@ -382,8 +404,11 @@ func (s *FanoutSender) enqueue(job fanoutFrameJob) bool {
 	s.submitMu.Lock()
 	defer s.submitMu.Unlock()
 	accepted, evicted := enqueueLatestFrame(s.frames, job)
-	if evicted {
+	if evicted != nil {
 		atomic.AddInt64(&s.framesDropped, 1)
+		if evicted.onComplete != nil {
+			evicted.onComplete(fanoutWriteResult{dropped: countFrameTargets(*evicted)})
+		}
 	}
 	if accepted {
 		atomic.AddInt64(&s.framesAccepted, 1)
@@ -393,15 +418,15 @@ func (s *FanoutSender) enqueue(job fanoutFrameJob) bool {
 	return false
 }
 
-func enqueueLatestFrame(queue chan fanoutFrameJob, job fanoutFrameJob) (accepted, evicted bool) {
+func enqueueLatestFrame(queue chan fanoutFrameJob, job fanoutFrameJob) (accepted bool, evicted *fanoutFrameJob) {
 	select {
 	case queue <- job:
-		return true, false
+		return true, nil
 	default:
 	}
 	select {
-	case <-queue:
-		evicted = true
+	case old := <-queue:
+		evicted = &old
 	default:
 	}
 	select {

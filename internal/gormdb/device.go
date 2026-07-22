@@ -2,10 +2,32 @@ package gormdb
 
 import (
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
+	updates := map[string]interface{}{
+		"current_entry_node_id":    nodeID,
+		"current_entry_session_id": sessionID,
+		"last_entry_node_id":       nodeID,
+		"last_entry_at":            now,
+		"entry_mode":               mode,
+		"is_online":                online,
+	}
+	if online {
+		updates["online_time"] = now
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var device Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&device, deviceID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Device{}).Where("id = ?", deviceID).Updates(updates).Error
+	})
+}
 
 var ErrDeviceNotInGroup = errors.New("device is no longer in the expected group")
 
@@ -197,13 +219,17 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 func (r *DeviceRepository) MarkAllDevicesOffline() error {
 	return r.db.Model(&Device{}).
 		Where("is_online = ?", true).
-		Update("is_online", false).Error
+		Updates(map[string]interface{}{"is_online": false, "current_entry_node_id": "", "current_entry_session_id": 0}).Error
 }
 
 // UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）
 func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime, lastOnlineIP string) error {
 	updates := map[string]interface{}{
 		"is_online": isOnline,
+	}
+	if !isOnline {
+		updates["current_entry_node_id"] = ""
+		updates["current_entry_session_id"] = 0
 	}
 	if onlineTime != "" {
 		updates["online_time"] = onlineTime

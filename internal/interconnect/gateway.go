@@ -20,12 +20,18 @@ type CenterGateway struct {
 	data           *NodeDatagramBridge
 	auth           DeviceAuthHandler
 	mu             sync.RWMutex
-	deviceSessions map[uint64]string
+	deviceSessions map[uint64]deviceSessionOwner
 	metrics        map[string]*Metrics
+	onNodeStatus   func(*NodeSession, *NodeHeartbeat, bool)
+}
+
+type deviceSessionOwner struct {
+	NodeID           string
+	ControlSessionID uint64
 }
 
 func NewCenterGateway(cluster *ClusterManager, auth DeviceAuthHandler) *CenterGateway {
-	return &CenterGateway{cluster: cluster, auth: auth, deviceSessions: make(map[uint64]string), metrics: make(map[string]*Metrics)}
+	return &CenterGateway{cluster: cluster, auth: auth, deviceSessions: make(map[uint64]deviceSessionOwner), metrics: make(map[string]*Metrics)}
 }
 func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 	g.server, g.data = server, data
@@ -35,22 +41,38 @@ func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 	}
 }
 func (g *CenterGateway) OnConnect(session *NodeSession) {
-	if g.cluster != nil {
-		g.cluster.OnConnect(session)
-	}
-}
-func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
-	if g.cluster != nil {
-		g.cluster.OnDisconnect(session, err)
-	}
 	g.mu.Lock()
-	for id, node := range g.deviceSessions {
-		if node == session.NodeID {
+	for id, owner := range g.deviceSessions {
+		if owner.NodeID == session.NodeID {
 			delete(g.deviceSessions, id)
 		}
 	}
-	delete(g.metrics, session.NodeID)
 	g.mu.Unlock()
+	if g.cluster != nil {
+		g.cluster.OnConnect(session)
+	}
+	if g.onNodeStatus != nil {
+		g.onNodeStatus(session, nil, true)
+	}
+}
+func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
+	currentSession := true
+	if g.cluster != nil {
+		currentSession = g.cluster.OnDisconnect(session, err)
+	}
+	g.mu.Lock()
+	for id, owner := range g.deviceSessions {
+		if owner.NodeID == session.NodeID && owner.ControlSessionID == session.SessionID {
+			delete(g.deviceSessions, id)
+		}
+	}
+	if currentSession {
+		delete(g.metrics, session.NodeID)
+	}
+	g.mu.Unlock()
+	if g.onNodeStatus != nil {
+		g.onNodeStatus(session, nil, false)
+	}
 }
 func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
 	if msg.Kind == "node_ready" {
@@ -64,6 +86,9 @@ func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
 		if DecodeJSON(msg.Payload, &heartbeat) == nil {
 			if g.cluster != nil {
 				g.cluster.UpdateNodeHeartbeat(session.NodeID, heartbeat)
+			}
+			if g.onNodeStatus != nil {
+				g.onNodeStatus(session, &heartbeat, true)
 			}
 			if g.cluster != nil {
 				g.mu.Lock()
@@ -100,7 +125,7 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 				response.Grant.SessionEpoch = 1
 			}
 			g.mu.Lock()
-			g.deviceSessions[response.Grant.SessionID] = session.NodeID
+			g.deviceSessions[response.Grant.SessionID] = deviceSessionOwner{NodeID: session.NodeID, ControlSessionID: session.SessionID}
 			g.mu.Unlock()
 			if g.cluster != nil {
 				_ = g.cluster.SetNodeRoute(session.NodeID, response.Grant.Route())
@@ -119,7 +144,7 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		g.mu.RLock()
 		owner := g.deviceSessions[frame.SessionID]
 		g.mu.RUnlock()
-		if owner != session.NodeID {
+		if owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID {
 			return
 		}
 		if g.cluster == nil {
@@ -147,6 +172,9 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		var heartbeat NodeHeartbeat
 		if DecodeJSON(env.Payload, &heartbeat) == nil && g.cluster != nil {
 			g.cluster.UpdateNodeHeartbeat(session.NodeID, heartbeat)
+			if g.onNodeStatus != nil {
+				g.onNodeStatus(session, &heartbeat, true)
+			}
 		}
 	}
 }
@@ -484,7 +512,17 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
 		}
 	}
 	g.mu.RUnlock()
-	if g.endpoint != nil && g.endpoint.Fanout(data, targets, 0, "", 0) {
+	if g.endpoint != nil && g.endpoint.Fanout(data, targets, 0, "", 0, func(result udphub.EdgeFanoutResult) {
+		if result.Sent > 0 {
+			g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(data)))
+		}
+		if result.Errors > 0 {
+			g.metrics.AddErrorBulk(uint64(result.Errors))
+		}
+		if result.Dropped > 0 {
+			g.metrics.AddDropBulk(uint64(result.Dropped))
+		}
+	}) {
 		return
 	}
 	for _, target := range targets {

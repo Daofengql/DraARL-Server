@@ -220,6 +220,8 @@ func main() {
 			stdlog.Fatalf("启动中心节点互联服务失败: %v", err)
 		}
 		defer centerRuntime.Close()
+		interconnect.SetActiveCenterRuntime(centerRuntime)
+		defer interconnect.SetActiveCenterRuntime(nil)
 		udphub.SetType0Handler(centerRuntime.UDPBridge)
 		defer udphub.SetType0Handler(nil)
 		stdlog.Printf("Type 0 节点服务已启动: control=%s shared_udp=%s", cfg.Interconnect.ControlListen, cfg.System.Port)

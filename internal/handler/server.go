@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"github.com/gin-gonic/gin"
 )
 
 // CreateServer 创建服务器
@@ -42,6 +42,12 @@ func CreateServer(c *gin.Context) {
 		})
 		return
 	}
+	// Legacy server CRUD must not mint a Type 0 node identity. Edge nodes are
+	// created only through /edge-nodes so credentials are generated and hashed
+	// by the server rather than accepted from JSON.
+	server.NodeID = nil
+	server.NodeTokenHash = ""
+	server.NodeRegistrationTokenHash = ""
 
 	// 获取用户信息
 	userRepo := gormdb.NewUserRepository()
@@ -105,6 +111,15 @@ func UpdateServer(c *gin.Context) {
 			"code":    400,
 			"message": "请求参数错误",
 		})
+		return
+	}
+	existing, err := gormdb.NewServerRepository().GetServerByID(server.ID)
+	if err != nil || existing == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "服务器不存在"})
+		return
+	}
+	if existing.NodeID != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点请使用节点管理接口修改"})
 		return
 	}
 
@@ -173,6 +188,10 @@ func DeleteServer(c *gin.Context) {
 
 	repo := gormdb.NewServerRepository()
 	server, _ := repo.GetServerByID(req.ID)
+	if server != nil && server.NodeID != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点需保留历史引用，请在节点管理中停用"})
+		return
+	}
 
 	if err := repo.DeleteServer(req.ID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

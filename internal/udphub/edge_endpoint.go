@@ -17,6 +17,13 @@ type EdgeFanoutTarget struct {
 	SSID     byte
 }
 
+type EdgeFanoutResult struct {
+	Attempted int64
+	Sent      int64
+	Dropped   int64
+	Errors    int64
+}
+
 // EdgeEndpoint is the database-free form of the udphub UDP ingress. One
 // socket carries both ordinary device packets and authenticated Type 0 node
 // packets; callers distinguish them in handler. It intentionally reuses the
@@ -118,7 +125,7 @@ func (e *EdgeEndpoint) SendTo(data []byte, addr *net.UDPAddr) error {
 	return err
 }
 
-func (e *EdgeEndpoint) Fanout(data []byte, targets []EdgeFanoutTarget, sourceID int, sourceUser string, sourceSSID byte) bool {
+func (e *EdgeEndpoint) Fanout(data []byte, targets []EdgeFanoutTarget, sourceID int, sourceUser string, sourceSSID byte, onComplete func(EdgeFanoutResult)) bool {
 	if e == nil || len(data) == 0 || len(targets) == 0 {
 		return false
 	}
@@ -147,6 +154,11 @@ func (e *EdgeEndpoint) Fanout(data []byte, targets []EdgeFanoutTarget, sourceID 
 		data: append([]byte(nil), data...), partitions: partitions,
 		sourceID: sourceID, sourceUser: sourceUser, sourceSSID: sourceSSID,
 		enqueuedAt: time.Now(), validateGen: false,
+		onComplete: func(result fanoutWriteResult) {
+			if onComplete != nil {
+				onComplete(EdgeFanoutResult{Attempted: result.attempted, Sent: result.sent, Dropped: result.dropped, Errors: result.errors})
+			}
+		},
 	})
 }
 

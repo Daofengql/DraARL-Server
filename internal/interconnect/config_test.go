@@ -3,7 +3,7 @@ package interconnect
 import "testing"
 
 func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
-	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "center.example.com:60100", Token: "token"}}
+	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "center.example.com:60100", NodeID: "edge-test", Token: "token"}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -16,7 +16,7 @@ func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 }
 
 func TestEdgeCustomSharedUDPPortIsPreserved(t *testing.T) {
-	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", CenterUDP: "127.0.0.1:61000", Listen: ":62000", Token: "token"}}
+	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", CenterUDP: "127.0.0.1:61000", Listen: ":62000", NodeID: "edge-test", Token: "token"}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}

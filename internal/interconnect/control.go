@@ -6,6 +6,7 @@ package interconnect
 // registration, route snapshots, deltas, acknowledgements and heartbeats.
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -36,76 +37,107 @@ const (
 )
 
 type ControlMessage struct {
-	Kind      string          `json:"kind"`
-	NodeID    string          `json:"node_id,omitempty"`
-	Token     string          `json:"token,omitempty"`
-	SessionID uint64          `json:"session_id,omitempty"`
-	KeyEpoch  uint32          `json:"key_epoch,omitempty"`
-	Key       string          `json:"key,omitempty"`
-	MessageID uint64          `json:"message_id,omitempty"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Packet    string          `json:"packet,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Kind            string          `json:"kind"`
+	NodeID          string          `json:"node_id,omitempty"`
+	Token           string          `json:"token,omitempty"`
+	Credential      string          `json:"credential,omitempty"`
+	CredentialEpoch uint32          `json:"credential_epoch,omitempty"`
+	SessionID       uint64          `json:"session_id,omitempty"`
+	KeyEpoch        uint32          `json:"key_epoch,omitempty"`
+	Key             string          `json:"key,omitempty"`
+	MessageID       uint64          `json:"message_id,omitempty"`
+	Payload         json.RawMessage `json:"payload,omitempty"`
+	Packet          string          `json:"packet,omitempty"`
+	Error           string          `json:"error,omitempty"`
+}
+
+type NodeAuthentication struct {
+	Accepted         bool
+	IssuedCredential string
+	CredentialEpoch  uint32
+}
+
+func marshalControlMessage(msg ControlMessage) ([]byte, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > controlMaxFrame {
+		return nil, errors.New("control frame too large")
+	}
+	wire := make([]byte, 4+len(data))
+	binary.BigEndian.PutUint32(wire[:4], uint32(len(data)))
+	copy(wire[4:], data)
+	return wire, nil
 }
 
 func writeControlMessage(w io.Writer, msg ControlMessage) error {
-	data, err := json.Marshal(msg)
+	wire, err := marshalControlMessage(msg)
 	if err != nil {
 		return err
 	}
-	if len(data) > controlMaxFrame {
-		return errors.New("control frame too large")
-	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(data)))
-	if _, err = w.Write(header[:]); err != nil {
-		return err
-	}
-	_, err = w.Write(data)
+	_, err = io.Copy(w, bytes.NewReader(wire))
 	return err
 }
 
 func readControlMessage(r io.Reader) (ControlMessage, error) {
+	msg, _, err := readControlMessageSize(r)
+	return msg, err
+}
+
+func readControlMessageSize(r io.Reader) (ControlMessage, int, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return ControlMessage{}, err
+		return ControlMessage{}, 0, err
 	}
 	n := int(binary.BigEndian.Uint32(header[:]))
 	if n <= 0 || n > controlMaxFrame {
-		return ControlMessage{}, errors.New("invalid control frame length")
+		return ControlMessage{}, 4, errors.New("invalid control frame length")
 	}
 	data := make([]byte, n)
 	if _, err := io.ReadFull(r, data); err != nil {
-		return ControlMessage{}, err
+		return ControlMessage{}, 4, err
 	}
 	var msg ControlMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		return ControlMessage{}, fmt.Errorf("decode control message: %w", err)
+		return ControlMessage{}, 4 + n, fmt.Errorf("decode control message: %w", err)
 	}
-	return msg, nil
+	return msg, 4 + n, nil
 }
 
 type NodeSession struct {
-	NodeID        string
-	SessionID     uint64
-	KeyEpoch      uint32
-	Key           []byte
-	RemoteAddr    string
-	ConnectedAt   time.Time
-	LastHeartbeat atomic.Int64
-	conn          net.Conn
-	writeMu       sync.Mutex
-	dataMu        sync.RWMutex
-	dataAddr      *net.UDPAddr
-	DataMetrics   Metrics
-	replayMu      sync.Mutex
-	replay        map[uint64]int64
+	NodeID                 string
+	SessionID              uint64
+	KeyEpoch               uint32
+	Key                    []byte
+	RemoteAddr             string
+	ConnectedAt            time.Time
+	LastHeartbeat          atomic.Int64
+	conn                   net.Conn
+	writeMu                sync.Mutex
+	dataMu                 sync.RWMutex
+	dataAddr               *net.UDPAddr
+	DataMetrics            Metrics
+	ControlMetrics         Metrics
+	AckedProjectionVersion atomic.Uint64
+	replayMu               sync.Mutex
+	replay                 map[uint64]int64
 }
 
 func (s *NodeSession) Send(msg ControlMessage) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return writeControlMessage(s.conn, msg)
+	wire, err := marshalControlMessage(msg)
+	if err != nil {
+		s.ControlMetrics.AddError()
+		return err
+	}
+	if _, err = io.Copy(s.conn, bytes.NewReader(wire)); err != nil {
+		s.ControlMetrics.AddError()
+		return err
+	}
+	s.ControlMetrics.AddOut(len(wire))
+	return nil
 }
 func (s *NodeSession) Touch() { s.LastHeartbeat.Store(time.Now().UnixMilli()) }
 
@@ -168,6 +200,7 @@ type NodeServerConfig struct {
 	ListenAddr    string
 	TLSConfig     *tls.Config
 	ValidateToken func(nodeID, token string) bool
+	Authenticate  func(nodeID, token string) (NodeAuthentication, error)
 	OnConnect     func(*NodeSession)
 	OnMessage     func(*NodeSession, ControlMessage)
 	OnEnvelope    func(*NodeSession, Envelope)
@@ -189,7 +222,7 @@ func NewNodeServer(cfg NodeServerConfig) (*NodeServer, error) {
 	if cfg.TLSConfig == nil {
 		return nil, errors.New("node control TLS config is required")
 	}
-	if cfg.ValidateToken == nil {
+	if cfg.ValidateToken == nil && cfg.Authenticate == nil {
 		return nil, errors.New("node token validator is required")
 	}
 	return &NodeServer{cfg: cfg, closed: make(chan struct{})}, nil
@@ -226,8 +259,16 @@ func (s *NodeServer) acceptLoop() {
 }
 func (s *NodeServer) handleConn(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	hello, err := readControlMessage(conn)
-	if err != nil || hello.Kind != controlHello || hello.NodeID == "" || !s.cfg.ValidateToken(hello.NodeID, hello.Token) {
+	hello, helloBytes, err := readControlMessageSize(conn)
+	authentication := NodeAuthentication{}
+	if err == nil && hello.Kind == controlHello && hello.NodeID != "" {
+		if s.cfg.Authenticate != nil {
+			authentication, err = s.cfg.Authenticate(hello.NodeID, hello.Token)
+		} else if s.cfg.ValidateToken != nil {
+			authentication.Accepted = s.cfg.ValidateToken(hello.NodeID, hello.Token)
+		}
+	}
+	if err != nil || hello.Kind != controlHello || hello.NodeID == "" || !authentication.Accepted {
 		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthError, Error: "node authentication failed"})
 		_ = conn.Close()
 		return
@@ -240,33 +281,41 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	sid := randomUint64()
 	session := &NodeSession{NodeID: hello.NodeID, SessionID: sid, KeyEpoch: 1, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
 	session.Touch()
-	response := ControlMessage{Kind: controlAuthOK, NodeID: session.NodeID, SessionID: sid, KeyEpoch: session.KeyEpoch, Key: base64.RawStdEncoding.EncodeToString(key)}
-	if err := writeControlMessage(conn, response); err != nil {
+	response := ControlMessage{Kind: controlAuthOK, NodeID: session.NodeID, SessionID: sid, KeyEpoch: session.KeyEpoch, Key: base64.RawStdEncoding.EncodeToString(key), Credential: authentication.IssuedCredential, CredentialEpoch: authentication.CredentialEpoch}
+	responseWire, err := marshalControlMessage(response)
+	if err != nil {
 		_ = conn.Close()
 		return
 	}
-	_ = conn.SetDeadline(time.Time{})
-	if old, loaded := s.sessions.LoadOrStore(session.NodeID, session); loaded {
-		_ = old.(*NodeSession).Close()
+	if _, err := io.Copy(conn, bytes.NewReader(responseWire)); err != nil {
+		_ = conn.Close()
+		return
 	}
-	if s.cfg.OnConnect != nil {
+	session.ControlMetrics.AddIn(helloBytes)
+	session.ControlMetrics.AddOut(len(responseWire))
+	_ = conn.SetDeadline(time.Time{})
+	if old, loaded := s.sessions.Swap(session.NodeID, session); loaded {
+		if s.cfg.OnConnect != nil {
+			s.cfg.OnConnect(session)
+		}
+		_ = old.(*NodeSession).Close()
+	} else if s.cfg.OnConnect != nil {
 		s.cfg.OnConnect(session)
 	}
 	defer func() {
-		if current, ok := s.sessions.Load(session.NodeID); ok && current == session {
-			s.sessions.Delete(session.NodeID)
-		}
+		s.sessions.CompareAndDelete(session.NodeID, session)
 		_ = conn.Close()
 		if s.cfg.OnDisconnect != nil {
 			s.cfg.OnDisconnect(session, err)
 		}
 	}()
 	for {
-		msg, readErr := readControlMessage(conn)
+		msg, frameBytes, readErr := readControlMessageSize(conn)
 		if readErr != nil {
 			err = readErr
 			return
 		}
+		session.ControlMetrics.AddIn(frameBytes)
 		if msg.Kind == controlHeartbeat {
 			session.Touch()
 		}
@@ -348,6 +397,14 @@ func (s *NodeServer) SendEnvelope(nodeID string, env Envelope) error {
 	}
 	return session.Send(ControlMessage{Kind: "type0", Packet: base64.RawStdEncoding.EncodeToString(wire), MessageID: env.MessageID})
 }
+func (s *NodeServer) Disconnect(nodeID string) bool {
+	session, ok := s.Session(nodeID)
+	if !ok {
+		return false
+	}
+	_ = session.Close()
+	return true
+}
 func (s *NodeServer) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
@@ -376,12 +433,14 @@ type NodeClientConfig struct {
 	OnDisconnect func(error)
 }
 type NodeClient struct {
-	cfg        NodeClientConfig
-	conn       net.Conn
-	Session    *NodeSession
-	closed     chan struct{}
-	writeMu    sync.Mutex
-	callbackMu sync.RWMutex
+	cfg              NodeClientConfig
+	conn             net.Conn
+	Session          *NodeSession
+	closed           chan struct{}
+	writeMu          sync.Mutex
+	callbackMu       sync.RWMutex
+	IssuedCredential string
+	CredentialEpoch  uint32
 }
 
 func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
@@ -397,11 +456,16 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	if err := writeControlMessage(conn, ControlMessage{Kind: controlHello, NodeID: cfg.NodeID, Token: cfg.Token}); err != nil {
+	helloWire, err := marshalControlMessage(ControlMessage{Kind: controlHello, NodeID: cfg.NodeID, Token: cfg.Token})
+	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	response, err := readControlMessage(conn)
+	if _, err := io.Copy(conn, bytes.NewReader(helloWire)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	response, responseBytes, err := readControlMessageSize(conn)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -417,6 +481,10 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	}
 	_ = conn.SetDeadline(time.Time{})
 	client.Session = &NodeSession{NodeID: response.NodeID, SessionID: response.SessionID, KeyEpoch: response.KeyEpoch, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
+	client.Session.ControlMetrics.AddOut(len(helloWire))
+	client.Session.ControlMetrics.AddIn(responseBytes)
+	client.IssuedCredential = response.Credential
+	client.CredentialEpoch = response.CredentialEpoch
 	client.Session.Touch()
 	go client.readLoop()
 	return client, nil
@@ -433,11 +501,12 @@ func (c *NodeClient) readLoop() {
 		}
 	}()
 	for {
-		msg, readErr := readControlMessage(c.conn)
+		msg, frameBytes, readErr := readControlMessageSize(c.conn)
 		if readErr != nil {
 			err = readErr
 			return
 		}
+		c.Session.ControlMetrics.AddIn(frameBytes)
 		if msg.Kind == controlHeartbeat {
 			c.Session.Touch()
 		}
@@ -477,7 +546,17 @@ func (c *NodeClient) readLoop() {
 func (c *NodeClient) Send(msg ControlMessage) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return writeControlMessage(c.conn, msg)
+	wire, err := marshalControlMessage(msg)
+	if err != nil {
+		c.Session.ControlMetrics.AddError()
+		return err
+	}
+	if _, err = io.Copy(c.conn, bytes.NewReader(wire)); err != nil {
+		c.Session.ControlMetrics.AddError()
+		return err
+	}
+	c.Session.ControlMetrics.AddOut(len(wire))
+	return nil
 }
 func (c *NodeClient) SendEnvelope(env Envelope) error {
 	if c.Session == nil {

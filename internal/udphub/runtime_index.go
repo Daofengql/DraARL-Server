@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"draarl/internal/models"
 	"draarl/internal/protocol"
+	"draarl/pkg/cache"
 )
 
 const runtimeDeviceActiveTimeout = 20 * time.Second
@@ -238,6 +240,120 @@ func removeDeviceFromGroupRuntime(gp *models.Group, dev *models.Device) {
 	rebuildDeviceConnListLocked(pool)
 	pool.mu.Unlock()
 	InvalidateDomainReceiverCache()
+}
+
+func removeDeviceConnectionFromGroup(gp *models.Group, dev *models.Device) {
+	if gp == nil || dev == nil {
+		return
+	}
+	pool := getGroupConnPool(gp)
+	if pool == nil {
+		return
+	}
+	pool.mu.Lock()
+	changed := false
+	for key, existing := range pool.DevConnMap {
+		if existing == nil || isSameRuntimeDevice(existing, dev) {
+			delete(pool.DevConnMap, key)
+			changed = true
+		}
+	}
+	if changed {
+		rebuildDeviceConnListLocked(pool)
+	}
+	pool.mu.Unlock()
+	if changed {
+		InvalidateDomainReceiverCache()
+	}
+}
+
+func invalidateDeviceEntryCache(dev *models.Device) {
+	if dev == nil {
+		return
+	}
+	deviceCache := cache.GetDeviceCache()
+	if deviceCache == nil {
+		return
+	}
+	ctx := context.Background()
+	_ = deviceCache.InvalidateDevice(ctx, dev.ID, dev.OwnerID, dev.SSID)
+	_ = deviceCache.InvalidateDeviceList(ctx)
+	if dev.GroupID > 0 {
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, dev.GroupID)
+	}
+}
+
+// SyncRuntimeDeviceEntry keeps the centre's in-memory device view aligned
+// with the committed entry ownership. Remote devices stay in their persistent
+// group membership, but are never left in a centre-local UDP fan-out pool.
+func SyncRuntimeDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, seenAt time.Time) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil {
+		return
+	}
+	runtimeIndexMu.Lock()
+	dev.CurrentEntryNodeID = nodeID
+	dev.CurrentEntrySessionID = sessionID
+	if nodeID != "" {
+		dev.LastEntryNodeID = nodeID
+		copyTime := seenAt
+		dev.LastEntryAt = &copyTime
+	}
+	dev.EntryMode = mode
+	dev.ISOnline = online
+	if online {
+		dev.OnlineTime = seenAt
+		onlineDevMap[dev.ID] = dev
+		onlineDevMapDraARL[dev.ID] = dev
+	} else {
+		delete(onlineDevMap, dev.ID)
+		delete(onlineDevMapDraARL, dev.ID)
+	}
+	remote := nodeID != "center"
+	if remote || !online {
+		dev.UDPAddr = nil
+	}
+	runtimeIndexMu.Unlock()
+
+	if remote || !online {
+		for _, gp := range GetAllGroupsFromCache() {
+			removeDeviceConnectionFromGroup(gp, dev)
+		}
+	}
+	invalidateDeviceEntryCache(dev)
+}
+
+// ClearRuntimeDeviceEntryIfNode prevents a stale disconnect from overwriting
+// a newer entry assignment made during a reconnect or node-to-node roam.
+func ClearRuntimeDeviceEntryIfSession(deviceID int, nodeID string, sessionID uint64) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil {
+		return
+	}
+	runtimeIndexMu.RLock()
+	matches := dev.CurrentEntryNodeID == nodeID && dev.CurrentEntrySessionID == sessionID
+	runtimeIndexMu.RUnlock()
+	if !matches {
+		invalidateDeviceEntryCache(dev)
+		return
+	}
+	SyncRuntimeDeviceEntry(deviceID, "", dev.EntryMode, 0, false, time.Now())
+}
+
+func ClearRuntimeDeviceEntryIfNode(deviceID int, nodeID string) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil {
+		return
+	}
+	runtimeIndexMu.RLock()
+	matches := dev.CurrentEntryNodeID == nodeID
+	mode := dev.EntryMode
+	runtimeIndexMu.RUnlock()
+	if !matches {
+		invalidateDeviceEntryCache(dev)
+		return
+	}
+	SyncRuntimeDeviceEntry(deviceID, "", mode, 0, false, time.Now())
 }
 
 func RemoveRuntimeDevice(ownerID int, ssid byte) bool {

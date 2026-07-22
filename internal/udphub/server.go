@@ -646,6 +646,12 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		dev.OnlineTime = packet.TimeStamp
 		dev.LastOnlineIP = realAddr.IP.String()
 		indexRuntimeDevice(dev)
+		if dev.ID > 0 {
+			now := time.Now()
+			if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(dev.ID, "center", "center", 0, true, now); err == nil {
+				SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)
+			}
+		}
 
 		// 默认群组为空时只登记并保持在线，不进入任何转发池。
 		if gp, ok := GetGroupFromCache(dev.GroupID); dev.GroupID > 0 && ok {
@@ -957,6 +963,12 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 
 		dev.ISOnline = true
+		if !isGhost && dev.ID > 0 {
+			now := time.Now()
+			if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(dev.ID, "center", "center", 0, true, now); err == nil {
+				SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)
+			}
+		}
 	}
 }
 

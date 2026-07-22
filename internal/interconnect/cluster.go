@@ -25,10 +25,12 @@ type ClusterManager struct {
 	messageID      atomic.Uint64
 	metrics        map[string]*Metrics
 	status         map[string]NodeHeartbeat
+	statusReceived map[string]time.Time
 	ackedVersion   map[string]uint64
 	ackedMessage   map[string]uint64
 	pendingControl map[string]map[uint64]*pendingControl
 	syncError      map[string]string
+	rateTrackers   map[string]*nodeRateTracker
 	closed         chan struct{}
 	closeOnce      sync.Once
 	retryWG        sync.WaitGroup
@@ -50,7 +52,7 @@ func NewClusterManager(epoch uint64) *ClusterManager {
 	if epoch == 0 {
 		epoch = uint64(time.Now().UnixNano())
 	}
-	m := &ClusterManager{epoch: epoch, projection: NewProjection(epoch), nodes: make(map[string]*NodeSession), nodeProjection: make(map[string]*Projection), domainNodes: make(map[uint64]map[string]struct{}), metrics: make(map[string]*Metrics), status: make(map[string]NodeHeartbeat), ackedVersion: make(map[string]uint64), ackedMessage: make(map[string]uint64), pendingControl: make(map[string]map[uint64]*pendingControl), syncError: make(map[string]string), closed: make(chan struct{})}
+	m := &ClusterManager{epoch: epoch, projection: NewProjection(epoch), nodes: make(map[string]*NodeSession), nodeProjection: make(map[string]*Projection), domainNodes: make(map[uint64]map[string]struct{}), metrics: make(map[string]*Metrics), status: make(map[string]NodeHeartbeat), statusReceived: make(map[string]time.Time), ackedVersion: make(map[string]uint64), ackedMessage: make(map[string]uint64), pendingControl: make(map[string]map[uint64]*pendingControl), syncError: make(map[string]string), rateTrackers: make(map[string]*nodeRateTracker), closed: make(chan struct{})}
 	m.retryWG.Add(1)
 	go m.retryControlLoop()
 	return m
@@ -87,9 +89,55 @@ func (m *ClusterManager) Metrics(nodeID string) *Metrics {
 	return m.metrics[nodeID]
 }
 func (m *ClusterManager) UpdateNodeHeartbeat(nodeID string, heartbeat NodeHeartbeat) {
+	receivedAt := time.Now()
 	m.mu.Lock()
 	m.status[nodeID] = heartbeat
+	m.statusReceived[nodeID] = receivedAt
+	tracker := m.rateTrackers[nodeID]
+	if tracker == nil {
+		tracker = &nodeRateTracker{}
+		m.rateTrackers[nodeID] = tracker
+	}
+	center := MetricsSnapshot{}
+	if session := m.nodes[nodeID]; session != nil {
+		center = AddMetricsSnapshots(session.DataMetrics.Snapshot(), session.ControlMetrics.Snapshot())
+	}
+	tracker.observe(heartbeat.InstanceID, heartbeat.Device, heartbeat.Interconnect, center, receivedAt)
 	m.mu.Unlock()
+}
+
+type NodeStatus struct {
+	NodeID         string           `json:"node_id"`
+	Online         bool             `json:"online"`
+	RemoteAddr     string           `json:"remote_addr,omitempty"`
+	ConnectedAt    *time.Time       `json:"connected_at,omitempty"`
+	LastHeartbeat  *time.Time       `json:"last_heartbeat,omitempty"`
+	Heartbeat      NodeHeartbeat    `json:"heartbeat"`
+	CenterData     MetricsSnapshot  `json:"center_interconnect"`
+	TrafficRates   NodeTrafficRates `json:"traffic_rates"`
+	AckedVersion   uint64           `json:"acked_projection_version"`
+	PendingControl int              `json:"pending_control"`
+	SyncError      string           `json:"sync_error,omitempty"`
+}
+
+func (m *ClusterManager) NodeStatus(nodeID string) NodeStatus {
+	m.mu.RLock()
+	status := NodeStatus{NodeID: nodeID, Heartbeat: m.status[nodeID], AckedVersion: m.ackedVersion[nodeID], PendingControl: len(m.pendingControl[nodeID]), SyncError: m.syncError[nodeID]}
+	if receivedAt, ok := m.statusReceived[nodeID]; ok {
+		copyTime := receivedAt
+		status.LastHeartbeat = &copyTime
+	}
+	if session := m.nodes[nodeID]; session != nil {
+		status.Online = true
+		status.RemoteAddr = session.RemoteAddr
+		connectedAt := session.ConnectedAt
+		status.ConnectedAt = &connectedAt
+		status.CenterData = AddMetricsSnapshots(session.DataMetrics.Snapshot(), session.ControlMetrics.Snapshot())
+	}
+	metricsCurrent := status.Online && status.LastHeartbeat != nil && (status.ConnectedAt == nil || !status.LastHeartbeat.Before(*status.ConnectedAt))
+	status.TrafficRates = m.rateTrackers[nodeID].snapshot(metricsCurrent)
+	m.mu.RUnlock()
+	return status
 }
 func (m *ClusterManager) NodeHeartbeat(nodeID string) (NodeHeartbeat, bool) {
 	m.mu.RLock()
@@ -123,6 +171,9 @@ func (m *ClusterManager) MarkRouteAck(nodeID string, ack RouteAck) bool {
 	delete(m.syncError, nodeID)
 	if ack.ProjectionVersion > m.ackedVersion[nodeID] {
 		m.ackedVersion[nodeID] = ack.ProjectionVersion
+		if session := m.nodes[nodeID]; session != nil {
+			session.AckedProjectionVersion.Store(ack.ProjectionVersion)
+		}
 	}
 	if ack.AckForMessageID != 0 {
 		m.ackedMessage[nodeID] = ack.AckForMessageID
@@ -150,14 +201,18 @@ func (m *ClusterManager) SyncError(nodeID string) string {
 
 func (m *ClusterManager) OnConnect(session *NodeSession) {
 	m.mu.Lock()
+	m.removeNodeProjectionLocked(session.NodeID)
 	m.nodes[session.NodeID] = session
 	m.nodeProjection[session.NodeID] = NewProjection(m.epoch)
 	m.metrics[session.NodeID] = &Metrics{}
 	m.mu.Unlock()
 }
-func (m *ClusterManager) OnDisconnect(session *NodeSession, _ error) {
+func (m *ClusterManager) OnDisconnect(session *NodeSession, _ error) bool {
 	m.mu.Lock()
+	currentSession := false
 	if current := m.nodes[session.NodeID]; current == session {
+		currentSession = true
+		m.removeNodeProjectionLocked(session.NodeID)
 		delete(m.nodes, session.NodeID)
 		delete(m.nodeProjection, session.NodeID)
 		delete(m.metrics, session.NodeID)
@@ -173,6 +228,24 @@ func (m *ClusterManager) OnDisconnect(session *NodeSession, _ error) {
 		}
 	}
 	m.mu.Unlock()
+	return currentSession
+}
+
+func (m *ClusterManager) removeNodeProjectionLocked(nodeID string) {
+	projection := m.nodeProjection[nodeID]
+	if projection == nil {
+		return
+	}
+	for sessionID := range projection.Devices {
+		delete(m.projection.Devices, sessionID)
+	}
+	delete(m.nodeProjection, nodeID)
+	for domainID, nodes := range m.domainNodes {
+		delete(nodes, nodeID)
+		if len(nodes) == 0 {
+			delete(m.domainNodes, domainID)
+		}
+	}
 }
 func (m *ClusterManager) RegisterProjectionNode(nodeID string, session *NodeSession) {
 	m.mu.Lock()

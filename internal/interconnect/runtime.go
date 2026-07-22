@@ -8,32 +8,57 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+var activeCenter struct {
+	sync.RWMutex
+	runtime *CenterRuntime
+}
+
+func SetActiveCenterRuntime(runtime *CenterRuntime) {
+	activeCenter.Lock()
+	activeCenter.runtime = runtime
+	activeCenter.Unlock()
+}
+func ActiveCenterRuntime() *CenterRuntime {
+	activeCenter.RLock()
+	runtime := activeCenter.runtime
+	activeCenter.RUnlock()
+	return runtime
+}
 
 type CenterRuntimeConfig struct {
 	ControlListen string
 	TLSConfig     *tls.Config
 	ValidateToken func(nodeID, token string) bool
+	Authenticate  func(nodeID, token string) (NodeAuthentication, error)
 	Auth          DeviceAuthHandler
+	OnNodeStatus  func(*NodeSession, *NodeHeartbeat, bool)
 }
 type CenterRuntime struct {
 	Cluster   *ClusterManager
 	Gateway   *CenterGateway
 	Control   *NodeServer
 	UDPBridge *NodeDatagramBridge
+	status    *NodeStatusDispatcher
 }
 
 func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	if cfg.TLSConfig == nil {
 		return nil, errors.New("center node TLS config is required")
 	}
-	if cfg.ValidateToken == nil {
+	if cfg.ValidateToken == nil && cfg.Authenticate == nil {
 		return nil, errors.New("center node token validator is required")
 	}
 	cluster := NewClusterManager(0)
 	gateway := NewCenterGateway(cluster, cfg.Auth)
-	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect})
+	status := NewNodeStatusDispatcher(cfg.OnNodeStatus)
+	if status != nil {
+		gateway.onNodeStatus = status.Submit
+	}
+	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect})
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +70,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	if err := server.Start(); err != nil {
 		return nil, err
 	}
-	return &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data}, nil
+	return &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data, status: status}, nil
 }
 func (r *CenterRuntime) Close() {
 	if r == nil {
@@ -56,6 +81,9 @@ func (r *CenterRuntime) Close() {
 	}
 	if r.Control != nil {
 		_ = r.Control.Close()
+	}
+	if r.status != nil {
+		r.status.Close()
 	}
 	if r.Cluster != nil {
 		r.Cluster.Close()
@@ -120,9 +148,9 @@ func (r *EdgeRuntime) heartbeatLoop() {
 			return
 		case <-ticker.C:
 			snapshot := r.Gateway.projection.Snapshot()
-			interconnectMetrics := MetricsSnapshot{}
+			interconnectMetrics := r.Client.Session.ControlMetrics.Snapshot()
 			if r.Gateway.peer != nil {
-				interconnectMetrics = r.Gateway.peer.Metrics.Snapshot()
+				interconnectMetrics = AddMetricsSnapshots(interconnectMetrics, r.Gateway.peer.Metrics.Snapshot())
 			}
 			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: instanceID, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version})
 			env := NewEnvelope(SubtypeNodeHeartbeat, r.Client.Session.NodeID, r.Client.Session.SessionID, randomUint64(), payload)

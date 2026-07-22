@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -47,30 +46,33 @@ func runEdgeMode(configPath string) error {
 		serverName = "localhost"
 	}
 	tlsCfg := &tls.Config{RootCAs: rootPool, ServerName: serverName, MinVersion: tls.VersionTLS13, InsecureSkipVerify: edgeCfg.Edge.InsecureSkipVerify} // #nosec G402 -- only explicit local/test configuration may skip verification.
-	start := func(nodeID, token string) (*interconnect.EdgeRuntime, error) {
-		return interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: nodeID, Token: token, CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, TLSConfig: tlsCfg, DeviceSessionTimeout: time.Duration(edgeCfg.Edge.DeviceSessionTimeoutSeconds) * time.Second, GrantRenewBefore: time.Duration(edgeCfg.Edge.GrantRenewBeforeSeconds) * time.Second})
-	}
-	runtime, err := start(edgeCfg.Edge.NodeID, edgeCfg.Edge.Token)
-	if err != nil {
-		if nodeID, token, ok := edgeCfg.RegistrationFallback(); ok {
-			runtime, err = start(nodeID, token)
-		}
-	}
+	fallbackNodeID, fallbackToken, _ := edgeCfg.RegistrationFallback()
+	runtime, err := interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{
+		NodeID: edgeCfg.Edge.NodeID, Token: edgeCfg.Edge.Token, FallbackNodeID: fallbackNodeID, FallbackToken: fallbackToken,
+		CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, TLSConfig: tlsCfg,
+		DeviceSessionTimeout: time.Duration(edgeCfg.Edge.DeviceSessionTimeoutSeconds) * time.Second,
+		GrantRenewBefore:     time.Duration(edgeCfg.Edge.GrantRenewBeforeSeconds) * time.Second,
+		DisconnectedGrace:    time.Duration(edgeCfg.Edge.DisconnectedLocalGraceSeconds) * time.Second,
+		OnCredential: func(identity interconnect.EdgeIdentity) error {
+			if err := interconnect.SaveEdgeIdentity(edgeCfg.Edge.IdentityFile, identity); err != nil {
+				return fmt.Errorf("save issued edge identity: %w", err)
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return err
 	}
 	defer runtime.Close()
-	if runtime.Client.IssuedCredential != "" {
-		identity := interconnect.EdgeIdentity{NodeID: runtime.Client.Session.NodeID, Credential: runtime.Client.IssuedCredential, CredentialEpoch: runtime.Client.CredentialEpoch}
-		if err := interconnect.SaveEdgeIdentity(edgeCfg.Edge.IdentityFile, identity); err != nil {
-			return fmt.Errorf("save issued edge identity: %w", err)
-		}
-	}
 	stdlog.Printf("DraARL edge node %s started: shared_udp=%s center_control=%s center_udp=%s", edgeCfg.Edge.NodeID, runtime.Gateway.Addr(), edgeCfg.Edge.Center, edgeCfg.Edge.CenterUDP)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	return nil
+	select {
+	case <-quit:
+		return nil
+	case err := <-runtime.Fatal():
+		return err
+	}
 }
 
 func edgeRootPool(path string) (*x509.CertPool, error) {
@@ -210,6 +212,3 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	}
 	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, OnNodeStatus: onNodeStatus})
 }
-
-var _ = context.Background
-var _ = fmt.Sprintf

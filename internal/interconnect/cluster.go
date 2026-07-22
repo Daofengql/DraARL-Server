@@ -303,6 +303,25 @@ func (m *ClusterManager) TargetNodes(domainID uint64, sourceNode string) []strin
 	}
 	return result
 }
+
+func (m *ClusterManager) targetNodeVersions(domainID uint64, sourceNode string) map[string]uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.targetNodeVersionsLocked(domainID, sourceNode)
+}
+
+func (m *ClusterManager) targetNodeVersionsLocked(domainID uint64, sourceNode string) map[string]uint64 {
+	targets := make(map[string]uint64)
+	for nodeID := range m.domainNodes[domainID] {
+		if nodeID == sourceNode || nodeID == CenterLocalNodeID {
+			continue
+		}
+		if projection := m.nodeProjection[nodeID]; projection != nil {
+			targets[nodeID] = projection.Version
+		}
+	}
+	return targets
+}
 func (m *ClusterManager) UpsertNodeRoute(nodeID string, route DeviceRoute) error {
 	m.mu.Lock()
 	if m.projection.Devices == nil {
@@ -572,12 +591,12 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 	if frame.DomainID == 0 || frame.SessionID == 0 {
 		return errors.New("relay frame identity is incomplete")
 	}
-	targets := m.TargetNodes(frame.DomainID, sourceNode)
 	m.mu.RLock()
 	server := m.server
 	dataBridge := m.dataBridge
 	localDelivery := m.localDelivery
 	epoch := m.epoch
+	targets := m.targetNodeVersionsLocked(frame.DomainID, sourceNode)
 	m.mu.RUnlock()
 	if sourceNode != CenterLocalNodeID && localDelivery != nil {
 		localDelivery(frame)
@@ -585,15 +604,17 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 	if len(targets) == 0 || (server == nil && dataBridge == nil) {
 		return nil
 	}
-	payload, err := frame.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	for _, nodeID := range targets {
+	for nodeID, projectionVersion := range targets {
+		targetFrame := frame
+		targetFrame.RequiredProjectionVersion = projectionVersion
+		payload, err := targetFrame.MarshalBinary()
+		if err != nil {
+			return err
+		}
 		if dataBridge != nil && server != nil {
 			if session, ok := server.Session(nodeID); ok && session.DataAddr() != nil {
 				env := NewEnvelope(SubtypeRelayDownstream, "center", session.SessionID, m.NextMessageID(), payload)
-				env.ClusterEpoch, env.ProjectionVersion, env.HopCount, env.KeyEpoch = epoch, frame.RequiredProjectionVersion, 1, session.KeyEpoch
+				env.ClusterEpoch, env.ProjectionVersion, env.HopCount, env.KeyEpoch = epoch, projectionVersion, 1, session.KeyEpoch
 				if err := dataBridge.Send(session, env); err == nil {
 					continue
 				}
@@ -603,7 +624,7 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 			continue
 		}
 		env := NewEnvelope(SubtypeRelayDownstream, "center", 0, m.NextMessageID(), payload)
-		env.ClusterEpoch, env.ProjectionVersion, env.HopCount = epoch, frame.RequiredProjectionVersion, 1
+		env.ClusterEpoch, env.ProjectionVersion, env.HopCount = epoch, projectionVersion, 1
 		if err := server.SendEnvelope(nodeID, env); err != nil {
 			return err
 		}

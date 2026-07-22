@@ -16,8 +16,8 @@ func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 	if cfg.Edge.CenterUDP != "center.example.com:60050" {
 		t.Fatalf("CenterUDP=%q", cfg.Edge.CenterUDP)
 	}
-	if cfg.Edge.DeviceSessionTimeoutSeconds != 20 || cfg.Edge.GrantRenewBeforeSeconds != 30 {
-		t.Fatalf("edge lease defaults changed: timeout=%d renew=%d", cfg.Edge.DeviceSessionTimeoutSeconds, cfg.Edge.GrantRenewBeforeSeconds)
+	if cfg.Edge.DeviceSessionTimeoutSeconds != 20 || cfg.Edge.GrantRenewBeforeSeconds != 30 || cfg.Edge.DisconnectedLocalGraceSeconds != 15 {
+		t.Fatalf("edge lease defaults changed: timeout=%d renew=%d grace=%d", cfg.Edge.DeviceSessionTimeoutSeconds, cfg.Edge.GrantRenewBeforeSeconds, cfg.Edge.DisconnectedLocalGraceSeconds)
 	}
 }
 
@@ -29,6 +29,10 @@ func TestEdgeRejectsInvalidSessionLeaseSettings(t *testing.T) {
 	cfg.Edge.DeviceSessionTimeoutSeconds, cfg.Edge.GrantRenewBeforeSeconds = 20, 91
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "GrantRenewBeforeSeconds") {
 		t.Fatalf("unexpected renewal validation error: %v", err)
+	}
+	cfg.Edge.GrantRenewBeforeSeconds, cfg.Edge.DisconnectedLocalGraceSeconds = 30, 121
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "DisconnectedLocalGraceSeconds") {
+		t.Fatalf("unexpected grace validation error: %v", err)
 	}
 }
 

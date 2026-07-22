@@ -17,6 +17,9 @@ func TestEdgeExpiresInactiveAndExpiredGrantSessions(t *testing.T) {
 		pendingIdentity: map[string]uint64{"old-1": 11, "fresh-1": 12},
 		sessionTimeout:  20 * time.Second, reportSession: func(report DeviceSessionReport) { reports = append(reports, report) },
 	}
+	link := newEdgeControlLink(nil, nil)
+	link.markReady()
+	gateway.control.Store(link)
 	gateway.sessions[1] = &edgeDeviceSession{Grant: DeviceGrant{SessionID: 1, SessionEpoch: 1, DeviceID: 7, Username: "alice", SSID: 1, ExpiresAtMillis: now.Add(time.Minute).UnixMilli()}, LastSeen: now.Add(-21 * time.Second)}
 	gateway.sessions[2] = &edgeDeviceSession{Grant: DeviceGrant{SessionID: 2, SessionEpoch: 2, DeviceID: 8, Username: "bob", SSID: 1, ExpiresAtMillis: now.Add(-time.Second).UnixMilli()}, LastSeen: now}
 	gateway.sessions[3] = &edgeDeviceSession{Grant: DeviceGrant{SessionID: 3, SessionEpoch: 3, DeviceID: 9, Username: "carol", SSID: 1, ExpiresAtMillis: now.Add(time.Minute).UnixMilli()}, LastSeen: now}
@@ -47,6 +50,9 @@ func TestEdgeGrantRenewalUpdatesExistingSessionInPlace(t *testing.T) {
 		sessions:   map[uint64]*edgeDeviceSession{10: {Grant: DeviceGrant{SessionID: 10, SessionEpoch: 4, Username: "alice", SSID: 1}, LastSeen: now.Add(-time.Minute)}},
 		byIdentity: map[string]uint64{"alice-1": 10}, pending: map[uint64]*pendingDeviceAuth{1: {addr: addr, realAddr: addr, wire: wire, identity: "alice-1", requestedAt: now}}, pendingIdentity: map[string]uint64{"alice-1": 1},
 	}
+	link := newEdgeControlLink(nil, nil)
+	link.markReady()
+	gateway.control.Store(link)
 	gateway.finishAuth(DeviceAuthResponse{RequestID: 1, Success: true, Grant: &DeviceGrant{SessionID: 10, SessionEpoch: 4, Username: "alice", SSID: 1, DomainID: 9, ExpiresAtMillis: now.Add(2 * time.Minute).UnixMilli()}})
 	if len(gateway.sessions) != 1 {
 		t.Fatalf("renewal created duplicate sessions: %#v", gateway.sessions)
@@ -67,6 +73,9 @@ func TestEdgeSessionRenewalIsBoundToCurrentSession(t *testing.T) {
 		renewingSessions: make(map[uint64]uint64),
 		renewSession:     func(got DeviceSessionRenewRequest) { request = got },
 	}
+	link := newEdgeControlLink(nil, nil)
+	link.markReady()
+	gateway.control.Store(link)
 	gateway.requestSessionRenewal(10, 4, now)
 	if request.RequestID == 0 || request.SessionID != 10 || request.SessionEpoch != 4 {
 		t.Fatalf("renew request=%#v", request)
@@ -83,5 +92,33 @@ func TestEdgeSessionRenewalIsBoundToCurrentSession(t *testing.T) {
 	}
 	if gateway.sessions[10].Grant.ExpiresAtMillis != now.Add(time.Minute).UnixMilli() {
 		t.Fatal("valid renewal did not update expiry")
+	}
+}
+
+func TestEdgeControlLossAllowsBoundedLocalGraceThenClearsSessions(t *testing.T) {
+	now := time.Now()
+	client := &NodeClient{Session: &NodeSession{NodeID: "edge-a", SessionID: 11}}
+	gateway := &EdgeGateway{
+		sessions:   map[uint64]*edgeDeviceSession{10: {Grant: DeviceGrant{SessionID: 10, SessionEpoch: 4, Username: "alice", SSID: 1}, LastSeen: now}},
+		byIdentity: map[string]uint64{"alice-1": 10}, pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64),
+		pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64), sessionTimeout: time.Minute, localGrace: 50 * time.Millisecond,
+	}
+	link := newEdgeControlLink(client, nil)
+	link.markReady()
+	gateway.control.Store(link)
+	if !gateway.detachControl(client, now) {
+		t.Fatal("current control link was not detached")
+	}
+	if !gateway.allowExistingLocal(now.Add(40 * time.Millisecond)) {
+		t.Fatal("existing local session was denied inside the grace period")
+	}
+	if gateway.expireDeviceSessions(now.Add(40*time.Millisecond)) != 0 {
+		t.Fatal("session expired inside the grace period")
+	}
+	if gateway.allowExistingLocal(now.Add(60 * time.Millisecond)) {
+		t.Fatal("local session remained enabled after the grace period")
+	}
+	if gateway.expireDeviceSessions(now.Add(60*time.Millisecond)) != 1 || len(gateway.sessions) != 0 || len(gateway.byIdentity) != 0 {
+		t.Fatalf("sessions not cleared after grace: sessions=%#v identities=%#v", gateway.sessions, gateway.byIdentity)
 	}
 }

@@ -71,3 +71,23 @@ func TestClusterReconnectRemovesOldNodeRoutesBeforeNewSession(t *testing.T) {
 		t.Fatal("stale disconnect removed the replacement session")
 	}
 }
+
+func TestClusterUsesTargetProjectionVersionForDownstream(t *testing.T) {
+	m := NewClusterManager(2)
+	defer m.Close()
+	m.OnConnect(&NodeSession{NodeID: "edge-a", SessionID: 10})
+	m.OnConnect(&NodeSession{NodeID: "edge-b", SessionID: 20})
+	if err := m.SetNodeRoute("edge-a", DeviceRoute{SessionID: 101, SessionEpoch: 1, DomainID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetNodeRoute("edge-b", DeviceRoute{SessionID: 201, SessionEpoch: 1, DomainID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetNodeRoute("edge-b", DeviceRoute{SessionID: 202, SessionEpoch: 1, DomainID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	targets := m.targetNodeVersions(7, "edge-a")
+	if len(targets) != 1 || targets["edge-b"] != 2 {
+		t.Fatalf("target projection versions=%#v", targets)
+	}
+}

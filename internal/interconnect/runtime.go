@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -94,6 +95,8 @@ func (r *CenterRuntime) Close() {
 type EdgeRuntimeConfig struct {
 	NodeID               string
 	Token                string
+	FallbackNodeID       string
+	FallbackToken        string
 	CenterControl        string
 	CenterUDP            string
 	Listen               string
@@ -101,24 +104,40 @@ type EdgeRuntimeConfig struct {
 	TLSConfig            *tls.Config
 	DeviceSessionTimeout time.Duration
 	GrantRenewBefore     time.Duration
+	DisconnectedGrace    time.Duration
+	ConnectTimeout       time.Duration
+	ReconnectMin         time.Duration
+	ReconnectMax         time.Duration
+	OnCredential         func(EdgeIdentity) error
 }
 type EdgeRuntime struct {
 	Client  *NodeClient
 	Gateway *EdgeGateway
-	closed  chan struct{}
+
+	cfg       EdgeRuntimeConfig
+	mu        sync.RWMutex
+	closed    chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
+	fatal     chan error
+	instance  string
 }
 
 func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if cfg.TLSConfig == nil {
 		return nil, errors.New("edge node TLS config is required")
 	}
-	client, err := DialNode(context.Background(), NodeClientConfig{CenterAddr: cfg.CenterControl, TLSConfig: cfg.TLSConfig, NodeID: cfg.NodeID, Token: cfg.Token})
-	if err != nil {
-		return nil, err
+	if cfg.ConnectTimeout <= 0 {
+		cfg.ConnectTimeout = 2 * time.Second
 	}
-	gateway, err := NewEdgeGateway(cfg.Listen, client, cfg.ProxyProtocol)
+	if cfg.ReconnectMin <= 0 {
+		cfg.ReconnectMin = 250 * time.Millisecond
+	}
+	if cfg.ReconnectMax < cfg.ReconnectMin {
+		cfg.ReconnectMax = 5 * time.Second
+	}
+	gateway, err := NewEdgeGateway(cfg.Listen, nil, cfg.ProxyProtocol)
 	if err != nil {
-		client.Close()
 		return nil, err
 	}
 	if cfg.DeviceSessionTimeout > 0 {
@@ -127,45 +146,207 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if cfg.GrantRenewBefore > 0 {
 		gateway.grantRenewBefore = cfg.GrantRenewBefore
 	}
-	client.SetEnvelopeHandler(gateway.OnEnvelope)
-	if strings.TrimSpace(cfg.CenterUDP) != "" {
-		peer, peerErr := NewNodeDatagramPeer(cfg.CenterUDP, client.Session, gateway.OnEnvelope)
-		if peerErr != nil {
-			client.Close()
-			return nil, peerErr
-		}
-		gateway.peer = peer
-	}
-	if err := client.Send(ControlMessage{Kind: "node_ready"}); err != nil {
-		client.Close()
-		return nil, err
+	if cfg.DisconnectedGrace > 0 {
+		gateway.localGrace = cfg.DisconnectedGrace
 	}
 	if err := gateway.Start(); err != nil {
-		client.Close()
 		return nil, err
 	}
-	runtime := &EdgeRuntime{Client: client, Gateway: gateway, closed: make(chan struct{})}
+	runtime := &EdgeRuntime{cfg: cfg, Gateway: gateway, closed: make(chan struct{}), fatal: make(chan error, 1), instance: fmt.Sprintf("%s-%d", cfg.NodeID, randomUint64())}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
+	client, link, connectErr := runtime.connectWithFallback(ctx)
+	cancel()
+	if connectErr != nil && (errors.Is(connectErr, errEdgeCredentialPersistence) || errors.Is(connectErr, ErrNodeAuthenticationRejected)) {
+		gateway.Close()
+		return nil, connectErr
+	}
+	runtime.wg.Add(2)
+	go runtime.connectionLoop(client)
 	go runtime.heartbeatLoop()
+	if client != nil && link != nil {
+		select {
+		case <-link.readyCh:
+		case <-client.Done():
+		case <-time.After(cfg.ConnectTimeout):
+		}
+	}
 	return runtime, nil
 }
+
+var errEdgeCredentialPersistence = errors.New("persist issued edge credential")
+
+func (r *EdgeRuntime) connectWithFallback(ctx context.Context) (*NodeClient, *edgeControlLink, error) {
+	client, link, err := r.connectOnce(ctx)
+	if err == nil || !errors.Is(err, ErrNodeAuthenticationRejected) {
+		return client, link, err
+	}
+	r.mu.Lock()
+	if strings.TrimSpace(r.cfg.FallbackNodeID) == "" || strings.TrimSpace(r.cfg.FallbackToken) == "" {
+		r.mu.Unlock()
+		return nil, nil, err
+	}
+	r.cfg.NodeID, r.cfg.Token = r.cfg.FallbackNodeID, r.cfg.FallbackToken
+	r.cfg.FallbackNodeID, r.cfg.FallbackToken = "", ""
+	r.mu.Unlock()
+	return r.connectOnce(ctx)
+}
+
+func (r *EdgeRuntime) connectOnce(ctx context.Context) (*NodeClient, *edgeControlLink, error) {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
+	client, err := DialNode(ctx, NodeClientConfig{CenterAddr: cfg.CenterControl, TLSConfig: cfg.TLSConfig, NodeID: cfg.NodeID, Token: cfg.Token})
+	if err != nil {
+		return nil, nil, err
+	}
+	if client.IssuedCredential != "" {
+		identity := EdgeIdentity{NodeID: client.Session.NodeID, Credential: client.IssuedCredential, CredentialEpoch: client.CredentialEpoch}
+		if cfg.OnCredential != nil {
+			if err := cfg.OnCredential(identity); err != nil {
+				_ = client.Close()
+				return nil, nil, fmt.Errorf("%w: %v", errEdgeCredentialPersistence, err)
+			}
+		}
+		r.mu.Lock()
+		r.cfg.NodeID, r.cfg.Token = identity.NodeID, identity.Credential
+		r.mu.Unlock()
+	}
+	var peer *NodeDatagramPeer
+	if strings.TrimSpace(cfg.CenterUDP) != "" {
+		peer, err = NewNodeDatagramPeer(cfg.CenterUDP, client.Session, nil)
+		if err != nil {
+			_ = client.Close()
+			return nil, nil, err
+		}
+	}
+	client.SetEnvelopeHandler(func(env Envelope) { r.Gateway.onEnvelopeFrom(client, env) })
+	link, err := r.Gateway.attachControl(client, peer)
+	if err != nil {
+		_ = client.Close()
+		return nil, nil, err
+	}
+	if peer != nil {
+		peer.onData = func(env Envelope) { r.Gateway.onEnvelopeFrom(client, env) }
+	}
+	if err := client.Send(ControlMessage{Kind: "node_ready"}); err != nil {
+		r.Gateway.detachControl(client, time.Now())
+		_ = client.Close()
+		return nil, nil, err
+	}
+	r.setClient(client)
+	return client, link, nil
+}
+
+func (r *EdgeRuntime) connectionLoop(client *NodeClient) {
+	defer r.wg.Done()
+	backoff := r.cfg.ReconnectMin
+	var lastFailureLog time.Time
+	for {
+		if client != nil {
+			select {
+			case <-r.closed:
+				r.Gateway.detachControl(client, time.Now())
+				r.clearClient(client)
+				_ = client.Close()
+				return
+			case <-client.Done():
+				r.Gateway.detachControl(client, time.Now())
+				r.clearClient(client)
+				client = nil
+			}
+		}
+		timer := time.NewTimer(jitterReconnectDelay(backoff))
+		select {
+		case <-r.closed:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), r.cfg.ConnectTimeout)
+		next, _, err := r.connectWithFallback(ctx)
+		cancel()
+		if err != nil {
+			if errors.Is(err, errEdgeCredentialPersistence) {
+				select {
+				case r.fatal <- err:
+				default:
+				}
+				return
+			}
+			if lastFailureLog.IsZero() || time.Since(lastFailureLog) >= 30*time.Second {
+				log.Printf("[INTERCONNECT] edge control reconnect failed: %v", err)
+				lastFailureLog = time.Now()
+			}
+			backoff *= 2
+			if backoff > r.cfg.ReconnectMax {
+				backoff = r.cfg.ReconnectMax
+			}
+			continue
+		}
+		client = next
+		backoff = r.cfg.ReconnectMin
+		lastFailureLog = time.Time{}
+	}
+}
+
+func jitterReconnectDelay(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	spread := base / 5
+	if spread <= 0 {
+		return base
+	}
+	width := uint64(spread*2 + 1)
+	offset := time.Duration(randomUint64()%width) - spread
+	return base + offset
+}
+
+func (r *EdgeRuntime) setClient(client *NodeClient) {
+	r.mu.Lock()
+	r.Client = client
+	r.mu.Unlock()
+}
+
+func (r *EdgeRuntime) clearClient(client *NodeClient) {
+	r.mu.Lock()
+	if r.Client == client {
+		r.Client = nil
+	}
+	r.mu.Unlock()
+}
+
+func (r *EdgeRuntime) CurrentClient() *NodeClient {
+	r.mu.RLock()
+	client := r.Client
+	r.mu.RUnlock()
+	return client
+}
+
+func (r *EdgeRuntime) Fatal() <-chan error { return r.fatal }
+
 func (r *EdgeRuntime) heartbeatLoop() {
+	defer r.wg.Done()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	instanceID := fmt.Sprintf("%s-%d", r.Client.Session.NodeID, r.Client.Session.ConnectedAt.UnixNano())
 	for {
 		select {
 		case <-r.closed:
 			return
 		case <-ticker.C:
-			snapshot := r.Gateway.projection.Snapshot()
-			interconnectMetrics := r.Client.Session.ControlMetrics.Snapshot()
-			if r.Gateway.peer != nil {
-				interconnectMetrics = AddMetricsSnapshots(interconnectMetrics, r.Gateway.peer.Metrics.Snapshot())
+			link := r.Gateway.currentControl(false)
+			if link == nil || link.client == nil || link.client.Session == nil {
+				continue
 			}
-			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: instanceID, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version})
-			env := NewEnvelope(SubtypeNodeHeartbeat, r.Client.Session.NodeID, r.Client.Session.SessionID, randomUint64(), payload)
+			snapshot := r.Gateway.projection.Snapshot()
+			interconnectMetrics := link.client.Session.ControlMetrics.Snapshot()
+			if link.peer != nil {
+				interconnectMetrics = AddMetricsSnapshots(interconnectMetrics, link.peer.Metrics.Snapshot())
+			}
+			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: r.instance, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version})
+			env := NewEnvelope(SubtypeNodeHeartbeat, link.client.Session.NodeID, link.client.Session.SessionID, randomUint64(), payload)
 			env.ClusterEpoch, env.ProjectionVersion, env.Flags = snapshot.ClusterEpoch, snapshot.Version, FlagControl
-			_ = r.Client.SendEnvelope(env)
+			_ = link.client.SendEnvelope(env)
 		}
 	}
 }
@@ -173,16 +354,13 @@ func (r *EdgeRuntime) Close() {
 	if r == nil {
 		return
 	}
-	select {
-	case <-r.closed:
-	default:
-		close(r.closed)
+	r.closeOnce.Do(func() { close(r.closed) })
+	if client := r.CurrentClient(); client != nil {
+		_ = client.Close()
 	}
+	r.wg.Wait()
 	if r.Gateway != nil {
 		_ = r.Gateway.Close()
-	}
-	if r.Client != nil {
-		_ = r.Client.Close()
 	}
 }
 

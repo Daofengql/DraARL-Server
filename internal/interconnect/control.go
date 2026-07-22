@@ -36,6 +36,8 @@ const (
 	controlHeartbeat = "node_heartbeat"
 )
 
+var ErrNodeAuthenticationRejected = errors.New("node authentication rejected")
+
 type ControlMessage struct {
 	Kind            string          `json:"kind"`
 	NodeID          string          `json:"node_id,omitempty"`
@@ -447,8 +449,8 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	if cfg.TLSConfig == nil {
 		return nil, errors.New("node client TLS config is required")
 	}
-	dialer := &net.Dialer{}
-	conn, err := tls.DialWithDialer(dialer, "tcp", cfg.CenterAddr, cfg.TLSConfig)
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: cfg.TLSConfig}
+	conn, err := dialer.DialContext(ctx, "tcp", cfg.CenterAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +474,7 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	}
 	if response.Kind != controlAuthOK {
 		_ = conn.Close()
-		return nil, fmt.Errorf("node authentication rejected: %s", response.Error)
+		return nil, fmt.Errorf("%w: %s", ErrNodeAuthenticationRejected, response.Error)
 	}
 	key, err := base64.RawStdEncoding.DecodeString(response.Key)
 	if err != nil || len(key) < 16 {

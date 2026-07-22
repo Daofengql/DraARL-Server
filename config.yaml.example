@@ -44,6 +44,7 @@ Edge:
     IdentityFile: "edge-identity.json"
     DeviceSessionTimeoutSeconds: 20 # 普通设备无包超时；超时后立即从本地路由移除并报告中心
     GrantRenewBeforeSeconds: 30     # 在中心短期授权到期前随设备心跳续租
+    DisconnectedLocalGraceSeconds: 15 # 控制链断开后仅允许已有设备短暂本地通信，随后失败关闭
 
 # MySQL数据库配置
 Database:

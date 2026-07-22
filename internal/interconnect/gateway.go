@@ -710,11 +710,11 @@ func (g *CenterGateway) RefreshActiveDeviceDomains(resolve func(groupID int) uin
 }
 
 type EdgeGateway struct {
-	client            *NodeClient
 	listenAddr        string
 	proxyProtocol     string
 	endpoint          *udphub.EdgeEndpoint
-	peer              *NodeDatagramPeer
+	control           atomic.Pointer[edgeControlLink]
+	disconnectedAt    atomic.Int64
 	projection        *ProjectionStore
 	mu                sync.RWMutex
 	sessions          map[uint64]*edgeDeviceSession
@@ -731,9 +731,35 @@ type EdgeGateway struct {
 	cleanerWG         sync.WaitGroup
 	sessionTimeout    time.Duration
 	grantRenewBefore  time.Duration
+	localGrace        time.Duration
+	downstreamMaxAge  time.Duration
+	downstreamMu      sync.Mutex
+	pendingDownstream []pendingDownstreamFrame
+	downstreamWake    chan struct{}
 	reportSession     func(DeviceSessionReport)
 	renewSession      func(DeviceSessionRenewRequest)
 }
+
+type edgeControlLink struct {
+	client    *NodeClient
+	peer      *NodeDatagramPeer
+	ready     atomic.Bool
+	readyOnce sync.Once
+	readyCh   chan struct{}
+}
+
+func newEdgeControlLink(client *NodeClient, peer *NodeDatagramPeer) *edgeControlLink {
+	return &edgeControlLink{client: client, peer: peer, readyCh: make(chan struct{})}
+}
+
+func (l *edgeControlLink) markReady() {
+	if l == nil {
+		return
+	}
+	l.ready.Store(true)
+	l.readyOnce.Do(func() { close(l.readyCh) })
+}
+
 type edgeDeviceSession struct {
 	Grant    DeviceGrant
 	Addr     *net.UDPAddr
@@ -754,12 +780,14 @@ type pendingDeviceRenewal struct {
 	requestedAt  time.Time
 }
 
+type pendingDownstreamFrame struct {
+	envelope Envelope
+	frame    RelayFrame
+}
+
 const edgeAuthRequestTimeout = 5 * time.Second
 
 func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...string) (*EdgeGateway, error) {
-	if client == nil {
-		return nil, errors.New("edge node client is required")
-	}
 	if listenAddr == "" {
 		listenAddr = ":60050"
 	}
@@ -771,7 +799,11 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 		return nil, errors.New("edge proxy protocol must be empty or v2")
 	}
 	p := NewProjection(1)
-	return &EdgeGateway{client: client, listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64), closed: make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second}, nil
+	gateway := &EdgeGateway{listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64), closed: make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second, localGrace: 15 * time.Second, downstreamMaxAge: 200 * time.Millisecond, downstreamWake: make(chan struct{}, 1)}
+	if client != nil {
+		gateway.control.Store(newEdgeControlLink(client, nil))
+	}
+	return gateway, nil
 }
 func (g *EdgeGateway) Start() error {
 	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.proxyProtocol, g.handleInbound)
@@ -779,19 +811,85 @@ func (g *EdgeGateway) Start() error {
 		return err
 	}
 	g.endpoint = endpoint
-	if g.peer != nil {
-		g.peer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
-			return endpoint.SendTo(data, addr)
-		})
-		if err := g.peer.Bind(); err != nil {
-			_ = endpoint.Close()
-			g.endpoint = nil
-			return err
+	g.cleanerWG.Add(2)
+	go g.sessionCleanerLoop()
+	go g.downstreamBarrierLoop()
+	return nil
+}
+
+func (g *EdgeGateway) attachControl(client *NodeClient, peer *NodeDatagramPeer) (*edgeControlLink, error) {
+	if client == nil || client.Session == nil {
+		return nil, errors.New("authenticated edge control client is required")
+	}
+	if peer != nil {
+		if g.endpoint == nil {
+			return nil, errors.New("edge UDP endpoint is not started")
+		}
+		peer.SetWriter(func(addr *net.UDPAddr, data []byte) error { return g.endpoint.SendTo(data, addr) })
+	}
+	link := newEdgeControlLink(client, peer)
+	old := g.control.Swap(link)
+	if old != nil && old.client != nil && old.client != client {
+		_ = old.client.Close()
+	}
+	g.disconnectedAt.Store(0)
+	g.clearPendingControlRequests()
+	if peer != nil {
+		if err := peer.Bind(); err != nil {
+			g.detachControl(client, time.Now())
+			return nil, err
 		}
 	}
-	g.cleanerWG.Add(1)
-	go g.sessionCleanerLoop()
-	return nil
+	return link, nil
+}
+
+func (g *EdgeGateway) detachControl(client *NodeClient, now time.Time) bool {
+	for {
+		link := g.control.Load()
+		if link == nil || link.client != client {
+			return false
+		}
+		if g.control.CompareAndSwap(link, nil) {
+			g.disconnectedAt.Store(now.UnixMilli())
+			g.clearPendingControlRequests()
+			g.clearPendingDownstream()
+			return true
+		}
+	}
+}
+
+func (g *EdgeGateway) clearPendingControlRequests() {
+	g.mu.Lock()
+	clear(g.pending)
+	clear(g.pendingIdentity)
+	clear(g.pendingRenewals)
+	clear(g.renewingSessions)
+	g.mu.Unlock()
+}
+
+func (g *EdgeGateway) currentControl(requireReady bool) *edgeControlLink {
+	link := g.control.Load()
+	if link == nil || (requireReady && !link.ready.Load()) {
+		return nil
+	}
+	return link
+}
+
+func (g *EdgeGateway) allowExistingLocal(now time.Time) bool {
+	if link := g.control.Load(); link != nil {
+		return link.ready.Load()
+	}
+	disconnectedAt := g.disconnectedAt.Load()
+	return disconnectedAt > 0 && g.localGrace > 0 && now.Sub(time.UnixMilli(disconnectedAt)) <= g.localGrace
+}
+
+func (g *EdgeGateway) markControlReady(client *NodeClient) bool {
+	link := g.control.Load()
+	if link == nil || link.client != client {
+		return false
+	}
+	link.markReady()
+	return true
 }
 func (g *EdgeGateway) Addr() net.Addr {
 	if g.endpoint == nil {
@@ -814,7 +912,7 @@ func (g *EdgeGateway) Close() error {
 	return err
 }
 func (g *EdgeGateway) handleInbound(data []byte, remoteAddr, realAddr *net.UDPAddr) {
-	if g.peer != nil && g.peer.Handle(data, remoteAddr) {
+	if link := g.currentControl(false); link != nil && link.peer != nil && link.peer.Handle(data, remoteAddr) {
 		return
 	}
 	if realAddr == nil {
@@ -849,6 +947,7 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 			}
 		}
 	}
+	realAddrMatches := exists && session != nil && udpAddrEqual(session.RealAddr, realAddr)
 	g.mu.RUnlock()
 	if !exists || session == nil {
 		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
@@ -856,12 +955,16 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		}
 		return
 	}
+	now := time.Now()
+	if !g.allowExistingLocal(now) {
+		return
+	}
 	// The device identity in a UDP packet is not proof of session ownership.
 	// A changed direct/PROXY-advertised endpoint must authenticate again; text
 	// or voice packets may never take over an existing identity or its FRP
 	// return path. A transport-only FRP address change is allowed when the
 	// authenticated real client endpoint remains the same.
-	if !udpAddrEqual(session.RealAddr, realAddr) {
+	if !realAddrMatches {
 		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
 			g.requestAuth(data, packet, remoteAddr, realAddr)
 		}
@@ -869,11 +972,13 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	}
 	// Update the endpoint and take an immutable grant snapshot while holding
 	// the gateway lock. RouteDelta may update the same grant concurrently.
-	now := time.Now()
 	g.mu.Lock()
 	current := g.sessions[sessionID]
-	if current == nil {
+	if current == nil || !udpAddrEqual(current.RealAddr, realAddr) {
 		g.mu.Unlock()
+		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
+			g.requestAuth(data, packet, remoteAddr, realAddr)
+		}
 		return
 	}
 	if current.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= current.Grant.ExpiresAtMillis {
@@ -912,17 +1017,21 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	inner := protocol.PrepareForwardPacket(data, grant.Username, grant.CallSign, grant.SSID, packet.Type, grant.DevModel, grant.DMRID, packet.DATA)
 	defer protocol.ReleaseForwardPacket(inner)
 	g.localFanout(grant.SessionID, grant.DomainID, inner)
+	link := g.currentControl(true)
+	if link == nil {
+		return
+	}
 	frame := RelayFrame{SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, InnerPacket: inner}
 	payload, err := frame.MarshalBinary()
 	if err != nil {
 		return
 	}
-	env := NewEnvelope(SubtypeRelayUpstream, g.client.Session.NodeID, g.client.Session.SessionID, g.client.Session.SessionID+uint64(time.Now().UnixNano()), payload)
+	env := NewEnvelope(SubtypeRelayUpstream, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
 	env.ProjectionVersion = frame.RequiredProjectionVersion
-	if g.peer != nil {
-		_ = g.peer.Send(env)
+	if link.peer != nil {
+		_ = link.peer.Send(env)
 	} else {
-		_ = g.client.SendEnvelope(env)
+		_ = link.client.SendEnvelope(env)
 	}
 }
 
@@ -964,7 +1073,9 @@ func (g *EdgeGateway) expireDeviceSessions(now time.Time) int {
 	}
 	for sessionID, session := range g.sessions {
 		reason := ""
-		if now.Sub(session.LastSeen) > g.sessionTimeout {
+		if !g.allowExistingLocal(now) {
+			reason = "control_unavailable"
+		} else if now.Sub(session.LastSeen) > g.sessionTimeout {
 			reason = "device_timeout"
 		} else if session.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= session.Grant.ExpiresAtMillis {
 			reason = "grant_expired"
@@ -984,6 +1095,10 @@ func (g *EdgeGateway) requestSessionRenewal(sessionID, sessionEpoch uint64, now 
 	if sessionID == 0 || sessionEpoch == 0 {
 		return
 	}
+	link := g.currentControl(true)
+	if link == nil {
+		return
+	}
 	requestID := g.nextRequest.Add(1)
 	request := DeviceSessionRenewRequest{RequestID: requestID, SessionID: sessionID, SessionEpoch: sessionEpoch}
 	g.mu.Lock()
@@ -1000,12 +1115,12 @@ func (g *EdgeGateway) requestSessionRenewal(sessionID, sessionEpoch uint64, now 
 		return
 	}
 	payload, err := EncodeJSON(request)
-	if err == nil && g.client != nil {
-		env := NewEnvelope(SubtypeDeviceSessionRenew, g.client.Session.NodeID, g.client.Session.SessionID, requestID, payload)
+	if err == nil {
+		env := NewEnvelope(SubtypeDeviceSessionRenew, link.client.Session.NodeID, link.client.Session.SessionID, requestID, payload)
 		env.Flags = FlagControl | FlagAck
-		err = g.client.SendEnvelope(env)
+		err = link.client.SendEnvelope(env)
 	}
-	if err != nil || g.client == nil {
+	if err != nil {
 		g.mu.Lock()
 		delete(g.pendingRenewals, requestID)
 		if g.renewingSessions[sessionID] == requestID {
@@ -1036,15 +1151,23 @@ func (g *EdgeGateway) sendDeviceSessionReport(report DeviceSessionReport) {
 		g.reportSession(report)
 		return
 	}
+	link := g.currentControl(true)
+	if link == nil {
+		return
+	}
 	payload, err := EncodeJSON(report)
 	if err != nil {
 		return
 	}
-	env := NewEnvelope(SubtypeDeviceSessionReport, g.client.Session.NodeID, g.client.Session.SessionID, g.nextRequest.Add(1), payload)
+	env := NewEnvelope(SubtypeDeviceSessionReport, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
 	env.Flags = FlagControl
-	_ = g.client.SendEnvelope(env)
+	_ = link.client.SendEnvelope(env)
 }
 func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, remoteAddr, realAddr *net.UDPAddr) {
+	link := g.currentControl(true)
+	if link == nil {
+		return
+	}
 	identity := g.identity(packet)
 	id := g.nextRequest.Add(1)
 	g.mu.Lock()
@@ -1070,9 +1193,9 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 		g.mu.Unlock()
 		return
 	}
-	env := NewEnvelope(SubtypeDeviceAuth, g.client.Session.NodeID, g.client.Session.SessionID, id, payload)
+	env := NewEnvelope(SubtypeDeviceAuth, link.client.Session.NodeID, link.client.Session.SessionID, id, payload)
 	env.Flags = FlagControl | FlagAck
-	if err := g.client.SendEnvelope(env); err != nil {
+	if err := link.client.SendEnvelope(env); err != nil {
 		g.mu.Lock()
 		delete(g.pending, id)
 		delete(g.pendingIdentity, identity)
@@ -1080,6 +1203,18 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 	}
 }
 func (g *EdgeGateway) OnEnvelope(env Envelope) {
+	link := g.currentControl(false)
+	if link == nil {
+		return
+	}
+	g.onEnvelopeFrom(link.client, env)
+}
+
+func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
+	link := g.currentControl(false)
+	if link == nil || link.client != client {
+		return
+	}
 	switch env.Subtype {
 	case SubtypeDeviceAuth:
 		var response DeviceAuthResponse
@@ -1112,6 +1247,7 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 			return
 		}
 		g.applyRoutes(g.projection.Snapshot())
+		g.drainDownstream(time.Now())
 		g.sendRouteAck(delta.NewVersion, "", env.MessageID)
 	case SubtypeRouteSnapshotBegin:
 		var begin SnapshotBegin
@@ -1143,6 +1279,7 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 			p := g.projection.Snapshot()
 			if p.ClusterEpoch == env.ClusterEpoch && p.Version == env.ProjectionVersion {
 				g.sendRouteAck(p.Version, "", env.MessageID)
+				g.markControlReady(client)
 			} else {
 				g.requestResync("duplicate snapshot commit does not match current projection")
 			}
@@ -1162,11 +1299,16 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 		}
 		_ = g.projection.Replace(p)
 		g.applyRoutes(p)
+		g.drainDownstream(time.Now())
 		g.sendRouteAck(p.Version, "", env.MessageID)
+		g.markControlReady(client)
 	case SubtypeRelayDownstream:
+		if !link.ready.Load() {
+			return
+		}
 		frame, err := UnmarshalRelayFrame(env.Payload)
 		if err == nil {
-			g.deliverDownstream(frame)
+			g.deliverDownstream(env, frame)
 		}
 	case SubtypeDeviceSessionRevoke:
 		var revoke DeviceSessionRevoke
@@ -1328,26 +1470,116 @@ func udpAddrEqual(a, b *net.UDPAddr) bool {
 	}
 	return a.IP.Equal(b.IP)
 }
-func (g *EdgeGateway) deliverDownstream(frame RelayFrame) {
+func (g *EdgeGateway) deliverDownstream(env Envelope, frame RelayFrame) {
+	now := time.Now()
+	if env.Expired(now, g.downstreamMaxAge) {
+		g.metrics.AddDrop()
+		return
+	}
 	p := g.projection.Snapshot()
-	if route, ok := p.Devices[frame.SessionID]; ok && route.SessionEpoch != frame.SessionEpoch {
+	if p.ClusterEpoch != env.ClusterEpoch || env.ProjectionVersion != frame.RequiredProjectionVersion {
+		g.metrics.AddDrop()
+		return
+	}
+	if p.Version < frame.RequiredProjectionVersion {
+		g.downstreamMu.Lock()
+		if len(g.pendingDownstream) >= 1024 {
+			g.downstreamMu.Unlock()
+			g.metrics.AddDrop()
+			return
+		}
+		g.pendingDownstream = append(g.pendingDownstream, pendingDownstreamFrame{envelope: env, frame: frame})
+		g.downstreamMu.Unlock()
+		select {
+		case g.downstreamWake <- struct{}{}:
+		default:
+		}
 		return
 	}
 	g.localFanout(0, frame.DomainID, frame.InnerPacket)
 }
+
+func (g *EdgeGateway) downstreamBarrierLoop() {
+	defer g.cleanerWG.Done()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.closed:
+			return
+		case now := <-ticker.C:
+			g.drainDownstream(now)
+		case <-g.downstreamWake:
+			g.drainDownstream(time.Now())
+		}
+	}
+}
+
+func (g *EdgeGateway) drainDownstream(now time.Time) {
+	p := g.projection.Snapshot()
+	ready := make([]RelayFrame, 0)
+	dropped := 0
+	g.downstreamMu.Lock()
+	remaining := g.pendingDownstream[:0]
+	for _, pending := range g.pendingDownstream {
+		if pending.envelope.Expired(now, g.downstreamMaxAge) || pending.envelope.ClusterEpoch != p.ClusterEpoch {
+			dropped++
+			continue
+		}
+		if p.Version >= pending.frame.RequiredProjectionVersion {
+			ready = append(ready, pending.frame)
+			continue
+		}
+		remaining = append(remaining, pending)
+	}
+	g.pendingDownstream = remaining
+	g.downstreamMu.Unlock()
+	if dropped > 0 {
+		g.metrics.AddDropBulk(uint64(dropped))
+	}
+	if g.currentControl(true) == nil {
+		if len(ready) > 0 {
+			g.metrics.AddDropBulk(uint64(len(ready)))
+		}
+		return
+	}
+	for _, frame := range ready {
+		g.localFanout(0, frame.DomainID, frame.InnerPacket)
+	}
+}
+
+func (g *EdgeGateway) clearPendingDownstream() {
+	g.downstreamMu.Lock()
+	dropped := len(g.pendingDownstream)
+	g.pendingDownstream = nil
+	g.downstreamMu.Unlock()
+	if dropped > 0 {
+		g.metrics.AddDropBulk(uint64(dropped))
+	}
+}
 func (g *EdgeGateway) sendRouteAck(version uint64, routeErr string, ackFor uint64) {
+	link := g.currentControl(false)
+	if link == nil {
+		return
+	}
 	p := g.projection.Snapshot()
 	payload, _ := EncodeJSON(RouteAck{ClusterEpoch: p.ClusterEpoch, ProjectionVersion: version, AckForMessageID: ackFor, Error: routeErr})
-	env := NewEnvelope(SubtypeRouteAck, g.client.Session.NodeID, g.client.Session.SessionID, g.nextRequest.Add(1), payload)
+	env := NewEnvelope(SubtypeRouteAck, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
 	env.Flags = FlagControl | FlagAck
-	_ = g.client.SendEnvelope(env)
+	_ = link.client.SendEnvelope(env)
 }
 func (g *EdgeGateway) requestResync(reason string) {
+	link := g.currentControl(false)
+	if link == nil {
+		return
+	}
+	link.ready.Store(false)
+	g.clearPendingDownstream()
 	p := g.projection.Snapshot()
 	payload, _ := EncodeJSON(ResyncRequest{ClusterEpoch: p.ClusterEpoch, ProjectionVersion: p.Version, Reason: reason})
-	env := NewEnvelope(SubtypeRouteResyncRequest, g.client.Session.NodeID, g.client.Session.SessionID, g.nextRequest.Add(1), payload)
+	env := NewEnvelope(SubtypeRouteResyncRequest, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
 	env.Flags = FlagControl | FlagAck
-	_ = g.client.SendEnvelope(env)
+	_ = link.client.SendEnvelope(env)
 }
 func (g *EdgeGateway) writeDevice(data []byte, addr *net.UDPAddr) {
 	if g.endpoint == nil || addr == nil {

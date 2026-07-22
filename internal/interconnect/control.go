@@ -448,8 +448,14 @@ func (c *NodeClient) readLoop() {
 			}
 			env, decodeErr := UnmarshalControl(wire, c.Session.Key)
 			now := time.Now()
-			if decodeErr != nil || env.NodeSessionID != c.Session.SessionID || env.KeyEpoch != c.Session.KeyEpoch || env.SourceNodeID != "center" || env.Expired(now, 30*time.Second) || !c.Session.AcceptMessage(env.MessageID, now) {
+			if decodeErr != nil || env.NodeSessionID != c.Session.SessionID || env.KeyEpoch != c.Session.KeyEpoch || env.SourceNodeID != "center" || env.Expired(now, 30*time.Second) {
 				continue
+			}
+			if !c.Session.AcceptMessage(env.MessageID, now) {
+				if env.Subtype != SubtypeRouteDelta && env.Subtype != SubtypeRouteSnapshotCommit {
+					continue
+				}
+				env.Duplicate = true
 			}
 			c.Session.Touch()
 			c.callbackMu.RLock()

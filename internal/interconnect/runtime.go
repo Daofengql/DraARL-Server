@@ -57,6 +57,9 @@ func (r *CenterRuntime) Close() {
 	if r.Control != nil {
 		_ = r.Control.Close()
 	}
+	if r.Cluster != nil {
+		r.Cluster.Close()
+	}
 }
 
 type EdgeRuntimeConfig struct {

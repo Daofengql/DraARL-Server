@@ -98,8 +98,20 @@ func TestTwoEdgesRouteOneFrameThroughCentreAndLocalFanout(t *testing.T) {
 	}
 	login(devA, edgeA.Gateway.Addr(), "alice")
 	login(devB, edgeB.Gateway.Addr(), "bob")
-	// Allow each edge's per-node delta to be applied and ACKed before traffic.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for an application-level ACK from each edge; TCP delivery alone is
+	// not enough to prove the projection was atomically applied.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		versionA, _ := center.Cluster.RouteAck("edge-a")
+		versionB, _ := center.Cluster.RouteAck("edge-b")
+		if versionA >= 1 && versionB >= 1 && center.Cluster.PendingControl("edge-a") == 0 && center.Cluster.PendingControl("edge-b") == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("route ACK timeout: edge-a=%d pending=%d edge-b=%d pending=%d", versionA, center.Cluster.PendingControl("edge-a"), versionB, center.Cluster.PendingControl("edge-b"))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	voice := protocol.EncodeDraARLv1("alice", "", 1, protocol.DraARLTypeOpus16K, protocol.DraARLDevModelESP32NoRadio, 1, "", []byte{1, 2, 3, 4})
 	edgeAddrA, _ := net.ResolveUDPAddr("udp", edgeA.Gateway.Addr().String())
 	if _, err := devA.WriteToUDP(voice, edgeAddrA); err != nil {

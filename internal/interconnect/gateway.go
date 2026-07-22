@@ -344,6 +344,15 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 		if DecodeJSON(env.Payload, &delta) != nil {
 			return
 		}
+		if env.Duplicate {
+			p := g.projection.Snapshot()
+			if p.ClusterEpoch == delta.ClusterEpoch && p.Version >= delta.NewVersion {
+				g.sendRouteAck(delta.NewVersion, "", env.MessageID)
+			} else {
+				g.requestResync("duplicate delta does not match current projection")
+			}
+			return
+		}
 		if err := g.projection.ApplyDelta(delta); err != nil {
 			g.requestResync(err.Error())
 			return
@@ -374,6 +383,15 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 	case SubtypeRouteSnapshotCommit:
 		var commit SnapshotCommit
 		if DecodeJSON(env.Payload, &commit) != nil {
+			return
+		}
+		if env.Duplicate {
+			p := g.projection.Snapshot()
+			if p.ClusterEpoch == env.ClusterEpoch && p.Version == env.ProjectionVersion {
+				g.sendRouteAck(p.Version, "", env.MessageID)
+			} else {
+				g.requestResync("duplicate snapshot commit does not match current projection")
+			}
 			return
 		}
 		g.mu.Lock()

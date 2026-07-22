@@ -65,6 +65,10 @@ type Envelope struct {
 	KeyEpoch          uint32
 	Payload           []byte
 	AuthTag           []byte
+	// Duplicate is local receive metadata and is never serialized. Reliable
+	// control retries reuse MessageID; the edge uses this bit to re-ACK an
+	// already applied update without applying it twice.
+	Duplicate bool
 }
 
 func NewEnvelope(subtype byte, sourceNode string, sessionID, messageID uint64, payload []byte) Envelope {

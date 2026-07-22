@@ -261,14 +261,14 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	hello, helloBytes, err := readControlMessageSize(conn)
 	authentication := NodeAuthentication{}
-	if err == nil && hello.Kind == controlHello && hello.NodeID != "" {
+	if err == nil && hello.Kind == controlHello && hello.NodeID != "" && hello.NodeID != CenterLocalNodeID {
 		if s.cfg.Authenticate != nil {
 			authentication, err = s.cfg.Authenticate(hello.NodeID, hello.Token)
 		} else if s.cfg.ValidateToken != nil {
 			authentication.Accepted = s.cfg.ValidateToken(hello.NodeID, hello.Token)
 		}
 	}
-	if err != nil || hello.Kind != controlHello || hello.NodeID == "" || !authentication.Accepted {
+	if err != nil || hello.Kind != controlHello || hello.NodeID == "" || hello.NodeID == CenterLocalNodeID || !authentication.Accepted {
 		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthError, Error: "node authentication failed"})
 		_ = conn.Close()
 		return

@@ -22,6 +22,7 @@ type ClusterManager struct {
 	domainNodes    map[uint64]map[string]struct{}
 	server         *NodeServer
 	dataBridge     *NodeDatagramBridge
+	localDelivery  func(RelayFrame)
 	messageID      atomic.Uint64
 	metrics        map[string]*Metrics
 	status         map[string]NodeHeartbeat
@@ -35,6 +36,10 @@ type ClusterManager struct {
 	closeOnce      sync.Once
 	retryWG        sync.WaitGroup
 }
+
+// CenterLocalNodeID is a reserved in-memory owner. It participates in the
+// authoritative session projection but is never treated as a network edge.
+const CenterLocalNodeID = "center"
 
 type pendingControl struct {
 	envelope Envelope
@@ -65,6 +70,11 @@ func (m *ClusterManager) AttachServer(server *NodeServer) {
 func (m *ClusterManager) AttachDataBridge(bridge *NodeDatagramBridge) {
 	m.mu.Lock()
 	m.dataBridge = bridge
+	m.mu.Unlock()
+}
+func (m *ClusterManager) SetLocalDelivery(deliver func(RelayFrame)) {
+	m.mu.Lock()
+	m.localDelivery = deliver
 	m.mu.Unlock()
 }
 func (m *ClusterManager) Epoch() uint64 { m.mu.RLock(); defer m.mu.RUnlock(); return m.epoch }
@@ -264,6 +274,9 @@ func (m *ClusterManager) RebuildDomainNodes() {
 func (m *ClusterManager) rebuildDomainNodesLocked() {
 	next := make(map[uint64]map[string]struct{})
 	for nodeID, projection := range m.nodeProjection {
+		if nodeID == CenterLocalNodeID {
+			continue
+		}
 		for _, route := range projection.Devices {
 			if route.DisableRecv || route.DomainID == 0 {
 				continue
@@ -284,7 +297,7 @@ func (m *ClusterManager) TargetNodes(domainID uint64, sourceNode string) []strin
 	set := m.domainNodes[domainID]
 	result := make([]string, 0, len(set))
 	for nodeID := range set {
-		if nodeID != sourceNode {
+		if nodeID != sourceNode && nodeID != CenterLocalNodeID {
 			result = append(result, nodeID)
 		}
 	}
@@ -339,6 +352,9 @@ func (m *ClusterManager) SetNodeRoute(nodeID string, route DeviceRoute) error {
 	server := m.server
 	m.rebuildDomainNodesLocked()
 	m.mu.Unlock()
+	if nodeID == CenterLocalNodeID {
+		return nil
+	}
 	if server == nil {
 		return nil
 	}
@@ -367,6 +383,9 @@ func (m *ClusterManager) RemoveNodeRoute(nodeID string, sessionID uint64) error 
 	server := m.server
 	m.rebuildDomainNodesLocked()
 	m.mu.Unlock()
+	if nodeID == CenterLocalNodeID {
+		return nil
+	}
 	if server == nil {
 		return nil
 	}
@@ -557,9 +576,13 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 	m.mu.RLock()
 	server := m.server
 	dataBridge := m.dataBridge
+	localDelivery := m.localDelivery
 	epoch := m.epoch
 	m.mu.RUnlock()
-	if server == nil && dataBridge == nil {
+	if sourceNode != CenterLocalNodeID && localDelivery != nil {
+		localDelivery(frame)
+	}
+	if len(targets) == 0 || (server == nil && dataBridge == nil) {
 		return nil
 	}
 	payload, err := frame.MarshalBinary()

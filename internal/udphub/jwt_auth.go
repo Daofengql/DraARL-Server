@@ -102,6 +102,11 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 			existingGhost.CallSign = user.CallSign
 			existingGhost.OwnerID = user.ID
 			existingGhost.CallSignSSID = protocol.GetCallSignSSID(user.CallSign, ssid)
+			if err := ActivateCenterLocalDevice(existingGhost); err != nil {
+				log.Printf("[UDP-JWT] 中心会话激活失败: user=%s err=%v", user.Name, err)
+				sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
+				return
+			}
 			sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
 			log.Printf("[UDP-JWT] 设备重连复用认证态: %s (地址: %v)", getDeviceKey(user.Name, ssid), realAddr)
 			return
@@ -142,7 +147,13 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	}
 
 	// 11. 注册设备（在准入前已完成冲突检查）
-	GlobalUDPGhostManager.Register(ghostDevice)
+	ghostDevice = GlobalUDPGhostManager.Register(ghostDevice)
+	if err := ActivateCenterLocalDevice(ghostDevice); err != nil {
+		GlobalUDPGhostManager.Remove(ghostDevice.Username, ghostDevice.SSID)
+		log.Printf("[UDP-JWT] 中心会话激活失败: user=%s err=%v", user.Name, err)
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
+		return
+	}
 
 	// 12. 发送成功响应
 	sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")

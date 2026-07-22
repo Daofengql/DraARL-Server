@@ -222,6 +222,43 @@ func main() {
 		defer centerRuntime.Close()
 		interconnect.SetActiveCenterRuntime(centerRuntime)
 		defer interconnect.SetActiveCenterRuntime(nil)
+		centerRuntime.Cluster.SetLocalDelivery(func(frame interconnect.RelayFrame) {
+			udphub.DeliverInterconnectPacket(frame.DomainID, frame.InnerPacket)
+		})
+		centerRuntime.Gateway.SetLocalRevocationHandler(func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64) {
+			udphub.RevokeCenterLocalSession(deviceID, ownerID, ssid, sessionID, sessionEpoch)
+		})
+		centerRuntime.Gateway.SetDeviceRevocationHandler(func(nodeID string, controlSessionID uint64, deviceID int, reason string) {
+			cleared, clearErr := gormdb.NewDeviceRepository().ClearDeviceEntryIfSession(deviceID, nodeID, controlSessionID)
+			if clearErr != nil {
+				stdlog.Printf("clear revoked device entry failed: device=%d node=%s reason=%s err=%v", deviceID, nodeID, reason, clearErr)
+				return
+			}
+			if cleared {
+				udphub.ClearRuntimeDeviceEntryIfSession(deviceID, nodeID, controlSessionID)
+			}
+		})
+		udphub.SetCenterInterconnectHooks(udphub.CenterInterconnectHooks{
+			Activate: func(source *udphub.CenterLocalSource) error {
+				grant := localSourceGrant(source)
+				if err := centerRuntime.Gateway.ActivateLocalDevice(&grant); err != nil {
+					return err
+				}
+				source.SessionID, source.SessionEpoch = grant.SessionID, grant.SessionEpoch
+				return nil
+			},
+			Authorize: func(source udphub.CenterLocalSource) bool {
+				return centerRuntime.Gateway.AuthorizeLocalDevice(localSourceGrant(&source))
+			},
+			RemoteOwner: centerRuntime.Gateway.IdentityOwnedByRemote,
+			Relay: func(source udphub.CenterLocalSource, data []byte) error {
+				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
+			},
+			Revoke: func(source udphub.CenterLocalSource) {
+				centerRuntime.Gateway.RevokeLocalDevice(source.SessionID, source.SessionEpoch)
+			},
+		})
+		defer udphub.SetCenterInterconnectHooks(udphub.CenterInterconnectHooks{})
 		udphub.SetType0Handler(centerRuntime.UDPBridge)
 		defer udphub.SetType0Handler(nil)
 		stdlog.Printf("Type 0 节点服务已启动: control=%s shared_udp=%s", cfg.Interconnect.ControlListen, cfg.System.Port)

@@ -130,6 +130,9 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 3. 互联组 WS 已包含在 RouteVoiceToWSClients
 	// 4. 转发到同组和互联组的其他 WS 客户端
 	r.RouteVoiceToWSClients(source, voicePacket, groupID)
+	if err := RelayCenterLocalWS(source, groupID, voicePacket); err != nil {
+		log.Printf("[INTERCONNECT] relay centre WS voice failed: %v", err)
+	}
 }
 
 // RouteTextToUDP 转发 WebSocket 文本消息到 UDP 设备
@@ -171,6 +174,9 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 
 	// 【新增】转发到同组和互联组的其他 WS 客户端
 	r.RouteTextToWSClients(source, textPacket, groupID)
+	if err := RelayCenterLocalWS(source, groupID, textPacket); err != nil {
+		log.Printf("[INTERCONNECT] relay centre WS text failed: %v", err)
+	}
 }
 
 // GlobalMessageRouter 全局消息路由器

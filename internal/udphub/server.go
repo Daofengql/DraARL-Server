@@ -383,6 +383,14 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 		return
 	}
 
+	// A runtime object may remain available for management while its current
+	// authoritative entry is an edge. It cannot be reused by an old centre UDP
+	// address until a heartbeat/JWT authentication takes ownership back.
+	remoteOwner := dev.CurrentEntryNodeID != "" && dev.CurrentEntryNodeID != "center"
+	if remoteOwner && packet.Type != protocol.DraARLTypeHeartbeat {
+		return
+	}
+
 	// ==========================================
 	// 已存在设备的处理
 	// ==========================================
@@ -402,7 +410,9 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 		} else {
 			// 普通设备心跳：可能需要重新鉴权
 			// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
-			if !dev.ISOnline || (dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr) {
+			localSessionMissing := CenterInterconnectActive() && !CenterLocalDeviceAuthoritative(dev)
+			needsCenterActivation := remoteOwner || localSessionMissing || !dev.ISOnline || dev.CurrentEntryNodeID != "center"
+			if remoteOwner || localSessionMissing || !dev.ISOnline || dev.UDPAddr == nil || dev.UDPAddr.String() != currentAddr {
 				authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
 				if !authResult.Success {
 					log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
@@ -422,10 +432,20 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 				}
 				log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 			}
+			if needsCenterActivation {
+				if err := activateAndPersistCenterDevice(dev); err != nil {
+					log.Printf("[INTERCONNECT] activate centre device %d failed: %v", dev.ID, err)
+					sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, "center_session_activation_failed")
+					return
+				}
+			}
 		}
 		if incomingMAC != "" {
 			dev.MAC = incomingMAC
 		}
+	}
+	if (packet.Type == protocol.DraARLTypeTextMessage || packet.Type == protocol.DraARLTypeOpus16K) && !CenterLocalDeviceAuthoritative(dev) {
+		return
 	}
 
 	// 已存在的设备，更新状态
@@ -647,9 +667,10 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		dev.LastOnlineIP = realAddr.IP.String()
 		indexRuntimeDevice(dev)
 		if dev.ID > 0 {
-			now := time.Now()
-			if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(dev.ID, "center", "center", 0, true, now); err == nil {
-				SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)
+			if err := activateAndPersistCenterDevice(dev); err != nil {
+				log.Printf("[INTERCONNECT] activate new centre device %d failed: %v", dev.ID, err)
+				sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, "center_session_activation_failed")
+				return
 			}
 		}
 
@@ -963,13 +984,22 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 
 		dev.ISOnline = true
-		if !isGhost && dev.ID > 0 {
-			now := time.Now()
-			if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(dev.ID, "center", "center", 0, true, now); err == nil {
-				SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)
-			}
-		}
 	}
+}
+
+func activateAndPersistCenterDevice(dev *models.Device) error {
+	if dev == nil || dev.ID <= 0 {
+		return nil
+	}
+	if CenterInterconnectActive() {
+		return ActivateCenterLocalDevice(dev)
+	}
+	now := time.Now()
+	if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(dev.ID, "center", "center", 0, true, now); err != nil {
+		return err
+	}
+	SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)
+	return nil
 }
 
 // handleDraARLConfig 处理 DraARLv1 设备配置
@@ -1042,6 +1072,9 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 
 	// 2. WebSocket：本群 + 连通域其它组（一次遍历域）
 	BroadcastVoiceFromUDPDomain(dev, refilledData, gp.ID)
+	if err := RelayCenterLocalDevice(dev, refilledData); err != nil {
+		log.Printf("[INTERCONNECT] relay centre voice failed: device=%d err=%v", dev.ID, err)
+	}
 	protocol.ReleaseForwardPacket(refilledData)
 }
 
@@ -1061,6 +1094,9 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 	// 文本同样走连通域 UDP fan-out
 	forwardVoiceDomain(dev, refilledData, gp.ID)
 	BroadcastTextFromUDPDomain(dev, refilledData, gp.ID)
+	if err := RelayCenterLocalDevice(dev, refilledData); err != nil {
+		log.Printf("[INTERCONNECT] relay centre text failed: device=%d err=%v", dev.ID, err)
+	}
 	protocol.ReleaseForwardPacket(refilledData)
 }
 
@@ -1251,6 +1287,7 @@ func refreshGroupCache() {
 	// 同时更新 publicGroupMap 以保持向后兼容
 	publicGroupMap = newGroupCache
 	if receiverRoutingChanged {
+		resetDomainGroupReverseCache()
 		InvalidateDomainReceiverCache()
 	}
 

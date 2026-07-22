@@ -365,6 +365,7 @@ func checkDeviceOnline() {
 		}
 
 		onlineMap := make(map[int]*models.Device, 100)
+		offlineLocal := make(map[int]*models.Device)
 		t := time.Now()
 		onlineCount := 0
 
@@ -426,6 +427,7 @@ func checkDeviceOnline() {
 							dev.ISOnline = false
 							dev.ReconnectCount++
 							removeRuntimeDeviceMAC(dev)
+							offlineLocal[dev.ID] = dev
 
 							delete(pool.DevConnMap, addrStr)
 							change = true
@@ -496,6 +498,7 @@ func checkDeviceOnline() {
 								dev.ISOnline = false
 								dev.ReconnectCount++
 								removeRuntimeDeviceMAC(dev)
+								offlineLocal[dev.ID] = dev
 
 								delete(pool.DevConnMap, addrStr)
 								change = true
@@ -531,6 +534,9 @@ func checkDeviceOnline() {
 			return true
 		})
 
+		for _, dev := range offlineLocal {
+			finalizeCenterLocalOffline(dev)
+		}
 		setOnlineDevMap(onlineMap)
 		setOnlineDevNumber(onlineCount)
 
@@ -548,6 +554,22 @@ func checkDeviceOnline() {
 			log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 服务器总在线=%d",
 				udpOnlineCount, udpGhostOnline, wsNormalCount, wsGhostCount, onlineCount+udpGhostOnline)
 		}
+	}
+}
+
+func finalizeCenterLocalOffline(dev *models.Device) {
+	if dev == nil || dev.ID <= 0 {
+		return
+	}
+	sessionID := dev.InterconnectSessionID
+	RevokeCenterLocalDevice(dev)
+	cleared, err := gormdb.NewDeviceRepository().ClearDeviceEntryIfSession(dev.ID, "center", sessionID)
+	if err != nil {
+		log.Printf("[OFFLINE] clear centre entry failed: device=%d session=%d err=%v", dev.ID, sessionID, err)
+		return
+	}
+	if cleared {
+		ClearRuntimeDeviceEntryIfSession(dev.ID, "center", sessionID)
 	}
 }
 

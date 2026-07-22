@@ -91,14 +91,27 @@ type WSDevice struct {
 	VoiceTime   int64
 	PacketCount int64
 
+	interconnectSessionID    atomic.Uint64
+	interconnectSessionEpoch atomic.Uint64
+
 	// ==========================================
 	// 异步写入优化：带缓冲的写通道
 	// 解决跨组转发时同步阻塞导致的延迟累积问题
 	// ==========================================
-	writeCh   chan *writeRequest // 异步写缓冲通道
-	closeCh   chan struct{}      // 关闭信号
-	writeMu   sync.Mutex         // 保护 writeCh 的访问
-	writeOnce sync.Once          // 确保 writer 只启动一次
+	writeCh      chan *writeRequest // 异步写缓冲通道
+	closeCh      chan struct{}      // 关闭信号
+	writeMu      sync.Mutex         // 保护 writeCh 的访问
+	writeOnce    sync.Once          // 确保 writer 只启动一次
+	unregistered atomic.Bool
+}
+
+func (d *WSDevice) GetInterconnectSession() (uint64, uint64) {
+	return d.interconnectSessionID.Load(), d.interconnectSessionEpoch.Load()
+}
+
+func (d *WSDevice) SetInterconnectSession(sessionID, sessionEpoch uint64) {
+	d.interconnectSessionID.Store(sessionID)
+	d.interconnectSessionEpoch.Store(sessionEpoch)
 }
 
 // writeRequest 写请求结构
@@ -515,30 +528,35 @@ func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice
 
 // UnregisterDevice 注销设备
 func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
-	if device.Conn == nil {
+	if device == nil || device.Conn == nil || !device.unregistered.CompareAndSwap(false, true) {
 		return
 	}
 
 	addr := device.Conn.RemoteAddr().String()
-	shard := m.getShardByAddr(addr)
-
-	shard.mu.Lock()
-	defer shard.mu.Unlock()
-
-	delete(shard.connMap, addr)
+	addrShard := m.getShardByAddr(addr)
+	addrShard.mu.Lock()
+	if addrShard.connMap[addr] == device {
+		delete(addrShard.connMap, addr)
+	}
+	addrShard.mu.Unlock()
 	device.IsOnline = false
 	device.ConnState = StateDisconnected
 
-	// 从分片群组索引中移除
 	key := getDeviceKey(device)
-	shard.removeFromGroupIndexInShard(device.GroupID, key)
-
-	// 【优化】从全局群组索引中移除
-	m.removeFromGlobalGroupIndex(device.GroupID, key)
-
-	// 从幽灵设备索引移除
 	if device.DeviceType == DeviceTypeGhost {
-		delete(shard.ghostDevices, device.UserID)
+		userShard := m.getShardByUserID(device.UserID)
+		userShard.mu.Lock()
+		if userShard.ghostDevices[device.UserID] == device {
+			delete(userShard.ghostDevices, device.UserID)
+			userShard.removeFromGroupIndexInShard(device.GroupID, key)
+			m.removeFromGlobalGroupIndex(device.GroupID, key)
+		}
+		userShard.mu.Unlock()
+	} else {
+		addrShard.mu.Lock()
+		addrShard.removeFromGroupIndexInShard(device.GroupID, key)
+		m.removeFromGlobalGroupIndex(device.GroupID, key)
+		addrShard.mu.Unlock()
 	}
 
 	atomic.AddInt64(&m.totalConnections, -1)
@@ -655,7 +673,14 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 	shard := m.getShardByUserID(userID)
 
 	shard.mu.Lock()
-	defer shard.mu.Unlock()
+	old := shard.ghostDevices[userID]
+	if old != nil && old != device {
+		oldKey := getDeviceKey(old)
+		shard.removeFromGroupIndexInShard(old.GroupID, oldKey)
+		m.removeFromGlobalGroupIndex(old.GroupID, oldKey)
+		old.IsOnline = false
+		old.ConnState = StateDisconnected
+	}
 
 	ssid = fixedWebGhostSSID
 
@@ -676,6 +701,10 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 
 	// 【优化】添加到全局群组索引
 	m.addToGlobalGroupIndex(device.GroupID, key, device)
+	shard.mu.Unlock()
+	if old != nil && old != device && old.Conn != nil {
+		_ = old.Conn.Close()
+	}
 
 	log.Printf("[WS] Ghost device registered: user-%d (%s-%d) group-%d", userID, callsign, ssid, device.GroupID)
 }

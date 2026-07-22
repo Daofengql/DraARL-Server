@@ -19,6 +19,8 @@ type WSDeviceInterface interface {
 	IsDisabledSend() bool
 	GetConnectTime() time.Time
 	GetLastPacketTime() time.Time
+	GetInterconnectSession() (uint64, uint64)
+	SetInterconnectSession(sessionID, sessionEpoch uint64)
 }
 
 type WSBroadcastFilter struct {
@@ -34,4 +36,5 @@ type WSManagerInterface interface {
 	GetDeliveryStats() map[string]int64
 	// GetOnlineCount 获取在线设备数量（普通设备数，幽灵设备数）
 	GetOnlineCount() (normalCount, ghostCount int)
+	RevokeInterconnectSession(ownerID int, ssid byte, sessionID, sessionEpoch uint64) bool
 }

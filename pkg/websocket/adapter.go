@@ -43,6 +43,9 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 			if device == nil || device.DisableRecv {
 				continue
 			}
+			if udphub.CenterIdentityOwnedByRemote(device.UserID, device.SSID) {
+				continue
+			}
 			if filter.ExcludeDeviceID != 0 && !device.IsGhost() && device.GetDeviceID() == filter.ExcludeDeviceID {
 				continue
 			}
@@ -61,6 +64,27 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 		}
 	}
 	return sent, dropped
+}
+
+func (a *WSManagerAdapter) RevokeInterconnectSession(ownerID int, ssid byte, sessionID, sessionEpoch uint64) bool {
+	if a == nil || a.manager == nil || ownerID <= 0 || sessionID == 0 {
+		return false
+	}
+	for _, device := range a.manager.GetAllOnlineDevices() {
+		if device == nil || device.UserID != ownerID || device.SSID != ssid {
+			continue
+		}
+		currentID, currentEpoch := device.GetInterconnectSession()
+		if currentID != sessionID || currentEpoch != sessionEpoch {
+			continue
+		}
+		device.SetInterconnectSession(0, 0)
+		if device.Conn != nil {
+			_ = device.Conn.Close()
+		}
+		return true
+	}
+	return false
 }
 
 func (a *WSManagerAdapter) GetDeliveryStats() map[string]int64 {
@@ -152,6 +176,9 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 	if device.DisableSend {
 		return
 	}
+	if !udphub.AuthorizeCenterLocalWS(device, device.GroupID) {
+		return
+	}
 
 	// 2. 通信录制：记录 WebSocket 客户端的上行语音数据
 	if len(packet.DATA) > 0 {
@@ -189,6 +216,9 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 func handleTextMessage(device *WSDevice, packet *WSPacket) {
 	// 1. 权限检查
 	if device.DisableSend {
+		return
+	}
+	if !udphub.AuthorizeCenterLocalWS(device, device.GroupID) {
 		return
 	}
 

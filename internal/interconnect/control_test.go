@@ -71,6 +71,35 @@ func TestTLSControlPlaneRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestTLSControlPlaneRejectsReservedCenterNodeID(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validatorCalled := false
+	server, err := NewNodeServer(NodeServerConfig{
+		ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(_, _ string) bool { validatorCalled = true; return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}, NodeID: CenterLocalNodeID, Token: "secret"})
+	if err == nil {
+		client.Close()
+		t.Fatal("reserved centre node ID was accepted")
+	}
+	if validatorCalled {
+		t.Fatal("reserved centre node ID reached the external token validator")
+	}
+}
+
 func TestTLSControlPlaneReplacesSameNodeSessionWithoutDeletingNewSession(t *testing.T) {
 	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
 	if err != nil {

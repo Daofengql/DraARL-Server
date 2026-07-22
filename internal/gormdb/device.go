@@ -29,6 +29,17 @@ func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, 
 	})
 }
 
+// ClearDeviceEntryIfSession prevents a delayed centre timeout from clearing a
+// newer edge assignment for the same persistent device.
+func (r *DeviceRepository) ClearDeviceEntryIfSession(deviceID int, nodeID string, sessionID uint64) (bool, error) {
+	result := r.db.Model(&Device{}).
+		Where("id = ? AND current_entry_node_id = ? AND current_entry_session_id = ?", deviceID, nodeID, sessionID).
+		Updates(map[string]interface{}{
+			"current_entry_node_id": "", "current_entry_session_id": 0, "is_online": false,
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
 var ErrDeviceNotInGroup = errors.New("device is no longer in the expected group")
 
 // DeviceRepository 设备仓库

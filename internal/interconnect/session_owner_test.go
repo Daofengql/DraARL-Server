@@ -3,6 +3,8 @@ package interconnect
 import (
 	"errors"
 	"testing"
+
+	"draarl/internal/protocol"
 )
 
 func TestDeviceSessionMigrationReplacesOwnerAndAdvancesEpoch(t *testing.T) {
@@ -48,6 +50,87 @@ func TestDeviceSessionMigrationReplacesOwnerAndAdvancesEpoch(t *testing.T) {
 	}
 	if newOwner.NodeID != "edge-b" || newOwner.SessionEpoch != 2 {
 		t.Fatalf("unexpected active owner: %#v", newOwner)
+	}
+}
+
+func TestDeviceRoamsBetweenCenterAndEdgeWithMonotonicEpoch(t *testing.T) {
+	cluster := NewClusterManager(48)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	edge := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	gateway.OnConnect(edge)
+	var revoked []deviceSessionOwner
+	gateway.SetLocalRevocationHandler(func(deviceID, ownerID int, ssid byte, sessionID, epoch uint64) {
+		revoked = append(revoked, deviceSessionOwner{DeviceID: deviceID, OwnerID: ownerID, SSID: ssid, SessionID: sessionID, SessionEpoch: epoch, NodeID: CenterLocalNodeID})
+	})
+
+	local := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", CallSign: "BG5ABC", SSID: 1, GroupID: 10, DomainID: 99}
+	if err := gateway.ActivateLocalDevice(local); err != nil {
+		t.Fatal(err)
+	}
+	if local.SessionID == 0 || local.SessionEpoch != 1 || !gateway.AuthorizeLocalDevice(*local) {
+		t.Fatalf("unexpected local owner: %#v", local)
+	}
+	if targets := cluster.TargetNodes(99, "edge-a"); len(targets) != 0 {
+		t.Fatalf("local owner appeared as edge target: %v", targets)
+	}
+
+	remote := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", CallSign: "BG5ABC", SSID: 1, GroupID: 10, DomainID: 99}
+	if err := gateway.activateDeviceSession(edge, remote); err != nil {
+		t.Fatal(err)
+	}
+	if remote.SessionEpoch != 2 || gateway.AuthorizeLocalDevice(*local) {
+		t.Fatalf("edge migration did not revoke local owner: local=%#v remote=%#v", local, remote)
+	}
+	if len(revoked) != 1 || revoked[0].SessionID != local.SessionID || revoked[0].SessionEpoch != local.SessionEpoch {
+		t.Fatalf("local revoke callbacks=%#v", revoked)
+	}
+	if _, ok := cluster.ResolveRoute(local.SessionID); ok {
+		t.Fatal("local route survived migration to edge")
+	}
+
+	returned := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", CallSign: "BG5ABC", SSID: 1, GroupID: 20, DomainID: 100}
+	if err := gateway.ActivateLocalDevice(returned); err != nil {
+		t.Fatal(err)
+	}
+	if returned.SessionEpoch != 3 || returned.SessionID == local.SessionID || returned.SessionID == remote.SessionID {
+		t.Fatalf("return to centre did not allocate a new epoch: %#v", returned)
+	}
+	if _, ok := cluster.ResolveRoute(remote.SessionID); ok {
+		t.Fatal("edge route survived migration to centre")
+	}
+	if !gateway.AuthorizeLocalDevice(*returned) || gateway.RevokeLocalDevice(local.SessionID, local.SessionEpoch) {
+		t.Fatal("stale local revoke affected the current centre owner")
+	}
+}
+
+func TestLocalRelayValidatesAuthorityPolicyAndInnerPacket(t *testing.T) {
+	cluster := NewClusterManager(49)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	grant := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", CallSign: "BG5ABC", SSID: 1, GroupID: 10, DomainID: 99}
+	if err := gateway.ActivateLocalDevice(grant); err != nil {
+		t.Fatal(err)
+	}
+	valid := protocol.EncodeDraARLv1("alice", "", 1, protocol.DraARLTypeOpus16K, protocol.DraARLDevModelESP32NoRadio, 0, "BG5ABC", []byte{1})
+	if err := gateway.RelayLocalDevice(*grant, valid); err != nil {
+		t.Fatalf("valid local relay failed: %v", err)
+	}
+	for name, wire := range map[string][]byte{
+		"credential": protocol.EncodeDraARLv1("alice", "secret", 1, protocol.DraARLTypeOpus16K, 0, 0, "BG5ABC", []byte{1}),
+		"config":     protocol.EncodeDraARLv1("alice", "", 1, protocol.DraARLTypeConfig, 0, 0, "BG5ABC", []byte{1}),
+		"identity":   protocol.EncodeDraARLv1("mallory", "", 1, protocol.DraARLTypeOpus16K, 0, 0, "BG5ABC", []byte{1}),
+	} {
+		if err := gateway.RelayLocalDevice(*grant, wire); err == nil {
+			t.Fatalf("%s local relay was accepted", name)
+		}
+	}
+	updated, err := gateway.UpdateActiveDeviceRoute(grant.DeviceID, grant.GroupID, grant.DomainID, true, false)
+	if err != nil || !updated {
+		t.Fatalf("disable send update failed: updated=%v err=%v", updated, err)
+	}
+	if err := gateway.RelayLocalDevice(*grant, valid); err == nil {
+		t.Fatal("disabled local sender was accepted")
 	}
 }
 
@@ -330,5 +413,34 @@ func TestDeviceAndOwnerRevocationRemoveOnlyCurrentSessions(t *testing.T) {
 	}
 	if _, ok := cluster.ResolveRoute(other.SessionID); !ok {
 		t.Fatal("owner revoke removed another user's route")
+	}
+}
+
+func TestDeviceRevocationCallbackIsBoundToCurrentEntrySession(t *testing.T) {
+	cluster := NewClusterManager(51)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	edge := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	gateway.OnConnect(edge)
+	type revokedEntry struct {
+		nodeID    string
+		controlID uint64
+		deviceID  int
+		reason    string
+	}
+	var callbacks []revokedEntry
+	gateway.SetDeviceRevocationHandler(func(nodeID string, controlSessionID uint64, deviceID int, reason string) {
+		callbacks = append(callbacks, revokedEntry{nodeID: nodeID, controlID: controlSessionID, deviceID: deviceID, reason: reason})
+	})
+	grant := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, DomainID: 9}
+	if err := gateway.activateDeviceSession(edge, grant); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := gateway.RevokeActiveDevice(grant.DeviceID, "user_disabled")
+	if err != nil || !revoked {
+		t.Fatalf("revoke failed: revoked=%v err=%v", revoked, err)
+	}
+	if len(callbacks) != 1 || callbacks[0] != (revokedEntry{nodeID: edge.NodeID, controlID: edge.SessionID, deviceID: grant.DeviceID, reason: "user_disabled"}) {
+		t.Fatalf("revocation callbacks=%#v", callbacks)
 	}
 }

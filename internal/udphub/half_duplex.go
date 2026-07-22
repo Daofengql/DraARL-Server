@@ -114,6 +114,7 @@ func tryAcquireHalfDuplex(groupID int, speaker halfDuplexSpeaker, ts time.Time) 
 func resetHalfDuplexDomainCache() {
 	halfDuplexDomainKeyCache = sync.Map{}
 	halfDuplexDomainGroupsCache = sync.Map{}
+	resetDomainGroupReverseCache()
 
 	// 仅回收明显过期的占用状态，防止状态表长期增长。
 	expireBefore := time.Now().Add(-3 * halfDuplexVoiceHoldTimeout)

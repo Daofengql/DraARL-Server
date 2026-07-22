@@ -51,7 +51,7 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte) ProxiedDeviceAuthRe
 	if !authResult.Success || authResult.User == nil {
 		return ProxiedDeviceAuthResult{Error: authResult.Error}
 	}
-	if existing := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflict(existing, packet.UDPAddr, "") {
+	if existing := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); existing != nil && existing.CurrentEntryNodeID != "center" && shouldRejectNormalDeviceConflict(existing, packet.UDPAddr, "") {
 		return ProxiedDeviceAuthResult{Error: "device_conflict_online"}
 	}
 	model := packet.DevModel

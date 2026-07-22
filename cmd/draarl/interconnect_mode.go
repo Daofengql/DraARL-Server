@@ -19,6 +19,17 @@ import (
 	"draarl/internal/udphub"
 )
 
+func localSourceGrant(source *udphub.CenterLocalSource) interconnect.DeviceGrant {
+	if source == nil {
+		return interconnect.DeviceGrant{}
+	}
+	return interconnect.DeviceGrant{
+		SessionID: source.SessionID, SessionEpoch: source.SessionEpoch, DeviceID: source.DeviceID, OwnerID: source.OwnerID,
+		Username: source.Username, CallSign: source.CallSign, SSID: source.SSID, DevModel: source.DevModel, DMRID: source.DMRID,
+		GroupID: source.GroupID, DomainID: source.DomainID, DisableSend: source.DisableSend, DisableRecv: source.DisableRecv,
+	}
+}
+
 func runEdgeMode(configPath string) error {
 	if strings.TrimSpace(configPath) == "" {
 		configPath = config.DefaultConfigFileName
@@ -136,10 +147,14 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			return nil
 		}
 		now := time.Now()
-		if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(grant.DeviceID, session.NodeID, "edge", session.SessionID, true, now); err != nil {
+		entryMode := "edge"
+		if session.NodeID == interconnect.CenterLocalNodeID {
+			entryMode = "center"
+		}
+		if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(grant.DeviceID, session.NodeID, entryMode, session.SessionID, true, now); err != nil {
 			return err
 		}
-		udphub.SyncRuntimeDeviceEntry(grant.DeviceID, session.NodeID, "edge", session.SessionID, true, now)
+		udphub.SyncRuntimeDeviceEntry(grant.DeviceID, session.NodeID, entryMode, session.SessionID, true, now)
 		return nil
 	}
 	onNodeStatus := func(session *interconnect.NodeSession, heartbeat *interconnect.NodeHeartbeat, online bool) {

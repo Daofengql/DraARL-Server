@@ -27,20 +27,22 @@ type routeTestWSDevice struct {
 	disableSend bool
 }
 
-func (d *routeTestWSDevice) GetIdentifier() string        { return d.identifier }
-func (d *routeTestWSDevice) GetCallSignSSID() string      { return d.callsign }
-func (d *routeTestWSDevice) GetGroupID() int              { return d.groupID }
-func (d *routeTestWSDevice) IsGhost() bool                { return d.ghost }
-func (d *routeTestWSDevice) GetUserID() int               { return d.userID }
-func (d *routeTestWSDevice) GetDeviceID() int             { return d.deviceID }
-func (d *routeTestWSDevice) GetUsername() string          { return d.username }
-func (d *routeTestWSDevice) GetCallSign() string          { return d.callsign }
-func (d *routeTestWSDevice) GetSSID() byte                { return d.ssid }
-func (d *routeTestWSDevice) GetDevModel() byte            { return d.devModel }
-func (d *routeTestWSDevice) IsDisabledRecv() bool         { return d.disableRecv }
-func (d *routeTestWSDevice) IsDisabledSend() bool         { return d.disableSend }
-func (d *routeTestWSDevice) GetConnectTime() time.Time    { return time.Time{} }
-func (d *routeTestWSDevice) GetLastPacketTime() time.Time { return time.Time{} }
+func (d *routeTestWSDevice) GetIdentifier() string                    { return d.identifier }
+func (d *routeTestWSDevice) GetCallSignSSID() string                  { return d.callsign }
+func (d *routeTestWSDevice) GetGroupID() int                          { return d.groupID }
+func (d *routeTestWSDevice) IsGhost() bool                            { return d.ghost }
+func (d *routeTestWSDevice) GetUserID() int                           { return d.userID }
+func (d *routeTestWSDevice) GetDeviceID() int                         { return d.deviceID }
+func (d *routeTestWSDevice) GetUsername() string                      { return d.username }
+func (d *routeTestWSDevice) GetCallSign() string                      { return d.callsign }
+func (d *routeTestWSDevice) GetSSID() byte                            { return d.ssid }
+func (d *routeTestWSDevice) GetDevModel() byte                        { return d.devModel }
+func (d *routeTestWSDevice) IsDisabledRecv() bool                     { return d.disableRecv }
+func (d *routeTestWSDevice) IsDisabledSend() bool                     { return d.disableSend }
+func (d *routeTestWSDevice) GetConnectTime() time.Time                { return time.Time{} }
+func (d *routeTestWSDevice) GetLastPacketTime() time.Time             { return time.Time{} }
+func (d *routeTestWSDevice) GetInterconnectSession() (uint64, uint64) { return 0, 0 }
+func (d *routeTestWSDevice) SetInterconnectSession(uint64, uint64)    {}
 
 type routeTestBroadcast struct {
 	groups      []int
@@ -127,6 +129,7 @@ func (m *routeTestWSManager) GetOnlineCount() (normalCount, ghostCount int) {
 	}
 	return normalCount, ghostCount
 }
+func (m *routeTestWSManager) RevokeInterconnectSession(int, byte, uint64, uint64) bool { return false }
 
 func (m *routeTestWSManager) resetDeliveries() {
 	m.mu.Lock()

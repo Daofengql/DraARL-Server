@@ -31,6 +31,8 @@ type CenterGateway struct {
 	deviceEpochs   map[string]uint64
 	metrics        map[string]*Metrics
 	onNodeStatus   func(*NodeSession, *NodeHeartbeat, bool)
+	onLocalRevoke  func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)
+	onDeviceRevoke func(nodeID string, controlSessionID uint64, deviceID int, reason string)
 }
 
 type deviceSessionOwner struct {
@@ -57,6 +59,28 @@ func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 		g.cluster.AttachServer(server)
 		g.cluster.AttachDataBridge(data)
 	}
+}
+func (g *CenterGateway) SetLocalRevocationHandler(handler func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)) {
+	g.mu.Lock()
+	g.onLocalRevoke = handler
+	g.mu.Unlock()
+}
+func (g *CenterGateway) SetDeviceRevocationHandler(handler func(nodeID string, controlSessionID uint64, deviceID int, reason string)) {
+	g.mu.Lock()
+	g.onDeviceRevoke = handler
+	g.mu.Unlock()
+}
+
+func (g *CenterGateway) IdentityOwnedByRemote(ownerID int, ssid byte) bool {
+	identity := deviceOwnerIdentity(ownerID, ssid)
+	if identity == "" {
+		return false
+	}
+	g.mu.RLock()
+	sessionID := g.activeDevices[identity]
+	owner, ok := g.deviceSessions[sessionID]
+	g.mu.RUnlock()
+	return ok && owner.NodeID != CenterLocalNodeID
 }
 func (g *CenterGateway) OnConnect(session *NodeSession) {
 	g.ownershipMu.Lock()
@@ -155,6 +179,9 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		if err != nil {
 			return
 		}
+		if err := protocol.ValidateRelayInnerPacket(frame.InnerPacket); err != nil {
+			return
+		}
 		g.mu.RLock()
 		owner := g.deviceSessions[frame.SessionID]
 		g.mu.RUnlock()
@@ -166,6 +193,9 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		}
 		route, ok := g.cluster.ResolveRoute(frame.SessionID)
 		if !ok || route.DisableSend || route.SessionEpoch != frame.SessionEpoch || route.DomainID == 0 {
+			return
+		}
+		if !protocol.RelayInnerIdentityMatches(frame.InnerPacket, route.Username, route.CallSign, route.SSID) {
 			return
 		}
 		// Node payload is never authoritative for routing or permissions.
@@ -235,18 +265,28 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 	}
 	g.mu.Unlock()
 	grant.SessionEpoch = epoch
-	if g.activate != nil {
-		if err := g.activate(session, grant); err != nil {
-			return err
-		}
-	}
+	// Remove the previous owner from the authoritative lookup before any
+	// persistence work. Relay hot paths therefore reject it while the new
+	// entry is being committed. Restore it if activation fails.
 	g.mu.Lock()
-	g.deviceEpochs[identity] = epoch
 	oldSessionID := g.activeDevices[identity]
 	oldOwner, hadOld := g.deviceSessions[oldSessionID]
 	if hadOld {
 		g.removeOwnerMapsLocked(oldSessionID, oldOwner)
 	}
+	g.mu.Unlock()
+	if g.activate != nil {
+		if err := g.activate(session, grant); err != nil {
+			if hadOld {
+				g.mu.Lock()
+				g.restoreOwnerMapsLocked(oldOwner)
+				g.mu.Unlock()
+			}
+			return err
+		}
+	}
+	g.mu.Lock()
+	g.deviceEpochs[identity] = epoch
 	owner := deviceSessionOwner{NodeID: session.NodeID, ControlSessionID: session.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity}
 	g.deviceSessions[grant.SessionID] = owner
 	g.activeDevices[identity] = grant.SessionID
@@ -256,6 +296,7 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 	g.mu.Unlock()
 
 	if hadOld {
+		g.notifyOwnerRevoke(oldOwner, "session_migrated")
 		g.sendDeviceSessionRevoke(oldOwner, "session_migrated")
 		if err := g.cluster.RemoveNodeRoute(oldOwner.NodeID, oldSessionID); err != nil {
 			log.Printf("[INTERCONNECT] remove migrated route failed: node=%s session=%d err=%v", oldOwner.NodeID, oldSessionID, err)
@@ -265,6 +306,140 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 		log.Printf("[INTERCONNECT] publish device route failed: node=%s session=%d err=%v", session.NodeID, grant.SessionID, err)
 	}
 	return nil
+}
+
+// ActivateLocalDevice makes a centre-direct UDP/WS device part of the same
+// owner/epoch state machine as an edge device. Repeated local activation is
+// idempotent, which keeps WS and heartbeat hot paths from churning sessions.
+func (g *CenterGateway) ActivateLocalDevice(grant *DeviceGrant) error {
+	if grant == nil || g.cluster == nil {
+		return errors.New("local device session activation is incomplete")
+	}
+	identity := deviceGrantIdentity(grant)
+	if identity == "" {
+		return errors.New("device identity is incomplete")
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+
+	g.mu.RLock()
+	oldSessionID := g.activeDevices[identity]
+	oldOwner, hadOld := g.deviceSessions[oldSessionID]
+	g.mu.RUnlock()
+	if hadOld && oldOwner.NodeID == CenterLocalNodeID && grant.SessionID == oldOwner.SessionID && grant.SessionEpoch == oldOwner.SessionEpoch {
+		grant.SessionID, grant.SessionEpoch = oldOwner.SessionID, oldOwner.SessionEpoch
+		route, ok := g.cluster.ResolveRoute(oldOwner.SessionID)
+		if !ok || route.SessionEpoch != oldOwner.SessionEpoch {
+			return errors.New("local owner route is missing")
+		}
+		next := grant.Route()
+		if route != next {
+			return g.cluster.SetNodeRoute(CenterLocalNodeID, next)
+		}
+		return nil
+	}
+
+	grant.SessionID = g.cluster.NextMessageID()
+	g.mu.RLock()
+	epoch := g.deviceEpochs[identity] + 1
+	g.mu.RUnlock()
+	if epoch == 0 {
+		epoch = 1
+	}
+	grant.SessionEpoch = epoch
+	pseudo := &NodeSession{NodeID: CenterLocalNodeID, SessionID: grant.SessionID}
+	g.mu.Lock()
+	if hadOld {
+		g.removeOwnerMapsLocked(oldSessionID, oldOwner)
+	}
+	g.mu.Unlock()
+	if g.activate != nil {
+		if err := g.activate(pseudo, grant); err != nil {
+			if hadOld {
+				g.mu.Lock()
+				g.restoreOwnerMapsLocked(oldOwner)
+				g.mu.Unlock()
+			}
+			return err
+		}
+	}
+
+	g.mu.Lock()
+	g.deviceEpochs[identity] = epoch
+	owner := deviceSessionOwner{NodeID: CenterLocalNodeID, ControlSessionID: grant.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity}
+	g.deviceSessions[grant.SessionID] = owner
+	g.activeDevices[identity] = grant.SessionID
+	if grant.DeviceID > 0 {
+		g.activeByID[grant.DeviceID] = grant.SessionID
+	}
+	g.mu.Unlock()
+
+	if hadOld {
+		g.notifyOwnerRevoke(oldOwner, "session_migrated")
+		g.sendDeviceSessionRevoke(oldOwner, "session_migrated")
+		if err := g.cluster.RemoveNodeRoute(oldOwner.NodeID, oldSessionID); err != nil {
+			log.Printf("[INTERCONNECT] remove migrated route failed: node=%s session=%d err=%v", oldOwner.NodeID, oldSessionID, err)
+		}
+	}
+	return g.cluster.SetNodeRoute(CenterLocalNodeID, grant.Route())
+}
+
+func (g *CenterGateway) RelayLocalDevice(grant DeviceGrant, inner []byte) error {
+	if g.cluster == nil || grant.SessionID == 0 || grant.SessionEpoch == 0 {
+		return errors.New("local relay session is incomplete")
+	}
+	if err := protocol.ValidateRelayInnerPacket(inner); err != nil {
+		return err
+	}
+	g.mu.RLock()
+	owner, ok := g.deviceSessions[grant.SessionID]
+	g.mu.RUnlock()
+	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != grant.SessionEpoch {
+		return errors.New("local relay session is not authoritative")
+	}
+	route, ok := g.cluster.ResolveRoute(grant.SessionID)
+	if !ok || route.SessionEpoch != grant.SessionEpoch || route.DisableSend || route.DomainID == 0 {
+		return errors.New("local relay route is not eligible")
+	}
+	if !protocol.RelayInnerIdentityMatches(inner, route.Username, route.CallSign, route.SSID) {
+		return errors.New("local relay identity mismatch")
+	}
+	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
+		SessionID: route.SessionID, SessionEpoch: route.SessionEpoch, DomainID: route.DomainID,
+		InnerPacket: inner,
+	})
+}
+
+func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {
+	if grant.SessionID == 0 || grant.SessionEpoch == 0 || g.cluster == nil {
+		return false
+	}
+	g.mu.RLock()
+	owner, ok := g.deviceSessions[grant.SessionID]
+	g.mu.RUnlock()
+	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != grant.SessionEpoch {
+		return false
+	}
+	route, ok := g.cluster.ResolveRoute(grant.SessionID)
+	return ok && route.SessionEpoch == grant.SessionEpoch
+}
+
+func (g *CenterGateway) RevokeLocalDevice(sessionID, sessionEpoch uint64) bool {
+	if g.cluster == nil || sessionID == 0 {
+		return false
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.Lock()
+	owner, ok := g.deviceSessions[sessionID]
+	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != sessionEpoch {
+		g.mu.Unlock()
+		return false
+	}
+	g.removeOwnerMapsLocked(sessionID, owner)
+	g.mu.Unlock()
+	_ = g.cluster.RemoveNodeRoute(CenterLocalNodeID, sessionID)
+	return true
 }
 
 func (g *CenterGateway) removeOwnerMapsLocked(sessionID uint64, owner deviceSessionOwner) {
@@ -277,8 +452,29 @@ func (g *CenterGateway) removeOwnerMapsLocked(sessionID uint64, owner deviceSess
 	}
 }
 
+func (g *CenterGateway) restoreOwnerMapsLocked(owner deviceSessionOwner) {
+	g.deviceSessions[owner.SessionID] = owner
+	g.activeDevices[owner.Identity] = owner.SessionID
+	if owner.DeviceID > 0 {
+		g.activeByID[owner.DeviceID] = owner.SessionID
+	}
+}
+
+func (g *CenterGateway) notifyOwnerRevoke(owner deviceSessionOwner, reason string) {
+	g.mu.RLock()
+	deviceHandler := g.onDeviceRevoke
+	localHandler := g.onLocalRevoke
+	g.mu.RUnlock()
+	if deviceHandler != nil && owner.DeviceID > 0 {
+		deviceHandler(owner.NodeID, owner.ControlSessionID, owner.DeviceID, reason)
+	}
+	if owner.NodeID == CenterLocalNodeID && localHandler != nil {
+		localHandler(owner.DeviceID, owner.OwnerID, owner.SSID, owner.SessionID, owner.SessionEpoch)
+	}
+}
+
 func (g *CenterGateway) sendDeviceSessionRevoke(owner deviceSessionOwner, reason string) {
-	if g.server == nil || owner.NodeID == "" || owner.SessionID == 0 {
+	if g.server == nil || owner.NodeID == "" || owner.NodeID == CenterLocalNodeID || owner.SessionID == 0 {
 		return
 	}
 	payload, err := EncodeJSON(DeviceSessionRevoke{SessionID: owner.SessionID, SessionEpoch: owner.SessionEpoch, DeviceID: owner.DeviceID, Reason: reason})
@@ -357,6 +553,7 @@ func (g *CenterGateway) RevokeActiveDevice(deviceID int, reason string) (bool, e
 	if !ok {
 		return false, nil
 	}
+	g.notifyOwnerRevoke(owner, reason)
 	g.sendDeviceSessionRevoke(owner, reason)
 	err := g.cluster.RemoveNodeRoute(owner.NodeID, sessionID)
 	return true, err
@@ -380,6 +577,7 @@ func (g *CenterGateway) RevokeActiveOwner(ownerID int, reason string) (int, erro
 	g.mu.Unlock()
 	var firstErr error
 	for _, owner := range owners {
+		g.notifyOwnerRevoke(owner, reason)
 		g.sendDeviceSessionRevoke(owner, reason)
 		if err := g.cluster.RemoveNodeRoute(owner.NodeID, owner.SessionID); err != nil && firstErr == nil {
 			firstErr = err

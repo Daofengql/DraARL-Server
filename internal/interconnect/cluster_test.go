@@ -1,6 +1,9 @@
 package interconnect
 
-import "testing"
+import (
+	"sync/atomic"
+	"testing"
+)
 
 func TestClusterDomainTargetsExcludeSourceAndDisabledRoutes(t *testing.T) {
 	m := NewClusterManager(1)
@@ -11,6 +14,37 @@ func TestClusterDomainTargetsExcludeSourceAndDisabledRoutes(t *testing.T) {
 	targets := m.TargetNodes(5, "a")
 	if len(targets) != 1 || targets[0] != "c" {
 		t.Fatalf("targets=%v", targets)
+	}
+}
+
+func TestClusterTreatsCenterAsLocalDeliveryOnly(t *testing.T) {
+	m := NewClusterManager(50)
+	defer m.Close()
+	var delivered atomic.Int64
+	m.SetLocalDelivery(func(frame RelayFrame) {
+		if frame.DomainID != 7 {
+			t.Errorf("local delivery domain=%d want=7", frame.DomainID)
+		}
+		delivered.Add(1)
+	})
+	if err := m.SetNodeRoute(CenterLocalNodeID, DeviceRoute{SessionID: 1, SessionEpoch: 1, DomainID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if targets := m.TargetNodes(7, "edge-a"); len(targets) != 0 {
+		t.Fatalf("centre-local route leaked into network targets: %v", targets)
+	}
+	frame := RelayFrame{SessionID: 2, SessionEpoch: 1, DomainID: 7, InnerPacket: make([]byte, DraARLHeaderSize)}
+	if err := m.Relay("edge-a", frame); err != nil {
+		t.Fatal(err)
+	}
+	if delivered.Load() != 1 {
+		t.Fatalf("edge relay local deliveries=%d want=1", delivered.Load())
+	}
+	if err := m.Relay(CenterLocalNodeID, frame); err != nil {
+		t.Fatal(err)
+	}
+	if delivered.Load() != 1 {
+		t.Fatalf("centre relay looped into local delivery: count=%d", delivered.Load())
 	}
 }
 

@@ -4,6 +4,54 @@ import (
 	"testing"
 )
 
+func TestDeviceConfigControlValidation(t *testing.T) {
+	base := DeviceConfigControl{SessionID: 11, SessionEpoch: 2, DeviceID: 7}
+	tests := []struct {
+		name    string
+		message DeviceConfigControl
+		valid   bool
+	}{
+		{name: "sync", message: func() DeviceConfigControl { m := base; m.Kind = DeviceConfigKindSync; return m }(), valid: true},
+		{name: "report", message: func() DeviceConfigControl { m := base; m.Kind, m.Data = DeviceConfigKindReport, []byte{2, 0}; return m }(), valid: true},
+		{name: "down", message: func() DeviceConfigControl {
+			m := base
+			m.Kind, m.Packet = DeviceConfigKindDown, make([]byte, DraARLHeaderSize)
+			return m
+		}(), valid: true},
+		{name: "result", message: func() DeviceConfigControl {
+			m := base
+			m.Kind, m.AckForMessageID = DeviceConfigKindResult, 99
+			m.Success = true
+			return m
+		}(), valid: true},
+		{name: "missing session", message: DeviceConfigControl{Kind: DeviceConfigKindSync, SessionEpoch: 1, DeviceID: 1}},
+		{name: "empty report", message: func() DeviceConfigControl { m := base; m.Kind = DeviceConfigKindReport; return m }()},
+		{name: "oversized report", message: func() DeviceConfigControl {
+			m := base
+			m.Kind, m.Data = DeviceConfigKindReport, make([]byte, 711)
+			return m
+		}()},
+		{name: "short down", message: func() DeviceConfigControl {
+			m := base
+			m.Kind, m.Packet = DeviceConfigKindDown, make([]byte, DraARLHeaderSize-1)
+			return m
+		}()},
+		{name: "result without ack", message: func() DeviceConfigControl { m := base; m.Kind = DeviceConfigKindResult; return m }()},
+		{name: "unknown", message: func() DeviceConfigControl { m := base; m.Kind = "other"; return m }()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.message.Validate()
+			if test.valid && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("Validate() accepted invalid message")
+			}
+		})
+	}
+}
+
 func TestProjectionSnapshotChunksAndCommits(t *testing.T) {
 	p := NewProjection(7)
 	p.Version = 12

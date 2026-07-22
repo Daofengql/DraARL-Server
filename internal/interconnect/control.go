@@ -328,8 +328,14 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 			}
 			env, decodeErr := UnmarshalControl(wire, session.Key)
 			now := time.Now()
-			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID || env.Expired(now, 30*time.Second) || !session.AcceptMessage(env.MessageID, now) {
+			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID || env.Expired(now, 30*time.Second) {
 				continue
+			}
+			if !session.AcceptMessage(env.MessageID, now) {
+				if env.Subtype != SubtypeDeviceConfig {
+					continue
+				}
+				env.Duplicate = true
 			}
 			session.Touch()
 			if s.cfg.OnEnvelope != nil {
@@ -523,7 +529,7 @@ func (c *NodeClient) readLoop() {
 				continue
 			}
 			if !c.Session.AcceptMessage(env.MessageID, now) {
-				if env.Subtype != SubtypeRouteDelta && env.Subtype != SubtypeRouteSnapshotCommit {
+				if env.Subtype != SubtypeRouteDelta && env.Subtype != SubtypeRouteSnapshotCommit && env.Subtype != SubtypeDeviceConfig {
 					continue
 				}
 				env.Duplicate = true

@@ -523,3 +523,42 @@ func TestCenterSessionRenewalRequiresCurrentOwner(t *testing.T) {
 		t.Fatalf("owner renewal response=%#v", response)
 	}
 }
+
+func TestDeviceConfigPendingDeliveryFailsImmediatelyOnMigration(t *testing.T) {
+	cluster := NewClusterManager(55)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	edgeA := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	edgeB := &NodeSession{NodeID: "edge-b", SessionID: 202}
+	gateway.OnConnect(edgeA)
+	gateway.OnConnect(edgeB)
+	first := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", CallSign: "BG5CFG", SSID: 1, DomainID: 90}
+	if err := gateway.activateDeviceSession(edgeA, first); err != nil {
+		t.Fatal(err)
+	}
+	gateway.mu.RLock()
+	owner := gateway.deviceSessions[first.SessionID]
+	gateway.mu.RUnlock()
+	result := make(chan error, 1)
+	gateway.configMu.Lock()
+	gateway.configPending[999] = &pendingDeviceConfigDelivery{owner: owner, envelope: Envelope{MessageID: 999}, result: result}
+	gateway.configMu.Unlock()
+	second := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", CallSign: "BG5CFG", SSID: 1, DomainID: 91}
+	if err := gateway.activateDeviceSession(edgeB, second); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("migration completed a stale config delivery successfully")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("migration did not fail the stale config delivery")
+	}
+	gateway.configMu.Lock()
+	_, pending := gateway.configPending[999]
+	gateway.configMu.Unlock()
+	if pending {
+		t.Fatal("migration left a stale config delivery pending")
+	}
+}

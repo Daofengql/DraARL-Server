@@ -16,6 +16,7 @@ import (
 
 type DeviceAuthHandler func(session *NodeSession, request DeviceAuthRequest) (DeviceAuthResponse, error)
 type DeviceActivationHandler func(session *NodeSession, grant *DeviceGrant) error
+type DeviceConfigHandler func(deviceID int, kind string, data []byte) ([][]byte, error)
 
 const defaultDeviceGrantTTL = 2 * time.Minute
 
@@ -35,6 +36,15 @@ type CenterGateway struct {
 	onNodeStatus   func(*NodeSession, *NodeHeartbeat, bool)
 	onLocalRevoke  func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)
 	onDeviceRevoke func(nodeID string, controlSessionID uint64, deviceID int, reason string)
+	configHandler  DeviceConfigHandler
+	configMu       sync.Mutex
+	configPending  map[uint64]*pendingDeviceConfigDelivery
+	configUpCache  map[deviceConfigCacheKey]cachedDeviceConfigResult
+	configClosing  bool
+	configClosed   chan struct{}
+	configClose    sync.Once
+	configLoopOnce sync.Once
+	configWG       sync.WaitGroup
 }
 
 type deviceSessionOwner struct {
@@ -48,12 +58,49 @@ type deviceSessionOwner struct {
 	Identity         string
 }
 
+type pendingDeviceConfigDelivery struct {
+	owner      deviceSessionOwner
+	envelope   Envelope
+	createdAt  time.Time
+	lastSentAt time.Time
+	attempts   int
+	result     chan error
+}
+
+type deviceConfigCacheKey struct {
+	nodeID           string
+	controlSessionID uint64
+	messageID        uint64
+}
+
+type cachedDeviceConfigResult struct {
+	message  DeviceConfigControl
+	storedAt time.Time
+}
+
+const (
+	maxPendingDeviceConfigs = 1024
+	deviceConfigRetryAfter  = 750 * time.Millisecond
+	deviceConfigTimeout     = 3 * time.Second
+	deviceConfigMaxAttempts = 3
+	deviceConfigCacheTTL    = 30 * time.Second
+)
+
+var (
+	errDeviceConfigQueueFull = errors.New("device config delivery queue is full")
+	errDeviceConfigTimeout   = errors.New("device config delivery timed out")
+)
+
 func NewCenterGateway(cluster *ClusterManager, auth DeviceAuthHandler, activators ...DeviceActivationHandler) *CenterGateway {
 	var activate DeviceActivationHandler
 	if len(activators) > 0 {
 		activate = activators[0]
 	}
-	return &CenterGateway{cluster: cluster, auth: auth, activate: activate, deviceSessions: make(map[uint64]deviceSessionOwner), activeDevices: make(map[string]uint64), activeByID: make(map[int]uint64), deviceEpochs: make(map[string]uint64), metrics: make(map[string]*Metrics)}
+	return &CenterGateway{
+		cluster: cluster, auth: auth, activate: activate,
+		deviceSessions: make(map[uint64]deviceSessionOwner), activeDevices: make(map[string]uint64), activeByID: make(map[int]uint64), deviceEpochs: make(map[string]uint64), metrics: make(map[string]*Metrics),
+		configPending: make(map[uint64]*pendingDeviceConfigDelivery), configUpCache: make(map[deviceConfigCacheKey]cachedDeviceConfigResult), configClosed: make(chan struct{}),
+	}
 }
 func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 	g.server, g.data = server, data
@@ -61,6 +108,10 @@ func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 		g.cluster.AttachServer(server)
 		g.cluster.AttachDataBridge(data)
 	}
+	g.configLoopOnce.Do(func() {
+		g.configWG.Add(1)
+		go g.deviceConfigRetryLoop()
+	})
 }
 func (g *CenterGateway) SetLocalRevocationHandler(handler func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)) {
 	g.mu.Lock()
@@ -70,6 +121,12 @@ func (g *CenterGateway) SetLocalRevocationHandler(handler func(deviceID, ownerID
 func (g *CenterGateway) SetDeviceRevocationHandler(handler func(nodeID string, controlSessionID uint64, deviceID int, reason string)) {
 	g.mu.Lock()
 	g.onDeviceRevoke = handler
+	g.mu.Unlock()
+}
+
+func (g *CenterGateway) SetDeviceConfigHandler(handler DeviceConfigHandler) {
+	g.mu.Lock()
+	g.configHandler = handler
 	g.mu.Unlock()
 }
 
@@ -118,6 +175,7 @@ func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
 	}
 	g.mu.Unlock()
 	g.ownershipMu.Unlock()
+	g.failDeviceConfigsForSession(session, errors.New("node control session disconnected"))
 	if g.onNodeStatus != nil {
 		g.onNodeStatus(session, nil, false)
 	}
@@ -189,6 +247,17 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		if g.server != nil {
 			_ = g.server.SendEnvelope(session.NodeID, reply)
 		}
+	case SubtypeDeviceConfig:
+		var message DeviceConfigControl
+		if DecodeJSON(env.Payload, &message) != nil || message.Validate() != nil {
+			return
+		}
+		switch message.Kind {
+		case DeviceConfigKindSync, DeviceConfigKindReport:
+			g.handleDeviceConfigUp(session, env, message)
+		case DeviceConfigKindResult:
+			g.finishDeviceConfigDelivery(session, message)
+		}
 	case SubtypeRelayUpstream:
 		frame, err := UnmarshalRelayFrame(env.Payload)
 		if err != nil {
@@ -239,6 +308,397 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		var report DeviceSessionReport
 		if DecodeJSON(env.Payload, &report) == nil {
 			g.handleDeviceSessionReport(session, report)
+		}
+	}
+}
+
+func (g *CenterGateway) handleDeviceConfigUp(session *NodeSession, env Envelope, message DeviceConfigControl) {
+	if session == nil || env.MessageID == 0 || g.cluster == nil || g.server == nil {
+		return
+	}
+	cacheKey := deviceConfigCacheKey{nodeID: session.NodeID, controlSessionID: session.SessionID, messageID: env.MessageID}
+	if env.Duplicate {
+		g.configMu.Lock()
+		cached, ok := g.configUpCache[cacheKey]
+		g.configMu.Unlock()
+		if ok {
+			g.sendDeviceConfigControl(session, cached.message)
+		}
+		return
+	}
+
+	g.ownershipMu.Lock()
+	g.mu.RLock()
+	owner, ok := g.deviceSessions[message.SessionID]
+	handler := g.configHandler
+	g.mu.RUnlock()
+	if !ok || owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID ||
+		owner.SessionEpoch != message.SessionEpoch || owner.DeviceID != message.DeviceID {
+		g.ownershipMu.Unlock()
+		return
+	}
+	if route, routeOK := g.cluster.ResolveRoute(owner.SessionID); !routeOK || route.SessionEpoch != owner.SessionEpoch || route.DeviceID != owner.DeviceID {
+		g.ownershipMu.Unlock()
+		return
+	}
+	var (
+		packets [][]byte
+		err     error
+	)
+	if handler == nil {
+		err = errors.New("device configuration handler is unavailable")
+	} else {
+		packets, err = handler(owner.DeviceID, message.Kind, message.Data)
+	}
+	g.ownershipMu.Unlock()
+
+	result := DeviceConfigControl{
+		Kind: DeviceConfigKindResult, SessionID: owner.SessionID, SessionEpoch: owner.SessionEpoch,
+		DeviceID: owner.DeviceID, AckForMessageID: env.MessageID, Success: err == nil,
+	}
+	if err != nil {
+		result.Error = "processing_failed"
+		log.Printf("[INTERCONNECT] process device config failed: node=%s device=%d kind=%s err=%v", session.NodeID, owner.DeviceID, message.Kind, err)
+	}
+	g.cacheDeviceConfigUpResult(cacheKey, result)
+	g.sendDeviceConfigControl(session, result)
+	if err != nil {
+		return
+	}
+	for _, packet := range packets {
+		if _, _, queueErr := g.enqueueCurrentDeviceConfig(owner, packet); queueErr != nil {
+			log.Printf("[INTERCONNECT] queue device config response failed: node=%s device=%d err=%v", owner.NodeID, owner.DeviceID, queueErr)
+		}
+	}
+}
+
+func (g *CenterGateway) cacheDeviceConfigUpResult(key deviceConfigCacheKey, result DeviceConfigControl) {
+	select {
+	case <-g.configClosed:
+		return
+	default:
+	}
+	now := time.Now()
+	g.configMu.Lock()
+	if g.configClosing {
+		g.configMu.Unlock()
+		return
+	}
+	for existingKey, cached := range g.configUpCache {
+		if now.Sub(cached.storedAt) > deviceConfigCacheTTL {
+			delete(g.configUpCache, existingKey)
+		}
+	}
+	if len(g.configUpCache) >= maxPendingDeviceConfigs {
+		var oldestKey deviceConfigCacheKey
+		var oldestAt time.Time
+		for existingKey, cached := range g.configUpCache {
+			if oldestAt.IsZero() || cached.storedAt.Before(oldestAt) {
+				oldestKey, oldestAt = existingKey, cached.storedAt
+			}
+		}
+		delete(g.configUpCache, oldestKey)
+	}
+	g.configUpCache[key] = cachedDeviceConfigResult{message: result, storedAt: now}
+	g.configMu.Unlock()
+}
+
+func (g *CenterGateway) sendDeviceConfigControl(session *NodeSession, message DeviceConfigControl) {
+	if session == nil || g.server == nil || g.cluster == nil {
+		return
+	}
+	select {
+	case <-g.configClosed:
+		return
+	default:
+	}
+	current, ok := g.server.Session(session.NodeID)
+	if !ok || current != session || current.SessionID != session.SessionID {
+		return
+	}
+	payload, err := EncodeJSON(message)
+	if err != nil {
+		return
+	}
+	env := NewEnvelope(SubtypeDeviceConfig, "center", 0, g.cluster.NextMessageID(), payload)
+	env.ClusterEpoch, env.Flags = g.cluster.Epoch(), FlagControl|FlagAck
+	_ = g.server.SendEnvelope(session.NodeID, env)
+}
+
+func (g *CenterGateway) validateDeviceConfigDelivery(owner deviceSessionOwner, packet []byte) error {
+	decoded, err := protocol.NewDraARLv1Packet(nil, packet)
+	if err != nil {
+		return err
+	}
+	if decoded.Type != protocol.DraARLTypeConfig {
+		return errors.New("downstream packet is not Type 3")
+	}
+	if g.cluster == nil {
+		return errors.New("cluster is unavailable")
+	}
+	route, ok := g.cluster.ResolveRoute(owner.SessionID)
+	if !ok || route.SessionEpoch != owner.SessionEpoch || route.DeviceID != owner.DeviceID {
+		return errors.New("device config owner route is stale")
+	}
+	if decoded.SSID != route.SSID || decoded.Username != route.Username || decoded.CallSign != route.CallSign {
+		return errors.New("device config packet identity mismatch")
+	}
+	return nil
+}
+
+func (g *CenterGateway) enqueueDeviceConfig(owner deviceSessionOwner, packet []byte) (uint64, <-chan error, error) {
+	if owner.NodeID == "" || owner.NodeID == CenterLocalNodeID || owner.ControlSessionID == 0 || g.server == nil || g.cluster == nil {
+		return 0, nil, errors.New("remote device config owner is unavailable")
+	}
+	select {
+	case <-g.configClosed:
+		return 0, nil, errors.New("center gateway is closed")
+	default:
+	}
+	if err := g.validateDeviceConfigDelivery(owner, packet); err != nil {
+		return 0, nil, err
+	}
+	messageID := g.cluster.NextMessageID()
+	message := DeviceConfigControl{
+		Kind: DeviceConfigKindDown, SessionID: owner.SessionID, SessionEpoch: owner.SessionEpoch,
+		DeviceID: owner.DeviceID, Packet: append([]byte(nil), packet...),
+	}
+	payload, err := EncodeJSON(message)
+	if err != nil {
+		return 0, nil, err
+	}
+	env := NewEnvelope(SubtypeDeviceConfig, "center", 0, messageID, payload)
+	env.ClusterEpoch, env.Flags = g.cluster.Epoch(), FlagControl|FlagAck
+	now := time.Now()
+	pending := &pendingDeviceConfigDelivery{
+		owner: owner, envelope: env, createdAt: now, lastSentAt: now, attempts: 1, result: make(chan error, 1),
+	}
+	g.configMu.Lock()
+	if g.configClosing {
+		g.configMu.Unlock()
+		return 0, nil, errors.New("center gateway is closed")
+	}
+	if len(g.configPending) >= maxPendingDeviceConfigs {
+		g.configMu.Unlock()
+		return 0, nil, errDeviceConfigQueueFull
+	}
+	g.configPending[messageID] = pending
+	g.configMu.Unlock()
+	if err := g.sendPendingDeviceConfig(pending); err != nil {
+		g.completePendingDeviceConfig(messageID, err)
+		return 0, nil, err
+	}
+	return messageID, pending.result, nil
+}
+
+func (g *CenterGateway) enqueueCurrentDeviceConfig(owner deviceSessionOwner, packet []byte) (uint64, <-chan error, error) {
+	g.ownershipMu.Lock()
+	g.mu.RLock()
+	currentSessionID := g.activeByID[owner.DeviceID]
+	current, ok := g.deviceSessions[owner.SessionID]
+	g.mu.RUnlock()
+	if !ok || currentSessionID != owner.SessionID || current != owner {
+		g.ownershipMu.Unlock()
+		return 0, nil, errors.New("device config owner changed")
+	}
+	messageID, result, err := g.enqueueDeviceConfig(owner, packet)
+	g.ownershipMu.Unlock()
+	return messageID, result, err
+}
+
+func (g *CenterGateway) sendPendingDeviceConfig(pending *pendingDeviceConfigDelivery) error {
+	if pending == nil || g.server == nil {
+		return errors.New("node control server is unavailable")
+	}
+	session, ok := g.server.Session(pending.owner.NodeID)
+	if !ok || session.SessionID != pending.owner.ControlSessionID {
+		return errors.New("device config owner control session is offline")
+	}
+	return g.server.SendEnvelope(pending.owner.NodeID, pending.envelope)
+}
+
+func (g *CenterGateway) completePendingDeviceConfig(messageID uint64, result error) bool {
+	g.configMu.Lock()
+	pending := g.configPending[messageID]
+	if pending != nil {
+		delete(g.configPending, messageID)
+	}
+	g.configMu.Unlock()
+	if pending == nil {
+		return false
+	}
+	select {
+	case pending.result <- result:
+	default:
+	}
+	return true
+}
+
+func (g *CenterGateway) finishDeviceConfigDelivery(session *NodeSession, message DeviceConfigControl) bool {
+	if session == nil || message.AckForMessageID == 0 {
+		return false
+	}
+	g.configMu.Lock()
+	pending := g.configPending[message.AckForMessageID]
+	if pending == nil || pending.owner.NodeID != session.NodeID || pending.owner.ControlSessionID != session.SessionID ||
+		pending.owner.SessionID != message.SessionID || pending.owner.SessionEpoch != message.SessionEpoch || pending.owner.DeviceID != message.DeviceID {
+		g.configMu.Unlock()
+		return false
+	}
+	delete(g.configPending, message.AckForMessageID)
+	g.configMu.Unlock()
+	var result error
+	if !message.Success {
+		result = errors.New("edge rejected device config delivery")
+		if message.Error != "" {
+			result = fmt.Errorf("edge rejected device config delivery: %s", message.Error)
+		}
+	}
+	select {
+	case pending.result <- result:
+	default:
+	}
+	return true
+}
+
+// SendDeviceConfig routes a complete Type 3 packet to the authoritative
+// remote session. handled=false means the device is centre-local or offline
+// and the caller should use its existing local path.
+func (g *CenterGateway) SendDeviceConfig(deviceID int, packet []byte, timeout time.Duration) (handled bool, err error) {
+	if deviceID <= 0 || g.cluster == nil {
+		return false, nil
+	}
+	g.ownershipMu.Lock()
+	g.mu.RLock()
+	sessionID := g.activeByID[deviceID]
+	owner, ok := g.deviceSessions[sessionID]
+	g.mu.RUnlock()
+	if !ok || owner.NodeID == CenterLocalNodeID {
+		g.ownershipMu.Unlock()
+		return false, nil
+	}
+	g.ownershipMu.Unlock()
+	messageID, result, err := g.enqueueCurrentDeviceConfig(owner, packet)
+	if err != nil {
+		return true, err
+	}
+	if timeout <= 0 || timeout > deviceConfigTimeout+time.Second {
+		timeout = deviceConfigTimeout + time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return true, err
+	case <-timer.C:
+		g.completePendingDeviceConfig(messageID, errDeviceConfigTimeout)
+		return true, errDeviceConfigTimeout
+	}
+}
+
+func (g *CenterGateway) deviceConfigRetryLoop() {
+	defer g.configWG.Done()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.configClosed:
+			return
+		case now := <-ticker.C:
+			g.retryPendingDeviceConfigs(now)
+		}
+	}
+}
+
+func (g *CenterGateway) retryPendingDeviceConfigs(now time.Time) {
+	resend := make([]*pendingDeviceConfigDelivery, 0)
+	expired := make([]*pendingDeviceConfigDelivery, 0)
+	g.configMu.Lock()
+	for messageID, pending := range g.configPending {
+		if now.Sub(pending.createdAt) >= deviceConfigTimeout {
+			delete(g.configPending, messageID)
+			expired = append(expired, pending)
+			continue
+		}
+		if pending.attempts < deviceConfigMaxAttempts && now.Sub(pending.lastSentAt) >= deviceConfigRetryAfter {
+			pending.attempts++
+			pending.lastSentAt = now
+			resend = append(resend, pending)
+		}
+	}
+	for key, cached := range g.configUpCache {
+		if now.Sub(cached.storedAt) > deviceConfigCacheTTL {
+			delete(g.configUpCache, key)
+		}
+	}
+	g.configMu.Unlock()
+	for _, pending := range expired {
+		select {
+		case pending.result <- errDeviceConfigTimeout:
+		default:
+		}
+	}
+	for _, pending := range resend {
+		g.ownershipMu.Lock()
+		g.mu.RLock()
+		currentSessionID := g.activeByID[pending.owner.DeviceID]
+		current, ok := g.deviceSessions[pending.owner.SessionID]
+		g.mu.RUnlock()
+		if !ok || currentSessionID != pending.owner.SessionID || current != pending.owner {
+			g.ownershipMu.Unlock()
+			g.completePendingDeviceConfig(pending.envelope.MessageID, errors.New("device config owner changed"))
+			continue
+		}
+		_ = g.sendPendingDeviceConfig(pending)
+		g.ownershipMu.Unlock()
+	}
+}
+
+func (g *CenterGateway) failDeviceConfigsForSession(session *NodeSession, result error) {
+	if session == nil {
+		return
+	}
+	failed := make([]*pendingDeviceConfigDelivery, 0)
+	g.configMu.Lock()
+	for messageID, pending := range g.configPending {
+		if pending.owner.NodeID == session.NodeID && pending.owner.ControlSessionID == session.SessionID {
+			delete(g.configPending, messageID)
+			failed = append(failed, pending)
+		}
+	}
+	for key := range g.configUpCache {
+		if key.nodeID == session.NodeID && key.controlSessionID == session.SessionID {
+			delete(g.configUpCache, key)
+		}
+	}
+	g.configMu.Unlock()
+	for _, pending := range failed {
+		select {
+		case pending.result <- result:
+		default:
+		}
+	}
+}
+
+func (g *CenterGateway) Close() {
+	if g == nil {
+		return
+	}
+	g.configClose.Do(func() { close(g.configClosed) })
+	g.configWG.Wait()
+	failed := make([]*pendingDeviceConfigDelivery, 0)
+	g.configMu.Lock()
+	g.configClosing = true
+	for messageID, pending := range g.configPending {
+		delete(g.configPending, messageID)
+		failed = append(failed, pending)
+	}
+	clear(g.configUpCache)
+	g.configMu.Unlock()
+	for _, pending := range failed {
+		select {
+		case pending.result <- errors.New("center gateway closed"):
+		default:
 		}
 	}
 }
@@ -549,6 +1009,7 @@ func (g *CenterGateway) restoreOwnerMapsLocked(owner deviceSessionOwner) {
 }
 
 func (g *CenterGateway) notifyOwnerRevoke(owner deviceSessionOwner, reason string) {
+	g.failDeviceConfigsForOwner(owner, errors.New("device config session revoked"))
 	g.mu.RLock()
 	deviceHandler := g.onDeviceRevoke
 	localHandler := g.onLocalRevoke
@@ -558,6 +1019,25 @@ func (g *CenterGateway) notifyOwnerRevoke(owner deviceSessionOwner, reason strin
 	}
 	if owner.NodeID == CenterLocalNodeID && localHandler != nil {
 		localHandler(owner.DeviceID, owner.OwnerID, owner.SSID, owner.SessionID, owner.SessionEpoch)
+	}
+}
+
+func (g *CenterGateway) failDeviceConfigsForOwner(owner deviceSessionOwner, result error) {
+	failed := make([]*pendingDeviceConfigDelivery, 0)
+	g.configMu.Lock()
+	for messageID, pending := range g.configPending {
+		if pending.owner.NodeID == owner.NodeID && pending.owner.ControlSessionID == owner.ControlSessionID &&
+			pending.owner.SessionID == owner.SessionID && pending.owner.SessionEpoch == owner.SessionEpoch {
+			delete(g.configPending, messageID)
+			failed = append(failed, pending)
+		}
+	}
+	g.configMu.Unlock()
+	for _, pending := range failed {
+		select {
+		case pending.result <- result:
+		default:
+		}
 	}
 }
 
@@ -723,6 +1203,8 @@ type EdgeGateway struct {
 	pendingIdentity   map[string]uint64
 	pendingRenewals   map[uint64]pendingDeviceRenewal
 	renewingSessions  map[uint64]uint64
+	pendingConfigUp   map[uint64]*pendingDeviceConfigUp
+	configDownResults map[uint64]cachedDeviceConfigResult
 	snapshotAssembler *SnapshotAssembler
 	nextRequest       atomic.Uint64
 	metrics           Metrics
@@ -780,12 +1262,23 @@ type pendingDeviceRenewal struct {
 	requestedAt  time.Time
 }
 
+type pendingDeviceConfigUp struct {
+	envelope     Envelope
+	sessionID    uint64
+	sessionEpoch uint64
+	requestedAt  time.Time
+	lastSentAt   time.Time
+	attempts     int
+}
+
 type pendingDownstreamFrame struct {
 	envelope Envelope
 	frame    RelayFrame
 }
 
 const edgeAuthRequestTimeout = 5 * time.Second
+
+const maxEdgePendingDeviceConfigs = 256
 
 func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...string) (*EdgeGateway, error) {
 	if listenAddr == "" {
@@ -799,7 +1292,12 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 		return nil, errors.New("edge proxy protocol must be empty or v2")
 	}
 	p := NewProjection(1)
-	gateway := &EdgeGateway{listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64), closed: make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second, localGrace: 15 * time.Second, downstreamMaxAge: 200 * time.Millisecond, downstreamWake: make(chan struct{}, 1)}
+	gateway := &EdgeGateway{
+		listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64),
+		pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64),
+		pendingConfigUp: make(map[uint64]*pendingDeviceConfigUp), configDownResults: make(map[uint64]cachedDeviceConfigResult),
+		closed: make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second, localGrace: 15 * time.Second, downstreamMaxAge: 200 * time.Millisecond, downstreamWake: make(chan struct{}, 1),
+	}
 	if client != nil {
 		gateway.control.Store(newEdgeControlLink(client, nil))
 	}
@@ -864,6 +1362,8 @@ func (g *EdgeGateway) clearPendingControlRequests() {
 	clear(g.pendingIdentity)
 	clear(g.pendingRenewals)
 	clear(g.renewingSessions)
+	clear(g.pendingConfigUp)
+	clear(g.configDownResults)
 	g.mu.Unlock()
 }
 
@@ -1008,6 +1508,12 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		}
 		return
 	}
+	if packet.Type == protocol.DraARLTypeConfig {
+		if protocol.IsValidNormalSSID(grant.SSID) && grant.DeviceID > 0 && len(packet.DATA) >= 2 && packet.DATA[0] == udphub.ConfigTypeSet {
+			g.requestDeviceConfigUp(DeviceConfigKindReport, grant, packet.DATA)
+		}
+		return
+	}
 	if packet.Type != protocol.DraARLTypeTextMessage && packet.Type != protocol.DraARLTypeOpus16K {
 		return
 	}
@@ -1050,10 +1556,8 @@ func (g *EdgeGateway) sessionCleanerLoop() {
 }
 
 func (g *EdgeGateway) expireDeviceSessions(now time.Time) int {
-	if g.sessionTimeout <= 0 {
-		return 0
-	}
 	reports := make([]DeviceSessionReport, 0)
+	configRetries := make([]Envelope, 0)
 	g.mu.Lock()
 	for requestID, pending := range g.pending {
 		if pending != nil && now.Sub(pending.requestedAt) > edgeAuthRequestTimeout {
@@ -1071,20 +1575,43 @@ func (g *EdgeGateway) expireDeviceSessions(now time.Time) int {
 			}
 		}
 	}
-	for sessionID, session := range g.sessions {
-		reason := ""
-		if !g.allowExistingLocal(now) {
-			reason = "control_unavailable"
-		} else if now.Sub(session.LastSeen) > g.sessionTimeout {
-			reason = "device_timeout"
-		} else if session.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= session.Grant.ExpiresAtMillis {
-			reason = "grant_expired"
+	for requestID, pending := range g.pendingConfigUp {
+		if now.Sub(pending.requestedAt) > edgeAuthRequestTimeout {
+			delete(g.pendingConfigUp, requestID)
+			continue
 		}
-		if reason != "" {
-			reports = append(reports, g.removeEdgeSessionLocked(sessionID, reason, now))
+		if pending.attempts < deviceConfigMaxAttempts && now.Sub(pending.lastSentAt) >= deviceConfigRetryAfter {
+			pending.attempts++
+			pending.lastSentAt = now
+			configRetries = append(configRetries, pending.envelope)
+		}
+	}
+	for messageID, cached := range g.configDownResults {
+		if now.Sub(cached.storedAt) > deviceConfigCacheTTL {
+			delete(g.configDownResults, messageID)
+		}
+	}
+	if g.sessionTimeout > 0 {
+		for sessionID, session := range g.sessions {
+			reason := ""
+			if !g.allowExistingLocal(now) {
+				reason = "control_unavailable"
+			} else if now.Sub(session.LastSeen) > g.sessionTimeout {
+				reason = "device_timeout"
+			} else if session.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= session.Grant.ExpiresAtMillis {
+				reason = "grant_expired"
+			}
+			if reason != "" {
+				reports = append(reports, g.removeEdgeSessionLocked(sessionID, reason, now))
+			}
 		}
 	}
 	g.mu.Unlock()
+	if link := g.currentControl(true); link != nil {
+		for _, env := range configRetries {
+			_ = link.client.SendEnvelope(env)
+		}
+	}
 	for _, report := range reports {
 		g.sendDeviceSessionReport(report)
 	}
@@ -1130,6 +1657,152 @@ func (g *EdgeGateway) requestSessionRenewal(sessionID, sessionEpoch uint64, now 
 	}
 }
 
+func (g *EdgeGateway) requestDeviceConfigUp(kind string, grant DeviceGrant, data []byte) {
+	if grant.SessionID == 0 || grant.SessionEpoch == 0 || grant.DeviceID <= 0 {
+		return
+	}
+	link := g.currentControl(true)
+	if link == nil {
+		return
+	}
+	message := DeviceConfigControl{
+		Kind: kind, SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch,
+		DeviceID: grant.DeviceID, Data: append([]byte(nil), data...),
+	}
+	if err := message.Validate(); err != nil {
+		return
+	}
+	requestID := g.nextRequest.Add(1)
+	payload, err := EncodeJSON(message)
+	if err != nil {
+		return
+	}
+	env := NewEnvelope(SubtypeDeviceConfig, link.client.Session.NodeID, link.client.Session.SessionID, requestID, payload)
+	env.Flags = FlagControl | FlagAck
+	now := time.Now()
+	g.mu.Lock()
+	session := g.sessions[grant.SessionID]
+	if session == nil || session.Grant.SessionEpoch != grant.SessionEpoch || len(g.pendingConfigUp) >= maxEdgePendingDeviceConfigs {
+		g.mu.Unlock()
+		g.metrics.AddDrop()
+		return
+	}
+	g.pendingConfigUp[requestID] = &pendingDeviceConfigUp{
+		envelope: env, sessionID: grant.SessionID, sessionEpoch: grant.SessionEpoch,
+		requestedAt: now, lastSentAt: now, attempts: 1,
+	}
+	g.mu.Unlock()
+	if err := link.client.SendEnvelope(env); err != nil {
+		g.mu.Lock()
+		delete(g.pendingConfigUp, requestID)
+		g.mu.Unlock()
+		g.metrics.AddError()
+	}
+}
+
+func (g *EdgeGateway) finishDeviceConfigUp(message DeviceConfigControl) bool {
+	g.mu.Lock()
+	pending := g.pendingConfigUp[message.AckForMessageID]
+	if pending == nil || pending.sessionID != message.SessionID || pending.sessionEpoch != message.SessionEpoch {
+		g.mu.Unlock()
+		return false
+	}
+	session := g.sessions[pending.sessionID]
+	if session == nil || session.Grant.SessionEpoch != pending.sessionEpoch || session.Grant.DeviceID != message.DeviceID {
+		g.mu.Unlock()
+		return false
+	}
+	delete(g.pendingConfigUp, message.AckForMessageID)
+	g.mu.Unlock()
+	if !message.Success {
+		g.metrics.AddError()
+	}
+	return true
+}
+
+func (g *EdgeGateway) handleDeviceConfigDown(env Envelope, message DeviceConfigControl) {
+	if env.MessageID == 0 {
+		return
+	}
+	if env.Duplicate {
+		g.mu.RLock()
+		cached, ok := g.configDownResults[env.MessageID]
+		g.mu.RUnlock()
+		if ok {
+			g.sendEdgeDeviceConfigResult(cached.message)
+		}
+		return
+	}
+	result := DeviceConfigControl{
+		Kind: DeviceConfigKindResult, SessionID: message.SessionID, SessionEpoch: message.SessionEpoch,
+		DeviceID: message.DeviceID, AckForMessageID: env.MessageID,
+	}
+	var target *net.UDPAddr
+	g.mu.RLock()
+	session := g.sessions[message.SessionID]
+	if session != nil && session.Grant.SessionEpoch == message.SessionEpoch && session.Grant.DeviceID == message.DeviceID {
+		target = cloneUDPAddr(session.Addr)
+	}
+	var grant DeviceGrant
+	if session != nil {
+		grant = session.Grant
+	}
+	g.mu.RUnlock()
+	if target == nil {
+		result.Error = "session_not_found"
+	} else if err := validateEdgeDeviceConfigPacket(message.Packet, grant); err != nil {
+		result.Error = "invalid_packet"
+	} else if err := g.writeDeviceResult(message.Packet, target); err != nil {
+		result.Error = "delivery_failed"
+	} else {
+		result.Success = true
+	}
+	g.cacheDeviceConfigDownResult(env.MessageID, result)
+	g.sendEdgeDeviceConfigResult(result)
+}
+
+func validateEdgeDeviceConfigPacket(packet []byte, grant DeviceGrant) error {
+	decoded, err := protocol.NewDraARLv1Packet(nil, packet)
+	if err != nil {
+		return err
+	}
+	if decoded.Type != protocol.DraARLTypeConfig || decoded.SSID != grant.SSID || decoded.Username != grant.Username || decoded.CallSign != grant.CallSign {
+		return errors.New("device config identity mismatch")
+	}
+	return nil
+}
+
+func (g *EdgeGateway) cacheDeviceConfigDownResult(messageID uint64, result DeviceConfigControl) {
+	now := time.Now()
+	g.mu.Lock()
+	if len(g.configDownResults) >= maxEdgePendingDeviceConfigs {
+		var oldestID uint64
+		var oldestAt time.Time
+		for id, cached := range g.configDownResults {
+			if oldestAt.IsZero() || cached.storedAt.Before(oldestAt) {
+				oldestID, oldestAt = id, cached.storedAt
+			}
+		}
+		delete(g.configDownResults, oldestID)
+	}
+	g.configDownResults[messageID] = cachedDeviceConfigResult{message: result, storedAt: now}
+	g.mu.Unlock()
+}
+
+func (g *EdgeGateway) sendEdgeDeviceConfigResult(result DeviceConfigControl) {
+	link := g.currentControl(false)
+	if link == nil {
+		return
+	}
+	payload, err := EncodeJSON(result)
+	if err != nil {
+		return
+	}
+	env := NewEnvelope(SubtypeDeviceConfig, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
+	env.Flags = FlagControl | FlagAck
+	_ = link.client.SendEnvelope(env)
+}
+
 func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, now time.Time) DeviceSessionReport {
 	session := g.sessions[sessionID]
 	if session == nil {
@@ -1140,7 +1813,16 @@ func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, n
 	if g.byIdentity[key] == sessionID {
 		delete(g.byIdentity, key)
 	}
+	g.removePendingDeviceConfigsLocked(sessionID)
 	return DeviceSessionReport{SessionID: sessionID, SessionEpoch: session.Grant.SessionEpoch, DeviceID: session.Grant.DeviceID, Reason: reason, ReportedAtMillis: now.UnixMilli()}
+}
+
+func (g *EdgeGateway) removePendingDeviceConfigsLocked(sessionID uint64) {
+	for requestID, pending := range g.pendingConfigUp {
+		if pending.sessionID == sessionID {
+			delete(g.pendingConfigUp, requestID)
+		}
+	}
 }
 
 func (g *EdgeGateway) sendDeviceSessionReport(report DeviceSessionReport) {
@@ -1228,6 +1910,17 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 			return
 		}
 		g.finishSessionRenewal(response, time.Now())
+	case SubtypeDeviceConfig:
+		var message DeviceConfigControl
+		if DecodeJSON(env.Payload, &message) != nil || message.Validate() != nil {
+			return
+		}
+		switch message.Kind {
+		case DeviceConfigKindDown:
+			g.handleDeviceConfigDown(env, message)
+		case DeviceConfigKindResult:
+			g.finishDeviceConfigUp(message)
+		}
 	case SubtypeRouteDelta:
 		var delta RouteDelta
 		if DecodeJSON(env.Payload, &delta) != nil {
@@ -1355,6 +2048,7 @@ func (g *EdgeGateway) revokeSession(revoke DeviceSessionRevoke) bool {
 	if g.byIdentity[key] == revoke.SessionID {
 		delete(g.byIdentity, key)
 	}
+	g.removePendingDeviceConfigsLocked(revoke.SessionID)
 	return true
 }
 
@@ -1392,6 +2086,7 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	} else {
 		if previousID := g.byIdentity[key]; previousID != 0 && previousID != grant.SessionID {
 			delete(g.sessions, previousID)
+			g.removePendingDeviceConfigsLocked(previousID)
 		}
 		g.sessions[grant.SessionID] = session
 	}
@@ -1399,13 +2094,16 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	g.mu.Unlock()
 	if len(response.ResponsePacket) > 0 {
 		g.writeDevice(response.ResponsePacket, pending.addr)
-		return
+	} else {
+		packet, err := protocol.NewDraARLv1RoutingPacket(pending.addr, pending.wire)
+		if err == nil {
+			responsePacket := protocol.EncodeHeartbeatResponse(packet, grant.CallSign)
+			g.writeDevice(responsePacket, pending.addr)
+			protocol.ReleaseDraARLv1RoutingPacket(packet)
+		}
 	}
-	packet, err := protocol.NewDraARLv1RoutingPacket(pending.addr, pending.wire)
-	if err == nil {
-		responsePacket := protocol.EncodeHeartbeatResponse(packet, grant.CallSign)
-		g.writeDevice(responsePacket, pending.addr)
-		protocol.ReleaseDraARLv1RoutingPacket(packet)
+	if protocol.IsValidNormalSSID(grant.SSID) && grant.DeviceID > 0 {
+		g.requestDeviceConfigUp(DeviceConfigKindSync, grant, nil)
 	}
 }
 func (g *EdgeGateway) applyRoutes(p *Projection) {
@@ -1421,6 +2119,7 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 			session.Grant.SessionEpoch = route.SessionEpoch
 		} else {
 			delete(g.sessions, id)
+			g.removePendingDeviceConfigsLocked(id)
 			key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
 			if g.byIdentity[key] == id {
 				delete(g.byIdentity, key)
@@ -1582,12 +2281,18 @@ func (g *EdgeGateway) requestResync(reason string) {
 	_ = link.client.SendEnvelope(env)
 }
 func (g *EdgeGateway) writeDevice(data []byte, addr *net.UDPAddr) {
+	_ = g.writeDeviceResult(data, addr)
+}
+
+func (g *EdgeGateway) writeDeviceResult(data []byte, addr *net.UDPAddr) error {
 	if g.endpoint == nil || addr == nil {
-		return
+		return errors.New("edge device endpoint is not ready")
 	}
 	if err := g.endpoint.SendTo(data, addr); err == nil {
 		g.metrics.AddOut(len(data))
+		return nil
 	} else {
 		g.metrics.AddError()
+		return err
 	}
 }

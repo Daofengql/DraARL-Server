@@ -37,6 +37,7 @@ type CenterRuntimeConfig struct {
 	Authenticate  func(nodeID, token string) (NodeAuthentication, error)
 	Auth          DeviceAuthHandler
 	Activate      DeviceActivationHandler
+	Config        DeviceConfigHandler
 	OnNodeStatus  func(*NodeSession, *NodeHeartbeat, bool)
 }
 type CenterRuntime struct {
@@ -56,6 +57,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	}
 	cluster := NewClusterManager(0)
 	gateway := NewCenterGateway(cluster, cfg.Auth, cfg.Activate)
+	gateway.SetDeviceConfigHandler(cfg.Config)
 	status := NewNodeStatusDispatcher(cfg.OnNodeStatus)
 	if status != nil {
 		gateway.onNodeStatus = status.Submit
@@ -70,6 +72,9 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	}
 	gateway.Bind(server, data)
 	if err := server.Start(); err != nil {
+		data.Close()
+		gateway.Close()
+		cluster.Close()
 		return nil, err
 	}
 	return &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data, status: status}, nil
@@ -80,6 +85,9 @@ func (r *CenterRuntime) Close() {
 	}
 	if r.UDPBridge != nil {
 		r.UDPBridge.Close()
+	}
+	if r.Gateway != nil {
+		r.Gateway.Close()
 	}
 	if r.Control != nil {
 		_ = r.Control.Close()

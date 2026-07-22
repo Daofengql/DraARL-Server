@@ -3,6 +3,7 @@ package udphub
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"draarl/internal/interfaces"
 	"draarl/internal/models"
@@ -33,6 +34,7 @@ type CenterInterconnectHooks struct {
 	Authorize   func(CenterLocalSource) bool
 	RemoteOwner func(ownerID int, ssid byte) bool
 	Relay       func(CenterLocalSource, []byte) error
+	SendConfig  func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
 	Revoke      func(CenterLocalSource)
 }
 
@@ -217,6 +219,14 @@ func RevokeCenterLocalWS(source interfaces.WSDeviceInterface) {
 func CenterIdentityOwnedByRemote(ownerID int, ssid byte) bool {
 	hooks := centerHooks()
 	return hooks.RemoteOwner != nil && hooks.RemoteOwner(ownerID, ssid)
+}
+
+func sendRemoteDeviceConfig(deviceID int, packet []byte, timeout time.Duration) (bool, error) {
+	hooks := centerHooks()
+	if hooks.SendConfig == nil {
+		return false, nil
+	}
+	return hooks.SendConfig(deviceID, packet, timeout)
 }
 
 var domainGroupReverseCache sync.Map // domain ID -> representative active group ID

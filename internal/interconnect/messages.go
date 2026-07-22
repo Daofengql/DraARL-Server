@@ -76,6 +76,59 @@ type DeviceSessionReport struct {
 	ReportedAtMillis int64  `json:"reported_at_ms"`
 }
 
+const (
+	DeviceConfigKindSync   = "sync"
+	DeviceConfigKindReport = "report"
+	DeviceConfigKindDown   = "down"
+	DeviceConfigKindResult = "result"
+)
+
+// DeviceConfigControl carries Type 3 configuration over the reliable node
+// control plane. Data is the ordinary device DATA region for an upstream
+// report; Packet is a complete Type 3 device packet for an exact downstream
+// session. Results acknowledge the envelope MessageID in AckForMessageID.
+type DeviceConfigControl struct {
+	Kind            string `json:"kind"`
+	SessionID       uint64 `json:"session_id"`
+	SessionEpoch    uint64 `json:"session_epoch"`
+	DeviceID        int    `json:"device_id"`
+	Data            []byte `json:"data,omitempty"`
+	Packet          []byte `json:"packet,omitempty"`
+	AckForMessageID uint64 `json:"ack_for_message_id,omitempty"`
+	Success         bool   `json:"success,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (m DeviceConfigControl) Validate() error {
+	if m.SessionID == 0 || m.SessionEpoch == 0 || m.DeviceID <= 0 {
+		return errors.New("device config session identity is incomplete")
+	}
+	if len(m.Error) > 128 {
+		return errors.New("device config error is too long")
+	}
+	switch m.Kind {
+	case DeviceConfigKindSync:
+		if len(m.Data) != 0 || len(m.Packet) != 0 || m.AckForMessageID != 0 {
+			return errors.New("invalid device config sync request")
+		}
+	case DeviceConfigKindReport:
+		if len(m.Data) == 0 || len(m.Data) > 800-DraARLHeaderSize || len(m.Packet) != 0 || m.AckForMessageID != 0 {
+			return errors.New("invalid device config report")
+		}
+	case DeviceConfigKindDown:
+		if len(m.Packet) < DraARLHeaderSize || len(m.Packet) > 800 || len(m.Data) != 0 || m.AckForMessageID != 0 {
+			return errors.New("invalid device config delivery")
+		}
+	case DeviceConfigKindResult:
+		if m.AckForMessageID == 0 || len(m.Data) != 0 || len(m.Packet) != 0 {
+			return errors.New("invalid device config result")
+		}
+	default:
+		return errors.New("unknown device config kind")
+	}
+	return nil
+}
+
 type RouteAck struct {
 	ClusterEpoch      uint64 `json:"cluster_epoch"`
 	ProjectionVersion uint64 `json:"projection_version"`

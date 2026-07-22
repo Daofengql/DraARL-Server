@@ -254,6 +254,7 @@ func main() {
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {
 				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
 			},
+			SendConfig: centerRuntime.Gateway.SendDeviceConfig,
 			Revoke: func(source udphub.CenterLocalSource) {
 				centerRuntime.Gateway.RevokeLocalDevice(source.SessionID, source.SessionEpoch)
 			},

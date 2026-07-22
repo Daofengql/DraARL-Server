@@ -157,6 +157,156 @@ func TestTwoEdgesRouteOneFrameThroughCentreAndLocalFanout(t *testing.T) {
 	}
 }
 
+func TestEdgeDeviceConfigurationUsesReliableExactSessionControl(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		deviceID = 77
+		username = "alice"
+		callsign = "BG5CFG"
+	)
+	var reportCount atomic.Int64
+	reports := make(chan []byte, 4)
+	configPacket := func(data []byte) []byte {
+		return protocol.EncodeDraARLv1(username, "", 1, protocol.DraARLTypeConfig, 0, 0, callsign, data)
+	}
+	auth := func(_ *NodeSession, req DeviceAuthRequest) (DeviceAuthResponse, error) {
+		packet, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, req.Packet)
+		if decodeErr != nil {
+			return DeviceAuthResponse{RequestID: req.RequestID, Error: "invalid"}, nil
+		}
+		defer protocol.ReleaseDraARLv1RoutingPacket(packet)
+		grant := &DeviceGrant{DeviceID: deviceID, OwnerID: 7, Username: username, CallSign: callsign, SSID: 1, DevModel: protocol.DraARLDevModelESP32NoRadio, GroupID: 1, DomainID: 99}
+		return DeviceAuthResponse{RequestID: req.RequestID, Success: true, Grant: grant, ResponsePacket: protocol.EncodeHeartbeatResponse(packet, callsign)}, nil
+	}
+	config := func(gotDeviceID int, kind string, data []byte) ([][]byte, error) {
+		if gotDeviceID != deviceID {
+			t.Fatalf("config device ID = %d, want %d", gotDeviceID, deviceID)
+		}
+		switch kind {
+		case DeviceConfigKindSync:
+			return [][]byte{configPacket([]byte{1})}, nil
+		case DeviceConfigKindReport:
+			reportCount.Add(1)
+			reports <- append([]byte(nil), data...)
+			return [][]byte{configPacket([]byte{3, 0, 0, 0, 0, 0, 0, 0, 0, 1})}, nil
+		default:
+			t.Fatalf("unexpected config kind %q", kind)
+			return nil, nil
+		}
+	}
+	center, err := StartCenterRuntime(CenterRuntimeConfig{
+		ControlListen: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(_, token string) bool { return token == "token" }, Auth: auth, Config: config,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer center.Close()
+	clientTLS := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
+	edge, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-config", Token: "token", CenterControl: center.Control.Addr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer edge.Close()
+	device, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer device.Close()
+	edgeAddr, _ := net.ResolveUDPAddr("udp", edge.Gateway.Addr().String())
+	heartbeat := protocol.EncodeDraARLv1(username, "device-password", 1, protocol.DraARLTypeHeartbeat, protocol.DraARLDevModelESP32NoRadio, 0, "", nil)
+	if _, err := device.WriteToUDP(heartbeat, edgeAddr); err != nil {
+		t.Fatal(err)
+	}
+	readPacket := func(timeout time.Duration) *protocol.DraARLv1Packet {
+		t.Helper()
+		_ = device.SetReadDeadline(time.Now().Add(timeout))
+		buf := make([]byte, 1400)
+		n, _, readErr := device.ReadFromUDP(buf)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		packet, decodeErr := protocol.NewDraARLv1Packet(nil, buf[:n])
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		return packet
+	}
+	if packet := readPacket(3 * time.Second); packet.Type != protocol.DraARLTypeHeartbeat {
+		t.Fatalf("first response type = %d, want heartbeat", packet.Type)
+	}
+	if packet := readPacket(3 * time.Second); packet.Type != protocol.DraARLTypeConfig || string(packet.DATA) != string([]byte{1}) {
+		t.Fatalf("initial config = type %d data %v", packet.Type, packet.DATA)
+	}
+
+	direct := configPacket([]byte{2, 0})
+	if handled, err := center.Gateway.SendDeviceConfig(deviceID, direct, 2*time.Second); !handled || err != nil {
+		t.Fatalf("direct config delivery: handled=%v err=%v", handled, err)
+	}
+	if packet := readPacket(time.Second); string(packet.DATA) != string([]byte{2, 0}) {
+		t.Fatalf("direct config DATA = %v", packet.DATA)
+	}
+
+	reportData := []byte{2, 0}
+	reportPacket := protocol.EncodeDraARLv1(username, "", 1, protocol.DraARLTypeConfig, protocol.DraARLDevModelESP32NoRadio, 0, "", reportData)
+	if _, err := device.WriteToUDP(reportPacket, edgeAddr); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-reports:
+		if string(got) != string(reportData) {
+			t.Fatalf("reported DATA = %v, want %v", got, reportData)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("center did not process edge config report")
+	}
+	if packet := readPacket(3 * time.Second); packet.DATA[0] != 3 {
+		t.Fatalf("report ACK DATA = %v", packet.DATA)
+	}
+
+	center.Gateway.mu.RLock()
+	owner := center.Gateway.deviceSessions[center.Gateway.activeByID[deviceID]]
+	center.Gateway.mu.RUnlock()
+	duplicatePacket := configPacket([]byte{1, 9})
+	duplicate := DeviceConfigControl{Kind: DeviceConfigKindDown, SessionID: owner.SessionID, SessionEpoch: owner.SessionEpoch, DeviceID: deviceID, Packet: duplicatePacket}
+	payload, _ := EncodeJSON(duplicate)
+	env := NewEnvelope(SubtypeDeviceConfig, "center", 0, center.Cluster.NextMessageID(), payload)
+	env.ClusterEpoch, env.Flags = center.Cluster.Epoch(), FlagControl|FlagAck
+	if err := center.Control.SendEnvelope(owner.NodeID, env); err != nil {
+		t.Fatal(err)
+	}
+	if packet := readPacket(time.Second); string(packet.DATA) != string([]byte{1, 9}) {
+		t.Fatalf("duplicate test DATA = %v", packet.DATA)
+	}
+	if err := center.Control.SendEnvelope(owner.NodeID, env); err != nil {
+		t.Fatal(err)
+	}
+	_ = device.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, _, err := device.ReadFromUDP(make([]byte, 1400)); err == nil {
+		t.Fatal("duplicate DeviceConfigDown was written to the device twice")
+	}
+
+	wrongIdentity := protocol.EncodeDraARLv1("mallory", "", 1, protocol.DraARLTypeConfig, 0, 0, callsign, []byte{1})
+	if handled, err := center.Gateway.SendDeviceConfig(deviceID, wrongIdentity, time.Second); !handled || err == nil {
+		t.Fatalf("identity-mismatched config: handled=%v err=%v", handled, err)
+	}
+	before := reportCount.Load()
+	stale := DeviceConfigControl{Kind: DeviceConfigKindReport, SessionID: owner.SessionID, SessionEpoch: owner.SessionEpoch + 1, DeviceID: deviceID, Data: []byte{2, 0}}
+	stalePayload, _ := EncodeJSON(stale)
+	staleEnv := NewEnvelope(SubtypeDeviceConfig, owner.NodeID, owner.ControlSessionID, edge.Gateway.nextRequest.Add(1), stalePayload)
+	staleEnv.Flags = FlagControl | FlagAck
+	if err := edge.CurrentClient().SendEnvelope(staleEnv); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if reportCount.Load() != before {
+		t.Fatal("center accepted a stale device config session epoch")
+	}
+}
+
 func wrapProxyV2IPv4(t *testing.T, source *net.UDPAddr, payload []byte) []byte {
 	t.Helper()
 	sourceIP := source.IP.To4()

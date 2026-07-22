@@ -144,6 +144,20 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
 	}
+	configHandler := func(deviceID int, kind string, data []byte) ([][]byte, error) {
+		switch kind {
+		case interconnect.DeviceConfigKindSync:
+			return udphub.BuildDeviceConfigSyncPackets(deviceID)
+		case interconnect.DeviceConfigKindReport:
+			packet, err := udphub.SaveDeviceConfigReportAndBuildAck(deviceID, data)
+			if err != nil {
+				return nil, err
+			}
+			return [][]byte{packet}, nil
+		default:
+			return nil, errors.New("unsupported device config request")
+		}
+	}
 	activateDevice := func(session *interconnect.NodeSession, grant *interconnect.DeviceGrant) error {
 		if session == nil || grant == nil || grant.DeviceID <= 0 {
 			return nil
@@ -210,5 +224,5 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			}
 		}
 	}
-	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, OnNodeStatus: onNodeStatus})
+	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Config: configHandler, OnNodeStatus: onNodeStatus})
 }

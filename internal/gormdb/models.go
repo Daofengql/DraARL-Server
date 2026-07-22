@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"draarl/internal/accesspoint"
+
 	"gorm.io/gorm"
 )
 
@@ -184,6 +186,13 @@ type Server struct {
 	UDPPort                    int        `gorm:"type:int" json:"udp_port"`
 	NodeID                     *string    `gorm:"type:varchar(64);uniqueIndex;column:node_id" json:"node_id,omitempty"`
 	DisplayName                string     `gorm:"type:varchar(255);column:display_name" json:"display_name"`
+	PublicAccessID             *string    `gorm:"type:varchar(64);uniqueIndex;column:public_access_id" json:"public_access_id,omitempty"`
+	PublicAccessEnabled        bool       `gorm:"type:tinyint(1);default:0;index;column:public_access_enabled" json:"public_access_enabled"`
+	PublicUDPHost              string     `gorm:"type:varchar(255);column:public_udp_host" json:"public_udp_host,omitempty"`
+	PublicUDPPort              int        `gorm:"type:int;column:public_udp_port" json:"public_udp_port"`
+	PublicRegion               string     `gorm:"type:varchar(100);column:public_region" json:"public_region,omitempty"`
+	PublicNetwork              string     `gorm:"type:varchar(100);column:public_network" json:"public_network,omitempty"`
+	PublicPriority             int        `gorm:"type:int;default:100;column:public_priority" json:"public_priority"`
 	NodeTokenHash              string     `gorm:"type:char(64);column:node_token_hash" json:"-"`
 	NodeRegistrationTokenHash  string     `gorm:"type:char(64);column:node_registration_token_hash" json:"-"`
 	NodeRegistrationExpiresAt  *time.Time `gorm:"type:datetime;column:node_registration_expires_at" json:"node_registration_expires_at,omitempty"`
@@ -558,6 +567,11 @@ func AutoMigrate() error {
 			return fmt.Errorf("normalize legacy empty server node IDs: %w", err)
 		}
 	}
+	if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "public_access_id") {
+		if err := db.Model(&Server{}).Where("public_access_id = ?", "").Update("public_access_id", nil).Error; err != nil {
+			return fmt.Errorf("normalize empty server public access IDs: %w", err)
+		}
+	}
 
 	// ==========================================
 	// 阶段二：执行 GORM 标准化迁移 (Schema Mapping)
@@ -588,6 +602,9 @@ func AutoMigrate() error {
 	if err != nil {
 		return err
 	}
+	if err := backfillServerPublicAccessIDs(db); err != nil {
+		return err
+	}
 
 	// 阶段三：下线 group_members 历史设备级字段（仅保留成员资格语义）
 	pruneLegacyGroupMemberColumns(db)
@@ -604,6 +621,24 @@ func AutoMigrate() error {
 	}
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
+	return nil
+}
+
+func backfillServerPublicAccessIDs(db *gorm.DB) error {
+	var nodeIDs []int
+	if err := db.Model(&Server{}).Where("node_id IS NOT NULL AND (public_access_id IS NULL OR public_access_id = ?)", "").Pluck("id", &nodeIDs).Error; err != nil {
+		return fmt.Errorf("list edge nodes missing public access IDs: %w", err)
+	}
+	for _, id := range nodeIDs {
+		publicID, err := accesspoint.NewPublicID()
+		if err != nil {
+			return fmt.Errorf("generate public access ID for edge node %d: %w", id, err)
+		}
+		result := db.Model(&Server{}).Where("id = ? AND (public_access_id IS NULL OR public_access_id = ?)", id, "").Update("public_access_id", publicID)
+		if result.Error != nil {
+			return fmt.Errorf("backfill public access ID for edge node %d: %w", id, result.Error)
+		}
+	}
 	return nil
 }
 

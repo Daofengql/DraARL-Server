@@ -7,9 +7,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"draarl/internal/accesspoint"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,6 +58,23 @@ type InterconnectConfig struct {
 	NodeTokens map[string]string `yaml:"NodeTokens" json:"node_tokens"`
 }
 
+type AccessDiscoveryConfig struct {
+	Enabled              bool `yaml:"Enabled" json:"enabled"`
+	TokenTTLSeconds      int  `yaml:"TokenTTLSeconds" json:"token_ttl_seconds"`
+	EdgeHealthTTLSeconds int  `yaml:"EdgeHealthTTLSeconds" json:"edge_health_ttl_seconds"`
+	CacheMaxAgeSeconds   int  `yaml:"CacheMaxAgeSeconds" json:"cache_max_age_seconds"`
+	Center               struct {
+		Enabled     bool   `yaml:"Enabled" json:"enabled"`
+		PublicID    string `yaml:"PublicID" json:"public_id"`
+		DisplayName string `yaml:"DisplayName" json:"display_name"`
+		UDPHost     string `yaml:"UDPHost" json:"udp_host"`
+		UDPPort     int    `yaml:"UDPPort" json:"udp_port"`
+		Region      string `yaml:"Region" json:"region"`
+		Network     string `yaml:"Network" json:"network"`
+		Priority    int    `yaml:"Priority" json:"priority"`
+	} `yaml:"Center" json:"center"`
+}
+
 // SetReleaseBuild 设置是否为 release 构建产物。
 func SetReleaseBuild(release bool) {
 	releaseBuild.Store(release)
@@ -75,8 +95,9 @@ type Configuration struct {
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
 
-	UDP          UDPConfig          `yaml:"UDP" json:"udp"`
-	Interconnect InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
+	UDP             UDPConfig             `yaml:"UDP" json:"udp"`
+	Interconnect    InterconnectConfig    `yaml:"Interconnect" json:"interconnect"`
+	AccessDiscovery AccessDiscoveryConfig `yaml:"AccessDiscovery" json:"access_discovery"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -237,6 +258,58 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.Interconnect.RegistrationTokenTTL <= 0 {
 		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60
+	}
+	if c.AccessDiscovery.TokenTTLSeconds <= 0 || c.AccessDiscovery.TokenTTLSeconds > 300 {
+		c.AccessDiscovery.TokenTTLSeconds = 300
+	}
+	if c.AccessDiscovery.EdgeHealthTTLSeconds <= 0 || c.AccessDiscovery.EdgeHealthTTLSeconds > 300 {
+		c.AccessDiscovery.EdgeHealthTTLSeconds = 20
+	}
+	if c.AccessDiscovery.CacheMaxAgeSeconds <= 0 || c.AccessDiscovery.CacheMaxAgeSeconds > 30 {
+		c.AccessDiscovery.CacheMaxAgeSeconds = 5
+	}
+	if strings.TrimSpace(c.AccessDiscovery.Center.DisplayName) == "" {
+		c.AccessDiscovery.Center.DisplayName = "中心直连"
+	}
+	if c.AccessDiscovery.Center.UDPPort <= 0 {
+		if port, err := strconv.Atoi(c.System.Port); err == nil && port > 0 && port <= 65535 {
+			c.AccessDiscovery.Center.UDPPort = port
+		} else {
+			c.AccessDiscovery.Center.UDPPort = 60050
+		}
+	}
+	if strings.TrimSpace(c.AccessDiscovery.Center.PublicID) == "" {
+		c.AccessDiscovery.Center.PublicID = "center"
+	}
+	if c.AccessDiscovery.Enabled && c.AccessDiscovery.Center.Enabled {
+		publicID, err := accesspoint.NormalizePublicID(c.AccessDiscovery.Center.PublicID)
+		if err != nil {
+			return fmt.Errorf("AccessDiscovery.Center.PublicID: %w", err)
+		}
+		displayName, err := accesspoint.NormalizeLabel(c.AccessDiscovery.Center.DisplayName, 100)
+		if err != nil || displayName == "" {
+			return fmt.Errorf("AccessDiscovery.Center.DisplayName is invalid")
+		}
+		host, err := accesspoint.NormalizeUDPHost(c.AccessDiscovery.Center.UDPHost)
+		if err != nil {
+			return fmt.Errorf("AccessDiscovery.Center.UDPHost: %w", err)
+		}
+		if err := accesspoint.ValidateUDPPort(c.AccessDiscovery.Center.UDPPort); err != nil {
+			return fmt.Errorf("AccessDiscovery.Center.UDPPort: %w", err)
+		}
+		region, err := accesspoint.NormalizeLabel(c.AccessDiscovery.Center.Region, 100)
+		if err != nil {
+			return fmt.Errorf("AccessDiscovery.Center.Region: %w", err)
+		}
+		network, err := accesspoint.NormalizeLabel(c.AccessDiscovery.Center.Network, 100)
+		if err != nil {
+			return fmt.Errorf("AccessDiscovery.Center.Network: %w", err)
+		}
+		c.AccessDiscovery.Center.PublicID = publicID
+		c.AccessDiscovery.Center.DisplayName = displayName
+		c.AccessDiscovery.Center.UDPHost = host
+		c.AccessDiscovery.Center.Region = region
+		c.AccessDiscovery.Center.Network = network
 	}
 
 	// 数据库默认值

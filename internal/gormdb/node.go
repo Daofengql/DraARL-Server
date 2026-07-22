@@ -117,6 +117,13 @@ func (r *ServerRepository) GetNodeNames(nodeIDs []string) (map[string]string, er
 	return result, nil
 }
 
+func (r *ServerRepository) ListDiscoverableNodes() ([]*Server, error) {
+	var nodes []*Server
+	err := r.db.Where("node_id IS NOT NULL AND public_access_id IS NOT NULL AND status = ? AND public_access_enabled = ? AND node_registered_at IS NOT NULL", 1, true).
+		Order("public_priority ASC, id ASC").Find(&nodes).Error
+	return nodes, err
+}
+
 func (r *ServerRepository) ClearCurrentEntryForNode(nodeID string) ([]*Device, error) {
 	return r.clearCurrentEntries("current_entry_node_id = ?", []interface{}{nodeID})
 }

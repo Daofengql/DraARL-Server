@@ -100,7 +100,7 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	}
 
 	// 解析 JWT Token
-	claims, err := jwt.ParseToken(tokenString)
+	claims, err := jwt.ValidateAccessToken(tokenString)
 	if err != nil {
 		result.Error = "invalid_token"
 		log.Printf("[WS-AUTH] JWT parse failed: %v", err)

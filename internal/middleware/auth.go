@@ -39,7 +39,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		token := parts[1]
 
 		// 验证 token
-		claims, err := jwt.ValidateToken(token)
+		claims, err := jwt.ValidateAccessToken(token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,

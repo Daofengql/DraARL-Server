@@ -46,6 +46,13 @@ func CreateServer(c *gin.Context) {
 	// created only through /edge-nodes so credentials are generated and hashed
 	// by the server rather than accepted from JSON.
 	server.NodeID = nil
+	server.PublicAccessID = nil
+	server.PublicAccessEnabled = false
+	server.PublicUDPHost = ""
+	server.PublicUDPPort = 0
+	server.PublicRegion = ""
+	server.PublicNetwork = ""
+	server.PublicPriority = 0
 	server.NodeTokenHash = ""
 	server.NodeRegistrationTokenHash = ""
 
@@ -122,6 +129,16 @@ func UpdateServer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点请使用节点管理接口修改"})
 		return
 	}
+	server.NodeID = nil
+	server.PublicAccessID = nil
+	server.PublicAccessEnabled = false
+	server.PublicUDPHost = ""
+	server.PublicUDPPort = 0
+	server.PublicRegion = ""
+	server.PublicNetwork = ""
+	server.PublicPriority = 0
+	server.NodeTokenHash = ""
+	server.NodeRegistrationTokenHash = ""
 
 	// 获取用户信息
 	userRepo := gormdb.NewUserRepository()

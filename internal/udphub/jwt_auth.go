@@ -49,7 +49,7 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	}
 
 	// 2. 验证 Token
-	claims, err := jwt.ParseToken(token)
+	claims, err := jwt.ValidateAccessToken(token)
 	if err != nil {
 		log.Printf("[UDP-JWT] Token 解析失败: %v (地址: %v)", err, realAddr)
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Invalid or expired token")
@@ -192,7 +192,7 @@ func AuthenticateJWT(token string) *JWTAuthResult {
 	result := &JWTAuthResult{}
 
 	// 解析 Token
-	claims, err := jwt.ParseToken(token)
+	claims, err := jwt.ValidateAccessToken(token)
 	if err != nil {
 		result.ErrorCode = protocol.JWTAuthInvalidToken
 		result.ErrorMsg = "Invalid or expired token"

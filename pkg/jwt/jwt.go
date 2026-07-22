@@ -14,12 +14,22 @@ const SecretMinLength = 32
 // AccessTokenTTL Access Token 默认有效期（短时效）。
 const AccessTokenTTL = 3 * time.Hour
 
+const (
+	TokenUseAccess        = "access"
+	TokenUseEdgeDiscovery = "edge-discovery"
+	EdgeDiscoveryAudience = "draarl-edge-discovery"
+	EdgeDiscoveryTokenTTL = 5 * time.Minute
+)
+
 var jwtSecret = []byte("nrl1234")
+
+var ErrInvalidToken = errors.New("invalid token")
 
 // Claims JWT声明
 type Claims struct {
 	Username string   `json:"username"`
 	Roles    []string `json:"roles"`
+	TokenUse string   `json:"token_use,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -38,9 +48,10 @@ func GenerateToken(username string, roles []string) (string, error) {
 	expireTime := now.Add(AccessTokenTTL)
 
 	claims := Claims{
-		username,
-		roles,
-		jwt.RegisteredClaims{
+		Username: username,
+		Roles:    roles,
+		TokenUse: TokenUseAccess,
+		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireTime),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "draarl",
@@ -53,11 +64,38 @@ func GenerateToken(username string, roles []string) (string, error) {
 	return token, err
 }
 
+func GenerateEdgeDiscoveryToken(username string, ttl time.Duration) (string, time.Time, error) {
+	if username == "" {
+		return "", time.Time{}, errors.New("discovery token username is required")
+	}
+	if ttl <= 0 || ttl > EdgeDiscoveryTokenTTL {
+		ttl = EdgeDiscoveryTokenTTL
+	}
+	now := time.Now()
+	expiresAt := now.Add(ttl)
+	claims := Claims{
+		Username: username,
+		TokenUse: TokenUseEdgeDiscovery,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{EdgeDiscoveryAudience},
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(now),
+			Issuer:    "draarl",
+			Subject:   username,
+		},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
+	return token, expiresAt, err
+}
+
 // ParseToken 解析JWT令牌
 func ParseToken(token string) (*Claims, error) {
 	tokenClaims, err := jwt.ParseWithClaims(token, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("unexpected JWT signing method")
+		}
 		return jwtSecret, nil
-	})
+	}, jwt.WithIssuer("draarl"), jwt.WithExpirationRequired())
 
 	if tokenClaims != nil {
 		if claims, ok := tokenClaims.Claims.(*Claims); ok && tokenClaims.Valid {
@@ -70,16 +108,38 @@ func ParseToken(token string) (*Claims, error) {
 
 // ValidateToken 验证令牌
 func ValidateToken(tokenString string) (*Claims, error) {
+	return ValidateAccessToken(tokenString)
+}
+
+func ValidateAccessToken(tokenString string) (*Claims, error) {
 	claims, err := ParseToken(tokenString)
-	if err != nil {
+	if err != nil || (claims.TokenUse != "" && claims.TokenUse != TokenUseAccess) {
 		return nil, errors.New("令牌错误，登录超时，请重新登录")
+	}
+	return claims, nil
+}
+
+func ValidateEdgeDiscoveryToken(tokenString string) (*Claims, error) {
+	claims, err := ParseToken(tokenString)
+	if err != nil || claims.TokenUse != TokenUseEdgeDiscovery || claims.Subject != claims.Username {
+		return nil, errors.New("invalid edge discovery token")
+	}
+	foundAudience := false
+	for _, audience := range claims.Audience {
+		if audience == EdgeDiscoveryAudience {
+			foundAudience = true
+			break
+		}
+	}
+	if !foundAudience {
+		return nil, errors.New("invalid edge discovery audience")
 	}
 	return claims, nil
 }
 
 // GetUsername 从令牌获取用户名
 func GetUsername(tokenString string) (string, error) {
-	claims, err := ParseToken(tokenString)
+	claims, err := ValidateAccessToken(tokenString)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +148,7 @@ func GetUsername(tokenString string) (string, error) {
 
 // RefreshToken 刷新令牌
 func RefreshToken(tokenString string) (string, error) {
-	claims, err := ParseToken(tokenString)
+	claims, err := ValidateAccessToken(tokenString)
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +158,7 @@ func RefreshToken(tokenString string) (string, error) {
 // MustParseToken 强制解析令牌（兼容函数）。
 // 为避免在 goroutine 中触发不可恢复 panic，解析失败时返回 nil。
 func MustParseToken(tokenString string) *Claims {
-	claims, err := ParseToken(tokenString)
+	claims, err := ValidateAccessToken(tokenString)
 	if err != nil {
 		return nil
 	}

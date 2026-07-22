@@ -79,3 +79,23 @@ func TestDynamicCodeRateLimitDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessDiscoveryTokenLimiterSupportsSharedNATButCapsEachUser(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	for i := 0; i < 50; i++ {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-ip-burst", "203.0.113.10"); !allowed {
+			t.Fatalf("shared NAT was blocked at distinct request %d", i+1)
+		}
+		if allowed, _ := limiter.checkLimit("access-discovery-token-user", "user-"+intToStr(i)); !allowed {
+			t.Fatalf("distinct user %d under shared NAT was blocked", i)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-user", "one-user"); !allowed {
+			t.Fatalf("one user was blocked before configured limit at %d", i+1)
+		}
+	}
+	if allowed, _ := limiter.checkLimit("access-discovery-token-user", "one-user"); allowed {
+		t.Fatal("one user exceeded the configured minute limit")
+	}
+}

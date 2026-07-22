@@ -117,7 +117,10 @@ func (s *Server) setupRoutes() {
 			device.POST("/pre-check", middleware.PreCheckRateLimit(), handler.PreCheck)
 			device.POST("/request-code", middleware.RequestCodeRateLimit(), handler.RequestCode)
 			device.POST("/confirm-bind", middleware.ConfirmBindRateLimit(), handler.ConfirmBind)
+			device.POST("/access-points/token", middleware.AccessDiscoveryTokenRateLimit(), handler.IssueDeviceAccessPointToken)
 		}
+
+		api.GET("/access-points", middleware.AccessDiscoveryListIPRateLimit(), middleware.AccessDiscoveryAuth(), middleware.AccessDiscoveryListUserRateLimit(), handler.ListAccessPoints)
 
 		// 需要认证的路由
 		protected := api.Group("")

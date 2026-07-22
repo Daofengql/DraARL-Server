@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,6 +99,21 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 				Limit:       30,
 				Window:      time.Minute,
 				Description: "同一 IP 每分钟 30 次",
+			},
+			"access-discovery-token-ip-burst": {
+				Key: "ip", Limit: 60, Window: 10 * time.Second, Description: "同一 IP 每 10 秒 60 次",
+			},
+			"access-discovery-token-ip-minute": {
+				Key: "ip", Limit: 300, Window: time.Minute, Description: "同一 IP 每分钟 300 次",
+			},
+			"access-discovery-token-user": {
+				Key: "user", Limit: 10, Window: time.Minute, Description: "同一用户每分钟 10 次",
+			},
+			"access-discovery-list-ip": {
+				Key: "ip", Limit: 600, Window: time.Minute, Description: "同一 IP 每分钟 600 次",
+			},
+			"access-discovery-list-user": {
+				Key: "user", Limit: 30, Window: time.Minute, Description: "同一用户每分钟 30 次",
 			},
 		},
 	}
@@ -440,6 +456,69 @@ func CaptchaRateLimit() gin.HandlerFunc {
 			"ip": c.ClientIP(),
 		}
 	})
+}
+
+type accessDiscoveryTokenRequest struct {
+	Username string `json:"username"`
+}
+
+func AccessDiscoveryTokenRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deviceRateLimiter == nil {
+			c.Next()
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
+		var req accessDiscoveryTokenRequest
+		_ = c.ShouldBindBodyWith(&req, binding.JSON)
+		keys := map[string]string{"ip": c.ClientIP(), "user": strings.ToLower(strings.TrimSpace(req.Username))}
+		applyRateLimitRules(c, []string{"access-discovery-token-ip-burst", "access-discovery-token-ip-minute", "access-discovery-token-user"}, keys)
+	}
+}
+
+func AccessDiscoveryListIPRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		applyRateLimitRules(c, []string{"access-discovery-list-ip"}, map[string]string{"ip": c.ClientIP()})
+	}
+}
+
+func AccessDiscoveryListUserRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		username, _ := c.Get("username")
+		applyRateLimitRules(c, []string{"access-discovery-list-user"}, map[string]string{"user": strings.ToLower(toString(username))})
+	}
+}
+
+func applyRateLimitRules(c *gin.Context, ruleNames []string, keys map[string]string) {
+	if deviceRateLimiter == nil {
+		c.Next()
+		return
+	}
+	for _, ruleName := range ruleNames {
+		rule, exists := deviceRateLimiter.rules[ruleName]
+		if !exists {
+			continue
+		}
+		value := keys[rule.Key]
+		if value == "" {
+			continue
+		}
+		allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value)
+		if !allowed {
+			c.Header("Retry-After", intToStr(maxInt(1, int(retryAfter.Seconds()))))
+			c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "请求过于频繁，请稍后重试", "data": gin.H{"retry_after": maxInt(1, int(retryAfter.Seconds()))}})
+			c.Abort()
+			return
+		}
+	}
+	c.Next()
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // toString 将 interface{} 转换为字符串

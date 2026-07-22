@@ -31,14 +31,15 @@ func ActiveCenterRuntime() *CenterRuntime {
 }
 
 type CenterRuntimeConfig struct {
-	ControlListen string
-	TLSConfig     *tls.Config
-	ValidateToken func(nodeID, token string) bool
-	Authenticate  func(nodeID, token string) (NodeAuthentication, error)
-	Auth          DeviceAuthHandler
-	Activate      DeviceActivationHandler
-	Config        DeviceConfigHandler
-	OnNodeStatus  func(*NodeSession, *NodeHeartbeat, bool)
+	ControlListen  string
+	TLSConfig      *tls.Config
+	ValidateToken  func(nodeID, token string) bool
+	Authenticate   func(nodeID, token string) (NodeAuthentication, error)
+	Auth           DeviceAuthHandler
+	Activate       DeviceActivationHandler
+	Config         DeviceConfigHandler
+	OnNodeStatus   func(*NodeSession, *NodeHeartbeat, bool)
+	ResourceLimits ResourceLimits
 }
 type CenterRuntime struct {
 	Cluster   *ClusterManager
@@ -57,16 +58,20 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	}
 	cluster := NewClusterManager(0)
 	gateway := NewCenterGateway(cluster, cfg.Auth, cfg.Activate)
+	if err := gateway.SetResourceLimits(cfg.ResourceLimits); err != nil {
+		cluster.Close()
+		return nil, err
+	}
 	gateway.SetDeviceConfigHandler(cfg.Config)
 	status := NewNodeStatusDispatcher(cfg.OnNodeStatus)
 	if status != nil {
 		gateway.onNodeStatus = status.Submit
 	}
-	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect})
+	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect, ResourceLimits: cfg.ResourceLimits})
 	if err != nil {
 		return nil, err
 	}
-	data, err := NewNodeDatagramBridge(server.SessionByID, gateway.OnDatagram, 2*time.Second)
+	data, err := NewNodeDatagramBridge(server.SessionByID, gateway.OnDatagram, 2*time.Second, cfg.ResourceLimits)
 	if err != nil {
 		return nil, err
 	}
@@ -346,13 +351,16 @@ func (r *EdgeRuntime) heartbeatLoop() {
 			if link == nil || link.client == nil || link.client.Session == nil {
 				continue
 			}
+			if link.peer != nil {
+				_ = r.Gateway.requestDataBind(link)
+			}
 			snapshot := r.Gateway.projection.Snapshot()
 			interconnectMetrics := link.client.Session.ControlMetrics.Snapshot()
 			if link.peer != nil {
 				interconnectMetrics = AddMetricsSnapshots(interconnectMetrics, link.peer.Metrics.Snapshot())
 			}
-			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: r.instance, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version})
-			env := NewEnvelope(SubtypeNodeHeartbeat, link.client.Session.NodeID, link.client.Session.SessionID, randomUint64(), payload)
+			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: r.instance, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version, Protection: link.client.Session.ProtectionSnapshot()})
+			env := NewEnvelope(SubtypeNodeHeartbeat, link.client.Session.NodeID, link.client.Session.SessionID, r.Gateway.nextRequest.Add(1), payload)
 			env.ClusterEpoch, env.ProjectionVersion, env.Flags = snapshot.ClusterEpoch, snapshot.Version, FlagControl
 			_ = link.client.SendEnvelope(env)
 		}

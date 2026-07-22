@@ -46,6 +46,13 @@ type CenterGateway struct {
 	configLoopOnce sync.Once
 	configWG       sync.WaitGroup
 	speaker        *SpeakerLeaseManager
+	resourceLimits ResourceLimits
+	sessionCounts  map[nodeControlSession]int
+}
+
+type nodeControlSession struct {
+	nodeID    string
+	sessionID uint64
 }
 
 type deviceSessionOwner struct {
@@ -97,12 +104,25 @@ func NewCenterGateway(cluster *ClusterManager, auth DeviceAuthHandler, activator
 	if len(activators) > 0 {
 		activate = activators[0]
 	}
+	limits := DefaultResourceLimits()
 	return &CenterGateway{
 		cluster: cluster, auth: auth, activate: activate,
 		deviceSessions: make(map[uint64]deviceSessionOwner), activeDevices: make(map[string]uint64), activeByID: make(map[int]uint64), deviceEpochs: make(map[string]uint64), metrics: make(map[string]*Metrics),
+		resourceLimits: limits, sessionCounts: make(map[nodeControlSession]int),
 		configPending: make(map[uint64]*pendingDeviceConfigDelivery), configUpCache: make(map[deviceConfigCacheKey]cachedDeviceConfigResult), configClosed: make(chan struct{}),
 		speaker: NewSpeakerLeaseManager(),
 	}
+}
+
+func (g *CenterGateway) SetResourceLimits(limits ResourceLimits) error {
+	normalized, err := limits.normalized()
+	if err != nil {
+		return err
+	}
+	g.mu.Lock()
+	g.resourceLimits = normalized
+	g.mu.Unlock()
+	return nil
 }
 func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 	g.server, g.data = server, data
@@ -216,7 +236,30 @@ func (g *CenterGateway) OnDatagram(session *NodeSession, env Envelope, _ *net.UD
 	g.handleEnvelope(session, env)
 }
 func (g *CenterGateway) OnEnvelope(session *NodeSession, env Envelope) {
+	if env.Subtype == SubtypeNodeDataBind {
+		g.handleDataBindRequest(session, env)
+		return
+	}
 	g.handleEnvelope(session, env)
+}
+
+func (g *CenterGateway) handleDataBindRequest(session *NodeSession, env Envelope) {
+	if session == nil || g.server == nil {
+		return
+	}
+	var request NodeDataBind
+	if DecodeJSON(env.Payload, &request) != nil || request.Action != NodeDataBindRequest || len(request.Challenge) != 0 {
+		session.resourceProtection().recordDataBindReject()
+		return
+	}
+	challenge, err := session.IssueDataBindChallenge(time.Now())
+	if err != nil {
+		return
+	}
+	payload, _ := EncodeJSON(NodeDataBind{Action: NodeDataBindChallenge, Challenge: challenge})
+	reply := NewEnvelope(SubtypeNodeDataBind, "center", 0, g.cluster.NextMessageID(), payload)
+	reply.Flags = FlagControl
+	_ = g.server.SendEnvelope(session.NodeID, reply)
 }
 
 func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
@@ -839,6 +882,17 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 		}
 		return nil
 	}
+	if session.NodeID != CenterLocalNodeID {
+		g.mu.RLock()
+		key := nodeControlSession{nodeID: session.NodeID, sessionID: session.SessionID}
+		atLimit := g.sessionCounts[key] >= g.resourceLimits.MaxDeviceSessionsPerNode
+		replacesSameSession := hadOld && oldOwner.NodeID == session.NodeID && oldOwner.ControlSessionID == session.SessionID
+		g.mu.RUnlock()
+		if atLimit && !replacesSameSession {
+			session.resourceProtection().recordSessionLimitReject()
+			return errors.New("edge device session limit reached")
+		}
+	}
 
 	grant.SessionID = g.cluster.NextMessageID()
 	g.mu.Lock()
@@ -872,6 +926,7 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 	g.deviceEpochs[identity] = epoch
 	owner := deviceSessionOwner{NodeID: session.NodeID, ControlSessionID: session.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity}
 	g.deviceSessions[grant.SessionID] = owner
+	g.sessionCounts[nodeControlSession{nodeID: owner.NodeID, sessionID: owner.ControlSessionID}]++
 	g.activeDevices[identity] = grant.SessionID
 	if grant.DeviceID > 0 {
 		g.activeByID[grant.DeviceID] = grant.SessionID
@@ -1083,6 +1138,12 @@ func (g *CenterGateway) removeOwnerMapsLocked(sessionID uint64, owner deviceSess
 		g.speaker.ReleaseSession(sessionID, owner.SessionEpoch)
 	}
 	delete(g.deviceSessions, sessionID)
+	key := nodeControlSession{nodeID: owner.NodeID, sessionID: owner.ControlSessionID}
+	if g.sessionCounts[key] <= 1 {
+		delete(g.sessionCounts, key)
+	} else {
+		g.sessionCounts[key]--
+	}
 	if g.activeDevices[owner.Identity] == sessionID {
 		delete(g.activeDevices, owner.Identity)
 	}
@@ -1102,6 +1163,7 @@ func (g *CenterGateway) releaseSpeakerForRouteChange(current, next DeviceRoute) 
 
 func (g *CenterGateway) restoreOwnerMapsLocked(owner deviceSessionOwner) {
 	g.deviceSessions[owner.SessionID] = owner
+	g.sessionCounts[nodeControlSession{nodeID: owner.NodeID, sessionID: owner.ControlSessionID}]++
 	g.activeDevices[owner.Identity] = owner.SessionID
 	if owner.DeviceID > 0 {
 		g.activeByID[owner.DeviceID] = owner.SessionID
@@ -1462,12 +1524,25 @@ func (g *EdgeGateway) attachControl(client *NodeClient, peer *NodeDatagramPeer) 
 	g.clearPendingControlRequests()
 	g.clearSpeakerStates()
 	if peer != nil {
-		if err := peer.Bind(); err != nil {
+		if err := g.requestDataBind(link); err != nil {
 			g.detachControl(client, time.Now())
 			return nil, err
 		}
 	}
 	return link, nil
+}
+
+func (g *EdgeGateway) requestDataBind(link *edgeControlLink) error {
+	if link == nil || link.client == nil || link.peer == nil {
+		return nil
+	}
+	payload, err := EncodeJSON(NodeDataBind{Action: NodeDataBindRequest})
+	if err != nil {
+		return err
+	}
+	env := NewEnvelope(SubtypeNodeDataBind, link.client.Session.NodeID, link.client.Session.SessionID, g.nextRequest.Add(1), payload)
+	env.Flags = FlagControl
+	return link.client.SendEnvelope(env)
 }
 
 func (g *EdgeGateway) detachControl(client *NodeClient, now time.Time) bool {
@@ -2309,6 +2384,12 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 		return
 	}
 	switch env.Subtype {
+	case SubtypeNodeDataBind:
+		var bind NodeDataBind
+		if DecodeJSON(env.Payload, &bind) != nil || bind.Action != NodeDataBindChallenge || len(bind.Challenge) != 32 || link.peer == nil {
+			return
+		}
+		_ = link.peer.ProveDataBind(bind.Challenge, g.nextRequest.Add(1))
 	case SubtypeDeviceAuth:
 		var response DeviceAuthResponse
 		if DecodeJSON(env.Payload, &response) != nil {

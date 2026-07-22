@@ -55,7 +55,26 @@ type InterconnectConfig struct {
 	RegistrationTokenTTL int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
 	// NodeTokens is a development/bootstrap map. Production deployments should
 	// replace it with hashed, rotatable credentials managed by the admin API.
-	NodeTokens map[string]string `yaml:"NodeTokens" json:"node_tokens"`
+	NodeTokens map[string]string          `yaml:"NodeTokens" json:"node_tokens"`
+	Resources  InterconnectResourceConfig `yaml:"Resources" json:"resources"`
+}
+
+type InterconnectResourceConfig struct {
+	MaxNodes                   int `yaml:"MaxNodes" json:"max_nodes"`
+	MaxPendingHandshakes       int `yaml:"MaxPendingHandshakes" json:"max_pending_handshakes"`
+	AuthAttemptsPerMinutePerIP int `yaml:"AuthAttemptsPerMinutePerIP" json:"auth_attempts_per_minute_per_ip"`
+	DataSoftPPSPerNode         int `yaml:"DataSoftPPSPerNode" json:"data_soft_pps_per_node"`
+	DataHardPPSPerNode         int `yaml:"DataHardPPSPerNode" json:"data_hard_pps_per_node"`
+	DataHardMbpsPerNode        int `yaml:"DataHardMbpsPerNode" json:"data_hard_mbps_per_node"`
+	DataQueuePerNode           int `yaml:"DataQueuePerNode" json:"data_queue_per_node"`
+	DataQueueGlobal            int `yaml:"DataQueueGlobal" json:"data_queue_global"`
+	DataWorkers                int `yaml:"DataWorkers" json:"data_workers"`
+	DataMaxQueueAgeMS          int `yaml:"DataMaxQueueAgeMS" json:"data_max_queue_age_ms"`
+	ControlSoftPPSPerNode      int `yaml:"ControlSoftPPSPerNode" json:"control_soft_pps_per_node"`
+	ControlHardPPSPerNode      int `yaml:"ControlHardPPSPerNode" json:"control_hard_pps_per_node"`
+	ControlHardMbpsPerNode     int `yaml:"ControlHardMbpsPerNode" json:"control_hard_mbps_per_node"`
+	DeviceAuthPPSPerNode       int `yaml:"DeviceAuthPPSPerNode" json:"device_auth_pps_per_node"`
+	MaxDeviceSessionsPerNode   int `yaml:"MaxDeviceSessionsPerNode" json:"max_device_sessions_per_node"`
 }
 
 type AccessDiscoveryConfig struct {
@@ -258,6 +277,49 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.Interconnect.RegistrationTokenTTL <= 0 {
 		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60
+	}
+	resources := &c.Interconnect.Resources
+	if resources.MaxNodes == 0 {
+		resources.MaxNodes = 256
+	}
+	if resources.MaxPendingHandshakes == 0 {
+		resources.MaxPendingHandshakes = 64
+	}
+	if resources.AuthAttemptsPerMinutePerIP == 0 {
+		resources.AuthAttemptsPerMinutePerIP = 30
+	}
+	if resources.DataSoftPPSPerNode == 0 {
+		resources.DataSoftPPSPerNode = 50000
+	}
+	if resources.DataHardPPSPerNode == 0 {
+		resources.DataHardPPSPerNode = 100000
+	}
+	if resources.DataHardMbpsPerNode == 0 {
+		resources.DataHardMbpsPerNode = 1000
+	}
+	if resources.DataQueuePerNode == 0 {
+		resources.DataQueuePerNode = 512
+	}
+	if resources.DataQueueGlobal == 0 {
+		resources.DataQueueGlobal = 4096
+	}
+	if resources.DataMaxQueueAgeMS == 0 {
+		resources.DataMaxQueueAgeMS = 200
+	}
+	if resources.ControlSoftPPSPerNode == 0 {
+		resources.ControlSoftPPSPerNode = 1000
+	}
+	if resources.ControlHardPPSPerNode == 0 {
+		resources.ControlHardPPSPerNode = 2000
+	}
+	if resources.ControlHardMbpsPerNode == 0 {
+		resources.ControlHardMbpsPerNode = 256
+	}
+	if resources.DeviceAuthPPSPerNode == 0 {
+		resources.DeviceAuthPPSPerNode = 500
+	}
+	if resources.MaxDeviceSessionsPerNode == 0 {
+		resources.MaxDeviceSessionsPerNode = 25000
 	}
 	if c.AccessDiscovery.TokenTTLSeconds <= 0 || c.AccessDiscovery.TokenTTLSeconds > 300 {
 		c.AccessDiscovery.TokenTTLSeconds = 300

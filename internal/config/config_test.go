@@ -90,6 +90,19 @@ func TestExplicitLocalDriverDoesNotMigrateLegacyMinIO(t *testing.T) {
 	}
 }
 
+func TestInterconnectResourceDefaults(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	r := cfg.Interconnect.Resources
+	if r.MaxNodes != 256 || r.MaxPendingHandshakes != 64 || r.DataHardPPSPerNode != 100000 ||
+		r.DataQueueGlobal != 4096 || r.ControlHardPPSPerNode != 2000 || r.MaxDeviceSessionsPerNode != 25000 {
+		t.Fatalf("unexpected interconnect resource defaults: %#v", r)
+	}
+}
+
 func containsOrigin(origins []string, target string) bool {
 	for _, origin := range origins {
 		if origin == target {

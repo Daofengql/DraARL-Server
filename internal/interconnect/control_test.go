@@ -200,3 +200,79 @@ func TestTLSControlMetricsCountSerializedApplicationFrames(t *testing.T) {
 		t.Fatalf("server control metrics = %#v, want handshake plus one %d-byte frame", serverMetrics, len(wire))
 	}
 }
+
+func TestTLSControlPlaneReservesNodeCapacityBeforeAuthSuccess(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewNodeServer(NodeServerConfig{
+		ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken:  func(_, token string) bool { return token == "secret" },
+		ResourceLimits: ResourceLimits{MaxNodes: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	clientTLS := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: clientTLS, NodeID: "edge-a", Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if second, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: clientTLS.Clone(), NodeID: "edge-b", Token: "secret"}); err == nil {
+		second.Close()
+		t.Fatal("second NodeID exceeded MaxNodes")
+	}
+	if snapshot := server.ProtectionSnapshot(); snapshot.ActiveNodes != 1 || snapshot.MaxNodesRejected != 1 {
+		t.Fatalf("capacity snapshot=%#v", snapshot)
+	}
+	replacement, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: clientTLS.Clone(), NodeID: "edge-a", Token: "secret"})
+	if err != nil {
+		t.Fatalf("same NodeID replacement consumed extra capacity: %v", err)
+	}
+	defer replacement.Close()
+	if snapshot := server.ProtectionSnapshot(); snapshot.ActiveNodes != 1 {
+		t.Fatalf("replacement active nodes=%d", snapshot.ActiveNodes)
+	}
+}
+
+func TestTLSControlPlaneLimitsAuthenticationAttemptsPerIP(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewNodeServer(NodeServerConfig{
+		ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken:  func(_, token string) bool { return token == "secret" },
+		ResourceLimits: ResourceLimits{AuthAttemptsPerMinutePerIP: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	clientTLS := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if client, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: clientTLS, NodeID: "edge-a", Token: "wrong"}); err == nil {
+		client.Close()
+		t.Fatal("invalid credential was accepted")
+	}
+	if client, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: clientTLS.Clone(), NodeID: "edge-a", Token: "secret"}); err == nil {
+		client.Close()
+		t.Fatal("authentication rate limit was bypassed")
+	}
+	snapshot := server.ProtectionSnapshot()
+	if snapshot.AuthFailed != 1 || snapshot.AuthRateRejected != 1 {
+		t.Fatalf("authentication snapshot=%#v", snapshot)
+	}
+}

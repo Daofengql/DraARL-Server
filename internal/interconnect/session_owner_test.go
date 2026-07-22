@@ -565,3 +565,35 @@ func TestDeviceConfigPendingDeliveryFailsImmediatelyOnMigration(t *testing.T) {
 		t.Fatal("migration left a stale config delivery pending")
 	}
 }
+
+func TestCenterGatewayLimitsDeviceSessionsPerNodeControlSession(t *testing.T) {
+	cluster := NewClusterManager(56)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	if err := gateway.SetResourceLimits(ResourceLimits{MaxDeviceSessionsPerNode: 1}); err != nil {
+		t.Fatal(err)
+	}
+	edge := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	gateway.OnConnect(edge)
+	first := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, DomainID: 90}
+	if err := gateway.activateDeviceSession(edge, first); err != nil {
+		t.Fatal(err)
+	}
+	renewed := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, DomainID: 91}
+	if err := gateway.activateDeviceSession(edge, renewed); err != nil {
+		t.Fatalf("idempotent renewal was counted as a new session: %v", err)
+	}
+	second := &DeviceGrant{DeviceID: 8, OwnerID: 6, Username: "bob", SSID: 1, DomainID: 90}
+	if err := gateway.activateDeviceSession(edge, second); err == nil {
+		t.Fatal("second device exceeded the node session limit")
+	}
+	if got := edge.ProtectionSnapshot().SessionLimitRejects; got != 1 {
+		t.Fatalf("session limit rejects=%d", got)
+	}
+	if !gateway.handleDeviceSessionReport(edge, DeviceSessionReport{SessionID: first.SessionID, SessionEpoch: first.SessionEpoch, DeviceID: first.DeviceID, Reason: "device_timeout"}) {
+		t.Fatal("first device was not removed")
+	}
+	if err := gateway.activateDeviceSession(edge, second); err != nil {
+		t.Fatalf("released quota was not reusable: %v", err)
+	}
+}

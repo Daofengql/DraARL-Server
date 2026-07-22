@@ -117,22 +117,31 @@ func (m *ClusterManager) UpdateNodeHeartbeat(nodeID string, heartbeat NodeHeartb
 }
 
 type NodeStatus struct {
-	NodeID         string           `json:"node_id"`
-	Online         bool             `json:"online"`
-	RemoteAddr     string           `json:"remote_addr,omitempty"`
-	ConnectedAt    *time.Time       `json:"connected_at,omitempty"`
-	LastHeartbeat  *time.Time       `json:"last_heartbeat,omitempty"`
-	Heartbeat      NodeHeartbeat    `json:"heartbeat"`
-	CenterData     MetricsSnapshot  `json:"center_interconnect"`
-	TrafficRates   NodeTrafficRates `json:"traffic_rates"`
-	AckedVersion   uint64           `json:"acked_projection_version"`
-	PendingControl int              `json:"pending_control"`
-	SyncError      string           `json:"sync_error,omitempty"`
+	NodeID           string                       `json:"node_id"`
+	Online           bool                         `json:"online"`
+	RemoteAddr       string                       `json:"remote_addr,omitempty"`
+	ConnectedAt      *time.Time                   `json:"connected_at,omitempty"`
+	LastHeartbeat    *time.Time                   `json:"last_heartbeat,omitempty"`
+	Heartbeat        NodeHeartbeat                `json:"heartbeat"`
+	CenterData       MetricsSnapshot              `json:"center_interconnect"`
+	TrafficRates     NodeTrafficRates             `json:"traffic_rates"`
+	AckedVersion     uint64                       `json:"acked_projection_version"`
+	PendingControl   int                          `json:"pending_control"`
+	SyncError        string                       `json:"sync_error,omitempty"`
+	CenterProtection NodeProtectionSnapshot       `json:"center_protection"`
+	ControlServer    NodeServerProtectionSnapshot `json:"control_server_protection"`
+	DatagramBridge   NodeDatagramBridgeSnapshot   `json:"datagram_bridge_protection"`
 }
 
 func (m *ClusterManager) NodeStatus(nodeID string) NodeStatus {
 	m.mu.RLock()
 	status := NodeStatus{NodeID: nodeID, Heartbeat: m.status[nodeID], AckedVersion: m.ackedVersion[nodeID], PendingControl: len(m.pendingControl[nodeID]), SyncError: m.syncError[nodeID]}
+	if m.server != nil {
+		status.ControlServer = m.server.ProtectionSnapshot()
+	}
+	if m.dataBridge != nil {
+		status.DatagramBridge = m.dataBridge.ProtectionSnapshot()
+	}
 	if receivedAt, ok := m.statusReceived[nodeID]; ok {
 		copyTime := receivedAt
 		status.LastHeartbeat = &copyTime
@@ -143,6 +152,7 @@ func (m *ClusterManager) NodeStatus(nodeID string) NodeStatus {
 		connectedAt := session.ConnectedAt
 		status.ConnectedAt = &connectedAt
 		status.CenterData = AddMetricsSnapshots(session.DataMetrics.Snapshot(), session.ControlMetrics.Snapshot())
+		status.CenterProtection = session.ProtectionSnapshot()
 	}
 	metricsCurrent := status.Online && status.LastHeartbeat != nil && (status.ConnectedAt == nil || !status.LastHeartbeat.Before(*status.ConnectedAt))
 	status.TrafficRates = m.rateTrackers[nodeID].snapshot(metricsCurrent)

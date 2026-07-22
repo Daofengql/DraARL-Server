@@ -8,6 +8,7 @@ package interconnect
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -29,11 +30,12 @@ import (
 )
 
 const (
-	controlMaxFrame  = 4 << 20
-	controlHello     = "node_enroll"
-	controlAuthOK    = "node_auth_ok"
-	controlAuthError = "node_auth_error"
-	controlHeartbeat = "node_heartbeat"
+	controlMaxFrame      = 4 << 20
+	controlHelloMaxFrame = 16 << 10
+	controlHello         = "node_enroll"
+	controlAuthOK        = "node_auth_ok"
+	controlAuthError     = "node_auth_error"
+	controlHeartbeat     = "node_heartbeat"
 )
 
 var ErrNodeAuthenticationRejected = errors.New("node authentication rejected")
@@ -88,12 +90,16 @@ func readControlMessage(r io.Reader) (ControlMessage, error) {
 }
 
 func readControlMessageSize(r io.Reader) (ControlMessage, int, error) {
+	return readControlMessageSizeLimit(r, controlMaxFrame)
+}
+
+func readControlMessageSizeLimit(r io.Reader, maxFrame int) (ControlMessage, int, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return ControlMessage{}, 0, err
 	}
 	n := int(binary.BigEndian.Uint32(header[:]))
-	if n <= 0 || n > controlMaxFrame {
+	if n <= 0 || n > maxFrame {
 		return ControlMessage{}, 4, errors.New("invalid control frame length")
 	}
 	data := make([]byte, n)
@@ -122,8 +128,12 @@ type NodeSession struct {
 	DataMetrics            Metrics
 	ControlMetrics         Metrics
 	AckedProjectionVersion atomic.Uint64
-	replayMu               sync.Mutex
-	replay                 map[uint64]int64
+	replay                 replayWindow
+	protectionOnce         sync.Once
+	protection             *nodeProtection
+	dataBindMu             sync.Mutex
+	dataBindChallenge      [32]byte
+	dataBindChallengeUntil time.Time
 }
 
 func (s *NodeSession) Send(msg ControlMessage) error {
@@ -143,38 +153,27 @@ func (s *NodeSession) Send(msg ControlMessage) error {
 }
 func (s *NodeSession) Touch() { s.LastHeartbeat.Store(time.Now().UnixMilli()) }
 
-// AcceptMessage rejects a recently seen Type 0 message ID. The cache is
-// bounded and time based so real-time traffic cannot grow it without limit.
+// AcceptMessage rejects replays inside a fixed, allocation-free sliding
+// window. The envelope timestamp independently rejects stale network traffic.
 func (s *NodeSession) AcceptMessage(messageID uint64, now time.Time) bool {
-	if messageID == 0 {
-		return false
-	}
-	nowMillis := now.UnixMilli()
-	s.replayMu.Lock()
-	defer s.replayMu.Unlock()
-	if s.replay == nil {
-		s.replay = make(map[uint64]int64, 256)
-	}
-	for id, seenAt := range s.replay {
-		if nowMillis-seenAt > 30_000 {
-			delete(s.replay, id)
+	_ = now
+	return s.replay.accept(messageID)
+}
+
+func (s *NodeSession) resourceProtection() *nodeProtection {
+	s.protectionOnce.Do(func() {
+		if s.protection == nil {
+			s.protection = newNodeProtection(ResourceLimits{})
 		}
+	})
+	return s.protection
+}
+
+func (s *NodeSession) ProtectionSnapshot() NodeProtectionSnapshot {
+	if s == nil {
+		return NodeProtectionSnapshot{}
 	}
-	if _, exists := s.replay[messageID]; exists {
-		return false
-	}
-	if len(s.replay) >= 4096 {
-		var oldestID uint64
-		var oldestAt int64 = nowMillis
-		for id, seenAt := range s.replay {
-			if seenAt <= oldestAt {
-				oldestID, oldestAt = id, seenAt
-			}
-		}
-		delete(s.replay, oldestID)
-	}
-	s.replay[messageID] = nowMillis
-	return true
+	return s.resourceProtection().snapshot()
 }
 func (s *NodeSession) BindDataAddr(addr *net.UDPAddr) {
 	s.dataMu.Lock()
@@ -198,23 +197,87 @@ func (s *NodeSession) DataAddr() *net.UDPAddr {
 	return &copyAddr
 }
 
+func (s *NodeSession) DataAddrMatches(addr *net.UDPAddr) bool {
+	if s == nil || addr == nil {
+		return false
+	}
+	s.dataMu.RLock()
+	bound := s.dataAddr
+	matches := bound != nil && bound.Port == addr.Port && bound.Zone == addr.Zone && bound.IP.Equal(addr.IP)
+	s.dataMu.RUnlock()
+	return matches
+}
+
+func (s *NodeSession) IssueDataBindChallenge(now time.Time) ([]byte, error) {
+	if s == nil {
+		return nil, errors.New("node session is required")
+	}
+	var challenge [32]byte
+	if _, err := rand.Read(challenge[:]); err != nil {
+		return nil, err
+	}
+	s.dataBindMu.Lock()
+	s.dataBindChallenge = challenge
+	s.dataBindChallengeUntil = now.Add(10 * time.Second)
+	s.dataBindMu.Unlock()
+	return append([]byte(nil), challenge[:]...), nil
+}
+
+func (s *NodeSession) ConsumeDataBindChallenge(challenge []byte, now time.Time) bool {
+	if s == nil || len(challenge) != len(s.dataBindChallenge) {
+		return false
+	}
+	s.dataBindMu.Lock()
+	defer s.dataBindMu.Unlock()
+	valid := !s.dataBindChallengeUntil.IsZero() && !now.After(s.dataBindChallengeUntil) &&
+		hmac.Equal(challenge, s.dataBindChallenge[:])
+	clear(s.dataBindChallenge[:])
+	s.dataBindChallengeUntil = time.Time{}
+	return valid
+}
+
 type NodeServerConfig struct {
-	ListenAddr    string
-	TLSConfig     *tls.Config
-	ValidateToken func(nodeID, token string) bool
-	Authenticate  func(nodeID, token string) (NodeAuthentication, error)
-	OnConnect     func(*NodeSession)
-	OnMessage     func(*NodeSession, ControlMessage)
-	OnEnvelope    func(*NodeSession, Envelope)
-	OnDisconnect  func(*NodeSession, error)
+	ListenAddr     string
+	TLSConfig      *tls.Config
+	ValidateToken  func(nodeID, token string) bool
+	Authenticate   func(nodeID, token string) (NodeAuthentication, error)
+	OnConnect      func(*NodeSession)
+	OnMessage      func(*NodeSession, ControlMessage)
+	OnEnvelope     func(*NodeSession, Envelope)
+	OnDisconnect   func(*NodeSession, error)
+	ResourceLimits ResourceLimits
 }
 
 type NodeServer struct {
-	cfg       NodeServerConfig
-	listener  net.Listener
-	sessions  sync.Map
-	closed    chan struct{}
-	closeOnce sync.Once
+	cfg        NodeServerConfig
+	listener   net.Listener
+	sessions   sync.Map
+	closed     chan struct{}
+	closeOnce  sync.Once
+	limits     ResourceLimits
+	pending    atomic.Int64
+	sessionMu  sync.Mutex
+	active     int
+	occupied   int
+	reserved   map[string]int
+	attempts   *handshakeLimiter
+	protection NodeServerProtection
+}
+
+type NodeServerProtection struct {
+	PendingRejected  atomic.Uint64
+	AuthRateRejected atomic.Uint64
+	AuthFailed       atomic.Uint64
+	MaxNodesRejected atomic.Uint64
+}
+
+type NodeServerProtectionSnapshot struct {
+	PendingHandshakes int64  `json:"pending_handshakes"`
+	ActiveNodes       int    `json:"active_nodes"`
+	PendingRejected   uint64 `json:"pending_rejected"`
+	AuthRateRejected  uint64 `json:"auth_rate_rejected"`
+	AuthFailed        uint64 `json:"auth_failed"`
+	MaxNodesRejected  uint64 `json:"max_nodes_rejected"`
 }
 
 func NewNodeServer(cfg NodeServerConfig) (*NodeServer, error) {
@@ -227,7 +290,11 @@ func NewNodeServer(cfg NodeServerConfig) (*NodeServer, error) {
 	if cfg.ValidateToken == nil && cfg.Authenticate == nil {
 		return nil, errors.New("node token validator is required")
 	}
-	return &NodeServer{cfg: cfg, closed: make(chan struct{})}, nil
+	limits, err := cfg.ResourceLimits.normalized()
+	if err != nil {
+		return nil, err
+	}
+	return &NodeServer{cfg: cfg, limits: limits, attempts: newHandshakeLimiter(limits.AuthAttemptsPerMinutePerIP), reserved: make(map[string]int), closed: make(chan struct{})}, nil
 }
 
 func (s *NodeServer) Start() error {
@@ -256,21 +323,43 @@ func (s *NodeServer) acceptLoop() {
 			}
 			continue
 		}
+		if s.pending.Add(1) > int64(s.limits.MaxPendingHandshakes) {
+			s.pending.Add(-1)
+			s.protection.PendingRejected.Add(1)
+			_ = conn.Close()
+			continue
+		}
 		go s.handleConn(conn)
 	}
 }
 func (s *NodeServer) handleConn(conn net.Conn) {
+	pending := true
+	releasePending := func() {
+		if pending {
+			pending = false
+			s.pending.Add(-1)
+		}
+	}
+	defer releasePending()
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	hello, helloBytes, err := readControlMessageSize(conn)
+	hello, helloBytes, err := readControlMessageSizeLimit(conn, controlHelloMaxFrame)
 	authentication := NodeAuthentication{}
-	if err == nil && hello.Kind == controlHello && hello.NodeID != "" && hello.NodeID != CenterLocalNodeID {
-		if s.cfg.Authenticate != nil {
+	validHello := err == nil && hello.Kind == controlHello && hello.NodeID != "" && hello.NodeID != CenterLocalNodeID
+	rateRejected := false
+	if validHello {
+		if !s.attempts.allow(conn.RemoteAddr(), time.Now()) {
+			rateRejected = true
+			s.protection.AuthRateRejected.Add(1)
+		} else if s.cfg.Authenticate != nil {
 			authentication, err = s.cfg.Authenticate(hello.NodeID, hello.Token)
 		} else if s.cfg.ValidateToken != nil {
 			authentication.Accepted = s.cfg.ValidateToken(hello.NodeID, hello.Token)
 		}
 	}
-	if err != nil || hello.Kind != controlHello || hello.NodeID == "" || hello.NodeID == CenterLocalNodeID || !authentication.Accepted {
+	if err != nil || !validHello || !authentication.Accepted {
+		if !rateRejected {
+			s.protection.AuthFailed.Add(1)
+		}
 		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthError, Error: "node authentication failed"})
 		_ = conn.Close()
 		return
@@ -281,8 +370,20 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		return
 	}
 	sid := randomUint64()
-	session := &NodeSession{NodeID: hello.NodeID, SessionID: sid, KeyEpoch: 1, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
+	session := &NodeSession{NodeID: hello.NodeID, SessionID: sid, KeyEpoch: 1, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn, protection: newNodeProtection(s.limits)}
 	session.Touch()
+	if !s.reserveSession(session.NodeID) {
+		s.protection.MaxNodesRejected.Add(1)
+		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthError, Error: "node capacity reached"})
+		_ = conn.Close()
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			s.releaseReservation(session.NodeID)
+		}
+	}()
 	response := ControlMessage{Kind: controlAuthOK, NodeID: session.NodeID, SessionID: sid, KeyEpoch: session.KeyEpoch, Key: base64.RawStdEncoding.EncodeToString(key), Credential: authentication.IssuedCredential, CredentialEpoch: authentication.CredentialEpoch}
 	responseWire, err := marshalControlMessage(response)
 	if err != nil {
@@ -296,16 +397,23 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	session.ControlMetrics.AddIn(helloBytes)
 	session.ControlMetrics.AddOut(len(responseWire))
 	_ = conn.SetDeadline(time.Time{})
-	if old, loaded := s.sessions.Swap(session.NodeID, session); loaded {
+	old, loaded, installed := s.installReservedSession(session)
+	if !installed {
+		_ = conn.Close()
+		return
+	}
+	reserved = false
+	releasePending()
+	if loaded {
 		if s.cfg.OnConnect != nil {
 			s.cfg.OnConnect(session)
 		}
-		_ = old.(*NodeSession).Close()
+		_ = old.Close()
 	} else if s.cfg.OnConnect != nil {
 		s.cfg.OnConnect(session)
 	}
 	defer func() {
-		s.sessions.CompareAndDelete(session.NodeID, session)
+		s.removeSession(session)
 		_ = conn.Close()
 		if s.cfg.OnDisconnect != nil {
 			s.cfg.OnDisconnect(session, err)
@@ -318,6 +426,11 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 			return
 		}
 		session.ControlMetrics.AddIn(frameBytes)
+		now := time.Now()
+		if !session.resourceProtection().allowControl(frameBytes, now) {
+			session.ControlMetrics.AddDrop()
+			continue
+		}
 		if msg.Kind == controlHeartbeat {
 			session.Touch()
 		}
@@ -327,12 +440,25 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 				continue
 			}
 			env, decodeErr := UnmarshalControl(wire, session.Key)
-			now := time.Now()
-			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID || env.Expired(now, 30*time.Second) {
+			if decodeErr != nil {
+				session.resourceProtection().recordInvalidAuthTag()
+				continue
+			}
+			if env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID {
+				session.resourceProtection().recordIdentityReject()
+				continue
+			}
+			if env.Expired(now, 30*time.Second) {
+				session.resourceProtection().recordExpiredDrop()
+				continue
+			}
+			if env.Subtype == SubtypeDeviceAuth && !session.resourceProtection().allowDeviceAuth(now) {
+				session.ControlMetrics.AddDrop()
 				continue
 			}
 			if !session.AcceptMessage(env.MessageID, now) {
 				if env.Subtype != SubtypeDeviceConfig {
+					session.resourceProtection().recordReplayDrop()
 					continue
 				}
 				env.Duplicate = true
@@ -346,6 +472,85 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		if s.cfg.OnMessage != nil {
 			s.cfg.OnMessage(session, msg)
 		}
+	}
+}
+
+func (s *NodeServer) reserveSession(nodeID string) bool {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	_, active := s.sessions.Load(nodeID)
+	if !active && s.reserved[nodeID] == 0 {
+		if s.occupied >= s.limits.MaxNodes {
+			return false
+		}
+		s.occupied++
+	}
+	s.reserved[nodeID]++
+	return true
+}
+
+func (s *NodeServer) releaseReservation(nodeID string) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.reserved[nodeID] <= 1 {
+		delete(s.reserved, nodeID)
+		if _, active := s.sessions.Load(nodeID); !active && s.occupied > 0 {
+			s.occupied--
+		}
+		return
+	}
+	s.reserved[nodeID]--
+}
+
+func (s *NodeServer) installReservedSession(session *NodeSession) (old *NodeSession, loaded, installed bool) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.reserved[session.NodeID] == 0 {
+		return nil, false, false
+	}
+	if value, ok := s.sessions.Load(session.NodeID); ok {
+		old = value.(*NodeSession)
+		loaded = true
+	} else {
+		s.active++
+	}
+	s.sessions.Store(session.NodeID, session)
+	if s.reserved[session.NodeID] == 1 {
+		delete(s.reserved, session.NodeID)
+	} else {
+		s.reserved[session.NodeID]--
+	}
+	return old, loaded, true
+}
+
+func (s *NodeServer) removeSession(session *NodeSession) bool {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	current, ok := s.sessions.Load(session.NodeID)
+	if !ok || current != session {
+		return false
+	}
+	s.sessions.Delete(session.NodeID)
+	if s.active > 0 {
+		s.active--
+	}
+	if s.reserved[session.NodeID] == 0 && s.occupied > 0 {
+		s.occupied--
+	}
+	return true
+}
+
+func (s *NodeServer) ProtectionSnapshot() NodeServerProtectionSnapshot {
+	if s == nil {
+		return NodeServerProtectionSnapshot{}
+	}
+	s.sessionMu.Lock()
+	active := s.active
+	s.sessionMu.Unlock()
+	return NodeServerProtectionSnapshot{
+		PendingHandshakes: s.pending.Load(), ActiveNodes: active,
+		PendingRejected: s.protection.PendingRejected.Load(), AuthRateRejected: s.protection.AuthRateRejected.Load(),
+		AuthFailed: s.protection.AuthFailed.Load(), MaxNodesRejected: s.protection.MaxNodesRejected.Load(),
 	}
 }
 func (s *NodeServer) Session(nodeID string) (*NodeSession, bool) {

@@ -224,5 +224,13 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			}
 		}
 	}
-	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Config: configHandler, OnNodeStatus: onNodeStatus})
+	r := cfg.Interconnect.Resources
+	limits := interconnect.ResourceLimits{
+		MaxNodes: r.MaxNodes, MaxPendingHandshakes: r.MaxPendingHandshakes, AuthAttemptsPerMinutePerIP: r.AuthAttemptsPerMinutePerIP,
+		DataSoftPPSPerNode: r.DataSoftPPSPerNode, DataHardPPSPerNode: r.DataHardPPSPerNode, DataHardMbpsPerNode: r.DataHardMbpsPerNode,
+		DataQueuePerNode: r.DataQueuePerNode, DataQueueGlobal: r.DataQueueGlobal, DataWorkers: r.DataWorkers, DataMaxQueueAge: time.Duration(r.DataMaxQueueAgeMS) * time.Millisecond,
+		ControlSoftPPSPerNode: r.ControlSoftPPSPerNode, ControlHardPPSPerNode: r.ControlHardPPSPerNode, ControlHardMbpsPerNode: r.ControlHardMbpsPerNode,
+		DeviceAuthPPSPerNode: r.DeviceAuthPPSPerNode, MaxDeviceSessionsPerNode: r.MaxDeviceSessionsPerNode,
+	}
+	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Config: configHandler, OnNodeStatus: onNodeStatus, ResourceLimits: limits})
 }

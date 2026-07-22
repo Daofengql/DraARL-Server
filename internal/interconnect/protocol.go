@@ -29,6 +29,7 @@ const (
 	SubtypeNodeEnroll          byte = 0x01
 	SubtypeNodeAuth            byte = 0x03
 	SubtypeNodeHeartbeat       byte = 0x05
+	SubtypeNodeDataBind        byte = 0x06
 	SubtypeRouteSnapshotBegin  byte = 0x10
 	SubtypeRouteSnapshotChunk  byte = 0x11
 	SubtypeRouteSnapshotCommit byte = 0x12

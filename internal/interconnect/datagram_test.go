@@ -35,7 +35,14 @@ func TestNodeDatagramBridgeUsesOwnerWriterWithoutListening(t *testing.T) {
 		}
 		return nil
 	})
-	env := NewEnvelope(SubtypeRelayUpstream, edgeSession.NodeID, edgeSession.SessionID, 1, []byte("voice"))
+	challenge, err := centerSession.IssueDataBindChallenge(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.ProveDataBind(challenge, 1); err != nil {
+		t.Fatal(err)
+	}
+	env := NewEnvelope(SubtypeRelayUpstream, edgeSession.NodeID, edgeSession.SessionID, 2, []byte("voice"))
 	if err := peer.Send(env); err != nil {
 		t.Fatal(err)
 	}
@@ -49,6 +56,102 @@ func TestNodeDatagramBridgeUsesOwnerWriterWithoutListening(t *testing.T) {
 	}
 }
 
+func TestNodeDatagramBridgeDoesNotSilentlyRebindAuthenticatedTraffic(t *testing.T) {
+	key := []byte("datagram-key-123")
+	session := &NodeSession{NodeID: "edge-a", SessionID: 12, KeyEpoch: 1, Key: key}
+	delivered := make(chan struct{}, 1)
+	bridge, err := NewNodeDatagramBridge(
+		func(nodeID string, sessionID uint64) *NodeSession {
+			if nodeID == session.NodeID && sessionID == session.SessionID {
+				return session
+			}
+			return nil
+		},
+		func(_ *NodeSession, _ Envelope, _ *net.UDPAddr) { delivered <- struct{}{} },
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+
+	bound := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 32000}
+	other := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 32001}
+	session.BindDataAddr(bound)
+	env := NewEnvelope(SubtypeRelayUpstream, session.NodeID, session.SessionID, 1, []byte("voice"))
+	env.KeyEpoch = session.KeyEpoch
+	wire, err := env.Marshal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bridge.Handle(wire, other) {
+		t.Fatal("authenticated Type 0 packet was not consumed")
+	}
+	select {
+	case <-delivered:
+		t.Fatal("packet from an unbound address was delivered")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if !session.DataAddrMatches(bound) || session.DataAddrMatches(other) {
+		t.Fatal("ordinary authenticated traffic changed the UDP binding")
+	}
+	if got := session.ProtectionSnapshot().UnboundAddressDrops; got != 1 {
+		t.Fatalf("unbound address drops=%d", got)
+	}
+}
+
+func TestNodeDatagramBridgeRebindRequiresFreshControlChallenge(t *testing.T) {
+	key := []byte("datagram-key-123")
+	session := &NodeSession{NodeID: "edge-a", SessionID: 12, KeyEpoch: 1, Key: key}
+	bridge, err := NewNodeDatagramBridge(
+		func(nodeID string, sessionID uint64) *NodeSession {
+			if nodeID == session.NodeID && sessionID == session.SessionID {
+				return session
+			}
+			return nil
+		},
+		func(_ *NodeSession, _ Envelope, _ *net.UDPAddr) {},
+		time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	oldAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 32000}
+	newAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 32001}
+	session.BindDataAddr(oldAddr)
+	challenge, err := session.IssueDataBindChallenge(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := EncodeJSON(NodeDataBind{Action: NodeDataBindProof, Challenge: challenge})
+	proof := NewEnvelope(SubtypeNodeDataBind, session.NodeID, session.SessionID, 1, payload)
+	proof.KeyEpoch = session.KeyEpoch
+	wire, err := proof.Marshal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bridge.Handle(wire, newAddr) || !session.DataAddrMatches(newAddr) {
+		t.Fatal("fresh challenge did not authorize UDP rebinding")
+	}
+
+	replayed := NewEnvelope(SubtypeNodeDataBind, session.NodeID, session.SessionID, 2, payload)
+	replayed.KeyEpoch = session.KeyEpoch
+	replayWire, err := replayed.Marshal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bridge.Handle(replayWire, oldAddr) {
+		t.Fatal("replayed proof was not consumed")
+	}
+	if !session.DataAddrMatches(newAddr) || session.DataAddrMatches(oldAddr) {
+		t.Fatal("a consumed challenge was reused to rebind the session")
+	}
+	if got := session.ProtectionSnapshot().DataBindRejects; got != 1 {
+		t.Fatalf("data bind rejects=%d", got)
+	}
+}
+
 func TestNodeSessionRejectsReplayMessageID(t *testing.T) {
 	session := &NodeSession{NodeID: "edge-a", SessionID: 1, Key: []byte("0123456789012345")}
 	now := time.Now()
@@ -58,8 +161,14 @@ func TestNodeSessionRejectsReplayMessageID(t *testing.T) {
 	if session.AcceptMessage(42, now.Add(time.Millisecond)) {
 		t.Fatal("duplicate message was accepted")
 	}
-	if !session.AcceptMessage(42, now.Add(31*time.Second)) {
-		t.Fatal("expired replay entry was not evicted")
+	if session.AcceptMessage(42, now.Add(31*time.Second)) {
+		t.Fatal("message ID replay became valid again inside one node session")
+	}
+	if !session.AcceptMessage(44, now.Add(31*time.Second)) || !session.AcceptMessage(43, now.Add(31*time.Second)) {
+		t.Fatal("new or out-of-order message inside the replay window was rejected")
+	}
+	if session.AcceptMessage(43, now.Add(31*time.Second)) {
+		t.Fatal("out-of-order message replay was accepted")
 	}
 }
 

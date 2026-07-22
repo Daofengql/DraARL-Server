@@ -52,10 +52,14 @@ type Device struct {
 	MAC                string            `json:"mac"`      // 运行时字段：设备上报的 MAC，用于快速重连判定
 
 	// Connection state tracking
-	LastDisconnectTime time.Time `json:"last_disconnect_time"` // Last time device went offline
-	ReconnectCount     int       `json:"reconnect_count"`      // Number of reconnections
-	PreviousUDPAddr    string    `json:"previous_udp_addr"`    // Previous connection address
-	IsReconnecting     bool      `json:"is_reconnecting"`      // Currently in reconnection grace period
+	LastDisconnectTime time.Time  `json:"last_disconnect_time"` // Last time device went offline
+	ReconnectCount     int        `json:"reconnect_count"`      // Number of reconnections
+	PreviousUDPAddr    string     `json:"previous_udp_addr"`    // Previous connection address
+	IsReconnecting     bool       `json:"is_reconnecting"`      // Currently in reconnection grace period
+	CurrentEntryNodeID string     `json:"current_entry_node_id,omitempty"`
+	LastEntryNodeID    string     `json:"last_entry_node_id,omitempty"`
+	LastEntryAt        *time.Time `json:"last_entry_at,omitempty"`
+	EntryMode          string     `json:"entry_mode,omitempty"`
 }
 
 // GetCallSignSSID returns the combined callsign and SSID

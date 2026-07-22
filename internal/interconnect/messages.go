@@ -48,6 +48,7 @@ type DeviceAuthResponse struct {
 type RouteAck struct {
 	ClusterEpoch      uint64 `json:"cluster_epoch"`
 	ProjectionVersion uint64 `json:"projection_version"`
+	AckForMessageID   uint64 `json:"ack_for_message_id,omitempty"`
 	Error             string `json:"error,omitempty"`
 }
 type ResyncRequest struct {

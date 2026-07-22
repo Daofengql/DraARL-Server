@@ -196,18 +196,22 @@ func main() {
 	}
 
 	// 获取 UDP 端口号
-	udpPort := 8000
+	udpPort := 60050
 	if cfg.System.Port != "" {
 		fmt.Sscanf(cfg.System.Port, "%d", &udpPort)
 	}
 
-	// 启动 UDP 服务器（核心语音转发服务）
+	// 先等待共享 UDP socket 和 udphub pipeline 就绪。Type 0 与普通设备
+	// 共用这个端口，TLS 节点控制面只能在此后启动。
+	udpReady := make(chan error, 1)
+	udpErrCh := make(chan error, 1)
 	go func() {
 		stdlog.Println("正在启动 UDP 服务器...")
-		if err := udphub.StartUDPServer(udpPort); err != nil {
-			stdlog.Printf("UDP 服务器启动失败: %v", err)
-		}
+		udpErrCh <- udphub.StartUDPServerWithReady(udpPort, udpReady)
 	}()
+	if err := <-udpReady; err != nil {
+		stdlog.Fatalf("UDP 服务器启动失败: %v", err)
+	}
 
 	var centerRuntime *interconnect.CenterRuntime
 	if cfg.Interconnect.Enabled {
@@ -216,7 +220,9 @@ func main() {
 			stdlog.Fatalf("启动中心节点互联服务失败: %v", err)
 		}
 		defer centerRuntime.Close()
-		stdlog.Printf("Type 0 节点服务已启动: control=%s data=%s", cfg.Interconnect.ControlListen, cfg.Interconnect.DataListen)
+		udphub.SetType0Handler(centerRuntime.UDPBridge)
+		defer udphub.SetType0Handler(nil)
+		stdlog.Printf("Type 0 节点服务已启动: control=%s shared_udp=%s", cfg.Interconnect.ControlListen, cfg.System.Port)
 	}
 
 	// 启动 APRS 服务（配置从数据库加载）
@@ -245,6 +251,12 @@ func main() {
 		stdlog.Printf("收到退出信号: %s", sig.String())
 	case err := <-httpErrCh:
 		stdlog.Printf("HTTP 服务器异常退出: %v", err)
+	case err := <-udpErrCh:
+		if err != nil {
+			stdlog.Printf("UDP 服务器异常退出: %v", err)
+		} else {
+			stdlog.Printf("UDP 服务器已退出")
+		}
 	}
 
 	stdlog.Println("正在关闭服务...")

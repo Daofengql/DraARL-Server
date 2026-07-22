@@ -20,26 +20,28 @@ type ClusterManager struct {
 	nodeProjection map[string]*Projection
 	domainNodes    map[uint64]map[string]struct{}
 	server         *NodeServer
-	dataServer     *NodeDatagramServer
+	dataBridge     *NodeDatagramBridge
 	messageID      atomic.Uint64
 	metrics        map[string]*Metrics
 	status         map[string]NodeHeartbeat
+	ackedVersion   map[string]uint64
+	ackedMessage   map[string]uint64
 }
 
 func NewClusterManager(epoch uint64) *ClusterManager {
 	if epoch == 0 {
 		epoch = uint64(time.Now().UnixNano())
 	}
-	return &ClusterManager{epoch: epoch, projection: NewProjection(epoch), nodes: make(map[string]*NodeSession), nodeProjection: make(map[string]*Projection), domainNodes: make(map[uint64]map[string]struct{}), metrics: make(map[string]*Metrics), status: make(map[string]NodeHeartbeat)}
+	return &ClusterManager{epoch: epoch, projection: NewProjection(epoch), nodes: make(map[string]*NodeSession), nodeProjection: make(map[string]*Projection), domainNodes: make(map[uint64]map[string]struct{}), metrics: make(map[string]*Metrics), status: make(map[string]NodeHeartbeat), ackedVersion: make(map[string]uint64), ackedMessage: make(map[string]uint64)}
 }
 func (m *ClusterManager) AttachServer(server *NodeServer) {
 	m.mu.Lock()
 	m.server = server
 	m.mu.Unlock()
 }
-func (m *ClusterManager) AttachDataServer(server *NodeDatagramServer) {
+func (m *ClusterManager) AttachDataBridge(bridge *NodeDatagramBridge) {
 	m.mu.Lock()
-	m.dataServer = server
+	m.dataBridge = bridge
 	m.mu.Unlock()
 }
 func (m *ClusterManager) Epoch() uint64 { m.mu.RLock(); defer m.mu.RUnlock(); return m.epoch }
@@ -47,6 +49,12 @@ func (m *ClusterManager) Projection() *Projection {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.projection.Clone()
+}
+func (m *ClusterManager) ResolveRoute(sessionID uint64) (DeviceRoute, bool) {
+	m.mu.RLock()
+	route, ok := m.projection.Devices[sessionID]
+	m.mu.RUnlock()
+	return route, ok
 }
 func (m *ClusterManager) NextMessageID() uint64 { return m.messageID.Add(1) }
 func (m *ClusterManager) Metrics(nodeID string) *Metrics {
@@ -69,6 +77,26 @@ func (m *ClusterManager) NodeHeartbeat(nodeID string) (NodeHeartbeat, bool) {
 	return heartbeat, ok
 }
 
+// MarkRouteAck records the highest route projection version applied by a node.
+// It is intentionally non-blocking for the relay hot path, while exposing an
+// exact synchronization point to management and retry logic.
+func (m *ClusterManager) MarkRouteAck(nodeID string, ack RouteAck) {
+	m.mu.Lock()
+	if ack.ProjectionVersion > m.ackedVersion[nodeID] {
+		m.ackedVersion[nodeID] = ack.ProjectionVersion
+	}
+	if ack.AckForMessageID != 0 {
+		m.ackedMessage[nodeID] = ack.AckForMessageID
+	}
+	m.mu.Unlock()
+}
+func (m *ClusterManager) RouteAck(nodeID string) (version, messageID uint64) {
+	m.mu.RLock()
+	version, messageID = m.ackedVersion[nodeID], m.ackedMessage[nodeID]
+	m.mu.RUnlock()
+	return version, messageID
+}
+
 func (m *ClusterManager) OnConnect(session *NodeSession) {
 	m.mu.Lock()
 	m.nodes[session.NodeID] = session
@@ -82,6 +110,8 @@ func (m *ClusterManager) OnDisconnect(session *NodeSession, _ error) {
 		delete(m.nodes, session.NodeID)
 		delete(m.nodeProjection, session.NodeID)
 		delete(m.metrics, session.NodeID)
+		delete(m.ackedVersion, session.NodeID)
+		delete(m.ackedMessage, session.NodeID)
 		for domain, nodes := range m.domainNodes {
 			delete(nodes, session.NodeID)
 			if len(nodes) == 0 {
@@ -294,10 +324,10 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 	targets := m.TargetNodes(frame.DomainID, sourceNode)
 	m.mu.RLock()
 	server := m.server
-	dataServer := m.dataServer
+	dataBridge := m.dataBridge
 	epoch := m.epoch
 	m.mu.RUnlock()
-	if server == nil && dataServer == nil {
+	if server == nil && dataBridge == nil {
 		return nil
 	}
 	payload, err := frame.MarshalBinary()
@@ -305,11 +335,11 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 		return err
 	}
 	for _, nodeID := range targets {
-		if dataServer != nil && server != nil {
+		if dataBridge != nil && server != nil {
 			if session, ok := server.Session(nodeID); ok && session.DataAddr() != nil {
 				env := NewEnvelope(SubtypeRelayDownstream, "center", session.SessionID, m.NextMessageID(), payload)
 				env.ClusterEpoch, env.ProjectionVersion, env.HopCount, env.KeyEpoch = epoch, frame.RequiredProjectionVersion, 1, session.KeyEpoch
-				if err := dataServer.Send(session, env); err == nil {
+				if err := dataBridge.Send(session, env); err == nil {
 					continue
 				}
 			}

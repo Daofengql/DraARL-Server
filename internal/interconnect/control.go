@@ -98,6 +98,8 @@ type NodeSession struct {
 	dataMu        sync.RWMutex
 	dataAddr      *net.UDPAddr
 	DataMetrics   Metrics
+	replayMu      sync.Mutex
+	replay        map[uint64]int64
 }
 
 func (s *NodeSession) Send(msg ControlMessage) error {
@@ -106,6 +108,40 @@ func (s *NodeSession) Send(msg ControlMessage) error {
 	return writeControlMessage(s.conn, msg)
 }
 func (s *NodeSession) Touch() { s.LastHeartbeat.Store(time.Now().UnixMilli()) }
+
+// AcceptMessage rejects a recently seen Type 0 message ID. The cache is
+// bounded and time based so real-time traffic cannot grow it without limit.
+func (s *NodeSession) AcceptMessage(messageID uint64, now time.Time) bool {
+	if messageID == 0 {
+		return false
+	}
+	nowMillis := now.UnixMilli()
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	if s.replay == nil {
+		s.replay = make(map[uint64]int64, 256)
+	}
+	for id, seenAt := range s.replay {
+		if nowMillis-seenAt > 30_000 {
+			delete(s.replay, id)
+		}
+	}
+	if _, exists := s.replay[messageID]; exists {
+		return false
+	}
+	if len(s.replay) >= 4096 {
+		var oldestID uint64
+		var oldestAt int64 = nowMillis
+		for id, seenAt := range s.replay {
+			if seenAt <= oldestAt {
+				oldestID, oldestAt = id, seenAt
+			}
+		}
+		delete(s.replay, oldestID)
+	}
+	s.replay[messageID] = nowMillis
+	return true
+}
 func (s *NodeSession) BindDataAddr(addr *net.UDPAddr) {
 	s.dataMu.Lock()
 	defer s.dataMu.Unlock()
@@ -240,7 +276,8 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 				continue
 			}
 			env, decodeErr := UnmarshalControl(wire, session.Key)
-			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.SourceNodeID != session.NodeID || env.Expired(time.Now(), 30*time.Second) {
+			now := time.Now()
+			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID || env.Expired(now, 30*time.Second) || !session.AcceptMessage(env.MessageID, now) {
 				continue
 			}
 			session.Touch()
@@ -260,6 +297,29 @@ func (s *NodeServer) Session(nodeID string) (*NodeSession, bool) {
 		return nil, false
 	}
 	return v.(*NodeSession), true
+}
+
+// SessionByID is used by the UDP data plane to avoid trying every connected
+// node's HMAC key for each datagram. The session ID is random per TLS
+// connection, so it is a safe first-stage lookup key; the decoder still
+// verifies the source NodeID and authentication tag afterwards.
+func (s *NodeServer) SessionByID(nodeID string, sessionID uint64) *NodeSession {
+	if nodeID != "" {
+		if session, ok := s.Session(nodeID); ok && session.SessionID == sessionID {
+			return session
+		}
+		return nil
+	}
+	var result *NodeSession
+	s.sessions.Range(func(_, value any) bool {
+		session := value.(*NodeSession)
+		if session.SessionID == sessionID {
+			result = session
+			return false
+		}
+		return true
+	})
+	return result
 }
 func (s *NodeServer) Sessions() []*NodeSession {
 	var result []*NodeSession
@@ -308,13 +368,11 @@ func (s *NodeSession) Close() error {
 
 type NodeClientConfig struct {
 	CenterAddr   string
-	DataAddr     string
 	TLSConfig    *tls.Config
 	NodeID       string
 	Token        string
 	OnMessage    func(ControlMessage)
 	OnEnvelope   func(Envelope)
-	OnDatagram   func(Envelope)
 	OnDisconnect func(error)
 }
 type NodeClient struct {
@@ -323,7 +381,6 @@ type NodeClient struct {
 	Session    *NodeSession
 	closed     chan struct{}
 	writeMu    sync.Mutex
-	datagram   *NodeDatagramClient
 	callbackMu sync.RWMutex
 }
 
@@ -361,15 +418,6 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	_ = conn.SetDeadline(time.Time{})
 	client.Session = &NodeSession{NodeID: response.NodeID, SessionID: response.SessionID, KeyEpoch: response.KeyEpoch, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
 	client.Session.Touch()
-	if cfg.DataAddr != "" {
-		datagram, datagramErr := DialNodeDatagram(ctx, cfg.DataAddr, client.Session)
-		if datagramErr != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("dial node data plane: %w", datagramErr)
-		}
-		client.datagram = datagram
-		go client.datagramLoop()
-	}
 	go client.readLoop()
 	return client, nil
 }
@@ -377,8 +425,11 @@ func (c *NodeClient) readLoop() {
 	var err error
 	defer func() {
 		close(c.closed)
-		if c.cfg.OnDisconnect != nil {
-			c.cfg.OnDisconnect(err)
+		c.callbackMu.RLock()
+		handler := c.cfg.OnDisconnect
+		c.callbackMu.RUnlock()
+		if handler != nil {
+			handler(err)
 		}
 	}()
 	for {
@@ -396,7 +447,8 @@ func (c *NodeClient) readLoop() {
 				continue
 			}
 			env, decodeErr := UnmarshalControl(wire, c.Session.Key)
-			if decodeErr != nil || env.NodeSessionID != c.Session.SessionID || env.Expired(time.Now(), 30*time.Second) {
+			now := time.Now()
+			if decodeErr != nil || env.NodeSessionID != c.Session.SessionID || env.KeyEpoch != c.Session.KeyEpoch || env.SourceNodeID != "center" || env.Expired(now, 30*time.Second) || !c.Session.AcceptMessage(env.MessageID, now) {
 				continue
 			}
 			c.Session.Touch()
@@ -430,49 +482,16 @@ func (c *NodeClient) SendEnvelope(env Envelope) error {
 	if err != nil {
 		return err
 	}
-	if (env.Subtype == SubtypeRelayUpstream || env.Subtype == SubtypeRelayDownstream) && c.datagram != nil {
-		return c.datagram.Send(env)
-	}
 	return c.Send(ControlMessage{Kind: "type0", Packet: base64.RawStdEncoding.EncodeToString(wire), MessageID: env.MessageID})
-}
-func (c *NodeClient) datagramLoop() {
-	for {
-		env, _, err := c.datagram.Receive(context.Background())
-		if err != nil {
-			return
-		}
-		c.callbackMu.RLock()
-		datagramHandler, envelopeHandler := c.cfg.OnDatagram, c.cfg.OnEnvelope
-		c.callbackMu.RUnlock()
-		if datagramHandler != nil {
-			datagramHandler(env)
-		} else if envelopeHandler != nil {
-			envelopeHandler(env)
-		}
-	}
 }
 func (c *NodeClient) SetEnvelopeHandler(handler func(Envelope)) {
 	c.callbackMu.Lock()
 	c.cfg.OnEnvelope = handler
 	c.callbackMu.Unlock()
 }
-func (c *NodeClient) SetDatagramHandler(handler func(Envelope)) {
-	c.callbackMu.Lock()
-	c.cfg.OnDatagram = handler
-	c.callbackMu.Unlock()
-}
-func (c *NodeClient) DataMetrics() MetricsSnapshot {
-	if c.datagram == nil {
-		return MetricsSnapshot{}
-	}
-	return c.datagram.Metrics.Snapshot()
-}
 func (c *NodeClient) Close() error {
 	if c.conn == nil {
 		return nil
-	}
-	if c.datagram != nil {
-		_ = c.datagram.Close()
 	}
 	return c.conn.Close()
 }

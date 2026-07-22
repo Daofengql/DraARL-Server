@@ -13,16 +13,15 @@ import (
 
 type CenterRuntimeConfig struct {
 	ControlListen string
-	DataListen    string
 	TLSConfig     *tls.Config
 	ValidateToken func(nodeID, token string) bool
 	Auth          DeviceAuthHandler
 }
 type CenterRuntime struct {
-	Cluster *ClusterManager
-	Gateway *CenterGateway
-	Control *NodeServer
-	Data    *NodeDatagramServer
+	Cluster   *ClusterManager
+	Gateway   *CenterGateway
+	Control   *NodeServer
+	UDPBridge *NodeDatagramBridge
 }
 
 func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
@@ -38,7 +37,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := NewNodeDatagramServer(NodeDatagramServerConfig{ListenAddr: cfg.DataListen, Sessions: server.Sessions, OnDatagram: gateway.OnDatagram, MaxAge: 2 * time.Second})
+	data, err := NewNodeDatagramBridge(server.SessionByID, gateway.OnDatagram, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -46,18 +45,14 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	if err := server.Start(); err != nil {
 		return nil, err
 	}
-	if err := data.Start(); err != nil {
-		_ = server.Close()
-		return nil, err
-	}
-	return &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, Data: data}, nil
+	return &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data}, nil
 }
 func (r *CenterRuntime) Close() {
 	if r == nil {
 		return
 	}
-	if r.Data != nil {
-		_ = r.Data.Close()
+	if r.UDPBridge != nil {
+		r.UDPBridge.Close()
 	}
 	if r.Control != nil {
 		_ = r.Control.Close()
@@ -68,7 +63,7 @@ type EdgeRuntimeConfig struct {
 	NodeID        string
 	Token         string
 	CenterControl string
-	CenterData    string
+	CenterUDP     string
 	Listen        string
 	TLSConfig     *tls.Config
 }
@@ -82,7 +77,7 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if cfg.TLSConfig == nil {
 		return nil, errors.New("edge node TLS config is required")
 	}
-	client, err := DialNode(context.Background(), NodeClientConfig{CenterAddr: cfg.CenterControl, DataAddr: cfg.CenterData, TLSConfig: cfg.TLSConfig, NodeID: cfg.NodeID, Token: cfg.Token})
+	client, err := DialNode(context.Background(), NodeClientConfig{CenterAddr: cfg.CenterControl, TLSConfig: cfg.TLSConfig, NodeID: cfg.NodeID, Token: cfg.Token})
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +87,14 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 		return nil, err
 	}
 	client.SetEnvelopeHandler(gateway.OnEnvelope)
-	client.SetDatagramHandler(gateway.OnEnvelope)
+	if strings.TrimSpace(cfg.CenterUDP) != "" {
+		peer, peerErr := NewNodeDatagramPeer(cfg.CenterUDP, client.Session, gateway.OnEnvelope)
+		if peerErr != nil {
+			client.Close()
+			return nil, peerErr
+		}
+		gateway.peer = peer
+	}
 	if err := client.Send(ControlMessage{Kind: "node_ready"}); err != nil {
 		client.Close()
 		return nil, err
@@ -115,7 +117,11 @@ func (r *EdgeRuntime) heartbeatLoop() {
 			return
 		case <-ticker.C:
 			snapshot := r.Gateway.projection.Snapshot()
-			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: instanceID, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: r.Client.DataMetrics(), ProjectionVersion: snapshot.Version})
+			interconnectMetrics := MetricsSnapshot{}
+			if r.Gateway.peer != nil {
+				interconnectMetrics = r.Gateway.peer.Metrics.Snapshot()
+			}
+			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: instanceID, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version})
 			env := NewEnvelope(SubtypeNodeHeartbeat, r.Client.Session.NodeID, r.Client.Session.SessionID, randomUint64(), payload)
 			env.ClusterEpoch, env.ProjectionVersion, env.Flags = snapshot.ClusterEpoch, snapshot.Version, FlagControl
 			_ = r.Client.SendEnvelope(env)

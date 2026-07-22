@@ -35,12 +35,12 @@ func runEdgeMode(configPath string) error {
 		serverName = "localhost"
 	}
 	tlsCfg := &tls.Config{RootCAs: rootPool, ServerName: serverName, MinVersion: tls.VersionTLS13, InsecureSkipVerify: edgeCfg.Edge.InsecureSkipVerify} // #nosec G402 -- only explicit local/test configuration may skip verification.
-	runtime, err := interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: edgeCfg.Edge.NodeID, Token: edgeCfg.Edge.Token, CenterControl: edgeCfg.Edge.Center, CenterData: edgeCfg.Edge.DataCenter, Listen: edgeCfg.Edge.Listen, TLSConfig: tlsCfg})
+	runtime, err := interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: edgeCfg.Edge.NodeID, Token: edgeCfg.Edge.Token, CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, TLSConfig: tlsCfg})
 	if err != nil {
 		return err
 	}
 	defer runtime.Close()
-	stdlog.Printf("DraARL edge node %s started: device_udp=%s center_control=%s center_data=%s", edgeCfg.Edge.NodeID, runtime.Gateway.Addr(), edgeCfg.Edge.Center, edgeCfg.Edge.DataCenter)
+	stdlog.Printf("DraARL edge node %s started: shared_udp=%s center_control=%s center_udp=%s", edgeCfg.Edge.NodeID, runtime.Gateway.Addr(), edgeCfg.Edge.Center, edgeCfg.Edge.CenterUDP)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -93,7 +93,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, SessionEpoch: uint64(time.Now().UnixNano()), ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
 	}
-	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, DataListen: cfg.Interconnect.DataListen, TLSConfig: tlsCfg, ValidateToken: validateToken, Auth: authHandler})
+	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, ValidateToken: validateToken, Auth: authHandler})
 }
 
 var _ = context.Background

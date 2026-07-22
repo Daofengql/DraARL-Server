@@ -1,203 +1,216 @@
 package interconnect
 
 import (
-	"context"
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"net"
 	"sync"
 	"time"
 )
 
-// NodeDatagramServer is the authenticated, lossy Type 0 data plane.  A
-// session is first established over the TLS control plane; the UDP packet is
-// accepted only when its session ID and HMAC key match that session.
-type NodeDatagramServerConfig struct {
-	ListenAddr string
-	Sessions   func() []*NodeSession
-	OnDatagram func(*NodeSession, Envelope, *net.UDPAddr)
-	MaxAge     time.Duration
+type nodeDatagram struct {
+	session *NodeSession
+	env     Envelope
+	addr    *net.UDPAddr
 }
 
-type NodeDatagramServer struct {
-	cfg       NodeDatagramServerConfig
-	conn      *net.UDPConn
+// NodeDatagramBridge authenticates and demultiplexes Type 0 packets received
+// by udphub. It owns no socket and starts no network listener. The only UDP
+// socket remains the one owned by udphub for ordinary DraARL traffic.
+type NodeDatagramBridge struct {
+	lookup     func(sourceNodeID string, sessionID uint64) *NodeSession
+	onDatagram func(*NodeSession, Envelope, *net.UDPAddr)
+	maxAge     time.Duration
+
+	writerMu sync.RWMutex
+	writer   func(*net.UDPAddr, []byte) error
+
+	queue     chan nodeDatagram
 	closed    chan struct{}
 	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
-func NewNodeDatagramServer(cfg NodeDatagramServerConfig) (*NodeDatagramServer, error) {
-	if cfg.ListenAddr == "" {
-		return nil, errors.New("node data listen address is required")
-	}
-	if cfg.Sessions == nil || cfg.OnDatagram == nil {
-		return nil, errors.New("node data callbacks are required")
-	}
-	return &NodeDatagramServer{cfg: cfg, closed: make(chan struct{})}, nil
+// NodeDatagramPeer is the edge side of the shared udphub UDP data path. It
+// owns no socket; EdgeEndpoint supplies the writer and feeds incoming packets
+// to Handle.
+type NodeDatagramPeer struct {
+	session *NodeSession
+	center  *net.UDPAddr
+	onData  func(Envelope)
+
+	writerMu sync.RWMutex
+	writer   func(*net.UDPAddr, []byte) error
+	Metrics  Metrics
 }
-func (s *NodeDatagramServer) Start() error {
-	addr, err := net.ResolveUDPAddr("udp", s.cfg.ListenAddr)
+
+func NewNodeDatagramPeer(center string, session *NodeSession, onData func(Envelope)) (*NodeDatagramPeer, error) {
+	if session == nil || len(session.Key) == 0 {
+		return nil, errors.New("node data session is required")
+	}
+	addr, err := net.ResolveUDPAddr("udp", center)
+	if err != nil {
+		return nil, err
+	}
+	return &NodeDatagramPeer{session: session, center: addr, onData: onData}, nil
+}
+
+func (p *NodeDatagramPeer) SetWriter(writer func(*net.UDPAddr, []byte) error) {
+	p.writerMu.Lock()
+	p.writer = writer
+	p.writerMu.Unlock()
+}
+
+func (p *NodeDatagramPeer) Handle(data []byte, _ *net.UDPAddr) bool {
+	if p == nil || len(data) < NodeHeaderSize+NodeAuthTagSize || string(data[:4]) != NodeMagic || data[48] != NodePacketType || string(data[86:90]) != "NOD0" {
+		return false
+	}
+	now := time.Now()
+	env, err := Unmarshal(data, p.session.Key)
+	if err != nil || env.SourceNodeID != "center" || env.NodeSessionID != p.session.SessionID || env.KeyEpoch != p.session.KeyEpoch || env.Expired(now, 2*time.Second) || !p.session.AcceptMessage(env.MessageID, now) {
+		return false
+	}
+	p.Metrics.AddIn(len(data))
+	if p.onData != nil {
+		p.onData(env)
+	}
+	return true
+}
+
+func (p *NodeDatagramPeer) Send(env Envelope) error {
+	if p == nil || p.session == nil {
+		return errors.New("node data peer is not ready")
+	}
+	env.SourceNodeID, env.NodeSessionID, env.KeyEpoch = p.session.NodeID, p.session.SessionID, p.session.KeyEpoch
+	data, err := env.Marshal(p.session.Key)
 	if err != nil {
 		return err
 	}
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
+	p.writerMu.RLock()
+	writer := p.writer
+	p.writerMu.RUnlock()
+	if writer == nil {
+		return errors.New("udphub edge writer is not configured")
+	}
+	if err := writer(p.center, data); err != nil {
+		p.Metrics.AddError()
 		return err
 	}
-	s.conn = conn
-	go s.readLoop()
+	p.Metrics.AddOut(len(data))
 	return nil
 }
-func (s *NodeDatagramServer) Addr() net.Addr {
-	if s.conn == nil {
-		return nil
-	}
-	return s.conn.LocalAddr()
+
+func (p *NodeDatagramPeer) Bind() error {
+	env := NewEnvelope(SubtypeNodeHeartbeat, p.session.NodeID, p.session.SessionID, randomUint64(), nil)
+	return p.Send(env)
 }
-func (s *NodeDatagramServer) readLoop() {
-	buf := make([]byte, NodeMaxDatagramSize)
+
+func NewNodeDatagramBridge(lookup func(string, uint64) *NodeSession, onDatagram func(*NodeSession, Envelope, *net.UDPAddr), maxAge time.Duration) (*NodeDatagramBridge, error) {
+	if lookup == nil || onDatagram == nil {
+		return nil, errors.New("node data callbacks are required")
+	}
+	if maxAge <= 0 {
+		maxAge = 2 * time.Second
+	}
+	b := &NodeDatagramBridge{
+		lookup: lookup, onDatagram: onDatagram, maxAge: maxAge,
+		queue: make(chan nodeDatagram, 4096), closed: make(chan struct{}),
+	}
+	workers := 2
+	for i := 0; i < workers; i++ {
+		b.wg.Add(1)
+		go b.worker()
+	}
+	return b, nil
+}
+
+func (b *NodeDatagramBridge) SetWriter(writer func(*net.UDPAddr, []byte) error) {
+	b.writerMu.Lock()
+	b.writer = writer
+	b.writerMu.Unlock()
+}
+
+// Handle implements udphub.Type0Handler. It returns true only after a Type 0
+// packet has been authenticated against an active TLS-created NodeSession.
+// Valid packets therefore bypass the ordinary per-device rate limiter, while
+// forged Type 0-shaped packets receive no exemption.
+func (b *NodeDatagramBridge) Handle(data []byte, addr *net.UDPAddr) bool {
+	if b == nil || len(data) < NodeHeaderSize+NodeAuthTagSize || string(data[:4]) != NodeMagic || data[48] != NodePacketType || string(data[86:90]) != "NOD0" {
+		return false
+	}
+	sourceID := string(bytes.TrimRight(data[6:38], "\x00"))
+	sessionID := binary.BigEndian.Uint64(data[DraARLHeaderSize+20 : DraARLHeaderSize+28])
+	session := b.lookup(sourceID, sessionID)
+	if session == nil || len(session.Key) == 0 {
+		return false
+	}
+	now := time.Now()
+	env, err := Unmarshal(data, session.Key)
+	if err != nil || env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID || env.Expired(now, b.maxAge) || !session.AcceptMessage(env.MessageID, now) {
+		return false
+	}
+	session.DataMetrics.AddIn(len(data))
+	session.BindDataAddr(addr)
+	item := nodeDatagram{session: session, env: env, addr: cloneUDPAddr(addr)}
+	select {
+	case <-b.closed:
+		return true
+	case b.queue <- item:
+		return true
+	default:
+		session.DataMetrics.AddDrop()
+		return true
+	}
+}
+
+func (b *NodeDatagramBridge) worker() {
+	defer b.wg.Done()
 	for {
-		n, addr, err := s.conn.ReadFromUDP(buf)
-		if err != nil {
-			select {
-			case <-s.closed:
-				return
-			default:
+		select {
+		case <-b.closed:
+			return
+		case item := <-b.queue:
+			if item.session != nil {
+				b.onDatagram(item.session, item.env, item.addr)
 			}
-			continue
-		}
-		data := append([]byte(nil), buf[:n]...)
-		for _, session := range s.cfg.Sessions() {
-			if session == nil || session.Key == nil {
-				continue
-			}
-			env, decodeErr := Unmarshal(data, session.Key)
-			if decodeErr != nil || env.NodeSessionID != session.SessionID || env.SourceNodeID != session.NodeID {
-				continue
-			}
-			if env.Expired(time.Now(), s.cfg.MaxAge) {
-				continue
-			}
-			session.DataMetrics.AddIn(n)
-			session.BindDataAddr(addr)
-			s.cfg.OnDatagram(session, env, addr)
-			break
 		}
 	}
 }
-func (s *NodeDatagramServer) WriteTo(session *NodeSession, data []byte) error {
-	if s.conn == nil || session == nil {
-		return errors.New("node data server is not ready")
+
+func (b *NodeDatagramBridge) Send(session *NodeSession, env Envelope) error {
+	if b == nil || session == nil {
+		return errors.New("node data session is required")
+	}
+	env.SourceNodeID, env.NodeSessionID, env.KeyEpoch = "center", session.SessionID, session.KeyEpoch
+	data, err := env.Marshal(session.Key)
+	if err != nil {
+		return err
 	}
 	addr := session.DataAddr()
 	if addr == nil {
 		return errors.New("node data address is not bound")
 	}
-	_, err := s.conn.WriteToUDP(data, addr)
-	return err
-}
-func (s *NodeDatagramServer) Send(session *NodeSession, env Envelope) error {
-	if session == nil {
-		return errors.New("node session is required")
+	b.writerMu.RLock()
+	writer := b.writer
+	b.writerMu.RUnlock()
+	if writer == nil {
+		return errors.New("udphub Type 0 writer is not configured")
 	}
-	data, err := env.Marshal(session.Key)
-	if err != nil {
+	if err := writer(addr, data); err != nil {
+		session.DataMetrics.AddError()
 		return err
 	}
-	return s.WriteTo(session, data)
+	session.DataMetrics.AddOut(len(data))
+	return nil
 }
-func (s *NodeDatagramServer) Close() error {
-	var err error
-	s.closeOnce.Do(func() {
-		close(s.closed)
-		if s.conn != nil {
-			err = s.conn.Close()
-		}
+
+func (b *NodeDatagramBridge) Close() {
+	if b == nil {
+		return
+	}
+	b.closeOnce.Do(func() {
+		close(b.closed)
+		b.wg.Wait()
 	})
-	return err
-}
-
-type NodeDatagramClient struct {
-	conn    *net.UDPConn
-	center  *net.UDPAddr
-	session *NodeSession
-	keyMu   sync.RWMutex
-	Metrics Metrics
-}
-
-func DialNodeDatagram(ctx context.Context, addr string, session *NodeSession) (*NodeDatagramClient, error) {
-	if session == nil || len(session.Key) == 0 {
-		return nil, errors.New("node data session is required")
-	}
-	center, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.ListenUDP("udp", nil)
-	if err != nil {
-		return nil, err
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetReadDeadline(deadline)
-	}
-	client := &NodeDatagramClient{conn: conn, center: center, session: session}
-	// Bind the edge's actual UDP/NAT endpoint before it has any relay traffic.
-	// This lets the centre send a first downstream frame to a receive-only edge.
-	env := NewEnvelope(SubtypeNodeHeartbeat, session.NodeID, session.SessionID, randomUint64(), nil)
-	env.KeyEpoch = session.KeyEpoch
-	wire, err := env.Marshal(session.Key)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	if _, err := conn.WriteToUDP(wire, center); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return client, nil
-}
-func (c *NodeDatagramClient) LocalAddr() net.Addr {
-	if c == nil || c.conn == nil {
-		return nil
-	}
-	return c.conn.LocalAddr()
-}
-func (c *NodeDatagramClient) Send(env Envelope) error {
-	c.keyMu.RLock()
-	key := append([]byte(nil), c.session.Key...)
-	c.keyMu.RUnlock()
-	data, err := env.Marshal(key)
-	if err != nil {
-		return err
-	}
-	_, err = c.conn.WriteToUDP(data, c.center)
-	if err == nil {
-		c.Metrics.AddOut(len(data))
-	}
-	return err
-}
-func (c *NodeDatagramClient) Receive(ctx context.Context) (Envelope, *net.UDPAddr, error) {
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.conn.SetReadDeadline(deadline)
-	}
-	buf := make([]byte, NodeMaxDatagramSize)
-	for {
-		n, addr, err := c.conn.ReadFromUDP(buf)
-		if err != nil {
-			return Envelope{}, nil, err
-		}
-		c.keyMu.RLock()
-		key := append([]byte(nil), c.session.Key...)
-		c.keyMu.RUnlock()
-		env, err := Unmarshal(buf[:n], key)
-		if err == nil && env.NodeSessionID == c.session.SessionID && env.SourceNodeID != "" {
-			c.Metrics.AddIn(n)
-			return env, addr, nil
-		}
-	}
-}
-func (c *NodeDatagramClient) Close() error {
-	if c == nil || c.conn == nil {
-		return nil
-	}
-	return c.conn.Close()
 }

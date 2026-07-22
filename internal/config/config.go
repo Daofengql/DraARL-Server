@@ -45,7 +45,6 @@ type UDPConfig struct {
 type InterconnectConfig struct {
 	Enabled              bool   `yaml:"Enabled" json:"enabled"`
 	ControlListen        string `yaml:"ControlListen" json:"control_listen"`
-	DataListen           string `yaml:"DataListen" json:"data_listen"`
 	TLSCertFile          string `yaml:"TLSCertFile" json:"tls_cert_file"`
 	TLSKeyFile           string `yaml:"TLSKeyFile" json:"tls_key_file"`
 	TLSClientCAFile      string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
@@ -235,9 +234,6 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if strings.TrimSpace(c.Interconnect.ControlListen) == "" {
 		c.Interconnect.ControlListen = ":60100"
-	}
-	if strings.TrimSpace(c.Interconnect.DataListen) == "" {
-		c.Interconnect.DataListen = ":60101"
 	}
 	if c.Interconnect.RegistrationTokenTTL <= 0 {
 		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60

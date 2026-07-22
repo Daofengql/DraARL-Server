@@ -18,6 +18,17 @@ UDP:
     ReadBufferBytes: 4194304   # 请求的 UDP 接收缓冲（实际值以启动日志/指标为准）
     WriteBufferBytes: 4194304  # 请求的 UDP 发送缓冲（实际值以启动日志/指标为准）
 
+# 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
+Interconnect:
+    Enabled: false
+    ControlListen: ":60100"   # 仅 TLS/TCP 节点控制面
+    TLSCertFile: ""
+    TLSKeyFile: ""
+    TLSClientCAFile: ""
+    AllowSelfSigned: false       # 仅本地开发/测试
+    RegistrationTokenTTL: 86400
+    NodeTokens: {}               # 开发引导配置；生产使用后台签发凭据
+
 # MySQL数据库配置
 Database:
     Host: "127.0.0.1"

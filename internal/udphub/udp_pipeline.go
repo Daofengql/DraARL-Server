@@ -11,6 +11,53 @@ import (
 	"draarl/internal/config"
 )
 
+// Type0Handler handles authenticated DraARL node packets on the same UDP
+// socket as ordinary device traffic. Interconnect implements this interface;
+// udphub remains independent of the interconnect package.
+type Type0Handler interface {
+	Handle(data []byte, addr *net.UDPAddr) bool
+}
+
+type Type0Writer interface {
+	SetWriter(func(*net.UDPAddr, []byte) error)
+}
+
+var (
+	type0HandlerMu sync.RWMutex
+	type0Handler   Type0Handler
+)
+
+func SetType0Handler(handler Type0Handler) {
+	type0HandlerMu.Lock()
+	type0Handler = handler
+	type0HandlerMu.Unlock()
+	if writer, ok := handler.(Type0Writer); ok && globalConn != nil {
+		conn := globalConn
+		writer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
+			if addr == nil {
+				return net.ErrClosed
+			}
+			_, err := conn.WriteToUDP(data, addr)
+			return err
+		})
+	}
+}
+
+func getType0Handler() Type0Handler {
+	type0HandlerMu.RLock()
+	handler := type0Handler
+	type0HandlerMu.RUnlock()
+	return handler
+}
+
+// AllowEdgeDevicePacket applies the same ordinary-device IP/IP:Port limiter
+// in the database-free edge endpoint. Authenticated Type 0 is checked before
+// callers invoke this function and therefore uses its separate NodeSession
+// resource accounting.
+func AllowEdgeDevicePacket(addr *net.UDPAddr) bool {
+	return addr == nil || checkRateLimit(addr)
+}
+
 const (
 	udpJobQueueSize  = 4096
 	udpPacketBufSize = 1460
@@ -73,6 +120,17 @@ func startUDPPipeline(conn *net.UDPConn) {
 		udpWorkerWg.Add(1)
 		go udpWorkerLoop(conn, udpJobQueues[i])
 	}
+	if handler := getType0Handler(); handler != nil {
+		if writer, ok := handler.(Type0Writer); ok {
+			writer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
+				if conn == nil || addr == nil {
+					return net.ErrClosed
+				}
+				_, err := conn.WriteToUDP(data, addr)
+				return err
+			})
+		}
+	}
 	udpReaderWg.Add(1)
 	go udpReaderLoop(conn, proxyEnabled)
 
@@ -118,6 +176,13 @@ func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
 				realAddr = GetRealAddr(remoteAddr, proxyInfo)
 				packetData = payload
 			}
+		}
+		// Authenticated Type 0 is verified before the ordinary device limiter.
+		// The exemption is bound to a live TLS-created NodeSession, never to an
+		// IP address. Forged packets return false and remain rate-limited.
+		if handler := getType0Handler(); handler != nil && handler.Handle(packetData, remoteAddr) {
+			packetPool.Put(base)
+			continue
 		}
 		if realAddr != nil && !checkRateLimit(realAddr) {
 			atomic.AddInt64(&udpRateLimitDrops, 1)

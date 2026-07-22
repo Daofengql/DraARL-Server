@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -18,12 +19,11 @@ type EdgeConfig struct {
 }
 type EdgeSettings struct {
 	Center             string `yaml:"Center" json:"center"`
-	DataCenter         string `yaml:"DataCenter" json:"data_center"`
+	CenterUDP          string `yaml:"CenterUDP" json:"center_udp"`
 	Token              string `yaml:"Token" json:"token"`
 	NodeID             string `yaml:"NodeID" json:"node_id"`
 	Listen             string `yaml:"Listen" json:"listen"`
 	ControlListen      string `yaml:"ControlListen" json:"control_listen"`
-	DataListen         string `yaml:"DataListen" json:"data_listen"`
 	TLSCAFile          string `yaml:"TLSCAFile" json:"tls_ca_file"`
 	TLSServerName      string `yaml:"TLSServerName" json:"tls_server_name"`
 	InsecureSkipVerify bool   `yaml:"InsecureSkipVerify" json:"insecure_skip_verify"`
@@ -31,19 +31,25 @@ type EdgeSettings struct {
 
 func (c *EdgeConfig) SetDefaults() {
 	if strings.TrimSpace(c.Edge.Listen) == "" {
-		c.Edge.Listen = ":8000"
+		c.Edge.Listen = ":60050"
 	}
 	if strings.TrimSpace(c.Edge.NodeID) == "" {
 		c.Edge.NodeID = randomNodeID()
 	}
-	if strings.TrimSpace(c.Edge.DataCenter) == "" {
-		c.Edge.DataCenter = c.Edge.Center
+	if strings.TrimSpace(c.Edge.CenterUDP) == "" {
+		host, _, err := net.SplitHostPort(c.Edge.Center)
+		if err == nil && host != "" {
+			c.Edge.CenterUDP = net.JoinHostPort(host, "60050")
+		}
 	}
 }
 func (c *EdgeConfig) Validate() error {
 	c.SetDefaults()
 	if strings.TrimSpace(c.Edge.Center) == "" {
 		return errors.New("Edge.Center is required")
+	}
+	if strings.TrimSpace(c.Edge.CenterUDP) == "" {
+		return errors.New("Edge.CenterUDP is required when it cannot be derived from Edge.Center")
 	}
 	if strings.TrimSpace(c.Edge.Token) == "" {
 		return errors.New("Edge.Token is required")

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"draarl/internal/protocol"
+	"draarl/internal/udphub"
 )
 
 type DeviceAuthHandler func(session *NodeSession, request DeviceAuthRequest) (DeviceAuthResponse, error)
@@ -16,7 +17,7 @@ type DeviceAuthHandler func(session *NodeSession, request DeviceAuthRequest) (De
 type CenterGateway struct {
 	cluster        *ClusterManager
 	server         *NodeServer
-	data           *NodeDatagramServer
+	data           *NodeDatagramBridge
 	auth           DeviceAuthHandler
 	mu             sync.RWMutex
 	deviceSessions map[uint64]string
@@ -26,11 +27,11 @@ type CenterGateway struct {
 func NewCenterGateway(cluster *ClusterManager, auth DeviceAuthHandler) *CenterGateway {
 	return &CenterGateway{cluster: cluster, auth: auth, deviceSessions: make(map[uint64]string), metrics: make(map[string]*Metrics)}
 }
-func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramServer) {
+func (g *CenterGateway) Bind(server *NodeServer, data *NodeDatagramBridge) {
 	g.server, g.data = server, data
 	if g.cluster != nil {
 		g.cluster.AttachServer(server)
-		g.cluster.AttachDataServer(data)
+		g.cluster.AttachDataBridge(data)
 	}
 }
 func (g *CenterGateway) OnConnect(session *NodeSession) {
@@ -121,21 +122,31 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		if owner != session.NodeID {
 			return
 		}
+		if g.cluster == nil {
+			return
+		}
+		route, ok := g.cluster.ResolveRoute(frame.SessionID)
+		if !ok || route.DisableSend || route.SessionEpoch != frame.SessionEpoch || route.DomainID == 0 {
+			return
+		}
+		// Node payload is never authoritative for routing or permissions.
+		frame.DomainID = route.DomainID
 		if g.cluster != nil {
 			_ = g.cluster.Relay(session.NodeID, frame)
 		}
 	case SubtypeRouteAck:
-		// ACKs are consumed by the node/session observability layer. The actual
-		// projection is already atomically applied by the edge before ACK.
+		var ack RouteAck
+		if DecodeJSON(env.Payload, &ack) == nil && g.cluster != nil {
+			g.cluster.MarkRouteAck(session.NodeID, ack)
+		}
 	case SubtypeRouteResyncRequest:
 		if g.cluster != nil {
 			_ = g.cluster.SendFullProjection(session.NodeID)
 		}
 	case SubtypeNodeHeartbeat:
 		var heartbeat NodeHeartbeat
-		if DecodeJSON(env.Payload, &heartbeat) == nil {
-			metric := g.cluster.Metrics(session.NodeID)
-			metric.AddIn(0)
+		if DecodeJSON(env.Payload, &heartbeat) == nil && g.cluster != nil {
+			g.cluster.UpdateNodeHeartbeat(session.NodeID, heartbeat)
 		}
 	}
 }
@@ -143,12 +154,14 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 type EdgeGateway struct {
 	client            *NodeClient
 	listenAddr        string
-	conn              *net.UDPConn
+	endpoint          *udphub.EdgeEndpoint
+	peer              *NodeDatagramPeer
 	projection        *ProjectionStore
 	mu                sync.RWMutex
 	sessions          map[uint64]*edgeDeviceSession
 	byIdentity        map[string]uint64
 	pending           map[uint64]*pendingDeviceAuth
+	pendingIdentity   map[string]uint64
 	snapshotAssembler *SnapshotAssembler
 	nextRequest       atomic.Uint64
 	metrics           Metrics
@@ -160,9 +173,8 @@ type edgeDeviceSession struct {
 	LastSeen time.Time
 }
 type pendingDeviceAuth struct {
-	addr    *net.UDPAddr
-	request *protocol.DraARLv1Packet
-	wire    []byte
+	addr *net.UDPAddr
+	wire []byte
 }
 
 func NewEdgeGateway(listenAddr string, client *NodeClient) (*EdgeGateway, error) {
@@ -170,28 +182,34 @@ func NewEdgeGateway(listenAddr string, client *NodeClient) (*EdgeGateway, error)
 		return nil, errors.New("edge node client is required")
 	}
 	if listenAddr == "" {
-		listenAddr = ":8000"
+		listenAddr = ":60050"
 	}
 	p := NewProjection(1)
-	return &EdgeGateway{client: client, listenAddr: listenAddr, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), closed: make(chan struct{})}, nil
+	return &EdgeGateway{client: client, listenAddr: listenAddr, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), closed: make(chan struct{})}, nil
 }
 func (g *EdgeGateway) Start() error {
-	addr, err := net.ResolveUDPAddr("udp", g.listenAddr)
+	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.handleInbound)
 	if err != nil {
 		return err
 	}
-	g.conn, err = net.ListenUDP("udp", addr)
-	if err != nil {
-		return err
+	g.endpoint = endpoint
+	if g.peer != nil {
+		g.peer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
+			return endpoint.SendTo(data, addr)
+		})
+		if err := g.peer.Bind(); err != nil {
+			_ = endpoint.Close()
+			g.endpoint = nil
+			return err
+		}
 	}
-	go g.readLoop()
 	return nil
 }
 func (g *EdgeGateway) Addr() net.Addr {
-	if g.conn == nil {
+	if g.endpoint == nil {
 		return nil
 	}
-	return g.conn.LocalAddr()
+	return g.endpoint.Addr()
 }
 func (g *EdgeGateway) ConnectionCount() int {
 	g.mu.RLock()
@@ -204,27 +222,21 @@ func (g *EdgeGateway) Close() error {
 	default:
 		close(g.closed)
 	}
-	if g.conn != nil {
-		return g.conn.Close()
+	if g.endpoint != nil {
+		return g.endpoint.Close()
 	}
 	return nil
 }
-func (g *EdgeGateway) readLoop() {
-	buf := make([]byte, 1460)
-	for {
-		n, addr, err := g.conn.ReadFromUDP(buf)
-		if err != nil {
-			select {
-			case <-g.closed:
-				return
-			default:
-			}
-			continue
-		}
-		data := append([]byte(nil), buf[:n]...)
-		g.metrics.AddIn(n)
-		g.handleDevicePacket(data, addr)
+func (g *EdgeGateway) handleInbound(data []byte, addr *net.UDPAddr) {
+	if g.peer != nil && g.peer.Handle(data, addr) {
+		return
 	}
+	if !udphub.AllowEdgeDevicePacket(addr) {
+		g.metrics.AddDrop()
+		return
+	}
+	g.metrics.AddIn(len(data))
+	g.handleDevicePacket(data, addr)
 }
 func (g *EdgeGateway) MetricsSnapshot() MetricsSnapshot { return g.metrics.Snapshot() }
 func (g *EdgeGateway) identity(packet *protocol.DraARLv1Packet) string {
@@ -255,35 +267,55 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, addr *net.UDPAddr) {
 		}
 		return
 	}
-	session.Addr = addr
-	session.LastSeen = time.Now()
+	// Update the endpoint and take an immutable grant snapshot while holding
+	// the gateway lock. RouteDelta may update the same grant concurrently.
+	g.mu.Lock()
+	current := g.sessions[sessionID]
+	if current == nil {
+		g.mu.Unlock()
+		return
+	}
+	current.Addr = cloneUDPAddr(addr)
+	current.LastSeen = time.Now()
+	grant := current.Grant
+	g.mu.Unlock()
 	if packet.Type == protocol.DraARLTypeHeartbeat {
-		response := protocol.EncodeHeartbeatResponse(packet, session.Grant.CallSign)
+		response := protocol.EncodeHeartbeatResponse(packet, grant.CallSign)
 		g.writeDevice(response, addr)
 		return
 	}
 	if packet.Type != protocol.DraARLTypeTextMessage && packet.Type != protocol.DraARLTypeOpus16K {
 		return
 	}
-	if session.Grant.DisableSend {
+	if grant.DisableSend {
 		return
 	}
-	inner := protocol.PrepareForwardPacket(data, session.Grant.Username, session.Grant.CallSign, session.Grant.SSID, packet.Type, session.Grant.DevModel, session.Grant.DMRID, packet.DATA)
+	inner := protocol.PrepareForwardPacket(data, grant.Username, grant.CallSign, grant.SSID, packet.Type, grant.DevModel, grant.DMRID, packet.DATA)
 	defer protocol.ReleaseForwardPacket(inner)
-	g.localFanout(session.Grant.SessionID, session.Grant.DomainID, inner)
-	frame := RelayFrame{SessionID: session.Grant.SessionID, SessionEpoch: session.Grant.SessionEpoch, DomainID: session.Grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, InnerPacket: inner}
+	g.localFanout(grant.SessionID, grant.DomainID, inner)
+	frame := RelayFrame{SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, InnerPacket: inner}
 	payload, err := frame.MarshalBinary()
 	if err != nil {
 		return
 	}
 	env := NewEnvelope(SubtypeRelayUpstream, g.client.Session.NodeID, g.client.Session.SessionID, g.client.Session.SessionID+uint64(time.Now().UnixNano()), payload)
 	env.ProjectionVersion = frame.RequiredProjectionVersion
-	_ = g.client.SendEnvelope(env)
+	if g.peer != nil {
+		_ = g.peer.Send(env)
+	} else {
+		_ = g.client.SendEnvelope(env)
+	}
 }
 func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, addr *net.UDPAddr) {
+	identity := g.identity(packet)
 	id := g.nextRequest.Add(1)
 	g.mu.Lock()
-	g.pending[id] = &pendingDeviceAuth{addr: addr, request: packet, wire: append([]byte(nil), data...)}
+	if _, exists := g.pendingIdentity[identity]; exists {
+		g.mu.Unlock()
+		return
+	}
+	g.pending[id] = &pendingDeviceAuth{addr: cloneUDPAddr(addr), wire: append([]byte(nil), data...)}
+	g.pendingIdentity[identity] = id
 	g.mu.Unlock()
 	request := DeviceAuthRequest{RequestID: id, SourceIP: addr.IP.String(), Packet: append([]byte(nil), data...)}
 	payload, err := EncodeJSON(request)
@@ -295,6 +327,7 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 	if err := g.client.SendEnvelope(env); err != nil {
 		g.mu.Lock()
 		delete(g.pending, id)
+		delete(g.pendingIdentity, identity)
 		g.mu.Unlock()
 	}
 }
@@ -316,7 +349,7 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 			return
 		}
 		g.applyRoutes(g.projection.Snapshot())
-		g.sendRouteAck(delta.NewVersion, "")
+		g.sendRouteAck(delta.NewVersion, "", env.MessageID)
 	case SubtypeRouteSnapshotBegin:
 		var begin SnapshotBegin
 		if DecodeJSON(env.Payload, &begin) != nil {
@@ -357,7 +390,7 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 		}
 		_ = g.projection.Replace(p)
 		g.applyRoutes(p)
-		g.sendRouteAck(p.Version, "")
+		g.sendRouteAck(p.Version, "", env.MessageID)
 	case SubtypeRelayDownstream:
 		frame, err := UnmarshalRelayFrame(env.Payload)
 		if err == nil {
@@ -370,6 +403,12 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	g.mu.Lock()
 	pending := g.pending[response.RequestID]
 	delete(g.pending, response.RequestID)
+	if pending != nil {
+		if packet, err := protocol.NewDraARLv1RoutingPacket(pending.addr, pending.wire); err == nil {
+			delete(g.pendingIdentity, g.identity(packet))
+			protocol.ReleaseDraARLv1RoutingPacket(packet)
+		}
+	}
 	g.mu.Unlock()
 	if pending == nil {
 		return
@@ -384,7 +423,7 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	if grant.SessionID == 0 {
 		return
 	}
-	session := &edgeDeviceSession{Grant: grant, Addr: pending.addr, LastSeen: time.Now()}
+	session := &edgeDeviceSession{Grant: grant, Addr: cloneUDPAddr(pending.addr), LastSeen: time.Now()}
 	key := fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
 	g.mu.Lock()
 	g.sessions[grant.SessionID] = session
@@ -420,16 +459,28 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 }
 func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
 	g.mu.RLock()
-	targets := make([]*edgeDeviceSession, 0, len(g.sessions))
+	targets := make([]udphub.EdgeFanoutTarget, 0, len(g.sessions))
 	for id, session := range g.sessions {
 		if id != sourceSession && session.Grant.DomainID == domainID && !session.Grant.DisableRecv && session.Addr != nil {
-			targets = append(targets, session)
+			targets = append(targets, udphub.EdgeFanoutTarget{Addr: cloneUDPAddr(session.Addr), DeviceID: session.Grant.DeviceID, Username: session.Grant.Username, SSID: session.Grant.SSID})
 		}
 	}
 	g.mu.RUnlock()
+	if g.endpoint != nil && g.endpoint.Fanout(data, targets, 0, "", 0) {
+		return
+	}
 	for _, target := range targets {
 		g.writeDevice(data, target.Addr)
 	}
+}
+
+func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
+	if addr == nil {
+		return nil
+	}
+	copyAddr := *addr
+	copyAddr.IP = append(net.IP(nil), addr.IP...)
+	return &copyAddr
 }
 func (g *EdgeGateway) deliverDownstream(frame RelayFrame) {
 	p := g.projection.Snapshot()
@@ -438,9 +489,9 @@ func (g *EdgeGateway) deliverDownstream(frame RelayFrame) {
 	}
 	g.localFanout(0, frame.DomainID, frame.InnerPacket)
 }
-func (g *EdgeGateway) sendRouteAck(version uint64, routeErr string) {
+func (g *EdgeGateway) sendRouteAck(version uint64, routeErr string, ackFor uint64) {
 	p := g.projection.Snapshot()
-	payload, _ := EncodeJSON(RouteAck{ClusterEpoch: p.ClusterEpoch, ProjectionVersion: version, Error: routeErr})
+	payload, _ := EncodeJSON(RouteAck{ClusterEpoch: p.ClusterEpoch, ProjectionVersion: version, AckForMessageID: ackFor, Error: routeErr})
 	env := NewEnvelope(SubtypeRouteAck, g.client.Session.NodeID, g.client.Session.SessionID, g.nextRequest.Add(1), payload)
 	env.Flags = FlagControl | FlagAck
 	_ = g.client.SendEnvelope(env)
@@ -453,10 +504,10 @@ func (g *EdgeGateway) requestResync(reason string) {
 	_ = g.client.SendEnvelope(env)
 }
 func (g *EdgeGateway) writeDevice(data []byte, addr *net.UDPAddr) {
-	if g.conn == nil || addr == nil {
+	if g.endpoint == nil || addr == nil {
 		return
 	}
-	if _, err := g.conn.WriteToUDP(data, addr); err == nil {
+	if err := g.endpoint.SendTo(data, addr); err == nil {
 		g.metrics.AddOut(len(data))
 	} else {
 		g.metrics.AddError()

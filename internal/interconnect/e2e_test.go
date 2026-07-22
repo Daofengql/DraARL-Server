@@ -27,20 +27,43 @@ func TestTwoEdgesRouteOneFrameThroughCentreAndLocalFanout(t *testing.T) {
 		grant := &DeviceGrant{SessionID: id, SessionEpoch: 1, DeviceID: int(id), Username: p.Username, CallSign: call, SSID: p.SSID, DevModel: p.DevModel, DMRID: p.DMRID, GroupID: 1, DomainID: 99}
 		return DeviceAuthResponse{RequestID: req.RequestID, Success: true, Grant: grant, ResponsePacket: protocol.EncodeHeartbeatResponse(p, call)}, nil
 	}
-	center, err := StartCenterRuntime(CenterRuntimeConfig{ControlListen: "127.0.0.1:0", DataListen: "127.0.0.1:0", TLSConfig: serverTLS, ValidateToken: func(_, token string) bool { return token == "token" }, Auth: auth})
+	center, err := StartCenterRuntime(CenterRuntimeConfig{ControlListen: "127.0.0.1:0", TLSConfig: serverTLS, ValidateToken: func(_, token string) bool { return token == "token" }, Auth: auth})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer center.Close()
+	// The test owns exactly one UDP socket, matching production where udphub
+	// owns the existing device port and feeds Type 0 into the bridge.
+	centerUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer centerUDP.Close()
+	center.UDPBridge.SetWriter(func(addr *net.UDPAddr, wire []byte) error {
+		_, err := centerUDP.WriteToUDP(wire, addr)
+		return err
+	})
+	dataDone := make(chan struct{})
+	go func() {
+		defer close(dataDone)
+		buf := make([]byte, NodeMaxDatagramSize)
+		for {
+			n, addr, readErr := centerUDP.ReadFromUDP(buf)
+			if readErr != nil {
+				return
+			}
+			center.UDPBridge.Handle(append([]byte(nil), buf[:n]...), addr)
+		}
+	}()
 	clientTLS := func() *tls.Config {
 		return &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
 	}
-	edgeA, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-a", Token: "token", CenterControl: center.Control.Addr().String(), CenterData: center.Data.Addr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS()})
+	edgeA, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-a", Token: "token", CenterControl: center.Control.Addr().String(), CenterUDP: centerUDP.LocalAddr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer edgeA.Close()
-	edgeB, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-b", Token: "token", CenterControl: center.Control.Addr().String(), CenterData: center.Data.Addr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS()})
+	edgeB, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-b", Token: "token", CenterControl: center.Control.Addr().String(), CenterUDP: centerUDP.LocalAddr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS()})
 	if err != nil {
 		t.Fatal(err)
 	}

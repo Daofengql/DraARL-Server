@@ -12,7 +12,7 @@ func TestCenterAndEdgeRuntimeConnectWithoutExternalDependencies(t *testing.T) {
 		t.Fatal(err)
 	}
 	center, err := StartCenterRuntime(CenterRuntimeConfig{
-		ControlListen: "127.0.0.1:0", DataListen: "127.0.0.1:0", TLSConfig: serverTLS,
+		ControlListen: "127.0.0.1:0", TLSConfig: serverTLS,
 		ValidateToken: func(nodeID, token string) bool { return nodeID == "edge-test" && token == "token" },
 	})
 	if err != nil {
@@ -20,7 +20,7 @@ func TestCenterAndEdgeRuntimeConnectWithoutExternalDependencies(t *testing.T) {
 	}
 	defer center.Close()
 	clientTLS := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
-	edge, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-test", Token: "token", CenterControl: center.Control.Addr().String(), CenterData: center.Data.Addr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS})
+	edge, err := StartEdgeRuntime(EdgeRuntimeConfig{NodeID: "edge-test", Token: "token", CenterControl: center.Control.Addr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS})
 	if err != nil {
 		t.Fatal(err)
 	}

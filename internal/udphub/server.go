@@ -164,11 +164,36 @@ func waitWithShutdown(d time.Duration) bool {
 
 // StartUDPServer 启动 UDP 服务器（DraARLv1 协议）
 func StartUDPServer(port int) error {
-	return StartDraARLServer(port)
+	return startDraARLServer(port, nil)
+}
+
+// StartUDPServerWithReady reports the bind/pipeline initialization result
+// exactly once. The service continues running until StopUDPServer is called.
+// This lets the main process start the TLS node control plane only after the
+// shared UDP socket is ready for both device and Type 0 traffic.
+func StartUDPServerWithReady(port int, ready chan<- error) error {
+	return startDraARLServer(port, ready)
 }
 
 // StartDraARLServer 启动 DraARLv1 协议的 UDP 服务器
 func StartDraARLServer(port int) error {
+	return startDraARLServer(port, nil)
+}
+
+func startDraARLServer(port int, ready chan<- error) (result error) {
+	reported := false
+	report := func(err error) {
+		if ready == nil || reported {
+			return
+		}
+		reported = true
+		ready <- err
+	}
+	defer func() {
+		if !reported {
+			report(result)
+		}
+	}()
 	network := "udp"
 	host := ""
 	if cfg := config.TryGet(); cfg != nil {
@@ -183,12 +208,14 @@ func StartDraARLServer(port int) error {
 	}
 	addr, err := net.ResolveUDPAddr(network, net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
-		return fmt.Errorf("resolve UDP address failed: %w", err)
+		result = fmt.Errorf("resolve UDP address failed: %w", err)
+		return result
 	}
 
 	conn, err := net.ListenUDP(network, addr)
 	if err != nil {
-		return fmt.Errorf("listen UDP failed: %w", err)
+		result = fmt.Errorf("listen UDP failed: %w", err)
+		return result
 	}
 	configureUDPSocketBuffers(conn)
 
@@ -250,6 +277,7 @@ func StartDraARLServer(port int) error {
 
 	// 单/少 reader + worker 池，避免多 goroutine 争抢同一 socket
 	startUDPPipeline(conn)
+	report(nil)
 
 	// 等待关闭
 	<-udpShutdown

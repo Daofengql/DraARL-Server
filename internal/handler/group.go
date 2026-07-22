@@ -12,6 +12,7 @@ import (
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/models"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 
@@ -476,6 +477,7 @@ func UpdateGroup(c *gin.Context) {
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
 	udphub.RefreshGroupCache()
+	routesync.RefreshTopology()
 
 	// Get owner callsign from user table
 	var ownerCallSign string
@@ -604,6 +606,10 @@ func DeleteGroup(c *gin.Context) {
 	}
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
+	for _, device := range movedDevices {
+		routesync.PublishDevice(device.ID)
+	}
+	routesync.RefreshTopology()
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -795,6 +801,7 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 		_ = deviceCache.InvalidateDeviceList(ctx)
 	}
 	udphub.SyncDeviceCommControlByID(after.ID, after.DisableSend, after.DisableRecv)
+	routesync.PublishDevice(after.ID)
 
 	ownerCallSign := ""
 	if owner, ownerErr := gormdb.NewUserRepository().GetUserByID(after.OwnerID); ownerErr == nil && owner != nil {
@@ -1346,6 +1353,7 @@ func KickDevice(c *gin.Context) {
 	if err := udphub.ChangeDeviceGroupByID(deviceID, models.GroupIDPublicMin); err != nil {
 		log.Printf("[WARN] Failed to update kicked device group in memory: %v", err)
 	}
+	routesync.PublishDevice(deviceID)
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -1439,6 +1447,9 @@ func LeaveGroup(c *gin.Context) {
 		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
 			log.Printf("[WARN] Failed to update leaving device group in memory: %v", err)
 		}
+	}
+	for _, device := range movedDevices {
+		routesync.PublishDevice(device.ID)
 	}
 
 	// 使设备缓存和群组设备列表缓存失效

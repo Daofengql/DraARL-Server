@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,19 +31,24 @@ type EdgeFanoutResult struct {
 // same single-reader, sharded-worker and parallel fan-out design as the
 // centre's udphub.
 type EdgeEndpoint struct {
-	conn      *net.UDPConn
-	handler   func([]byte, *net.UDPAddr)
-	queues    []chan udpDatagramJob
-	readerWG  sync.WaitGroup
-	workerWG  sync.WaitGroup
-	closeOnce sync.Once
-	closed    chan struct{}
-	sender    *FanoutSender
+	conn            *net.UDPConn
+	handler         func([]byte, *net.UDPAddr, *net.UDPAddr)
+	proxyProtocolV2 bool
+	queues          []chan udpDatagramJob
+	readerWG        sync.WaitGroup
+	workerWG        sync.WaitGroup
+	closeOnce       sync.Once
+	closed          chan struct{}
+	sender          *FanoutSender
 }
 
-func NewEdgeEndpoint(listenAddr string, handler func([]byte, *net.UDPAddr)) (*EdgeEndpoint, error) {
+func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net.UDPAddr, *net.UDPAddr)) (*EdgeEndpoint, error) {
 	if handler == nil {
 		return nil, errors.New("edge UDP handler is required")
+	}
+	proxyProtocol = strings.ToLower(strings.TrimSpace(proxyProtocol))
+	if proxyProtocol != "" && proxyProtocol != "v2" {
+		return nil, errors.New("edge UDP proxy protocol must be empty or v2")
 	}
 	if listenAddr == "" {
 		listenAddr = ":60050"
@@ -62,7 +68,7 @@ func NewEdgeEndpoint(listenAddr string, handler func([]byte, *net.UDPAddr)) (*Ed
 	if perQueue < 64 {
 		perQueue = 64
 	}
-	e := &EdgeEndpoint{conn: conn, handler: handler, queues: make([]chan udpDatagramJob, workers), closed: make(chan struct{})}
+	e := &EdgeEndpoint{conn: conn, handler: handler, proxyProtocolV2: proxyProtocol == "v2", queues: make([]chan udpDatagramJob, workers), closed: make(chan struct{})}
 	for i := range e.queues {
 		e.queues[i] = make(chan udpDatagramJob, perQueue)
 		e.workerWG.Add(1)
@@ -96,8 +102,19 @@ func (e *EdgeEndpoint) readLoop() {
 			packetPool.Put(base)
 			return
 		}
-		job := udpDatagramJob{data: base[:n], baseBuffer: base, remoteAddr: addr, realAddr: addr, receivedAt: time.Now()}
-		queue := e.queues[udpDatagramShard(job.data, addr, len(e.queues))]
+		packetData := base[:n]
+		realAddr := addr
+		if e.proxyProtocolV2 {
+			proxyInfo, payload, parsed := ParseProxyProtocolV2(packetData)
+			if parsed {
+				packetData = payload
+				if proxyInfo != nil && proxyInfo.IsProxy {
+					realAddr = GetRealAddr(addr, proxyInfo)
+				}
+			}
+		}
+		job := udpDatagramJob{data: packetData, baseBuffer: base, remoteAddr: addr, realAddr: realAddr, receivedAt: time.Now()}
+		queue := e.queues[udpDatagramShard(job.data, realAddr, len(e.queues))]
 		select {
 		case queue <- job:
 		default:
@@ -111,7 +128,7 @@ func (e *EdgeEndpoint) worker(queue <-chan udpDatagramJob) {
 	for job := range queue {
 		func() {
 			defer func() { _ = recover() }()
-			e.handler(job.data, job.remoteAddr)
+			e.handler(job.data, job.remoteAddr, job.realAddr)
 		}()
 		packetPool.Put(job.baseBuffer)
 	}

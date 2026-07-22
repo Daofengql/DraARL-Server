@@ -281,7 +281,7 @@ git push origin v1.1.4-alpha10
 - 配置真实的 `Web.FrontendURL` 和 `Web.AllowedOrigins`，避免 Release 模式下 Origin 校验失败。
 - 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
 - 使用 MinIO 保存头像、操作证、资源文件、通信录音和固件。
-- 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；如使用 frp 等代理，可按需开启 `System.ProxyProtocol`。
+- 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；中心直连接入使用 `System.ProxyProtocol: v2`，边缘接入使用 `Edge.ProxyProtocol: v2`。启用后必须限制 UDP 入口只允许受信代理访问。
 - 首次上线后立即修改默认管理员密码，并检查注册审核、操作证审核和设备绑定策略。
 
 更多排障内容请阅读 [运维与排障](docs/usage/08-运维与排障.md)。

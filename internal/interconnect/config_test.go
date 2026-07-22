@@ -1,6 +1,9 @@
 package interconnect
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "center.example.com:60100", NodeID: "edge-test", Token: "token"}}
@@ -22,5 +25,22 @@ func TestEdgeCustomSharedUDPPortIsPreserved(t *testing.T) {
 	}
 	if cfg.Edge.CenterUDP != "127.0.0.1:61000" || cfg.Edge.Listen != ":62000" {
 		t.Fatalf("custom UDP ports changed: %+v", cfg.Edge)
+	}
+}
+
+func TestEdgeProxyProtocolV2IsNormalized(t *testing.T) {
+	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: " V2 "}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Edge.ProxyProtocol != "v2" {
+		t.Fatalf("ProxyProtocol=%q want=v2", cfg.Edge.ProxyProtocol)
+	}
+}
+
+func TestEdgeRejectsUnsupportedProxyProtocol(t *testing.T) {
+	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: "v1"}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyProtocol") {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }

@@ -37,7 +37,7 @@ func runEdgeMode(configPath string) error {
 	}
 	tlsCfg := &tls.Config{RootCAs: rootPool, ServerName: serverName, MinVersion: tls.VersionTLS13, InsecureSkipVerify: edgeCfg.Edge.InsecureSkipVerify} // #nosec G402 -- only explicit local/test configuration may skip verification.
 	start := func(nodeID, token string) (*interconnect.EdgeRuntime, error) {
-		return interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: nodeID, Token: token, CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, TLSConfig: tlsCfg})
+		return interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: nodeID, Token: token, CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, TLSConfig: tlsCfg})
 	}
 	runtime, err := start(edgeCfg.Edge.NodeID, edgeCfg.Edge.Token)
 	if err != nil {
@@ -128,15 +128,19 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		if !result.Success {
 			return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: false, Error: result.Error, ResponsePacket: result.ResponsePacket}, nil
 		}
-		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, SessionEpoch: uint64(time.Now().UnixNano()), ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
-		if result.DeviceID > 0 && session != nil {
-			now := time.Now()
-			if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(result.DeviceID, session.NodeID, "edge", session.SessionID, true, now); err != nil {
-				return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: false, Error: "persist_device_entry_failed"}, err
-			}
-			udphub.SyncRuntimeDeviceEntry(result.DeviceID, session.NodeID, "edge", session.SessionID, true, now)
-		}
+		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
+	}
+	activateDevice := func(session *interconnect.NodeSession, grant *interconnect.DeviceGrant) error {
+		if session == nil || grant == nil || grant.DeviceID <= 0 {
+			return nil
+		}
+		now := time.Now()
+		if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(grant.DeviceID, session.NodeID, "edge", session.SessionID, true, now); err != nil {
+			return err
+		}
+		udphub.SyncRuntimeDeviceEntry(grant.DeviceID, session.NodeID, "edge", session.SessionID, true, now)
+		return nil
 	}
 	onNodeStatus := func(session *interconnect.NodeSession, heartbeat *interconnect.NodeHeartbeat, online bool) {
 		if session == nil {
@@ -189,7 +193,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			}
 		}
 	}
-	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, OnNodeStatus: onNodeStatus})
+	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, OnNodeStatus: onNodeStatus})
 }
 
 var _ = context.Background

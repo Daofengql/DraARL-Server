@@ -258,6 +258,10 @@ func (m *ClusterManager) RegisterProjectionNode(nodeID string, session *NodeSess
 func (m *ClusterManager) RebuildDomainNodes() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.rebuildDomainNodesLocked()
+}
+
+func (m *ClusterManager) rebuildDomainNodesLocked() {
 	next := make(map[uint64]map[string]struct{})
 	for nodeID, projection := range m.nodeProjection {
 		for _, route := range projection.Devices {
@@ -301,8 +305,8 @@ func (m *ClusterManager) UpsertNodeRoute(nodeID string, route DeviceRoute) error
 		projection.Devices = make(map[uint64]DeviceRoute)
 	}
 	projection.Devices[route.SessionID] = route
+	m.rebuildDomainNodesLocked()
 	m.mu.Unlock()
-	m.RebuildDomainNodes()
 	return nil
 }
 
@@ -333,8 +337,8 @@ func (m *ClusterManager) SetNodeRoute(nodeID string, route DeviceRoute) error {
 	}
 	m.projection.Devices[route.SessionID] = route
 	server := m.server
+	m.rebuildDomainNodesLocked()
 	m.mu.Unlock()
-	m.RebuildDomainNodes()
 	if server == nil {
 		return nil
 	}
@@ -361,8 +365,8 @@ func (m *ClusterManager) RemoveNodeRoute(nodeID string, sessionID uint64) error 
 	}
 	delete(m.projection.Devices, sessionID)
 	server := m.server
+	m.rebuildDomainNodesLocked()
 	m.mu.Unlock()
-	m.RebuildDomainNodes()
 	if server == nil {
 		return nil
 	}
@@ -385,8 +389,8 @@ func (m *ClusterManager) ApplyRouteDelta(delta RouteDelta) error {
 		return err
 	}
 	m.version = delta.NewVersion
+	m.rebuildDomainNodesLocked()
 	m.mu.Unlock()
-	m.RebuildDomainNodes()
 	return m.pushDelta(delta)
 }
 func (m *ClusterManager) pushDelta(delta RouteDelta) error {

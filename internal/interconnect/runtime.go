@@ -35,6 +35,7 @@ type CenterRuntimeConfig struct {
 	ValidateToken func(nodeID, token string) bool
 	Authenticate  func(nodeID, token string) (NodeAuthentication, error)
 	Auth          DeviceAuthHandler
+	Activate      DeviceActivationHandler
 	OnNodeStatus  func(*NodeSession, *NodeHeartbeat, bool)
 }
 type CenterRuntime struct {
@@ -53,7 +54,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 		return nil, errors.New("center node token validator is required")
 	}
 	cluster := NewClusterManager(0)
-	gateway := NewCenterGateway(cluster, cfg.Auth)
+	gateway := NewCenterGateway(cluster, cfg.Auth, cfg.Activate)
 	status := NewNodeStatusDispatcher(cfg.OnNodeStatus)
 	if status != nil {
 		gateway.onNodeStatus = status.Submit
@@ -96,6 +97,7 @@ type EdgeRuntimeConfig struct {
 	CenterControl string
 	CenterUDP     string
 	Listen        string
+	ProxyProtocol string
 	TLSConfig     *tls.Config
 }
 type EdgeRuntime struct {
@@ -112,7 +114,7 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	gateway, err := NewEdgeGateway(cfg.Listen, client)
+	gateway, err := NewEdgeGateway(cfg.Listen, client, cfg.ProxyProtocol)
 	if err != nil {
 		client.Close()
 		return nil, err

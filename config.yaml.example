@@ -29,6 +29,20 @@ Interconnect:
     RegistrationTokenTTL: 86400
     NodeTokens: {}               # 开发引导配置；生产使用后台签发凭据
 
+# 仅在 `draarl --edge -c config.yaml` 下读取；中心模式忽略此块。
+# 边缘不需要下方 Database/Redis/Web/Storage 等中心依赖。
+Edge:
+    Center: "center.example.com:60100" # 中心 TLS 控制面
+    CenterUDP: "center.example.com:60050" # 中心 Type 0 UDP，与中心普通设备端口复用
+    Token: ""                  # 后台一次性注册凭据；首次注册后使用独立 identity 文件
+    NodeID: ""                 # 可由注册凭据携带，通常无需手填
+    Listen: ":60050"           # 边缘普通设备与 Type 0 共用入口
+    ProxyProtocol: ""          # 设为 v2 时解析 FRP PROXY Protocol v2；应使用防火墙仅允许受信代理访问
+    TLSCAFile: ""              # 中心证书 CA；使用公共 CA 时可留空
+    TLSServerName: "center.example.com"
+    InsecureSkipVerify: false     # 仅本地测试可临时开启
+    IdentityFile: "edge-identity.json"
+
 # MySQL数据库配置
 Database:
     Host: "127.0.0.1"

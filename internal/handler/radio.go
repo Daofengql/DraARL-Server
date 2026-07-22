@@ -9,6 +9,7 @@ import (
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	ws "draarl/pkg/websocket"
@@ -297,6 +298,9 @@ func UpdateRadioGroup(c *gin.Context) {
 	if err := userRepo.UpsertUserDevicePreference(userID, devModel, req.GroupID); err != nil {
 		log.Printf("[RADIO] 警告: 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
 		// 不影响响应，群组切换已成功
+	}
+	if devModel != protocol.DraARLDevModelBrowser {
+		routesync.PublishIdentity(userID, devModel, req.GroupID, false, false)
 	}
 
 	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 设备 %d 从群组 %d 切换到群组 %d", userID, devModel, oldGroupID, req.GroupID)

@@ -45,6 +45,13 @@ type DeviceAuthResponse struct {
 	ResponsePacket []byte       `json:"response_packet,omitempty"`
 }
 
+type DeviceSessionRevoke struct {
+	SessionID    uint64 `json:"session_id"`
+	SessionEpoch uint64 `json:"session_epoch"`
+	DeviceID     int    `json:"device_id,omitempty"`
+	Reason       string `json:"reason"`
+}
+
 type RouteAck struct {
 	ClusterEpoch      uint64 `json:"cluster_epoch"`
 	ProjectionVersion uint64 `json:"projection_version"`

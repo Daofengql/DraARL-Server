@@ -172,6 +172,20 @@ func GetCommunicationDomainID(groupID int) uint64 {
 	return uint64(fnv32String(key))
 }
 
+// GetActiveCommunicationDomainID also applies the authoritative group enabled
+// state. Disabled, missing, ungrouped and virtual groups never form a live
+// forwarding domain on an edge.
+func GetActiveCommunicationDomainID(groupID int) uint64 {
+	if groupID <= 0 {
+		return 0
+	}
+	group, ok := GetGroupFromCache(groupID)
+	if !ok || group == nil || group.Status != 1 || group.IsVirtual {
+		return 0
+	}
+	return GetCommunicationDomainID(groupID)
+}
+
 // collectHalfDuplexDomainGroupIDs 计算一个群组可达的“语音转发连通域”。
 // 同一连通域内应共享半双工占用状态，不同域互不影响。
 func collectHalfDuplexDomainGroupIDs(groupID int) []int {

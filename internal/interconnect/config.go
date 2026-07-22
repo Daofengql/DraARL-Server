@@ -26,6 +26,7 @@ type EdgeSettings struct {
 	Token              string `yaml:"Token" json:"token"`
 	NodeID             string `yaml:"NodeID" json:"node_id"`
 	Listen             string `yaml:"Listen" json:"listen"`
+	ProxyProtocol      string `yaml:"ProxyProtocol" json:"proxy_protocol"`
 	ControlListen      string `yaml:"ControlListen" json:"control_listen"`
 	TLSCAFile          string `yaml:"TLSCAFile" json:"tls_ca_file"`
 	TLSServerName      string `yaml:"TLSServerName" json:"tls_server_name"`
@@ -55,6 +56,10 @@ func (c *EdgeConfig) SetDefaults() {
 }
 func (c *EdgeConfig) Validate() error {
 	c.SetDefaults()
+	c.Edge.ProxyProtocol = strings.ToLower(strings.TrimSpace(c.Edge.ProxyProtocol))
+	if c.Edge.ProxyProtocol != "" && c.Edge.ProxyProtocol != "v2" {
+		return errors.New("Edge.ProxyProtocol must be empty or v2")
+	}
 	if strings.TrimSpace(c.Edge.Center) == "" {
 		return errors.New("Edge.Center is required")
 	}

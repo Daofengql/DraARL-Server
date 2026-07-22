@@ -8,6 +8,7 @@ import (
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	"github.com/gin-gonic/gin"
@@ -343,6 +344,7 @@ func UpdateVirtualGroup(c *gin.Context) {
 	// 通知 udphub 刷新群组缓存和互联路由缓存
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache() // 状态变更后立即刷新互联路由，确保转发立刻生效
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -432,6 +434,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 	// 通知 udphub 刷新群组缓存和互联缓存
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -637,6 +640,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 
 	// 通知 udphub 刷新互联缓存
 	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -724,6 +728,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 通知 udphub 刷新互联缓存
 	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(

@@ -14,6 +14,7 @@ import (
 	oplog "draarl/internal/log"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	appcrypto "draarl/pkg/crypto"
@@ -883,8 +884,10 @@ func DeleteUser(c *gin.Context) {
 		})
 		return
 	}
+	routesync.RevokeOwner(id, "user_deleted")
 	for _, device := range cascadeResult.DeletedDevices {
 		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
+		routesync.RevokeDevice(device.ID, "user_deleted")
 	}
 	for _, device := range cascadeResult.MovedDevices {
 		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
@@ -917,6 +920,10 @@ func DeleteUser(c *gin.Context) {
 	}
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
+	for _, device := range cascadeResult.MovedDevices {
+		routesync.PublishDevice(device.ID)
+	}
+	routesync.RefreshTopology()
 
 	// 获取当前操作用户信息
 	if username, exists := c.Get("username"); exists {
@@ -1005,6 +1012,9 @@ func UpdateUserStatus(c *gin.Context) {
 			"message": "更新用户状态失败",
 		})
 		return
+	}
+	if req.Status == 0 {
+		routesync.RevokeOwner(id, "user_disabled")
 	}
 
 	// 使用户缓存失效

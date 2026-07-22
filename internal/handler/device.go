@@ -10,6 +10,7 @@ import (
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 
@@ -500,6 +501,7 @@ func UpdateDevice(c *gin.Context) {
 	// 立即同步 UDP Hub 运行时内存，避免等待定时器导致收发控制生效延迟
 	if req.DisableSend != nil || req.DisableRecv != nil {
 		udphub.SyncDeviceCommControlByID(id, device.DisableSend, device.DisableRecv)
+		routesync.PublishDevice(id)
 	}
 
 	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
@@ -580,6 +582,7 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
+		routesync.RevokeDevice(device.ID, "device_deleted")
 
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()
@@ -666,6 +669,7 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
+		routesync.RevokeDevice(device.ID, "device_deleted")
 
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()
@@ -883,6 +887,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 		log.Printf("[WARN] Failed to update UDP device group in memory: %v", err)
 		udphub.RefreshDeviceCache()
 	}
+	routesync.PublishDevice(req.DeviceID)
 
 	// 注：WS 只支持 JWT 幽灵设备，幽灵设备群组切换通过前端直接调用 WebSocket 发送 Config 包实现
 	groupType := 0

@@ -16,6 +16,20 @@ func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 	if cfg.Edge.CenterUDP != "center.example.com:60050" {
 		t.Fatalf("CenterUDP=%q", cfg.Edge.CenterUDP)
 	}
+	if cfg.Edge.DeviceSessionTimeoutSeconds != 20 || cfg.Edge.GrantRenewBeforeSeconds != 30 {
+		t.Fatalf("edge lease defaults changed: timeout=%d renew=%d", cfg.Edge.DeviceSessionTimeoutSeconds, cfg.Edge.GrantRenewBeforeSeconds)
+	}
+}
+
+func TestEdgeRejectsInvalidSessionLeaseSettings(t *testing.T) {
+	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", DeviceSessionTimeoutSeconds: 4, GrantRenewBeforeSeconds: 30}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "DeviceSessionTimeoutSeconds") {
+		t.Fatalf("unexpected timeout validation error: %v", err)
+	}
+	cfg.Edge.DeviceSessionTimeoutSeconds, cfg.Edge.GrantRenewBeforeSeconds = 20, 91
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "GrantRenewBeforeSeconds") {
+		t.Fatalf("unexpected renewal validation error: %v", err)
+	}
 }
 
 func TestEdgeCustomSharedUDPPortIsPreserved(t *testing.T) {

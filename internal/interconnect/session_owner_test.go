@@ -3,6 +3,7 @@ package interconnect
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"draarl/internal/protocol"
 )
@@ -442,5 +443,83 @@ func TestDeviceRevocationCallbackIsBoundToCurrentEntrySession(t *testing.T) {
 	}
 	if len(callbacks) != 1 || callbacks[0] != (revokedEntry{nodeID: edge.NodeID, controlID: edge.SessionID, deviceID: grant.DeviceID, reason: "user_disabled"}) {
 		t.Fatalf("revocation callbacks=%#v", callbacks)
+	}
+}
+
+func TestSameEdgeGrantRenewalKeepsSessionAndEpoch(t *testing.T) {
+	cluster := NewClusterManager(52)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	edge := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	gateway.OnConnect(edge)
+	first := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, GroupID: 10, DomainID: 90}
+	if err := gateway.activateDeviceSession(edge, first); err != nil {
+		t.Fatal(err)
+	}
+	renewed := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, GroupID: 20, DomainID: 91}
+	if err := gateway.activateDeviceSession(edge, renewed); err != nil {
+		t.Fatal(err)
+	}
+	if renewed.SessionID != first.SessionID || renewed.SessionEpoch != first.SessionEpoch {
+		t.Fatalf("renewal churned owner: first=%#v renewed=%#v", first, renewed)
+	}
+	if route, ok := cluster.ResolveRoute(first.SessionID); !ok || route.GroupID != 20 || route.DomainID != 91 {
+		t.Fatalf("renewal did not refresh route: %#v, %v", route, ok)
+	}
+}
+
+func TestOfflineSessionReportRejectsStaleOwnerAndRemovesCurrent(t *testing.T) {
+	cluster := NewClusterManager(53)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	edgeA := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	edgeB := &NodeSession{NodeID: "edge-b", SessionID: 202}
+	gateway.OnConnect(edgeA)
+	gateway.OnConnect(edgeB)
+	first := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, DomainID: 90}
+	if err := gateway.activateDeviceSession(edgeA, first); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.handleDeviceSessionReport(edgeA, DeviceSessionReport{SessionID: first.SessionID, SessionEpoch: first.SessionEpoch + 1, DeviceID: first.DeviceID, Reason: "device_timeout"}) {
+		t.Fatal("wrong epoch offline report was accepted")
+	}
+	second := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, DomainID: 91}
+	if err := gateway.activateDeviceSession(edgeB, second); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.handleDeviceSessionReport(edgeA, DeviceSessionReport{SessionID: first.SessionID, SessionEpoch: first.SessionEpoch, DeviceID: first.DeviceID, Reason: "late_timeout"}) {
+		t.Fatal("late old-edge offline report was accepted")
+	}
+	if route, ok := cluster.ResolveRoute(second.SessionID); !ok || route.SessionEpoch != second.SessionEpoch {
+		t.Fatalf("late report changed current route: %#v, %v", route, ok)
+	}
+	if !gateway.handleDeviceSessionReport(edgeB, DeviceSessionReport{SessionID: second.SessionID, SessionEpoch: second.SessionEpoch, DeviceID: second.DeviceID, Reason: "device_timeout"}) {
+		t.Fatal("current offline report was rejected")
+	}
+	if _, ok := cluster.ResolveRoute(second.SessionID); ok {
+		t.Fatal("current offline report left route active")
+	}
+}
+
+func TestCenterSessionRenewalRequiresCurrentOwner(t *testing.T) {
+	now := time.Now()
+	cluster := NewClusterManager(54)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	edgeA := &NodeSession{NodeID: "edge-a", SessionID: 101}
+	edgeB := &NodeSession{NodeID: "edge-b", SessionID: 202}
+	gateway.OnConnect(edgeA)
+	gateway.OnConnect(edgeB)
+	grant := &DeviceGrant{DeviceID: 7, OwnerID: 5, Username: "alice", SSID: 1, DomainID: 90}
+	if err := gateway.activateDeviceSession(edgeA, grant); err != nil {
+		t.Fatal(err)
+	}
+	request := DeviceSessionRenewRequest{RequestID: 1, SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch}
+	if response := gateway.renewDeviceSession(edgeB, request, now); response.Success || response.Error != "session_not_owned" {
+		t.Fatalf("foreign renewal response=%#v", response)
+	}
+	response := gateway.renewDeviceSession(edgeA, request, now)
+	if !response.Success || response.ExpiresAtMillis != now.Add(defaultDeviceGrantTTL).UnixMilli() {
+		t.Fatalf("owner renewal response=%#v", response)
 	}
 }

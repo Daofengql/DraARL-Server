@@ -45,11 +45,35 @@ type DeviceAuthResponse struct {
 	ResponsePacket []byte       `json:"response_packet,omitempty"`
 }
 
+type DeviceSessionRenewRequest struct {
+	RequestID    uint64 `json:"request_id"`
+	SessionID    uint64 `json:"session_id"`
+	SessionEpoch uint64 `json:"session_epoch"`
+}
+
+type DeviceSessionRenewResponse struct {
+	RequestID       uint64 `json:"request_id"`
+	SessionID       uint64 `json:"session_id"`
+	SessionEpoch    uint64 `json:"session_epoch"`
+	Success         bool   `json:"success"`
+	Error           string `json:"error,omitempty"`
+	ExpiresAtMillis int64  `json:"expires_at_ms,omitempty"`
+}
+
 type DeviceSessionRevoke struct {
 	SessionID    uint64 `json:"session_id"`
 	SessionEpoch uint64 `json:"session_epoch"`
 	DeviceID     int    `json:"device_id,omitempty"`
 	Reason       string `json:"reason"`
+}
+
+type DeviceSessionReport struct {
+	SessionID        uint64 `json:"session_id"`
+	SessionEpoch     uint64 `json:"session_epoch"`
+	DeviceID         int    `json:"device_id,omitempty"`
+	Online           bool   `json:"online"`
+	Reason           string `json:"reason,omitempty"`
+	ReportedAtMillis int64  `json:"reported_at_ms"`
 }
 
 type RouteAck struct {

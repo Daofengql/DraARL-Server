@@ -92,13 +92,15 @@ func (r *CenterRuntime) Close() {
 }
 
 type EdgeRuntimeConfig struct {
-	NodeID        string
-	Token         string
-	CenterControl string
-	CenterUDP     string
-	Listen        string
-	ProxyProtocol string
-	TLSConfig     *tls.Config
+	NodeID               string
+	Token                string
+	CenterControl        string
+	CenterUDP            string
+	Listen               string
+	ProxyProtocol        string
+	TLSConfig            *tls.Config
+	DeviceSessionTimeout time.Duration
+	GrantRenewBefore     time.Duration
 }
 type EdgeRuntime struct {
 	Client  *NodeClient
@@ -118,6 +120,12 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if err != nil {
 		client.Close()
 		return nil, err
+	}
+	if cfg.DeviceSessionTimeout > 0 {
+		gateway.sessionTimeout = cfg.DeviceSessionTimeout
+	}
+	if cfg.GrantRenewBefore > 0 {
+		gateway.grantRenewBefore = cfg.GrantRenewBefore
 	}
 	client.SetEnvelopeHandler(gateway.OnEnvelope)
 	if strings.TrimSpace(cfg.CenterUDP) != "" {

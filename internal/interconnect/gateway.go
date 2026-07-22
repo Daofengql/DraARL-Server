@@ -17,6 +17,8 @@ import (
 type DeviceAuthHandler func(session *NodeSession, request DeviceAuthRequest) (DeviceAuthResponse, error)
 type DeviceActivationHandler func(session *NodeSession, grant *DeviceGrant) error
 
+const defaultDeviceGrantTTL = 2 * time.Minute
+
 type CenterGateway struct {
 	cluster        *ClusterManager
 	server         *NodeServer
@@ -174,6 +176,19 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		reply.ClusterEpoch = g.cluster.Epoch()
 		reply.Flags = FlagControl | FlagAck
 		_ = g.server.SendEnvelope(session.NodeID, reply)
+	case SubtypeDeviceSessionRenew:
+		var request DeviceSessionRenewRequest
+		if DecodeJSON(env.Payload, &request) != nil {
+			return
+		}
+		response := g.renewDeviceSession(session, request, time.Now())
+		payload, _ := EncodeJSON(response)
+		reply := NewEnvelope(SubtypeDeviceSessionRenew, "center", 0, g.cluster.NextMessageID(), payload)
+		reply.ClusterEpoch = g.cluster.Epoch()
+		reply.Flags = FlagControl | FlagAck
+		if g.server != nil {
+			_ = g.server.SendEnvelope(session.NodeID, reply)
+		}
 	case SubtypeRelayUpstream:
 		frame, err := UnmarshalRelayFrame(env.Payload)
 		if err != nil {
@@ -220,7 +235,37 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 				g.onNodeStatus(session, &heartbeat, true)
 			}
 		}
+	case SubtypeDeviceSessionReport:
+		var report DeviceSessionReport
+		if DecodeJSON(env.Payload, &report) == nil {
+			g.handleDeviceSessionReport(session, report)
+		}
 	}
+}
+
+func (g *CenterGateway) renewDeviceSession(session *NodeSession, request DeviceSessionRenewRequest, now time.Time) DeviceSessionRenewResponse {
+	response := DeviceSessionRenewResponse{RequestID: request.RequestID, SessionID: request.SessionID, SessionEpoch: request.SessionEpoch}
+	if session == nil || request.RequestID == 0 || request.SessionID == 0 || request.SessionEpoch == 0 || g.cluster == nil {
+		response.Error = "invalid_session_renewal"
+		return response
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.RLock()
+	owner, ok := g.deviceSessions[request.SessionID]
+	g.mu.RUnlock()
+	if !ok || owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID || owner.SessionEpoch != request.SessionEpoch {
+		response.Error = "session_not_owned"
+		return response
+	}
+	route, ok := g.cluster.ResolveRoute(request.SessionID)
+	if !ok || route.SessionEpoch != request.SessionEpoch {
+		response.Error = "session_route_missing"
+		return response
+	}
+	response.Success = true
+	response.ExpiresAtMillis = now.Add(defaultDeviceGrantTTL).UnixMilli()
+	return response
 }
 
 func deviceGrantIdentity(grant *DeviceGrant) string {
@@ -256,6 +301,23 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 	}
 	g.ownershipMu.Lock()
 	defer g.ownershipMu.Unlock()
+	g.mu.RLock()
+	oldSessionID := g.activeDevices[identity]
+	oldOwner, hadOld := g.deviceSessions[oldSessionID]
+	g.mu.RUnlock()
+	if hadOld && oldOwner.NodeID == session.NodeID && oldOwner.ControlSessionID == session.SessionID &&
+		oldOwner.DeviceID == grant.DeviceID && oldOwner.OwnerID == grant.OwnerID && oldOwner.SSID == grant.SSID {
+		grant.SessionID, grant.SessionEpoch = oldOwner.SessionID, oldOwner.SessionEpoch
+		route, ok := g.cluster.ResolveRoute(oldOwner.SessionID)
+		if !ok || route.SessionEpoch != oldOwner.SessionEpoch {
+			return errors.New("edge owner route is missing")
+		}
+		next := grant.Route()
+		if route != next {
+			return g.cluster.SetNodeRoute(session.NodeID, next)
+		}
+		return nil
+	}
 
 	grant.SessionID = g.cluster.NextMessageID()
 	g.mu.Lock()
@@ -269,8 +331,8 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 	// persistence work. Relay hot paths therefore reject it while the new
 	// entry is being committed. Restore it if activation fails.
 	g.mu.Lock()
-	oldSessionID := g.activeDevices[identity]
-	oldOwner, hadOld := g.deviceSessions[oldSessionID]
+	oldSessionID = g.activeDevices[identity]
+	oldOwner, hadOld = g.deviceSessions[oldSessionID]
 	if hadOld {
 		g.removeOwnerMapsLocked(oldSessionID, oldOwner)
 	}
@@ -306,6 +368,32 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 		log.Printf("[INTERCONNECT] publish device route failed: node=%s session=%d err=%v", session.NodeID, grant.SessionID, err)
 	}
 	return nil
+}
+
+func (g *CenterGateway) handleDeviceSessionReport(session *NodeSession, report DeviceSessionReport) bool {
+	if session == nil || report.Online || report.SessionID == 0 || report.SessionEpoch == 0 || g.cluster == nil {
+		return false
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.Lock()
+	owner, ok := g.deviceSessions[report.SessionID]
+	if !ok || owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID ||
+		owner.SessionEpoch != report.SessionEpoch || (report.DeviceID > 0 && owner.DeviceID != report.DeviceID) {
+		g.mu.Unlock()
+		return false
+	}
+	g.removeOwnerMapsLocked(report.SessionID, owner)
+	g.mu.Unlock()
+	reason := strings.TrimSpace(report.Reason)
+	if reason == "" {
+		reason = "edge_session_offline"
+	}
+	g.notifyOwnerRevoke(owner, reason)
+	if err := g.cluster.RemoveNodeRoute(owner.NodeID, owner.SessionID); err != nil {
+		log.Printf("[INTERCONNECT] remove reported offline route failed: node=%s session=%d err=%v", owner.NodeID, owner.SessionID, err)
+	}
+	return true
 }
 
 // ActivateLocalDevice makes a centre-direct UDP/WS device part of the same
@@ -633,10 +721,18 @@ type EdgeGateway struct {
 	byIdentity        map[string]uint64
 	pending           map[uint64]*pendingDeviceAuth
 	pendingIdentity   map[string]uint64
+	pendingRenewals   map[uint64]pendingDeviceRenewal
+	renewingSessions  map[uint64]uint64
 	snapshotAssembler *SnapshotAssembler
 	nextRequest       atomic.Uint64
 	metrics           Metrics
 	closed            chan struct{}
+	closeOnce         sync.Once
+	cleanerWG         sync.WaitGroup
+	sessionTimeout    time.Duration
+	grantRenewBefore  time.Duration
+	reportSession     func(DeviceSessionReport)
+	renewSession      func(DeviceSessionRenewRequest)
 }
 type edgeDeviceSession struct {
 	Grant    DeviceGrant
@@ -645,10 +741,20 @@ type edgeDeviceSession struct {
 	LastSeen time.Time
 }
 type pendingDeviceAuth struct {
-	addr     *net.UDPAddr
-	realAddr *net.UDPAddr
-	wire     []byte
+	addr        *net.UDPAddr
+	realAddr    *net.UDPAddr
+	wire        []byte
+	identity    string
+	requestedAt time.Time
 }
+
+type pendingDeviceRenewal struct {
+	sessionID    uint64
+	sessionEpoch uint64
+	requestedAt  time.Time
+}
+
+const edgeAuthRequestTimeout = 5 * time.Second
 
 func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...string) (*EdgeGateway, error) {
 	if client == nil {
@@ -665,7 +771,7 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 		return nil, errors.New("edge proxy protocol must be empty or v2")
 	}
 	p := NewProjection(1)
-	return &EdgeGateway{client: client, listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), closed: make(chan struct{})}, nil
+	return &EdgeGateway{client: client, listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64), closed: make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second}, nil
 }
 func (g *EdgeGateway) Start() error {
 	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.proxyProtocol, g.handleInbound)
@@ -683,6 +789,8 @@ func (g *EdgeGateway) Start() error {
 			return err
 		}
 	}
+	g.cleanerWG.Add(1)
+	go g.sessionCleanerLoop()
 	return nil
 }
 func (g *EdgeGateway) Addr() net.Addr {
@@ -697,15 +805,13 @@ func (g *EdgeGateway) ConnectionCount() int {
 	return len(g.sessions)
 }
 func (g *EdgeGateway) Close() error {
-	select {
-	case <-g.closed:
-	default:
-		close(g.closed)
-	}
+	g.closeOnce.Do(func() { close(g.closed) })
+	var err error
 	if g.endpoint != nil {
-		return g.endpoint.Close()
+		err = g.endpoint.Close()
 	}
-	return nil
+	g.cleanerWG.Wait()
+	return err
 }
 func (g *EdgeGateway) handleInbound(data []byte, remoteAddr, realAddr *net.UDPAddr) {
 	if g.peer != nil && g.peer.Handle(data, remoteAddr) {
@@ -763,20 +869,38 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	}
 	// Update the endpoint and take an immutable grant snapshot while holding
 	// the gateway lock. RouteDelta may update the same grant concurrently.
+	now := time.Now()
 	g.mu.Lock()
 	current := g.sessions[sessionID]
 	if current == nil {
 		g.mu.Unlock()
 		return
 	}
+	if current.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= current.Grant.ExpiresAtMillis {
+		report := g.removeEdgeSessionLocked(sessionID, "grant_expired", now)
+		g.mu.Unlock()
+		g.sendDeviceSessionReport(report)
+		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
+			g.requestAuth(data, packet, remoteAddr, realAddr)
+		}
+		return
+	}
 	current.Addr = cloneUDPAddr(remoteAddr)
 	current.RealAddr = cloneUDPAddr(realAddr)
-	current.LastSeen = time.Now()
+	current.LastSeen = now
 	grant := current.Grant
+	shouldRenew := grant.ExpiresAtMillis > 0 && time.UnixMilli(grant.ExpiresAtMillis).Sub(now) <= g.grantRenewBefore
 	g.mu.Unlock()
+	if packet.Type == protocol.DraARLTypeJWTAuth {
+		g.requestAuth(data, packet, remoteAddr, realAddr)
+		return
+	}
 	if packet.Type == protocol.DraARLTypeHeartbeat {
 		response := protocol.EncodeHeartbeatResponse(packet, grant.CallSign)
 		g.writeDevice(response, remoteAddr)
+		if shouldRenew {
+			g.requestSessionRenewal(sessionID, grant.SessionEpoch, now)
+		}
 		return
 	}
 	if packet.Type != protocol.DraARLTypeTextMessage && packet.Type != protocol.DraARLTypeOpus16K {
@@ -801,6 +925,125 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		_ = g.client.SendEnvelope(env)
 	}
 }
+
+func (g *EdgeGateway) sessionCleanerLoop() {
+	defer g.cleanerWG.Done()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.closed:
+			return
+		case now := <-ticker.C:
+			g.expireDeviceSessions(now)
+		}
+	}
+}
+
+func (g *EdgeGateway) expireDeviceSessions(now time.Time) int {
+	if g.sessionTimeout <= 0 {
+		return 0
+	}
+	reports := make([]DeviceSessionReport, 0)
+	g.mu.Lock()
+	for requestID, pending := range g.pending {
+		if pending != nil && now.Sub(pending.requestedAt) > edgeAuthRequestTimeout {
+			delete(g.pending, requestID)
+			if g.pendingIdentity[pending.identity] == requestID {
+				delete(g.pendingIdentity, pending.identity)
+			}
+		}
+	}
+	for requestID, pending := range g.pendingRenewals {
+		if now.Sub(pending.requestedAt) > edgeAuthRequestTimeout {
+			delete(g.pendingRenewals, requestID)
+			if g.renewingSessions[pending.sessionID] == requestID {
+				delete(g.renewingSessions, pending.sessionID)
+			}
+		}
+	}
+	for sessionID, session := range g.sessions {
+		reason := ""
+		if now.Sub(session.LastSeen) > g.sessionTimeout {
+			reason = "device_timeout"
+		} else if session.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= session.Grant.ExpiresAtMillis {
+			reason = "grant_expired"
+		}
+		if reason != "" {
+			reports = append(reports, g.removeEdgeSessionLocked(sessionID, reason, now))
+		}
+	}
+	g.mu.Unlock()
+	for _, report := range reports {
+		g.sendDeviceSessionReport(report)
+	}
+	return len(reports)
+}
+
+func (g *EdgeGateway) requestSessionRenewal(sessionID, sessionEpoch uint64, now time.Time) {
+	if sessionID == 0 || sessionEpoch == 0 {
+		return
+	}
+	requestID := g.nextRequest.Add(1)
+	request := DeviceSessionRenewRequest{RequestID: requestID, SessionID: sessionID, SessionEpoch: sessionEpoch}
+	g.mu.Lock()
+	session := g.sessions[sessionID]
+	if session == nil || session.Grant.SessionEpoch != sessionEpoch || g.renewingSessions[sessionID] != 0 {
+		g.mu.Unlock()
+		return
+	}
+	g.pendingRenewals[requestID] = pendingDeviceRenewal{sessionID: sessionID, sessionEpoch: sessionEpoch, requestedAt: now}
+	g.renewingSessions[sessionID] = requestID
+	g.mu.Unlock()
+	if g.renewSession != nil {
+		g.renewSession(request)
+		return
+	}
+	payload, err := EncodeJSON(request)
+	if err == nil && g.client != nil {
+		env := NewEnvelope(SubtypeDeviceSessionRenew, g.client.Session.NodeID, g.client.Session.SessionID, requestID, payload)
+		env.Flags = FlagControl | FlagAck
+		err = g.client.SendEnvelope(env)
+	}
+	if err != nil || g.client == nil {
+		g.mu.Lock()
+		delete(g.pendingRenewals, requestID)
+		if g.renewingSessions[sessionID] == requestID {
+			delete(g.renewingSessions, sessionID)
+		}
+		g.mu.Unlock()
+	}
+}
+
+func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, now time.Time) DeviceSessionReport {
+	session := g.sessions[sessionID]
+	if session == nil {
+		return DeviceSessionReport{}
+	}
+	delete(g.sessions, sessionID)
+	key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
+	if g.byIdentity[key] == sessionID {
+		delete(g.byIdentity, key)
+	}
+	return DeviceSessionReport{SessionID: sessionID, SessionEpoch: session.Grant.SessionEpoch, DeviceID: session.Grant.DeviceID, Reason: reason, ReportedAtMillis: now.UnixMilli()}
+}
+
+func (g *EdgeGateway) sendDeviceSessionReport(report DeviceSessionReport) {
+	if report.SessionID == 0 || report.SessionEpoch == 0 {
+		return
+	}
+	if g.reportSession != nil {
+		g.reportSession(report)
+		return
+	}
+	payload, err := EncodeJSON(report)
+	if err != nil {
+		return
+	}
+	env := NewEnvelope(SubtypeDeviceSessionReport, g.client.Session.NodeID, g.client.Session.SessionID, g.nextRequest.Add(1), payload)
+	env.Flags = FlagControl
+	_ = g.client.SendEnvelope(env)
+}
 func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, remoteAddr, realAddr *net.UDPAddr) {
 	identity := g.identity(packet)
 	id := g.nextRequest.Add(1)
@@ -809,7 +1052,7 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 		g.mu.Unlock()
 		return
 	}
-	g.pending[id] = &pendingDeviceAuth{addr: cloneUDPAddr(remoteAddr), realAddr: cloneUDPAddr(realAddr), wire: append([]byte(nil), data...)}
+	g.pending[id] = &pendingDeviceAuth{addr: cloneUDPAddr(remoteAddr), realAddr: cloneUDPAddr(realAddr), wire: append([]byte(nil), data...), identity: identity, requestedAt: time.Now()}
 	g.pendingIdentity[identity] = id
 	g.mu.Unlock()
 	sourceIP := ""
@@ -819,6 +1062,12 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 	request := DeviceAuthRequest{RequestID: id, SourceIP: sourceIP, Packet: append([]byte(nil), data...)}
 	payload, err := EncodeJSON(request)
 	if err != nil {
+		g.mu.Lock()
+		delete(g.pending, id)
+		if g.pendingIdentity[identity] == id {
+			delete(g.pendingIdentity, identity)
+		}
+		g.mu.Unlock()
 		return
 	}
 	env := NewEnvelope(SubtypeDeviceAuth, g.client.Session.NodeID, g.client.Session.SessionID, id, payload)
@@ -838,6 +1087,12 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 			return
 		}
 		g.finishAuth(response)
+	case SubtypeDeviceSessionRenew:
+		var response DeviceSessionRenewResponse
+		if DecodeJSON(env.Payload, &response) != nil {
+			return
+		}
+		g.finishSessionRenewal(response, time.Now())
 	case SubtypeRouteDelta:
 		var delta RouteDelta
 		if DecodeJSON(env.Payload, &delta) != nil {
@@ -921,6 +1176,28 @@ func (g *EdgeGateway) OnEnvelope(env Envelope) {
 	}
 }
 
+func (g *EdgeGateway) finishSessionRenewal(response DeviceSessionRenewResponse, now time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	pending, ok := g.pendingRenewals[response.RequestID]
+	if !ok {
+		return false
+	}
+	delete(g.pendingRenewals, response.RequestID)
+	if g.renewingSessions[pending.sessionID] == response.RequestID {
+		delete(g.renewingSessions, pending.sessionID)
+	}
+	if !response.Success || response.SessionID != pending.sessionID || response.SessionEpoch != pending.sessionEpoch || response.ExpiresAtMillis <= now.UnixMilli() {
+		return false
+	}
+	session := g.sessions[pending.sessionID]
+	if session == nil || session.Grant.SessionEpoch != pending.sessionEpoch {
+		return false
+	}
+	session.Grant.ExpiresAtMillis = response.ExpiresAtMillis
+	return true
+}
+
 func (g *EdgeGateway) revokeSession(revoke DeviceSessionRevoke) bool {
 	if revoke.SessionID == 0 {
 		return false
@@ -944,9 +1221,8 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	pending := g.pending[response.RequestID]
 	delete(g.pending, response.RequestID)
 	if pending != nil {
-		if packet, err := protocol.NewDraARLv1RoutingPacket(pending.addr, pending.wire); err == nil {
-			delete(g.pendingIdentity, g.identity(packet))
-			protocol.ReleaseDraARLv1RoutingPacket(packet)
+		if g.pendingIdentity[pending.identity] == response.RequestID {
+			delete(g.pendingIdentity, pending.identity)
 		}
 	}
 	g.mu.Unlock()
@@ -966,7 +1242,17 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	session := &edgeDeviceSession{Grant: grant, Addr: cloneUDPAddr(pending.addr), RealAddr: cloneUDPAddr(pending.realAddr), LastSeen: time.Now()}
 	key := fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
 	g.mu.Lock()
-	g.sessions[grant.SessionID] = session
+	if existing := g.sessions[grant.SessionID]; existing != nil {
+		existing.Grant = grant
+		existing.Addr = session.Addr
+		existing.RealAddr = session.RealAddr
+		existing.LastSeen = session.LastSeen
+	} else {
+		if previousID := g.byIdentity[key]; previousID != 0 && previousID != grant.SessionID {
+			delete(g.sessions, previousID)
+		}
+		g.sessions[grant.SessionID] = session
+	}
 	g.byIdentity[key] = grant.SessionID
 	g.mu.Unlock()
 	if len(response.ResponsePacket) > 0 {

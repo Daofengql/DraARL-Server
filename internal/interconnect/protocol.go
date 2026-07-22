@@ -36,6 +36,7 @@ const (
 	SubtypeRouteAck            byte = 0x14
 	SubtypeRouteResyncRequest  byte = 0x15
 	SubtypeDeviceAuth          byte = 0x20
+	SubtypeDeviceSessionRenew  byte = 0x21
 	SubtypeDeviceSessionReport byte = 0x22
 	SubtypeDeviceSessionRevoke byte = 0x23
 	SubtypeDeviceConfig        byte = 0x24

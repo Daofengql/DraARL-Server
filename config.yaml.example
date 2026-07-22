@@ -42,6 +42,8 @@ Edge:
     TLSServerName: "center.example.com"
     InsecureSkipVerify: false     # 仅本地测试可临时开启
     IdentityFile: "edge-identity.json"
+    DeviceSessionTimeoutSeconds: 20 # 普通设备无包超时；超时后立即从本地路由移除并报告中心
+    GrantRenewBeforeSeconds: 30     # 在中心短期授权到期前随设备心跳续租
 
 # MySQL数据库配置
 Database:

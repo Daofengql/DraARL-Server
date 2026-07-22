@@ -48,7 +48,7 @@ func runEdgeMode(configPath string) error {
 	}
 	tlsCfg := &tls.Config{RootCAs: rootPool, ServerName: serverName, MinVersion: tls.VersionTLS13, InsecureSkipVerify: edgeCfg.Edge.InsecureSkipVerify} // #nosec G402 -- only explicit local/test configuration may skip verification.
 	start := func(nodeID, token string) (*interconnect.EdgeRuntime, error) {
-		return interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: nodeID, Token: token, CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, TLSConfig: tlsCfg})
+		return interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{NodeID: nodeID, Token: token, CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, TLSConfig: tlsCfg, DeviceSessionTimeout: time.Duration(edgeCfg.Edge.DeviceSessionTimeoutSeconds) * time.Second, GrantRenewBefore: time.Duration(edgeCfg.Edge.GrantRenewBeforeSeconds) * time.Second})
 	}
 	runtime, err := start(edgeCfg.Edge.NodeID, edgeCfg.Edge.Token)
 	if err != nil {

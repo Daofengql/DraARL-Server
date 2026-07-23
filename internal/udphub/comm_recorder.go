@@ -15,7 +15,7 @@ type CommRecorder struct {
 	syncer   *CommSyncer
 	config   *CommSettingsConfig
 	running  bool
-	mu       sync.Mutex
+	mu       sync.RWMutex
 
 	// 定时器
 	timeoutTicker *time.Ticker
@@ -65,48 +65,64 @@ func NewCommRecorder(config *CommSettingsConfig) *CommRecorder {
 
 // Start 启动录制管理器
 func (cr *CommRecorder) Start() {
-	if cr == nil || !cr.config.Enabled {
-		log.Println("[COMM_RECORDER] 通信录制功能未启用")
+	if cr == nil {
 		return
 	}
 
+	cr.mu.Lock()
+	if cr.running {
+		cr.mu.Unlock()
+		return
+	}
 	cr.running = true
-	cr.syncer.Start()
-
-	// 启动定时器
-	go cr.runTimers()
-
-	log.Printf("[COMM_RECORDER] 通信录制管理器已启动 (最小阈值: %dms, 最大时长: %ds, 上传间隔: %ds)",
-		cr.config.MinDurationMs, cr.config.MaxDurationSec, cr.config.BatchUploadSec)
-}
-
-// runTimers 运行定时器
-func (cr *CommRecorder) runTimers() {
-	// 会话超时检查：每 500ms
+	config := *cr.config
 	cr.timeoutTicker = time.NewTicker(500 * time.Millisecond)
-
-	// 批量上传间隔（可配置）
-	uploadInterval := time.Duration(cr.config.BatchUploadSec) * time.Second
+	uploadInterval := time.Duration(config.BatchUploadSec) * time.Second
 	if uploadInterval <= 0 {
 		uploadInterval = 10 * time.Second
 	}
 	cr.uploadTicker = time.NewTicker(uploadInterval)
-
-	// 数据库同步：每 30 秒
 	cr.dbSyncTicker = time.NewTicker(30 * time.Second)
+	cr.mu.Unlock()
+
+	cr.syncer.Start()
+
+	go cr.runTimers()
+
+	log.Printf("[COMM_RECORDER] 通信录制管理器已启动 (启用: %v, 最小阈值: %dms, 最大时长: %ds, 上传间隔: %ds)",
+		config.Enabled, config.MinDurationMs, config.MaxDurationSec, config.BatchUploadSec)
+}
+
+// runTimers 运行定时器
+func (cr *CommRecorder) runTimers() {
+	cr.mu.RLock()
+	timeoutTicker := cr.timeoutTicker
+	uploadTicker := cr.uploadTicker
+	dbSyncTicker := cr.dbSyncTicker
+	stopChan := cr.stopChan
+	cr.mu.RUnlock()
 
 	for {
 		select {
-		case <-cr.stopChan:
+		case <-stopChan:
 			return
-		case <-cr.timeoutTicker.C:
+		case <-timeoutTicker.C:
 			cr.buffer.CheckTimeout()
-		case <-cr.uploadTicker.C:
+		case <-uploadTicker.C:
 			cr.uploader.ProcessBatch()
-		case <-cr.dbSyncTicker.C:
+		case <-dbSyncTicker.C:
 			cr.syncer.SyncToDatabase()
 		}
 	}
+}
+
+func (cr *CommRecorder) canRecord() bool {
+	if cr == nil {
+		return false
+	}
+	cr.mu.RLock()
+	defer cr.mu.RUnlock()
+	return cr.running && cr.config != nil && cr.config.Enabled
 }
 
 // RecordPacket 录制音频包（在转发前调用）
@@ -120,7 +136,7 @@ func (cr *CommRecorder) RecordPacket(
 	userID *uint,
 	audioData []byte,
 ) {
-	if cr == nil || !cr.running || !cr.config.Enabled {
+	if !cr.canRecord() {
 		return
 	}
 
@@ -134,20 +150,30 @@ func (cr *CommRecorder) Stop() {
 		return
 	}
 
+	cr.mu.Lock()
+	if !cr.running {
+		cr.mu.Unlock()
+		return
+	}
 	cr.running = false
+	timeoutTicker := cr.timeoutTicker
+	uploadTicker := cr.uploadTicker
+	dbSyncTicker := cr.dbSyncTicker
+	stopChan := cr.stopChan
+	cr.mu.Unlock()
 
 	// 停止定时器
-	if cr.timeoutTicker != nil {
-		cr.timeoutTicker.Stop()
+	if timeoutTicker != nil {
+		timeoutTicker.Stop()
 	}
-	if cr.uploadTicker != nil {
-		cr.uploadTicker.Stop()
+	if uploadTicker != nil {
+		uploadTicker.Stop()
 	}
-	if cr.dbSyncTicker != nil {
-		cr.dbSyncTicker.Stop()
+	if dbSyncTicker != nil {
+		dbSyncTicker.Stop()
 	}
 
-	close(cr.stopChan)
+	close(stopChan)
 
 	// 处理剩余数据
 	cr.buffer.CheckTimeout()
@@ -160,20 +186,21 @@ func (cr *CommRecorder) Stop() {
 
 // UpdateConfig 更新配置
 func (cr *CommRecorder) UpdateConfig(config *CommSettingsConfig) {
-	if cr == nil {
+	if cr == nil || config == nil {
 		return
 	}
 
 	cr.mu.Lock()
-	defer cr.mu.Unlock()
-
 	cr.config = config
+	uploadTicker := cr.uploadTicker
+	cr.mu.Unlock()
+
 	cr.buffer.UpdateConfig(config)
 	cr.uploader.UpdateConfig(config)
 
 	// 更新上传间隔
-	if cr.uploadTicker != nil && config.BatchUploadSec > 0 {
-		cr.uploadTicker.Reset(time.Duration(config.BatchUploadSec) * time.Second)
+	if uploadTicker != nil && config.BatchUploadSec > 0 {
+		uploadTicker.Reset(time.Duration(config.BatchUploadSec) * time.Second)
 	}
 
 	log.Printf("[COMM_RECORDER] 配置已更新 (启用: %v, 最小阈值: %dms, 最大时长: %ds)",
@@ -185,9 +212,14 @@ func (cr *CommRecorder) GetStats() map[string]interface{} {
 	if cr == nil {
 		return nil
 	}
+	cr.mu.RLock()
+	enabled := cr.config != nil && cr.config.Enabled
+	running := cr.running
+	cr.mu.RUnlock()
 
 	return map[string]interface{}{
-		"enabled":           cr.config.Enabled,
+		"enabled":           enabled,
+		"running":           running,
 		"active_sessions":   cr.buffer.GetActiveSessionCount(),
 		"pending_uploads":   cr.uploader.GetPendingCount(),
 		"pending_db_writes": cr.syncer.GetPendingCount(),

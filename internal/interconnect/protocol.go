@@ -28,25 +28,26 @@ const (
 )
 
 const (
-	SubtypeNodeEnroll          byte = 0x01
-	SubtypeNodeAuth            byte = 0x03
-	SubtypeNodeHeartbeat       byte = 0x05
-	SubtypeNodeDataBind        byte = 0x06
-	SubtypeNodeCredential      byte = 0x07
-	SubtypeRouteSnapshotBegin  byte = 0x10
-	SubtypeRouteSnapshotChunk  byte = 0x11
-	SubtypeRouteSnapshotCommit byte = 0x12
-	SubtypeRouteDelta          byte = 0x13
-	SubtypeRouteAck            byte = 0x14
-	SubtypeRouteResyncRequest  byte = 0x15
-	SubtypeDeviceAuth          byte = 0x20
-	SubtypeDeviceSessionRenew  byte = 0x21
-	SubtypeDeviceSessionReport byte = 0x22
-	SubtypeDeviceSessionRevoke byte = 0x23
-	SubtypeDeviceConfig        byte = 0x24
-	SubtypeSpeakerLease        byte = 0x28
-	SubtypeRelayUpstream       byte = 0x30
-	SubtypeRelayDownstream     byte = 0x31
+	SubtypeNodeEnroll           byte = 0x01
+	SubtypeNodeAuth             byte = 0x03
+	SubtypeNodeHeartbeat        byte = 0x05
+	SubtypeNodeDataBind         byte = 0x06
+	SubtypeNodeCredential       byte = 0x07
+	SubtypeRouteSnapshotBegin   byte = 0x10
+	SubtypeRouteSnapshotChunk   byte = 0x11
+	SubtypeRouteSnapshotCommit  byte = 0x12
+	SubtypeRouteDelta           byte = 0x13
+	SubtypeRouteAck             byte = 0x14
+	SubtypeRouteResyncRequest   byte = 0x15
+	SubtypeDeviceAuth           byte = 0x20
+	SubtypeDeviceSessionRenew   byte = 0x21
+	SubtypeDeviceSessionReport  byte = 0x22
+	SubtypeDeviceSessionRevoke  byte = 0x23
+	SubtypeDeviceConfig         byte = 0x24
+	SubtypeDeviceSessionConfirm byte = 0x25
+	SubtypeSpeakerLease         byte = 0x28
+	SubtypeRelayUpstream        byte = 0x30
+	SubtypeRelayDownstream      byte = 0x31
 )
 
 const (
@@ -67,11 +68,13 @@ const (
 	NodeFeatureSpeakerLease
 	NodeFeatureRuntimeMetrics
 	NodeFeatureCredentialRotation
+	NodeFeatureSessionReconfirm
 )
 
 const (
 	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
-		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation
+		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation |
+		NodeFeatureSessionReconfirm
 	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
 )
 
@@ -81,7 +84,7 @@ func IsKnownSubtype(subtype byte) bool {
 		SubtypeRouteSnapshotBegin, SubtypeRouteSnapshotChunk, SubtypeRouteSnapshotCommit,
 		SubtypeRouteDelta, SubtypeRouteAck, SubtypeRouteResyncRequest,
 		SubtypeDeviceAuth, SubtypeDeviceSessionRenew, SubtypeDeviceSessionReport,
-		SubtypeDeviceSessionRevoke, SubtypeDeviceConfig, SubtypeSpeakerLease,
+		SubtypeDeviceSessionRevoke, SubtypeDeviceConfig, SubtypeDeviceSessionConfirm, SubtypeSpeakerLease,
 		SubtypeRelayUpstream, SubtypeRelayDownstream:
 		return true
 	default:

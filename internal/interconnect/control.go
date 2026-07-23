@@ -592,7 +592,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 				session.resourceProtection().recordExpiredDrop()
 				continue
 			}
-			if env.Subtype == SubtypeDeviceAuth && !session.resourceProtection().allowDeviceAuth(now) {
+			if (env.Subtype == SubtypeDeviceAuth || env.Subtype == SubtypeDeviceSessionConfirm) && !session.resourceProtection().allowDeviceAuth(now) {
 				session.ControlMetrics.AddDrop()
 				continue
 			}

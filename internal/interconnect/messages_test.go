@@ -24,6 +24,25 @@ func TestNodeCredentialControlValidation(t *testing.T) {
 	}
 }
 
+func TestDeviceSessionConfirmValidationRejectsDuplicateIdentity(t *testing.T) {
+	base := DeviceSessionConfirmItem{SessionID: 10, SessionEpoch: 2, ControlSessionID: 30, DeviceID: 40, OwnerID: 50, SSID: 1}
+	request := DeviceSessionConfirmRequest{RequestID: 1, Sessions: []DeviceSessionConfirmItem{base}}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("valid session confirmation rejected: %v", err)
+	}
+	duplicate := base
+	duplicate.SessionID = 11
+	request.Sessions = append(request.Sessions, duplicate)
+	if err := request.Validate(); err == nil {
+		t.Fatal("duplicate device confirmation identity was accepted")
+	}
+	grant := &DeviceGrant{SessionID: 60, SessionEpoch: 3, DeviceID: 40, OwnerID: 50, SSID: 1, ExpiresAtMillis: time.Now().Add(time.Minute).UnixMilli()}
+	response := DeviceSessionConfirmResponse{RequestID: 1, Results: []DeviceSessionConfirmResult{{SessionID: 10, SessionEpoch: 2, Success: true, Grant: grant}}}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("valid session confirmation response rejected: %v", err)
+	}
+}
+
 func TestDeviceConfigControlValidation(t *testing.T) {
 	base := DeviceConfigControl{SessionID: 11, SessionEpoch: 2, DeviceID: 7}
 	tests := []struct {

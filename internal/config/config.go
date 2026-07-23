@@ -54,6 +54,7 @@ type InterconnectConfig struct {
 	AllowSelfSigned                bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
 	RegistrationTokenTTL           int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
 	CredentialRotationGraceSeconds int    `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
+	SessionRecoveryWindowSeconds   int    `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
 	// NodeTokens is a development/bootstrap map. Production deployments should
 	// replace it with hashed, rotatable credentials managed by the admin API.
 	NodeTokens map[string]string          `yaml:"NodeTokens" json:"node_tokens"`
@@ -284,6 +285,15 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.Interconnect.CredentialRotationGraceSeconds > 60*60 {
 		c.Interconnect.CredentialRotationGraceSeconds = 60 * 60
+	}
+	if c.Interconnect.SessionRecoveryWindowSeconds <= 0 {
+		c.Interconnect.SessionRecoveryWindowSeconds = 3 * 60
+	}
+	if c.Interconnect.SessionRecoveryWindowSeconds < 30 {
+		c.Interconnect.SessionRecoveryWindowSeconds = 30
+	}
+	if c.Interconnect.SessionRecoveryWindowSeconds > 10*60 {
+		c.Interconnect.SessionRecoveryWindowSeconds = 10 * 60
 	}
 	resources := &c.Interconnect.Resources
 	if resources.MaxNodes == 0 {

@@ -101,6 +101,17 @@ func (r *DeviceRepository) GetDeviceByID(id int) (*Device, error) {
 	return &device, nil
 }
 
+// ListDevicesByIDsWithOwner loads one bounded confirmation batch and its
+// owners without issuing one query per device.
+func (r *DeviceRepository) ListDevicesByIDsWithOwner(ids []int) ([]*Device, error) {
+	if len(ids) == 0 {
+		return []*Device{}, nil
+	}
+	var devices []*Device
+	err := r.db.Preload("Owner").Where("id IN ?", ids).Find(&devices).Error
+	return devices, err
+}
+
 // GetDeviceByOwnerSSID 根据 owner_id + ssid 查询设备（设备唯一性）
 func (r *DeviceRepository) GetDeviceByOwnerSSID(ownerID int, ssid uint8) (*Device, error) {
 	var device Device
@@ -225,12 +236,44 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 	return count, err
 }
 
-// MarkAllDevicesOffline 在服务冷启动时统一清理历史在线状态。
-// 设计目标：服务异常退出后，避免数据库残留的 is_online=true 被新进程继续当作在线设备。
+// PrepareDevicesForStartup marks every device offline. When interconnect is
+// enabled, remote ownership is retained briefly so a still-running edge can
+// prove its previous node/control-session assignment after a centre restart.
+func (r *DeviceRepository) PrepareDevicesForStartup(preserveRemoteEntries bool) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Device{}).Where("is_online = ?", true).Update("is_online", false).Error; err != nil {
+			return err
+		}
+		query := tx.Model(&Device{})
+		if preserveRemoteEntries {
+			query = query.Where("current_entry_node_id = ?", "center")
+		} else {
+			query = query.Where("current_entry_node_id <> ? OR current_entry_session_id <> ?", "", 0)
+		}
+		return query.Updates(map[string]interface{}{"current_entry_node_id": "", "current_entry_session_id": 0}).Error
+	})
+}
+
+// MarkAllDevicesOffline preserves the historical single-node behaviour.
 func (r *DeviceRepository) MarkAllDevicesOffline() error {
-	return r.db.Model(&Device{}).
-		Where("is_online = ?", true).
-		Updates(map[string]interface{}{"is_online": false, "current_entry_node_id": "", "current_entry_session_id": 0}).Error
+	return r.PrepareDevicesForStartup(false)
+}
+
+type DeviceEntrySession struct {
+	NodeID    string `gorm:"column:current_entry_node_id"`
+	SessionID uint64 `gorm:"column:current_entry_session_id"`
+}
+
+// ListOfflineRemoteEntrySessions captures only ownership left by the previous
+// centre process. The control listener is started after this query, so later
+// disconnects cannot be swept by the startup recovery timer.
+func (r *DeviceRepository) ListOfflineRemoteEntrySessions() ([]DeviceEntrySession, error) {
+	var sessions []DeviceEntrySession
+	err := r.db.Model(&Device{}).
+		Select("DISTINCT current_entry_node_id, current_entry_session_id").
+		Where("is_online = ? AND current_entry_node_id <> ? AND current_entry_session_id <> ?", false, "", 0).
+		Find(&sessions).Error
+	return sessions, err
 }
 
 // UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）

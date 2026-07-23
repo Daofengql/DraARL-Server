@@ -244,12 +244,17 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 	initPublicGroups()
 	initDeviceMACStore(config.Get())
 
-	// 冷启动时先清理数据库残留的在线态，避免异常退出后“幽灵在线”。
+	// 冷启动时先清理数据库残留的在线态。互联模式短时保留远端
+	// ownership，供仍在运行的边缘证明中心重启前的会话归属。
 	deviceRepo := gormdb.NewDeviceRepository()
-	if err := deviceRepo.MarkAllDevicesOffline(); err != nil {
+	preserveRemoteEntries := false
+	if cfg := config.TryGet(); cfg != nil {
+		preserveRemoteEntries = cfg.Interconnect.Enabled
+	}
+	if err := deviceRepo.PrepareDevicesForStartup(preserveRemoteEntries); err != nil {
 		log.Printf("[UDP] Reset persisted device online flags failed: %v", err)
 	} else {
-		log.Printf("[UDP] Reset persisted device online flags on startup")
+		log.Printf("[UDP] Reset persisted device online flags on startup (preserve_remote_entries=%t)", preserveRemoteEntries)
 	}
 
 	// ==========================================

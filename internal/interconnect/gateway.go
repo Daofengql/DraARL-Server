@@ -16,6 +16,7 @@ import (
 
 type DeviceAuthHandler func(session *NodeSession, request DeviceAuthRequest) (DeviceAuthResponse, error)
 type DeviceActivationHandler func(session *NodeSession, grant *DeviceGrant) error
+type DeviceSessionConfirmHandler func(session *NodeSession, sessions []DeviceSessionConfirmItem) ([]DeviceSessionConfirmResult, error)
 type DeviceConfigHandler func(deviceID int, kind string, data []byte) ([][]byte, error)
 
 const defaultDeviceGrantTTL = 2 * time.Minute
@@ -26,6 +27,7 @@ type CenterGateway struct {
 	data               *NodeDatagramBridge
 	auth               DeviceAuthHandler
 	activate           DeviceActivationHandler
+	confirm            DeviceSessionConfirmHandler
 	mu                 sync.RWMutex
 	ownershipMu        sync.Mutex
 	deviceSessions     map[uint64]deviceSessionOwner
@@ -150,6 +152,12 @@ func (g *CenterGateway) SetDeviceRevocationHandler(handler func(nodeID string, c
 func (g *CenterGateway) SetDeviceConfigHandler(handler DeviceConfigHandler) {
 	g.mu.Lock()
 	g.configHandler = handler
+	g.mu.Unlock()
+}
+
+func (g *CenterGateway) SetDeviceSessionConfirmHandler(handler DeviceSessionConfirmHandler) {
+	g.mu.Lock()
+	g.confirm = handler
 	g.mu.Unlock()
 }
 
@@ -307,6 +315,17 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		if g.server != nil {
 			_ = g.server.SendEnvelope(session.NodeID, reply)
 		}
+	case SubtypeDeviceSessionConfirm:
+		var request DeviceSessionConfirmRequest
+		if DecodeJSON(env.Payload, &request) != nil || request.Validate() != nil {
+			return
+		}
+		response := g.confirmDeviceSessions(session, request)
+		payload, _ := EncodeJSON(response)
+		reply := NewEnvelope(SubtypeDeviceSessionConfirm, "center", 0, g.cluster.NextMessageID(), payload)
+		reply.ClusterEpoch = g.cluster.Epoch()
+		reply.Flags = FlagControl | FlagAck | FlagCritical
+		_ = session.SendEnvelope(reply)
 	case SubtypeDeviceConfig:
 		var message DeviceConfigControl
 		if DecodeJSON(env.Payload, &message) != nil || message.Validate() != nil {
@@ -864,6 +883,15 @@ func deviceOwnerIdentity(ownerID int, ssid byte) string {
 }
 
 func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *DeviceGrant) error {
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	return g.activateDeviceSessionLocked(session, grant)
+}
+
+// activateDeviceSessionLocked requires ownershipMu. Keeping confirmation and
+// activation under the same lock prevents a normal authentication from moving
+// the device between the database ownership check and the replacement grant.
+func (g *CenterGateway) activateDeviceSessionLocked(session *NodeSession, grant *DeviceGrant) error {
 	if session == nil || grant == nil || g.cluster == nil {
 		return errors.New("device session activation is incomplete")
 	}
@@ -871,8 +899,6 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 	if identity == "" {
 		return errors.New("device identity is incomplete")
 	}
-	g.ownershipMu.Lock()
-	defer g.ownershipMu.Unlock()
 	g.mu.RLock()
 	oldSessionID := g.activeDevices[identity]
 	oldOwner, hadOld := g.deviceSessions[oldSessionID]
@@ -953,6 +979,56 @@ func (g *CenterGateway) activateDeviceSession(session *NodeSession, grant *Devic
 		log.Printf("[INTERCONNECT] publish device route failed: node=%s session=%d err=%v", session.NodeID, grant.SessionID, err)
 	}
 	return nil
+}
+
+func (g *CenterGateway) confirmDeviceSessions(session *NodeSession, request DeviceSessionConfirmRequest) DeviceSessionConfirmResponse {
+	response := DeviceSessionConfirmResponse{RequestID: request.RequestID, Results: make([]DeviceSessionConfirmResult, 0, len(request.Sessions))}
+	if session == nil || request.Validate() != nil {
+		return response
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+
+	g.mu.RLock()
+	handler := g.confirm
+	g.mu.RUnlock()
+	var candidates []DeviceSessionConfirmResult
+	var err error
+	if handler != nil {
+		candidates, err = handler(session, request.Sessions)
+	} else {
+		err = errors.New("device session confirmation is unavailable")
+	}
+	candidateBySession := make(map[uint64]DeviceSessionConfirmResult, len(candidates))
+	for _, candidate := range candidates {
+		if _, exists := candidateBySession[candidate.SessionID]; !exists {
+			candidateBySession[candidate.SessionID] = candidate
+		}
+	}
+	for _, item := range request.Sessions {
+		result := DeviceSessionConfirmResult{SessionID: item.SessionID, SessionEpoch: item.SessionEpoch}
+		candidate, ok := candidateBySession[item.SessionID]
+		if err != nil || !ok || !candidate.Success || candidate.SessionEpoch != item.SessionEpoch || candidate.Grant == nil {
+			result.Error = "session_reconfirm_rejected"
+			response.Results = append(response.Results, result)
+			continue
+		}
+		grant := *candidate.Grant
+		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID || deviceGrantIdentity(&grant) == "" {
+			result.Error = "session_identity_mismatch"
+			response.Results = append(response.Results, result)
+			continue
+		}
+		if err := g.activateDeviceSessionLocked(session, &grant); err != nil {
+			result.Error = "session_activation_failed"
+			response.Results = append(response.Results, result)
+			continue
+		}
+		result.Success = true
+		result.Grant = &grant
+		response.Results = append(response.Results, result)
+	}
+	return response
 }
 
 func (g *CenterGateway) handleDeviceSessionReport(session *NodeSession, report DeviceSessionReport) bool {
@@ -1380,6 +1456,7 @@ type EdgeGateway struct {
 	pendingIdentity   map[string]uint64
 	pendingRenewals   map[uint64]pendingDeviceRenewal
 	renewingSessions  map[uint64]uint64
+	pendingConfirms   map[uint64]chan DeviceSessionConfirmResponse
 	pendingConfigUp   map[uint64]*pendingDeviceConfigUp
 	configDownResults map[uint64]cachedDeviceConfigResult
 	snapshotAssembler *SnapshotAssembler
@@ -1402,30 +1479,38 @@ type EdgeGateway struct {
 }
 
 type edgeControlLink struct {
-	client    *NodeClient
-	peer      *NodeDatagramPeer
-	ready     atomic.Bool
-	readyOnce sync.Once
-	readyCh   chan struct{}
+	client     *NodeClient
+	peer       *NodeDatagramPeer
+	ready      atomic.Bool
+	recovering atomic.Bool
+	confirming atomic.Bool
+	readyOnce  sync.Once
+	readyCh    chan struct{}
 }
 
 func newEdgeControlLink(client *NodeClient, peer *NodeDatagramPeer) *edgeControlLink {
-	return &edgeControlLink{client: client, peer: peer, readyCh: make(chan struct{})}
+	link := &edgeControlLink{client: client, peer: peer, readyCh: make(chan struct{})}
+	link.recovering.Store(true)
+	link.confirming.Store(true)
+	return link
 }
 
 func (l *edgeControlLink) markReady() {
 	if l == nil {
 		return
 	}
+	l.confirming.Store(false)
 	l.ready.Store(true)
+	l.recovering.Store(false)
 	l.readyOnce.Do(func() { close(l.readyCh) })
 }
 
 type edgeDeviceSession struct {
-	Grant    DeviceGrant
-	Addr     *net.UDPAddr
-	RealAddr *net.UDPAddr
-	LastSeen time.Time
+	Grant            DeviceGrant
+	ControlSessionID uint64
+	Addr             *net.UDPAddr
+	RealAddr         *net.UDPAddr
+	LastSeen         time.Time
 }
 type pendingDeviceAuth struct {
 	addr        *net.UDPAddr
@@ -1493,6 +1578,7 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 	gateway := &EdgeGateway{
 		listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64),
 		pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64),
+		pendingConfirms: make(map[uint64]chan DeviceSessionConfirmResponse),
 		pendingConfigUp: make(map[uint64]*pendingDeviceConfigUp), configDownResults: make(map[uint64]cachedDeviceConfigResult),
 		speakerDomains: make(map[uint64]*edgeSpeakerState),
 		closed:         make(chan struct{}), sessionTimeout: 20 * time.Second, grantRenewBefore: 30 * time.Second, localGrace: 15 * time.Second, downstreamMaxAge: 200 * time.Millisecond, downstreamWake: make(chan struct{}, 1),
@@ -1577,6 +1663,7 @@ func (g *EdgeGateway) clearPendingControlRequests() {
 	clear(g.pendingIdentity)
 	clear(g.pendingRenewals)
 	clear(g.renewingSessions)
+	clear(g.pendingConfirms)
 	clear(g.pendingConfigUp)
 	clear(g.configDownResults)
 	g.mu.Unlock()
@@ -1602,6 +1689,11 @@ func (g *EdgeGateway) allowExistingLocal(now time.Time) bool {
 	}
 	disconnectedAt := g.disconnectedAt.Load()
 	return disconnectedAt > 0 && g.localGrace > 0 && now.Sub(time.UnixMilli(disconnectedAt)) <= g.localGrace
+}
+
+func (g *EdgeGateway) preserveSessionsDuringRecovery() bool {
+	link := g.control.Load()
+	return link != nil && !link.ready.Load() && link.recovering.Load()
 }
 
 func (g *EdgeGateway) markControlReady(client *NodeClient) bool {
@@ -2089,12 +2181,12 @@ func (g *EdgeGateway) expireDeviceSessions(now time.Time) int {
 	if g.sessionTimeout > 0 {
 		for sessionID, session := range g.sessions {
 			reason := ""
-			if !g.allowExistingLocal(now) {
-				reason = "control_unavailable"
-			} else if now.Sub(session.LastSeen) > g.sessionTimeout {
+			if now.Sub(session.LastSeen) > g.sessionTimeout {
 				reason = "device_timeout"
 			} else if session.Grant.ExpiresAtMillis > 0 && now.UnixMilli() >= session.Grant.ExpiresAtMillis {
 				reason = "grant_expired"
+			} else if !g.allowExistingLocal(now) && !g.preserveSessionsDuringRecovery() {
+				reason = "control_unavailable"
 			}
 			if reason != "" {
 				reports = append(reports, g.removeEdgeSessionLocked(sessionID, reason, now))
@@ -2341,6 +2433,133 @@ func (g *EdgeGateway) sendDeviceSessionReport(report DeviceSessionReport) {
 	env.Flags = FlagControl
 	_ = link.client.SendEnvelope(env)
 }
+
+func (g *EdgeGateway) confirmActiveSessions(link *edgeControlLink) error {
+	if link == nil || link.client == nil || link.client.Session == nil {
+		return errors.New("edge control is unavailable for session confirmation")
+	}
+	defer link.confirming.Store(false)
+	items := g.sessionConfirmSnapshot(time.Now())
+	if len(items) == 0 {
+		link.recovering.Store(false)
+		return nil
+	}
+	if link.client.Session.Features&NodeFeatureSessionReconfirm == 0 {
+		g.dropUnconfirmedSessions(items, "session_reconfirm_unsupported")
+		link.recovering.Store(false)
+		return nil
+	}
+	for offset := 0; offset < len(items); offset += MaxDeviceSessionConfirmBatch {
+		end := offset + MaxDeviceSessionConfirmBatch
+		if end > len(items) {
+			end = len(items)
+		}
+		request := DeviceSessionConfirmRequest{RequestID: g.nextRequest.Add(1), Sessions: append([]DeviceSessionConfirmItem(nil), items[offset:end]...)}
+		responseCh := make(chan DeviceSessionConfirmResponse, 1)
+		g.mu.Lock()
+		g.pendingConfirms[request.RequestID] = responseCh
+		g.mu.Unlock()
+		payload, err := EncodeJSON(request)
+		if err == nil {
+			env := NewEnvelope(SubtypeDeviceSessionConfirm, link.client.Session.NodeID, link.client.Session.SessionID, request.RequestID, payload)
+			env.Flags = FlagControl | FlagAck | FlagCritical
+			err = link.client.SendEnvelope(env)
+		}
+		if err == nil {
+			select {
+			case response := <-responseCh:
+				err = g.applySessionConfirmResponse(link, request, response, time.Now())
+			case <-link.client.Done():
+				err = errors.New("edge control closed during session confirmation")
+			case <-g.closed:
+				err = errors.New("edge gateway closed during session confirmation")
+			case <-time.After(edgeAuthRequestTimeout):
+				err = errors.New("device session confirmation timed out")
+			}
+		}
+		g.mu.Lock()
+		delete(g.pendingConfirms, request.RequestID)
+		g.mu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *EdgeGateway) sessionConfirmSnapshot(now time.Time) []DeviceSessionConfirmItem {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	items := make([]DeviceSessionConfirmItem, 0, len(g.sessions))
+	for sessionID, session := range g.sessions {
+		valid := session != nil && session.ControlSessionID != 0 && session.Grant.DeviceID > 0 && session.Grant.OwnerID > 0 && session.Grant.SSID != 0 &&
+			session.Grant.SessionEpoch != 0 && now.Sub(session.LastSeen) <= g.sessionTimeout &&
+			session.Grant.ExpiresAtMillis > now.UnixMilli()
+		if !valid {
+			g.removeEdgeSessionLocked(sessionID, "session_reconfirm_ineligible", now)
+			continue
+		}
+		items = append(items, DeviceSessionConfirmItem{
+			SessionID: sessionID, SessionEpoch: session.Grant.SessionEpoch, ControlSessionID: session.ControlSessionID,
+			DeviceID: session.Grant.DeviceID, OwnerID: session.Grant.OwnerID, SSID: session.Grant.SSID,
+		})
+	}
+	return items
+}
+
+func (g *EdgeGateway) dropUnconfirmedSessions(items []DeviceSessionConfirmItem, reason string) {
+	g.mu.Lock()
+	for _, item := range items {
+		session := g.sessions[item.SessionID]
+		if session != nil && session.Grant.SessionEpoch == item.SessionEpoch && session.ControlSessionID == item.ControlSessionID {
+			g.removeEdgeSessionLocked(item.SessionID, reason, time.Now())
+		}
+	}
+	g.mu.Unlock()
+}
+
+func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request DeviceSessionConfirmRequest, response DeviceSessionConfirmResponse, now time.Time) error {
+	if link == nil || response.RequestID != request.RequestID || response.Validate() != nil {
+		return errors.New("invalid device session confirmation response")
+	}
+	results := make(map[uint64]DeviceSessionConfirmResult, len(response.Results))
+	for _, result := range response.Results {
+		results[result.SessionID] = result
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, item := range request.Sessions {
+		session := g.sessions[item.SessionID]
+		if session == nil || session.Grant.SessionEpoch != item.SessionEpoch || session.ControlSessionID != item.ControlSessionID {
+			continue
+		}
+		result, ok := results[item.SessionID]
+		if !ok || !result.Success || result.SessionEpoch != item.SessionEpoch || result.Grant == nil {
+			g.removeEdgeSessionLocked(item.SessionID, "session_reconfirm_rejected", now)
+			continue
+		}
+		grant := *result.Grant
+		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID || grant.SessionID == 0 || grant.SessionEpoch == 0 || grant.ExpiresAtMillis <= now.UnixMilli() {
+			return errors.New("device session confirmation changed the device identity")
+		}
+		if collision := g.sessions[grant.SessionID]; collision != nil && collision != session {
+			return errors.New("device session confirmation reused an active session ID")
+		}
+		oldKey := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
+		delete(g.sessions, item.SessionID)
+		g.removeSpeakerSessionLocked(item.SessionID, item.SessionEpoch)
+		g.removePendingDeviceConfigsLocked(item.SessionID)
+		session.Grant = grant
+		session.ControlSessionID = link.client.Session.SessionID
+		g.sessions[grant.SessionID] = session
+		if g.byIdentity[oldKey] == item.SessionID {
+			delete(g.byIdentity, oldKey)
+		}
+		g.byIdentity[fmt.Sprintf("%s-%d", grant.Username, grant.SSID)] = grant.SessionID
+	}
+	return nil
+}
+
 func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, remoteAddr, realAddr *net.UDPAddr) {
 	link := g.currentControl(true)
 	if link == nil {
@@ -2432,6 +2651,20 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 			return
 		}
 		g.finishSessionRenewal(response, time.Now())
+	case SubtypeDeviceSessionConfirm:
+		var response DeviceSessionConfirmResponse
+		if DecodeJSON(env.Payload, &response) != nil || response.Validate() != nil {
+			return
+		}
+		g.mu.RLock()
+		pending := g.pendingConfirms[response.RequestID]
+		g.mu.RUnlock()
+		if pending != nil {
+			select {
+			case pending <- response:
+			default:
+			}
+		}
 	case SubtypeDeviceConfig:
 		var message DeviceConfigControl
 		if DecodeJSON(env.Payload, &message) != nil || message.Validate() != nil {
@@ -2467,8 +2700,10 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 			g.requestResync(err.Error())
 			return
 		}
-		g.applyRoutes(g.projection.Snapshot())
-		g.drainDownstream(time.Now())
+		if !link.confirming.Load() {
+			g.applyRoutes(g.projection.Snapshot())
+			g.drainDownstream(time.Now())
+		}
 		g.sendRouteAck(delta.NewVersion, "", env.MessageID)
 	case SubtypeRouteSnapshotBegin:
 		var begin SnapshotBegin
@@ -2500,7 +2735,9 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 			p := g.projection.Snapshot()
 			if p.ClusterEpoch == env.ClusterEpoch && p.Version == env.ProjectionVersion {
 				g.sendRouteAck(p.Version, "", env.MessageID)
-				g.markControlReady(client)
+				if !link.confirming.Load() {
+					g.markControlReady(client)
+				}
 			} else {
 				g.requestResync("duplicate snapshot commit does not match current projection")
 			}
@@ -2519,10 +2756,14 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 			return
 		}
 		_ = g.projection.Replace(p)
-		g.applyRoutes(p)
-		g.drainDownstream(time.Now())
+		if !link.confirming.Load() {
+			g.applyRoutes(p)
+			g.drainDownstream(time.Now())
+		}
 		g.sendRouteAck(p.Version, "", env.MessageID)
-		g.markControlReady(client)
+		if !link.confirming.Load() {
+			g.markControlReady(client)
+		}
 	case SubtypeRelayDownstream:
 		if !link.ready.Load() {
 			return
@@ -2604,7 +2845,11 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	if grant.SessionID == 0 {
 		return
 	}
-	session := &edgeDeviceSession{Grant: grant, Addr: cloneUDPAddr(pending.addr), RealAddr: cloneUDPAddr(pending.realAddr), LastSeen: time.Now()}
+	controlSessionID := uint64(0)
+	if link := g.currentControl(false); link != nil && link.client != nil && link.client.Session != nil {
+		controlSessionID = link.client.Session.SessionID
+	}
+	session := &edgeDeviceSession{Grant: grant, ControlSessionID: controlSessionID, Addr: cloneUDPAddr(pending.addr), RealAddr: cloneUDPAddr(pending.realAddr), LastSeen: time.Now()}
 	key := fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
 	g.mu.Lock()
 	if existing := g.sessions[grant.SessionID]; existing != nil {
@@ -2615,6 +2860,7 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 		existing.Addr = session.Addr
 		existing.RealAddr = session.RealAddr
 		existing.LastSeen = session.LastSeen
+		existing.ControlSessionID = session.ControlSessionID
 	} else {
 		if previousID := g.byIdentity[key]; previousID != 0 && previousID != grant.SessionID {
 			if previous := g.sessions[previousID]; previous != nil {

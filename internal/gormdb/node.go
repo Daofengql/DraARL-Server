@@ -217,6 +217,23 @@ func (r *ServerRepository) ClearCurrentEntryForSession(nodeID string, sessionID 
 	return r.clearCurrentEntries("current_entry_node_id = ? AND current_entry_session_id = ?", []interface{}{nodeID, sessionID})
 }
 
+// MarkCurrentEntriesOfflineForSession keeps the old ownership proof for a
+// bounded reconnect window while removing the devices from online views.
+func (r *ServerRepository) MarkCurrentEntriesOfflineForSession(nodeID string, sessionID uint64) ([]*Device, error) {
+	var affected []*Device
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		where := "current_entry_node_id = ? AND current_entry_session_id = ?"
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(where, nodeID, sessionID).Find(&affected).Error; err != nil {
+			return err
+		}
+		if len(affected) == 0 {
+			return nil
+		}
+		return tx.Model(&Device{}).Where(where, nodeID, sessionID).Update("is_online", false).Error
+	})
+	return affected, err
+}
+
 func (r *ServerRepository) clearCurrentEntries(where string, args []interface{}) ([]*Device, error) {
 	var affected []*Device
 	err := r.db.Transaction(func(tx *gorm.DB) error {

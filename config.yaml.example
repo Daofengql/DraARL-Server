@@ -28,6 +28,7 @@ Interconnect:
     AllowSelfSigned: false       # 仅本地开发/测试
     RegistrationTokenTTL: 86400
     CredentialRotationGraceSeconds: 600 # 在线轮换后旧凭据可重连的短时宽限，最大 3600 秒
+    SessionRecoveryWindowSeconds: 180   # 中心重启/节点重连时保留旧设备归属的恢复窗口，30-600 秒
     NodeTokens: {}               # 开发引导配置；生产使用后台签发凭据
     Resources:
         MaxNodes: 256

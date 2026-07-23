@@ -104,6 +104,9 @@ func TestInterconnectResourceDefaults(t *testing.T) {
 	if cfg.Interconnect.CredentialRotationGraceSeconds != 600 {
 		t.Fatalf("credential rotation grace=%d", cfg.Interconnect.CredentialRotationGraceSeconds)
 	}
+	if cfg.Interconnect.SessionRecoveryWindowSeconds != 180 {
+		t.Fatalf("session recovery window=%d", cfg.Interconnect.SessionRecoveryWindowSeconds)
+	}
 }
 
 func containsOrigin(origins []string, target string) bool {

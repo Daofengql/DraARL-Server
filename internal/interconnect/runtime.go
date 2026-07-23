@@ -37,6 +37,7 @@ type CenterRuntimeConfig struct {
 	Authenticate     func(nodeID, token string) (NodeAuthentication, error)
 	Auth             DeviceAuthHandler
 	Activate         DeviceActivationHandler
+	Confirm          DeviceSessionConfirmHandler
 	Config           DeviceConfigHandler
 	OnNodeStatus     func(*NodeSession, *NodeHeartbeat, bool)
 	OnAuthentication func(NodeAuthenticationEvent)
@@ -73,6 +74,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 		return nil, err
 	}
 	gateway.SetDeviceConfigHandler(cfg.Config)
+	gateway.SetDeviceSessionConfirmHandler(cfg.Confirm)
 	status := NewNodeStatusDispatcher(cfg.OnNodeStatus)
 	if status != nil {
 		gateway.onNodeStatus = status.Submit
@@ -351,6 +353,11 @@ func (r *EdgeRuntime) connectOnce(ctx context.Context) (*NodeClient, *edgeContro
 	}
 	if peer != nil {
 		peer.onData = func(env Envelope) { r.Gateway.onEnvelopeFrom(client, env) }
+	}
+	if err := r.Gateway.confirmActiveSessions(link); err != nil {
+		r.Gateway.detachControl(client, time.Now())
+		_ = client.Close()
+		return nil, nil, err
 	}
 	if err := client.Send(ControlMessage{Kind: "node_ready"}); err != nil {
 		r.Gateway.detachControl(client, time.Now())

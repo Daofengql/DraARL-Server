@@ -112,6 +112,87 @@ type DeviceSessionReport struct {
 	ReportedAtMillis int64  `json:"reported_at_ms"`
 }
 
+const MaxDeviceSessionConfirmBatch = 128
+
+type DeviceSessionConfirmItem struct {
+	SessionID        uint64 `json:"session_id"`
+	SessionEpoch     uint64 `json:"session_epoch"`
+	ControlSessionID uint64 `json:"control_session_id"`
+	DeviceID         int    `json:"device_id"`
+	OwnerID          int    `json:"owner_id"`
+	SSID             byte   `json:"ssid"`
+}
+
+type DeviceSessionConfirmRequest struct {
+	RequestID uint64                     `json:"request_id"`
+	Sessions  []DeviceSessionConfirmItem `json:"sessions"`
+}
+
+func (m DeviceSessionConfirmRequest) Validate() error {
+	if m.RequestID == 0 || len(m.Sessions) == 0 || len(m.Sessions) > MaxDeviceSessionConfirmBatch {
+		return errors.New("invalid device session confirmation batch")
+	}
+	seen := make(map[uint64]struct{}, len(m.Sessions))
+	seenDevices := make(map[int]struct{}, len(m.Sessions))
+	seenOwners := make(map[string]struct{}, len(m.Sessions))
+	for _, item := range m.Sessions {
+		if item.SessionID == 0 || item.SessionEpoch == 0 || item.ControlSessionID == 0 || item.DeviceID <= 0 || item.OwnerID <= 0 || item.SSID == 0 {
+			return errors.New("invalid device session confirmation identity")
+		}
+		if _, exists := seen[item.SessionID]; exists {
+			return errors.New("duplicate device session confirmation identity")
+		}
+		seen[item.SessionID] = struct{}{}
+		ownerKey := fmt.Sprintf("%d:%d", item.OwnerID, item.SSID)
+		if _, exists := seenDevices[item.DeviceID]; exists {
+			return errors.New("duplicate device in session confirmation batch")
+		}
+		if _, exists := seenOwners[ownerKey]; exists {
+			return errors.New("duplicate owner identity in session confirmation batch")
+		}
+		seenDevices[item.DeviceID] = struct{}{}
+		seenOwners[ownerKey] = struct{}{}
+	}
+	return nil
+}
+
+type DeviceSessionConfirmResult struct {
+	SessionID    uint64       `json:"session_id"`
+	SessionEpoch uint64       `json:"session_epoch"`
+	Success      bool         `json:"success"`
+	Error        string       `json:"error,omitempty"`
+	Grant        *DeviceGrant `json:"grant,omitempty"`
+}
+
+type DeviceSessionConfirmResponse struct {
+	RequestID uint64                       `json:"request_id"`
+	Results   []DeviceSessionConfirmResult `json:"results"`
+}
+
+func (m DeviceSessionConfirmResponse) Validate() error {
+	if m.RequestID == 0 || len(m.Results) == 0 || len(m.Results) > MaxDeviceSessionConfirmBatch {
+		return errors.New("invalid device session confirmation response")
+	}
+	seen := make(map[uint64]struct{}, len(m.Results))
+	for _, result := range m.Results {
+		if result.SessionID == 0 || result.SessionEpoch == 0 || len(result.Error) > 128 {
+			return errors.New("invalid device session confirmation result")
+		}
+		if _, exists := seen[result.SessionID]; exists {
+			return errors.New("duplicate device session confirmation result")
+		}
+		seen[result.SessionID] = struct{}{}
+		if result.Success {
+			if result.Grant == nil || result.Error != "" || result.Grant.SessionID == 0 || result.Grant.SessionEpoch == 0 || result.Grant.ExpiresAtMillis <= 0 {
+				return errors.New("invalid successful device session confirmation")
+			}
+		} else if result.Grant != nil {
+			return errors.New("failed device session confirmation contains a grant")
+		}
+	}
+	return nil
+}
+
 const (
 	SpeakerLeaseActionClaim   = "claim"
 	SpeakerLeaseActionGrant   = "grant"

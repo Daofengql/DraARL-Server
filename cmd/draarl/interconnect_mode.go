@@ -88,6 +88,10 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	if cfg == nil {
 		return nil, errors.New("center configuration is nil")
 	}
+	recoveryWindow := time.Duration(cfg.Interconnect.SessionRecoveryWindowSeconds) * time.Second
+	if recoveryWindow <= 0 {
+		recoveryWindow = 3 * time.Minute
+	}
 	var tlsCfg *tls.Config
 	if cfg.Interconnect.TLSCertFile != "" || cfg.Interconnect.TLSKeyFile != "" {
 		if cfg.Interconnect.TLSCertFile == "" || cfg.Interconnect.TLSKeyFile == "" {
@@ -145,6 +149,44 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		}
 		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
+	}
+	confirmHandler := func(session *interconnect.NodeSession, items []interconnect.DeviceSessionConfirmItem) ([]interconnect.DeviceSessionConfirmResult, error) {
+		ids := make([]int, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.DeviceID)
+		}
+		devices, err := gormdb.NewDeviceRepository().ListDevicesByIDsWithOwner(ids)
+		if err != nil {
+			return nil, err
+		}
+		byID := make(map[int]*gormdb.Device, len(devices))
+		for _, device := range devices {
+			byID[device.ID] = device
+		}
+		now := time.Now()
+		results := make([]interconnect.DeviceSessionConfirmResult, 0, len(items))
+		for _, item := range items {
+			result := interconnect.DeviceSessionConfirmResult{SessionID: item.SessionID, SessionEpoch: item.SessionEpoch}
+			device := byID[item.DeviceID]
+			valid := device != nil && device.Owner != nil && device.OwnerID == item.OwnerID && byte(device.SSID) == item.SSID &&
+				device.CurrentEntryNodeID == session.NodeID && device.CurrentEntrySessionID == item.ControlSessionID &&
+				device.Owner.Status == 1 && device.Owner.ApprovalStatus == 1
+			if !valid {
+				result.Error = "persisted_ownership_mismatch"
+				results = append(results, result)
+				continue
+			}
+			result.Success = true
+			result.Grant = &interconnect.DeviceGrant{
+				DeviceID: device.ID, OwnerID: device.OwnerID, Username: device.Owner.Name, CallSign: device.Owner.CallSign,
+				SSID: byte(device.SSID), DevModel: byte(device.DevModel), DMRID: uint32(device.DMRID),
+				GroupID: device.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(device.GroupID),
+				DisableSend: device.DisableSend, DisableRecv: device.DisableRecv,
+				ExpiresAtMillis: now.Add(2 * time.Minute).UnixMilli(),
+			}
+			results = append(results, result)
+		}
+		return results, nil
 	}
 	configHandler := func(deviceID int, kind string, data []byte) ([][]byte, error) {
 		switch kind {
@@ -218,11 +260,24 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			if _, err := repo.MarkNodeDisconnected(session.NodeID, session.SessionID, fields); err != nil {
 				stdlog.Printf("persist edge node disconnect failed: node=%s err=%v", session.NodeID, err)
 			}
-			affected, err := repo.ClearCurrentEntryForSession(session.NodeID, session.SessionID)
+			affected, err := repo.MarkCurrentEntriesOfflineForSession(session.NodeID, session.SessionID)
 			if err == nil {
 				for _, device := range affected {
-					udphub.ClearRuntimeDeviceEntryIfSession(device.ID, session.NodeID, session.SessionID)
+					udphub.SyncRuntimeDeviceEntry(device.ID, session.NodeID, device.EntryMode, session.SessionID, false, now)
 				}
+			}
+			if len(affected) > 0 {
+				nodeID, sessionID := session.NodeID, session.SessionID
+				time.AfterFunc(recoveryWindow, func() {
+					stale, clearErr := gormdb.NewServerRepository().ClearCurrentEntryForSession(nodeID, sessionID)
+					if clearErr != nil {
+						stdlog.Printf("clear expired disconnected edge sessions failed: node=%s err=%v", nodeID, clearErr)
+						return
+					}
+					for _, device := range stale {
+						udphub.ClearRuntimeDeviceEntryIfSession(device.ID, nodeID, sessionID)
+					}
+				})
 			}
 		}
 	}
@@ -251,5 +306,30 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		ControlSoftPPSPerNode: r.ControlSoftPPSPerNode, ControlHardPPSPerNode: r.ControlHardPPSPerNode, ControlHardMbpsPerNode: r.ControlHardMbpsPerNode,
 		DeviceAuthPPSPerNode: r.DeviceAuthPPSPerNode, MaxDeviceSessionsPerNode: r.MaxDeviceSessionsPerNode,
 	}
-	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Config: configHandler, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits})
+	startupEntries, err := gormdb.NewDeviceRepository().ListOfflineRemoteEntrySessions()
+	if err != nil {
+		return nil, fmt.Errorf("list edge restart recovery sessions: %w", err)
+	}
+	runtime, err := interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Confirm: confirmHandler, Config: configHandler, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits})
+	if err != nil {
+		return nil, err
+	}
+	time.AfterFunc(recoveryWindow, func() {
+		cleared := 0
+		for _, entry := range startupEntries {
+			stale, clearErr := gormdb.NewServerRepository().ClearCurrentEntryForSession(entry.NodeID, entry.SessionID)
+			if clearErr != nil {
+				stdlog.Printf("clear expired edge restart ownership failed: node=%s session=%d err=%v", entry.NodeID, entry.SessionID, clearErr)
+				continue
+			}
+			for _, device := range stale {
+				udphub.ClearRuntimeDeviceEntryIfSession(device.ID, entry.NodeID, entry.SessionID)
+			}
+			cleared += len(stale)
+		}
+		if cleared > 0 {
+			stdlog.Printf("cleared %d unclaimed edge device entries after restart recovery window", cleared)
+		}
+	})
+	return runtime, nil
 }

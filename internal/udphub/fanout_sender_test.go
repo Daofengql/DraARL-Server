@@ -49,29 +49,35 @@ func TestFanoutSenderPreservesOrderPerAddress(t *testing.T) {
 	sender := newFanoutSender(senderConn, 4, 4096)
 	defer sender.stop()
 
-	const packetCount = 1000
-	for seq := 0; seq < packetCount; seq++ {
-		payload := make([]byte, 4)
-		binary.BigEndian.PutUint32(payload, uint32(seq))
-		if !enqueueTestFrame(sender, payload, receiverAddr) {
-			t.Fatalf("packet %d was not accepted", seq)
-		}
-	}
-
-	if err := receiverConn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatalf("set deadline: %v", err)
-	}
+	const (
+		packetCount = 1000
+		batchSize   = 64
+	)
 	buf := make([]byte, 32)
-	for want := 0; want < packetCount; want++ {
-		n, _, err := receiverConn.ReadFromUDP(buf)
-		if err != nil {
-			t.Fatalf("read packet %d: %v", want, err)
+	for batchStart := 0; batchStart < packetCount; batchStart += batchSize {
+		batchEnd := min(batchStart+batchSize, packetCount)
+		for seq := batchStart; seq < batchEnd; seq++ {
+			payload := make([]byte, 4)
+			binary.BigEndian.PutUint32(payload, uint32(seq))
+			if !enqueueTestFrame(sender, payload, receiverAddr) {
+				t.Fatalf("packet %d was not accepted", seq)
+			}
 		}
-		if n != 4 {
-			t.Fatalf("packet %d length = %d, want 4", want, n)
+
+		if err := receiverConn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("set deadline for batch at packet %d: %v", batchStart, err)
 		}
-		if got := int(binary.BigEndian.Uint32(buf[:4])); got != want {
-			t.Fatalf("packet order mismatch: got %d, want %d", got, want)
+		for want := batchStart; want < batchEnd; want++ {
+			n, _, err := receiverConn.ReadFromUDP(buf)
+			if err != nil {
+				t.Fatalf("read packet %d: %v", want, err)
+			}
+			if n != 4 {
+				t.Fatalf("packet %d length = %d, want 4", want, n)
+			}
+			if got := int(binary.BigEndian.Uint32(buf[:4])); got != want {
+				t.Fatalf("packet order mismatch: got %d, want %d", got, want)
+			}
 		}
 	}
 }

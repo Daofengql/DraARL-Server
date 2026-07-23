@@ -17,6 +17,7 @@ import (
 	"draarl/internal/gormdb"
 	"draarl/internal/interconnect"
 	oplog "draarl/internal/log"
+	"draarl/internal/protocol"
 	"draarl/internal/udphub"
 )
 
@@ -310,7 +311,32 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	if err != nil {
 		return nil, fmt.Errorf("list edge restart recovery sessions: %w", err)
 	}
-	runtime, err := interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Confirm: confirmHandler, Config: configHandler, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits})
+	recordAcceptedRelay := func(relay interconnect.AcceptedRelay) {
+		if len(relay.Payload) == 0 {
+			return
+		}
+		var groupID *uint
+		if relay.GroupID > 0 {
+			value := uint(relay.GroupID)
+			groupID = &value
+		}
+		var ownerID *uint
+		if relay.OwnerID > 0 {
+			value := uint(relay.OwnerID)
+			ownerID = &value
+		}
+		switch relay.Type {
+		case protocol.DraARLTypeOpus16K:
+			udphub.RecordCommPacket(relay.DeviceID, relay.SSID, groupID, ownerID, relay.Payload)
+		case protocol.DraARLTypeTextMessage:
+			udphub.RecordTextMessage(relay.DeviceID, relay.SSID, groupID, ownerID, string(relay.Payload))
+		}
+	}
+	runtime, err := interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{
+		ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode,
+		Auth: authHandler, Activate: activateDevice, Confirm: confirmHandler, Config: configHandler,
+		OnAcceptedRelay: recordAcceptedRelay, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits,
+	})
 	if err != nil {
 		return nil, err
 	}

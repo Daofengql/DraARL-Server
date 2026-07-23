@@ -39,6 +39,7 @@ type CenterRuntimeConfig struct {
 	Activate         DeviceActivationHandler
 	Confirm          DeviceSessionConfirmHandler
 	Config           DeviceConfigHandler
+	OnAcceptedRelay  AcceptedRelayHandler
 	OnNodeStatus     func(*NodeSession, *NodeHeartbeat, bool)
 	OnAuthentication func(NodeAuthenticationEvent)
 	ResourceLimits   ResourceLimits
@@ -75,6 +76,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	}
 	gateway.SetDeviceConfigHandler(cfg.Config)
 	gateway.SetDeviceSessionConfirmHandler(cfg.Confirm)
+	gateway.SetAcceptedRelayHandler(cfg.OnAcceptedRelay)
 	status := NewNodeStatusDispatcher(cfg.OnNodeStatus)
 	if status != nil {
 		gateway.onNodeStatus = status.Submit

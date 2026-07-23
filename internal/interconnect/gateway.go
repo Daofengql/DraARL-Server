@@ -18,6 +18,16 @@ type DeviceAuthHandler func(session *NodeSession, request DeviceAuthRequest) (De
 type DeviceActivationHandler func(session *NodeSession, grant *DeviceGrant) error
 type DeviceSessionConfirmHandler func(session *NodeSession, sessions []DeviceSessionConfirmItem) ([]DeviceSessionConfirmResult, error)
 type DeviceConfigHandler func(deviceID int, kind string, data []byte) ([][]byte, error)
+type AcceptedRelayHandler func(AcceptedRelay)
+
+type AcceptedRelay struct {
+	DeviceID int
+	OwnerID  int
+	SSID     byte
+	GroupID  int
+	Type     byte
+	Payload  []byte
+}
 
 const defaultDeviceGrantTTL = 2 * time.Minute
 
@@ -39,6 +49,7 @@ type CenterGateway struct {
 	onLocalRevoke      func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)
 	onDeviceRevoke     func(nodeID string, controlSessionID uint64, deviceID int, reason string)
 	onCredentialResult func(*NodeSession, NodeCredentialControl)
+	onAcceptedRelay    AcceptedRelayHandler
 	configHandler      DeviceConfigHandler
 	configMu           sync.Mutex
 	configPending      map[uint64]*pendingDeviceConfigDelivery
@@ -158,6 +169,12 @@ func (g *CenterGateway) SetDeviceConfigHandler(handler DeviceConfigHandler) {
 func (g *CenterGateway) SetDeviceSessionConfirmHandler(handler DeviceSessionConfirmHandler) {
 	g.mu.Lock()
 	g.confirm = handler
+	g.mu.Unlock()
+}
+
+func (g *CenterGateway) SetAcceptedRelayHandler(handler AcceptedRelayHandler) {
+	g.mu.Lock()
+	g.onAcceptedRelay = handler
 	g.mu.Unlock()
 }
 
@@ -353,6 +370,7 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		}
 		g.mu.RLock()
 		owner := g.deviceSessions[frame.SessionID]
+		onAcceptedRelay := g.onAcceptedRelay
 		g.mu.RUnlock()
 		if owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID {
 			return
@@ -375,6 +393,12 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 			}
 		} else if frame.SpeakerLeaseID != 0 {
 			return
+		}
+		if onAcceptedRelay != nil {
+			onAcceptedRelay(AcceptedRelay{
+				DeviceID: route.DeviceID, OwnerID: owner.OwnerID, SSID: route.SSID, GroupID: route.GroupID,
+				Type: frame.InnerPacket[48], Payload: frame.InnerPacket[DraARLHeaderSize:],
+			})
 		}
 		if g.cluster != nil {
 			_ = g.cluster.Relay(session.NodeID, frame)

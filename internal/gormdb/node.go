@@ -77,6 +77,11 @@ type NodeCredentialRotation struct {
 	PreviousValidUntil time.Time
 }
 
+type DeletedEdgeNode struct {
+	Node    Server
+	Devices []*Device
+}
+
 // RotateNodeCredential atomically installs the new credential and retains the
 // previous hash only for a bounded reconnect grace period. Raw credentials
 // never enter the database.
@@ -147,6 +152,42 @@ func (r *ServerRepository) RevokeNodeCredentials(id int) (string, uint32, error)
 		}).Error
 	})
 	return nodeID, epoch, err
+}
+
+// DeleteEdgeNode removes an edge node and clears the persisted ownership of
+// devices currently attached through it in the same transaction.
+func (r *ServerRepository) DeleteEdgeNode(id int) (DeletedEdgeNode, error) {
+	var deleted DeletedEdgeNode
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND node_id IS NOT NULL", id).
+			First(&deleted.Node).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNodeNotFound
+			}
+			return err
+		}
+
+		nodeID := *deleted.Node.NodeID
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("current_entry_node_id = ?", nodeID).
+			Find(&deleted.Devices).Error; err != nil {
+			return err
+		}
+		if len(deleted.Devices) > 0 {
+			if err := tx.Model(&Device{}).
+				Where("current_entry_node_id = ?", nodeID).
+				Updates(map[string]interface{}{
+					"current_entry_node_id":    "",
+					"current_entry_session_id": 0,
+					"is_online":                false,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&Server{}, deleted.Node.ID).Error
+	})
+	return deleted, err
 }
 
 func secureHashEqual(left, right string) bool {

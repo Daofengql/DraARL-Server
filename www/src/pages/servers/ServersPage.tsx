@@ -34,6 +34,7 @@ import {
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import ContentCopy from '@mui/icons-material/ContentCopy'
+import Delete from '@mui/icons-material/Delete'
 import Edit from '@mui/icons-material/Edit'
 import Key from '@mui/icons-material/Key'
 import KeyOff from '@mui/icons-material/KeyOff'
@@ -412,6 +413,21 @@ export function ServersPage() {
     })
   }
 
+  const requestDelete = (node: EdgeNode) => {
+    closeNodeMenu()
+    setConfirm({
+      open: true,
+      title: '删除边缘节点',
+      message: `永久删除“${node.display_name}”？当前连接会被断开，已有注册 Token 和节点凭据都将失效。此操作无法撤销。`,
+      confirmText: '删除节点',
+      type: 'danger',
+      action: async () => {
+        await edgeNodeService.delete(node.id)
+        setNotice('边缘节点已删除')
+      },
+    })
+  }
+
   const runConfirmedAction = async () => {
     if (!confirm) return
     const action = confirm.action
@@ -489,6 +505,8 @@ export function ServersPage() {
                   right: 0,
                   zIndex: 2,
                   bgcolor: 'grey.50',
+                  minWidth: 120,
+                  whiteSpace: 'nowrap',
                 }}
               >操作</TableCell>
             </TableRow>
@@ -590,17 +608,22 @@ export function ServersPage() {
                       right: 0,
                       zIndex: 1,
                       bgcolor: 'background.paper',
+                      minWidth: 120,
+                      width: 120,
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    <Tooltip title="查看详情">
-                      <IconButton size="small" onClick={() => setDetailNode(node)}><Visibility fontSize="small" /></IconButton>
-                    </Tooltip>
-                    <Tooltip title="编辑节点">
-                      <IconButton size="small" color="primary" onClick={() => openEdit(node)}><Edit fontSize="small" /></IconButton>
-                    </Tooltip>
-                    <Tooltip title="更多操作">
-                      <IconButton size="small" onClick={(event) => openNodeMenu(event, node)}><MoreVert fontSize="small" /></IconButton>
-                    </Tooltip>
+                    <Stack direction="row" spacing={0} justifyContent="center" sx={{ flexWrap: 'nowrap' }}>
+                      <Tooltip title="查看详情">
+                        <IconButton size="small" onClick={() => setDetailNode(node)}><Visibility fontSize="small" /></IconButton>
+                      </Tooltip>
+                      <Tooltip title="编辑节点">
+                        <IconButton size="small" color="primary" onClick={() => openEdit(node)}><Edit fontSize="small" /></IconButton>
+                      </Tooltip>
+                      <Tooltip title="更多操作">
+                        <IconButton size="small" onClick={(event) => openNodeMenu(event, node)}><MoreVert fontSize="small" /></IconButton>
+                      </Tooltip>
+                    </Stack>
                   </TableCell>
                 </TableRow>
               )
@@ -626,6 +649,10 @@ export function ServersPage() {
         </MenuItem>
         <MenuItem onClick={() => menuNode && requestRevoke(menuNode)} sx={{ color: 'error.main' }}>
           <KeyOff fontSize="small" sx={{ mr: 1.5 }} />吊销凭据
+        </MenuItem>
+        <Divider />
+        <MenuItem onClick={() => menuNode && requestDelete(menuNode)} sx={{ color: 'error.main' }}>
+          <Delete fontSize="small" sx={{ mr: 1.5 }} />删除节点
         </MenuItem>
       </Menu>
 

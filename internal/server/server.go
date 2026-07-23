@@ -300,6 +300,7 @@ func (s *Server) setupRoutes() {
 			admin.GET("/edge-nodes", handler.ListEdgeNodes)
 			admin.POST("/edge-nodes", handler.CreateEdgeNode)
 			admin.PUT("/edge-nodes/:id", handler.UpdateEdgeNode)
+			admin.DELETE("/edge-nodes/:id", handler.DeleteEdgeNode)
 			admin.POST("/edge-nodes/:id/rotate-credential", handler.RotateEdgeNodeCredential)
 			admin.POST("/edge-nodes/:id/revoke-credential", handler.RevokeEdgeNodeCredential)
 			admin.POST("/edge-nodes/:id/disconnect", handler.DisconnectEdgeNode)

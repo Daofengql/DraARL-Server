@@ -348,6 +348,56 @@ func RevokeEdgeNodeCredential(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "节点凭据已吊销", "data": gin.H{"credential_epoch": epoch, "disconnected": disconnected}})
 }
 
+func DeleteEdgeNode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		return
+	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+
+	repo := gormdb.NewServerRepository()
+	node, err := repo.GetServerByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询边缘节点失败"})
+		return
+	}
+	if node == nil || node.NodeID == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+		return
+	}
+
+	disconnected := false
+	if runtime := interconnect.ActiveCenterRuntime(); runtime != nil && runtime.Control != nil {
+		disconnected = runtime.Control.Disconnect(*node.NodeID)
+	}
+	deleted, err := repo.DeleteEdgeNode(id)
+	if err != nil {
+		if err == gormdb.ErrNodeNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除边缘节点失败"})
+		return
+	}
+
+	if runtime := interconnect.ActiveCenterRuntime(); runtime != nil && runtime.Control != nil {
+		disconnected = runtime.Control.Disconnect(*deleted.Node.NodeID) || disconnected
+	}
+	for _, device := range deleted.Devices {
+		udphub.ClearRuntimeDeviceEntryIfNode(device.ID, *deleted.Node.NodeID)
+	}
+	// Sweep once more after closing the session so an in-flight ownership
+	// update cannot leave a device attached to a node that no longer exists.
+	clearEdgeNodeDeviceEntries(repo, *deleted.Node.NodeID)
+
+	oplog.AddLog("删除边缘节点: "+*deleted.Node.NodeID+" ("+deleted.Node.DisplayName+")", "edge_node_delete", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "边缘节点已删除", "data": gin.H{"disconnected": disconnected}})
+}
+
 // DisconnectEdgeNode resets the current node session for diagnostics. An
 // enabled node with a valid credential may reconnect immediately.
 func DisconnectEdgeNode(c *gin.Context) {

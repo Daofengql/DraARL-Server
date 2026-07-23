@@ -59,6 +59,7 @@ const EVENT_TYPES = [
   { value: 'comm_record_delete', label: '删除通信记录' },
   { value: 'cache_clear_all', label: '清空缓存' },
   { value: 'cache_metrics_reset', label: '重置缓存指标' },
+  { value: 'edge_node_delete', label: '删除边缘节点' },
   { value: 'system', label: '系统' },
 ]
 
@@ -97,6 +98,7 @@ const EVENT_TYPE_COLORS: Record<string, any> = {
   comm_record_delete: 'warning',
   cache_clear_all: 'warning',
   cache_metrics_reset: 'info',
+  edge_node_delete: 'error',
   system: 'primary',
 }
 

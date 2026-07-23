@@ -268,6 +268,11 @@ export const edgeNodeService = {
     return res.data
   },
 
+  async delete(id: number): Promise<{ disconnected: boolean }> {
+    const res = await apiClient.delete<BackendResponse<{ disconnected: boolean }>>(`/api/edge-nodes/${id}`)
+    return res.data || { disconnected: false }
+  },
+
   async rotateCredential(id: number): Promise<EdgeNodeCredentialResult> {
     const res = await apiClient.post<BackendResponse<EdgeNodeCredentialResult>>(`/api/edge-nodes/${id}/rotate-credential`)
     if (!res.data) throw new Error('轮换后未返回新凭据')

@@ -38,3 +38,26 @@ func TestNormalizePublicID(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeAdministrativeRegionRequiresCityForChineseProvince(t *testing.T) {
+	for _, input := range []string{"福建省", "北京市", "新疆维吾尔自治区"} {
+		if _, err := NormalizeAdministrativeRegion(input, 100); err == nil {
+			t.Errorf("province-only Chinese region %q was accepted", input)
+		}
+	}
+	tests := map[string]string{
+		" 福建省   福州市 鼓楼区 ": "福建省 福州市 鼓楼区",
+		"北京市 北京市":         "北京市 北京市",
+		"美国":              "美国",
+		"美国 加利福尼亚州":       "美国 加利福尼亚州",
+	}
+	for input, want := range tests {
+		got, err := NormalizeAdministrativeRegion(input, 100)
+		if err != nil || got != want {
+			t.Errorf("NormalizeAdministrativeRegion(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	if _, err := NormalizeAdministrativeRegion("", 100); err == nil {
+		t.Fatal("empty region was accepted")
+	}
+}

@@ -28,6 +28,8 @@ import {
   TableRow,
   TextField,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
@@ -50,6 +52,7 @@ import type {
 import { AutoRefresh } from '../../components/common/AutoRefresh'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
+import { RegionCascader, isChineseAdministrativeRegion } from '../../components/common/RegionCascader'
 import { SearchBar } from '../../components/common/SearchBar'
 
 const integerFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
@@ -232,6 +235,7 @@ export function ServersPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [editingNode, setEditingNode] = useState<EdgeNode | null>(null)
   const [editForm, setEditForm] = useState<EdgeNodeUpdate>(emptyEditForm)
+  const [regionScope, setRegionScope] = useState<'china' | 'overseas'>('china')
   const [detailNode, setDetailNode] = useState<EdgeNode | null>(null)
   const [secret, setSecret] = useState<{ title: string; value: string; description: string } | null>(null)
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
@@ -279,6 +283,7 @@ export function ServersPage() {
   const openCreate = () => {
     setEditingNode(null)
     setEditForm(emptyEditForm)
+    setRegionScope('china')
     setEditOpen(true)
   }
 
@@ -295,12 +300,22 @@ export function ServersPage() {
       public_network: node.public_network,
       public_priority: node.public_priority,
     })
+    setRegionScope(!node.public_region || isChineseAdministrativeRegion(node.public_region) ? 'china' : 'overseas')
     setEditOpen(true)
   }
 
   const saveNode = async () => {
     if (!editForm.display_name.trim()) {
       setError('节点昵称不能为空')
+      return
+    }
+    const region = editForm.public_region.trim()
+    if (!region) {
+      setError('节点地区不能为空')
+      return
+    }
+    if (regionScope === 'china' && region.split(/\s+/).length < 2) {
+      setError('国内节点地区至少需要选择到市级别')
       return
     }
     setSaving(true)
@@ -311,7 +326,7 @@ export function ServersPage() {
           display_name: editForm.display_name.trim(),
           note: editForm.note.trim(),
           public_udp_host: editForm.public_udp_host.trim(),
-          public_region: editForm.public_region.trim(),
+          public_region: region,
           public_network: editForm.public_network.trim(),
         })
         setNotice('节点设置已更新')
@@ -319,6 +334,7 @@ export function ServersPage() {
         const result = await edgeNodeService.create({
           display_name: editForm.display_name.trim(),
           note: editForm.note.trim(),
+          public_region: region,
         })
         setSecret({
           title: '一次性注册 Token',
@@ -637,6 +653,43 @@ export function ServersPage() {
                 </Select>
               </FormControl>
             )}
+            <Box sx={{ gridColumn: '1 / -1', display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5, alignItems: { sm: 'flex-start' } }}>
+              <ToggleButtonGroup
+                value={regionScope}
+                exclusive
+                size="small"
+                onChange={(_, next: 'china' | 'overseas' | null) => {
+                  if (!next || next === regionScope) return
+                  setRegionScope(next)
+                  setEditForm({ ...editForm, public_region: '' })
+                }}
+                aria-label="节点地区范围"
+                sx={{ flexShrink: 0 }}
+              >
+                <ToggleButton value="china">国内</ToggleButton>
+                <ToggleButton value="overseas">海外</ToggleButton>
+              </ToggleButtonGroup>
+              <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
+                {regionScope === 'china' ? (
+                  <RegionCascader
+                    value={editForm.public_region}
+                    onChange={(value) => setEditForm({ ...editForm, public_region: value })}
+                    label="节点地区"
+                    required
+                    helperText="至少需要选择到市级别"
+                  />
+                ) : (
+                  <TextField
+                    label="国家或地区"
+                    value={editForm.public_region}
+                    onChange={(event) => setEditForm({ ...editForm, public_region: event.target.value })}
+                    placeholder="美国 加利福尼亚州"
+                    required
+                    fullWidth
+                  />
+                )}
+              </Box>
+            </Box>
             <TextField
               label="备注"
               value={editForm.note}
@@ -661,7 +714,7 @@ export function ServersPage() {
                 }
                 label="加入客户端可选入口列表"
               />
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '2fr 1fr' }, gap: 2, mt: 2 }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '2fr 1fr 1fr' }, gap: 2, mt: 2 }}>
                 <TextField
                   label="公开 UDP 主机"
                   value={editForm.public_udp_host}
@@ -675,13 +728,6 @@ export function ServersPage() {
                   value={editForm.public_udp_port}
                   onChange={(event) => setEditForm({ ...editForm, public_udp_port: Number(event.target.value) })}
                   inputProps={{ min: 1, max: 65535 }}
-                  fullWidth
-                />
-                <TextField
-                  label="地区"
-                  value={editForm.public_region}
-                  onChange={(event) => setEditForm({ ...editForm, public_region: event.target.value })}
-                  placeholder="福州"
                   fullWidth
                 />
                 <TextField

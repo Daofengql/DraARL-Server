@@ -17,8 +17,9 @@ import (
 )
 
 type createEdgeNodeRequest struct {
-	DisplayName string `json:"display_name" binding:"required"`
-	Note        string `json:"note"`
+	DisplayName  string `json:"display_name" binding:"required"`
+	Note         string `json:"note"`
+	PublicRegion string `json:"public_region"`
 }
 
 type updateEdgeNodeRequest struct {
@@ -99,6 +100,11 @@ func CreateEdgeNode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称无效"})
 		return
 	}
+	region, err := accesspoint.NormalizeAdministrativeRegion(req.PublicRegion, 100)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点地区不能为空，国内节点至少需要选择到市级别"})
+		return
+	}
 	nodeID, err := interconnect.NewNodeID()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成节点身份失败"})
@@ -123,7 +129,7 @@ func CreateEdgeNode(c *gin.Context) {
 	if !ok {
 		return
 	}
-	node := &gormdb.Server{Name: displayName, DisplayName: displayName, Note: strings.TrimSpace(req.Note), NodeID: &nodeID, PublicAccessID: &publicAccessID, PublicPriority: 100, NodeRegistrationTokenHash: interconnect.HashCredential(credential), NodeRegistrationExpiresAt: &expiresAt, Status: 1, ServerType: 3, OwerID: strconv.Itoa(currentUser.ID), OwerCallSign: currentUser.CallSign}
+	node := &gormdb.Server{Name: displayName, DisplayName: displayName, Note: strings.TrimSpace(req.Note), NodeID: &nodeID, PublicAccessID: &publicAccessID, PublicRegion: region, PublicPriority: 100, NodeRegistrationTokenHash: interconnect.HashCredential(credential), NodeRegistrationExpiresAt: &expiresAt, Status: 1, ServerType: 3, OwerID: strconv.Itoa(currentUser.ID), OwerCallSign: currentUser.CallSign}
 	if err := gormdb.NewServerRepository().CreateServer(node); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建边缘节点失败"})
 		return
@@ -202,16 +208,21 @@ func UpdateEdgeNode(c *gin.Context) {
 			return
 		}
 	}
-	for column, input := range map[string]*string{"public_region": req.PublicRegion, "public_network": req.PublicNetwork} {
-		if input == nil {
-			continue
+	if req.PublicRegion != nil {
+		region, regionErr := accesspoint.NormalizeAdministrativeRegion(*req.PublicRegion, 100)
+		if regionErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点地区不能为空，国内节点至少需要选择到市级别"})
+			return
 		}
-		label, err := accesspoint.NormalizeLabel(*input, 100)
-		if err != nil {
+		updates["public_region"] = region
+	}
+	if req.PublicNetwork != nil {
+		label, labelErr := accesspoint.NormalizeLabel(*req.PublicNetwork, 100)
+		if labelErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "公开入口标签无效"})
 			return
 		}
-		updates[column] = label
+		updates["public_network"] = label
 	}
 	if req.PublicPriority != nil {
 		if *req.PublicPriority < -10000 || *req.PublicPriority > 10000 {

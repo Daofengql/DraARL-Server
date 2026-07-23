@@ -18,7 +18,7 @@ func TestPublishedEdgeAccessPointRequiresFreshOnlineRegisteredNode(t *testing.T)
 	node := &gormdb.Server{
 		NodeID: &nodeID, PublicAccessID: &publicID, DisplayName: "福州电信入口",
 		PublicAccessEnabled: true, PublicUDPHost: "edge.example.com", PublicUDPPort: 60050,
-		PublicRegion: "福建", PublicNetwork: "电信", PublicPriority: 10, Status: 1,
+		PublicRegion: "福建省 福州市", PublicNetwork: "电信", PublicPriority: 10, Status: 1,
 		NodeRegisteredAt: &registeredAt, Note: "private-note", NodeRemoteAddr: "10.0.0.1:1234",
 	}
 	status := interconnect.NodeStatus{Online: true, LastHeartbeat: &lastHeartbeat}
@@ -55,6 +55,8 @@ func TestPublishedEdgeAccessPointRequiresFreshOnlineRegisteredNode(t *testing.T)
 			s.LastHeartbeat = &stale
 		}},
 		{"invalid host", func(n *gormdb.Server, _ *interconnect.NodeStatus) { n.PublicUDPHost = "https://bad.example" }},
+		{"empty region", func(n *gormdb.Server, _ *interconnect.NodeStatus) { n.PublicRegion = "" }},
+		{"province-only region", func(n *gormdb.Server, _ *interconnect.NodeStatus) { n.PublicRegion = "福建省" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

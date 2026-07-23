@@ -121,7 +121,7 @@ func publishedEdgeAccessPoint(node *gormdb.Server, status interconnect.NodeStatu
 	if err != nil || displayName == "" {
 		return publicAccessPoint{}, false
 	}
-	region, err := accesspoint.NormalizeLabel(node.PublicRegion, 100)
+	region, err := accesspoint.NormalizeAdministrativeRegion(node.PublicRegion, 100)
 	if err != nil {
 		return publicAccessPoint{}, false
 	}

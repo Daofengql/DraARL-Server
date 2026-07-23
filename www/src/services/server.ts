@@ -247,7 +247,7 @@ export const edgeNodeService = {
     return res.data?.items || []
   },
 
-  async create(data: { display_name: string; note: string }): Promise<{ node: EdgeNode; registration_token: string }> {
+  async create(data: { display_name: string; note: string; public_region: string }): Promise<{ node: EdgeNode; registration_token: string }> {
     const res = await apiClient.post<BackendResponse<{ node: EdgeNode; registration_token: string }>>('/api/edge-nodes', data)
     if (!res.data) throw new Error('创建节点后未返回注册凭据')
     return res.data

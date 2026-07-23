@@ -65,6 +65,9 @@ func New(cfg *config.Configuration) *Server {
 func (s *Server) setupRoutes() {
 	// 前端静态文件服务（根据编译标签选择嵌入模式或磁盘模式）
 	setupFrontend(s.engine, s.config)
+	s.engine.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	// 本地存储文件服务
 	s.engine.GET("/files/*key", handler.ServeLocalFile)

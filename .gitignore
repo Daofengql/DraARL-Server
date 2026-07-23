@@ -38,9 +38,11 @@ vendor/
 # Configuration files (may contain sensitive data)
 *.yaml
 *.yml
+!compose.yaml
 !config.yaml.example
 !*.example.yaml
 !*.example.yml
+!deploy/docker/*.yaml
 !docs/mkdocs.yml
 !.github/workflows/*.yml
 

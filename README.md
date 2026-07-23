@@ -99,6 +99,26 @@ DraARL-Server/
 
 ## 快速开始
 
+### Docker Compose（Linux）
+
+Compose 会构建带嵌入前端的 DraARL 镜像，并自动拉起 MySQL、Redis 和
+MinIO。首次启动会在命名卷内生成 `config.yaml`、JWT 密钥和设备 AES 密钥，
+随后初始化数据库与 MinIO bucket：
+
+```bash
+cp .env.example .env
+# 修改 .env 中的数据库、Redis、MinIO 密码和对外地址
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:9000/healthz
+```
+
+首次管理员账号和密码可通过 `docker compose logs draarl` 查看。普通
+`docker compose down` 会保留四个命名卷；不要在没有备份时使用
+`docker compose down -v`。完整说明见[部署与配置](docs/usage/01-部署与配置.md)。
+
+以下步骤用于不采用 Compose 的手动部署。
+
 ### 1. 克隆仓库
 
 ```bash

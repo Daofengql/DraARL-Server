@@ -26,12 +26,14 @@ var releaseBuild atomic.Bool
 const DefaultConfigFileName = "config.yaml"
 
 type MinIOConfig struct {
-	Endpoint  string `yaml:"Endpoint" json:"endpoint"`
-	AccessKey string `yaml:"AccessKey" json:"access_key"`
-	SecretKey string `yaml:"SecretKey" json:"secret_key"`
-	UseSSL    bool   `yaml:"UseSSL" json:"use_ssl"`
-	Bucket    string `yaml:"Bucket" json:"bucket"`
-	BasePath  string `yaml:"BasePath" json:"base_path"`
+	Endpoint       string `yaml:"Endpoint" json:"endpoint"`
+	PublicEndpoint string `yaml:"PublicEndpoint" json:"public_endpoint"`
+	AccessKey      string `yaml:"AccessKey" json:"access_key"`
+	SecretKey      string `yaml:"SecretKey" json:"secret_key"`
+	UseSSL         bool   `yaml:"UseSSL" json:"use_ssl"`
+	PublicUseSSL   bool   `yaml:"PublicUseSSL" json:"public_use_ssl"`
+	Bucket         string `yaml:"Bucket" json:"bucket"`
+	BasePath       string `yaml:"BasePath" json:"base_path"`
 }
 
 type UDPConfig struct {

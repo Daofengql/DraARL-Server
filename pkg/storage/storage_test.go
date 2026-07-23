@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,55 @@ func TestResolveDriver(t *testing.T) {
 			t.Fatalf("got %s want local", got)
 		}
 	})
+}
+
+func TestResolveMinIOPublicTarget(t *testing.T) {
+	cfg := config.MinIOConfig{Endpoint: "minio:9000"}
+	if endpoint, secure := resolveMinIOPublicTarget(cfg); endpoint != "minio:9000" || secure {
+		t.Fatalf("fallback target=%q secure=%t", endpoint, secure)
+	}
+	cfg.PublicEndpoint = "storage.example.com"
+	cfg.PublicUseSSL = true
+	if endpoint, secure := resolveMinIOPublicTarget(cfg); endpoint != "storage.example.com" || !secure {
+		t.Fatalf("public target=%q secure=%t", endpoint, secure)
+	}
+}
+
+func TestPublicReadBucketPolicy(t *testing.T) {
+	encoded, err := publicReadBucketPolicy("draarl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Version   string `json:"Version"`
+		Statement []struct {
+			Effect    string              `json:"Effect"`
+			Principal map[string][]string `json:"Principal"`
+			Action    []string            `json:"Action"`
+			Resource  []string            `json:"Resource"`
+		} `json:"Statement"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Version != "2012-10-17" || len(document.Statement) != 1 {
+		t.Fatalf("unexpected policy document: %s", encoded)
+	}
+	statement := document.Statement[0]
+	if statement.Effect != "Allow" || len(statement.Principal["AWS"]) != 1 || statement.Principal["AWS"][0] != "*" {
+		t.Fatalf("unexpected policy principal: %s", encoded)
+	}
+	if len(statement.Action) != 1 || statement.Action[0] != "s3:GetObject" {
+		t.Fatalf("public policy must only allow object reads: %s", encoded)
+	}
+	if len(statement.Resource) != 1 || statement.Resource[0] != "arn:aws:s3:::draarl/*" {
+		t.Fatalf("unexpected policy resource: %s", encoded)
+	}
+	for _, forbidden := range []string{"s3:ListBucket", "s3:PutObject", "s3:DeleteObject"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("public policy contains forbidden action %s: %s", forbidden, encoded)
+		}
+	}
 }
 
 func TestShouldPresignUpload(t *testing.T) {

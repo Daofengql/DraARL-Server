@@ -136,10 +136,12 @@ Storage:
         RootPath: "./data/storage"    # 本地磁盘根目录（已做路径穿越防护）
         BaseURL: ""                   # 公开访问前缀，空则使用 /files
     MinIO:
-        Endpoint: "localhost:9000"    # MinIO 服务地址（浏览器直传时需公网可达）
+        Endpoint: "localhost:9000"    # 后端连接 MinIO 的地址
+        PublicEndpoint: ""            # 可选，对外预签名地址；容器部署时与内部 Endpoint 分离
         AccessKey: "minioadmin"       # Access Key
         SecretKey: "minioadmin"       # Secret Key
         UseSSL: false                 # 是否使用 HTTPS
+        PublicUseSSL: false           # PublicEndpoint 是否使用 HTTPS
         Bucket: "draarl"             # 默认存储桶
         BasePath: "/minio"            # URL 访问基础路径
 

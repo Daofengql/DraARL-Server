@@ -294,6 +294,9 @@ func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked
 	GlobalUDPGhostManager = &UDPGhostManager{
 		devices: make(map[string]*models.Device), groupDevices: make(map[int]map[string]*models.Device),
 	}
+	oldTextBuffer := globalTextBuffer
+	globalTextBuffer = NewTextMessageBuffer(100, time.Hour)
+	globalTextBuffer.running = true
 
 	env.wsSource = &routeTestWSDevice{
 		identifier: "ws-source", groupID: env.groupA, userID: baseGroupID + 201,
@@ -332,6 +335,7 @@ func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked
 		globalConn = oldConn
 		GlobalMessageRouter = oldRouter
 		GlobalUDPGhostManager = oldGhostManager
+		globalTextBuffer = oldTextBuffer
 		StopDomainReceiverCache()
 		clearDomainReceiverCacheForTest()
 		clearRouteTestHalfDuplexState()
@@ -399,7 +403,11 @@ func assertRouteTestPacket(t *testing.T, got, want, payload []byte) {
 	if err := decoded.Decode(got); err != nil {
 		t.Fatalf("decode routed packet: %v", err)
 	}
-	if decoded.DevicePassword != "" || decoded.Type != protocol.DraARLTypeOpus16K || !bytes.Equal(decoded.DATA, payload) {
+	var expected protocol.DraARLv1Packet
+	if err := expected.Decode(want); err != nil {
+		t.Fatalf("decode expected routed packet: %v", err)
+	}
+	if decoded.DevicePassword != "" || decoded.Type != expected.Type || !bytes.Equal(decoded.DATA, payload) {
 		t.Fatalf("routed packet fields password=%q type=%d data=%x", decoded.DevicePassword, decoded.Type, decoded.DATA)
 	}
 }
@@ -466,6 +474,92 @@ func routeTestWSVoice(env *routeTestEnv, payload []byte) []byte {
 		env.wsSource.username, "", env.wsSource.ssid, protocol.DraARLTypeOpus16K,
 		env.wsSource.devModel, 0, env.wsSource.callsign, payload,
 	)
+}
+
+func routeTestUDPText(t *testing.T, env *routeTestEnv, payload []byte) []byte {
+	t.Helper()
+	source := env.udpA1.device
+	raw := protocol.EncodeDraARLv1(
+		source.Username, "topsecret!", source.SSID, protocol.DraARLTypeTextMessage,
+		protocol.DraARLDevModelESP32Radio, 1, "SPOOFED", payload,
+	)
+	packet, err := protocol.NewDraARLv1Packet(source.UDPAddr, raw)
+	if err != nil {
+		t.Fatalf("decode UDP text source packet: %v", err)
+	}
+	group, ok := GetGroupFromCache(env.groupA)
+	if !ok {
+		t.Fatalf("source group %d missing", env.groupA)
+	}
+	handleDraARLTextMessage(packet, raw, source, env.serverConn, group)
+	return protocol.EncodeDraARLv1(
+		source.Username, "", source.SSID, protocol.DraARLTypeTextMessage,
+		source.DevModel, source.DMRID, source.CallSign, payload,
+	)
+}
+
+func routeTestWSText(env *routeTestEnv, payload []byte) []byte {
+	env.router.RouteTextToUDP(env.wsSource, payload, env.groupA)
+	return protocol.EncodeDraARLv1(
+		env.wsSource.username, "", env.wsSource.ssid, protocol.DraARLTypeTextMessage,
+		env.wsSource.devModel, 0, env.wsSource.callsign, payload,
+	)
+}
+
+func TestRouteTextWithinGroupEndToEnd(t *testing.T) {
+	t.Run("UDP source", func(t *testing.T) {
+		env := setupRouteTest(t, 51200, false)
+		payload := []byte("single-group UDP text")
+		want := routeTestUDPText(t, env, payload)
+
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+		assertNoRouteTestPacket(t, env.udpA1.conn)
+		assertNoRouteTestPacket(t, env.udpB.conn)
+		assertNoRouteTestPacket(t, env.udpC.conn)
+		assertRouteTestFanoutSent(t, 1)
+		assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a"}, want, payload, []int{env.groupA})
+	})
+
+	t.Run("WebSocket source", func(t *testing.T) {
+		env := setupRouteTest(t, 51300, false)
+		payload := []byte("single-group WebSocket text")
+		want := routeTestWSText(env, payload)
+
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA1.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+		assertNoRouteTestPacket(t, env.udpB.conn)
+		assertNoRouteTestPacket(t, env.udpC.conn)
+		assertRouteTestFanoutSent(t, 2)
+		assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a"}, want, payload, []int{env.groupA})
+	})
+}
+
+func TestRouteTextAcrossVirtualGroupEndToEnd(t *testing.T) {
+	t.Run("UDP source", func(t *testing.T) {
+		env := setupRouteTest(t, 51400, true)
+		payload := []byte("linked-group UDP text")
+		want := routeTestUDPText(t, env, payload)
+
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+		assertNoRouteTestPacket(t, env.udpA1.conn)
+		assertNoRouteTestPacket(t, env.udpC.conn)
+		assertRouteTestFanoutSent(t, 2)
+		assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+	})
+
+	t.Run("WebSocket source", func(t *testing.T) {
+		env := setupRouteTest(t, 51500, true)
+		payload := []byte("linked-group WebSocket text")
+		want := routeTestWSText(env, payload)
+
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA1.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+		assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+		assertNoRouteTestPacket(t, env.udpC.conn)
+		assertRouteTestFanoutSent(t, 3)
+		assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+	})
 }
 
 func TestRouteUDPVoiceWithinGroupEndToEnd(t *testing.T) {

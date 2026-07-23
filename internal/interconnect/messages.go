@@ -1,6 +1,7 @@
 package interconnect
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -349,29 +350,56 @@ func SplitProjection(snapshotID uint64, p *Projection) (SnapshotBegin, []Snapsho
 }
 
 type SnapshotAssembler struct {
-	Begin     SnapshotBegin
-	chunks    map[int][]byte
-	startedAt time.Time
+	Begin         SnapshotBegin
+	chunks        map[int][]byte
+	receivedBytes int
+	startedAt     time.Time
 }
 
 func NewSnapshotAssembler(begin SnapshotBegin) (*SnapshotAssembler, error) {
-	if begin.SnapshotID == 0 || begin.ClusterEpoch == 0 || begin.Chunks <= 0 || begin.Chunks > 10000 || begin.TotalBytes < 0 || begin.TotalBytes > 64<<20 {
+	if begin.SnapshotID == 0 || begin.ClusterEpoch == 0 || begin.TotalBytes < 0 || begin.TotalBytes > 64<<20 {
+		return nil, errors.New("invalid snapshot begin")
+	}
+	expectedChunks := (begin.TotalBytes + SnapshotRawChunkSize - 1) / SnapshotRawChunkSize
+	if expectedChunks == 0 {
+		expectedChunks = 1
+	}
+	if len(begin.Checksum) != sha256.Size*2 {
+		return nil, errors.New("invalid snapshot begin")
+	}
+	checksum, checksumErr := hex.DecodeString(begin.Checksum)
+	if begin.Chunks != expectedChunks || checksumErr != nil || len(checksum) != sha256.Size {
 		return nil, errors.New("invalid snapshot begin")
 	}
 	return &SnapshotAssembler{Begin: begin, chunks: make(map[int][]byte, begin.Chunks), startedAt: time.Now()}, nil
 }
 func (a *SnapshotAssembler) Add(chunk SnapshotChunk) error {
-	if a == nil || chunk.SnapshotID != a.Begin.SnapshotID || chunk.Index < 0 || chunk.Index >= a.Begin.Chunks || len(chunk.Data) > SnapshotRawChunkSize {
+	if a == nil || chunk.SnapshotID != a.Begin.SnapshotID || chunk.Index < 0 || chunk.Index >= a.Begin.Chunks {
 		return errors.New("invalid snapshot chunk")
 	}
-	if _, exists := a.chunks[chunk.Index]; exists {
+	start := chunk.Index * SnapshotRawChunkSize
+	expectedBytes := SnapshotRawChunkSize
+	if remaining := a.Begin.TotalBytes - start; remaining < expectedBytes {
+		expectedBytes = remaining
+	}
+	if expectedBytes < 0 || len(chunk.Data) != expectedBytes {
+		return errors.New("invalid snapshot chunk length")
+	}
+	if existing, exists := a.chunks[chunk.Index]; exists {
+		if !bytes.Equal(existing, chunk.Data) {
+			return errors.New("conflicting duplicate snapshot chunk")
+		}
 		return nil
 	}
+	if a.receivedBytes+len(chunk.Data) > a.Begin.TotalBytes {
+		return errors.New("snapshot chunks exceed declared length")
+	}
 	a.chunks[chunk.Index] = append([]byte(nil), chunk.Data...)
+	a.receivedBytes += len(chunk.Data)
 	return nil
 }
 func (a *SnapshotAssembler) Commit(commit SnapshotCommit) (*Projection, error) {
-	if a == nil || commit.SnapshotID != a.Begin.SnapshotID || len(a.chunks) != a.Begin.Chunks {
+	if a == nil || commit.SnapshotID != a.Begin.SnapshotID || len(a.chunks) != a.Begin.Chunks || a.receivedBytes != a.Begin.TotalBytes {
 		return nil, errors.New("snapshot is incomplete")
 	}
 	data := make([]byte, 0, a.Begin.TotalBytes)
@@ -466,6 +494,9 @@ func UnmarshalRelayFrame(data []byte) (RelayFrame, error) {
 	f.DomainID = binary.BigEndian.Uint64(data[16:24])
 	f.RequiredProjectionVersion = binary.BigEndian.Uint64(data[24:32])
 	f.SpeakerLeaseID = binary.BigEndian.Uint64(data[32:40])
+	if f.SessionID == 0 || f.SessionEpoch == 0 || f.DomainID == 0 {
+		return RelayFrame{}, errors.New("relay identity is incomplete")
+	}
 	f.InnerPacket = append([]byte(nil), data[42:]...)
 	return f, nil
 }

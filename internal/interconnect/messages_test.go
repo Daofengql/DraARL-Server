@@ -122,6 +122,47 @@ func TestProjectionSnapshotChunksAndCommits(t *testing.T) {
 	}
 }
 
+func TestSnapshotAssemblerRejectsOversizedAndConflictingChunks(t *testing.T) {
+	p := NewProjection(7)
+	p.Version = 1
+	begin, chunks, err := SplitProjection(9, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidBegin := begin
+	invalidBegin.Chunks++
+	if _, err := NewSnapshotAssembler(invalidBegin); err == nil {
+		t.Fatal("snapshot accepted a chunk count inconsistent with total bytes")
+	}
+	invalidBegin = begin
+	invalidBegin.Checksum += "00"
+	if _, err := NewSnapshotAssembler(invalidBegin); err == nil {
+		t.Fatal("snapshot accepted a checksum with an invalid length")
+	}
+	assembler, err := NewSnapshotAssembler(begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized := chunks[0]
+	oversized.Data = append(oversized.Data, 0)
+	if err := assembler.Add(oversized); err == nil {
+		t.Fatal("snapshot accepted bytes beyond its declared length")
+	}
+	if err := assembler.Add(chunks[0]); err != nil {
+		t.Fatal(err)
+	}
+	conflict := chunks[0]
+	conflict.Data = append([]byte(nil), conflict.Data...)
+	if len(conflict.Data) == 0 {
+		conflict.Data = []byte{1}
+	} else {
+		conflict.Data[0] ^= 0xff
+	}
+	if err := assembler.Add(conflict); err == nil {
+		t.Fatal("snapshot accepted a conflicting duplicate chunk")
+	}
+}
+
 func TestRelayFrameRoundTrip(t *testing.T) {
 	inner := make([]byte, 90)
 	copy(inner, "DraA")
@@ -136,5 +177,30 @@ func TestRelayFrameRoundTrip(t *testing.T) {
 	}
 	if got.SessionID != f.SessionID || got.DomainID != f.DomainID || got.SpeakerLeaseID != f.SpeakerLeaseID || len(got.InnerPacket) != 90 {
 		t.Fatalf("relay mismatch: %#v", got)
+	}
+}
+
+func TestRelayFrameRejectsIncompleteIdentity(t *testing.T) {
+	inner := make([]byte, DraARLHeaderSize)
+	for _, frame := range []RelayFrame{
+		{SessionEpoch: 1, DomainID: 1, InnerPacket: inner},
+		{SessionID: 1, DomainID: 1, InnerPacket: inner},
+		{SessionID: 1, SessionEpoch: 1, InnerPacket: inner},
+	} {
+		if _, err := frame.MarshalBinary(); err == nil {
+			t.Fatal("relay frame accepted an incomplete identity")
+		}
+	}
+	valid := RelayFrame{SessionID: 1, SessionEpoch: 1, DomainID: 1, InnerPacket: inner}
+	wire, err := valid.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, offset := range []int{0, 8, 16} {
+		invalid := append([]byte(nil), wire...)
+		clear(invalid[offset : offset+8])
+		if _, err := UnmarshalRelayFrame(invalid); err == nil {
+			t.Fatal("relay decoder accepted an incomplete identity")
+		}
 	}
 }

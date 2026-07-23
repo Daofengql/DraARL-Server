@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -216,6 +217,48 @@ func TestTLSControlPlaneRejectsInvalidToken(t *testing.T) {
 	if err == nil {
 		client.Close()
 		t.Fatal("invalid token was accepted")
+	}
+}
+
+func TestTLSAuthenticationFailureDoesNotExposeToken(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan NodeAuthenticationEvent, 1)
+	server, err := NewNodeServer(NodeServerConfig{
+		ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken:    func(_, _ string) bool { return false },
+		OnAuthentication: func(event NodeAuthenticationEvent) { events <- event },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	secret := "draarl-test-token-that-must-not-be-reflected"
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, dialErr := DialNode(ctx, NodeClientConfig{
+		CenterAddr: server.Addr().String(), TLSConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13},
+		NodeID: "edge-redaction", Token: secret,
+	})
+	if client != nil {
+		client.Close()
+	}
+	if dialErr == nil {
+		t.Fatal("invalid token was accepted")
+	}
+	var event NodeAuthenticationEvent
+	select {
+	case event = <-events:
+	case <-ctx.Done():
+		t.Fatal("authentication event was not emitted")
+	}
+	if strings.Contains(dialErr.Error(), secret) || strings.Contains(event.Reason, secret) || strings.Contains(event.NodeID, secret) {
+		t.Fatal("authentication failure exposed the presented token")
 	}
 }
 

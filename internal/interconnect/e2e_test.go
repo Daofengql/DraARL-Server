@@ -157,6 +157,220 @@ func TestTwoEdgesRouteOneFrameThroughCentreAndLocalFanout(t *testing.T) {
 	}
 }
 
+func TestCenterSendsOneDownstreamPerReceivingEdge(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nextSession atomic.Uint64
+	auth := func(_ *NodeSession, req DeviceAuthRequest) (DeviceAuthResponse, error) {
+		packet, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, req.Packet)
+		if decodeErr != nil {
+			return DeviceAuthResponse{RequestID: req.RequestID, Error: decodeErr.Error()}, nil
+		}
+		defer protocol.ReleaseDraARLv1RoutingPacket(packet)
+		domainID := uint64(99)
+		if packet.Username == "outside" {
+			domainID = 100
+		}
+		id := nextSession.Add(1)
+		grant := &DeviceGrant{
+			SessionID: id, SessionEpoch: 1, DeviceID: int(id), Username: packet.Username,
+			CallSign: packet.Username, SSID: packet.SSID, DevModel: packet.DevModel,
+			DMRID: packet.DMRID, GroupID: int(domainID), DomainID: domainID,
+		}
+		return DeviceAuthResponse{
+			RequestID: req.RequestID, Success: true, Grant: grant,
+			ResponsePacket: protocol.EncodeHeartbeatResponse(packet, grant.CallSign),
+		}, nil
+	}
+	center, err := StartCenterRuntime(CenterRuntimeConfig{
+		ControlListen: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(_, token string) bool { return token == "token" }, Auth: auth,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer center.Close()
+	centerUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer centerUDP.Close()
+
+	var captureMu sync.Mutex
+	captureDownstream := false
+	downstreamByAddr := make(map[string]int)
+	center.UDPBridge.SetWriter(func(addr *net.UDPAddr, wire []byte) error {
+		if len(wire) > DraARLHeaderSize+1 && wire[DraARLHeaderSize+1] == SubtypeRelayDownstream {
+			captureMu.Lock()
+			if captureDownstream {
+				downstreamByAddr[addr.String()]++
+			}
+			captureMu.Unlock()
+		}
+		_, writeErr := centerUDP.WriteToUDP(wire, addr)
+		return writeErr
+	})
+	go func() {
+		buf := make([]byte, NodeMaxDatagramSize)
+		for {
+			n, addr, readErr := centerUDP.ReadFromUDP(buf)
+			if readErr != nil {
+				return
+			}
+			center.UDPBridge.Handle(append([]byte(nil), buf[:n]...), addr)
+		}
+	}()
+
+	clientTLS := func() *tls.Config {
+		return &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
+	}
+	edges := make(map[string]*EdgeRuntime)
+	for _, nodeID := range []string{"edge-a", "edge-b", "edge-c", "edge-d", "edge-empty"} {
+		edge, startErr := StartEdgeRuntime(EdgeRuntimeConfig{
+			NodeID: nodeID, Token: "token", CenterControl: center.Control.Addr().String(),
+			CenterUDP: centerUDP.LocalAddr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS(),
+		})
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		edges[nodeID] = edge
+		defer edge.Close()
+	}
+
+	devices := make(map[string]*net.UDPConn)
+	login := func(nodeID, username string) {
+		t.Helper()
+		device, listenErr := net.ListenUDP("udp", nil)
+		if listenErr != nil {
+			t.Fatal(listenErr)
+		}
+		devices[username] = device
+		packet := protocol.EncodeDraARLv1(username, "device-password", 1, protocol.DraARLTypeHeartbeat, protocol.DraARLDevModelESP32NoRadio, uint32(len(username)), "", nil)
+		edgeAddr, resolveErr := net.ResolveUDPAddr("udp", edges[nodeID].Gateway.Addr().String())
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		if _, writeErr := device.WriteToUDP(packet, edgeAddr); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		_ = device.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, 1400)
+		n, _, readErr := device.ReadFromUDP(buf)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		response, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, buf[:n])
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if response.Type != protocol.DraARLTypeHeartbeat {
+			protocol.ReleaseDraARLv1RoutingPacket(response)
+			t.Fatalf("login response type=%d want=%d", response.Type, protocol.DraARLTypeHeartbeat)
+		}
+		protocol.ReleaseDraARLv1RoutingPacket(response)
+	}
+	login("edge-a", "alice")
+	login("edge-b", "bob-1")
+	login("edge-b", "bob-2")
+	login("edge-c", "carol")
+	login("edge-d", "dave")
+	login("edge-empty", "outside")
+	for _, device := range devices {
+		defer device.Close()
+	}
+
+	expectedVersions := map[string]uint64{"edge-a": 1, "edge-b": 2, "edge-c": 1, "edge-d": 1, "edge-empty": 1}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		ready := true
+		for nodeID, expectedVersion := range expectedVersions {
+			version, _ := center.Cluster.RouteAck(nodeID)
+			session, online := center.Control.Session(nodeID)
+			if version < expectedVersion || center.Cluster.PendingControl(nodeID) != 0 || !online || session.DataAddr() == nil {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("edge route ACK or UDP binding did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	nodeDataAddr := make(map[string]string, len(edges))
+	for nodeID := range edges {
+		session, _ := center.Control.Session(nodeID)
+		nodeDataAddr[nodeID] = session.DataAddr().String()
+	}
+	captureMu.Lock()
+	captureDownstream = true
+	captureMu.Unlock()
+
+	payload := []byte("one downstream per receiving edge")
+	message := protocol.EncodeDraARLv1("", "", 1, protocol.DraARLTypeTextMessage, protocol.DraARLDevModelESP32NoRadio, 1, "", payload)
+	sourceAddr, err := net.ResolveUDPAddr("udp", edges["edge-a"].Gateway.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = devices["alice"].WriteToUDP(message, sourceAddr); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnce := func(username string) {
+		t.Helper()
+		device := devices[username]
+		_ = device.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, 1400)
+		n, _, readErr := device.ReadFromUDP(buf)
+		if readErr != nil {
+			t.Fatalf("%s did not receive relayed text: %v", username, readErr)
+		}
+		packet, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, buf[:n])
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if packet.Type != protocol.DraARLTypeTextMessage || string(packet.DATA) != string(payload) {
+			protocol.ReleaseDraARLv1RoutingPacket(packet)
+			t.Fatalf("%s received type=%d data=%q", username, packet.Type, packet.DATA)
+		}
+		protocol.ReleaseDraARLv1RoutingPacket(packet)
+		_ = device.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		if _, _, duplicateErr := device.ReadFromUDP(buf); duplicateErr == nil {
+			t.Fatalf("%s received the same relayed text more than once", username)
+		}
+	}
+	for _, username := range []string{"bob-1", "bob-2", "carol", "dave"} {
+		readOnce(username)
+	}
+	for _, username := range []string{"alice", "outside"} {
+		_ = devices[username].SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+		if _, _, readErr := devices[username].ReadFromUDP(make([]byte, 1400)); readErr == nil {
+			t.Fatalf("%s received a frame outside the intended remote domain", username)
+		}
+	}
+
+	captureMu.Lock()
+	defer captureMu.Unlock()
+	for _, nodeID := range []string{"edge-b", "edge-c", "edge-d"} {
+		if got := downstreamByAddr[nodeDataAddr[nodeID]]; got != 1 {
+			t.Errorf("%s downstream datagrams=%d want=1", nodeID, got)
+		}
+	}
+	for _, nodeID := range []string{"edge-a", "edge-empty"} {
+		if got := downstreamByAddr[nodeDataAddr[nodeID]]; got != 0 {
+			t.Errorf("%s downstream datagrams=%d want=0", nodeID, got)
+		}
+	}
+	if got := len(downstreamByAddr); got != 3 {
+		t.Errorf("downstream target addresses=%d want=3: %#v", got, downstreamByAddr)
+	}
+}
+
 func TestEdgeDeviceConfigurationUsesReliableExactSessionControl(t *testing.T) {
 	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
 	if err != nil {

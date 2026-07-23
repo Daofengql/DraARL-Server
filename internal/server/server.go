@@ -298,6 +298,8 @@ func (s *Server) setupRoutes() {
 			admin.POST("/edge-nodes", handler.CreateEdgeNode)
 			admin.PUT("/edge-nodes/:id", handler.UpdateEdgeNode)
 			admin.POST("/edge-nodes/:id/rotate-credential", handler.RotateEdgeNodeCredential)
+			admin.POST("/edge-nodes/:id/revoke-credential", handler.RevokeEdgeNodeCredential)
+			admin.POST("/edge-nodes/:id/disconnect", handler.DisconnectEdgeNode)
 
 			// 设备配置管理（管理员权限，可操作任意设备）
 			admin.GET("/admin/devices/:id/config", handler.AdminGetDeviceConfig)

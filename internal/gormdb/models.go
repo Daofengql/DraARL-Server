@@ -194,6 +194,8 @@ type Server struct {
 	PublicNetwork              string     `gorm:"type:varchar(100);column:public_network" json:"public_network,omitempty"`
 	PublicPriority             int        `gorm:"type:int;default:100;column:public_priority" json:"public_priority"`
 	NodeTokenHash              string     `gorm:"type:char(64);column:node_token_hash" json:"-"`
+	NodePreviousTokenHash      string     `gorm:"type:char(64);column:node_previous_token_hash" json:"-"`
+	NodePreviousTokenExpiresAt *time.Time `gorm:"type:datetime;column:node_previous_token_expires_at" json:"-"`
 	NodeRegistrationTokenHash  string     `gorm:"type:char(64);column:node_registration_token_hash" json:"-"`
 	NodeRegistrationExpiresAt  *time.Time `gorm:"type:datetime;column:node_registration_expires_at" json:"node_registration_expires_at,omitempty"`
 	NodeRegisteredAt           *time.Time `gorm:"type:datetime;column:node_registered_at" json:"node_registered_at,omitempty"`
@@ -264,6 +266,7 @@ type OperatorLog struct {
 	EventType  string    `gorm:"type:varchar(255);index" json:"event_type"`
 	Operator   string    `gorm:"type:varchar(255)" json:"operator"`
 	OperatorID int       `gorm:"type:int;index" json:"operator_id"`
+	IPAddress  string    `gorm:"type:varchar(64);column:ip_address" json:"ip_address,omitempty"`
 }
 
 // TableName 指定表名
@@ -622,6 +625,21 @@ func AutoMigrate() error {
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 	return nil
+}
+
+// IsSchemaEmpty reports whether the selected database contains no tables at
+// all. A partially initialized or unrelated non-empty schema is deliberately
+// not treated as empty; repairing or upgrading it requires -auto-migrate.
+func IsSchemaEmpty() (bool, error) {
+	tables, err := Get().Migrator().GetTables()
+	if err != nil {
+		return false, err
+	}
+	return schemaIsEmpty(tables), nil
+}
+
+func schemaIsEmpty(tables []string) bool {
+	return len(tables) == 0
 }
 
 func backfillServerPublicAccessIDs(db *gorm.DB) error {

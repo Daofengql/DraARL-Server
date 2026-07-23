@@ -21,33 +21,34 @@ type DeviceConfigHandler func(deviceID int, kind string, data []byte) ([][]byte,
 const defaultDeviceGrantTTL = 2 * time.Minute
 
 type CenterGateway struct {
-	cluster        *ClusterManager
-	server         *NodeServer
-	data           *NodeDatagramBridge
-	auth           DeviceAuthHandler
-	activate       DeviceActivationHandler
-	mu             sync.RWMutex
-	ownershipMu    sync.Mutex
-	deviceSessions map[uint64]deviceSessionOwner
-	activeDevices  map[string]uint64
-	activeByID     map[int]uint64
-	deviceEpochs   map[string]uint64
-	metrics        map[string]*Metrics
-	onNodeStatus   func(*NodeSession, *NodeHeartbeat, bool)
-	onLocalRevoke  func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)
-	onDeviceRevoke func(nodeID string, controlSessionID uint64, deviceID int, reason string)
-	configHandler  DeviceConfigHandler
-	configMu       sync.Mutex
-	configPending  map[uint64]*pendingDeviceConfigDelivery
-	configUpCache  map[deviceConfigCacheKey]cachedDeviceConfigResult
-	configClosing  bool
-	configClosed   chan struct{}
-	configClose    sync.Once
-	configLoopOnce sync.Once
-	configWG       sync.WaitGroup
-	speaker        *SpeakerLeaseManager
-	resourceLimits ResourceLimits
-	sessionCounts  map[nodeControlSession]int
+	cluster            *ClusterManager
+	server             *NodeServer
+	data               *NodeDatagramBridge
+	auth               DeviceAuthHandler
+	activate           DeviceActivationHandler
+	mu                 sync.RWMutex
+	ownershipMu        sync.Mutex
+	deviceSessions     map[uint64]deviceSessionOwner
+	activeDevices      map[string]uint64
+	activeByID         map[int]uint64
+	deviceEpochs       map[string]uint64
+	metrics            map[string]*Metrics
+	onNodeStatus       func(*NodeSession, *NodeHeartbeat, bool)
+	onLocalRevoke      func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)
+	onDeviceRevoke     func(nodeID string, controlSessionID uint64, deviceID int, reason string)
+	onCredentialResult func(*NodeSession, NodeCredentialControl)
+	configHandler      DeviceConfigHandler
+	configMu           sync.Mutex
+	configPending      map[uint64]*pendingDeviceConfigDelivery
+	configUpCache      map[deviceConfigCacheKey]cachedDeviceConfigResult
+	configClosing      bool
+	configClosed       chan struct{}
+	configClose        sync.Once
+	configLoopOnce     sync.Once
+	configWG           sync.WaitGroup
+	speaker            *SpeakerLeaseManager
+	resourceLimits     ResourceLimits
+	sessionCounts      map[nodeControlSession]int
 }
 
 type nodeControlSession struct {
@@ -264,6 +265,14 @@ func (g *CenterGateway) handleDataBindRequest(session *NodeSession, env Envelope
 
 func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 	switch env.Subtype {
+	case SubtypeNodeCredential:
+		var message NodeCredentialControl
+		if DecodeJSON(env.Payload, &message) != nil || message.Kind != NodeCredentialKindResult || message.Validate(session.NodeID) != nil {
+			return
+		}
+		if g.onCredentialResult != nil {
+			g.onCredentialResult(session, message)
+		}
 	case SubtypeDeviceAuth:
 		var request DeviceAuthRequest
 		if err := DecodeJSON(env.Payload, &request); err != nil || g.auth == nil {
@@ -1389,6 +1398,7 @@ type EdgeGateway struct {
 	speakerDomains    map[uint64]*edgeSpeakerState
 	reportSession     func(DeviceSessionReport)
 	renewSession      func(DeviceSessionRenewRequest)
+	installCredential func(NodeCredentialControl) error
 }
 
 type edgeControlLink struct {
@@ -2387,6 +2397,23 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 		env.receivedAt = time.Now()
 	}
 	switch env.Subtype {
+	case SubtypeNodeCredential:
+		var message NodeCredentialControl
+		if DecodeJSON(env.Payload, &message) != nil || message.Kind != NodeCredentialKindRotate || message.Validate(client.Session.NodeID) != nil {
+			return
+		}
+		result := NodeCredentialControl{Kind: NodeCredentialKindResult, CredentialEpoch: message.CredentialEpoch, AckForMessageID: env.MessageID, Success: false}
+		if g.installCredential == nil {
+			result.Error = "credential persistence is unavailable"
+		} else if err := g.installCredential(message); err != nil {
+			result.Error = "credential persistence failed"
+		} else {
+			result.Success = true
+		}
+		payload, _ := EncodeJSON(result)
+		reply := NewEnvelope(SubtypeNodeCredential, client.Session.NodeID, client.Session.SessionID, g.nextRequest.Add(1), payload)
+		reply.Flags = FlagControl | FlagAck | FlagCritical
+		_ = client.SendEnvelope(reply)
 	case SubtypeNodeDataBind:
 		var bind NodeDataBind
 		if DecodeJSON(env.Payload, &bind) != nil || bind.Action != NodeDataBindChallenge || len(bind.Challenge) != 32 || link.peer == nil {

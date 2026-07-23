@@ -32,6 +32,7 @@ const (
 	SubtypeNodeAuth            byte = 0x03
 	SubtypeNodeHeartbeat       byte = 0x05
 	SubtypeNodeDataBind        byte = 0x06
+	SubtypeNodeCredential      byte = 0x07
 	SubtypeRouteSnapshotBegin  byte = 0x10
 	SubtypeRouteSnapshotChunk  byte = 0x11
 	SubtypeRouteSnapshotCommit byte = 0x12
@@ -65,17 +66,18 @@ const (
 	NodeFeatureDeviceConfig
 	NodeFeatureSpeakerLease
 	NodeFeatureRuntimeMetrics
+	NodeFeatureCredentialRotation
 )
 
 const (
 	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
-		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics
+		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation
 	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
 )
 
 func IsKnownSubtype(subtype byte) bool {
 	switch subtype {
-	case SubtypeNodeEnroll, SubtypeNodeAuth, SubtypeNodeHeartbeat, SubtypeNodeDataBind,
+	case SubtypeNodeEnroll, SubtypeNodeAuth, SubtypeNodeHeartbeat, SubtypeNodeDataBind, SubtypeNodeCredential,
 		SubtypeRouteSnapshotBegin, SubtypeRouteSnapshotChunk, SubtypeRouteSnapshotCommit,
 		SubtypeRouteDelta, SubtypeRouteAck, SubtypeRouteResyncRequest,
 		SubtypeDeviceAuth, SubtypeDeviceSessionRenew, SubtypeDeviceSessionReport,

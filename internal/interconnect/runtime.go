@@ -31,22 +31,32 @@ func ActiveCenterRuntime() *CenterRuntime {
 }
 
 type CenterRuntimeConfig struct {
-	ControlListen  string
-	TLSConfig      *tls.Config
-	ValidateToken  func(nodeID, token string) bool
-	Authenticate   func(nodeID, token string) (NodeAuthentication, error)
-	Auth           DeviceAuthHandler
-	Activate       DeviceActivationHandler
-	Config         DeviceConfigHandler
-	OnNodeStatus   func(*NodeSession, *NodeHeartbeat, bool)
-	ResourceLimits ResourceLimits
+	ControlListen    string
+	TLSConfig        *tls.Config
+	ValidateToken    func(nodeID, token string) bool
+	Authenticate     func(nodeID, token string) (NodeAuthentication, error)
+	Auth             DeviceAuthHandler
+	Activate         DeviceActivationHandler
+	Config           DeviceConfigHandler
+	OnNodeStatus     func(*NodeSession, *NodeHeartbeat, bool)
+	OnAuthentication func(NodeAuthenticationEvent)
+	ResourceLimits   ResourceLimits
 }
 type CenterRuntime struct {
-	Cluster   *ClusterManager
-	Gateway   *CenterGateway
-	Control   *NodeServer
-	UDPBridge *NodeDatagramBridge
-	status    *NodeStatusDispatcher
+	Cluster           *ClusterManager
+	Gateway           *CenterGateway
+	Control           *NodeServer
+	UDPBridge         *NodeDatagramBridge
+	status            *NodeStatusDispatcher
+	credentialMu      sync.Mutex
+	credentialPending map[uint64]*pendingNodeCredentialRotation
+}
+
+type pendingNodeCredentialRotation struct {
+	nodeID          string
+	sessionID       uint64
+	credentialEpoch uint32
+	result          chan NodeCredentialControl
 }
 
 func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
@@ -67,7 +77,7 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	if status != nil {
 		gateway.onNodeStatus = status.Submit
 	}
-	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect, ResourceLimits: cfg.ResourceLimits})
+	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect, OnAuthentication: cfg.OnAuthentication, ResourceLimits: cfg.ResourceLimits})
 	if err != nil {
 		return nil, err
 	}
@@ -82,12 +92,23 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 		cluster.Close()
 		return nil, err
 	}
-	return &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data, status: status}, nil
+	runtime := &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data, status: status, credentialPending: make(map[uint64]*pendingNodeCredentialRotation)}
+	gateway.onCredentialResult = runtime.finishCredentialRotation
+	return runtime, nil
 }
 func (r *CenterRuntime) Close() {
 	if r == nil {
 		return
 	}
+	r.credentialMu.Lock()
+	for messageID, pending := range r.credentialPending {
+		delete(r.credentialPending, messageID)
+		select {
+		case pending.result <- NodeCredentialControl{Kind: NodeCredentialKindResult, AckForMessageID: messageID, CredentialEpoch: pending.credentialEpoch, Error: "runtime_closed"}:
+		default:
+		}
+	}
+	r.credentialMu.Unlock()
 	if r.UDPBridge != nil {
 		r.UDPBridge.Close()
 	}
@@ -166,6 +187,7 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 		return nil, err
 	}
 	runtime := &EdgeRuntime{cfg: cfg, Gateway: gateway, closed: make(chan struct{}), fatal: make(chan error, 1), instance: fmt.Sprintf("%s-%d", cfg.NodeID, randomUint64())}
+	gateway.installCredential = runtime.installCredential
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
 	client, link, connectErr := runtime.connectWithFallback(ctx)
 	cancel()
@@ -184,6 +206,95 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 		}
 	}
 	return runtime, nil
+}
+
+func (r *EdgeRuntime) installCredential(message NodeCredentialControl) error {
+	if r == nil || message.Kind != NodeCredentialKindRotate {
+		return errors.New("invalid node credential rotation")
+	}
+	r.mu.RLock()
+	nodeID := r.cfg.NodeID
+	onCredential := r.cfg.OnCredential
+	r.mu.RUnlock()
+	identity := EdgeIdentity{NodeID: nodeID, Credential: message.Credential, CredentialEpoch: message.CredentialEpoch}
+	if CredentialNodeID(identity.Credential) != identity.NodeID {
+		return errors.New("rotated node credential identity mismatch")
+	}
+	if onCredential == nil {
+		return errors.New("edge credential persistence callback is unavailable")
+	}
+	if err := onCredential(identity); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.cfg.Token = identity.Credential
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *CenterRuntime) RotateNodeCredential(nodeID, credential string, epoch uint32, previousValidUntil time.Time) (uint64, error) {
+	if r == nil || r.Control == nil {
+		return 0, errors.New("center interconnect runtime is unavailable")
+	}
+	session, ok := r.Control.Session(nodeID)
+	if !ok {
+		return 0, errors.New("node is offline")
+	}
+	if session.Features&NodeFeatureCredentialRotation == 0 {
+		return 0, errors.New("node does not support online credential rotation")
+	}
+	message := NodeCredentialControl{Kind: NodeCredentialKindRotate, Credential: credential, CredentialEpoch: epoch, PreviousValidUntilMillis: previousValidUntil.UnixMilli()}
+	if err := message.Validate(nodeID); err != nil {
+		return 0, err
+	}
+	payload, err := EncodeJSON(message)
+	if err != nil {
+		return 0, err
+	}
+	messageID := r.Cluster.NextMessageID()
+	result := make(chan NodeCredentialControl, 1)
+	pending := &pendingNodeCredentialRotation{nodeID: nodeID, sessionID: session.SessionID, credentialEpoch: epoch, result: result}
+	r.credentialMu.Lock()
+	r.credentialPending[messageID] = pending
+	r.credentialMu.Unlock()
+	defer func() {
+		r.credentialMu.Lock()
+		delete(r.credentialPending, messageID)
+		r.credentialMu.Unlock()
+	}()
+	env := NewEnvelope(SubtypeNodeCredential, "center", 0, messageID, payload)
+	env.Flags = FlagControl | FlagAck | FlagCritical
+	if err := session.SendEnvelope(env); err != nil {
+		return 0, err
+	}
+	select {
+	case reply, ok := <-result:
+		if !ok {
+			return messageID, errors.New("center interconnect runtime closed during credential rotation")
+		}
+		if !reply.Success {
+			return messageID, errors.New("edge failed to persist rotated credential")
+		}
+		return messageID, nil
+	case <-time.After(3 * time.Second):
+		return messageID, errors.New("edge credential rotation acknowledgement timed out")
+	}
+}
+
+func (r *CenterRuntime) finishCredentialRotation(session *NodeSession, message NodeCredentialControl) {
+	if r == nil || session == nil || message.Kind != NodeCredentialKindResult {
+		return
+	}
+	r.credentialMu.Lock()
+	pending := r.credentialPending[message.AckForMessageID]
+	r.credentialMu.Unlock()
+	if pending == nil || pending.nodeID != session.NodeID || pending.sessionID != session.SessionID || pending.credentialEpoch != message.CredentialEpoch {
+		return
+	}
+	select {
+	case pending.result <- message:
+	default:
+	}
 }
 
 var errEdgeCredentialPersistence = errors.New("persist issued edge credential")

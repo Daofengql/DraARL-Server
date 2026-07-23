@@ -2,7 +2,27 @@ package interconnect
 
 import (
 	"testing"
+	"time"
 )
+
+func TestNodeCredentialControlValidation(t *testing.T) {
+	credential, err := NewLongTermCredential("edge-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotation := NodeCredentialControl{Kind: NodeCredentialKindRotate, Credential: credential, CredentialEpoch: 2, PreviousValidUntilMillis: time.Now().Add(time.Minute).UnixMilli()}
+	if err := rotation.Validate("edge-test"); err != nil {
+		t.Fatalf("valid rotation rejected: %v", err)
+	}
+	rotation.Credential = "redacted"
+	if err := rotation.Validate("edge-test"); err == nil {
+		t.Fatal("credential for the wrong node was accepted")
+	}
+	result := NodeCredentialControl{Kind: NodeCredentialKindResult, CredentialEpoch: 2, AckForMessageID: 9, Success: true}
+	if err := result.Validate("edge-test"); err != nil {
+		t.Fatalf("valid rotation result rejected: %v", err)
+	}
+}
 
 func TestDeviceConfigControlValidation(t *testing.T) {
 	base := DeviceConfigControl{SessionID: 11, SessionEpoch: 2, DeviceID: 7}

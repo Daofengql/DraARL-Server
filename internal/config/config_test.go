@@ -101,6 +101,9 @@ func TestInterconnectResourceDefaults(t *testing.T) {
 		r.DataQueueGlobal != 4096 || r.ControlHardPPSPerNode != 2000 || r.MaxDeviceSessionsPerNode != 25000 {
 		t.Fatalf("unexpected interconnect resource defaults: %#v", r)
 	}
+	if cfg.Interconnect.CredentialRotationGraceSeconds != 600 {
+		t.Fatalf("credential rotation grace=%d", cfg.Interconnect.CredentialRotationGraceSeconds)
+	}
 }
 
 func containsOrigin(origins []string, target string) bool {

@@ -10,6 +10,42 @@ import (
 	"time"
 )
 
+const (
+	NodeCredentialKindRotate = "rotate"
+	NodeCredentialKindResult = "result"
+)
+
+// NodeCredentialControl carries a newly generated long-term credential only
+// over the authenticated TLS control plane. The centre stores only its hash.
+type NodeCredentialControl struct {
+	Kind                     string `json:"kind"`
+	Credential               string `json:"credential,omitempty"`
+	CredentialEpoch          uint32 `json:"credential_epoch"`
+	PreviousValidUntilMillis int64  `json:"previous_valid_until_ms,omitempty"`
+	AckForMessageID          uint64 `json:"ack_for_message_id,omitempty"`
+	Success                  bool   `json:"success,omitempty"`
+	Error                    string `json:"error,omitempty"`
+}
+
+func (m NodeCredentialControl) Validate(nodeID string) error {
+	if m.CredentialEpoch == 0 || len(m.Error) > 128 {
+		return errors.New("invalid node credential control metadata")
+	}
+	switch m.Kind {
+	case NodeCredentialKindRotate:
+		if m.AckForMessageID != 0 || m.PreviousValidUntilMillis <= 0 || CredentialNodeID(m.Credential) != nodeID {
+			return errors.New("invalid node credential rotation")
+		}
+	case NodeCredentialKindResult:
+		if m.Credential != "" || m.PreviousValidUntilMillis != 0 || m.AckForMessageID == 0 {
+			return errors.New("invalid node credential rotation result")
+		}
+	default:
+		return errors.New("unknown node credential control kind")
+	}
+	return nil
+}
+
 type DeviceAuthRequest struct {
 	RequestID uint64 `json:"request_id"`
 	SourceIP  string `json:"source_ip"`

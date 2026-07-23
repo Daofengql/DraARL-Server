@@ -140,7 +140,13 @@ cd ..
 
 ### 5. 初始化数据库并启动
 
-首次部署或表结构变更后执行自动迁移：
+首次部署到完全没有表的空数据库时，直接启动即可自动初始化表结构：
+
+```bash
+go run ./cmd/draarl -c config.yaml
+```
+
+如果数据库中已经存在任意一张表，程序不会在普通启动时修改结构。表结构变更后需显式执行自动迁移：
 
 ```bash
 go run ./cmd/draarl -c config.yaml -auto-migrate

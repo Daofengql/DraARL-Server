@@ -36,6 +36,91 @@ func TestCenterAndEdgeRuntimeConnectWithoutExternalDependencies(t *testing.T) {
 	}
 }
 
+func TestOnlineCredentialRotationPersistsAtEdge(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	center, err := StartCenterRuntime(CenterRuntimeConfig{
+		ControlListen: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(nodeID, token string) bool { return nodeID == "edge-rotate" && token == "old-token" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer center.Close()
+	persisted := make(chan EdgeIdentity, 1)
+	edge, err := StartEdgeRuntime(EdgeRuntimeConfig{
+		NodeID: "edge-rotate", Token: "old-token", CenterControl: center.Control.Addr().String(), Listen: "127.0.0.1:0",
+		TLSConfig:    &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13},
+		OnCredential: func(identity EdgeIdentity) error { persisted <- identity; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer edge.Close()
+	waitForReadyEdgeClient(t, edge, 3*time.Second)
+	credential, err := NewLongTermCredential("edge-rotate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := center.RotateNodeCredential("edge-rotate", credential, 2, time.Now().Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case identity := <-persisted:
+		if identity.NodeID != "edge-rotate" || identity.Credential != credential || identity.CredentialEpoch != 2 {
+			t.Fatalf("persisted identity=%#v", identity)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("online credential rotation was not persisted by edge")
+	}
+	edge.mu.RLock()
+	got := edge.cfg.Token
+	edge.mu.RUnlock()
+	if got != credential {
+		t.Fatal("edge reconnect credential was not updated after persistence")
+	}
+}
+
+func TestCredentialRotationAckIsBoundToNodeSessionAndEpoch(t *testing.T) {
+	result := make(chan NodeCredentialControl, 1)
+	runtime := &CenterRuntime{credentialPending: map[uint64]*pendingNodeCredentialRotation{
+		9: {nodeID: "edge-target", sessionID: 42, credentialEpoch: 3, result: result},
+	}}
+	ack := NodeCredentialControl{Kind: NodeCredentialKindResult, CredentialEpoch: 3, AckForMessageID: 9, Success: true}
+
+	for _, session := range []*NodeSession{
+		{NodeID: "edge-other", SessionID: 42},
+		{NodeID: "edge-target", SessionID: 41},
+	} {
+		runtime.finishCredentialRotation(session, ack)
+		select {
+		case <-result:
+			t.Fatal("credential rotation accepted an acknowledgement from the wrong node session")
+		default:
+		}
+	}
+	wrongEpoch := ack
+	wrongEpoch.CredentialEpoch = 2
+	runtime.finishCredentialRotation(&NodeSession{NodeID: "edge-target", SessionID: 42}, wrongEpoch)
+	select {
+	case <-result:
+		t.Fatal("credential rotation accepted an acknowledgement for the wrong credential epoch")
+	default:
+	}
+
+	runtime.finishCredentialRotation(&NodeSession{NodeID: "edge-target", SessionID: 42}, ack)
+	select {
+	case got := <-result:
+		if got.AckForMessageID != 9 || !got.Success {
+			t.Fatalf("unexpected credential acknowledgement: %#v", got)
+		}
+	default:
+		t.Fatal("credential rotation rejected the matching acknowledgement")
+	}
+}
+
 func TestEdgeStartsBeforeCenterAndReconnectsAfterCenterRestart(t *testing.T) {
 	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
 	if err != nil {

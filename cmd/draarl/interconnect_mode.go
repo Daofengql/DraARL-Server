@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	stdlog "log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
 	"draarl/internal/interconnect"
+	oplog "draarl/internal/log"
 	"draarl/internal/udphub"
 )
 
@@ -224,6 +226,23 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			}
 		}
 	}
+	onNodeAuthentication := func(event interconnect.NodeAuthenticationEvent) {
+		remoteIP := event.RemoteAddr
+		if host, _, err := net.SplitHostPort(event.RemoteAddr); err == nil {
+			remoteIP = host
+		}
+		if event.Registered {
+			oplog.AddLog("边缘节点完成首次注册: "+event.NodeID, "edge_node_register", 0, "system", "", remoteIP)
+			return
+		}
+		if !event.Accepted {
+			nodeID := strings.TrimSpace(event.NodeID)
+			if nodeID == "" {
+				nodeID = "unknown"
+			}
+			oplog.AddLog("边缘节点认证失败: "+nodeID+" reason="+event.Reason, "edge_node_auth_failed", 0, "system", "", remoteIP)
+		}
+	}
 	r := cfg.Interconnect.Resources
 	limits := interconnect.ResourceLimits{
 		MaxNodes: r.MaxNodes, MaxPendingHandshakes: r.MaxPendingHandshakes, AuthAttemptsPerMinutePerIP: r.AuthAttemptsPerMinutePerIP,
@@ -232,5 +251,5 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		ControlSoftPPSPerNode: r.ControlSoftPPSPerNode, ControlHardPPSPerNode: r.ControlHardPPSPerNode, ControlHardMbpsPerNode: r.ControlHardMbpsPerNode,
 		DeviceAuthPPSPerNode: r.DeviceAuthPPSPerNode, MaxDeviceSessionsPerNode: r.MaxDeviceSessionsPerNode,
 	}
-	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Config: configHandler, OnNodeStatus: onNodeStatus, ResourceLimits: limits})
+	return interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode, Auth: authHandler, Activate: activateDevice, Config: configHandler, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits})
 }

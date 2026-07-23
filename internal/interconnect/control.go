@@ -123,6 +123,16 @@ type NodeAuthentication struct {
 	CredentialEpoch  uint32
 }
 
+type NodeAuthenticationEvent struct {
+	NodeID     string
+	RemoteAddr string
+	Accepted   bool
+	Registered bool
+	Reason     string
+	Protocol   byte
+	Features   uint64
+}
+
 func marshalControlMessage(msg ControlMessage) ([]byte, error) {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -215,6 +225,21 @@ func (s *NodeSession) Send(msg ControlMessage) error {
 	s.ControlMetrics.AddOut(len(wire))
 	return nil
 }
+
+func (s *NodeSession) SendEnvelope(env Envelope) error {
+	if s == nil {
+		return errors.New("node session is unavailable")
+	}
+	env.NodeSessionID, env.KeyEpoch = s.SessionID, s.KeyEpoch
+	if env.SourceNodeID == "" {
+		env.SourceNodeID = "center"
+	}
+	wire, err := env.MarshalControl(s.Key)
+	if err != nil {
+		return err
+	}
+	return s.Send(ControlMessage{Kind: "type0", Packet: base64.RawStdEncoding.EncodeToString(wire), MessageID: env.MessageID})
+}
 func (s *NodeSession) Touch() { s.LastHeartbeat.Store(time.Now().UnixMilli()) }
 
 // AcceptMessage rejects replays inside a fixed, allocation-free sliding
@@ -301,16 +326,23 @@ func (s *NodeSession) ConsumeDataBindChallenge(challenge []byte, now time.Time) 
 }
 
 type NodeServerConfig struct {
-	ListenAddr     string
-	TLSConfig      *tls.Config
-	ValidateToken  func(nodeID, token string) bool
-	Authenticate   func(nodeID, token string) (NodeAuthentication, error)
-	OnConnect      func(*NodeSession)
-	OnMessage      func(*NodeSession, ControlMessage)
-	OnEnvelope     func(*NodeSession, Envelope)
-	OnDisconnect   func(*NodeSession, error)
-	ResourceLimits ResourceLimits
-	Capabilities   NodeCapabilities
+	ListenAddr       string
+	TLSConfig        *tls.Config
+	ValidateToken    func(nodeID, token string) bool
+	Authenticate     func(nodeID, token string) (NodeAuthentication, error)
+	OnConnect        func(*NodeSession)
+	OnMessage        func(*NodeSession, ControlMessage)
+	OnEnvelope       func(*NodeSession, Envelope)
+	OnDisconnect     func(*NodeSession, error)
+	OnAuthentication func(NodeAuthenticationEvent)
+	ResourceLimits   ResourceLimits
+	Capabilities     NodeCapabilities
+}
+
+func (s *NodeServer) emitAuthentication(event NodeAuthenticationEvent) {
+	if s != nil && s.cfg.OnAuthentication != nil {
+		s.cfg.OnAuthentication(event)
+	}
 }
 
 type NodeServer struct {
@@ -425,6 +457,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	})
 	if validHello && negotiationErr != nil {
 		s.protection.ProtocolRejected.Add(1)
+		s.emitAuthentication(NodeAuthenticationEvent{NodeID: hello.NodeID, RemoteAddr: conn.RemoteAddr().String(), Reason: "protocol_incompatible"})
 		_ = writeControlMessage(conn, ControlMessage{Kind: controlProtocolError, Error: "node protocol negotiation failed"})
 		_ = conn.Close()
 		return
@@ -444,6 +477,13 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		if !rateRejected {
 			s.protection.AuthFailed.Add(1)
 		}
+		reason := "credential_rejected"
+		if !validHello {
+			reason = "invalid_hello"
+		} else if rateRejected {
+			reason = "rate_limited"
+		}
+		s.emitAuthentication(NodeAuthenticationEvent{NodeID: hello.NodeID, RemoteAddr: conn.RemoteAddr().String(), Reason: reason, Protocol: protocolVersion, Features: features})
 		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthError, Error: "node authentication failed"})
 		_ = conn.Close()
 		return
@@ -458,6 +498,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	session.Touch()
 	if !s.reserveSession(session.NodeID) {
 		s.protection.MaxNodesRejected.Add(1)
+		s.emitAuthentication(NodeAuthenticationEvent{NodeID: session.NodeID, RemoteAddr: session.RemoteAddr, Reason: "node_capacity", Protocol: protocolVersion, Features: features})
 		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthError, Error: "node capacity reached"})
 		_ = conn.Close()
 		return
@@ -496,6 +537,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	} else if s.cfg.OnConnect != nil {
 		s.cfg.OnConnect(session)
 	}
+	s.emitAuthentication(NodeAuthenticationEvent{NodeID: session.NodeID, RemoteAddr: session.RemoteAddr, Accepted: true, Registered: authentication.IssuedCredential != "", Reason: "accepted", Protocol: protocolVersion, Features: features})
 	defer func() {
 		s.removeSession(session)
 		_ = conn.Close()
@@ -699,15 +741,7 @@ func (s *NodeServer) SendEnvelope(nodeID string, env Envelope) error {
 	if !ok {
 		return errors.New("node is offline")
 	}
-	env.NodeSessionID, env.KeyEpoch = session.SessionID, session.KeyEpoch
-	if env.SourceNodeID == "" {
-		env.SourceNodeID = "center"
-	}
-	wire, err := env.MarshalControl(session.Key)
-	if err != nil {
-		return err
-	}
-	return session.Send(ControlMessage{Kind: "type0", Packet: base64.RawStdEncoding.EncodeToString(wire), MessageID: env.MessageID})
+	return session.SendEnvelope(env)
 }
 func (s *NodeServer) Disconnect(nodeID string) bool {
 	session, ok := s.Session(nodeID)

@@ -13,6 +13,7 @@ var (
 	ErrNodeNotFound          = errors.New("edge node not found")
 	ErrNodeDisabled          = errors.New("edge node is disabled")
 	ErrNodeCredentialInvalid = errors.New("edge node credential is invalid")
+	ErrNodeCredentialMissing = errors.New("edge node has no active credential")
 )
 
 type NodeAuthenticationResult struct {
@@ -42,6 +43,13 @@ func (r *ServerRepository) AuthenticateNode(nodeID, presentedHash, issuedCredent
 			outcome.CredentialEpoch = node.NodeCredentialEpoch
 			return nil
 		}
+		previousValid := node.NodePreviousTokenExpiresAt != nil && !now.After(*node.NodePreviousTokenExpiresAt) &&
+			secureHashEqual(node.NodePreviousTokenHash, presentedHash)
+		if previousValid {
+			outcome.Accepted = true
+			outcome.CredentialEpoch = node.NodeCredentialEpoch
+			return nil
+		}
 		registrationValid := node.NodeRegistrationExpiresAt != nil && !now.After(*node.NodeRegistrationExpiresAt) &&
 			secureHashEqual(node.NodeRegistrationTokenHash, presentedHash)
 		if !registrationValid || issuedCredentialHash == "" {
@@ -62,6 +70,83 @@ func (r *ServerRepository) AuthenticateNode(nodeID, presentedHash, issuedCredent
 		return nil
 	})
 	return outcome, err
+}
+
+type NodeCredentialRotation struct {
+	CredentialEpoch    uint32
+	PreviousValidUntil time.Time
+}
+
+// RotateNodeCredential atomically installs the new credential and retains the
+// previous hash only for a bounded reconnect grace period. Raw credentials
+// never enter the database.
+func (r *ServerRepository) RotateNodeCredential(id int, newHash string, now time.Time, grace time.Duration) (NodeCredentialRotation, error) {
+	var outcome NodeCredentialRotation
+	if len(newHash) != 64 {
+		return outcome, ErrNodeCredentialInvalid
+	}
+	if grace <= 0 {
+		grace = 10 * time.Minute
+	}
+	if grace > time.Hour {
+		grace = time.Hour
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var node Server
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND node_id IS NOT NULL", id).First(&node).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNodeNotFound
+			}
+			return err
+		}
+		if node.Status != 1 {
+			return ErrNodeDisabled
+		}
+		epoch := node.NodeCredentialEpoch + 1
+		validUntil := now.Add(grace)
+		updates := map[string]interface{}{
+			"node_token_hash":                newHash,
+			"node_previous_token_hash":       node.NodeTokenHash,
+			"node_previous_token_expires_at": validUntil,
+			"node_registration_token_hash":   "",
+			"node_registration_expires_at":   nil,
+			"node_credential_epoch":          epoch,
+		}
+		if node.NodeRegisteredAt == nil {
+			updates["node_registered_at"] = now
+		}
+		if err := tx.Model(&Server{}).Where("id = ?", node.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		outcome = NodeCredentialRotation{CredentialEpoch: epoch, PreviousValidUntil: validUntil}
+		return nil
+	})
+	return outcome, err
+}
+
+// RevokeNodeCredentials invalidates registration, current and grace-period
+// credentials in one transaction. Incrementing the epoch makes the action
+// visible even though no secret value is retained.
+func (r *ServerRepository) RevokeNodeCredentials(id int) (string, uint32, error) {
+	var nodeID string
+	var epoch uint32
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var node Server
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND node_id IS NOT NULL", id).First(&node).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNodeNotFound
+			}
+			return err
+		}
+		nodeID = *node.NodeID
+		epoch = node.NodeCredentialEpoch + 1
+		return tx.Model(&Server{}).Where("id = ?", node.ID).Updates(map[string]interface{}{
+			"node_token_hash": "", "node_previous_token_hash": "", "node_previous_token_expires_at": nil,
+			"node_registration_token_hash": "", "node_registration_expires_at": nil,
+			"node_credential_epoch": epoch,
+		}).Error
+	})
+	return nodeID, epoch, err
 }
 
 func secureHashEqual(left, right string) bool {

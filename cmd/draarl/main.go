@@ -151,8 +151,20 @@ func main() {
 	}
 	defer gormdb.Close()
 
-	// 只有在指定 -auto-migrate 参数时才执行数据库迁移
-	if *autoMigrate {
+	// 全新空库可安全地自动初始化；任何非空库仍要求显式参数，避免
+	// 启动过程静默修改已有或半初始化结构。
+	runMigration := *autoMigrate
+	if !runMigration {
+		empty, checkErr := gormdb.IsSchemaEmpty()
+		if checkErr != nil {
+			stdlog.Fatalf("检查数据库结构失败: %v", checkErr)
+		}
+		if empty {
+			runMigration = true
+			stdlog.Println("检测到目标数据库为空，将自动初始化表结构")
+		}
+	}
+	if runMigration {
 		stdlog.Println("执行数据库自动迁移...")
 
 		// 自动迁移表结构（创建新表或更新表结构）

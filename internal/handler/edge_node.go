@@ -88,6 +88,7 @@ func ListEdgeNodes(c *gin.Context) {
 }
 
 func CreateEdgeNode(c *gin.Context) {
+	setCredentialResponseNoStore(c)
 	var req createEdgeNodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.DisplayName) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称不能为空"})
@@ -233,21 +234,29 @@ func UpdateEdgeNode(c *gin.Context) {
 			return
 		}
 	}
+	forcedDisconnect := false
 	if req.Status != nil && *req.Status == 0 {
 		if runtime := interconnect.ActiveCenterRuntime(); runtime != nil {
-			runtime.Control.Disconnect(*node.NodeID)
+			forcedDisconnect = runtime.Control.Disconnect(*node.NodeID)
 		}
 		clearEdgeNodeDeviceEntries(repo, *node.NodeID)
 	}
 	currentUser, _ := requireCurrentUser(c)
 	if currentUser != nil {
 		oplog.AddLog("更新边缘节点: "+*node.NodeID, "edge_node_update", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+		if req.Status != nil && *req.Status == 0 && node.Status != 0 {
+			oplog.AddLog("禁用边缘节点: "+*node.NodeID, "edge_node_disable", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+			if forcedDisconnect {
+				oplog.AddLog("强制断开已禁用边缘节点: "+*node.NodeID, "edge_node_force_disconnect", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+			}
+		}
 	}
 	updated, _ := repo.GetServerByID(id)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "更新成功", "data": edgeNodeToView(updated)})
 }
 
 func RotateEdgeNodeCredential(c *gin.Context) {
+	setCredentialResponseNoStore(c)
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
@@ -259,29 +268,97 @@ func RotateEdgeNodeCredential(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 		return
 	}
-	credential, err := interconnect.NewRegistrationCredential(*node.NodeID)
+	credential, err := interconnect.NewLongTermCredential(*node.NodeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成注册凭据失败"})
 		return
 	}
 	now := time.Now()
-	expiresAt := now.Add(24 * time.Hour)
-	if cfg := config.TryGet(); cfg != nil && cfg.Interconnect.RegistrationTokenTTL > 0 {
-		expiresAt = now.Add(time.Duration(cfg.Interconnect.RegistrationTokenTTL) * time.Second)
+	grace := 10 * time.Minute
+	if cfg := config.TryGet(); cfg != nil && cfg.Interconnect.CredentialRotationGraceSeconds > 0 {
+		grace = time.Duration(cfg.Interconnect.CredentialRotationGraceSeconds) * time.Second
 	}
-	if err := repo.UpdateServerFields(id, map[string]interface{}{"node_token_hash": "", "node_registration_token_hash": interconnect.HashCredential(credential), "node_registration_expires_at": expiresAt}); err != nil {
+	rotation, err := repo.RotateNodeCredential(id, interconnect.HashCredential(credential), now, grace)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "轮换节点凭据失败"})
 		return
 	}
+	deliveredOnline := false
+	var deliveryMessageID uint64
 	if runtime := interconnect.ActiveCenterRuntime(); runtime != nil {
-		runtime.Control.Disconnect(*node.NodeID)
+		if messageID, deliverErr := runtime.RotateNodeCredential(*node.NodeID, credential, rotation.CredentialEpoch, rotation.PreviousValidUntil); deliverErr == nil {
+			deliveredOnline = true
+			deliveryMessageID = messageID
+		}
 	}
-	clearEdgeNodeDeviceEntries(repo, *node.NodeID)
 	currentUser, _ := requireCurrentUser(c)
 	if currentUser != nil {
-		oplog.AddLog("轮换边缘节点凭据: "+*node.NodeID, "edge_node_rotate", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+		delivery := "offline_manual_install"
+		if deliveredOnline {
+			delivery = "online_delivery"
+		}
+		oplog.AddLog("轮换边缘节点凭据: "+*node.NodeID+" delivery="+delivery, "edge_node_rotate", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "注册凭据仅显示一次", "data": gin.H{"registration_token": credential, "expires_at": expiresAt}})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "新凭据仅显示一次", "data": gin.H{
+		"credential": credential, "credential_epoch": rotation.CredentialEpoch,
+		"previous_valid_until": rotation.PreviousValidUntil, "delivered_online": deliveredOnline,
+		"delivery_message_id": deliveryMessageID,
+	}})
+}
+
+func RevokeEdgeNodeCredential(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		return
+	}
+	repo := gormdb.NewServerRepository()
+	nodeID, epoch, err := repo.RevokeNodeCredentials(id)
+	if err != nil {
+		if err == gormdb.ErrNodeNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "吊销节点凭据失败"})
+		return
+	}
+	disconnected := false
+	if runtime := interconnect.ActiveCenterRuntime(); runtime != nil {
+		disconnected = runtime.Control.Disconnect(nodeID)
+	}
+	clearEdgeNodeDeviceEntries(repo, nodeID)
+	currentUser, _ := requireCurrentUser(c)
+	if currentUser != nil {
+		oplog.AddLog("吊销边缘节点凭据: "+nodeID, "edge_node_revoke", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+		if disconnected {
+			oplog.AddLog("强制断开凭据已吊销边缘节点: "+nodeID, "edge_node_force_disconnect", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "节点凭据已吊销", "data": gin.H{"credential_epoch": epoch, "disconnected": disconnected}})
+}
+
+// DisconnectEdgeNode resets the current node session for diagnostics. An
+// enabled node with a valid credential may reconnect immediately.
+func DisconnectEdgeNode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		return
+	}
+	node, err := gormdb.NewServerRepository().GetServerByID(id)
+	if err != nil || node == nil || node.NodeID == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+		return
+	}
+	disconnected := false
+	if runtime := interconnect.ActiveCenterRuntime(); runtime != nil {
+		disconnected = runtime.Control.Disconnect(*node.NodeID)
+	}
+	currentUser, _ := requireCurrentUser(c)
+	if currentUser != nil {
+		oplog.AddLog("重置边缘节点连接: "+*node.NodeID, "edge_node_force_disconnect", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "连接重置请求已执行", "data": gin.H{"disconnected": disconnected}})
 }
 
 func clearEdgeNodeDeviceEntries(repo *gormdb.ServerRepository, nodeID string) {

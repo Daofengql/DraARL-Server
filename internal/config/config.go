@@ -46,13 +46,14 @@ type UDPConfig struct {
 // InterconnectConfig controls the optional centre-side Type 0 node services.
 // It is ignored unless Enabled is true, preserving existing single-node startup.
 type InterconnectConfig struct {
-	Enabled              bool   `yaml:"Enabled" json:"enabled"`
-	ControlListen        string `yaml:"ControlListen" json:"control_listen"`
-	TLSCertFile          string `yaml:"TLSCertFile" json:"tls_cert_file"`
-	TLSKeyFile           string `yaml:"TLSKeyFile" json:"tls_key_file"`
-	TLSClientCAFile      string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
-	AllowSelfSigned      bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
-	RegistrationTokenTTL int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
+	Enabled                        bool   `yaml:"Enabled" json:"enabled"`
+	ControlListen                  string `yaml:"ControlListen" json:"control_listen"`
+	TLSCertFile                    string `yaml:"TLSCertFile" json:"tls_cert_file"`
+	TLSKeyFile                     string `yaml:"TLSKeyFile" json:"tls_key_file"`
+	TLSClientCAFile                string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
+	AllowSelfSigned                bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
+	RegistrationTokenTTL           int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
+	CredentialRotationGraceSeconds int    `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
 	// NodeTokens is a development/bootstrap map. Production deployments should
 	// replace it with hashed, rotatable credentials managed by the admin API.
 	NodeTokens map[string]string          `yaml:"NodeTokens" json:"node_tokens"`
@@ -277,6 +278,12 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.Interconnect.RegistrationTokenTTL <= 0 {
 		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60
+	}
+	if c.Interconnect.CredentialRotationGraceSeconds <= 0 {
+		c.Interconnect.CredentialRotationGraceSeconds = 10 * 60
+	}
+	if c.Interconnect.CredentialRotationGraceSeconds > 60*60 {
+		c.Interconnect.CredentialRotationGraceSeconds = 60 * 60
 	}
 	resources := &c.Interconnect.Resources
 	if resources.MaxNodes == 0 {

@@ -294,7 +294,7 @@ export function DevicesPage() {
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 800, tableLayout: 'fixed' }}>
+        <Table sx={{ minWidth: 920, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
               <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
@@ -302,6 +302,7 @@ export function DevicesPage() {
               <TableCell align="center">设备类型</TableCell>
               <TableCell align="center">呼号-SSID</TableCell>
               <TableCell align="center">最新上线IP</TableCell>
+              <TableCell align="center">入口服务器</TableCell>
               <TableCell align="center">所在群组</TableCell>
               <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
               <TableCell align="center" sx={{ width: 120 }}>操作</TableCell>
@@ -310,13 +311,13 @@ export function DevicesPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={9} align="center">
                   加载中...
                 </TableCell>
               </TableRow>
             ) : paginatedDevices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={9} align="center">
                   暂无设备数据
                 </TableCell>
               </TableRow>
@@ -346,6 +347,14 @@ export function DevicesPage() {
                       {device.last_online_ip_location && (
                         <Typography variant="caption" color="text.secondary">
                           {device.last_online_ip_location}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Typography variant="body2">{device.entry_node_name || '-'}</Typography>
+                      {device.entry_node_name && (
+                        <Typography variant="caption" color="text.secondary">
+                          {device.is_online ? '当前入口' : '最近入口'}
                         </Typography>
                       )}
                     </TableCell>

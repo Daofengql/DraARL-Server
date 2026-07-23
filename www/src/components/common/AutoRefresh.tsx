@@ -65,9 +65,11 @@ export function AutoRefresh({
         </Select>
       </FormControl>
       <Tooltip title="立即刷新">
-        <IconButton onClick={onRefresh} disabled={loading} size={size}>
-          {loading ? <CircularProgress size={20} /> : <Refresh />}
-        </IconButton>
+        <span>
+          <IconButton onClick={onRefresh} disabled={loading} size={size}>
+            {loading ? <CircularProgress size={20} /> : <Refresh />}
+          </IconButton>
+        </span>
       </Tooltip>
     </>
   )

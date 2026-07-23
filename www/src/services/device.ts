@@ -33,6 +33,10 @@ interface BackendDevice {
   owner_id?: number
   owner_name?: string
   owner_callsign?: string
+  entry_node_id?: string
+  entry_node_name?: string
+  entry_mode?: string
+  entry_seen_at?: string
   create_time?: string
   update_time?: string
 }
@@ -59,6 +63,10 @@ const normalizeDevice = (d: BackendDevice): Device => ({
   owner_id: d.owner_id,
   owner_name: d.owner_name,
   owner_callsign: d.owner_callsign,
+  entry_node_id: d.entry_node_id,
+  entry_node_name: d.entry_node_name,
+  entry_mode: d.entry_mode,
+  entry_seen_at: d.entry_seen_at,
   online_time: d.online_time,
   last_heartbeat: d.online_time,
   create_time: d.create_time,

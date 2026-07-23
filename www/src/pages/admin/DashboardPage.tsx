@@ -1,13 +1,21 @@
 import { useEffect, useState } from 'react'
 import {
   Box,
+  Button,
   Card,
   CardContent,
+  Chip,
   Typography,
   Paper,
   LinearProgress,
   Stack,
   Skeleton,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   useTheme,
   useMediaQuery,
 } from '@mui/material'
@@ -20,6 +28,8 @@ import DashboardIcon from '@mui/icons-material/Dashboard'
 import RecordVoiceOver from '@mui/icons-material/RecordVoiceOver'
 import Storage from '@mui/icons-material/Storage'
 import Timer from '@mui/icons-material/Timer'
+import Dns from '@mui/icons-material/Dns'
+import ArrowForward from '@mui/icons-material/ArrowForward'
 import {
   LineChart,
   Line,
@@ -32,9 +42,12 @@ import {
 } from 'recharts'
 import { platformService } from '../../services/platform'
 import { commStatsService } from '../../services/commStats'
+import { edgeNodeService } from '../../services/server'
+import type { EdgeNode } from '../../services/server'
 import type { DailyCommStats } from '../../types'
 import { SITE_CONFIG } from '../../config/site'
 import { useConfig } from '../../contexts/ConfigContext'
+import { useNavigate } from 'react-router-dom'
 
 interface StatCardProps {
   title: string
@@ -107,6 +120,30 @@ function formatDuration(ms: number): string {
   return parts.join(' ')
 }
 
+function formatPPS(value: number): string {
+  return `${value.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} pps`
+}
+
+function formatBitRate(bytesPerSecond: number): string {
+  const units = ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s', 'Tbit/s']
+  let value = Math.max(0, bytesPerSecond * 8)
+  let unit = 0
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit += 1
+  }
+  return `${value.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} ${units[unit]}`
+}
+
+function nodeHasIssue(node: EdgeNode): boolean {
+  if (node.status === 1 && !node.runtime.online) return true
+  if (!node.runtime.online) return false
+  return Boolean(node.runtime.sync_error) ||
+    node.runtime.pending_control > 0 ||
+    node.runtime.acked_projection_version !== node.runtime.heartbeat.projection_version ||
+    node.runtime.traffic_rates.device.stale
+}
+
 // 骨架屏
 function DashboardSkeleton() {
   return (
@@ -134,6 +171,7 @@ function DashboardSkeleton() {
 }
 
 export function AdminDashboardPage() {
+  const navigate = useNavigate()
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const { config: systemConfig } = useConfig()
@@ -149,15 +187,22 @@ export function AdminDashboardPage() {
     total_duration: 0,
   })
   const [commTrend, setCommTrend] = useState<DailyCommStats[]>([])
+  const [edgeNodes, setEdgeNodes] = useState<EdgeNode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [serverError, setServerError] = useState<string | null>(null)
 
   const fetchSystemStats = async () => {
     try {
-      const [statsData, commStatsData, commTrendData] = await Promise.all([
+      const edgeNodesPromise = edgeNodeService.list().catch(() => {
+        setServerError('边缘节点状态暂时无法读取')
+        return []
+      })
+      const [statsData, commStatsData, commTrendData, edgeNodeData] = await Promise.all([
         platformService.getTotalStats(),
         commStatsService.getSystemStats(),
         commStatsService.getSystemTrend(),
+        edgeNodesPromise,
       ])
       setStats({
         total_devices: statsData.total_devices || 0,
@@ -171,6 +216,7 @@ export function AdminDashboardPage() {
         total_duration: commStatsData.total_duration || 0,
       })
       setCommTrend(commTrendData)
+      setEdgeNodes(edgeNodeData)
     } catch {
       setError('获取统计数据失败')
     } finally {
@@ -184,6 +230,21 @@ export function AdminDashboardPage() {
 
   // 站点名称：欢迎卡片使用配置的站点名称或默认值
   const siteName = systemConfig?.systemInfo?.name || SITE_CONFIG.NAME
+
+  const onlineEdgeNodes = edgeNodes.filter((node) => node.status === 1 && node.runtime.online)
+  const edgeConnections = onlineEdgeNodes.reduce(
+    (total, node) => total + node.runtime.heartbeat.connection_count,
+    0,
+  )
+  const deviceTraffic = onlineEdgeNodes.reduce((total, node) => ({
+    pps: total.pps + node.runtime.traffic_rates.device.current.in_pps + node.runtime.traffic_rates.device.current.out_pps,
+    bytes: total.bytes + node.runtime.traffic_rates.device.current.in_bytes_per_second + node.runtime.traffic_rates.device.current.out_bytes_per_second,
+  }), { pps: 0, bytes: 0 })
+  const interconnectTraffic = onlineEdgeNodes.reduce((total, node) => ({
+    pps: total.pps + node.runtime.traffic_rates.edge_interconnect.current.in_pps + node.runtime.traffic_rates.edge_interconnect.current.out_pps,
+    bytes: total.bytes + node.runtime.traffic_rates.edge_interconnect.current.in_bytes_per_second + node.runtime.traffic_rates.edge_interconnect.current.out_bytes_per_second,
+  }), { pps: 0, bytes: 0 })
+  const issueNodeCount = edgeNodes.filter(nodeHasIssue).length
 
   if (loading) {
     return <DashboardSkeleton />
@@ -286,6 +347,105 @@ export function AdminDashboardPage() {
           color="success"
         />
       </Box>
+
+      <Paper variant="outlined">
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          justifyContent="space-between"
+          alignItems={{ xs: 'flex-start', sm: 'center' }}
+          spacing={1}
+          sx={{ px: 3, py: 2 }}
+        >
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Dns color="primary" />
+            <Box>
+              <Typography variant="h6" fontWeight={600}>边缘节点</Typography>
+              <Typography variant="caption" color="text.secondary">DraARL 应用层实时统计</Typography>
+            </Box>
+          </Stack>
+          <Button endIcon={<ArrowForward />} onClick={() => navigate('/admin/servers')}>节点管理</Button>
+        </Stack>
+
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)' },
+            borderTop: 1,
+            borderBottom: edgeNodes.length > 0 ? 1 : 0,
+            borderColor: 'divider',
+          }}
+        >
+          {[
+            { label: '在线节点', value: `${onlineEdgeNodes.length} / ${edgeNodes.length}` },
+            { label: '边缘设备连接', value: edgeConnections.toLocaleString() },
+            { label: '设备侧吞吐', value: `${formatPPS(deviceTraffic.pps)} · ${formatBitRate(deviceTraffic.bytes)}` },
+            { label: '互联侧吞吐', value: `${formatPPS(interconnectTraffic.pps)} · ${formatBitRate(interconnectTraffic.bytes)}` },
+            { label: '异常节点', value: issueNodeCount.toLocaleString() },
+          ].map((item) => (
+            <Box key={item.label} sx={{ px: 3, py: 2, minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary">{item.label}</Typography>
+              <Typography variant="body1" fontWeight={600} sx={{ mt: 0.5, overflowWrap: 'anywhere' }}>{item.value}</Typography>
+            </Box>
+          ))}
+        </Box>
+
+        {serverError ? (
+          <Typography color="warning.main" sx={{ px: 3, py: 2 }}>{serverError}</Typography>
+        ) : edgeNodes.length === 0 ? (
+          <Typography color="text.secondary" sx={{ px: 3, py: 2 }}>尚未注册边缘节点</Typography>
+        ) : (
+          <TableContainer sx={{ overflow: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 760 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>节点</TableCell>
+                  <TableCell>状态</TableCell>
+                  <TableCell align="right">设备连接</TableCell>
+                  <TableCell>设备侧</TableCell>
+                  <TableCell>互联侧</TableCell>
+                  <TableCell>路由投影</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {edgeNodes.slice(0, 5).map((node) => {
+                  const issue = nodeHasIssue(node)
+                  const deviceRate = node.runtime.traffic_rates.device.current
+                  const interconnectRate = node.runtime.traffic_rates.edge_interconnect.current
+                  return (
+                    <TableRow key={node.id} hover>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={500}>{node.display_name}</Typography>
+                        {node.public_region && <Typography variant="caption" color="text.secondary">{node.public_region}</Typography>}
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          label={node.status === 0 ? '已禁用' : node.runtime.online ? '在线' : '离线'}
+                          color={node.status === 0 ? 'default' : node.runtime.online ? 'success' : 'error'}
+                        />
+                      </TableCell>
+                      <TableCell align="right">{node.runtime.online ? node.runtime.heartbeat.connection_count.toLocaleString() : '-'}</TableCell>
+                      <TableCell>
+                        {node.runtime.online && !node.runtime.traffic_rates.device.stale
+                          ? `${formatPPS(deviceRate.in_pps + deviceRate.out_pps)} · ${formatBitRate(deviceRate.in_bytes_per_second + deviceRate.out_bytes_per_second)}`
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {node.runtime.online && !node.runtime.traffic_rates.edge_interconnect.stale
+                          ? `${formatPPS(interconnectRate.in_pps + interconnectRate.out_pps)} · ${formatBitRate(interconnectRate.in_bytes_per_second + interconnectRate.out_bytes_per_second)}`
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" variant="outlined" label={issue ? '需检查' : node.runtime.online ? '已同步' : '等待上线'} color={issue ? 'warning' : node.runtime.online ? 'success' : 'default'} />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Paper>
 
       {/* 通信趋势图 */}
       <Card>

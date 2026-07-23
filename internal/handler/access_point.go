@@ -90,6 +90,29 @@ func ListAccessPoints(c *gin.Context) {
 			}
 		}
 	}
+	if len(items) == 0 && !cfg.AccessDiscovery.Center.Enabled {
+		siteConfig, siteErr := gormdb.GetSiteConfigRepo().GetAPRSConfig()
+		if siteErr != nil {
+			c.Header("Cache-Control", "no-store")
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询主节点接入配置失败"})
+			return
+		}
+		port, portErr := strconv.Atoi(strings.TrimSpace(siteConfig.SelfPort))
+		if portErr == nil {
+			if item, ok := centerAccessPoint(
+				cfg.AccessDiscovery.Center.PublicID,
+				cfg.AccessDiscovery.Center.DisplayName,
+				siteConfig.SelfAddress,
+				port,
+				cfg.AccessDiscovery.Center.Region,
+				cfg.AccessDiscovery.Center.Network,
+				cfg.AccessDiscovery.Center.Priority,
+				now,
+			); ok {
+				items = append(items, item)
+			}
+		}
+	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Priority != items[j].Priority {
 			return items[i].Priority < items[j].Priority
@@ -103,6 +126,33 @@ func ListAccessPoints(c *gin.Context) {
 	c.Header("Cache-Control", "private, max-age="+strconv.Itoa(maxAge))
 	c.Header("Vary", "Authorization")
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "成功", "data": gin.H{"items": items, "server_time": now, "cache_max_age": maxAge}})
+}
+
+func centerAccessPoint(id, displayName, host string, port int, region, network string, priority int, now time.Time) (publicAccessPoint, bool) {
+	publicID, err := accesspoint.NormalizePublicID(id)
+	if err != nil {
+		return publicAccessPoint{}, false
+	}
+	label, err := accesspoint.NormalizeLabel(displayName, 100)
+	if err != nil || label == "" {
+		return publicAccessPoint{}, false
+	}
+	udpHost, err := accesspoint.NormalizeUDPHost(host)
+	if err != nil || accesspoint.ValidateUDPPort(port) != nil {
+		return publicAccessPoint{}, false
+	}
+	region, err = accesspoint.NormalizeLabel(region, 100)
+	if err != nil {
+		return publicAccessPoint{}, false
+	}
+	network, err = accesspoint.NormalizeLabel(network, 100)
+	if err != nil {
+		return publicAccessPoint{}, false
+	}
+	return publicAccessPoint{
+		ID: publicID, DisplayName: label, UDPHost: udpHost, UDPPort: port,
+		Region: region, Network: network, Priority: priority, HealthySampleAt: now,
+	}, true
 }
 
 func publishedEdgeAccessPoint(node *gormdb.Server, status interconnect.NodeStatus, now time.Time, healthTTL time.Duration) (publicAccessPoint, bool) {

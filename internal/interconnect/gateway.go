@@ -256,10 +256,15 @@ func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
 	}
 }
 func (g *CenterGateway) OnDatagram(session *NodeSession, env Envelope, _ *net.UDPAddr) {
-	if env.Subtype == SubtypeSpeakerLease {
+	if env.Subtype != SubtypeRelayUpstream {
+		if session != nil {
+			session.DataMetrics.AddDrop()
+		}
 		return
 	}
-	g.handleEnvelope(session, env)
+	if !g.handleRelayUpstream(session, env) && session != nil {
+		session.DataMetrics.AddDrop()
+	}
 }
 func (g *CenterGateway) OnEnvelope(session *NodeSession, env Envelope) {
 	if env.Subtype == SubtypeNodeDataBind {
@@ -361,48 +366,7 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		}
 		g.handleSpeakerLease(session, message)
 	case SubtypeRelayUpstream:
-		frame, err := UnmarshalRelayFrame(env.Payload)
-		if err != nil {
-			return
-		}
-		if err := protocol.ValidateRelayInnerPacket(frame.InnerPacket); err != nil {
-			return
-		}
-		g.mu.RLock()
-		owner := g.deviceSessions[frame.SessionID]
-		onAcceptedRelay := g.onAcceptedRelay
-		g.mu.RUnlock()
-		if owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID {
-			return
-		}
-		if g.cluster == nil {
-			return
-		}
-		route, ok := g.cluster.ResolveRoute(frame.SessionID)
-		if !ok || route.DisableSend || route.SessionEpoch != frame.SessionEpoch || route.DomainID == 0 {
-			return
-		}
-		if !protocol.RelayInnerIdentityMatches(frame.InnerPacket, route.Username, route.CallSign, route.SSID) {
-			return
-		}
-		// Node payload is never authoritative for routing or permissions.
-		frame.DomainID = route.DomainID
-		if frame.InnerPacket[48] == protocol.DraARLTypeOpus16K {
-			if g.speaker == nil || !g.speaker.AcceptFrame(session.NodeID, session.SessionID, frame, time.Now()) {
-				return
-			}
-		} else if frame.SpeakerLeaseID != 0 {
-			return
-		}
-		if onAcceptedRelay != nil {
-			onAcceptedRelay(AcceptedRelay{
-				DeviceID: route.DeviceID, OwnerID: owner.OwnerID, SSID: route.SSID, GroupID: route.GroupID,
-				Type: frame.InnerPacket[48], Payload: frame.InnerPacket[DraARLHeaderSize:],
-			})
-		}
-		if g.cluster != nil {
-			_ = g.cluster.Relay(session.NodeID, frame)
-		}
+		g.handleRelayUpstream(session, env)
 	case SubtypeRouteAck:
 		var ack RouteAck
 		if DecodeJSON(env.Payload, &ack) == nil && g.cluster != nil {
@@ -426,6 +390,47 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 			g.handleDeviceSessionReport(session, report)
 		}
 	}
+}
+
+func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) bool {
+	if session == nil || g.cluster == nil {
+		return false
+	}
+	frame, err := UnmarshalRelayFrame(env.Payload)
+	if err != nil || protocol.ValidateRelayInnerPacket(frame.InnerPacket) != nil {
+		return false
+	}
+	g.mu.RLock()
+	owner := g.deviceSessions[frame.SessionID]
+	onAcceptedRelay := g.onAcceptedRelay
+	g.mu.RUnlock()
+	if owner.NodeID != session.NodeID || owner.ControlSessionID != session.SessionID {
+		return false
+	}
+	route, ok := g.cluster.ResolveRoute(frame.SessionID)
+	if !ok || route.DisableSend || route.SessionEpoch != frame.SessionEpoch || route.DomainID == 0 {
+		return false
+	}
+	if !protocol.RelayInnerIdentityMatches(frame.InnerPacket, route.Username, route.CallSign, route.SSID) {
+		return false
+	}
+	// Node payload is never authoritative for routing or permissions.
+	frame.DomainID = route.DomainID
+	if frame.InnerPacket[48] == protocol.DraARLTypeOpus16K {
+		if g.speaker == nil || !g.speaker.AcceptFrame(session.NodeID, session.SessionID, frame, time.Now()) {
+			return false
+		}
+	} else if frame.SpeakerLeaseID != 0 {
+		return false
+	}
+	if onAcceptedRelay != nil {
+		onAcceptedRelay(AcceptedRelay{
+			DeviceID: route.DeviceID, OwnerID: owner.OwnerID, SSID: route.SSID, GroupID: route.GroupID,
+			Type: frame.InnerPacket[48], Payload: frame.InnerPacket[DraARLHeaderSize:],
+		})
+	}
+	_ = g.cluster.Relay(session.NodeID, frame)
+	return true
 }
 
 func (g *CenterGateway) handleSpeakerLease(session *NodeSession, message SpeakerLeaseControl) {

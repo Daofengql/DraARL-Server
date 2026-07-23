@@ -590,6 +590,12 @@ func TestCenterGatewayLimitsDeviceSessionsPerNodeControlSession(t *testing.T) {
 	if got := edge.ProtectionSnapshot().SessionLimitRejects; got != 1 {
 		t.Fatalf("session limit rejects=%d", got)
 	}
+	edgeB := &NodeSession{NodeID: "edge-b", SessionID: 202, RemoteAddr: edge.RemoteAddr}
+	gateway.OnConnect(edgeB)
+	third := &DeviceGrant{DeviceID: 9, OwnerID: 7, Username: "carol", SSID: 1, DomainID: 90}
+	if err := gateway.activateDeviceSession(edgeB, third); err != nil {
+		t.Fatalf("edge-a session limit affected edge-b behind the same NAT: %v", err)
+	}
 	if !gateway.handleDeviceSessionReport(edge, DeviceSessionReport{SessionID: first.SessionID, SessionEpoch: first.SessionEpoch, DeviceID: first.DeviceID, Reason: "device_timeout"}) {
 		t.Fatal("first device was not removed")
 	}

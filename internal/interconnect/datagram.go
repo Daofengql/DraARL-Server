@@ -91,15 +91,17 @@ func (p *NodeDatagramPeer) Handle(data []byte, _ *net.UDPAddr) bool {
 		p.session.resourceProtection().recordIdentityReject()
 		return false
 	}
+	p.Metrics.AddIn(len(data))
 	if env.Expired(now, 2*time.Second) {
 		p.session.resourceProtection().recordExpiredDrop()
+		p.Metrics.AddDrop()
 		return false
 	}
 	if !p.session.AcceptMessage(env.MessageID, now) {
 		p.session.resourceProtection().recordReplayDrop()
+		p.Metrics.AddDrop()
 		return false
 	}
-	p.Metrics.AddIn(len(data))
 	if !p.session.resourceProtection().allowData(len(data), now) {
 		p.Metrics.AddDrop()
 		return true
@@ -206,17 +208,19 @@ func (b *NodeDatagramBridge) Handle(data []byte, addr *net.UDPAddr) bool {
 		session.resourceProtection().recordIdentityReject()
 		return false
 	}
+	session.DataMetrics.AddIn(len(data))
 	if env.Expired(now, b.maxAge) {
 		b.invalid.Add(1)
 		session.resourceProtection().recordExpiredDrop()
+		session.DataMetrics.AddDrop()
 		return false
 	}
 	if !session.AcceptMessage(env.MessageID, now) {
 		b.invalid.Add(1)
 		session.resourceProtection().recordReplayDrop()
+		session.DataMetrics.AddDrop()
 		return false
 	}
-	session.DataMetrics.AddIn(len(data))
 	protection := session.resourceProtection()
 	if !protection.allowData(len(data), now) {
 		session.DataMetrics.AddDrop()

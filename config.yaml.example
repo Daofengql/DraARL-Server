@@ -47,6 +47,22 @@ Interconnect:
         DeviceAuthPPSPerNode: 500
         MaxDeviceSessionsPerNode: 25000
 
+# 设备接入点发现。客户端获取列表后自行 ICMP 测速，平台不代测网络质量。
+AccessDiscovery:
+    Enabled: false
+    TokenTTLSeconds: 300       # 设备密码换取的短期发现凭证，最大 300 秒
+    EdgeHealthTTLSeconds: 20   # 只发布心跳仍新鲜的在线边缘
+    CacheMaxAgeSeconds: 5      # 私有响应的客户端缓存时间，最大 30 秒
+    Center:
+        Enabled: false
+        PublicID: center       # 对设备公开的稳定 ID，不是内部 NodeID
+        DisplayName: "中心直连"
+        UDPHost: ""            # 不含协议和端口，例如 radio.example.com
+        UDPPort: 60050
+        Region: ""             # 国内至少填写“省 市”，海外可自由填写
+        Network: ""            # 可选，仅作为管理员自定义识别标签
+        Priority: 100
+
 # 仅在 `draarl --edge -c config.yaml` 下读取；中心模式忽略此块。
 # 边缘不需要下方 Database/Redis/Web/Storage 等中心依赖。
 Edge:

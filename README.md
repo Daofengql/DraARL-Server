@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 最新版本 | `v1.1.4-alpha10` |
+| 最新版本 | `v1.1.5-alpha1` |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
@@ -29,6 +29,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 |------|------|
 | [文档站首页](docs/index.md) | 推荐阅读顺序、文档目录、本地预览与自动发布说明 |
 | [架构设计](docs/架构设计.md) | 系统模块、数据流、部署形态和核心链路 |
+| [Type 0 节点互联协议](docs/节点互联协议.md) | 中心/边缘拓扑、控制面、数据面与安全边界 |
 | [UDP 单机转发压力测试](docs/UDP单机转发压力测试.md) | 大规模设备 fan-out 实测、瓶颈分析和容量建议 |
 | [数据字典](docs/数据字典.md) | 数据库表、字段、索引和关系说明 |
 | [使用与说明文档](docs/usage/README.md) | 部署、账号、设备、群组、在线收发、后台、运维等功能说明 |
@@ -249,8 +250,8 @@ make run
 示例：
 
 ```bash
-git tag -a v1.1.4-alpha10 -m "release: v1.1.4-alpha10"
-git push origin v1.1.4-alpha10
+git tag -a v1.1.5-alpha1 -m "release: v1.1.5-alpha1"
+git push origin v1.1.5-alpha1
 ```
 
 ## 服务端口与入口
@@ -258,6 +259,7 @@ git push origin v1.1.4-alpha10
 | 类型 | 默认/常用端口 | 说明 |
 |------|---------------|------|
 | UDP 设备接入 | `60050` | DraARLv1 设备接入和语音转发 |
+| Type 0 节点控制 | `60100/tcp` | 可选的中心/边缘 TLS 控制面；数据面仍复用 UDP `60050` |
 | HTTP API / Web | `9000` 或本地开发常用 `9002` | Gin API、WebSocket、前端静态资源 |
 | Vite 开发服务器 | `9001` | 前端开发预览，代理 `/api` 到后端 |
 | WebSocket | `/ws` | 浏览器在线收发连接入口 |

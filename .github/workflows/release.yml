@@ -90,14 +90,15 @@ jobs:
             -ldflags="-s -w -X draarl/internal/buildinfo.Version=${{ github.ref_name }} -X draarl/internal/buildinfo.BuildTime=${BUILD_TIME} -X draarl/internal/buildinfo.Release=true" \
             -tags=embed \
             -o ${{ matrix.filename }} \
-            ./cmd/udphub/...
+            ./cmd/draarl
 
       - name: Create package
         run: |
           # 创建一个临时打包目录，放入可执行文件和示例配置文件
           mkdir -p package
           cp ${{ matrix.filename }} package/
-          cp udphub.yaml.example package/
+          cp config.yaml.example package/config.yaml
+          cp docs/interconnect-edge-config.yaml.example package/edge-config.yaml.example
 
           # 根据平台差异，将文件打包为 zip 或 tar.gz
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -146,9 +147,8 @@ jobs:
           # 选取 artifacts 目录下的所有文件（包括压缩包和刚才生成的校验和文件）
           files: ./artifacts/*
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          update_existing_files: true
           body: |
             ## DraARL ${{ github.ref_name }}
 
@@ -167,16 +167,16 @@ jobs:
             ### 快速开始
             ```bash
             # 解压
-            tar xzf DraARL-linux-amd64.tar.gz
-            cd DraARL-linux-amd64
+            mkdir draarl
+            tar xzf DraARL-linux-amd64.tar.gz -C draarl
+            cd draarl
 
-            # 复制配置文件
-            cp udphub.yaml.example udphub.yaml
-            # 编辑 udphub.yaml 配置数据库、Redis 等信息
+            # 编辑配置文件中的数据库、Redis 等信息
+            nano config.yaml
 
             # 运行
             chmod +x DraARL-*
-            ./DraARL-linux-amd64 -c udphub.yaml
+            ./DraARL-linux-amd64 -c config.yaml
             ```
 
             ### 系统要求

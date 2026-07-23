@@ -71,6 +71,21 @@ type Envelope struct {
 	// control retries reuse MessageID; the edge uses this bit to re-ACK an
 	// already applied update without applying it twice.
 	Duplicate bool
+	// receivedAt is local receive metadata and is never serialized. Short
+	// real-time queue deadlines must use this monotonic timestamp instead of
+	// comparing wall clocks from different servers.
+	receivedAt time.Time
+}
+
+func (e Envelope) locallyExpired(now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		maxAge = 2 * time.Second
+	}
+	if e.receivedAt.IsZero() {
+		return e.Expired(now, maxAge)
+	}
+	age := now.Sub(e.receivedAt)
+	return age < 0 || age > maxAge
 }
 
 func NewEnvelope(subtype byte, sourceNode string, sessionID, messageID uint64, payload []byte) Envelope {

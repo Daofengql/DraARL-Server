@@ -218,3 +218,91 @@ func TestDownstreamWaitsForRequiredProjectionVersion(t *testing.T) {
 		t.Fatalf("eligible downstream was not released: data=%q err=%v", buf[:n], err)
 	}
 }
+
+func TestDownstreamFreshnessUsesLocalReceiptTimeAcrossClockSkew(t *testing.T) {
+	gateway, err := NewEdgeGateway("127.0.0.1:0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	link := newEdgeControlLink(nil, nil)
+	link.markReady()
+	gateway.control.Store(link)
+	receiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	now := time.Now()
+	gateway.sessions[2] = &edgeDeviceSession{Grant: DeviceGrant{SessionID: 2, SessionEpoch: 1, Username: "bob", SSID: 1, DomainID: 9}, Addr: receiver.LocalAddr().(*net.UDPAddr), LastSeen: now}
+	gateway.byIdentity["bob-1"] = 2
+	projection := NewProjection(7)
+	projection.Version = 2
+	projection.Devices[2] = gateway.sessions[2].Grant.Route()
+	if err := gateway.projection.Replace(projection); err != nil {
+		t.Fatal(err)
+	}
+
+	env := NewEnvelope(SubtypeRelayDownstream, "center", 1, 1, nil)
+	env.ClusterEpoch, env.ProjectionVersion = 7, 2
+	env.SentAtMillis = now.Add(700 * time.Millisecond).UnixMilli()
+	env.receivedAt = now
+	frame := RelayFrame{SessionID: 99, SessionEpoch: 3, DomainID: 9, RequiredProjectionVersion: 2, InnerPacket: []byte("voice")}
+	gateway.deliverDownstream(env, frame)
+
+	_ = receiver.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 32)
+	n, _, err := receiver.ReadFromUDP(buf)
+	if err != nil || string(buf[:n]) != "voice" {
+		t.Fatalf("fresh local frame was rejected because of remote clock skew: data=%q err=%v", buf[:n], err)
+	}
+}
+
+func TestDownstreamProjectionWaitStillExpiresByLocalAge(t *testing.T) {
+	gateway, err := NewEdgeGateway("127.0.0.1:0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	link := newEdgeControlLink(nil, nil)
+	link.markReady()
+	gateway.control.Store(link)
+	receiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	now := time.Now()
+	gateway.sessions[2] = &edgeDeviceSession{Grant: DeviceGrant{SessionID: 2, SessionEpoch: 1, Username: "bob", SSID: 1, DomainID: 9}, Addr: receiver.LocalAddr().(*net.UDPAddr), LastSeen: now}
+	gateway.byIdentity["bob-1"] = 2
+	projection := NewProjection(7)
+	projection.Version = 1
+	projection.Devices[2] = gateway.sessions[2].Grant.Route()
+	if err := gateway.projection.Replace(projection); err != nil {
+		t.Fatal(err)
+	}
+
+	env := NewEnvelope(SubtypeRelayDownstream, "center", 1, 1, nil)
+	env.ClusterEpoch, env.ProjectionVersion = 7, 2
+	env.receivedAt = now.Add(-gateway.downstreamMaxAge - time.Millisecond)
+	frame := RelayFrame{SessionID: 99, SessionEpoch: 3, DomainID: 9, RequiredProjectionVersion: 2, InnerPacket: []byte("voice")}
+	gateway.deliverDownstream(env, frame)
+	projection.Version = 2
+	if err := gateway.projection.Replace(projection); err != nil {
+		t.Fatal(err)
+	}
+	gateway.drainDownstream(now)
+
+	_ = receiver.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, _, err := receiver.ReadFromUDP(make([]byte, 32)); err == nil {
+		t.Fatal("locally stale downstream frame was delivered")
+	}
+}

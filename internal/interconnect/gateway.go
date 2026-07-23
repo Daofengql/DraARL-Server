@@ -2383,6 +2383,9 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 	if link == nil || link.client != client {
 		return
 	}
+	if env.receivedAt.IsZero() {
+		env.receivedAt = time.Now()
+	}
 	switch env.Subtype {
 	case SubtypeNodeDataBind:
 		var bind NodeDataBind
@@ -2680,7 +2683,7 @@ func udpAddrEqual(a, b *net.UDPAddr) bool {
 }
 func (g *EdgeGateway) deliverDownstream(env Envelope, frame RelayFrame) {
 	now := time.Now()
-	if env.Expired(now, g.downstreamMaxAge) {
+	if env.locallyExpired(now, g.downstreamMaxAge) {
 		g.metrics.AddDrop()
 		return
 	}
@@ -2730,7 +2733,7 @@ func (g *EdgeGateway) drainDownstream(now time.Time) {
 	g.downstreamMu.Lock()
 	remaining := g.pendingDownstream[:0]
 	for _, pending := range g.pendingDownstream {
-		if pending.envelope.Expired(now, g.downstreamMaxAge) || pending.envelope.ClusterEpoch != p.ClusterEpoch {
+		if pending.envelope.locallyExpired(now, g.downstreamMaxAge) || pending.envelope.ClusterEpoch != p.ClusterEpoch {
 			dropped++
 			continue
 		}

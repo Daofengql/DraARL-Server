@@ -107,7 +107,7 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 				Key: "ip", Limit: 300, Window: time.Minute, Description: "同一 IP 每分钟 300 次",
 			},
 			"access-discovery-token-user": {
-				Key: "user", Limit: 10, Window: time.Minute, Description: "同一用户每分钟 10 次",
+				Key: "user", Limit: 10, Window: time.Minute, Description: "同一 IP 和用户名每分钟 10 次",
 			},
 			"access-discovery-list-ip": {
 				Key: "ip", Limit: 600, Window: time.Minute, Description: "同一 IP 每分钟 600 次",
@@ -471,9 +471,24 @@ func AccessDiscoveryTokenRateLimit() gin.HandlerFunc {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
 		var req accessDiscoveryTokenRequest
 		_ = c.ShouldBindBodyWith(&req, binding.JSON)
-		keys := map[string]string{"ip": c.ClientIP(), "user": strings.ToLower(strings.TrimSpace(req.Username))}
+		ip := c.ClientIP()
+		keys := map[string]string{"ip": ip}
+		if principal := accessDiscoveryTokenPrincipalKey(ip, req.Username); principal != "" {
+			// The username is still unauthenticated here. Scope this bucket to
+			// the source IP so one remote client cannot exhaust another user's
+			// discovery-token allowance by submitting their username.
+			keys["user"] = principal
+		}
 		applyRateLimitRules(c, []string{"access-discovery-token-ip-burst", "access-discovery-token-ip-minute", "access-discovery-token-user"}, keys)
 	}
+}
+
+func accessDiscoveryTokenPrincipalKey(ip, username string) string {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if ip == "" || username == "" {
+		return ""
+	}
+	return ip + "\x00" + username
 }
 
 func AccessDiscoveryListIPRateLimit() gin.HandlerFunc {

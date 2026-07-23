@@ -274,7 +274,7 @@ class UDPDeviceClient(BaseClient):
                     self.log(f"[文字] {sender}: {msg}")
 
                 # 重置发言者
-                elif packet.packet_type in [PacketType.CONTROL, PacketType.HEARTBEAT]:
+                elif packet.packet_type == PacketType.HEARTBEAT:
                     last_sender = None
 
                 # Config 配置包

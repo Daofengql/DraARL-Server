@@ -15,14 +15,11 @@ DRAARL_MAX_PACKET_SIZE = 800
 
 # 数据包类型
 class PacketType:
-    CONTROL = 0        # 控制指令
     JWT_AUTH = 1       # JWT 认证包
     HEARTBEAT = 2      # 心跳包
     CONFIG = 3         # 设备配置
     TEXT_MESSAGE = 4   # 文本消息
     OPUS_16K = 5       # Opus 16K 语音
-    SERVER_VOICE = 6   # 服务器互联语音
-    AT_PASSTHROUGH = 7 # AT 透传
 
 # 设备型号
 class DevModel:

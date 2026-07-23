@@ -694,11 +694,6 @@ export class RadioService {
         this.handleVoicePacket(packet, rawData)
         break
 
-      case PacketType.SERVER_VOICE:
-        // 服务器互联语音
-        this.handleServerVoicePacket(packet, rawData)
-        break
-
       case PacketType.TEXT_MESSAGE:
         // 文本消息
         this.handleTextPacket(packet)
@@ -752,55 +747,6 @@ export class RadioService {
 
     // 重置语音结束检测
     this.resetVoiceEndTimer()
-  }
-
-  /**
-   * 处理服务器互联语音包
-   */
-  private handleServerVoicePacket(packet: DraARLPacket, _rawData: ArrayBuffer): void {
-    // 服务器互联语音包的 DATA 区域包含原始发送方信息
-    // 前 32 字节：原始用户名
-    // 32-64 字节：原始呼号
-    // 64-68 字节：原始 IP
-    // 68+ 字节：语音数据
-
-    if (packet.data && packet.data.length >= 68) {
-      // 解析原始发送方信息
-      const originalUsername = new TextDecoder()
-        .decode(packet.data.slice(0, 32))
-        .replace(/\0/g, '')
-      const originalCallsign = new TextDecoder()
-        .decode(packet.data.slice(32, 64))
-        .replace(/\0/g, '')
-
-      // 使用原始呼号作为说话人
-      this.updateSpeaker(originalCallsign, packet.ssid)
-
-      this.setVoiceState('receiving')
-
-      // 收集语音数据用于消息记录
-      const voiceData = packet.data.slice(68)
-      if (voiceData.length > 0) {
-        // 如果是新说话人，重置缓存
-        if (this.currentVoiceCallsign !== originalCallsign || this.currentVoiceSSID !== packet.ssid) {
-          this.voiceChunks = []
-          this.voiceStartTime = Date.now()
-          this.currentVoiceCallsign = originalCallsign
-          this.currentVoiceSSID = packet.ssid
-          this.currentVoiceUsername = originalUsername
-        }
-        // 收集语音数据
-        this.voiceChunks.push(new Uint8Array(voiceData))
-      }
-
-      if (this.audioPlayer && !this.config.muted) {
-        if (voiceData.length > 0) {
-          this.audioPlayer.play(voiceData)
-        }
-      }
-
-      this.resetVoiceEndTimer()
-    }
   }
 
   /**

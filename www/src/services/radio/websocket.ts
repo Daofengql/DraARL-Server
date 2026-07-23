@@ -317,7 +317,7 @@ export class RadioWebSocket {
       }
 
       // 处理语音包
-      if (packet.type === PacketType.OPUS_16K || packet.type === PacketType.SERVER_VOICE) {
+      if (packet.type === PacketType.OPUS_16K) {
         this.isReceiving = true
         this.clearVoiceEndTimer()
 

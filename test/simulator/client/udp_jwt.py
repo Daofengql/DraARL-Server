@@ -290,7 +290,7 @@ class UDPJWTClient(BaseClient):
                     sender = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
                     self.log(f"[文字] {sender}: {msg}")
 
-                elif packet.packet_type in [PacketType.CONTROL, PacketType.HEARTBEAT]:
+                elif packet.packet_type == PacketType.HEARTBEAT:
                     last_sender = None
 
             except socket.timeout:

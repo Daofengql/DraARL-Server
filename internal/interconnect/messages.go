@@ -424,13 +424,14 @@ func (a *SnapshotAssembler) Commit(commit SnapshotCommit) (*Projection, error) {
 }
 
 type NodeHeartbeat struct {
-	InstanceID        string                 `json:"instance_id"`
-	SentAtMillis      int64                  `json:"sent_at_ms"`
-	ConnectionCount   int                    `json:"connection_count"`
-	Device            MetricsSnapshot        `json:"device"`
-	Interconnect      MetricsSnapshot        `json:"interconnect"`
-	ProjectionVersion uint64                 `json:"projection_version"`
-	Protection        NodeProtectionSnapshot `json:"protection"`
+	InstanceID        string                    `json:"instance_id"`
+	SentAtMillis      int64                     `json:"sent_at_ms"`
+	ConnectionCount   int                       `json:"connection_count"`
+	Device            MetricsSnapshot           `json:"device"`
+	Interconnect      MetricsSnapshot           `json:"interconnect"`
+	ProjectionVersion uint64                    `json:"projection_version"`
+	Protection        NodeProtectionSnapshot    `json:"protection"`
+	ReceiverCache     EdgeReceiverCacheSnapshot `json:"receiver_cache"`
 }
 
 const (

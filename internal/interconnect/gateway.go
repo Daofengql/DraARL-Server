@@ -1472,39 +1472,64 @@ func (g *CenterGateway) RefreshActiveDeviceDomains(resolve func(groupID int) uin
 }
 
 type EdgeGateway struct {
-	listenAddr        string
-	proxyProtocol     string
-	endpoint          *udphub.EdgeEndpoint
-	control           atomic.Pointer[edgeControlLink]
-	disconnectedAt    atomic.Int64
-	projection        *ProjectionStore
-	mu                sync.RWMutex
-	sessions          map[uint64]*edgeDeviceSession
-	byIdentity        map[string]uint64
-	pending           map[uint64]*pendingDeviceAuth
-	pendingIdentity   map[string]uint64
-	pendingRenewals   map[uint64]pendingDeviceRenewal
-	renewingSessions  map[uint64]uint64
-	pendingConfirms   map[uint64]chan DeviceSessionConfirmResponse
-	pendingConfigUp   map[uint64]*pendingDeviceConfigUp
-	configDownResults map[uint64]cachedDeviceConfigResult
-	snapshotAssembler *SnapshotAssembler
-	nextRequest       atomic.Uint64
-	metrics           Metrics
-	closed            chan struct{}
-	closeOnce         sync.Once
-	cleanerWG         sync.WaitGroup
-	sessionTimeout    time.Duration
-	grantRenewBefore  time.Duration
-	localGrace        time.Duration
-	downstreamMaxAge  time.Duration
-	downstreamMu      sync.Mutex
-	pendingDownstream []pendingDownstreamFrame
-	downstreamWake    chan struct{}
-	speakerDomains    map[uint64]*edgeSpeakerState
-	reportSession     func(DeviceSessionReport)
-	renewSession      func(DeviceSessionRenewRequest)
-	installCredential func(NodeCredentialControl) error
+	listenAddr         string
+	proxyProtocol      string
+	endpoint           *udphub.EdgeEndpoint
+	control            atomic.Pointer[edgeControlLink]
+	disconnectedAt     atomic.Int64
+	projection         *ProjectionStore
+	mu                 sync.RWMutex
+	sessions           map[uint64]*edgeDeviceSession
+	byIdentity         map[string]uint64
+	receiverGen        atomic.Uint64
+	receiverCache      atomic.Pointer[edgeReceiverSnapshot]
+	receiverBuildMu    sync.Mutex
+	receiverHits       atomic.Uint64
+	receiverMisses     atomic.Uint64
+	receiverRebuilds   atomic.Uint64
+	receiverBuildNS    atomic.Uint64
+	receiverMaxEntries atomic.Uint64
+	pending            map[uint64]*pendingDeviceAuth
+	pendingIdentity    map[string]uint64
+	pendingRenewals    map[uint64]pendingDeviceRenewal
+	renewingSessions   map[uint64]uint64
+	pendingConfirms    map[uint64]chan DeviceSessionConfirmResponse
+	pendingConfigUp    map[uint64]*pendingDeviceConfigUp
+	configDownResults  map[uint64]cachedDeviceConfigResult
+	snapshotAssembler  *SnapshotAssembler
+	nextRequest        atomic.Uint64
+	metrics            Metrics
+	closed             chan struct{}
+	closeOnce          sync.Once
+	cleanerWG          sync.WaitGroup
+	sessionTimeout     time.Duration
+	grantRenewBefore   time.Duration
+	localGrace         time.Duration
+	downstreamMaxAge   time.Duration
+	downstreamMu       sync.Mutex
+	pendingDownstream  []pendingDownstreamFrame
+	downstreamWake     chan struct{}
+	speakerDomains     map[uint64]*edgeSpeakerState
+	reportSession      func(DeviceSessionReport)
+	renewSession       func(DeviceSessionRenewRequest)
+	installCredential  func(NodeCredentialControl) error
+}
+
+const edgeReceiverCacheTTL = 30 * time.Second
+
+type edgeReceiverSnapshot struct {
+	generation uint64
+	builtAt    time.Time
+	plans      map[uint64]*udphub.EdgeFanoutPlan
+}
+
+type EdgeReceiverCacheSnapshot struct {
+	Hits       uint64 `json:"hits"`
+	Misses     uint64 `json:"misses"`
+	Rebuilds   uint64 `json:"rebuilds"`
+	BuildNanos uint64 `json:"build_ns"`
+	MaxEntries uint64 `json:"max_entries"`
+	Generation uint64 `json:"generation"`
 }
 
 type edgeControlLink struct {
@@ -1744,6 +1769,93 @@ func (g *EdgeGateway) ConnectionCount() int {
 	defer g.mu.RUnlock()
 	return len(g.sessions)
 }
+
+func (g *EdgeGateway) ReceiverCacheSnapshot() EdgeReceiverCacheSnapshot {
+	return EdgeReceiverCacheSnapshot{
+		Hits:       g.receiverHits.Load(),
+		Misses:     g.receiverMisses.Load(),
+		Rebuilds:   g.receiverRebuilds.Load(),
+		BuildNanos: g.receiverBuildNS.Load(),
+		MaxEntries: g.receiverMaxEntries.Load(),
+		Generation: g.receiverGen.Load(),
+	}
+}
+
+func (g *EdgeGateway) invalidateReceiverPlansLocked() {
+	g.receiverGen.Add(1)
+	if g.endpoint != nil {
+		g.endpoint.InvalidateFanoutPlans()
+	}
+}
+
+func updateEdgeReceiverMax(target *atomic.Uint64, value uint64) {
+	for {
+		current := target.Load()
+		if value <= current || target.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+func (g *EdgeGateway) receiverPlan(domainID uint64) *udphub.EdgeFanoutPlan {
+	if domainID == 0 || g.endpoint == nil {
+		return nil
+	}
+	generation := g.receiverGen.Load()
+	if snapshot := g.receiverCache.Load(); snapshot != nil && snapshot.generation == generation && time.Since(snapshot.builtAt) < edgeReceiverCacheTTL {
+		g.receiverHits.Add(1)
+		return snapshot.plans[domainID]
+	}
+
+	g.receiverMisses.Add(1)
+	g.receiverBuildMu.Lock()
+	defer g.receiverBuildMu.Unlock()
+	for attempts := 0; attempts < 3; attempts++ {
+		generation = g.receiverGen.Load()
+		if snapshot := g.receiverCache.Load(); snapshot != nil && snapshot.generation == generation && time.Since(snapshot.builtAt) < edgeReceiverCacheTTL {
+			g.receiverHits.Add(1)
+			return snapshot.plans[domainID]
+		}
+
+		started := time.Now()
+		targetsByDomain := make(map[uint64][]udphub.EdgeFanoutTarget)
+		g.mu.RLock()
+		for _, session := range g.sessions {
+			if session == nil || session.Grant.DomainID == 0 || session.Grant.DisableRecv || session.Addr == nil {
+				continue
+			}
+			domain := session.Grant.DomainID
+			target, ok := udphub.NewEdgeFanoutTarget(session.Addr, session.Grant.DeviceID, session.Grant.Username, session.Grant.SSID)
+			if ok {
+				targetsByDomain[domain] = append(targetsByDomain[domain], target)
+			}
+		}
+		g.mu.RUnlock()
+
+		plans := make(map[uint64]*udphub.EdgeFanoutPlan, len(targetsByDomain))
+		var maxEntries uint64
+		for domain, targets := range targetsByDomain {
+			plan := g.endpoint.PrepareFanout(targets)
+			if plan == nil {
+				continue
+			}
+			plans[domain] = plan
+			if entries := uint64(plan.Len()); entries > maxEntries {
+				maxEntries = entries
+			}
+		}
+		if generation != g.receiverGen.Load() {
+			continue
+		}
+		g.receiverCache.Store(&edgeReceiverSnapshot{generation: generation, builtAt: time.Now(), plans: plans})
+		g.receiverRebuilds.Add(1)
+		g.receiverBuildNS.Add(uint64(time.Since(started)))
+		updateEdgeReceiverMax(&g.receiverMaxEntries, maxEntries)
+		return plans[domainID]
+	}
+	return nil
+}
+
 func (g *EdgeGateway) Close() error {
 	g.closeOnce.Do(func() { close(g.closed) })
 	var err error
@@ -1832,8 +1944,13 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		}
 		return
 	}
-	current.Addr = cloneUDPAddr(remoteAddr)
-	current.RealAddr = cloneUDPAddr(realAddr)
+	if !udpAddrEqual(current.Addr, remoteAddr) {
+		current.Addr = cloneUDPAddr(remoteAddr)
+		g.invalidateReceiverPlansLocked()
+	}
+	if !udpAddrEqual(current.RealAddr, realAddr) {
+		current.RealAddr = cloneUDPAddr(realAddr)
+	}
 	current.LastSeen = now
 	grant := current.Grant
 	shouldRenew := grant.ExpiresAtMillis > 0 && time.UnixMilli(grant.ExpiresAtMillis).Sub(now) <= g.grantRenewBefore
@@ -2425,6 +2542,7 @@ func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, n
 		return DeviceSessionReport{}
 	}
 	delete(g.sessions, sessionID)
+	g.invalidateReceiverPlansLocked()
 	g.removeSpeakerSessionLocked(sessionID, session.Grant.SessionEpoch)
 	key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
 	if g.byIdentity[key] == sessionID {
@@ -2557,6 +2675,12 @@ func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	receiversChanged := false
+	defer func() {
+		if receiversChanged {
+			g.invalidateReceiverPlansLocked()
+		}
+	}()
 	for _, item := range request.Sessions {
 		session := g.sessions[item.SessionID]
 		if session == nil || session.Grant.SessionEpoch != item.SessionEpoch || session.ControlSessionID != item.ControlSessionID {
@@ -2585,6 +2709,7 @@ func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request
 			delete(g.byIdentity, oldKey)
 		}
 		g.byIdentity[fmt.Sprintf("%s-%d", grant.Username, grant.SSID)] = grant.SessionID
+		receiversChanged = true
 	}
 	return nil
 }
@@ -2841,13 +2966,7 @@ func (g *EdgeGateway) revokeSession(revoke DeviceSessionRevoke) bool {
 	if session == nil || session.Grant.SessionEpoch != revoke.SessionEpoch {
 		return false
 	}
-	delete(g.sessions, revoke.SessionID)
-	g.removeSpeakerSessionLocked(revoke.SessionID, revoke.SessionEpoch)
-	key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
-	if g.byIdentity[key] == revoke.SessionID {
-		delete(g.byIdentity, key)
-	}
-	g.removePendingDeviceConfigsLocked(revoke.SessionID)
+	g.removeEdgeSessionLocked(revoke.SessionID, "center_revoke", time.Now())
 	return true
 }
 
@@ -2881,7 +3000,11 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	session := &edgeDeviceSession{Grant: grant, ControlSessionID: controlSessionID, Addr: cloneUDPAddr(pending.addr), RealAddr: cloneUDPAddr(pending.realAddr), LastSeen: time.Now()}
 	key := fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
 	g.mu.Lock()
+	receiversChanged := false
 	if existing := g.sessions[grant.SessionID]; existing != nil {
+		receiversChanged = existing.Grant.DomainID != grant.DomainID || existing.Grant.DisableRecv != grant.DisableRecv ||
+			existing.Grant.DeviceID != grant.DeviceID || existing.Grant.Username != grant.Username || existing.Grant.SSID != grant.SSID ||
+			!udpAddrEqual(existing.Addr, session.Addr)
 		if existing.Grant.SessionEpoch != grant.SessionEpoch || existing.Grant.DomainID != grant.DomainID || grant.DisableSend {
 			g.removeSpeakerSessionLocked(grant.SessionID, existing.Grant.SessionEpoch)
 		}
@@ -2899,8 +3022,12 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 			g.removePendingDeviceConfigsLocked(previousID)
 		}
 		g.sessions[grant.SessionID] = session
+		receiversChanged = true
 	}
 	g.byIdentity[key] = grant.SessionID
+	if receiversChanged {
+		g.invalidateReceiverPlansLocked()
+	}
 	g.mu.Unlock()
 	if len(response.ResponsePacket) > 0 {
 		g.writeDevice(response.ResponsePacket, pending.addr)
@@ -2921,15 +3048,20 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 		return
 	}
 	g.mu.Lock()
+	receiversChanged := false
 	for id, session := range g.sessions {
 		if route, ok := p.Devices[id]; ok {
 			if session.Grant.SessionEpoch != route.SessionEpoch || session.Grant.DomainID != route.DomainID || route.DisableSend {
 				g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
 			}
+			if session.Grant.DomainID != route.DomainID || session.Grant.DisableRecv != route.DisableRecv {
+				receiversChanged = true
+			}
 			session.Grant.DisableSend, session.Grant.DisableRecv = route.DisableSend, route.DisableRecv
 			session.Grant.GroupID, session.Grant.DomainID = route.GroupID, route.DomainID
 			session.Grant.SessionEpoch = route.SessionEpoch
 		} else {
+			receiversChanged = true
 			g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
 			delete(g.sessions, id)
 			g.removePendingDeviceConfigsLocked(id)
@@ -2939,9 +3071,44 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 			}
 		}
 	}
+	if receiversChanged {
+		g.invalidateReceiverPlansLocked()
+	}
 	g.mu.Unlock()
 }
 func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
+	if g.endpoint != nil {
+		onComplete := func(result udphub.EdgeFanoutResult) {
+			if result.Sent > 0 {
+				g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(data)))
+			}
+			if result.Errors > 0 {
+				g.metrics.AddErrorBulk(uint64(result.Errors))
+			}
+			if result.Dropped > 0 {
+				g.metrics.AddDropBulk(uint64(result.Dropped))
+			}
+		}
+		for attempts := 0; attempts < 3; attempts++ {
+			plan := g.receiverPlan(domainID)
+			if plan == nil {
+				return
+			}
+			sourceID, sourceUser, sourceSSID := 0, "", byte(0)
+			if sourceSession != 0 {
+				g.mu.RLock()
+				if source := g.sessions[sourceSession]; source != nil {
+					sourceID, sourceUser, sourceSSID = source.Grant.DeviceID, source.Grant.Username, source.Grant.SSID
+				}
+				g.mu.RUnlock()
+			}
+			if g.endpoint.FanoutPlan(data, plan, sourceID, sourceUser, sourceSSID, onComplete) {
+				return
+			}
+		}
+		return
+	}
+
 	g.mu.RLock()
 	targets := make([]udphub.EdgeFanoutTarget, 0, len(g.sessions))
 	for id, session := range g.sessions {
@@ -2950,19 +3117,6 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
 		}
 	}
 	g.mu.RUnlock()
-	if g.endpoint != nil && g.endpoint.Fanout(data, targets, 0, "", 0, func(result udphub.EdgeFanoutResult) {
-		if result.Sent > 0 {
-			g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(data)))
-		}
-		if result.Errors > 0 {
-			g.metrics.AddErrorBulk(uint64(result.Errors))
-		}
-		if result.Dropped > 0 {
-			g.metrics.AddDropBulk(uint64(result.Dropped))
-		}
-	}) {
-		return
-	}
 	for _, target := range targets {
 		g.writeDevice(data, target.Addr)
 	}

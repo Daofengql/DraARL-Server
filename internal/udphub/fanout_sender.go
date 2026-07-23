@@ -22,6 +22,7 @@ type fanoutFrameJob struct {
 	enqueuedAt  time.Time
 	snapshotGen uint64
 	validateGen bool
+	generation  *atomic.Uint64
 	onComplete  func(fanoutWriteResult)
 }
 
@@ -261,7 +262,8 @@ func (s *FanoutSender) dispatcher() {
 	}()
 
 	for frame := range s.frames {
-		if s.frameExpired(frame) || (frame.validateGen && frame.snapshotGen != atomic.LoadUint64(&domainReceiverGen)) {
+		generationStale := frame.generation != nil && frame.snapshotGen != frame.generation.Load()
+		if s.frameExpired(frame) || generationStale || (frame.validateGen && frame.snapshotGen != atomic.LoadUint64(&domainReceiverGen)) {
 			atomic.AddInt64(&s.framesStale, 1)
 			atomic.AddInt64(&s.framesDropped, 1)
 			if frame.onComplete != nil {

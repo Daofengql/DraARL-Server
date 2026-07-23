@@ -479,7 +479,7 @@ func (r *EdgeRuntime) heartbeatLoop() {
 			if link.peer != nil {
 				interconnectMetrics = AddMetricsSnapshots(interconnectMetrics, link.peer.Metrics.Snapshot())
 			}
-			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: r.instance, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version, Protection: link.client.Session.ProtectionSnapshot()})
+			payload, _ := EncodeJSON(NodeHeartbeat{InstanceID: r.instance, SentAtMillis: time.Now().UnixMilli(), ConnectionCount: r.Gateway.ConnectionCount(), Device: r.Gateway.metrics.Snapshot(), Interconnect: interconnectMetrics, ProjectionVersion: snapshot.Version, Protection: link.client.Session.ProtectionSnapshot(), ReceiverCache: r.Gateway.ReceiverCacheSnapshot()})
 			env := NewEnvelope(SubtypeNodeHeartbeat, link.client.Session.NodeID, link.client.Session.SessionID, r.Gateway.nextRequest.Add(1), payload)
 			env.ClusterEpoch, env.ProjectionVersion, env.Flags = snapshot.ClusterEpoch, snapshot.Version, FlagControl
 			_ = link.client.SendEnvelope(env)

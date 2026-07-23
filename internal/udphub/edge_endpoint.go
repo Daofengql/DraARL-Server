@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,6 +17,15 @@ type EdgeFanoutTarget struct {
 	DeviceID int
 	Username string
 	SSID     byte
+	addrPort netip.AddrPort
+}
+
+func NewEdgeFanoutTarget(addr *net.UDPAddr, deviceID int, username string, ssid byte) (EdgeFanoutTarget, bool) {
+	addrPort, ok := udpAddrPort(addr)
+	if !ok {
+		return EdgeFanoutTarget{}, false
+	}
+	return EdgeFanoutTarget{DeviceID: deviceID, Username: username, SSID: ssid, addrPort: addrPort}, true
 }
 
 type EdgeFanoutResult struct {
@@ -23,6 +33,24 @@ type EdgeFanoutResult struct {
 	Sent      int64
 	Dropped   int64
 	Errors    int64
+}
+
+// EdgeFanoutPlan is an immutable receiver snapshot already partitioned for
+// this endpoint's parallel writers. It is safe to reuse across frames until
+// InvalidateFanoutPlans is called.
+type EdgeFanoutPlan struct {
+	endpoint   *EdgeEndpoint
+	entries    []domainReceiverEntry
+	partitions [][]domainReceiverEntry
+	workers    int
+	generation uint64
+}
+
+func (p *EdgeFanoutPlan) Len() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.entries)
 }
 
 // EdgeEndpoint is the database-free form of the udphub UDP ingress. One
@@ -40,6 +68,7 @@ type EdgeEndpoint struct {
 	closeOnce       sync.Once
 	closed          chan struct{}
 	sender          *FanoutSender
+	planGeneration  atomic.Uint64
 }
 
 func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net.UDPAddr, *net.UDPAddr)) (*EdgeEndpoint, error) {
@@ -142,16 +171,21 @@ func (e *EdgeEndpoint) SendTo(data []byte, addr *net.UDPAddr) error {
 	return err
 }
 
-func (e *EdgeEndpoint) Fanout(data []byte, targets []EdgeFanoutTarget, sourceID int, sourceUser string, sourceSSID byte, onComplete func(EdgeFanoutResult)) bool {
-	if e == nil || len(data) == 0 || len(targets) == 0 {
-		return false
+func (e *EdgeEndpoint) PrepareFanout(targets []EdgeFanoutTarget) *EdgeFanoutPlan {
+	if e == nil || len(targets) == 0 || e.sender == nil || len(e.sender.writers) == 0 {
+		return nil
 	}
+	generation := e.planGeneration.Load()
 	entries := make([]domainReceiverEntry, 0, len(targets))
 	seen := make(map[netip.AddrPort]struct{}, len(targets))
 	for _, target := range targets {
-		addr, ok := udpAddrPort(target.Addr)
-		if !ok {
-			continue
+		addr := target.addrPort
+		if !addr.IsValid() {
+			var ok bool
+			addr, ok = udpAddrPort(target.Addr)
+			if !ok {
+				continue
+			}
 		}
 		if _, exists := seen[addr]; exists {
 			continue
@@ -159,24 +193,62 @@ func (e *EdgeEndpoint) Fanout(data []byte, targets []EdgeFanoutTarget, sourceID 
 		seen[addr] = struct{}{}
 		entries = append(entries, domainReceiverEntry{addr: addr, deviceID: target.DeviceID, username: target.Username, ssid: target.SSID})
 	}
-	if len(entries) == 0 || e.sender == nil || len(e.sender.writers) == 0 {
-		return false
+	if len(entries) == 0 {
+		return nil
 	}
 	partitions := make([][]domainReceiverEntry, len(e.sender.writers))
 	for i := range entries {
 		index := addrPortShard(entries[i].addr, len(partitions))
 		partitions[index] = append(partitions[index], entries[i])
 	}
-	return e.sender.enqueue(fanoutFrameJob{
-		data: append([]byte(nil), data...), partitions: partitions,
+	return &EdgeFanoutPlan{endpoint: e, entries: entries, partitions: partitions, workers: len(partitions), generation: generation}
+}
+
+func (e *EdgeEndpoint) InvalidateFanoutPlans() {
+	if e != nil {
+		e.planGeneration.Add(1)
+	}
+}
+
+func (e *EdgeEndpoint) FanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID int, sourceUser string, sourceSSID byte, onComplete func(EdgeFanoutResult)) bool {
+	if e == nil || len(data) == 0 || plan == nil || plan.endpoint != e || plan.workers == 0 || plan.workers != len(e.sender.writers) || plan.generation != e.planGeneration.Load() {
+		return false
+	}
+	complete := func(result fanoutWriteResult) {
+		if onComplete != nil {
+			onComplete(EdgeFanoutResult{Attempted: result.attempted, Sent: result.sent, Dropped: result.dropped, Errors: result.errors})
+		}
+	}
+	if e.sender.enqueue(fanoutFrameJob{
+		data: append([]byte(nil), data...), partitions: plan.partitions,
 		sourceID: sourceID, sourceUser: sourceUser, sourceSSID: sourceSSID,
-		enqueuedAt: time.Now(), validateGen: false,
-		onComplete: func(result fanoutWriteResult) {
-			if onComplete != nil {
-				onComplete(EdgeFanoutResult{Attempted: result.attempted, Sent: result.sent, Dropped: result.dropped, Errors: result.errors})
-			}
-		},
-	})
+		enqueuedAt: time.Now(), snapshotGen: plan.generation, generation: &e.planGeneration,
+		onComplete: complete,
+	}) {
+		return true
+	}
+	if plan.generation != e.planGeneration.Load() {
+		return false
+	}
+	result := fanoutWriteResult{}
+	for i := range plan.entries {
+		target := &plan.entries[i]
+		if isSourceTarget(target, sourceID, sourceUser, sourceSSID) {
+			continue
+		}
+		result.attempted++
+		if _, err := e.conn.WriteToUDPAddrPort(data, target.addr); err == nil {
+			result.sent++
+		} else {
+			result.errors++
+		}
+	}
+	complete(result)
+	return true
+}
+
+func (e *EdgeEndpoint) Fanout(data []byte, targets []EdgeFanoutTarget, sourceID int, sourceUser string, sourceSSID byte, onComplete func(EdgeFanoutResult)) bool {
+	return e.FanoutPlan(data, e.PrepareFanout(targets), sourceID, sourceUser, sourceSSID, onComplete)
 }
 
 func (e *EdgeEndpoint) Close() error {
@@ -186,6 +258,7 @@ func (e *EdgeEndpoint) Close() error {
 	var err error
 	e.closeOnce.Do(func() {
 		close(e.closed)
+		e.InvalidateFanoutPlans()
 		if e.conn != nil {
 			// Wake the single reader before closing duplicated Windows socket
 			// views. A direct Close can wait for an outstanding IOCP read.

@@ -13,16 +13,18 @@ import (
 )
 
 const (
-	NodeMagic                = "DraA"
-	NodePacketType      byte = 0
-	NodeProtocolVersion byte = 1
-	NodeIDSize               = 32
-	NodeAuthTagSize          = sha256.Size
-	DraARLHeaderSize         = 90
-	NodeDataHeaderSize       = 53
-	NodeHeaderSize           = DraARLHeaderSize + NodeDataHeaderSize
-	NodeMaxDatagramSize      = 1400
-	NodeMaxControlSize       = 65535
+	NodeMagic                   = "DraA"
+	NodePacketType         byte = 0
+	NodeProtocolVersion    byte = 1
+	NodeProtocolMinVersion      = NodeProtocolVersion
+	NodeProtocolMaxVersion      = NodeProtocolVersion
+	NodeIDSize                  = 32
+	NodeAuthTagSize             = sha256.Size
+	DraARLHeaderSize            = 90
+	NodeDataHeaderSize          = 53
+	NodeHeaderSize              = DraARLHeaderSize + NodeDataHeaderSize
+	NodeMaxDatagramSize         = 1400
+	NodeMaxControlSize          = 65535
 )
 
 const (
@@ -51,7 +53,39 @@ const (
 	FlagEncrypted
 	FlagChunked
 	FlagControl
+	// FlagCritical requires a peer that does not understand the subtype to
+	// reject the node session instead of silently ignoring the envelope.
+	FlagCritical
 )
+
+const (
+	NodeFeatureRouteSync uint64 = 1 << iota
+	NodeFeatureUDPRelay
+	NodeFeatureDeviceSessions
+	NodeFeatureDeviceConfig
+	NodeFeatureSpeakerLease
+	NodeFeatureRuntimeMetrics
+)
+
+const (
+	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
+		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics
+	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
+)
+
+func IsKnownSubtype(subtype byte) bool {
+	switch subtype {
+	case SubtypeNodeEnroll, SubtypeNodeAuth, SubtypeNodeHeartbeat, SubtypeNodeDataBind,
+		SubtypeRouteSnapshotBegin, SubtypeRouteSnapshotChunk, SubtypeRouteSnapshotCommit,
+		SubtypeRouteDelta, SubtypeRouteAck, SubtypeRouteResyncRequest,
+		SubtypeDeviceAuth, SubtypeDeviceSessionRenew, SubtypeDeviceSessionReport,
+		SubtypeDeviceSessionRevoke, SubtypeDeviceConfig, SubtypeSpeakerLease,
+		SubtypeRelayUpstream, SubtypeRelayDownstream:
+		return true
+	default:
+		return false
+	}
+}
 
 type Envelope struct {
 	Version           byte

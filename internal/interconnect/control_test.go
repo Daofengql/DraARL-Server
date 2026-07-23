@@ -3,6 +3,7 @@ package interconnect
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"testing"
 	"time"
 )
@@ -36,6 +37,9 @@ func TestTLSControlPlaneAuthenticatesAndCarriesMessages(t *testing.T) {
 	if client.Session == nil || client.Session.SessionID == 0 || len(client.Session.Key) != 32 {
 		t.Fatalf("invalid authenticated session: %#v", client.Session)
 	}
+	if client.Session.ProtocolVersion != NodeProtocolVersion || client.Session.Features != NodeSupportedFeatures {
+		t.Fatalf("unexpected negotiated capabilities: protocol=%d features=%#x", client.Session.ProtocolVersion, client.Session.Features)
+	}
 	if err := client.Send(ControlMessage{Kind: controlHeartbeat, MessageID: 9}); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +50,150 @@ func TestTLSControlPlaneAuthenticatesAndCarriesMessages(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("control message not delivered")
+	}
+}
+
+func TestTLSControlPlaneRejectsIncompatibleProtocolBeforeAuthentication(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authCalled := false
+	server, err := NewNodeServer(NodeServerConfig{
+		ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(_, _ string) bool { authCalled = true; return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := DialNode(ctx, NodeClientConfig{
+		CenterAddr: server.Addr().String(), TLSConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13},
+		NodeID: "edge-newer", Token: "secret",
+		Capabilities: NodeCapabilities{MinProtocolVersion: NodeProtocolVersion + 1, MaxProtocolVersion: NodeProtocolVersion + 1, Features: NodeSupportedFeatures, RequiredFeatures: NodeRequiredFeatures},
+	})
+	if client != nil {
+		client.Close()
+	}
+	if !errors.Is(err, ErrNodeProtocolIncompatible) {
+		t.Fatalf("incompatible protocol error=%v", err)
+	}
+	if authCalled {
+		t.Fatal("credential validator was called before protocol compatibility was established")
+	}
+	if got := server.ProtectionSnapshot().ProtocolRejected; got != 1 {
+		t.Fatalf("protocol rejection count=%d", got)
+	}
+}
+
+func TestTLSControlPlaneRejectsMissingRequiredFeature(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewNodeServer(NodeServerConfig{ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS, ValidateToken: func(_, _ string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := DialNode(ctx, NodeClientConfig{
+		CenterAddr: server.Addr().String(), TLSConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13},
+		NodeID: "edge-limited", Token: "secret",
+		Capabilities: NodeCapabilities{Features: NodeFeatureRouteSync, RequiredFeatures: NodeFeatureRouteSync},
+	})
+	if client != nil {
+		client.Close()
+	}
+	if !errors.Is(err, ErrNodeProtocolIncompatible) {
+		t.Fatalf("missing feature error=%v", err)
+	}
+}
+
+func TestTLSControlPlaneRejectsUnknownCriticalSubtype(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewNodeServer(NodeServerConfig{ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS, ValidateToken: func(_, _ string) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}, NodeID: "edge-critical", Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	env := NewEnvelope(0x7f, client.Session.NodeID, client.Session.SessionID, 77, []byte("future-critical"))
+	env.Flags = FlagControl | FlagCritical
+	if err := client.SendEnvelope(env); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-client.Done():
+	case <-ctx.Done():
+		t.Fatal("unknown critical subtype did not close the node session")
+	}
+	if got := server.ProtectionSnapshot().UnsupportedSubtypeDrops; got != 1 {
+		t.Fatalf("unsupported subtype drops=%d", got)
+	}
+}
+
+func TestTLSControlPlaneIgnoresUnknownNonCriticalSubtype(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan struct{}, 1)
+	server, err := NewNodeServer(NodeServerConfig{
+		ListenAddr: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(_, _ string) bool { return true },
+		OnMessage: func(_ *NodeSession, message ControlMessage) {
+			if message.Kind == controlHeartbeat {
+				received <- struct{}{}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := DialNode(ctx, NodeClientConfig{CenterAddr: server.Addr().String(), TLSConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}, NodeID: "edge-optional", Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	env := NewEnvelope(0x7e, client.Session.NodeID, client.Session.SessionID, 78, []byte("future-optional"))
+	if err := client.SendEnvelope(env); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Send(ControlMessage{Kind: controlHeartbeat}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-received:
+	case <-ctx.Done():
+		t.Fatal("unknown non-critical subtype terminated the node session")
 	}
 }
 

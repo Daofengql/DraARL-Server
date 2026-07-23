@@ -35,24 +35,86 @@ const (
 	controlHello         = "node_enroll"
 	controlAuthOK        = "node_auth_ok"
 	controlAuthError     = "node_auth_error"
+	controlProtocolError = "node_protocol_error"
 	controlHeartbeat     = "node_heartbeat"
 )
 
 var ErrNodeAuthenticationRejected = errors.New("node authentication rejected")
+var ErrNodeProtocolIncompatible = errors.New("node protocol incompatible")
+
+type NodeCapabilities struct {
+	MinProtocolVersion byte
+	MaxProtocolVersion byte
+	Features           uint64
+	RequiredFeatures   uint64
+}
+
+func (c NodeCapabilities) normalized() (NodeCapabilities, error) {
+	if c.MinProtocolVersion == 0 {
+		c.MinProtocolVersion = NodeProtocolMinVersion
+	}
+	if c.MaxProtocolVersion == 0 {
+		c.MaxProtocolVersion = NodeProtocolMaxVersion
+	}
+	if c.Features == 0 {
+		c.Features = NodeSupportedFeatures
+	}
+	if c.RequiredFeatures == 0 {
+		c.RequiredFeatures = NodeRequiredFeatures
+	}
+	if c.MinProtocolVersion > c.MaxProtocolVersion {
+		return c, errors.New("minimum node protocol version exceeds maximum")
+	}
+	if c.RequiredFeatures & ^c.Features != 0 {
+		return c, errors.New("required node features are not advertised")
+	}
+	return c, nil
+}
+
+func negotiateNodeCapabilities(server, client NodeCapabilities) (byte, uint64, error) {
+	var err error
+	if server, err = server.normalized(); err != nil {
+		return 0, 0, err
+	}
+	if client, err = client.normalized(); err != nil {
+		return 0, 0, err
+	}
+	minimum := server.MinProtocolVersion
+	if client.MinProtocolVersion > minimum {
+		minimum = client.MinProtocolVersion
+	}
+	maximum := server.MaxProtocolVersion
+	if client.MaxProtocolVersion < maximum {
+		maximum = client.MaxProtocolVersion
+	}
+	if minimum > maximum {
+		return 0, 0, ErrNodeProtocolIncompatible
+	}
+	features := server.Features & client.Features
+	if server.RequiredFeatures & ^features != 0 || client.RequiredFeatures & ^features != 0 {
+		return 0, 0, ErrNodeProtocolIncompatible
+	}
+	return maximum, features, nil
+}
 
 type ControlMessage struct {
-	Kind            string          `json:"kind"`
-	NodeID          string          `json:"node_id,omitempty"`
-	Token           string          `json:"token,omitempty"`
-	Credential      string          `json:"credential,omitempty"`
-	CredentialEpoch uint32          `json:"credential_epoch,omitempty"`
-	SessionID       uint64          `json:"session_id,omitempty"`
-	KeyEpoch        uint32          `json:"key_epoch,omitempty"`
-	Key             string          `json:"key,omitempty"`
-	MessageID       uint64          `json:"message_id,omitempty"`
-	Payload         json.RawMessage `json:"payload,omitempty"`
-	Packet          string          `json:"packet,omitempty"`
-	Error           string          `json:"error,omitempty"`
+	Kind             string          `json:"kind"`
+	NodeID           string          `json:"node_id,omitempty"`
+	Token            string          `json:"token,omitempty"`
+	Credential       string          `json:"credential,omitempty"`
+	CredentialEpoch  uint32          `json:"credential_epoch,omitempty"`
+	MinProtocol      byte            `json:"min_protocol,omitempty"`
+	MaxProtocol      byte            `json:"max_protocol,omitempty"`
+	Protocol         byte            `json:"protocol,omitempty"`
+	Features         uint64          `json:"features,omitempty"`
+	RequiredFeatures uint64          `json:"required_features,omitempty"`
+	SessionID        uint64          `json:"session_id,omitempty"`
+	KeyEpoch         uint32          `json:"key_epoch,omitempty"`
+	Key              string          `json:"key,omitempty"`
+	MessageID        uint64          `json:"message_id,omitempty"`
+	Payload          json.RawMessage `json:"payload,omitempty"`
+	Packet           string          `json:"packet,omitempty"`
+	Error            string          `json:"error,omitempty"`
 }
 
 type NodeAuthentication struct {
@@ -118,6 +180,8 @@ type NodeSession struct {
 	SessionID              uint64
 	KeyEpoch               uint32
 	Key                    []byte
+	ProtocolVersion        byte
+	Features               uint64
 	RemoteAddr             string
 	ConnectedAt            time.Time
 	LastHeartbeat          atomic.Int64
@@ -246,38 +310,44 @@ type NodeServerConfig struct {
 	OnEnvelope     func(*NodeSession, Envelope)
 	OnDisconnect   func(*NodeSession, error)
 	ResourceLimits ResourceLimits
+	Capabilities   NodeCapabilities
 }
 
 type NodeServer struct {
-	cfg        NodeServerConfig
-	listener   net.Listener
-	sessions   sync.Map
-	closed     chan struct{}
-	closeOnce  sync.Once
-	limits     ResourceLimits
-	pending    atomic.Int64
-	sessionMu  sync.Mutex
-	active     int
-	occupied   int
-	reserved   map[string]int
-	attempts   *handshakeLimiter
-	protection NodeServerProtection
+	cfg          NodeServerConfig
+	listener     net.Listener
+	sessions     sync.Map
+	closed       chan struct{}
+	closeOnce    sync.Once
+	limits       ResourceLimits
+	pending      atomic.Int64
+	sessionMu    sync.Mutex
+	active       int
+	occupied     int
+	reserved     map[string]int
+	attempts     *handshakeLimiter
+	protection   NodeServerProtection
+	capabilities NodeCapabilities
 }
 
 type NodeServerProtection struct {
-	PendingRejected  atomic.Uint64
-	AuthRateRejected atomic.Uint64
-	AuthFailed       atomic.Uint64
-	MaxNodesRejected atomic.Uint64
+	PendingRejected         atomic.Uint64
+	AuthRateRejected        atomic.Uint64
+	AuthFailed              atomic.Uint64
+	MaxNodesRejected        atomic.Uint64
+	ProtocolRejected        atomic.Uint64
+	UnsupportedSubtypeDrops atomic.Uint64
 }
 
 type NodeServerProtectionSnapshot struct {
-	PendingHandshakes int64  `json:"pending_handshakes"`
-	ActiveNodes       int    `json:"active_nodes"`
-	PendingRejected   uint64 `json:"pending_rejected"`
-	AuthRateRejected  uint64 `json:"auth_rate_rejected"`
-	AuthFailed        uint64 `json:"auth_failed"`
-	MaxNodesRejected  uint64 `json:"max_nodes_rejected"`
+	PendingHandshakes       int64  `json:"pending_handshakes"`
+	ActiveNodes             int    `json:"active_nodes"`
+	PendingRejected         uint64 `json:"pending_rejected"`
+	AuthRateRejected        uint64 `json:"auth_rate_rejected"`
+	AuthFailed              uint64 `json:"auth_failed"`
+	MaxNodesRejected        uint64 `json:"max_nodes_rejected"`
+	ProtocolRejected        uint64 `json:"protocol_rejected"`
+	UnsupportedSubtypeDrops uint64 `json:"unsupported_subtype_drops"`
 }
 
 func NewNodeServer(cfg NodeServerConfig) (*NodeServer, error) {
@@ -294,7 +364,11 @@ func NewNodeServer(cfg NodeServerConfig) (*NodeServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &NodeServer{cfg: cfg, limits: limits, attempts: newHandshakeLimiter(limits.AuthAttemptsPerMinutePerIP), reserved: make(map[string]int), closed: make(chan struct{})}, nil
+	capabilities, err := cfg.Capabilities.normalized()
+	if err != nil {
+		return nil, err
+	}
+	return &NodeServer{cfg: cfg, limits: limits, capabilities: capabilities, attempts: newHandshakeLimiter(limits.AuthAttemptsPerMinutePerIP), reserved: make(map[string]int), closed: make(chan struct{})}, nil
 }
 
 func (s *NodeServer) Start() error {
@@ -345,6 +419,16 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	hello, helloBytes, err := readControlMessageSizeLimit(conn, controlHelloMaxFrame)
 	authentication := NodeAuthentication{}
 	validHello := err == nil && hello.Kind == controlHello && hello.NodeID != "" && hello.NodeID != CenterLocalNodeID
+	protocolVersion, features, negotiationErr := negotiateNodeCapabilities(s.capabilities, NodeCapabilities{
+		MinProtocolVersion: hello.MinProtocol, MaxProtocolVersion: hello.MaxProtocol,
+		Features: hello.Features, RequiredFeatures: hello.RequiredFeatures,
+	})
+	if validHello && negotiationErr != nil {
+		s.protection.ProtocolRejected.Add(1)
+		_ = writeControlMessage(conn, ControlMessage{Kind: controlProtocolError, Error: "node protocol negotiation failed"})
+		_ = conn.Close()
+		return
+	}
 	rateRejected := false
 	if validHello {
 		if !s.attempts.allow(conn.RemoteAddr(), time.Now()) {
@@ -370,7 +454,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		return
 	}
 	sid := randomUint64()
-	session := &NodeSession{NodeID: hello.NodeID, SessionID: sid, KeyEpoch: 1, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn, protection: newNodeProtection(s.limits)}
+	session := &NodeSession{NodeID: hello.NodeID, SessionID: sid, KeyEpoch: 1, Key: key, ProtocolVersion: protocolVersion, Features: features, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn, protection: newNodeProtection(s.limits)}
 	session.Touch()
 	if !s.reserveSession(session.NodeID) {
 		s.protection.MaxNodesRejected.Add(1)
@@ -384,7 +468,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 			s.releaseReservation(session.NodeID)
 		}
 	}()
-	response := ControlMessage{Kind: controlAuthOK, NodeID: session.NodeID, SessionID: sid, KeyEpoch: session.KeyEpoch, Key: base64.RawStdEncoding.EncodeToString(key), Credential: authentication.IssuedCredential, CredentialEpoch: authentication.CredentialEpoch}
+	response := ControlMessage{Kind: controlAuthOK, NodeID: session.NodeID, SessionID: sid, KeyEpoch: session.KeyEpoch, Key: base64.RawStdEncoding.EncodeToString(key), Credential: authentication.IssuedCredential, CredentialEpoch: authentication.CredentialEpoch, Protocol: protocolVersion, Features: features}
 	responseWire, err := marshalControlMessage(response)
 	if err != nil {
 		_ = conn.Close()
@@ -434,6 +518,10 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		if msg.Kind == controlHeartbeat {
 			session.Touch()
 		}
+		if msg.Kind == controlProtocolError {
+			err = ErrNodeProtocolIncompatible
+			return
+		}
 		if msg.Kind == "type0" {
 			wire, decodeErr := base64.RawStdEncoding.DecodeString(msg.Packet)
 			if decodeErr != nil {
@@ -446,6 +534,16 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 			}
 			if env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID {
 				session.resourceProtection().recordIdentityReject()
+				continue
+			}
+			if !IsKnownSubtype(env.Subtype) {
+				s.protection.UnsupportedSubtypeDrops.Add(1)
+				session.ControlMetrics.AddDrop()
+				if env.Flags&FlagCritical != 0 {
+					_ = session.Send(ControlMessage{Kind: controlProtocolError, Error: "unsupported critical Type 0 subtype"})
+					err = ErrNodeProtocolIncompatible
+					return
+				}
 				continue
 			}
 			if env.Expired(now, 30*time.Second) {
@@ -551,6 +649,7 @@ func (s *NodeServer) ProtectionSnapshot() NodeServerProtectionSnapshot {
 		PendingHandshakes: s.pending.Load(), ActiveNodes: active,
 		PendingRejected: s.protection.PendingRejected.Load(), AuthRateRejected: s.protection.AuthRateRejected.Load(),
 		AuthFailed: s.protection.AuthFailed.Load(), MaxNodesRejected: s.protection.MaxNodesRejected.Load(),
+		ProtocolRejected: s.protection.ProtocolRejected.Load(), UnsupportedSubtypeDrops: s.protection.UnsupportedSubtypeDrops.Load(),
 	}
 }
 func (s *NodeServer) Session(nodeID string) (*NodeSession, bool) {
@@ -644,6 +743,7 @@ type NodeClientConfig struct {
 	OnMessage    func(ControlMessage)
 	OnEnvelope   func(Envelope)
 	OnDisconnect func(error)
+	Capabilities NodeCapabilities
 }
 type NodeClient struct {
 	cfg              NodeClientConfig
@@ -665,11 +765,16 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	capabilities, err := cfg.Capabilities.normalized()
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	client := &NodeClient{cfg: cfg, conn: conn, closed: make(chan struct{})}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	helloWire, err := marshalControlMessage(ControlMessage{Kind: controlHello, NodeID: cfg.NodeID, Token: cfg.Token})
+	helloWire, err := marshalControlMessage(ControlMessage{Kind: controlHello, NodeID: cfg.NodeID, Token: cfg.Token, MinProtocol: capabilities.MinProtocolVersion, MaxProtocol: capabilities.MaxProtocolVersion, Features: capabilities.Features, RequiredFeatures: capabilities.RequiredFeatures})
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -683,6 +788,10 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 		_ = conn.Close()
 		return nil, err
 	}
+	if response.Kind == controlProtocolError {
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w: %s", ErrNodeProtocolIncompatible, response.Error)
+	}
 	if response.Kind != controlAuthOK {
 		_ = conn.Close()
 		return nil, fmt.Errorf("%w: %s", ErrNodeAuthenticationRejected, response.Error)
@@ -692,8 +801,13 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 		_ = conn.Close()
 		return nil, errors.New("invalid node session key")
 	}
+	if response.Protocol < capabilities.MinProtocolVersion || response.Protocol > capabilities.MaxProtocolVersion ||
+		response.Features&^capabilities.Features != 0 || capabilities.RequiredFeatures&^response.Features != 0 {
+		_ = conn.Close()
+		return nil, ErrNodeProtocolIncompatible
+	}
 	_ = conn.SetDeadline(time.Time{})
-	client.Session = &NodeSession{NodeID: response.NodeID, SessionID: response.SessionID, KeyEpoch: response.KeyEpoch, Key: key, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
+	client.Session = &NodeSession{NodeID: response.NodeID, SessionID: response.SessionID, KeyEpoch: response.KeyEpoch, Key: key, ProtocolVersion: response.Protocol, Features: response.Features, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
 	client.Session.ControlMetrics.AddOut(len(helloWire))
 	client.Session.ControlMetrics.AddIn(responseBytes)
 	client.IssuedCredential = response.Credential
@@ -723,6 +837,10 @@ func (c *NodeClient) readLoop() {
 		if msg.Kind == controlHeartbeat {
 			c.Session.Touch()
 		}
+		if msg.Kind == controlProtocolError {
+			err = fmt.Errorf("%w: %s", ErrNodeProtocolIncompatible, msg.Error)
+			return
+		}
 		if msg.Kind == "type0" {
 			wire, decodeErr := base64.RawStdEncoding.DecodeString(msg.Packet)
 			if decodeErr != nil {
@@ -731,6 +849,15 @@ func (c *NodeClient) readLoop() {
 			env, decodeErr := UnmarshalControl(wire, c.Session.Key)
 			now := time.Now()
 			if decodeErr != nil || env.NodeSessionID != c.Session.SessionID || env.KeyEpoch != c.Session.KeyEpoch || env.SourceNodeID != "center" || env.Expired(now, 30*time.Second) {
+				continue
+			}
+			if !IsKnownSubtype(env.Subtype) {
+				c.Session.ControlMetrics.AddDrop()
+				if env.Flags&FlagCritical != 0 {
+					_ = c.Send(ControlMessage{Kind: controlProtocolError, Error: "unsupported critical Type 0 subtype"})
+					err = ErrNodeProtocolIncompatible
+					return
+				}
 				continue
 			}
 			if !c.Session.AcceptMessage(env.MessageID, now) {

@@ -44,21 +44,25 @@ var (
 )
 
 type options struct {
-	configPath  string
-	serverAddr  string
-	serverAddrs string
-	serverPID   int
-	processPIDs string
-	levels      []int
-	duration    time.Duration
-	interval    time.Duration
-	intervals   []time.Duration
-	payload     int
-	settle      time.Duration
-	groups      int
-	placement   string
-	confirm     bool
-	cleanupOnly bool
+	configPath     string
+	serverAddr     string
+	serverAddrs    string
+	apiBase        string
+	serverPID      int
+	processPIDs    string
+	levels         []int
+	duration       time.Duration
+	interval       time.Duration
+	intervals      []time.Duration
+	payload        int
+	settle         time.Duration
+	groups         int
+	placement      string
+	churn          bool
+	churnEvery     time.Duration
+	edgeResetEvery time.Duration
+	confirm        bool
+	cleanupOnly    bool
 }
 
 type processTarget struct {
@@ -75,14 +79,21 @@ type benchIdentity struct {
 }
 
 type benchClient struct {
-	identity benchIdentity
-	conn     *net.UDPConn
-	server   *net.UDPAddr
-	authCh   chan struct{}
-	authOnce sync.Once
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	identity      benchIdentity
+	conn          *net.UDPConn
+	server        atomic.Pointer[net.UDPAddr]
+	authCh        chan struct{}
+	authOnce      sync.Once
+	heartbeatAcks chan string
+	receivedTypes [6]atomic.Uint64
+	stopCh        chan struct{}
+	stopOnce      sync.Once
+	wg            sync.WaitGroup
+}
+
+type benchData struct {
+	groupIDs  []int64
+	deviceIDs []int64
 }
 
 type stageMetrics struct {
@@ -178,6 +189,9 @@ func run() (runErr error) {
 	if err != nil {
 		return err
 	}
+	if opts.churn && len(serverUDPs) < 2 {
+		return errors.New("-churn requires at least two UDP servers")
+	}
 	processTargets, err := parseProcessTargets(opts.serverPID, opts.processPIDs)
 	if err != nil {
 		return err
@@ -201,11 +215,11 @@ func run() (runErr error) {
 	if err := cleanupStale(); err != nil {
 		return fmt.Errorf("cleanup stale benchmark data: %w", err)
 	}
-	groupIDs, err := setupBenchData(db, cfg.DeviceAuth.AESKey, maxClients, opts.groups)
+	benchRows, err := setupBenchData(db, cfg.DeviceAuth.AESKey, maxClients, opts.groups, opts.churn)
 	if err != nil {
 		return fmt.Errorf("setup benchmark data: %w", err)
 	}
-	fmt.Printf("SETUP group_ids=%v groups=%d clients=%d users=%d\n", groupIDs, opts.groups, maxClients, usersForClients(maxClients))
+	fmt.Printf("SETUP group_ids=%v groups=%d clients=%d users=%d\n", benchRows.groupIDs, opts.groups, maxClients, usersForClients(maxClients))
 
 	clients := make([]*benchClient, 0, maxClients)
 	defer func() {
@@ -260,6 +274,14 @@ func run() (runErr error) {
 		}
 		time.Sleep(settle)
 		warmUp(clients[:opts.groups], opts.payload)
+		if opts.churn {
+			result, err := runChurnSoak(clients, benchRows, opts, cfg.JWT.Secret, serverMeters, loadMeter)
+			if err != nil {
+				return fmt.Errorf("mixed churn soak: %w", err)
+			}
+			fmt.Println(result)
+			break
+		}
 
 		stopLevels := false
 		for intervalIndex, interval := range opts.intervals {
@@ -331,6 +353,7 @@ func parseOptions() (options, error) {
 	flag.StringVar(&opts.configPath, "config", "config.yaml", "DraARL config path")
 	flag.StringVar(&opts.serverAddr, "server", "127.0.0.1:60050", "UDP server address")
 	flag.StringVar(&opts.serverAddrs, "servers", "", "comma-separated UDP server addresses; overrides -server")
+	flag.StringVar(&opts.apiBase, "api-base", "", "HTTP API base including /api; required by -churn")
 	flag.IntVar(&opts.serverPID, "server-pid", 0, "DraARL server process ID")
 	flag.StringVar(&opts.processPIDs, "process-pids", "", "comma-separated measured processes, for example center=100,edge-a=101")
 	flag.StringVar(&rawLevels, "levels", "100,500,1000,2000,4000", "ascending client counts")
@@ -341,6 +364,9 @@ func parseOptions() (options, error) {
 	flag.DurationVar(&opts.settle, "settle", 3*time.Second, "settling time after adding clients")
 	flag.IntVar(&opts.groups, "groups", 1, "independent groups and simultaneous speakers")
 	flag.StringVar(&opts.placement, "placement", "local", "client placement across -servers: local, distributed, or cross")
+	flag.BoolVar(&opts.churn, "churn", false, "run mixed route/control churn soak instead of a static fan-out stage")
+	flag.DurationVar(&opts.churnEvery, "churn-interval", 5*time.Second, "interval between route/control churn operations")
+	flag.DurationVar(&opts.edgeResetEvery, "edge-reset-interval", 2*time.Minute, "interval between edge control reconnect tests; 0 disables")
 	flag.BoolVar(&opts.confirm, "confirm-test-data", false, "confirm temporary MySQL rows may be created and deleted")
 	flag.BoolVar(&opts.cleanupOnly, "cleanup-only", false, "remove stale benchmark rows/files without running a benchmark")
 	flag.Parse()
@@ -363,6 +389,32 @@ func parseOptions() (options, error) {
 	}
 	if len(opts.levels) == 0 || opts.levels[len(opts.levels)-1] > maxBenchClients {
 		return opts, fmt.Errorf("client levels must end between 2 and %d", maxBenchClients)
+	}
+	if opts.churn {
+		if len(opts.levels) != 1 {
+			return opts, errors.New("-churn requires exactly one client level")
+		}
+		if strings.TrimSpace(opts.apiBase) == "" {
+			return opts, errors.New("-api-base is required by -churn")
+		}
+		if opts.levels[0] < opts.groups+2 {
+			return opts, errors.New("-churn requires at least two non-speaker clients")
+		}
+		if opts.groups < 2 {
+			return opts, errors.New("-churn requires at least two groups")
+		}
+		if opts.churnEvery < time.Second {
+			return opts, errors.New("-churn-interval must be at least 1s")
+		}
+		if opts.edgeResetEvery < 0 || opts.edgeResetEvery > 0 && opts.edgeResetEvery < 5*time.Second {
+			return opts, errors.New("-edge-reset-interval must be 0 or at least 5s")
+		}
+		if opts.duration < 8*opts.churnEvery {
+			return opts, errors.New("-duration is too short to cover one complete churn cycle")
+		}
+		if opts.edgeResetEvery > 0 && opts.duration < opts.edgeResetEvery+35*time.Second {
+			return opts, errors.New("-duration must leave at least 35s to verify an edge reconnect")
+		}
 	}
 	if opts.groups < 1 || opts.groups > 1024 {
 		return opts, fmt.Errorf("groups must be between 1 and 1024")
@@ -469,7 +521,7 @@ func sanitizeMetricName(raw string) string {
 	return b.String()
 }
 
-func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int) ([]int64, error) {
+func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int, adminOwner bool) (*benchData, error) {
 	cipher, err := draarlcrypto.NewAESCrypto(aesKey)
 	if err != nil {
 		return nil, err
@@ -487,11 +539,15 @@ func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int) ([]int64
 
 	userIDs := make([]int64, usersForClients(clients))
 	for i := range userIDs {
+		role := "user"
+		if adminOwner && i == 0 {
+			role = "admin"
+		}
 		result, err := tx.Exec(`INSERT INTO users
 			(name,email,email_verified,callsign,roles,status,approval_status,dmrid,device_password,create_time,update_time)
-			VALUES (?,?,?,?, 'user',1,1,?,?,NOW(3),NOW(3))`,
+			VALUES (?,?,?,?,?,1,1,?,?,NOW(3),NOW(3))`,
 			usernameForUser(i), fmt.Sprintf("%s%04d@example.invalid", benchPrefix, i), 1,
-			callsignForUser(i), 9000000+i, encryptedPassword)
+			callsignForUser(i), role, 9000000+i, encryptedPassword)
 		if err != nil {
 			return nil, fmt.Errorf("insert user %d: %w", i, err)
 		}
@@ -515,6 +571,7 @@ func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int) ([]int64
 		}
 	}
 
+	deviceIDs := make([]int64, clients)
 	stmt, err := tx.Prepare(`INSERT INTO devices
 		(name,dmrid,ssid,owner_id,qth,last_online_ip,dev_model,group_id,status,is_certed,priority,
 		 disable_send,disable_recv,is_online,online_time,note,create_time,update_time)
@@ -525,16 +582,21 @@ func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int) ([]int64
 	defer stmt.Close()
 	for i := 0; i < clients; i++ {
 		identity := identityForIndex(i)
-		if _, err := stmt.Exec(fmt.Sprintf("bench-device-%05d", i), identity.dmrid, identity.ssid,
-			userIDs[i/devicesPerUser], identity.ip.String(), groupIDs[i%groupCount], benchPrefix); err != nil {
+		result, err := stmt.Exec(fmt.Sprintf("bench-device-%05d", i), identity.dmrid, identity.ssid,
+			userIDs[i/devicesPerUser], identity.ip.String(), groupIDs[i%groupCount], benchPrefix)
+		if err != nil {
 			return nil, fmt.Errorf("insert device %d: %w", i, err)
+		}
+		deviceIDs[i], err = result.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("read device %d id: %w", i, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return groupIDs, nil
+	return &benchData{groupIDs: groupIDs, deviceIDs: deviceIDs}, nil
 }
 
 func cleanupBenchData(db *sql.DB) error {
@@ -655,11 +717,12 @@ func serverIndexForClient(index, groups, serverCount int, placement string) int 
 
 func connectClient(server *net.UDPAddr, identity benchIdentity) (*benchClient, error) {
 	client := &benchClient{
-		identity: identity,
-		server:   server,
-		authCh:   make(chan struct{}),
-		stopCh:   make(chan struct{}),
+		identity:      identity,
+		authCh:        make(chan struct{}),
+		heartbeatAcks: make(chan string, 16),
+		stopCh:        make(chan struct{}),
 	}
+	client.server.Store(server)
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: identity.ip, Port: 0})
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", identity.ip, err)
@@ -687,12 +750,51 @@ func connectClient(server *net.UDPAddr, identity benchIdentity) (*benchClient, e
 }
 
 func (c *benchClient) sendHeartbeat() error {
+	return c.sendHeartbeatTo(c.serverAddr())
+}
+
+func (c *benchClient) sendHeartbeatTo(server *net.UDPAddr) error {
+	if server == nil {
+		return errors.New("UDP server is not set")
+	}
 	payload := make([]byte, protocol.HeartbeatGPSPayloadSize, protocol.HeartbeatGPSPayloadSize+17)
 	payload = append(payload, c.identity.mac...)
 	packet := protocol.EncodeDraARLv1(c.identity.username, benchPassword, c.identity.ssid,
 		protocol.DraARLTypeHeartbeat, protocol.DraARLDevModelESP32NoRadio, c.identity.dmrid, "", payload)
-	_, err := c.conn.WriteToUDP(packet, c.server)
+	_, err := c.conn.WriteToUDP(packet, server)
 	return err
+}
+
+func (c *benchClient) serverAddr() *net.UDPAddr { return c.server.Load() }
+
+func (c *benchClient) authenticateAt(server *net.UDPAddr, timeout time.Duration) error {
+	if server == nil {
+		return errors.New("UDP server is not set")
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := c.sendHeartbeatTo(server); err != nil {
+			return err
+		}
+		attemptDeadline := time.NewTimer(time.Second)
+		for {
+			select {
+			case from := <-c.heartbeatAcks:
+				if from == server.String() {
+					attemptDeadline.Stop()
+					c.server.Store(server)
+					return nil
+				}
+			case <-attemptDeadline.C:
+				goto retry
+			case <-c.stopCh:
+				attemptDeadline.Stop()
+				return errors.New("client stopped")
+			}
+		}
+	retry:
+	}
+	return fmt.Errorf("authenticate %s-%d at %s: timeout", c.identity.username, c.identity.ssid, server)
 }
 
 func (c *benchClient) heartbeatLoop() {
@@ -714,7 +816,7 @@ func (c *benchClient) readLoop() {
 	defer c.wg.Done()
 	buf := make([]byte, 2048)
 	for {
-		n, _, err := c.conn.ReadFromUDP(buf)
+		n, from, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
 			return
 		}
@@ -724,7 +826,14 @@ func (c *benchClient) readLoop() {
 		packetType := buf[48]
 		if packetType == protocol.DraARLTypeHeartbeat && len(bytes.TrimRight(buf[54:86], "\x00")) > 0 {
 			c.authOnce.Do(func() { close(c.authCh) })
+			select {
+			case c.heartbeatAcks <- from.String():
+			default:
+			}
 			continue
+		}
+		if int(packetType) < len(c.receivedTypes) {
+			c.receivedTypes[packetType].Add(1)
 		}
 		metrics := activeStage.Load()
 		if metrics == nil || packetType != protocol.DraARLTypeOpus16K || n < protocol.DraARLv1HeaderSize+32 {
@@ -741,6 +850,13 @@ func (c *benchClient) readLoop() {
 		}
 		metrics.observe(latencyUS)
 	}
+}
+
+func (c *benchClient) receivedType(packetType byte) uint64 {
+	if int(packetType) >= len(c.receivedTypes) {
+		return 0
+	}
+	return c.receivedTypes[packetType].Load()
 }
 
 func (c *benchClient) close() {
@@ -775,7 +891,7 @@ func warmUp(sources []*benchClient, payloadSize int) {
 	for i := 0; i < 8; i++ {
 		for sourceIndex, source := range sources {
 			packet := buildVoicePacket(source.identity, payloadSize, 0, uint64(i*len(sources)+sourceIndex))
-			_, _ = source.conn.WriteToUDP(packet, source.server)
+			_, _ = source.conn.WriteToUDP(packet, source.serverAddr())
 		}
 		time.Sleep(120 * time.Millisecond)
 	}
@@ -812,7 +928,7 @@ func runStage(clients []*benchClient, opts options, serverMeters []*processMeter
 		for groupIndex := 0; groupIndex < opts.groups; groupIndex++ {
 			source := clients[groupIndex]
 			packet := buildVoicePacket(source.identity, opts.payload, stageID, sent)
-			if _, err := source.conn.WriteToUDP(packet, source.server); err == nil {
+			if _, err := source.conn.WriteToUDP(packet, source.serverAddr()); err == nil {
 				sent++
 				expected += uint64(groupSizes[groupIndex] - 1)
 			}
@@ -872,8 +988,8 @@ func runStage(clients []*benchClient, opts options, serverMeters []*processMeter
 func countDistinctServers(clients []*benchClient) int {
 	seen := make(map[string]struct{})
 	for _, client := range clients {
-		if client != nil && client.server != nil {
-			seen[client.server.String()] = struct{}{}
+		if client != nil && client.serverAddr() != nil {
+			seen[client.serverAddr().String()] = struct{}{}
 		}
 	}
 	return len(seen)

@@ -64,11 +64,20 @@ export interface EdgeNodeRuntime {
   heartbeat: {
     instance_id: string
     sent_at_ms: number
+    goroutines: number
     connection_count: number
     device: MetricsSnapshot
     interconnect: MetricsSnapshot
     projection_version: number
     protection: NodeProtectionSnapshot
+    receiver_cache: {
+      hits: number
+      misses: number
+      rebuilds: number
+      build_ns: number
+      max_entries: number
+      generation: number
+    }
   }
   center_interconnect: MetricsSnapshot
   traffic_rates: {

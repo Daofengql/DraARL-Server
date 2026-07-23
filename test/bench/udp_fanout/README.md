@@ -58,6 +58,23 @@ go run ./test/bench/udp_fanout -confirm-test-data -server-pid 11396 -groups 5 -l
   -process-pids center=11094,edge-a=11208,edge-b=11219,edge-c=11230
 ```
 
+30 分钟混合 churn soak（持续 Type 2/4/5，并循环验证切组、禁收发、Type 3
+配置下发、设备跨边缘漫游和 TLS 控制连接重连）：
+
+```bash
+./udp-fanout-bench -confirm-test-data -churn -config center.yaml \
+  -api-base http://127.0.0.1:60051/api \
+  -servers 127.0.0.1:62051,127.0.0.1:62052,127.0.0.1:62053 \
+  -placement distributed -groups 5 -levels 1000 -duration 30m \
+  -interval 120ms -churn-interval 5s -edge-reset-interval 2m \
+  -process-pids center=11094,edge-a=11208,edge-b=11219,edge-c=11230
+```
+
+churn 模式要求至少两个群组、两个 UDP 边缘和两个在线边缘控制会话。工具用
+`config.yaml` 的 JWT 密钥为临时管理员测试用户签发仅在本进程内使用的令牌，
+所有状态变更均调用正式 HTTP API；令牌和密码不会写入输出。退出时会先恢复测试
+设备的群组与收发状态，再执行统一的数据及录音清理。
+
 同一批 20000 个会话逐档提高发送频率，寻找丢包拐点：
 
 ```bash
@@ -87,11 +104,15 @@ go build -o ./bin/udp-fanout-bench ./test/bench/udp_fanout
 | `-config` | `config.yaml` | 服务端配置文件 |
 | `-server` | `127.0.0.1:60050` | UDP 服务地址 |
 | `-servers` | 空 | 多个 UDP 边缘入口，逗号分隔；设置后覆盖 `-server` |
+| `-api-base` | 空 | HTTP API 根地址（含 `/api`），`-churn` 时必填 |
 | `-server-pid` | 无 | DraARL Server PID，正式测试必填 |
 | `-process-pids` | 空 | 多进程测量目标，例如 `center=100,edge-a=101`；设置后替代 `-server-pid` |
 | `-levels` | `100,500,1000,2000,4000` | 递增的总客户端数，最大 20000 |
 | `-groups` | `1` | 独立群组数，也是同时发言者数量，最大 1024 |
 | `-placement` | `local` | `local` 全部设备在首入口；`distributed` 同组设备轮转各入口；`cross` 发言者在首入口且接收者只在其他入口 |
+| `-churn` | `false` | 运行混合状态变化 soak，替代静态 fan-out 档位 |
+| `-churn-interval` | `5s` | 切组、禁收发、配置下发和漫游操作间隔 |
+| `-edge-reset-interval` | `2m` | 强制重置边缘 TLS 控制连接的间隔；`0` 可仅在诊断时禁用 |
 | `-duration` | `10s` | 每档测量时间 |
 | `-interval` | `120ms` | 每个发言者的语音包间隔 |
 | `-intervals` | 空 | 由慢到快扫描多个包间隔，复用同一批已认证会话；设置后覆盖 `-interval` |
@@ -107,5 +128,8 @@ go build -o ./bin/udp-fanout-bench ./test/bench/udp_fanout
 - `server_cpu_cores`：服务进程全部 OS 线程消耗的 CPU 核数，例如 `1.20` 表示约 1.2 个逻辑核。
 - `server_rss_mb`：服务进程 RSS。
 - `proc_<name>_cpu_cores/proc_<name>_rss_mb`：使用 `-process-pids` 时各中心/边缘进程的独立资源占用；`server_*` 为它们的合计。
+- `CHURN_RESULT`：混合 soak 的操作覆盖数、Type 3/4/5 实收数、边缘保护队列增量、
+  goroutine 起止值、接收者缓存命中/重建增量和各进程 CPU/RSS。若必要操作未覆盖、
+  控制队列未排空、边缘未重连或出现队列保护丢弃，命令以非零状态退出。
 
 工具在丢包率超过 5% 后停止更高档位，避免继续制造不具代表性的过载流量。

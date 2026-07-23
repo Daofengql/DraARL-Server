@@ -2,7 +2,7 @@
 
 # UDP fan-out benchmark
 
-`udp_fanout` 使用真实 DraARLv1 心跳认证和 UDP socket，测量单机服务在大量在线设备下的语音 fan-out 能力。工具支持一个或多个独立群组，并为每个群组安排一个同时发言的设备。
+`udp_fanout` 使用真实 DraARLv1 心跳认证和 UDP socket，测量单机或中心/多边缘拓扑在大量在线设备下的语音 fan-out 能力。工具支持一个或多个独立群组，并为每个群组安排一个同时发言的设备。
 
 历史实测结果和瓶颈分析见[UDP 单机转发压力测试](../../../docs/UDP单机转发压力测试.md)。
 
@@ -40,6 +40,33 @@ go run ./test/bench/udp_fanout -confirm-test-data -server-pid 11396 -levels 1000
 go run ./test/bench/udp_fanout -confirm-test-data -server-pid 11396 -groups 5 -levels 5000 -duration 15s -interval 120ms
 ```
 
+真实中心和三个边缘的混合本地/跨节点转发：
+
+```bash
+./udp-fanout-bench -confirm-test-data -config center.yaml \
+  -servers 127.0.0.1:62051,127.0.0.1:62052,127.0.0.1:62053 \
+  -placement distributed -groups 5 -levels 5000 -duration 15s \
+  -process-pids center=11094,edge-a=11208,edge-b=11219,edge-c=11230
+```
+
+纯跨节点转发（每组发言者在第一个边缘，所有接收者在其他边缘）：
+
+```bash
+./udp-fanout-bench -confirm-test-data -config center.yaml \
+  -servers 127.0.0.1:62051,127.0.0.1:62052,127.0.0.1:62053 \
+  -placement cross -groups 5 -levels 5000 -duration 15s \
+  -process-pids center=11094,edge-a=11208,edge-b=11219,edge-c=11230
+```
+
+同一批 20000 个会话逐档提高发送频率，寻找丢包拐点：
+
+```bash
+./udp-fanout-bench -confirm-test-data -config center.yaml \
+  -servers 127.0.0.1:62051,127.0.0.1:62052,127.0.0.1:62053 \
+  -placement cross -groups 5 -levels 20000 -duration 10s \
+  -intervals 120ms,60ms,30ms,20ms,10ms -process-pids center=11094,edge-a=11208,edge-b=11219,edge-c=11230
+```
+
 仅清理遗留测试数据：
 
 ```bash
@@ -59,11 +86,15 @@ go build -o ./bin/udp-fanout-bench ./test/bench/udp_fanout
 | `-confirm-test-data` | `false` | 确认允许创建和删除临时 MySQL 数据，必填 |
 | `-config` | `config.yaml` | 服务端配置文件 |
 | `-server` | `127.0.0.1:60050` | UDP 服务地址 |
+| `-servers` | 空 | 多个 UDP 边缘入口，逗号分隔；设置后覆盖 `-server` |
 | `-server-pid` | 无 | DraARL Server PID，正式测试必填 |
+| `-process-pids` | 空 | 多进程测量目标，例如 `center=100,edge-a=101`；设置后替代 `-server-pid` |
 | `-levels` | `100,500,1000,2000,4000` | 递增的总客户端数，最大 20000 |
-| `-groups` | `1` | 独立群组数，也是同时发言者数量 |
+| `-groups` | `1` | 独立群组数，也是同时发言者数量，最大 1024 |
+| `-placement` | `local` | `local` 全部设备在首入口；`distributed` 同组设备轮转各入口；`cross` 发言者在首入口且接收者只在其他入口 |
 | `-duration` | `10s` | 每档测量时间 |
 | `-interval` | `120ms` | 每个发言者的语音包间隔 |
+| `-intervals` | 空 | 由慢到快扫描多个包间隔，复用同一批已认证会话；设置后覆盖 `-interval` |
 | `-payload` | `320` | 语音 DATA 长度，完整包长另加 90 字节 |
 | `-settle` | `3s` | 新增客户端后的稳定等待时间 |
 | `-cleanup-only` | `false` | 仅清理遗留数据，不运行测试 |
@@ -75,5 +106,6 @@ go build -o ./bin/udp-fanout-bench ./test/bench/udp_fanout
 - `latency_*`：数据包发送时间到本地接收时间，不含真实网络 RTT。
 - `server_cpu_cores`：服务进程全部 OS 线程消耗的 CPU 核数，例如 `1.20` 表示约 1.2 个逻辑核。
 - `server_rss_mb`：服务进程 RSS。
+- `proc_<name>_cpu_cores/proc_<name>_rss_mb`：使用 `-process-pids` 时各中心/边缘进程的独立资源占用；`server_*` 为它们的合计。
 
 工具在丢包率超过 5% 后停止更高档位，避免继续制造不具代表性的过载流量。

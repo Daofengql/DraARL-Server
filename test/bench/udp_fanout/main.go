@@ -46,15 +46,24 @@ var (
 type options struct {
 	configPath  string
 	serverAddr  string
+	serverAddrs string
 	serverPID   int
+	processPIDs string
 	levels      []int
 	duration    time.Duration
 	interval    time.Duration
+	intervals   []time.Duration
 	payload     int
 	settle      time.Duration
 	groups      int
+	placement   string
 	confirm     bool
 	cleanupOnly bool
+}
+
+type processTarget struct {
+	name string
+	pid  int
 }
 
 type benchIdentity struct {
@@ -165,15 +174,23 @@ func run() (runErr error) {
 		return nil
 	}
 
-	serverUDP, err := net.ResolveUDPAddr("udp4", opts.serverAddr)
+	serverUDPs, err := resolveServerAddrs(opts.serverAddr, opts.serverAddrs)
 	if err != nil {
-		return fmt.Errorf("resolve UDP server: %w", err)
+		return err
 	}
-	serverMeter, err := newProcessMeter("server", opts.serverPID)
+	processTargets, err := parseProcessTargets(opts.serverPID, opts.processPIDs)
 	if err != nil {
-		return fmt.Errorf("open server process %d: %w", opts.serverPID, err)
+		return err
 	}
-	defer serverMeter.close()
+	serverMeters := make([]*processMeter, 0, len(processTargets))
+	for _, target := range processTargets {
+		meter, meterErr := newProcessMeter(target.name, target.pid)
+		if meterErr != nil {
+			return fmt.Errorf("open %s process %d: %w", target.name, target.pid, meterErr)
+		}
+		serverMeters = append(serverMeters, meter)
+		defer meter.close()
+	}
 	loadMeter, err := newProcessMeter("loadgen", os.Getpid())
 	if err != nil {
 		return fmt.Errorf("open load generator process: %w", err)
@@ -222,16 +239,16 @@ func run() (runErr error) {
 	time.Sleep(11 * time.Second)
 
 	for levelIndex, level := range opts.levels {
-		beforeServer, _ := serverMeter.sample()
+		beforeServers := sampleProcesses(serverMeters)
 		connectStart := time.Now()
-		newClients, err := connectRange(serverUDP, len(clients), level)
+		newClients, err := connectRange(serverUDPs, opts.placement, opts.groups, len(clients), level)
 		if err != nil {
 			return fmt.Errorf("connect clients up to %d: %w", level, err)
 		}
 		clients = append(clients, newClients...)
 		connectElapsed := time.Since(connectStart)
-		afterServer, _ := serverMeter.sample()
-		connectCPU := cpuCorePercent(beforeServer, afterServer, connectElapsed)
+		afterServers := sampleProcesses(serverMeters)
+		connectCPU := aggregateCPUCorePercent(beforeServers, afterServers, connectElapsed)
 		fmt.Printf("CONNECTED clients=%d added=%d elapsed=%s rate=%.1f_clients_s server_cpu=%.1f%%_of_one_core\n",
 			level, len(newClients), connectElapsed.Round(time.Millisecond), float64(len(newClients))/connectElapsed.Seconds(), connectCPU)
 
@@ -244,10 +261,19 @@ func run() (runErr error) {
 		time.Sleep(settle)
 		warmUp(clients[:opts.groups], opts.payload)
 
-		result, loss := runStage(clients, opts, serverMeter, loadMeter, uint64(levelIndex+1))
-		fmt.Println(result)
-		if loss > 5 {
-			fmt.Printf("STOP loss_pct=%.3f exceeded 5%%; higher levels would not be representative\n", loss)
+		stopLevels := false
+		for intervalIndex, interval := range opts.intervals {
+			opts.interval = interval
+			stageID := uint64(levelIndex+1)<<32 | uint64(intervalIndex+1)
+			result, loss := runStage(clients, opts, serverMeters, loadMeter, stageID)
+			fmt.Println(result)
+			if loss > 5 {
+				fmt.Printf("STOP loss_pct=%.3f exceeded 5%%; faster intervals and higher levels would not be representative\n", loss)
+				stopLevels = true
+				break
+			}
+		}
+		if stopLevels {
 			break
 		}
 	}
@@ -300,17 +326,21 @@ func cleanupBenchAudioFiles(db *sql.DB, root string) (int, error) {
 }
 
 func parseOptions() (options, error) {
-	var rawLevels string
+	var rawLevels, rawIntervals string
 	opts := options{}
 	flag.StringVar(&opts.configPath, "config", "config.yaml", "DraARL config path")
 	flag.StringVar(&opts.serverAddr, "server", "127.0.0.1:60050", "UDP server address")
+	flag.StringVar(&opts.serverAddrs, "servers", "", "comma-separated UDP server addresses; overrides -server")
 	flag.IntVar(&opts.serverPID, "server-pid", 0, "DraARL server process ID")
+	flag.StringVar(&opts.processPIDs, "process-pids", "", "comma-separated measured processes, for example center=100,edge-a=101")
 	flag.StringVar(&rawLevels, "levels", "100,500,1000,2000,4000", "ascending client counts")
 	flag.DurationVar(&opts.duration, "duration", 10*time.Second, "measurement duration per level")
 	flag.DurationVar(&opts.interval, "interval", 120*time.Millisecond, "voice packet interval")
+	flag.StringVar(&rawIntervals, "intervals", "", "comma-separated voice intervals scanned from slower to faster; overrides -interval")
 	flag.IntVar(&opts.payload, "payload", 320, "voice payload bytes")
 	flag.DurationVar(&opts.settle, "settle", 3*time.Second, "settling time after adding clients")
 	flag.IntVar(&opts.groups, "groups", 1, "independent groups and simultaneous speakers")
+	flag.StringVar(&opts.placement, "placement", "local", "client placement across -servers: local, distributed, or cross")
 	flag.BoolVar(&opts.confirm, "confirm-test-data", false, "confirm temporary MySQL rows may be created and deleted")
 	flag.BoolVar(&opts.cleanupOnly, "cleanup-only", false, "remove stale benchmark rows/files without running a benchmark")
 	flag.Parse()
@@ -318,8 +348,8 @@ func parseOptions() (options, error) {
 	if !opts.confirm {
 		return opts, errors.New("-confirm-test-data is required because this tool writes temporary MySQL rows")
 	}
-	if !opts.cleanupOnly && opts.serverPID <= 0 {
-		return opts, fmt.Errorf("-server-pid is required")
+	if !opts.cleanupOnly && opts.serverPID <= 0 && strings.TrimSpace(opts.processPIDs) == "" {
+		return opts, fmt.Errorf("-server-pid or -process-pids is required")
 	}
 	for _, part := range strings.Split(rawLevels, ",") {
 		level, err := strconv.Atoi(strings.TrimSpace(part))
@@ -334,8 +364,12 @@ func parseOptions() (options, error) {
 	if len(opts.levels) == 0 || opts.levels[len(opts.levels)-1] > maxBenchClients {
 		return opts, fmt.Errorf("client levels must end between 2 and %d", maxBenchClients)
 	}
-	if opts.groups < 1 || opts.groups > 32 {
-		return opts, fmt.Errorf("groups must be between 1 and 32")
+	if opts.groups < 1 || opts.groups > 1024 {
+		return opts, fmt.Errorf("groups must be between 1 and 1024")
+	}
+	opts.placement = strings.ToLower(strings.TrimSpace(opts.placement))
+	if opts.placement != "local" && opts.placement != "distributed" && opts.placement != "cross" {
+		return opts, fmt.Errorf("placement must be local, distributed, or cross")
 	}
 	for _, level := range opts.levels {
 		if level < opts.groups {
@@ -345,10 +379,94 @@ func parseOptions() (options, error) {
 	if opts.duration < time.Second || opts.interval < 10*time.Millisecond {
 		return opts, fmt.Errorf("duration must be >=1s and interval >=10ms")
 	}
+	if strings.TrimSpace(rawIntervals) == "" {
+		opts.intervals = []time.Duration{opts.interval}
+	} else {
+		var previous time.Duration
+		for _, part := range strings.Split(rawIntervals, ",") {
+			interval, err := time.ParseDuration(strings.TrimSpace(part))
+			if err != nil || interval < 10*time.Millisecond {
+				return opts, fmt.Errorf("invalid voice interval %q", part)
+			}
+			if previous > 0 && interval >= previous {
+				return opts, errors.New("voice intervals must be ordered from slower to faster")
+			}
+			opts.intervals = append(opts.intervals, interval)
+			previous = interval
+		}
+	}
 	if opts.payload < 32 || opts.payload+protocol.DraARLv1HeaderSize > protocol.DraARLv1MaxPacketSize {
 		return opts, fmt.Errorf("payload must be between 32 and %d bytes", protocol.DraARLv1MaxPacketSize-protocol.DraARLv1HeaderSize)
 	}
 	return opts, nil
+}
+
+func resolveServerAddrs(single, multiple string) ([]*net.UDPAddr, error) {
+	raw := strings.TrimSpace(multiple)
+	if raw == "" {
+		raw = strings.TrimSpace(single)
+	}
+	seen := make(map[string]struct{})
+	var result []*net.UDPAddr
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil, errors.New("UDP server address is empty")
+		}
+		addr, err := net.ResolveUDPAddr("udp4", item)
+		if err != nil {
+			return nil, fmt.Errorf("resolve UDP server %q: %w", item, err)
+		}
+		key := addr.String()
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("duplicate UDP server address %q", item)
+		}
+		seen[key] = struct{}{}
+		result = append(result, addr)
+	}
+	return result, nil
+}
+
+func parseProcessTargets(serverPID int, raw string) ([]processTarget, error) {
+	if strings.TrimSpace(raw) == "" {
+		if serverPID <= 0 {
+			return nil, errors.New("measured process PID is required")
+		}
+		return []processTarget{{name: "server", pid: serverPID}}, nil
+	}
+	seen := make(map[string]struct{})
+	var result []processTarget
+	for _, item := range strings.Split(raw, ",") {
+		parts := strings.SplitN(strings.TrimSpace(item), "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid measured process %q; want name=pid", item)
+		}
+		name := sanitizeMetricName(parts[0])
+		pid, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if name == "" || err != nil || pid <= 0 {
+			return nil, fmt.Errorf("invalid measured process %q", item)
+		}
+		if _, exists := seen[name]; exists {
+			return nil, fmt.Errorf("duplicate measured process name %q", name)
+		}
+		seen[name] = struct{}{}
+		result = append(result, processTarget{name: name, pid: pid})
+	}
+	return result, nil
+}
+
+func sanitizeMetricName(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	var b strings.Builder
+	for _, r := range raw {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			if r == '-' {
+				r = '_'
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int) ([]int64, error) {
@@ -469,7 +587,7 @@ func identityForIndex(index int) benchIdentity {
 	}
 }
 
-func connectRange(server *net.UDPAddr, start, end int) ([]*benchClient, error) {
+func connectRange(servers []*net.UDPAddr, placement string, groups, start, end int) ([]*benchClient, error) {
 	count := end - start
 	clients := make([]*benchClient, count)
 	type connectResult struct {
@@ -489,6 +607,7 @@ func connectRange(server *net.UDPAddr, start, end int) ([]*benchClient, error) {
 		go func() {
 			defer wg.Done()
 			for globalIndex := range jobs {
+				server := servers[serverIndexForClient(globalIndex, groups, len(servers), placement)]
 				client, err := connectClient(server, identityForIndex(globalIndex))
 				results <- connectResult{index: globalIndex - start, client: client, err: err}
 			}
@@ -518,6 +637,20 @@ func connectRange(server *net.UDPAddr, start, end int) ([]*benchClient, error) {
 		return nil, firstErr
 	}
 	return clients, nil
+}
+
+func serverIndexForClient(index, groups, serverCount int, placement string) int {
+	if serverCount <= 1 || placement == "local" {
+		return 0
+	}
+	positionInGroup := index / groups
+	if placement == "cross" {
+		if positionInGroup == 0 {
+			return 0
+		}
+		return 1 + (positionInGroup-1)%(serverCount-1)
+	}
+	return positionInGroup % serverCount
 }
 
 func connectClient(server *net.UDPAddr, identity benchIdentity) (*benchClient, error) {
@@ -649,19 +782,22 @@ func warmUp(sources []*benchClient, payloadSize int) {
 	time.Sleep(time.Second)
 }
 
-func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *processMeter, stageID uint64) (string, float64) {
+func runStage(clients []*benchClient, opts options, serverMeters []*processMeter, loadMeter *processMeter, stageID uint64) (string, float64) {
 	metrics := &stageMetrics{id: stageID}
 	activeStage.Store(metrics)
 	time.Sleep(200 * time.Millisecond)
 
-	serverBefore, _ := serverMeter.sample()
+	serverBefore := sampleProcesses(serverMeters)
 	loadBefore, _ := loadMeter.sample()
 	stopSampling := make(chan struct{})
-	serverPeak := atomic.Uint64{}
+	serverPeaks := make([]*atomic.Uint64, len(serverMeters))
 	loadPeak := atomic.Uint64{}
-	serverPeak.Store(serverBefore.rss)
+	for i := range serverMeters {
+		serverPeaks[i] = &atomic.Uint64{}
+		serverPeaks[i].Store(serverBefore[i].rss)
+	}
 	loadPeak.Store(loadBefore.rss)
-	go sampleMemoryPeaks(stopSampling, serverMeter, loadMeter, &serverPeak, &loadPeak)
+	go sampleMemoryPeaks(stopSampling, serverMeters, loadMeter, serverPeaks, &loadPeak)
 
 	start := time.Now()
 	deadline := start.Add(opts.duration)
@@ -692,7 +828,7 @@ func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *proc
 	time.Sleep(time.Second)
 	elapsed := time.Since(start)
 	close(stopSampling)
-	serverAfter, _ := serverMeter.sample()
+	serverAfter := sampleProcesses(serverMeters)
 	loadAfter, _ := loadMeter.sample()
 	activeStage.Store(nil)
 
@@ -702,7 +838,15 @@ func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *proc
 		loss = 100 * float64(expected-received) / float64(expected)
 	}
 	packetBytes := opts.payload + protocol.DraARLv1HeaderSize
-	serverResult := processDelta(serverBefore, serverAfter, serverPeak.Load(), elapsed)
+	serverResults := make([]processResult, len(serverMeters))
+	serverResult := processResult{}
+	for i := range serverMeters {
+		serverResults[i] = processDelta(serverBefore[i], serverAfter[i], serverPeaks[i].Load(), elapsed)
+		serverResult.corePercent += serverResults[i].corePercent
+		serverResult.machinePct += serverResults[i].machinePct
+		serverResult.rssMB += serverResults[i].rssMB
+		serverResult.peakRSSMB += serverResults[i].peakRSSMB
+	}
 	loadResult := processDelta(loadBefore, loadAfter, loadPeak.Load(), elapsed)
 	avgLatency := 0.0
 	if received > 0 {
@@ -713,11 +857,26 @@ func runStage(clients []*benchClient, opts options, serverMeter, loadMeter *proc
 	outputPPS := float64(received) / opts.duration.Seconds()
 	inputPPS := float64(sent) / opts.duration.Seconds()
 	outputMbps := outputPPS * float64(packetBytes) * 8 / 1_000_000
-	return fmt.Sprintf("RESULT clients=%d groups=%d senders=%d type=%d packet_bytes=%d interval=%s sent=%d input_pps=%.1f expected=%d received=%d loss_pct=%.4f output_pps=%.0f output_mbps=%.2f latency_avg_ms=%.3f latency_p95_le_ms=%.3f latency_max_ms=%.3f server_cpu_cores=%.2f server_machine_cpu_pct=%.2f server_rss_mb=%.1f server_peak_rss_mb=%.1f loadgen_cpu_cores=%.2f loadgen_rss_mb=%.1f wall=%s",
-		len(clients), opts.groups, opts.groups, protocol.DraARLTypeOpus16K, packetBytes, opts.interval, sent, inputPPS, expected, received, loss,
+	result := fmt.Sprintf("RESULT clients=%d groups=%d senders=%d servers=%d placement=%s type=%d packet_bytes=%d interval=%s sent=%d input_pps=%.1f expected=%d received=%d loss_pct=%.4f output_pps=%.0f output_mbps=%.2f latency_avg_ms=%.3f latency_p95_le_ms=%.3f latency_max_ms=%.3f server_cpu_cores=%.2f server_machine_cpu_pct=%.2f server_rss_mb=%.1f server_peak_rss_mb=%.1f loadgen_cpu_cores=%.2f loadgen_rss_mb=%.1f wall=%s",
+		len(clients), opts.groups, opts.groups, countDistinctServers(clients), opts.placement, protocol.DraARLTypeOpus16K, packetBytes, opts.interval, sent, inputPPS, expected, received, loss,
 		outputPPS, outputMbps, avgLatency, p95, maxLatency,
 		serverResult.corePercent/100, serverResult.machinePct, serverResult.rssMB, serverResult.peakRSSMB,
-		loadResult.corePercent/100, loadResult.rssMB, elapsed.Round(time.Millisecond)), loss
+		loadResult.corePercent/100, loadResult.rssMB, elapsed.Round(time.Millisecond))
+	for i, meter := range serverMeters {
+		result += fmt.Sprintf(" proc_%s_cpu_cores=%.2f proc_%s_rss_mb=%.1f proc_%s_peak_rss_mb=%.1f",
+			meter.name, serverResults[i].corePercent/100, meter.name, serverResults[i].rssMB, meter.name, serverResults[i].peakRSSMB)
+	}
+	return result, loss
+}
+
+func countDistinctServers(clients []*benchClient) int {
+	seen := make(map[string]struct{})
+	for _, client := range clients {
+		if client != nil && client.server != nil {
+			seen[client.server.String()] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func buildVoicePacket(identity benchIdentity, payloadSize int, stageID, sequence uint64) []byte {
@@ -768,7 +927,25 @@ func (m *stageMetrics) percentileBucket(percentile float64) uint64 {
 	return limits[len(limits)-1]
 }
 
-func sampleMemoryPeaks(stop <-chan struct{}, server, load *processMeter, serverPeak, loadPeak *atomic.Uint64) {
+func sampleProcesses(meters []*processMeter) []processSample {
+	result := make([]processSample, len(meters))
+	for i, meter := range meters {
+		result[i], _ = meter.sample()
+	}
+	return result
+}
+
+func aggregateCPUCorePercent(before, after []processSample, elapsed time.Duration) float64 {
+	var total float64
+	for i := range before {
+		if i < len(after) {
+			total += cpuCorePercent(before[i], after[i], elapsed)
+		}
+	}
+	return total
+}
+
+func sampleMemoryPeaks(stop <-chan struct{}, servers []*processMeter, load *processMeter, serverPeaks []*atomic.Uint64, loadPeak *atomic.Uint64) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -776,8 +953,10 @@ func sampleMemoryPeaks(stop <-chan struct{}, server, load *processMeter, serverP
 		case <-stop:
 			return
 		case <-ticker.C:
-			if sample, err := server.sample(); err == nil {
-				storeMax(serverPeak, sample.rss)
+			for i, server := range servers {
+				if sample, err := server.sample(); err == nil {
+					storeMax(serverPeaks[i], sample.rss)
+				}
 			}
 			if sample, err := load.sample(); err == nil {
 				storeMax(loadPeak, sample.rss)

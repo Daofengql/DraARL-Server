@@ -11,6 +11,7 @@ import (
 	"draarl/internal/config"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	"draarl/pkg/minio"
@@ -1087,6 +1088,9 @@ func ApproveUser(c *gin.Context) {
 			"message": "更新审批状态失败",
 		})
 		return
+	}
+	if req.Status != 1 {
+		routesync.RevokeOwner(userID, "user_approval_revoked")
 	}
 
 	// 使用户缓存失效

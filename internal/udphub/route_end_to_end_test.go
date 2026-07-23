@@ -5,6 +5,7 @@ import (
 	"net"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,35 +15,41 @@ import (
 )
 
 type routeTestWSDevice struct {
-	identifier  string
-	groupID     int
-	userID      int
-	deviceID    int
-	username    string
-	callsign    string
-	ssid        byte
-	devModel    byte
-	ghost       bool
-	disableRecv bool
-	disableSend bool
+	identifier   string
+	groupID      int
+	userID       int
+	deviceID     int
+	username     string
+	callsign     string
+	ssid         byte
+	devModel     byte
+	ghost        bool
+	disableRecv  bool
+	disableSend  bool
+	sessionID    uint64
+	sessionEpoch uint64
 }
 
-func (d *routeTestWSDevice) GetIdentifier() string                    { return d.identifier }
-func (d *routeTestWSDevice) GetCallSignSSID() string                  { return d.callsign }
-func (d *routeTestWSDevice) GetGroupID() int                          { return d.groupID }
-func (d *routeTestWSDevice) IsGhost() bool                            { return d.ghost }
-func (d *routeTestWSDevice) GetUserID() int                           { return d.userID }
-func (d *routeTestWSDevice) GetDeviceID() int                         { return d.deviceID }
-func (d *routeTestWSDevice) GetUsername() string                      { return d.username }
-func (d *routeTestWSDevice) GetCallSign() string                      { return d.callsign }
-func (d *routeTestWSDevice) GetSSID() byte                            { return d.ssid }
-func (d *routeTestWSDevice) GetDevModel() byte                        { return d.devModel }
-func (d *routeTestWSDevice) IsDisabledRecv() bool                     { return d.disableRecv }
-func (d *routeTestWSDevice) IsDisabledSend() bool                     { return d.disableSend }
-func (d *routeTestWSDevice) GetConnectTime() time.Time                { return time.Time{} }
-func (d *routeTestWSDevice) GetLastPacketTime() time.Time             { return time.Time{} }
-func (d *routeTestWSDevice) GetInterconnectSession() (uint64, uint64) { return 0, 0 }
-func (d *routeTestWSDevice) SetInterconnectSession(uint64, uint64)    {}
+func (d *routeTestWSDevice) GetIdentifier() string        { return d.identifier }
+func (d *routeTestWSDevice) GetCallSignSSID() string      { return d.callsign }
+func (d *routeTestWSDevice) GetGroupID() int              { return d.groupID }
+func (d *routeTestWSDevice) IsGhost() bool                { return d.ghost }
+func (d *routeTestWSDevice) GetUserID() int               { return d.userID }
+func (d *routeTestWSDevice) GetDeviceID() int             { return d.deviceID }
+func (d *routeTestWSDevice) GetUsername() string          { return d.username }
+func (d *routeTestWSDevice) GetCallSign() string          { return d.callsign }
+func (d *routeTestWSDevice) GetSSID() byte                { return d.ssid }
+func (d *routeTestWSDevice) GetDevModel() byte            { return d.devModel }
+func (d *routeTestWSDevice) IsDisabledRecv() bool         { return d.disableRecv }
+func (d *routeTestWSDevice) IsDisabledSend() bool         { return d.disableSend }
+func (d *routeTestWSDevice) GetConnectTime() time.Time    { return time.Time{} }
+func (d *routeTestWSDevice) GetLastPacketTime() time.Time { return time.Time{} }
+func (d *routeTestWSDevice) GetInterconnectSession() (uint64, uint64) {
+	return d.sessionID, d.sessionEpoch
+}
+func (d *routeTestWSDevice) SetInterconnectSession(sessionID, sessionEpoch uint64) {
+	d.sessionID, d.sessionEpoch = sessionID, sessionEpoch
+}
 
 type routeTestBroadcast struct {
 	groups      []int
@@ -511,6 +518,98 @@ func TestRouteWSVoiceToUDPAcrossVirtualGroupEndToEnd(t *testing.T) {
 	assertNoRouteTestPacket(t, env.udpC.conn)
 	assertRouteTestFanoutSent(t, 3)
 	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+}
+
+func TestCenterLocalSourcesRelayOnceAcrossVirtualDomain(t *testing.T) {
+	testRelay := func(t *testing.T, route func(*routeTestEnv) []byte, assertLocal func(*testing.T, *routeTestEnv, []byte)) {
+		t.Helper()
+		env := setupRouteTest(t, 54500, true)
+		oldHooks := centerHooks()
+		var nextSession atomic.Uint64
+		relays := make(chan struct {
+			source CenterLocalSource
+			packet []byte
+		}, 2)
+		SetCenterInterconnectHooks(CenterInterconnectHooks{
+			Activate: func(source *CenterLocalSource) error {
+				if source.SessionID == 0 {
+					source.SessionID = nextSession.Add(1)
+					source.SessionEpoch = 1
+				}
+				return nil
+			},
+			Authorize: func(source CenterLocalSource) bool {
+				return source.SessionID != 0 && source.SessionEpoch == 1
+			},
+			AcquireVoice: func(source CenterLocalSource) bool {
+				return source.SessionID != 0 && source.SessionEpoch == 1
+			},
+			Relay: func(source CenterLocalSource, packet []byte) error {
+				relays <- struct {
+					source CenterLocalSource
+					packet []byte
+				}{source: source, packet: append([]byte(nil), packet...)}
+				return nil
+			},
+		})
+		t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+
+		want := route(env)
+		assertLocal(t, env, want)
+		select {
+		case relay := <-relays:
+			if relay.source.DomainID != GetActiveCommunicationDomainID(env.groupA) {
+				t.Fatalf("relay domain=%d want=%d", relay.source.DomainID, GetActiveCommunicationDomainID(env.groupA))
+			}
+			if relay.source.SessionID == 0 || relay.source.SessionEpoch != 1 {
+				t.Fatalf("relay session=%d/%d", relay.source.SessionID, relay.source.SessionEpoch)
+			}
+			if !bytes.Equal(relay.packet, want) {
+				t.Fatalf("relayed packet mismatch\n got: %x\nwant: %x", relay.packet, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("centre-local frame was not uploaded to interconnect")
+		}
+		select {
+		case duplicate := <-relays:
+			t.Fatalf("centre-local frame was uploaded more than once: %#v", duplicate.source)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	t.Run("UDP source", func(t *testing.T) {
+		payload := []byte{0x35, 0x36, 0x37}
+		testRelay(t, func(env *routeTestEnv) []byte {
+			if err := ActivateCenterLocalDevice(env.udpA1.device); err != nil {
+				t.Fatal(err)
+			}
+			return routeTestUDPVoice(t, env, payload)
+		}, func(t *testing.T, env *routeTestEnv, want []byte) {
+			assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+			assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+			assertNoRouteTestPacket(t, env.udpA1.conn)
+			assertNoRouteTestPacket(t, env.udpC.conn)
+			assertRouteTestFanoutSent(t, 2)
+			assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+		})
+	})
+
+	t.Run("WebSocket source", func(t *testing.T) {
+		payload := []byte{0x38, 0x39, 0x3a}
+		testRelay(t, func(env *routeTestEnv) []byte {
+			if !AuthorizeCenterLocalWS(env.wsSource, env.groupA) {
+				t.Fatal("WebSocket source could not establish centre-local interconnect ownership")
+			}
+			return routeTestWSVoice(env, payload)
+		}, func(t *testing.T, env *routeTestEnv, want []byte) {
+			assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA1.conn), want, payload)
+			assertRouteTestPacket(t, readRouteTestPacket(t, env.udpA2.conn), want, payload)
+			assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+			assertNoRouteTestPacket(t, env.udpC.conn)
+			assertRouteTestFanoutSent(t, 3)
+			assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+		})
+	})
 }
 
 func TestRouteVoiceIPv6AcrossVirtualGroupEndToEnd(t *testing.T) {

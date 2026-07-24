@@ -84,16 +84,8 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 			return nil, fmt.Errorf("创建 bucket 失败: %w", err)
 		}
 	}
-	policy, err := publicReadBucketPolicy(bucket)
-	if err != nil {
-		return nil, fmt.Errorf("生成 bucket 公共读策略失败: %w", err)
-	}
-	policyCtx, policyCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer policyCancel()
-	if err := client.SetBucketPolicy(policyCtx, bucket, policy); err != nil {
-		return nil, fmt.Errorf("配置 bucket 公共读策略失败: %w", err)
-	}
-
+	// Bucket policies are managed by the object-storage provider. Runtime
+	// credentials only need bucket and object access, not policy administration.
 	return &minioStorage{
 		client:         client,
 		publicClient:   publicClient,

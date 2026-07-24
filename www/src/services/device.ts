@@ -82,6 +82,7 @@ export const deviceService = {
     page_size?: number
     keyword?: string
     group_id?: number
+    owner_only?: boolean
   }): Promise<ListResponse<Device>> {
     const query = params ? {
       ...params,
@@ -95,17 +96,21 @@ export const deviceService = {
 
   // 获取设备列表（兼容旧接口）
   async list(): Promise<Device[]> {
-    return this.listAll()
+    return this.listAll({ ownerOnly: true })
   },
 
-  async listAll(): Promise<Device[]> {
+  async listAll(options?: { ownerOnly?: boolean }): Promise<Device[]> {
     const pageSize = 100
     const result: Device[] = []
     let page = 1
     let total = Number.POSITIVE_INFINITY
 
     while (result.length < total) {
-      const current = await this.getList({ page, page_size: pageSize })
+      const current = await this.getList({
+        page,
+        page_size: pageSize,
+        owner_only: options?.ownerOnly,
+      })
       result.push(...current.items)
       total = current.total
       if (current.items.length === 0 || current.items.length < pageSize) break

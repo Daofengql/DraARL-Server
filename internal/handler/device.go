@@ -84,6 +84,13 @@ func GetDevices(c *gin.Context) {
 		return
 	}
 	isAdmin := isAdminUser(currentUser)
+	// The foreground device page is scoped explicitly with owner_only=true.
+	// Keep the admin-wide default for the dedicated backend management page.
+	ownerOnly := strings.EqualFold(strings.TrimSpace(c.Query("owner_only")), "true")
+	ownerID := 0
+	if !isAdmin || ownerOnly {
+		ownerID = currentUser.ID
+	}
 
 	var devices []*gormdb.Device
 	var total int64
@@ -94,17 +101,9 @@ func GetDevices(c *gin.Context) {
 	// 根据查询条件选择不同的查询方法（全部使用数据库分页）
 	if keyword != "" {
 		// 后台搜索框按设备名称或所有者呼号模糊匹配，并保持数据库层分页。
-		ownerID := 0
-		if !isAdmin {
-			ownerID = currentUser.ID
-		}
 		devices, total, err = repo.ListDevicesByKeywordPaginated(keyword, ownerID, limit, page)
 	} else if callsign != "" {
 		// 按呼号搜索（数据库层分页）
-		ownerID := 0
-		if !isAdmin {
-			ownerID = currentUser.ID // 非管理员只能看到自己的设备
-		}
 		devices, total, err = repo.ListDevicesByCallSignPaginated(callsign, ownerID, limit, page)
 	} else if groupID != "" {
 		// 按群组过滤（数据库层分页）
@@ -116,14 +115,10 @@ func GetDevices(c *gin.Context) {
 			})
 			return
 		}
-		ownerID := 0
-		if !isAdmin {
-			ownerID = currentUser.ID // 非管理员只能看到自己的设备
-		}
 		devices, total, err = repo.ListDevicesByGroupIDPaginated(gid, ownerID, limit, page)
 	} else {
 		// 普通用户只获取自己的设备，管理员获取所有设备
-		if isAdmin {
+		if ownerID == 0 {
 			// 管理员获取所有设备（使用缓存）
 			if deviceCache != nil {
 				devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)

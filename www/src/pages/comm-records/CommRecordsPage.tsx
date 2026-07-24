@@ -134,13 +134,13 @@ export function CommRecordsPage() {
 
   const loadDevices = useCallback(async () => {
     try {
-      const devices = await deviceService.listAll()
+      const devices = await deviceService.listAll({ ownerOnly: !isAdminPage })
       setDeviceList(devices)
     } catch (err) {
       console.error('Failed to load devices:', err)
       setDeviceList([])
     }
-  }, [])
+  }, [isAdminPage])
 
   const loadGroups = useCallback(async () => {
     try {

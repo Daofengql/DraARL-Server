@@ -1,16 +1,23 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/models"
+	"draarl/internal/routesync"
+	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -24,23 +31,29 @@ func isSupportedGroupType(groupType int) bool {
 
 // GroupInfo 群组信息响应
 type GroupInfo struct {
-	ID                int    `json:"id"`
-	Name              string `json:"name"`
-	Type              int    `json:"type"`
-	CallSign          string `json:"callsign"`
-	Password          string `json:"password,omitempty"`
-	AllowCallSignSSID string `json:"allow_callsign_ssid"`
-	OwerID            int    `json:"ower_id"`
-	MasterServer      int    `json:"master_server"`
-	SlaveServer       int    `json:"slave_server"`
-	Status            int    `json:"status"`
-	CreateTime        string `json:"create_time,omitempty"`
-	UpdateTime        string `json:"update_time,omitempty"`
-	Note              string `json:"note"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Type         int    `json:"type"`
+	OwerID       int    `json:"ower_id"`
+	MasterServer int    `json:"master_server"`
+	SlaveServer  int    `json:"slave_server"`
+	Status       int    `json:"status"`
+	CreateTime   string `json:"create_time,omitempty"`
+	UpdateTime   string `json:"update_time,omitempty"`
+	Note         string `json:"note"`
 }
 
-// GetGroups 获取群组列表（区分公开/私有）
+// GetGroups 获取当前用户可见的群组列表（公开群组 + 已加入私有群组）。
 func GetGroups(c *gin.Context) {
+	getGroups(c, false)
+}
+
+// GetAdminGroups 获取管理员可管理的全部非虚拟群组。
+func GetAdminGroups(c *gin.Context) {
+	getGroups(c, true)
+}
+
+func getGroups(c *gin.Context, adminView bool) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	keyword := c.Query("keyword")
@@ -54,22 +67,14 @@ func GetGroups(c *gin.Context) {
 		pageSize = 100
 	}
 
-	ctx := c.Request.Context()
-	userCache := cache.GetUserCache()
-	username, _ := c.Get("username")
-
-	var currentUser *gormdb.User
-	if userCache != nil {
-		currentUser, _ = userCache.GetUserByName(ctx, username.(string))
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
 	}
-	if currentUser == nil {
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ = userRepo.GetUserByName(username.(string))
-	}
-	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
+	if adminView && !isAdminUser(currentUser) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "需要管理员权限",
 		})
 		return
 	}
@@ -81,7 +86,10 @@ func GetGroups(c *gin.Context) {
 	countQuery := gormdb.Get().Table("public_groups g").
 		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
-		Where("(g.type = 1 OR gm.user_id IS NOT NULL)")
+		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
+	if !adminView {
+		countQuery = countQuery.Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
+	}
 	if keyword != "" {
 		countQuery = countQuery.Where("CAST(g.id AS CHAR) LIKE ? OR g.name LIKE ?", likeKeyword, likeKeyword)
 	}
@@ -96,37 +104,36 @@ func GetGroups(c *gin.Context) {
 	}
 
 	type groupListRow struct {
-		ID                int       `gorm:"column:id"`
-		Name              string    `gorm:"column:name"`
-		Type              int       `gorm:"column:type"`
-		CallSign          string    `gorm:"column:call_sign"`
-		AllowCallSignSSID string    `gorm:"column:allow_callsign_ssid"`
-		OwerID            int       `gorm:"column:ower_id"`
-		OwnerCallSign     string    `gorm:"column:owner_callsign"`
-		MasterServer      int       `gorm:"column:master_server"`
-		SlaveServer       int       `gorm:"column:slave_server"`
-		Status            int       `gorm:"column:status"`
-		Note              string    `gorm:"column:note"`
-		CreateTime        time.Time `gorm:"column:create_time"`
-		UpdateTime        time.Time `gorm:"column:update_time"`
-		OnlineCount       int       `gorm:"column:online_count"`
-		TotalCount        int       `gorm:"column:total_count"`
-		IsJoined          bool      `gorm:"column:is_joined"`
+		ID            int       `gorm:"column:id"`
+		Name          string    `gorm:"column:name"`
+		Type          int       `gorm:"column:type"`
+		OwerID        int       `gorm:"column:ower_id"`
+		OwnerCallSign string    `gorm:"column:owner_callsign"`
+		MasterServer  int       `gorm:"column:master_server"`
+		SlaveServer   int       `gorm:"column:slave_server"`
+		Status        int       `gorm:"column:status"`
+		Note          string    `gorm:"column:note"`
+		CreateTime    time.Time `gorm:"column:create_time"`
+		UpdateTime    time.Time `gorm:"column:update_time"`
+		OnlineCount   int       `gorm:"column:online_count"`
+		TotalCount    int       `gorm:"column:total_count"`
+		IsJoined      bool      `gorm:"column:is_joined"`
 	}
 
 	rows := make([]groupListRow, 0, pageSize)
 	dataQuery := gormdb.Get().Table("public_groups g").
 		Select(`
-			g.id, g.name, g.type, g.call_sign, g.allow_callsign_ssid, g.ower_id, g.master_server, g.slave_server, g.status, g.note, g.create_time, g.update_time,
+			g.id, g.name, g.type, g.ower_id, g.master_server, g.slave_server, g.status, g.note, g.create_time, g.update_time,
 			COALESCE(u.callsign, '') AS owner_callsign,
 			COALESCE(stats.online_count, 0) AS online_count,
 			COALESCE(stats.total_count, 0) AS total_count,
 			CASE
 				WHEN g.type = 1 THEN true
+				WHEN g.ower_id = ? THEN true
 				WHEN gm.user_id IS NOT NULL THEN true
 				ELSE false
 			END AS is_joined
-		`).
+		`, uid).
 		Joins("LEFT JOIN users u ON u.id = g.ower_id").
 		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
 		Joins(`
@@ -139,7 +146,10 @@ func GetGroups(c *gin.Context) {
 			) stats ON stats.group_id = g.id
 		`).
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
-		Where("(g.type = 1 OR gm.user_id IS NOT NULL)")
+		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
+	if !adminView {
+		dataQuery = dataQuery.Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
+	}
 	if keyword != "" {
 		dataQuery = dataQuery.Where("CAST(g.id AS CHAR) LIKE ? OR g.name LIKE ?", likeKeyword, likeKeyword)
 	}
@@ -169,23 +179,21 @@ func GetGroups(c *gin.Context) {
 	resultItems := make([]gin.H, 0, len(uniqueRows))
 	for _, row := range uniqueRows {
 		resultItems = append(resultItems, gin.H{
-			"id":                  row.ID,
-			"name":                row.Name,
-			"type":                row.Type,
-			"callsign":            row.CallSign,
-			"allow_callsign_ssid": row.AllowCallSignSSID,
-			"ower_id":             row.OwerID,
-			"ower_callsign":       row.OwnerCallSign,
-			"master_server":       row.MasterServer,
-			"slave_server":        row.SlaveServer,
-			"status":              row.Status,
-			"note":                row.Note,
-			"is_joined":           row.IsJoined,
-			"is_owner":            row.OwerID == uid,
-			"online_count":        row.OnlineCount,
-			"total_count":         row.TotalCount,
-			"create_time":         row.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":         row.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":            row.ID,
+			"name":          row.Name,
+			"type":          row.Type,
+			"ower_id":       row.OwerID,
+			"ower_callsign": row.OwnerCallSign,
+			"master_server": row.MasterServer,
+			"slave_server":  row.SlaveServer,
+			"status":        row.Status,
+			"note":          row.Note,
+			"is_joined":     row.IsJoined,
+			"is_owner":      row.OwerID == uid,
+			"online_count":  row.OnlineCount,
+			"total_count":   row.TotalCount,
+			"create_time":   row.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":   row.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -215,7 +223,6 @@ func GetGroup(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	groupCache := cache.GetGroupCache()
-	userCache := cache.GetUserCache()
 
 	var group *gormdb.Group
 	if groupCache != nil {
@@ -231,25 +238,12 @@ func GetGroup(c *gin.Context) {
 		})
 		return
 	}
-
-	// 获取当前用户ID用于判断是否是群组所有者（使用缓存）
-	username, _ := c.Get("username")
-	var currentUserID int
-	if username != nil {
-		var currentUser *gormdb.User
-		if userCache != nil {
-			currentUser, _ = userCache.GetUserByName(ctx, username.(string))
-		} else {
-			userRepo := gormdb.NewUserRepository()
-			currentUser, _ = userRepo.GetUserByName(username.(string))
-		}
-		if currentUser != nil {
-			currentUserID = currentUser.ID
-		}
+	currentUser, ok := requireGroupViewAccess(c, group)
+	if !ok {
+		return
 	}
 
-	// Check if current user is the group owner
-	isOwner := group.OwerID == currentUserID
+	isOwner := group.OwerID == currentUser.ID
 
 	// Get owner callsign from user table
 	var ownerCallSign string
@@ -264,33 +258,29 @@ func GetGroup(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":                  group.ID,
-			"name":                group.Name,
-			"type":                group.Type,
-			"callsign":            group.CallSign,
-			"allow_callsign_ssid": group.AllowCallSignSSID,
-			"ower_id":             group.OwerID,
-			"ower_callsign":       ownerCallSign,
-			"master_server":       group.MasterServer,
-			"slave_server":        group.SlaveServer,
-			"status":              group.Status,
-			"note":                group.Note,
-			"is_owner":            isOwner,
-			"create_time":         group.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":         group.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":            group.ID,
+			"name":          group.Name,
+			"type":          group.Type,
+			"ower_id":       group.OwerID,
+			"ower_callsign": ownerCallSign,
+			"master_server": group.MasterServer,
+			"slave_server":  group.SlaveServer,
+			"status":        group.Status,
+			"note":          group.Note,
+			"is_owner":      isOwner,
+			"create_time":   group.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":   group.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
 
 // CreateGroupRequest 创建群组请求
 type CreateGroupRequest struct {
-	Name              string `json:"name" binding:"required"`
-	Type              int    `json:"type"`
-	CallSign          string `json:"callsign"`
-	Password          string `json:"password"`
-	AllowCallSignSSID string `json:"allow_callsign_ssid"`
-	Note              string `json:"note"`
-	Status            int    `json:"status"`
+	Name     string `json:"name" binding:"required"`
+	Type     int    `json:"type"`
+	Password string `json:"password"`
+	Note     string `json:"note"`
+	Status   int    `json:"status"`
 }
 
 // CreateGroup 创建群组
@@ -338,18 +328,16 @@ func CreateGroup(c *gin.Context) {
 
 	repo := gormdb.NewGroupRepository()
 	group := &gormdb.Group{
-		Name:              req.Name,
-		Type:              groupType,
-		CallSign:          req.CallSign,
-		Password:          req.Password,
-		AllowCallSignSSID: req.AllowCallSignSSID,
-		OwerID:            currentUser.ID,
-		Note:              req.Note,
-		Status:            1,
+		Name:     req.Name,
+		Type:     groupType,
+		Password: req.Password,
+		OwerID:   currentUser.ID,
+		Note:     req.Note,
+		Status:   1,
 	}
 
-	// 3. 写入群组表
-	if err := repo.CreateGroup(group); err != nil {
+	// 群组与群主的已验证成员资格必须原子创建，避免只留下半个群组。
+	if err := repo.CreateGroupWithOwnerMember(group); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建群组失败",
@@ -357,22 +345,11 @@ func CreateGroup(c *gin.Context) {
 		return
 	}
 
-	// 4. 修复：自动将创建者加入到该群组的已验证成员中
-	// 这样创建者无需搜索和输入密码，就能在"我的群组"列表中看到并管理自己创建的群组
-	memberRepo := gormdb.NewGroupMemberRepository()
-	groupMember := &gormdb.GroupMember{
-		GroupID:    group.ID,
-		UserID:     currentUser.ID,
-		IsVerified: true,
-		JoinTime:   time.Now(),
-		LastVerify: time.Now(),
-	}
-	_ = memberRepo.CreateMember(groupMember)
-
 	// 使群组列表缓存失效（新创建群组后列表应更新）
 	if groupCache := cache.GetGroupCache(); groupCache != nil {
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
+	udphub.RefreshGroupCache()
 
 	// 记录审计日志
 	groupTypeStr := "公开群组"
@@ -399,33 +376,40 @@ func CreateGroup(c *gin.Context) {
 
 // UpdateGroupRequest 更新群组请求
 type UpdateGroupRequest struct {
-	Name              string `json:"name"`
-	Type              int    `json:"type"`
-	CallSign          string `json:"callsign"`
-	Password          string `json:"password"`
-	AllowCallSignSSID string `json:"allow_callsign_ssid"`
-	Note              string `json:"note"`
-	Status            *int   `json:"status"`
+	ID       int     `json:"id"` // 兼容 POST /group/update
+	Name     string  `json:"name"`
+	Type     int     `json:"type"`
+	Password string  `json:"password"`
+	Note     *string `json:"note"`
+	Status   *int    `json:"status"`
 }
 
 // UpdateGroup 更新群组
 func UpdateGroup(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的群组ID",
-		})
-		return
-	}
-
 	var req UpdateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
+		return
+	}
+
+	idStr := c.Param("id")
+	if idStr == "" {
+		idStr = c.Query("id")
+	}
+	id := req.ID
+	if idStr != "" {
+		parsedID, err := strconv.Atoi(idStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+			return
+		}
+		id = parsedID
+	}
+	if id <= 0 || (req.ID > 0 && idStr != "" && req.ID != id) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效或不一致的群组ID"})
 		return
 	}
 
@@ -438,6 +422,18 @@ func UpdateGroup(c *gin.Context) {
 			"code":    404,
 			"message": "群组不存在",
 		})
+		return
+	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !canManageGroup(currentUser, group) {
+		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		return
+	}
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口修改虚拟群组"})
 		return
 	}
 
@@ -455,17 +451,11 @@ func UpdateGroup(c *gin.Context) {
 		}
 		group.Type = req.Type
 	}
-	if req.CallSign != "" {
-		group.CallSign = req.CallSign
-	}
 	if req.Password != "" {
 		group.Password = req.Password
 	}
-	if req.AllowCallSignSSID != "" {
-		group.AllowCallSignSSID = req.AllowCallSignSSID
-	}
-	if req.Note != "" {
-		group.Note = req.Note
+	if req.Note != nil {
+		group.Note = *req.Note
 	}
 	if req.Status != nil {
 		group.Status = *req.Status
@@ -486,6 +476,8 @@ func UpdateGroup(c *gin.Context) {
 		// 主动使群组的公开列表和所有分页列表失效
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
+	udphub.RefreshGroupCache()
+	routesync.RefreshTopology()
 
 	// Get owner callsign from user table
 	var ownerCallSign string
@@ -497,37 +489,30 @@ func UpdateGroup(c *gin.Context) {
 	}
 
 	// 记录审计日志 - 获取当前用户
-	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser != nil {
-		oplog.AddLog(
-			fmt.Sprintf("更新群组: %s (ID: %d)", group.Name, group.ID),
-			"group_update",
-			currentUser.ID,
-			currentUser.Name,
-			currentUser.CallSign,
-			c.ClientIP(),
-		)
-	}
+	oplog.AddLog(
+		fmt.Sprintf("更新群组: %s (ID: %d)", group.Name, group.ID),
+		"group_update",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
 		"data": gin.H{
-			"id":                  group.ID,
-			"name":                group.Name,
-			"type":                group.Type,
-			"callsign":            group.CallSign,
-			"allow_callsign_ssid": group.AllowCallSignSSID,
-			"ower_id":             group.OwerID,
-			"ower_callsign":       ownerCallSign,
-			"master_server":       group.MasterServer,
-			"slave_server":        group.SlaveServer,
-			"status":              group.Status,
-			"note":                group.Note,
-			"create_time":         group.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":         group.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":            group.ID,
+			"name":          group.Name,
+			"type":          group.Type,
+			"ower_id":       group.OwerID,
+			"ower_callsign": ownerCallSign,
+			"master_server": group.MasterServer,
+			"slave_server":  group.SlaveServer,
+			"status":        group.Status,
+			"note":          group.Note,
+			"create_time":   group.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":   group.UpdateTime.Format("2006-01-02 15:04:05"),
 		},
 	})
 }
@@ -535,8 +520,19 @@ func UpdateGroup(c *gin.Context) {
 // DeleteGroup 删除群组
 func DeleteGroup(c *gin.Context) {
 	idStr := c.Param("id")
+	if idStr == "" {
+		idStr = c.Query("id")
+	}
+	if idStr == "" {
+		var req struct {
+			ID int `json:"id"`
+		}
+		if err := c.ShouldBindJSON(&req); err == nil && req.ID > 0 {
+			idStr = strconv.Itoa(req.ID)
+		}
+	}
 	id, err := strconv.Atoi(idStr)
-	if err != nil {
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
@@ -547,10 +543,28 @@ func DeleteGroup(c *gin.Context) {
 	repo := gormdb.NewGroupRepository()
 
 	// 先获取群组信息用于审计日志
-	group, _ := repo.GetGroupByID(id)
-	var groupName string
-	if group != nil {
-		groupName = group.Name
+	group, err := repo.GetGroupByID(id)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		return
+	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !canManageGroup(currentUser, group) {
+		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		return
+	}
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口删除虚拟群组"})
+		return
+	}
+	deviceRepo := gormdb.NewDeviceRepository()
+	movedDevices, err := deviceRepo.ListDevicesByGroupID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备失败"})
+		return
 	}
 
 	if err := repo.DeleteGroupWithCascade(id); err != nil {
@@ -560,21 +574,21 @@ func DeleteGroup(c *gin.Context) {
 		})
 		return
 	}
+	for _, device := range movedDevices {
+		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
+			log.Printf("[WARN] Failed to update deleted-group device in memory: %v", err)
+		}
+	}
 
 	// 记录审计日志
-	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser != nil {
-		oplog.AddLog(
-			fmt.Sprintf("删除群组: %s (ID: %d)", groupName, id),
-			"group_delete",
-			currentUser.ID,
-			currentUser.Name,
-			currentUser.CallSign,
-			c.ClientIP(),
-		)
-	}
+	oplog.AddLog(
+		fmt.Sprintf("删除群组: %s (ID: %d)", group.Name, id),
+		"group_delete",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
 
 	// 使群组详情缓存和列表缓存统统失效
 	if groupCache := cache.GetGroupCache(); groupCache != nil {
@@ -582,6 +596,20 @@ func DeleteGroup(c *gin.Context) {
 		// 彻底清空相关的群组列表
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		for _, device := range movedDevices {
+			_ = deviceCache.InvalidateDevice(c.Request.Context(), device.ID, device.OwnerID, uint8(device.SSID))
+		}
+		_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), id)
+		_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), models.GroupIDPublicMin)
+		_ = deviceCache.InvalidateDeviceList(c.Request.Context())
+	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	for _, device := range movedDevices {
+		routesync.PublishDevice(device.ID)
+	}
+	routesync.RefreshTopology()
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -598,6 +626,22 @@ func GetGroupDevices(c *gin.Context) {
 			"code":    400,
 			"message": "无效的群组ID",
 		})
+		return
+	}
+	groupRepo := gormdb.NewGroupRepository()
+	group, err := groupRepo.GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    http.StatusNotFound,
+			"message": "群组不存在",
+		})
+		return
+	}
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持设备列表"})
+		return
+	}
+	if _, ok := requireGroupViewAccess(c, group); !ok {
 		return
 	}
 
@@ -648,19 +692,20 @@ func GetGroupDevices(c *gin.Context) {
 		}
 
 		devices = append(devices, gin.H{
-			"id":           d.ID,
-			"name":         d.Name,
-			"callsign":     callsign,
-			"ssid":         d.SSID,
-			"dev_model":    d.DevModel,
-			"group_id":     d.GroupID,
-			"status":       d.Status,
-			"priority":     d.Priority,
-			"is_online":    d.ISOnline,
-			"disable_send": d.DisableSend,
-			"disable_recv": d.DisableRecv,
-			"create_time":  d.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":  d.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":             d.ID,
+			"name":           d.Name,
+			"callsign":       callsign,
+			"owner_callsign": callsign,
+			"ssid":           d.SSID,
+			"dev_model":      d.DevModel,
+			"group_id":       d.GroupID,
+			"status":         d.Status,
+			"priority":       d.Priority,
+			"is_online":      d.ISOnline,
+			"disable_send":   d.DisableSend,
+			"disable_recv":   d.DisableRecv,
+			"create_time":    d.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":    d.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -670,6 +715,132 @@ func GetGroupDevices(c *gin.Context) {
 		"data": gin.H{
 			"total": int64(len(devices)),
 			"items": devices,
+		},
+	})
+}
+
+// UpdateGroupDeviceCommControlRequest 仅更新设备级禁发/禁收状态。
+type UpdateGroupDeviceCommControlRequest struct {
+	DisableSend *bool `json:"disable_send"`
+	DisableRecv *bool `json:"disable_recv"`
+}
+
+// UpdateGroupDeviceCommControl 允许管理员或当前群主临时控制组内普通设备收发。
+func UpdateGroupDeviceCommControl(c *gin.Context) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+		return
+	}
+	deviceID, err := strconv.Atoi(c.Param("deviceId"))
+	if err != nil || deviceID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的设备ID"})
+		return
+	}
+
+	var req UpdateGroupDeviceCommControlRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请求参数错误"})
+		return
+	}
+	if req.DisableSend == nil && req.DisableRecv == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "至少需要设置一项收发状态"})
+		return
+	}
+	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		return
+	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !canManageGroup(currentUser, group) {
+		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		return
+	}
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持设备收发控制"})
+		return
+	}
+
+	deviceRepo := gormdb.NewDeviceRepository()
+	currentDevice, err := deviceRepo.GetDeviceByID(deviceID)
+	if err != nil || currentDevice == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "设备不存在"})
+		return
+	}
+	if !canManageGroupDeviceCommControl(currentUser, group, currentDevice) {
+		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "设备已不在该群组，请刷新设备列表"})
+		return
+	}
+	before, after, err := deviceRepo.UpdateDeviceCommControlInGroup(
+		deviceID,
+		groupID,
+		req.DisableSend,
+		req.DisableRecv,
+	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "设备不存在"})
+		return
+	}
+	if errors.Is(err, gormdb.ErrDeviceNotInGroup) {
+		c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "message": "设备已不在该群组，请刷新设备列表"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "更新设备收发状态失败"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		_ = deviceCache.InvalidateDevice(ctx, after.ID, after.OwnerID, after.SSID)
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
+		_ = deviceCache.InvalidateDeviceList(ctx)
+	}
+	udphub.SyncDeviceCommControlByID(after.ID, after.DisableSend, after.DisableRecv)
+	routesync.PublishDevice(after.ID)
+
+	ownerCallSign := ""
+	if owner, ownerErr := gormdb.NewUserRepository().GetUserByID(after.OwnerID); ownerErr == nil && owner != nil {
+		ownerCallSign = owner.CallSign
+	}
+	source := "group_owner"
+	if isAdminUser(currentUser) {
+		source = "admin"
+	}
+	oplog.AddLog(
+		fmt.Sprintf(
+			"群组设备收发控制: source=%s, group_id=%d, group_name=%q, device_id=%d, owner_id=%d, callsign_ssid=%s-%d, disable_send=%t->%t, disable_recv=%t->%t",
+			source,
+			groupID,
+			group.Name,
+			after.ID,
+			after.OwnerID,
+			ownerCallSign,
+			after.SSID,
+			before.DisableSend,
+			after.DisableSend,
+			before.DisableRecv,
+			after.DisableRecv,
+		),
+		"group_device_comm_control",
+		currentUser.ID,
+		currentUser.Name,
+		currentUser.CallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    http.StatusOK,
+		"message": "设备收发状态已更新",
+		"data": gin.H{
+			"device_id":    after.ID,
+			"group_id":     groupID,
+			"disable_send": after.DisableSend,
+			"disable_recv": after.DisableRecv,
 		},
 	})
 }
@@ -730,6 +901,7 @@ func GetServers(c *gin.Context) {
 // SearchGroupsRequest 搜索群组请求
 type SearchGroupsRequest struct {
 	Keyword  string `json:"keyword"`
+	Query    string `json:"query"` // 兼容旧电台客户端
 	Page     int    `json:"page"`
 	PageSize int    `json:"page_size"`
 }
@@ -744,9 +916,31 @@ func SearchGroups(c *gin.Context) {
 		})
 		return
 	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	keyword := strings.TrimSpace(req.Keyword)
+	if keyword == "" {
+		keyword = strings.TrimSpace(req.Query)
+	}
+	if keyword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请输入搜索关键词"})
+		return
+	}
+	page := req.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = 20
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
 
 	repo := gormdb.NewGroupRepository()
-	groups, err := repo.SearchGroups(req.Keyword)
+	groups, err := repo.SearchGroups(keyword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -755,24 +949,37 @@ func SearchGroups(c *gin.Context) {
 		return
 	}
 
-	// 过滤掉虚拟互联组（对普通用户不可见）
-	filteredGroups := make([]*gormdb.Group, 0, len(groups))
-	for _, g := range groups {
-		if !g.IsVirtual {
-			filteredGroups = append(filteredGroups, g)
+	memberRepo := gormdb.NewGroupMemberRepository()
+	verifiedGroupIDs := make(map[int]bool)
+	if !isAdminUser(currentUser) {
+		members, err := memberRepo.ListGroupsByUser(currentUser.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组成员关系失败"})
+			return
+		}
+		for _, member := range members {
+			verifiedGroupIDs[member.GroupID] = true
 		}
 	}
-	groups = filteredGroups
 
-	// 获取当前用户，用于判断是否已加入私有群组
-	username, _ := c.Get("username")
-	var currentUser *gormdb.User
-	if username != nil {
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ = userRepo.GetUserByName(username.(string))
+	// 搜索与普通列表、详情使用完全相同的可见性规则，避免通过旧搜索
+	// 接口枚举未加入私有群组的名称和备注。
+	visibleGroups := make([]*gormdb.Group, 0, len(groups))
+	for _, group := range groups {
+		if canViewGroup(currentUser, group, verifiedGroupIDs[group.ID]) {
+			visibleGroups = append(visibleGroups, group)
+		}
 	}
-
-	memberRepo := gormdb.NewGroupMemberRepository()
+	total := len(visibleGroups)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	groups = visibleGroups[start:end]
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
@@ -796,17 +1003,7 @@ func SearchGroups(c *gin.Context) {
 	// Reassemble response data with user status
 	resultItems := make([]gin.H, 0, len(groups))
 	for _, g := range groups {
-		isJoined := false
-		requirePassword := false
-
-		if g.Type == 2 {
-			// Private group requires password
-			requirePassword = true
-			if currentUser != nil {
-				// Check if user has verified
-				isJoined = memberRepo.IsVerifiedMember(g.ID, currentUser.ID)
-			}
-		}
+		isJoined := g.Type == groupTypePublic || g.OwerID == currentUser.ID || verifiedGroupIDs[g.ID]
 
 		// Get owner callsign
 		var ownerCallSign string
@@ -815,21 +1012,19 @@ func SearchGroups(c *gin.Context) {
 		}
 
 		resultItems = append(resultItems, gin.H{
-			"id":                  g.ID,
-			"name":                g.Name,
-			"type":                g.Type,
-			"callsign":            g.CallSign,
-			"allow_callsign_ssid": g.AllowCallSignSSID,
-			"ower_id":             g.OwerID,
-			"ower_callsign":       ownerCallSign,
-			"master_server":       g.MasterServer,
-			"slave_server":        g.SlaveServer,
-			"status":              g.Status,
-			"note":                g.Note,
-			"require_password":    requirePassword,
-			"is_joined":           isJoined,
-			"create_time":         g.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":         g.UpdateTime.Format("2006-01-02 15:04:05"),
+			"id":               g.ID,
+			"name":             g.Name,
+			"type":             g.Type,
+			"ower_id":          g.OwerID,
+			"ower_callsign":    ownerCallSign,
+			"master_server":    g.MasterServer,
+			"slave_server":     g.SlaveServer,
+			"status":           g.Status,
+			"note":             g.Note,
+			"require_password": false,
+			"is_joined":        isJoined,
+			"create_time":      g.CreateTime.Format("2006-01-02 15:04:05"),
+			"update_time":      g.UpdateTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -837,8 +1032,10 @@ func SearchGroups(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"items": resultItems,
-			"total": len(groups),
+			"items":     resultItems,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
 		},
 	})
 }
@@ -877,6 +1074,10 @@ func JoinGroup(c *gin.Context) {
 			"code":    404,
 			"message": "群组不存在",
 		})
+		return
+	}
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持加入"})
 		return
 	}
 
@@ -1009,16 +1210,6 @@ func GetGroupMembers(c *gin.Context) {
 		return
 	}
 
-	// 检查权限：只有群组创建者可查看
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
-		return
-	}
-
 	repo := gormdb.NewGroupRepository()
 	group, err := repo.GetGroupByID(groupID)
 	if err != nil || group == nil {
@@ -1028,22 +1219,20 @@ func GetGroupMembers(c *gin.Context) {
 		})
 		return
 	}
-
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持成员列表"})
 		return
 	}
 
-	// 检查是否是群组创建者
-	if group.OwerID != currentUser.ID {
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+
+	if !canManageGroup(currentUser, group) {
 		c.JSON(http.StatusForbidden, gin.H{
-			"code":    403,
-			"message": "需要群组创建者权限",
+			"code":    http.StatusForbidden,
+			"message": "需要管理员或群组创建者权限",
 		})
 		return
 	}
@@ -1090,16 +1279,6 @@ func KickDevice(c *gin.Context) {
 		return
 	}
 
-	// 检查权限：只有群组创建者可操作
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
-		return
-	}
-
 	repo := gormdb.NewGroupRepository()
 	group, err := repo.GetGroupByID(groupID)
 	if err != nil || group == nil {
@@ -1109,22 +1288,20 @@ func KickDevice(c *gin.Context) {
 		})
 		return
 	}
-
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
+	if group.IsVirtual || !isSupportedGroupType(group.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持踢出设备"})
 		return
 	}
 
-	// 检查是否是群组创建者
-	if group.OwerID != currentUser.ID {
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+
+	if !canManageGroup(currentUser, group) {
 		c.JSON(http.StatusForbidden, gin.H{
-			"code":    403,
-			"message": "需要群组创建者权限",
+			"code":    http.StatusForbidden,
+			"message": "需要管理员或群组创建者权限",
 		})
 		return
 	}
@@ -1148,20 +1325,10 @@ func KickDevice(c *gin.Context) {
 		return
 	}
 
-	// 删除GroupMember记录
-	memberRepo := gormdb.NewGroupMemberRepository()
-	err = memberRepo.DeleteMember(groupID, currentUser.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "踢出设备失败",
-		})
-		return
-	}
-
-	// 将设备移到默认群组（id=1）
+	// 踢出只移动指定设备；设备所有者的成员资格必须保留，因为同一用户
+	// 可能仍有其他设备留在该群组。系统默认公共群组为 999。
 	err = deviceRepo.UpdateDeviceFields(deviceID, map[string]interface{}{
-		"group_id": 1,
+		"group_id": models.GroupIDPublicMin,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -1179,10 +1346,14 @@ func KickDevice(c *gin.Context) {
 		// 使原群组设备列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 		// 使默认群组设备列表缓存失效（设备移入默认群组）
-		_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, models.GroupIDPublicMin)
 		// 由于设备的 GroupID 发生了改变，必须使全局设备列表也主动失效
 		_ = deviceCache.InvalidateDeviceList(ctx)
 	}
+	if err := udphub.ChangeDeviceGroupByID(deviceID, models.GroupIDPublicMin); err != nil {
+		log.Printf("[WARN] Failed to update kicked device group in memory: %v", err)
+	}
+	routesync.PublishDevice(deviceID)
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -1261,9 +1432,8 @@ func LeaveGroup(c *gin.Context) {
 		return
 	}
 
-	// 删除GroupMember记录
-	memberRepo := gormdb.NewGroupMemberRepository()
-	err = memberRepo.DeleteMember(id, currentUser.ID)
+	// 成员资格删除与本人设备迁移必须处于同一事务。
+	movedDevices, err := repo.LeaveGroupAndMoveDevices(id, currentUser.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -1272,37 +1442,27 @@ func LeaveGroup(c *gin.Context) {
 		return
 	}
 
-	// 将用户在该群组中的所有设备移到默认群组
-	deviceRepo := gormdb.NewDeviceRepository()
-	devices, _ := deviceRepo.ListDevicesByGroupID(id)
-	movedDeviceIDs := make([]int, 0)
-	for _, device := range devices {
-		if device.OwnerID == currentUser.ID {
-			err = deviceRepo.UpdateDeviceFields(device.ID, map[string]interface{}{
-				"group_id": 1,
-			})
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "移动设备失败",
-				})
-				return
-			}
-			movedDeviceIDs = append(movedDeviceIDs, device.ID)
+	// 数据库写入完成后同步 UDP 运行时索引，避免设备仍在旧私有群组收发。
+	for _, device := range movedDevices {
+		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
+			log.Printf("[WARN] Failed to update leaving device group in memory: %v", err)
 		}
+	}
+	for _, device := range movedDevices {
+		routesync.PublishDevice(device.ID)
 	}
 
 	// 使设备缓存和群组设备列表缓存失效
 	ctx := c.Request.Context()
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 		// 使移动的设备缓存失效
-		for _, deviceID := range movedDeviceIDs {
-			_ = deviceCache.InvalidateDevice(ctx, deviceID, 0, 0)
+		for _, device := range movedDevices {
+			_ = deviceCache.InvalidateDevice(ctx, device.ID, device.OwnerID, uint8(device.SSID))
 		}
 		// 使原群组和默认群组的设备列表缓存失效
 		_ = deviceCache.InvalidateDevicesByGroup(ctx, id)
-		if len(movedDeviceIDs) > 0 {
-			_ = deviceCache.InvalidateDevicesByGroup(ctx, 1)
+		if len(movedDevices) > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, models.GroupIDPublicMin)
 		}
 		// 由于设备的 GroupID 发生了改变，必须使全局设备列表也主动失效
 		_ = deviceCache.InvalidateDeviceList(ctx)

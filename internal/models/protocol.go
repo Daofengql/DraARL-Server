@@ -6,21 +6,6 @@ import (
 	"time"
 )
 
-// PacketType 数据包类型
-const (
-	TypeControl       byte = 0
-	TypeHeartbeat     byte = 2
-	TypeConfig        byte = 3
-	TypeReserved      byte = 4
-	TypeTextMessage   byte = 5
-	TypeDeviceControl byte = 6
-	TypeGroupCommand  byte = 7
-	TypeOpus16K       byte = 8
-	TypeServerVoice   byte = 9
-	TypeReserved2     byte = 10
-	TypeATPassThrough byte = 11
-)
-
 // DeviceModel 设备型号
 const (
 	DevModelUnknown      byte = 0
@@ -37,7 +22,6 @@ const (
 	DevModelTTBridge     byte = 237
 	DevModelHTBridge     byte = 238
 	DevModelNRL2Bridge   byte = 239
-	DevModelServer       byte = 200
 	DevModelBM           byte = 201
 	DevModelNanny        byte = 250
 	DevModelFullNet      byte = 255

@@ -17,9 +17,7 @@ interface BackendGroup {
   id: number
   name: string
   type: number
-  callsign: string
   password?: string
-  allow_callsign_ssid: string
   ower_id: number
   ower_callsign: string
   devlist: string
@@ -42,9 +40,7 @@ const normalizeGroup = (g: BackendGroup): Group => ({
   id: g.id,
   name: g.name,
   type: g.type,
-  callsign: g.callsign,
   password: g.password ?? '',
-  allow_callsign_ssid: g.allow_callsign_ssid,
   ower_id: g.ower_id,
   ower_callsign: g.ower_callsign,
   devlist: g.devlist,
@@ -72,13 +68,42 @@ export const groupService = {
   }): Promise<ListResponse<Group>> {
     const res = await apiClient.get<BackendResponse<{ items: BackendGroup[]; total?: number }>>('/api/groups', { params })
     const items = (res.data?.items || []).map(normalizeGroup)
-    return { items, total: res.data?.total || items.length, page: params?.page || 1, page_size: params?.page_size || 10 }
+    return { items, total: res.data?.total ?? items.length, page: params?.page || 1, page_size: params?.page_size || 20 }
+  },
+
+  // 管理员获取所有非虚拟群组（包含其他用户的私有群组）
+  async getAdminList(params?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+  }): Promise<ListResponse<Group>> {
+    const res = await apiClient.get<BackendResponse<{ items: BackendGroup[]; total?: number }>>('/api/admin/groups', { params })
+    const items = (res.data?.items || []).map(normalizeGroup)
+    return { items, total: res.data?.total ?? items.length, page: params?.page || 1, page_size: params?.page_size || 100 }
+  },
+
+  // 自动翻页拉取完整群组集合，供下拉框和后台引用数据使用。
+  async listAll(options?: { admin?: boolean; keyword?: string }): Promise<Group[]> {
+    const pageSize = 100
+    const result: Group[] = []
+    let page = 1
+    let total = Number.POSITIVE_INFINITY
+
+    while (result.length < total) {
+      const current = options?.admin
+        ? await this.getAdminList({ page, page_size: pageSize, keyword: options.keyword })
+        : await this.getList({ page, page_size: pageSize, keyword: options?.keyword })
+      result.push(...current.items)
+      total = current.total
+      if (current.items.length === 0 || current.items.length < pageSize) break
+      page += 1
+    }
+    return result
   },
 
   // 获取群组列表（兼容旧接口）
   async list(): Promise<Group[]> {
-    const res = await apiClient.get<BackendResponse<{ items: BackendGroup[] }>>('/api/groups')
-    return (res.data?.items || []).map(normalizeGroup)
+    return this.listAll()
   },
 
   // 获取群组详情
@@ -99,9 +124,7 @@ export const groupService = {
       id: data.id,
       name: data.name,
       type: data.type,
-      callsign: data.callsign,
       password: data.password,
-      allow_callsign_ssid: data.allow_callsign_ssid,
       ower_id: data.ower_id,
       ower_callsign: data.ower_callsign,
       devlist: data.devlist,
@@ -122,9 +145,7 @@ export const groupService = {
       id: data.id,
       name: data.name,
       type: data.type,
-      callsign: data.callsign,
       password: data.password,
-      allow_callsign_ssid: data.allow_callsign_ssid,
       ower_id: data.ower_id,
       ower_callsign: data.ower_callsign,
       devlist: data.devlist,
@@ -183,6 +204,20 @@ export const groupService = {
   // 踢出设备
   async kickDevice(groupId: number, deviceId: number): Promise<void> {
     await apiClient.delete<BackendResponse<unknown>>(`/api/groups/${groupId}/devices/${deviceId}`)
+  },
+
+  async updateDeviceCommControl(
+    groupId: number,
+    deviceId: number,
+    data: { disable_send?: boolean; disable_recv?: boolean },
+  ): Promise<{ device_id: number; group_id: number; disable_send: boolean; disable_recv: boolean }> {
+    const res = await apiClient.put<BackendResponse<{
+      device_id: number
+      group_id: number
+      disable_send: boolean
+      disable_recv: boolean
+    }>>(`/api/groups/${groupId}/devices/${deviceId}/comm-control`, data)
+    return res.data!
   },
 
   // 离开群组

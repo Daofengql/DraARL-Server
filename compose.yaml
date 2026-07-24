@@ -1,0 +1,119 @@
+name: ${COMPOSE_PROJECT_NAME:-draarl}
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: draarl
+      MYSQL_USER: draarl
+      MYSQL_PASSWORD: ${DRAARL_MYSQL_PASSWORD:?set DRAARL_MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${DRAARL_MYSQL_ROOT_PASSWORD:?set DRAARL_MYSQL_ROOT_PASSWORD in .env}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks: [draarl]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${DRAARL_REDIS_PASSWORD:?set DRAARL_REDIS_PASSWORD in .env}
+      TZ: Asia/Shanghai
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${DRAARL_REDIS_PASSWORD:?set DRAARL_REDIS_PASSWORD in .env}"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [draarl]
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${DRAARL_MINIO_ROOT_USER:?set DRAARL_MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${DRAARL_MINIO_ROOT_PASSWORD:?set DRAARL_MINIO_ROOT_PASSWORD in .env}
+      MINIO_API_CORS_ALLOW_ORIGIN: ${DRAARL_PUBLIC_URL:-http://localhost:9000}
+      MINIO_BROWSER: "off"
+      TZ: Asia/Shanghai
+    command: ["server", "/data"]
+    ports:
+      - "${DRAARL_MINIO_API_PORT:-9002}:9000"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [draarl]
+
+  draarl:
+    image: ${DRAARL_IMAGE:-draarl:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DRAARL_VERSION: ${DRAARL_VERSION:-dev}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DRAARL_PUBLIC_URL: ${DRAARL_PUBLIC_URL:-http://localhost:9000}
+      DRAARL_MYSQL_PASSWORD: ${DRAARL_MYSQL_PASSWORD:?set DRAARL_MYSQL_PASSWORD in .env}
+      DRAARL_REDIS_PASSWORD: ${DRAARL_REDIS_PASSWORD:?set DRAARL_REDIS_PASSWORD in .env}
+      DRAARL_MINIO_ROOT_USER: ${DRAARL_MINIO_ROOT_USER:?set DRAARL_MINIO_ROOT_USER in .env}
+      DRAARL_MINIO_ROOT_PASSWORD: ${DRAARL_MINIO_ROOT_PASSWORD:?set DRAARL_MINIO_ROOT_PASSWORD in .env}
+      DRAARL_MINIO_ENDPOINT: ${DRAARL_MINIO_ENDPOINT:?set DRAARL_MINIO_ENDPOINT in .env}
+      DRAARL_MINIO_USE_SSL: ${DRAARL_MINIO_USE_SSL:-false}
+      DRAARL_JWT_SECRET: ${DRAARL_JWT_SECRET:-}
+      DRAARL_AES_KEY: ${DRAARL_AES_KEY:-}
+      DRAARL_AUTO_MIGRATE: ${DRAARL_AUTO_MIGRATE:-true}
+      TZ: Asia/Shanghai
+    ports:
+      - "${DRAARL_HTTP_PORT:-9000}:9000"
+      - "${DRAARL_UDP_PORT:-60050}:60050/udp"
+    volumes:
+      - draarl-config:/var/lib/draarl
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    networks: [draarl]
+
+networks:
+  draarl:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  minio-data:
+  draarl-config:

@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 
@@ -19,6 +21,7 @@ import (
 type DeviceListRequest struct {
 	Limit    int    `json:"limit"`
 	Page     int    `json:"page"`
+	Keyword  string `json:"keyword"`
 	CallSign string `json:"callsign"`
 	GroupID  string `json:"group_id"`
 	IsOnline bool   `json:"isonline"`
@@ -48,6 +51,10 @@ type DeviceInfo struct {
 	OnlineTime           string `json:"online_time,omitempty"`
 	CreateTime           string `json:"create_time,omitempty"`
 	UpdateTime           string `json:"update_time,omitempty"`
+	EntryNodeID          string `json:"entry_node_id,omitempty"`
+	EntryNodeName        string `json:"entry_node_name,omitempty"`
+	EntryMode            string `json:"entry_mode,omitempty"`
+	EntrySeenAt          string `json:"entry_seen_at,omitempty"`
 }
 
 // GetDevices 获取设备列表
@@ -55,7 +62,8 @@ func GetDevices(c *gin.Context) {
 	// 获取查询参数
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	callsign := c.Query("callsign")
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	callsign := strings.TrimSpace(c.Query("callsign"))
 	groupID := c.Query("group_id")
 	_ = c.Query("isonline") == "true" // TODO: 实现在线状态过滤
 
@@ -71,16 +79,11 @@ func GetDevices(c *gin.Context) {
 	ctx := c.Request.Context()
 	deviceCache := cache.GetDeviceCache()
 
-	// 获取当前用户信息（使用缓存）
-	username, _ := c.Get("username")
-	var currentUser *gormdb.User
-	if userCache := cache.GetUserCache(); userCache != nil {
-		currentUser, _ = userCache.GetUserByName(ctx, username.(string))
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
 	}
-	if currentUser == nil {
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ = userRepo.GetUserByName(username.(string))
-	}
+	isAdmin := isAdminUser(currentUser)
 
 	var devices []*gormdb.Device
 	var total int64
@@ -89,24 +92,38 @@ func GetDevices(c *gin.Context) {
 	repo := gormdb.NewDeviceRepository()
 
 	// 根据查询条件选择不同的查询方法（全部使用数据库分页）
-	if callsign != "" {
+	if keyword != "" {
+		// 后台搜索框按设备名称或所有者呼号模糊匹配，并保持数据库层分页。
+		ownerID := 0
+		if !isAdmin {
+			ownerID = currentUser.ID
+		}
+		devices, total, err = repo.ListDevicesByKeywordPaginated(keyword, ownerID, limit, page)
+	} else if callsign != "" {
 		// 按呼号搜索（数据库层分页）
 		ownerID := 0
-		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
+		if !isAdmin {
 			ownerID = currentUser.ID // 非管理员只能看到自己的设备
 		}
-		devices, total, _ = repo.ListDevicesByCallSignPaginated(callsign, ownerID, limit, page)
+		devices, total, err = repo.ListDevicesByCallSignPaginated(callsign, ownerID, limit, page)
 	} else if groupID != "" {
 		// 按群组过滤（数据库层分页）
-		gid, _ := strconv.Atoi(groupID)
+		gid, parseErr := strconv.Atoi(groupID)
+		if parseErr != nil || gid <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    http.StatusBadRequest,
+				"message": "无效的群组ID",
+			})
+			return
+		}
 		ownerID := 0
-		if currentUser != nil && !hasRoleGORM(currentUser, "admin") {
+		if !isAdmin {
 			ownerID = currentUser.ID // 非管理员只能看到自己的设备
 		}
-		devices, total, _ = repo.ListDevicesByGroupIDPaginated(gid, ownerID, limit, page)
+		devices, total, err = repo.ListDevicesByGroupIDPaginated(gid, ownerID, limit, page)
 	} else {
 		// 普通用户只获取自己的设备，管理员获取所有设备
-		if currentUser != nil && hasRoleGORM(currentUser, "admin") {
+		if isAdmin {
 			// 管理员获取所有设备（使用缓存）
 			if deviceCache != nil {
 				devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)
@@ -115,15 +132,15 @@ func GetDevices(c *gin.Context) {
 			}
 		} else {
 			// 普通用户获取自己的设备（数据库层分页）
-			devices, total, _ = repo.ListDevicesByOwnerIDPaginated(currentUser.ID, limit, page)
+			devices, total, err = repo.ListDevicesByOwnerIDPaginated(currentUser.ID, limit, page)
 		}
-		if err != nil && (currentUser == nil || hasRoleGORM(currentUser, "admin")) {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    500,
-				"message": "查询设备列表失败",
-			})
-			return
-		}
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    http.StatusInternalServerError,
+			"message": "查询设备列表失败",
+		})
+		return
 	}
 
 	// 批量获取所有需要的用户信息（解决 N+1 查询问题）
@@ -146,6 +163,21 @@ func GetDevices(c *gin.Context) {
 	// 批量查询用户简要信息
 	userCache := cache.GetUserCache()
 	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+	nodeIDs := make([]string, 0, len(devices))
+	seenNodeIDs := make(map[string]struct{}, len(devices))
+	for _, d := range devices {
+		nodeID := d.LastEntryNodeID
+		if d.ISOnline && d.CurrentEntryNodeID != "" {
+			nodeID = d.CurrentEntryNodeID
+		}
+		if nodeID != "" && nodeID != "center" {
+			if _, exists := seenNodeIDs[nodeID]; !exists {
+				seenNodeIDs[nodeID] = struct{}{}
+				nodeIDs = append(nodeIDs, nodeID)
+			}
+		}
+	}
+	nodeNames, _ := gormdb.NewServerRepository().GetNodeNames(nodeIDs)
 
 	// 转换为响应格式
 	items := make([]*DeviceInfo, 0, len(devices))
@@ -168,6 +200,18 @@ func GetDevices(c *gin.Context) {
 			CreateTime:           d.CreateTime.Format("2006-01-02 15:04:05"),
 			UpdateTime:           d.UpdateTime.Format("2006-01-02 15:04:05"),
 		}
+		entryNodeID := d.LastEntryNodeID
+		if d.ISOnline && d.CurrentEntryNodeID != "" {
+			entryNodeID = d.CurrentEntryNodeID
+		}
+		if isAdmin {
+			info.EntryNodeID = entryNodeID
+		}
+		info.EntryMode = d.EntryMode
+		if d.LastEntryAt != nil {
+			info.EntrySeenAt = d.LastEntryAt.Format("2006-01-02 15:04:05")
+		}
+		info.EntryNodeName = resolveEntryNodeName(entryNodeID, nodeNames)
 
 		// 从批量查询结果中获取设备所有者信息
 		if d.OwnerID > 0 {
@@ -213,9 +257,29 @@ func GetDevices(c *gin.Context) {
 	})
 }
 
+func resolveEntryNodeName(nodeID string, names map[string]string) string {
+	switch nodeID {
+	case "":
+		return ""
+	case "center":
+		return "中心直连"
+	}
+	if name := strings.TrimSpace(names[nodeID]); name != "" {
+		return name
+	}
+	short := nodeID
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	return "已删除节点（" + short + "）"
+}
+
 // GetDevice 获取单个设备
 func GetDevice(c *gin.Context) {
 	idStr := c.Query("id")
+	if idStr == "" {
+		idStr = c.Param("id")
+	}
 
 	var device *gormdb.Device
 	var err error
@@ -226,7 +290,14 @@ func GetDevice(c *gin.Context) {
 
 	// 必须使用ID查询
 	if idStr != "" {
-		id, _ := strconv.Atoi(idStr)
+		id, parseErr := strconv.Atoi(idStr)
+		if parseErr != nil || id <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    http.StatusBadRequest,
+				"message": "无效的设备ID",
+			})
+			return
+		}
 		if deviceCache != nil {
 			device, err = deviceCache.GetDeviceByID(ctx, id)
 		} else {
@@ -248,6 +319,17 @@ func GetDevice(c *gin.Context) {
 		})
 		return
 	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !canManageDevice(currentUser, device) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "无权查看此设备",
+		})
+		return
+	}
 
 	// 获取所有者呼号
 	var callsign string
@@ -263,6 +345,22 @@ func GetDevice(c *gin.Context) {
 		if owner != nil {
 			callsign = owner.CallSign
 		}
+	}
+	entryNodeID := device.LastEntryNodeID
+	if device.ISOnline && device.CurrentEntryNodeID != "" {
+		entryNodeID = device.CurrentEntryNodeID
+	}
+	nodeNames := map[string]string{}
+	if entryNodeID != "" && entryNodeID != "center" {
+		nodeNames, _ = gormdb.NewServerRepository().GetNodeNames([]string{entryNodeID})
+	}
+	entrySeenAt := ""
+	if device.LastEntryAt != nil {
+		entrySeenAt = device.LastEntryAt.Format("2006-01-02 15:04:05")
+	}
+	entryNodeIDResponse := ""
+	if isAdminUser(currentUser) {
+		entryNodeIDResponse = entryNodeID
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -284,6 +382,10 @@ func GetDevice(c *gin.Context) {
 			"note":                    device.Note,
 			"create_time":             device.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time":             device.UpdateTime.Format("2006-01-02 15:04:05"),
+			"entry_node_id":           entryNodeIDResponse,
+			"entry_node_name":         resolveEntryNodeName(entryNodeID, nodeNames),
+			"entry_mode":              device.EntryMode,
+			"entry_seen_at":           entrySeenAt,
 		},
 	})
 }
@@ -332,31 +434,38 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 
-	// 检查权限：只有设备所有者或管理员可以修改
-	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-
-	if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.OwnerID != currentUser.ID {
+	// 检查权限：只有设备所有者或管理员可以修改。
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !canManageDevice(currentUser, device) {
 		c.JSON(http.StatusForbidden, gin.H{
-			"code":    403,
+			"code":    http.StatusForbidden,
 			"message": "无权修改此设备",
 		})
 		return
 	}
 
-	// 记录旧群组ID（用于缓存失效和审计）
+	// 群组切换必须走 ChangeDeviceGroup，确保私有群组验证、对象级授权、
+	// 缓存和 UDP 运行时状态同步不会被通用更新接口绕过。
+	if req.GroupID > 0 && req.GroupID != device.GroupID {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "请使用设备切换群组接口修改群组",
+		})
+		return
+	}
+
 	oldGroupID := device.GroupID
+	oldDisableSend := device.DisableSend
+	oldDisableRecv := device.DisableRecv
 
 	// 更新字段
 	updates := make(map[string]interface{})
 	if req.Name != "" {
 		updates["name"] = req.Name
 		device.Name = req.Name
-	}
-	if req.GroupID > 0 {
-		updates["group_id"] = req.GroupID
-		device.GroupID = req.GroupID
 	}
 	if req.Status > 0 {
 		updates["status"] = req.Status
@@ -392,6 +501,7 @@ func UpdateDevice(c *gin.Context) {
 	// 立即同步 UDP Hub 运行时内存，避免等待定时器导致收发控制生效延迟
 	if req.DisableSend != nil || req.DisableRecv != nil {
 		udphub.SyncDeviceCommControlByID(id, device.DisableSend, device.DisableRecv)
+		routesync.PublishDevice(id)
 	}
 
 	// 使设备详情缓存失效，并在群组改变时使新旧群组设备列表缓存失效
@@ -403,13 +513,6 @@ func UpdateDevice(c *gin.Context) {
 		// 2. 主动清理全局设备分页列表（设备属性修改后列表应更新）
 		_ = deviceCache.InvalidateDeviceList(ctx)
 
-		// 3. 如果群组改变，使新旧群组设备列表缓存都失效
-		if req.GroupID > 0 && oldGroupID != req.GroupID {
-			if oldGroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(ctx, oldGroupID)
-			}
-			_ = deviceCache.InvalidateDevicesByGroup(ctx, req.GroupID)
-		}
 	}
 
 	operatorName := ""
@@ -421,8 +524,9 @@ func UpdateDevice(c *gin.Context) {
 		operatorCallSign = currentUser.CallSign
 	}
 	oplog.AddLog(
-		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, disable_send=%t, disable_recv=%t",
-			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority, device.DisableSend, device.DisableRecv),
+		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, disable_send=%t->%t, disable_recv=%t->%t",
+			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority,
+			oldDisableSend, device.DisableSend, oldDisableRecv, device.DisableRecv),
 		"device_update",
 		operatorID,
 		operatorName,
@@ -441,10 +545,10 @@ func UpdateDevice(c *gin.Context) {
 
 // DeleteDevice 删除设备
 func DeleteDevice(c *gin.Context) {
-	// 获取当前操作者
-	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
 
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -462,7 +566,7 @@ func DeleteDevice(c *gin.Context) {
 		}
 
 		// 检查权限：只有设备所有者或管理员可以删除
-		if currentUser != nil && !hasRoleGORM(currentUser, "admin") && device.OwnerID != currentUser.ID {
+		if !canManageDevice(currentUser, device) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    403,
 				"message": "无权删除此设备",
@@ -470,7 +574,7 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 
-		if err := repo.DeleteDeviceByID(id); err != nil {
+		if err := repo.DeleteDeviceWithCascade(id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "删除设备失败",
@@ -478,6 +582,7 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
+		routesync.RevokeDevice(device.ID, "device_deleted")
 
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()
@@ -546,7 +651,17 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 
-		if err := repo.DeleteDeviceByID(device.ID); err != nil {
+		// 兼容入口同样必须执行对象级授权，不能因为改用 owner_id + ssid
+		// 定位设备就绕过“设备所有者或管理员”规则。
+		if !canManageDevice(currentUser, device) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    http.StatusForbidden,
+				"message": "无权删除此设备",
+			})
+			return
+		}
+
+		if err := repo.DeleteDeviceWithCascade(device.ID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "删除设备失败",
@@ -554,6 +669,7 @@ func DeleteDevice(c *gin.Context) {
 			return
 		}
 		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
+		routesync.RevokeDevice(device.ID, "device_deleted")
 
 		// 使设备详情、设备列表和群组设备列表缓存失效
 		ctx := c.Request.Context()
@@ -592,8 +708,8 @@ func DeleteDevice(c *gin.Context) {
 
 // ChangeDeviceGroupRequest 切换设备群组请求
 type ChangeDeviceGroupRequest struct {
-	DeviceID int    `json:"device_id" binding:"required"`
-	GroupID  int    `json:"group_id" binding:"required"`
+	DeviceID int    `json:"device_id"`
+	GroupID  *int   `json:"group_id" binding:"required"`
 	Password string `json:"password"` // 私有群组且未验证时需要
 }
 
@@ -607,24 +723,42 @@ func ChangeDeviceGroup(c *gin.Context) {
 		})
 		return
 	}
-
-	// 获取当前用户
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
+	if idStr := c.Param("id"); idStr != "" {
+		deviceID, err := strconv.Atoi(idStr)
+		if err != nil || deviceID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    http.StatusBadRequest,
+				"message": "无效的设备ID",
+			})
+			return
+		}
+		if req.DeviceID != 0 && req.DeviceID != deviceID {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    http.StatusBadRequest,
+				"message": "路径设备ID与请求设备ID不一致",
+			})
+			return
+		}
+		req.DeviceID = deviceID
+	}
+	if req.DeviceID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "无效的设备ID",
 		})
 		return
 	}
-
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
+	if req.GroupID == nil || *req.GroupID < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "无效的群组ID",
 		})
+		return
+	}
+	targetGroupID := *req.GroupID
+
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
 		return
 	}
 
@@ -637,28 +771,51 @@ func ChangeDeviceGroup(c *gin.Context) {
 		})
 		return
 	}
-
-	// 检查群组是否存在
-	groupRepo := gormdb.NewGroupRepository()
-	group, err := groupRepo.GetGroupByID(req.GroupID)
-	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
-			"message": "群组不存在",
+	if !canManageDevice(currentUser, device) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "无权修改此设备的群组",
 		})
 		return
+	}
+
+	var group *gormdb.Group
+	if targetGroupID > 0 {
+		groupRepo := gormdb.NewGroupRepository()
+		group, err = groupRepo.GetGroupByID(targetGroupID)
+		if err != nil || group == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    404,
+				"message": "群组不存在",
+			})
+			return
+		}
+		if group.IsVirtual || !isSupportedGroupType(group.Type) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    http.StatusBadRequest,
+				"message": "不能切换到虚拟或不受支持的群组",
+			})
+			return
+		}
+		if group.Status != 1 {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    http.StatusForbidden,
+				"message": "群组已禁用",
+			})
+			return
+		}
 	}
 
 	usedGroupPassword := false
 
 	// 检查权限：公开群组所有人可见，私有群组需要已验证
-	if group.Type == 1 {
+	if group == nil || group.Type == groupTypePublic || isAdminUser(currentUser) {
 		// 公开群组，直接允许切换
 	} else {
 		// 私有群组，需要已验证
 		// 检查用户是否已验证
 		memberRepo := gormdb.NewGroupMemberRepository()
-		isVerified := memberRepo.IsVerifiedMember(req.GroupID, currentUser.ID)
+		isVerified := memberRepo.IsVerifiedMember(targetGroupID, currentUser.ID)
 		if !isVerified {
 			// 未验证用户，需要提供密码
 			if req.Password == "" {
@@ -681,7 +838,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 
 			// 密码验证成功，创建 GroupMember 记录
 			if err := memberRepo.CreateMember(&gormdb.GroupMember{
-				GroupID:    req.GroupID,
+				GroupID:    targetGroupID,
 				UserID:     currentUser.ID,
 				IsVerified: true,
 				JoinTime:   time.Now(),
@@ -699,7 +856,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 	// 更新设备的群组（数据库）
 	oldGroupID := device.GroupID
 	if err := repo.UpdateDeviceFields(req.DeviceID, map[string]interface{}{
-		"group_id": req.GroupID,
+		"group_id": targetGroupID,
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -719,19 +876,27 @@ func ChangeDeviceGroup(c *gin.Context) {
 			_ = deviceCache.InvalidateDevicesByGroup(ctx, oldGroupID)
 		}
 		// 使新群组设备列表缓存失效
-		_ = deviceCache.InvalidateDevicesByGroup(ctx, req.GroupID)
+		if targetGroupID > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, targetGroupID)
+		}
 	}
 
 	// 更新内存中的 UDP 设备群组
-	if err := udphub.ChangeDeviceGroupByID(req.DeviceID, req.GroupID); err != nil {
+	if err := udphub.ChangeDeviceGroupByID(req.DeviceID, targetGroupID); err != nil {
 		// 内存更新失败只记录日志，不影响响应（数据库已更新成功）
 		log.Printf("[WARN] Failed to update UDP device group in memory: %v", err)
+		udphub.RefreshDeviceCache()
 	}
+	routesync.PublishDevice(req.DeviceID)
 
 	// 注：WS 只支持 JWT 幽灵设备，幽灵设备群组切换通过前端直接调用 WebSocket 发送 Config 包实现
+	groupType := 0
+	if group != nil {
+		groupType = group.Type
+	}
 	oplog.AddLog(
 		fmt.Sprintf("修改设备群组: device_id=%d, owner_id=%d, group_id=%d->%d, group_type=%d, used_password=%t",
-			req.DeviceID, device.OwnerID, oldGroupID, req.GroupID, group.Type, usedGroupPassword),
+			req.DeviceID, device.OwnerID, oldGroupID, targetGroupID, groupType, usedGroupPassword),
 		"device_group_change",
 		currentUser.ID,
 		currentUser.Name,
@@ -748,17 +913,25 @@ func ChangeDeviceGroup(c *gin.Context) {
 // GetDeviceQTHs 获取设备位置列表
 func GetDeviceQTHs(c *gin.Context) {
 	ctx := c.Request.Context()
-	deviceCache := cache.GetDeviceCache()
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
 
 	var devicesRaw []*gormdb.Device
 	var err error
 
-	// 使用缓存获取设备列表
-	if deviceCache != nil {
-		devicesRaw, _, err = deviceCache.GetDeviceList(ctx, 1, 1000)
+	// 设备位置属于设备详情的一部分：管理员可查看全部，普通用户只能查看本人设备。
+	if isAdminUser(currentUser) {
+		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+			devicesRaw, _, err = deviceCache.GetDeviceList(ctx, 1, 1000)
+		} else {
+			repo := gormdb.NewDeviceRepository()
+			devicesRaw, _, err = repo.ListDevices(1000, 1)
+		}
 	} else {
 		repo := gormdb.NewDeviceRepository()
-		devicesRaw, _, err = repo.ListDevices(1000, 1)
+		devicesRaw, err = repo.ListDevicesByOwnerID(currentUser.ID)
 	}
 
 	if err != nil {

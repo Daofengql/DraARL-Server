@@ -27,6 +27,8 @@ interface GroupPickerDialogProps {
   currentGroupId?: number
   device?: Device
   showSearchTab?: boolean
+  adminMode?: boolean
+  allowUngrouped?: boolean
   onSelect: (groupId: number, password?: string) => void
   title?: string
 }
@@ -38,6 +40,8 @@ export function GroupPickerDialog({
   currentGroupId,
   device,
   showSearchTab = true,
+  adminMode = false,
+  allowUngrouped = true,
   onSelect,
   title = '选择群组',
 }: GroupPickerDialogProps) {
@@ -55,8 +59,8 @@ export function GroupPickerDialog({
 
   // 分类群组
   const publicGroups = groups.filter((g) => g.type === GROUP_TYPE_PUBLIC)
-  const joinedPrivateGroups = groups.filter(
-    (g) => g.type === GROUP_TYPE_PRIVATE && g.is_joined
+  const privateGroups = groups.filter(
+    (g) => g.type === GROUP_TYPE_PRIVATE && (adminMode || g.is_joined)
   )
 
   // 搜索群组
@@ -87,7 +91,7 @@ export function GroupPickerDialog({
     if (group.id === currentGroupId) return
 
     // 公开群组或已加入的私有群组直接切换
-    if (group.type === GROUP_TYPE_PUBLIC || group.is_joined) {
+    if (adminMode || group.type === GROUP_TYPE_PUBLIC || group.is_joined) {
       onSelect(group.id)
       onClose()
     } else {
@@ -139,12 +143,28 @@ export function GroupPickerDialog({
             </Box>
           )}
 
+          {allowUngrouped && (
+            <Button
+              fullWidth
+              variant={currentGroupId ? 'outlined' : 'contained'}
+              color="inherit"
+              onClick={() => {
+                if (currentGroupId) onSelect(0)
+                onClose()
+              }}
+              disabled={!currentGroupId}
+              sx={{ mb: 2 }}
+            >
+              {currentGroupId ? '设为未分组（停止参与转发）' : '当前为未分组状态'}
+            </Button>
+          )}
+
           <Tabs
             value={tabValue}
             onChange={(_, v) => setTabValue(v)}
             sx={{ borderBottom: 1, borderColor: 'divider' }}
           >
-            <Tab label="已验证群组" />
+            <Tab label={adminMode ? '私有群组' : '已验证群组'} />
             <Tab label="公开群组" />
             {showSearchTab && <Tab label="搜索群组" />}
           </Tabs>
@@ -157,15 +177,15 @@ export function GroupPickerDialog({
 
           {/* 已验证群组（私有） */}
           <TabPanel value={tabValue} index={0}>
-            {joinedPrivateGroups.length === 0 ? (
+            {privateGroups.length === 0 ? (
               <Box sx={{ textAlign: 'center', py: 4 }}>
                 <Typography color="text.secondary">
-                  暂无已加入的私有群组
+                  {adminMode ? '暂无私有群组' : '暂无已加入的私有群组'}
                 </Typography>
               </Box>
             ) : (
               <List>
-                {joinedPrivateGroups.map((group) => (
+                {privateGroups.map((group) => (
                   <GroupListItem
                     key={group.id}
                     group={group}

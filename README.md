@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 最新 tag | [v1.1.4-alpha6](https://github.com/Daofengql/DraARL-Server/tree/v1.1.4-alpha6) |
+| 最新版本 | `v1.1.5-alpha1` |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
@@ -29,6 +29,8 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 |------|------|
 | [文档站首页](docs/index.md) | 推荐阅读顺序、文档目录、本地预览与自动发布说明 |
 | [架构设计](docs/架构设计.md) | 系统模块、数据流、部署形态和核心链路 |
+| [Type 0 节点互联协议](docs/节点互联协议.md) | 中心/边缘拓扑、控制面、数据面与安全边界 |
+| [UDP 单机转发压力测试](docs/UDP单机转发压力测试.md) | 大规模设备 fan-out 实测、瓶颈分析和容量建议 |
 | [数据字典](docs/数据字典.md) | 数据库表、字段、索引和关系说明 |
 | [使用与说明文档](docs/usage/README.md) | 部署、账号、设备、群组、在线收发、后台、运维等功能说明 |
 | [设备接入指南](docs/usage/07-设备接入与API快速对接.md) | 设备绑定、认证、上报、配置同步和 API 快速对接 |
@@ -62,7 +64,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 
 ```text
 DraARL-Server/
-├── cmd/udphub/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
+├── cmd/draarl/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
 ├── internal/
 │   ├── aprs/                # APRS 连接、配置和日志
 │   ├── auth/                # refresh token 存储，支持 Redis 与内存降级
@@ -78,9 +80,9 @@ DraARL-Server/
 ├── pkg/                     # JWT、缓存、MinIO、WebSocket、加密、GeoIP 等公共包
 ├── www/                     # React 前端项目
 ├── docs/                    # MkDocs 文档站、API 文档、协议文档和图表资源
-├── test/                    # Python 设备/协议测试工具
+├── test/                    # Python 设备/协议测试工具和 Go 压测命令
 ├── .github/workflows/       # Release 与文档发布工作流
-├── udphub.yaml.example      # 配置模板
+├── config.yaml.example      # 配置模板
 ├── Makefile                 # 常用构建、测试和运行命令
 └── README.md
 ```
@@ -96,6 +98,26 @@ DraARL-Server/
 - Python 3.11+（仅本地预览/构建 MkDocs 文档时需要）
 
 ## 快速开始
+
+### Docker Compose（Linux）
+
+Compose 会构建带嵌入前端的 DraARL 镜像，并自动拉起 MySQL、Redis 和
+MinIO。首次启动会在命名卷内生成 `config.yaml`、JWT 密钥和设备 AES 密钥，
+随后初始化数据库与 MinIO bucket：
+
+```bash
+cp .env.example .env
+# 修改 .env 中的数据库、Redis、MinIO 密码和对外地址
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:9000/healthz
+```
+
+首次管理员账号和密码可通过 `docker compose logs draarl` 查看。普通
+`docker compose down` 会保留四个命名卷；不要在没有备份时使用
+`docker compose down -v`。完整说明见[部署与配置](docs/usage/01-部署与配置.md)。
+
+以下步骤用于不采用 Compose 的手动部署。
 
 ### 1. 克隆仓库
 
@@ -113,7 +135,7 @@ CREATE DATABASE draarl CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ### 3. 准备配置文件
 
 ```bash
-cp udphub.yaml.example udphub.yaml
+cp config.yaml.example config.yaml
 ```
 
 至少需要检查以下配置：
@@ -139,16 +161,26 @@ cd ..
 
 ### 5. 初始化数据库并启动
 
-首次部署或表结构变更后执行自动迁移：
+首次部署到完全没有表的空数据库时，直接启动即可自动初始化表结构：
 
 ```bash
-go run ./cmd/udphub -c udphub.yaml -auto-migrate
+go run ./cmd/draarl -c config.yaml
 ```
+
+如果数据库中已经存在任意一张表，程序不会在普通启动时修改结构。表结构变更后需显式执行自动迁移：
+
+```bash
+go run ./cmd/draarl -c config.yaml -auto-migrate
+```
+
+群组自身呼号和设备准入白名单已停用。正常启动会兼容并忽略旧的
+`public_groups.call_sign`、`public_groups.allow_callsign_ssid` 列；显式执行
+`-auto-migrate` 时会安全删除遗留列。若准入白名单仍有非空配置，迁移会中止并要求先人工确认清理。
 
 后续正常启动：
 
 ```bash
-go run ./cmd/udphub -c udphub.yaml
+go run ./cmd/draarl -c config.yaml
 ```
 
 首次启动会自动创建管理员用户，并在控制台输出初始用户名和密码。登录后请立即修改密码。
@@ -158,7 +190,7 @@ go run ./cmd/udphub -c udphub.yaml
 后端：
 
 ```bash
-go run ./cmd/udphub -c udphub.yaml
+go run ./cmd/draarl -c config.yaml
 ```
 
 前端：
@@ -189,8 +221,8 @@ npm run build
 默认构建不嵌入前端资源，适合 API 服务或本地开发：
 
 ```bash
-go build -o draarl ./cmd/udphub
-./draarl -c udphub.yaml
+go build -o draarl ./cmd/draarl
+./draarl -c config.yaml
 ```
 
 ### 嵌入前端构建
@@ -205,7 +237,7 @@ cd ..
 
 mkdir -p internal/server/web/dist
 cp -r www/dist/* internal/server/web/dist/
-go build -tags=embed -o draarl ./cmd/udphub
+go build -tags=embed -o draarl ./cmd/draarl
 ```
 
 Windows PowerShell 可将复制步骤替换为：
@@ -213,7 +245,7 @@ Windows PowerShell 可将复制步骤替换为：
 ```powershell
 New-Item -ItemType Directory -Force internal/server/web/dist
 Copy-Item -Recurse -Force www/dist/* internal/server/web/dist/
-go build -tags=embed -o draarl.exe ./cmd/udphub
+go build -tags=embed -o draarl.exe ./cmd/draarl
 ```
 
 ### Makefile
@@ -238,8 +270,8 @@ make run
 示例：
 
 ```bash
-git tag -a v1.1.4-alpha7 -m "release: v1.1.4-alpha7"
-git push origin v1.1.4-alpha7
+git tag -a v1.1.5-alpha1 -m "release: v1.1.5-alpha1"
+git push origin v1.1.5-alpha1
 ```
 
 ## 服务端口与入口
@@ -247,6 +279,7 @@ git push origin v1.1.4-alpha7
 | 类型 | 默认/常用端口 | 说明 |
 |------|---------------|------|
 | UDP 设备接入 | `60050` | DraARLv1 设备接入和语音转发 |
+| Type 0 节点控制 | `60100/tcp` | 可选的中心/边缘 TLS 控制面；数据面仍复用 UDP `60050` |
 | HTTP API / Web | `9000` 或本地开发常用 `9002` | Gin API、WebSocket、前端静态资源 |
 | Vite 开发服务器 | `9001` | 前端开发预览，代理 `/api` 到后端 |
 | WebSocket | `/ws` | 浏览器在线收发连接入口 |
@@ -261,22 +294,22 @@ git push origin v1.1.4-alpha7
 ./draarl -v
 
 # 打印关键配置
-./draarl -c udphub.yaml -p json
+./draarl -c config.yaml -p json
 
 # 重置管理员密码
-./draarl -c udphub.yaml -reset-admin-pass "new-password"
+./draarl -c config.yaml -reset-admin-pass "new-password"
 
 # 执行数据库自动迁移
-./draarl -c udphub.yaml -auto-migrate
+./draarl -c config.yaml -auto-migrate
 ```
 
 生产环境建议：
 
-- 固定并备份 `udphub.yaml` 中的 `JWT.Secret` 和 `DeviceAuth.AESKey`。
+- 固定并备份 `config.yaml` 中的 `JWT.Secret` 和 `DeviceAuth.AESKey`。
 - 配置真实的 `Web.FrontendURL` 和 `Web.AllowedOrigins`，避免 Release 模式下 Origin 校验失败。
 - 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
 - 使用 MinIO 保存头像、操作证、资源文件、通信录音和固件。
-- 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；如使用 frp 等代理，可按需开启 `System.ProxyProtocol`。
+- 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；中心直连接入使用 `System.ProxyProtocol: v2`，边缘接入使用 `Edge.ProxyProtocol: v2`。启用后必须限制 UDP 入口只允许受信代理访问。
 - 首次上线后立即修改默认管理员密码，并检查注册审核、操作证审核和设备绑定策略。
 
 更多排障内容请阅读 [运维与排障](docs/usage/08-运维与排障.md)。

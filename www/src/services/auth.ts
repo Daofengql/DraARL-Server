@@ -29,6 +29,12 @@ export const authService = {
     return res.data!
   },
 
+  // 管理员直接切换为目标用户登录。返回的是目标用户自己的完整登录态。
+  async switchLogin(userId: number): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>(`/api/auth/switch-login/${userId}`)
+    return res.data!
+  },
+
   // 用户登出
   async logout(): Promise<void> {
     try {

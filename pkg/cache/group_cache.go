@@ -213,15 +213,20 @@ func (c *GroupCache) InvalidateGroupMembers(ctx context.Context, groupID int) er
 	return c.cache.Delete(ctx, groupMembersKey(groupID))
 }
 
-// InvalidateGroupList 使群组列表缓存失效（批量操作、新增、删除时调用）
-// 不仅清理总数和公开列表Key，还要前缀清理全部分页列表
+// InvalidateGroupList 使所有群组列表视图失效（批量操作、新增、删除时调用）。
+// 除总数、公开列表和分页列表外，也必须清理用户维度的群组成员列表，
+// 避免删除群组或用户后仍从 group:user:* 读到旧成员关系。
 func (c *GroupCache) InvalidateGroupList(ctx context.Context) error {
 	// 1. 删除固定名称的列表Key
 	if err := c.cache.Delete(ctx, groupListTotalKey(), groupPublicListKey()); err != nil {
 		return err
 	}
 	// 2. 主动删除所有分页相关的缓存 (形如 group:list:page:*)
-	return c.cache.DeletePrefix(ctx, "group:list:page:")
+	if err := c.cache.DeletePrefix(ctx, "group:list:page:"); err != nil {
+		return err
+	}
+	// 3. 删除所有用户维度的群组列表。
+	return c.cache.DeletePrefix(ctx, "group:user:")
 }
 
 // GetCache 获取底层缓存接口（用于特殊操作）

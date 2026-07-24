@@ -9,6 +9,7 @@ import (
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	ws "draarl/pkg/websocket"
@@ -149,6 +150,14 @@ func GetRadioGroupDevices(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
 		return
 	}
+	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		return
+	}
+	if _, ok := requireGroupViewAccess(c, group); !ok {
+		return
+	}
 
 	devices := make([]RadioDeviceResponse, 0)
 	seenDevices := make(map[string]bool) // 用于去重
@@ -225,20 +234,21 @@ func UpdateRadioGroup(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
+	userID := currentUser.ID
 
-	// 验证群组是否存在
-	group, exists := udphub.GetGroupFromCache(req.GroupID)
-	if !exists {
+	// 群组必须存在于数据库、处于启用状态且不是虚拟互联组。
+	group, err := gormdb.NewGroupRepository().GetGroupByID(req.GroupID)
+	if err != nil || group == nil || group.Status != 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "目标群组不存在或未激活"})
 		return
 	}
-	_ = group // 避免未使用变量警告
+	if _, ok := requireGroupViewAccess(c, group); !ok {
+		return
+	}
 
 	// 如果未指定 dev_model，默认为 Web (105)
 	devModel := byte(req.DevModel)
@@ -247,14 +257,38 @@ func UpdateRadioGroup(c *gin.Context) {
 	}
 
 	oldGroupID := 0
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+	var webGhost *ws.GhostDevice
+	var udpGhostUsername string
+
+	// Capture the current runtime location for the response and audit log, but
+	// do not mutate it until the authoritative preference write succeeds.
+	if devModel == protocol.DraARLDevModelBrowser {
+		if ghostDevice, exists := ws.GlobalGhostManager.GetGhostDevice(userID); exists && ghostDevice != nil {
+			webGhost = ghostDevice
+			oldGroupID = ghostDevice.GroupID
+		}
+	} else if usernameStr != "" {
+		if ghostDevice := udphub.GlobalUDPGhostManager.Get(usernameStr, devModel); ghostDevice != nil {
+			udpGhostUsername = usernameStr
+			oldGroupID = ghostDevice.GroupID
+		}
+	}
+
+	// Persist first. Runtime state and Type 0 routes are projections of this
+	// committed preference and must never advance when the write fails.
+	userRepo := gormdb.NewUserRepository()
+	if err := userRepo.UpsertUserDevicePreference(userID, devModel, req.GroupID); err != nil {
+		log.Printf("[RADIO] 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存群组偏好失败"})
+		return
+	}
 
 	// 【分平台处理】根据 dev_model 更新对应的设备群组
-	if devModel == 105 {
+	if devModel == protocol.DraARLDevModelBrowser {
 		// Web 端 (WebSocket 幽灵设备)
-		ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
-		if ok && ghostDevice != nil {
-			oldGroupID = ghostDevice.GroupID
-
+		if webGhost != nil {
 			// 1. 更新 GhostDeviceManager 中的 GroupID
 			if err := ws.GlobalGhostManager.SetGhostDeviceGroup(userID, req.GroupID); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新群组失败"})
@@ -262,43 +296,25 @@ func UpdateRadioGroup(c *gin.Context) {
 			}
 
 			// 2. 更新 WSConnectionManager 中的 WSDevice.GroupID
-			if ghostDevice.Conn != nil {
-				ws.GlobalManager.SetDeviceGroup(ghostDevice.Conn, req.GroupID)
+			if webGhost.Conn != nil {
+				ws.GlobalManager.SetDeviceGroup(webGhost.Conn, req.GroupID)
 			}
 		}
-	} else {
+	} else if udpGhostUsername != "" {
 		// UDP 幽灵设备 (101-104)
-		// 需要从 JWT 中获取 username 来查找设备
-		username, _ := c.Get("username")
-		if usernameStr, ok := username.(string); ok && usernameStr != "" {
-			// SSID 等于 DevModel（幽灵设备的 SSID 规则）
-			ssid := devModel
-			if ghostDev := udphub.GlobalUDPGhostManager.Get(usernameStr, ssid); ghostDev != nil {
-				oldGroupID = ghostDev.GroupID
-				// 更新 UDP 幽灵设备的群组
-				if err := udphub.GlobalUDPGhostManager.SetDeviceGroup(usernameStr, ssid, req.GroupID); err != nil {
-					log.Printf("[RADIO] 警告: 更新 UDP 幽灵设备群组失败: %v", err)
-				}
-			}
+		// SSID 等于 DevModel（幽灵设备的 SSID 规则）
+		if err := udphub.GlobalUDPGhostManager.SetDeviceGroup(udpGhostUsername, devModel, req.GroupID); err != nil {
+			log.Printf("[RADIO] 警告: 更新 UDP 幽灵设备群组失败: %v", err)
 		}
 	}
 
-	// 【持久化】保存分平台群组偏好到 user_device_preferences 表
-	userRepo := gormdb.NewUserRepository()
-	if err := userRepo.UpsertUserDevicePreference(userID, devModel, req.GroupID); err != nil {
-		log.Printf("[RADIO] 警告: 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
-		// 不影响响应，群组切换已成功
+	if devModel != protocol.DraARLDevModelBrowser {
+		routesync.PublishIdentity(userID, devModel, req.GroupID, false, false)
 	}
 
 	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 设备 %d 从群组 %d 切换到群组 %d", userID, devModel, oldGroupID, req.GroupID)
 
 	// 获取用户名用于缓存失效
-	username, _ := c.Get("username")
-	usernameStr := ""
-	if username != nil {
-		usernameStr = username.(string)
-	}
-
 	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新的群组设置
 	// 必须传入 username，否则 GetUserByName 使用的 userByNameKey 缓存不会被清除
 	if userCache := cache.GetUserCache(); userCache != nil && usernameStr != "" {
@@ -340,25 +356,25 @@ func UpdateRadioGroup(c *gin.Context) {
 // 此接口专门为 Radio 页面设计，返回包含 WS 设备的实时统计
 // 只返回用户有权限访问的群组（公开群组 + 用户已验证的私有群组）
 func GetRadioGroupStats(c *gin.Context) {
-	// 获取当前用户
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
+	userID := currentUser.ID
 
 	// 获取用户有权限访问的群组 ID 列表
-	memberRepo := gormdb.NewGroupMemberRepository()
-	members, err := memberRepo.ListGroupsByUser(userID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
-		return
-	}
-
 	// 构建用户有权限的群组 ID 集合
 	accessibleGroupIDs := make(map[int]bool)
-	for _, m := range members {
-		accessibleGroupIDs[m.GroupID] = true
+	if !isAdminUser(currentUser) {
+		memberRepo := gormdb.NewGroupMemberRepository()
+		members, err := memberRepo.ListGroupsByUser(userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
+			return
+		}
+		for _, m := range members {
+			accessibleGroupIDs[m.GroupID] = true
+		}
 	}
 
 	// 获取所有群组统计
@@ -369,7 +385,7 @@ func GetRadioGroupStats(c *gin.Context) {
 	for _, s := range allStats {
 		// 公开群组（type=1）对所有用户可见
 		// 私有群组（type=2）只对已验证用户可见
-		if s.Type == 1 || accessibleGroupIDs[s.ID] {
+		if s.Type == groupTypePublic || isAdminUser(currentUser) || s.OwnerID == userID || accessibleGroupIDs[s.ID] {
 			result = append(result, gin.H{
 				"id":                s.ID,
 				"name":              s.Name,

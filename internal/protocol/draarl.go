@@ -20,6 +20,12 @@ var forwardPacketPool = sync.Pool{
 	},
 }
 
+var routingPacketPool = sync.Pool{
+	New: func() interface{} {
+		return &DraARLv1Packet{}
+	},
+}
+
 // DraARLv1 协议版本标识
 const DraARLVersion = "DraA"
 
@@ -36,15 +42,17 @@ const (
 
 // DraARLv1 数据包类型常量
 const (
-	DraARLTypeControl       byte = 0 // 控制指令
-	DraARLTypeJWTAuth       byte = 1 // JWT 认证包
-	DraARLTypeHeartbeat     byte = 2 // 心跳包
-	DraARLTypeConfig        byte = 3 // 设备配置
-	DraARLTypeTextMessage   byte = 4 // 文本消息
-	DraARLTypeOpus16K       byte = 5 // Opus 16K 语音
-	DraARLTypeServerVoice   byte = 6 // 服务器互联语音
-	DraARLTypeATPassThrough byte = 7 // AT 透传
+	DraARLTypeJWTAuth     byte = 1 // JWT 认证包
+	DraARLTypeHeartbeat   byte = 2 // 心跳包
+	DraARLTypeConfig      byte = 3 // 设备配置
+	DraARLTypeTextMessage byte = 4 // 文本消息
+	DraARLTypeOpus16K     byte = 5 // Opus 16K 语音
 )
+
+// IsSupportedDraARLType 报告类型是否属于当前 DraARLv1 核心协议。
+func IsSupportedDraARLType(packetType byte) bool {
+	return packetType >= DraARLTypeJWTAuth && packetType <= DraARLTypeOpus16K
+}
 
 // DraARLv1 设备型号常量
 const (
@@ -118,9 +126,8 @@ const (
 
 // DraARLv1Packet DraARLv1协议数据包
 type DraARLv1Packet struct {
-	TimeStamp  time.Time
-	UDPAddrStr string
-	UDPAddr    *net.UDPAddr
+	TimeStamp time.Time
+	UDPAddr   *net.UDPAddr
 
 	// Header fields (90 bytes)
 	Version        string // 4B  - "DraA"
@@ -136,20 +143,13 @@ type DraARLv1Packet struct {
 
 	// DATA region
 	DATA []byte
-
-	// ServerVoice type specific fields (parsed from DATA)
-	OriginalUsername string // 32B - 原始发送方用户名
-	OriginalCallSign string // 32B - 原始发送方呼号
-	OriginalIP       net.IP // 4B  - 原始服务器IP
-	VoiceData        []byte // 实际语音数据
 }
 
 // NewDraARLv1Packet 创建新的 DraARLv1 数据包
 func NewDraARLv1Packet(remoteAddr *net.UDPAddr, data []byte) (*DraARLv1Packet, error) {
 	packet := &DraARLv1Packet{
-		UDPAddr:    remoteAddr,
-		UDPAddrStr: remoteAddr.String(),
-		TimeStamp:  time.Now(),
+		UDPAddr:   remoteAddr,
+		TimeStamp: time.Now(),
 	}
 
 	err := packet.Decode(data)
@@ -160,22 +160,70 @@ func NewDraARLv1Packet(remoteAddr *net.UDPAddr, data []byte) (*DraARLv1Packet, e
 	return packet, nil
 }
 
-// Decode 解码 DraARLv1 报文
-func (p *DraARLv1Packet) Decode(data []byte) error {
+// NewDraARLv1RoutingPacket 只物化路由热路径实际需要的字符串字段。
+// 返回的对象必须通过 ReleaseDraARLv1RoutingPacket 归还。
+func NewDraARLv1RoutingPacket(remoteAddr *net.UDPAddr, data []byte) (*DraARLv1Packet, error) {
+	packet := routingPacketPool.Get().(*DraARLv1Packet)
+	*packet = DraARLv1Packet{UDPAddr: remoteAddr, TimeStamp: time.Now()}
+	if err := packet.DecodeRouting(data); err != nil {
+		ReleaseDraARLv1RoutingPacket(packet)
+		return nil, err
+	}
+	return packet, nil
+}
+
+func ReleaseDraARLv1RoutingPacket(packet *DraARLv1Packet) {
+	if packet == nil {
+		return
+	}
+	*packet = DraARLv1Packet{}
+	routingPacketPool.Put(packet)
+}
+
+func (p *DraARLv1Packet) decodeEnvelope(data []byte) error {
 	if len(data) < DraARLv1HeaderSize {
 		return errors.New("packet too short, minimum 90 bytes required")
 	}
-
-	// 解析 Version (0-3)
-	p.Version = string(data[0:4])
-	if p.Version != DraARLVersion {
-		return fmt.Errorf("invalid protocol version: expected %s, got %s", DraARLVersion, p.Version)
+	if data[0] != 'D' || data[1] != 'r' || data[2] != 'a' || data[3] != 'A' {
+		return fmt.Errorf("invalid protocol version: expected %s, got %s", DraARLVersion, string(data[0:4]))
 	}
 
-	// 解析 Length (4-5)
+	p.Version = DraARLVersion
 	p.Length = binary.BigEndian.Uint16(data[4:6])
 	if int(p.Length) != len(data) {
 		return fmt.Errorf("invalid packet length: header=%d actual=%d", p.Length, len(data))
+	}
+	p.Type = data[48]
+	if !IsSupportedDraARLType(p.Type) {
+		return fmt.Errorf("unsupported packet type: %d", p.Type)
+	}
+	p.DevModel = data[49]
+	p.SSID = data[50]
+	p.DMRID = bytesToUint24(data[51:54])
+	p.Reserved = data[86:90]
+	if len(data) > DraARLv1HeaderSize {
+		p.DATA = data[DraARLv1HeaderSize:]
+	}
+	return nil
+}
+
+// DecodeRouting 解码路由所需字段。语音和文本包不解析
+// password/callsign，避免为每个实时帧构造不会使用的字符串。
+func (p *DraARLv1Packet) DecodeRouting(data []byte) error {
+	if err := p.decodeEnvelope(data); err != nil {
+		return err
+	}
+	p.Username = string(bytes.TrimRight(data[6:38], "\x00"))
+	if p.Type == DraARLTypeHeartbeat {
+		p.DevicePassword = string(bytes.TrimRight(data[38:48], "\x00"))
+	}
+	return nil
+}
+
+// Decode 解码 DraARLv1 报文
+func (p *DraARLv1Packet) Decode(data []byte) error {
+	if err := p.decodeEnvelope(data); err != nil {
+		return err
 	}
 
 	// 解析 Username (6-37)
@@ -184,38 +232,8 @@ func (p *DraARLv1Packet) Decode(data []byte) error {
 	// 解析 DevicePassword (38-47)
 	p.DevicePassword = string(bytes.TrimRight(data[38:48], "\x00"))
 
-	// 解析 Type (48)
-	p.Type = data[48]
-
-	// 解析 DevModel (49)
-	p.DevModel = data[49]
-
-	// 解析 SSID (50)
-	p.SSID = data[50]
-
-	// 解析 DMRID (51-53) - uint24 big-endian
-	p.DMRID = bytesToUint24(data[51:54])
-
 	// 解析 CallSign (54-85)
 	p.CallSign = string(bytes.TrimRight(data[54:86], "\x00"))
-
-	// 解析 Reserved (86-89)
-	p.Reserved = data[86:90]
-
-	// 解析 DATA (90+)
-	if len(data) > DraARLv1HeaderSize {
-		p.DATA = data[DraARLv1HeaderSize:]
-
-		// 如果是服务器互联语音类型，解析原始发送方信息
-		if p.Type == DraARLTypeServerVoice && len(p.DATA) >= 68 {
-			p.OriginalUsername = string(bytes.TrimRight(p.DATA[0:32], "\x00"))
-			p.OriginalCallSign = string(bytes.TrimRight(p.DATA[32:64], "\x00"))
-			p.OriginalIP = net.IP(p.DATA[64:68])
-			p.VoiceData = p.DATA[68:]
-		}
-	} else {
-		p.DATA = nil
-	}
 
 	return nil
 }
@@ -446,35 +464,6 @@ func ExtractHeartbeatMAC(data []byte) string {
 	}
 	raw := strings.TrimSpace(string(bytes.Trim(data[HeartbeatGPSPayloadSize:], "\x00")))
 	return NormalizeMAC(raw)
-}
-
-// EncodeServerVoice 编码服务器互联语音包
-func EncodeServerVoice(username, callsign string, ssid, devModel byte, dmrid uint32,
-	originalUsername, originalCallsign string, originalIP net.IP, voiceData []byte) []byte {
-	// DATA 区域前 68 字节存储原始发送方信息
-	data := make([]byte, 68+len(voiceData))
-
-	// OriginalUsername (0-31)
-	origUserBytes := []byte(originalUsername)
-	if len(origUserBytes) > 32 {
-		origUserBytes = origUserBytes[:32]
-	}
-	copy(data[0:32], origUserBytes)
-
-	// OriginalCallSign (32-63)
-	origCallBytes := []byte(originalCallsign)
-	if len(origCallBytes) > 32 {
-		origCallBytes = origCallBytes[:32]
-	}
-	copy(data[32:64], origCallBytes)
-
-	// OriginalIP (64-67)
-	copy(data[64:68], originalIP)
-
-	// VoiceData (68+)
-	copy(data[68:], voiceData)
-
-	return EncodeDraARLv1(username, "", ssid, DraARLTypeServerVoice, devModel, dmrid, callsign, data)
 }
 
 // bytesToUint24 将 3 字节转换为 uint32 (big-endian)

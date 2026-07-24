@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Box,
   Paper,
@@ -28,37 +28,30 @@ import {
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
-import ExpandMore from '@mui/icons-material/ExpandMore'
-import PersonOff from '@mui/icons-material/PersonOff'
 import Person from '@mui/icons-material/Person'
+import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import { groupService } from '../../services/group'
 import { userService } from '../../services'
-import type { Group, Device, User } from '../../types'
+import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SearchBar } from '../../components/common/SearchBar'
-import { OnlineIndicator } from '../../components/common/OnlineIndicator'
-import { GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
+import { GroupDeviceManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function AdminGroupPage() {
   const [groups, setGroups] = useState<Group[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [page, setPage] = useState(0)
-  const [rowsPerPage] = useState(10)
   const [searchKeyword, setSearchKeyword] = useState('')
-
-  // 群组设备缓存
-  const [groupDevices, setGroupDevices] = useState<Record<number, Device[]>>({})
-  const [expandedGroupId, setExpandedGroupId] = useState<number | null>(null)
 
   // 对话框状态
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [editingGroup, setEditingGroup] = useState<Group | null>(null)
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
+  const [managedGroup, setManagedGroup] = useState<Group | null>(null)
 
   // 用户详情弹窗状态
   const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
@@ -77,9 +70,7 @@ export function AdminGroupPage() {
   const [formData, setFormData] = useState({
     name: '',
     type: 1,
-    callsign: '',
     password: '',
-    allow_callsign_ssid: '',
     note: '',
     status: 1,
   })
@@ -87,26 +78,15 @@ export function AdminGroupPage() {
   const fetchGroups = async () => {
     setLoading(true)
     try {
-      const result = await groupService.getList({
-        page: page + 1,
-        page_size: rowsPerPage,
+      const items = await groupService.listAll({
+        admin: true,
         keyword: searchKeyword || undefined,
       })
-      setGroups(result.items)
+      setGroups(items)
     } catch {
       setError('获取群组列表失败')
     } finally {
       setLoading(false)
-    }
-  }
-
-  const fetchGroupDevices = async (groupId: number) => {
-    if (groupDevices[groupId]) return // 已缓存
-    try {
-      const devices = await groupService.getDevices(groupId)
-      setGroupDevices((prev) => ({ ...prev, [groupId]: devices }))
-    } catch (error) {
-      console.error('获取群组设备失败', error)
     }
   }
 
@@ -148,35 +128,29 @@ export function AdminGroupPage() {
     setSelectedUser(null)
   }
 
-  // Pagination refreshes immediately; keyword changes are handled by the debounced effect below.
+  // Reference data is loaded once; group keyword changes are handled by the debounced effect below.
   useEffect(() => {
     fetchGroups()
     loadUsers()
-  }, [page, rowsPerPage]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadUsers = async () => {
     try {
-      const data = await userService.getList()
-      setUsers(data.items || data)
+      const data = await userService.listAll()
+      setUsers(data)
     } catch (error) {
       console.error('Failed to load users:', error)
     }
   }
 
-  // Keep keyword debounce separate so page resets do not schedule a duplicate request.
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      if (page === 0) {
-        fetchGroups()
-      } else {
-        setPage(0)
-      }
+      fetchGroups()
     }, 500)
     return () => clearTimeout(timeoutId)
   }, [searchKeyword]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
-    setPage(0)
     fetchGroups()
   }
 
@@ -185,9 +159,7 @@ export function AdminGroupPage() {
     setFormData({
       name: '',
       type: 1,
-      callsign: '',
       password: '',
-      allow_callsign_ssid: '',
       note: '',
       status: 1,
     })
@@ -199,9 +171,7 @@ export function AdminGroupPage() {
     setFormData({
       name: group.name,
       type: group.type,
-      callsign: group.callsign || '',
       password: '', // 编辑时不强制回显密码
-      allow_callsign_ssid: group.allow_callsign_ssid || '',
       note: group.note || '',
       status: group.status ?? 1,
     })
@@ -232,12 +202,6 @@ export function AdminGroupPage() {
     try {
       await groupService.delete(deletingGroup.id)
       setDeleteDialogOpen(false)
-      // 清除缓存
-      setGroupDevices((prev) => {
-        const newCache = { ...prev }
-        delete newCache[deletingGroup.id]
-        return newCache
-      })
       fetchGroups()
     } catch {
       setError('删除群组失败')
@@ -278,181 +242,65 @@ export function AdminGroupPage() {
     )
   }
 
-  // 踢出设备
-  const handleKickDevice = async (groupId: number, deviceId: number, deviceName: string) => {
-    setConfirmDialog({
-      open: true,
-      title: '踢出设备',
-      message: `确定要将设备"${deviceName}"踢出群组吗？`,
-      type: 'danger',
-      onConfirm: async () => {
-        try {
-          await groupService.kickDevice(groupId, deviceId)
-          // 刷新设备列表
-          setGroupDevices((prev) => {
-            const newCache = { ...prev }
-            delete newCache[groupId]
-            return newCache
-          })
-          fetchGroupDevices(groupId)
-        } catch {
-          setError('踢出设备失败')
-        }
-      },
-    })
-  }
-
   // 渲染群组表格行
   const renderGroupRow = (group: Group) => {
-    const devices = groupDevices[group.id] || []
     const devCount = group.total_count || (group.devlist ? group.devlist.split(',').filter(Boolean).length : 0)
-    const isExpanded = expandedGroupId === group.id
 
     return (
-      <React.Fragment key={group.id}>
-        <TableRow hover>
-          <TableCell width={60}>{group.id}</TableCell>
-          <TableCell>
+      <TableRow key={group.id} hover>
+        <TableCell width={60}>{group.id}</TableCell>
+        <TableCell>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <GroupTypeIcon type={group.type} />
+            <Typography fontWeight={500}>{group.name}</Typography>
+          </Stack>
+        </TableCell>
+        <TableCell>
+          {group.ower_id ? (
             <Stack direction="row" alignItems="center" spacing={1}>
-              <GroupTypeIcon type={group.type} />
-              <Typography fontWeight={500}>{group.name}</Typography>
-            </Stack>
-          </TableCell>
-          <TableCell>
-            {group.callsign || '-'}
-          </TableCell>
-          <TableCell>
-            {group.ower_id ? (
               <Stack
                 direction="row"
                 alignItems="center"
                 spacing={1}
                 sx={{
                   cursor: 'pointer',
-                  '&:hover .owner-text': {
-                    color: 'primary.main',
-                    textDecoration: 'underline',
-                  },
+                  '&:hover .owner-text': { color: 'primary.main', textDecoration: 'underline' },
                 }}
-                onClick={(e) => handleOpenUserDetail(e, group.ower_id!)}
+                onClick={(event) => handleOpenUserDetail(event, group.ower_id!)}
               >
                 <Person color="primary" fontSize="small" />
                 <Typography className="owner-text" variant="body2">
                   {getUserInfo(group.ower_id)?.username || getUserInfo(group.ower_id)?.callsign || group.ower_callsign || '-'}
                 </Typography>
               </Stack>
-            ) : (
-              group.ower_name || group.ower_callsign || '-'
-            )}
-          </TableCell>
-          <TableCell>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography>
-                {group.online_count ?? 0}/{group.total_count ?? devCount}
-              </Typography>
-              <IconButton
-                size="small"
-                onClick={() => {
-                  if (isExpanded) {
-                    setExpandedGroupId(null)
-                  } else {
-                    setExpandedGroupId(group.id)
-                    fetchGroupDevices(group.id)
-                  }
-                }}
-              >
-                <ExpandMore fontSize="small" sx={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-              </IconButton>
             </Stack>
-          </TableCell>
-          <TableCell>{renderStatusSwitch(group)}</TableCell>
-          <TableCell>
-            <Typography
-              sx={{
-                maxWidth: 150,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {group.note || '-'}
-            </Typography>
-          </TableCell>
-          <TableCell align="right" width={120}>
-            <Tooltip title="编辑">
-              <IconButton
-                size="small"
-                onClick={() => handleOpenEdit(group)}
-              >
-                <Edit fontSize="small" />
+          ) : (group.ower_name || group.ower_callsign || '-')}
+        </TableCell>
+        <TableCell>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <Typography>{group.online_count ?? 0}/{group.total_count ?? devCount}</Typography>
+            <Tooltip title="管理设备">
+              <IconButton size="small" onClick={() => setManagedGroup(group)}>
+                <SettingsInputAntenna fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="删除">
-              <IconButton
-                size="small"
-                color="error"
-                onClick={() => handleOpenDelete(group)}
-              >
-                <Delete fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </TableCell>
-        </TableRow>
-
-        {/* 设备详情展开行 */}
-        {isExpanded && (
-          <TableRow>
-            <TableCell colSpan={8} sx={{ pb: 2, pt: 1, bgcolor: 'grey.50' }}>
-              <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
-                设备列表 ({devices.length})
-              </Typography>
-              {devices.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">暂无设备</Typography>
-              ) : (
-                <Stack spacing={1}>
-                  {devices.map((device) => (
-                    <Stack
-                      key={device.id}
-                      direction="row"
-                      alignItems="center"
-                      justifyContent="space-between"
-                      sx={{
-                        p: 1.5,
-                        bgcolor: 'background.paper',
-                        borderRadius: 1,
-                      }}
-                    >
-                      <Stack direction="row" alignItems="center" spacing={2}>
-                        <OnlineIndicator online={device.is_online || device.online || false} />
-                        <Typography variant="body2" fontWeight={500}>
-                          {device.name}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {device.callsign}-{device.ssid}
-                        </Typography>
-                      </Stack>
-                      <Stack direction="row" alignItems="center" spacing={1}>
-                        <Typography variant="caption" color="text.secondary">
-                          发:{device.disable_send ? '禁用' : '正常'} / 收:{device.disable_recv ? '禁用' : '正常'}
-                        </Typography>
-                        <Tooltip title="踢出设备">
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={() => handleKickDevice(group.id, device.id!, device.name)}
-                          >
-                            <PersonOff fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
-                    </Stack>
-                  ))}
-                </Stack>
-              )}
-            </TableCell>
-          </TableRow>
-        )}
-      </React.Fragment>
+          </Stack>
+        </TableCell>
+        <TableCell>{renderStatusSwitch(group)}</TableCell>
+        <TableCell>
+          <Typography sx={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {group.note || '-'}
+          </Typography>
+        </TableCell>
+        <TableCell align="right" width={120}>
+          <Tooltip title="编辑">
+            <IconButton size="small" onClick={() => handleOpenEdit(group)}><Edit fontSize="small" /></IconButton>
+          </Tooltip>
+          <Tooltip title="删除">
+            <IconButton size="small" color="error" onClick={() => handleOpenDelete(group)}><Delete fontSize="small" /></IconButton>
+          </Tooltip>
+        </TableCell>
+      </TableRow>
     )
   }
 
@@ -490,7 +338,7 @@ export function AdminGroupPage() {
           value={searchKeyword}
           onChange={setSearchKeyword}
           onSearch={handleSearch}
-          placeholder="搜索群组名称、呼号..."
+          placeholder="搜索群组 ID 或名称..."
           loading={loading}
           fullWidth
         />
@@ -511,7 +359,6 @@ export function AdminGroupPage() {
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
                 <TableCell>群组名称</TableCell>
-                <TableCell>呼号</TableCell>
                 <TableCell width={100}>拥有者</TableCell>
                 <TableCell width={120}>设备数量</TableCell>
                 <TableCell width={100}>状态</TableCell>
@@ -521,9 +368,9 @@ export function AdminGroupPage() {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
               ) : publicGroups.length === 0 ? (
-                <TableRow><TableCell colSpan={8} align="center">暂无公开群组</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">暂无公开群组</TableCell></TableRow>
               ) : (
                 publicGroups.map(renderGroupRow)
               )}
@@ -547,7 +394,6 @@ export function AdminGroupPage() {
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
                 <TableCell>群组名称</TableCell>
-                <TableCell>呼号</TableCell>
                 <TableCell width={100}>拥有者</TableCell>
                 <TableCell width={120}>设备数量</TableCell>
                 <TableCell width={100}>状态</TableCell>
@@ -557,9 +403,9 @@ export function AdminGroupPage() {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={8} align="center">加载中...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">加载中...</TableCell></TableRow>
               ) : privateGroups.length === 0 ? (
-                <TableRow><TableCell colSpan={8} align="center">暂无私有群组</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} align="center">暂无私有群组</TableCell></TableRow>
               ) : (
                 privateGroups.map(renderGroupRow)
               )}
@@ -600,13 +446,6 @@ export function AdminGroupPage() {
                 </MenuItem>
               </Select>
             </FormControl>
-            <TextField
-              label="呼号"
-              fullWidth
-              value={formData.callsign}
-              onChange={(e) => setFormData({ ...formData, callsign: e.target.value })}
-            />
-
             {/* 修改点：只有私有群组才显示密码输入框 */}
             {formData.type === GROUP_TYPE_PRIVATE && (
               <TextField
@@ -618,13 +457,6 @@ export function AdminGroupPage() {
               />
             )}
 
-            <TextField
-              label="允许呼号SSID"
-              fullWidth
-              value={formData.allow_callsign_ssid}
-              onChange={(e) => setFormData({ ...formData, allow_callsign_ssid: e.target.value })}
-              placeholder="例: BG5XXX-0,BG5XXX-1"
-            />
             <TextField
               label="备注"
               fullWidth
@@ -658,6 +490,13 @@ export function AdminGroupPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <GroupDeviceManagementDialog
+        open={Boolean(managedGroup)}
+        group={managedGroup}
+        onClose={() => setManagedGroup(null)}
+        onChanged={() => void fetchGroups()}
+      />
 
       {/* 用户详情弹窗 */}
       <UserDetailPopover

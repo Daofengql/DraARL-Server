@@ -1,11 +1,44 @@
 package udphub
 
 import (
+	"bytes"
 	"testing"
+	"time"
 
 	"draarl/internal/models"
 	"draarl/internal/protocol"
 )
+
+func TestSendConfigToRemoteDeviceUsesInterconnectHookWithoutUDPAddress(t *testing.T) {
+	oldHooks := centerHooks()
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+	var delivered []byte
+	SetCenterInterconnectHooks(CenterInterconnectHooks{SendConfig: func(deviceID int, packet []byte, timeout time.Duration) (bool, error) {
+		if deviceID != 77 {
+			t.Fatalf("deviceID = %d, want 77", deviceID)
+		}
+		if timeout <= 0 {
+			t.Fatal("remote config delivery has no timeout")
+		}
+		delivered = append([]byte(nil), packet...)
+		return true, nil
+	}})
+	dev := &models.Device{ID: 77, Username: "alice", CallSign: "BG5CFG", SSID: 1, DevModel: protocol.DraARLDevModelESP32NoRadio, ISOnline: true}
+	if err := sendConfigToDevice(dev, map[string]string{ConfigKeyADCVolume: "42"}); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := protocol.NewDraARLv1Packet(nil, delivered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Type != protocol.DraARLTypeConfig || decoded.Username != dev.Username || decoded.CallSign != dev.CallSign || decoded.SSID != dev.SSID {
+		t.Fatalf("unexpected config identity: %#v", decoded)
+	}
+	want := buildConfigSetPacket(map[string]string{ConfigKeyADCVolume: "42"})
+	if !bytes.Equal(decoded.DATA, want) {
+		t.Fatalf("DATA = %v, want %v", decoded.DATA, want)
+	}
+}
 
 func TestNormalizeDeviceConfigsDoesNotHydrateNewToneFieldsFromLegacyOnly(t *testing.T) {
 	configs := NormalizeDeviceConfigs(map[string]string{

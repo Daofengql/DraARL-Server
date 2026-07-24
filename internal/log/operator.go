@@ -10,13 +10,13 @@ import (
 
 // OperatorLog 操作日志
 type OperatorLog struct {
-	ID        int       `json:"id"`
-	UserID    int       `json:"user_id"`
-	UserName  string    `json:"user_name"`
-	CallSign  string    `json:"callsign"`
-	Content   string    `json:"content"`
-	Operation string    `json:"operation"`
-	IPAddress string    `json:"ip_address"`
+	ID         int       `json:"id"`
+	UserID     int       `json:"user_id"`
+	UserName   string    `json:"user_name"`
+	CallSign   string    `json:"callsign"`
+	Content    string    `json:"content"`
+	Operation  string    `json:"operation"`
+	IPAddress  string    `json:"ip_address"`
 	CreateTime time.Time `json:"create_time"`
 }
 
@@ -38,12 +38,12 @@ func Start() {
 // AddLog 添加操作日志
 func AddLog(content, operation string, userID int, userName, callSign, ipAddress string) {
 	logEntry := &OperatorLog{
-		UserID:    userID,
-		UserName:  userName,
-		CallSign:  callSign,
-		Content:   content,
-		Operation: operation,
-		IPAddress: ipAddress,
+		UserID:     userID,
+		UserName:   userName,
+		CallSign:   callSign,
+		Content:    content,
+		Operation:  operation,
+		IPAddress:  ipAddress,
 		CreateTime: time.Now(),
 	}
 
@@ -84,6 +84,7 @@ func processLogBuffer() {
 				Operator:   logEntry.UserName + "-" + logEntry.CallSign,
 				OperatorID: logEntry.UserID,
 				Timestamp:  logEntry.CreateTime,
+				IPAddress:  logEntry.IPAddress,
 			}
 			batch = append(batch, dbLog)
 			if len(batch) >= 50 {
@@ -120,9 +121,10 @@ func writeLog(logEntry *OperatorLog) {
 		Operator:   logEntry.UserName + "-" + logEntry.CallSign,
 		OperatorID: logEntry.UserID,
 		Timestamp:  logEntry.CreateTime,
+		IPAddress:  logEntry.IPAddress,
 	}
 
-	if err := repo.AddOperatorLog(dbLog.Content, dbLog.EventType, dbLog.Operator, dbLog.OperatorID); err != nil {
+	if err := repo.CreateLog(dbLog); err != nil {
 		log.Printf("Write operator log failed: %v", err)
 	}
 	// 审计日志只写入数据库，不在命令行打印
@@ -143,6 +145,7 @@ func QueryLogs(userID int, page, limit int, operation string) ([]*OperatorLog, i
 			Operation:  dbLog.EventType,
 			UserID:     dbLog.OperatorID,
 			CreateTime: dbLog.Timestamp,
+			IPAddress:  dbLog.IPAddress,
 		}
 		logs = append(logs, log)
 	}
@@ -175,6 +178,7 @@ func Flush() {
 				Operator:   logEntry.UserName + "-" + logEntry.CallSign,
 				OperatorID: logEntry.UserID,
 				Timestamp:  logEntry.CreateTime,
+				IPAddress:  logEntry.IPAddress,
 			}
 			batch = append(batch, dbLog)
 		default:

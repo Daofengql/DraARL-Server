@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -11,33 +12,40 @@ const rateLimitShardCount = 32
 
 type rateLimitShard struct {
 	mu      sync.Mutex
-	entries map[string]*rateLimitEntry
+	entries map[rateLimitKey]*rateLimitEntry
+}
+
+type rateLimitKey struct {
+	addr netip.Addr
+	port uint16
 }
 
 var rateLimitShards [rateLimitShardCount]rateLimitShard
 
 func init() {
 	for i := 0; i < rateLimitShardCount; i++ {
-		rateLimitShards[i].entries = make(map[string]*rateLimitEntry)
+		rateLimitShards[i].entries = make(map[rateLimitKey]*rateLimitEntry)
 	}
 }
 
-func rateLimitShardIndex(addr string) int {
-	return int(fnv32String(addr) & (rateLimitShardCount - 1))
+func rateLimitShardIndex(key rateLimitKey) int {
+	return int(hashAddrPort(netip.AddrPortFrom(key.addr, key.port)) & (rateLimitShardCount - 1))
 }
 
 // checkRateLimit 检查 IP 粗限速和 IP+Port 细限速。
 // 返回 true 表示允许通过，false 表示超限应丢弃。
-func checkRateLimit(addr string) bool {
-	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
-		if !checkRateLimitKey("ip:"+host, rateLimitMaxPps*4) {
-			return false
-		}
+func checkRateLimit(addr *net.UDPAddr) bool {
+	ap, ok := udpAddrPort(addr)
+	if !ok {
+		return true
 	}
-	return checkRateLimitKey("addr:"+addr, rateLimitMaxPps)
+	if !checkRateLimitKey(rateLimitKey{addr: ap.Addr()}, rateLimitMaxPps*4) {
+		return false
+	}
+	return checkRateLimitKey(rateLimitKey{addr: ap.Addr(), port: ap.Port()}, rateLimitMaxPps)
 }
 
-func checkRateLimitKey(key string, maxPPS int) bool {
+func checkRateLimitKey(key rateLimitKey, maxPPS int) bool {
 	now := time.Now().Unix()
 	shard := &rateLimitShards[rateLimitShardIndex(key)]
 

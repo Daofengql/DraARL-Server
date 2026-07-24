@@ -27,6 +27,7 @@ const EVENT_TYPES = [
   { value: '', label: '全部' },
   { value: 'login', label: '登录' },
   { value: 'logout', label: '登出' },
+  { value: 'admin_switch_login', label: '管理员切换登录' },
   { value: 'login_failed', label: '登录失败' },
   { value: 'register', label: '注册' },
   { value: 'user_create', label: '创建用户' },
@@ -58,12 +59,14 @@ const EVENT_TYPES = [
   { value: 'comm_record_delete', label: '删除通信记录' },
   { value: 'cache_clear_all', label: '清空缓存' },
   { value: 'cache_metrics_reset', label: '重置缓存指标' },
+  { value: 'edge_node_delete', label: '删除边缘节点' },
   { value: 'system', label: '系统' },
 ]
 
 const EVENT_TYPE_COLORS: Record<string, any> = {
   login: 'info',
   logout: 'default',
+  admin_switch_login: 'warning',
   login_failed: 'error',
   register: 'success',
   user_create: 'success',
@@ -95,6 +98,7 @@ const EVENT_TYPE_COLORS: Record<string, any> = {
   comm_record_delete: 'warning',
   cache_clear_all: 'warning',
   cache_metrics_reset: 'info',
+  edge_node_delete: 'error',
   system: 'primary',
 }
 

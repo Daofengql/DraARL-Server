@@ -1,7 +1,6 @@
 package gormdb
 
 import (
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -202,9 +201,6 @@ func (r *OperatorCertRepository) ApproveCert(certID int, reviewerID int, note st
 			}
 			if !available {
 				return ErrCallSignConflict
-			}
-			if err := rewriteGroupAllowCallSignSSID(tx, oldCallSign, newCallSign); err != nil {
-				return err
 			}
 		}
 
@@ -559,50 +555,4 @@ func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, off
 	}
 
 	return result, total, nil
-}
-
-func rewriteGroupAllowCallSignSSID(tx *gorm.DB, oldCallSign, newCallSign string) error {
-	oldCallSign = NormalizeCallSign(oldCallSign)
-	newCallSign = NormalizeCallSign(newCallSign)
-	if oldCallSign == "" || newCallSign == "" || oldCallSign == newCallSign {
-		return nil
-	}
-
-	var groups []Group
-	if err := tx.Where("allow_callsign_ssid <> ''").Find(&groups).Error; err != nil {
-		return err
-	}
-
-	for _, group := range groups {
-		rewritten, changed := rewriteAllowCallSignSSIDValue(group.AllowCallSignSSID, oldCallSign, newCallSign)
-		if !changed {
-			continue
-		}
-		if err := tx.Model(&Group{}).Where("id = ?", group.ID).Update("allow_callsign_ssid", rewritten).Error; err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func rewriteAllowCallSignSSIDValue(raw, oldCallSign, newCallSign string) (string, bool) {
-	if raw == "" {
-		return raw, false
-	}
-
-	oldPrefix := oldCallSign + "-"
-	parts := strings.Split(raw, ",")
-	changed := false
-	for i, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if strings.HasPrefix(trimmed, oldPrefix) {
-			parts[i] = newCallSign + trimmed[len(oldCallSign):]
-			changed = true
-			continue
-		}
-		parts[i] = trimmed
-	}
-
-	return strings.Join(parts, ","), changed
 }

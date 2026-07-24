@@ -68,6 +68,7 @@ export function GroupLinkPage() {
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
   const [linkedTargets, setLinkedTargets] = useState<GroupLinkTarget[]>([])
   const [selectedTargets, setSelectedTargets] = useState<number[]>([])
+  const [targetSearch, setTargetSearch] = useState('')
   const [linkWarning, setLinkWarning] = useState<string | null>(null)
 
   // 确认对话框
@@ -201,6 +202,7 @@ export function GroupLinkPage() {
     setLinkWarning(null)
     await Promise.all([fetchAvailableGroups(), fetchLinkedTargets(vg.id)])
     setSelectedTargets([])
+    setTargetSearch('')
     setLinkDialogOpen(true)
   }
 
@@ -268,6 +270,13 @@ export function GroupLinkPage() {
   const unlinkedGroups = availableGroups.filter(
     g => !linkedTargets.some(t => t.target_group_id === g.id)
   )
+  const normalizedTargetSearch = targetSearch.trim().toLowerCase()
+  const filteredUnlinkedGroups = normalizedTargetSearch
+    ? unlinkedGroups.filter(group =>
+        String(group.id).includes(normalizedTargetSearch) ||
+        group.name.toLowerCase().includes(normalizedTargetSearch)
+      )
+    : []
 
   return (
     <Box sx={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
@@ -514,12 +523,13 @@ export function GroupLinkPage() {
             </Alert>
           )}
 
-          <Stack direction="row" spacing={2} sx={{ height: 400 }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ height: { xs: 'auto', md: 360 } }}>
             {/* 左侧：已关联的群组 */}
-            <Card sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <Card variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
               <CardHeader
                 title={`已关联群组 (${linkedTargets.length})`}
-                sx={{ pb: 1 }}
+                titleTypographyProps={{ variant: 'subtitle2' }}
+                sx={{ py: 1, px: 1.5 }}
               />
               <Divider />
               <List dense sx={{ flex: 1, overflow: 'auto' }}>
@@ -546,9 +556,9 @@ export function GroupLinkPage() {
                         </IconButton>
                       }
                     >
-                      <ListItemButton sx={{ pr: 6 }}>
-                        <ListItemIcon>
-                          <GroupIcon color="primary" />
+                      <ListItemButton dense sx={{ pr: 6, py: 0.25 }}>
+                        <ListItemIcon sx={{ minWidth: 34 }}>
+                          <GroupIcon color="primary" fontSize="small" />
                         </ListItemIcon>
                         <ListItemText
                           primary={target.target_group_name}
@@ -562,10 +572,11 @@ export function GroupLinkPage() {
             </Card>
 
             {/* 右侧：可添加的群组 */}
-            <Card sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <Card variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
               <CardHeader
                 title={`可添加的群组 (${unlinkedGroups.length})`}
-                sx={{ pb: 1 }}
+                titleTypographyProps={{ variant: 'subtitle2' }}
+                sx={{ py: 1, px: 1.5 }}
                 action={
                   selectedTargets.length > 0 && (
                     <Button
@@ -580,6 +591,39 @@ export function GroupLinkPage() {
                 }
               />
               <Divider />
+              <Box sx={{ p: 1 }}>
+                <TextField
+                  value={targetSearch}
+                  onChange={(event) => setTargetSearch(event.target.value)}
+                  size="small"
+                  fullWidth
+                  autoFocus
+                  placeholder="输入群组 ID 或名称"
+                />
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    {normalizedTargetSearch
+                      ? '匹配 ' + filteredUnlinkedGroups.length + ' 个'
+                      : '输入关键词后显示候选'}
+                  </Typography>
+                  <Stack direction="row" spacing={0.5}>
+                    <Button
+                      size="small"
+                      onClick={() => setSelectedTargets(prev => Array.from(new Set([
+                        ...prev,
+                        ...filteredUnlinkedGroups.map(group => group.id),
+                      ])))}
+                      disabled={filteredUnlinkedGroups.length === 0}
+                    >
+                      全选结果
+                    </Button>
+                    <Button size="small" onClick={() => setSelectedTargets([])} disabled={selectedTargets.length === 0}>
+                      清空
+                    </Button>
+                  </Stack>
+                </Stack>
+              </Box>
+              <Divider />
               <List dense sx={{ flex: 1, overflow: 'auto' }}>
                 {unlinkedGroups.length === 0 ? (
                   <ListItem>
@@ -588,17 +632,32 @@ export function GroupLinkPage() {
                       secondaryTypographyProps={{ align: 'center' }}
                     />
                   </ListItem>
+                ) : !normalizedTargetSearch ? (
+                  <ListItem>
+                    <ListItemText
+                      secondary="输入关键词以查找候选群组"
+                      secondaryTypographyProps={{ align: 'center' }}
+                    />
+                  </ListItem>
+                ) : filteredUnlinkedGroups.length === 0 ? (
+                  <ListItem>
+                    <ListItemText
+                      secondary="没有匹配的群组"
+                      secondaryTypographyProps={{ align: 'center' }}
+                    />
+                  </ListItem>
                 ) : (
-                  unlinkedGroups.map((group) => (
+                  filteredUnlinkedGroups.map((group) => (
                     <ListItem
                       key={group.id}
                       disablePadding
                     >
                       <ListItemButton
                         dense
+                        sx={{ py: 0.25 }}
                         onClick={() => handleToggleTarget(group.id)}
                       >
-                        <ListItemIcon>
+                        <ListItemIcon sx={{ minWidth: 34 }}>
                           <Checkbox
                             edge="start"
                             checked={selectedTargets.includes(group.id)}

@@ -8,10 +8,32 @@ import (
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	"github.com/gin-gonic/gin"
 )
+
+func canUseGroupAsLinkTarget(group *gormdb.Group) bool {
+	return group != nil &&
+		group.Status == 1 &&
+		!group.IsVirtual &&
+		isSupportedGroupType(group.Type)
+}
+
+func filterAvailableGroupLinkTargets(groups []*gormdb.Group, occupied map[int]struct{}) []*gormdb.Group {
+	available := make([]*gormdb.Group, 0, len(groups))
+	for _, group := range groups {
+		if !canUseGroupAsLinkTarget(group) {
+			continue
+		}
+		if _, exists := occupied[group.ID]; exists {
+			continue
+		}
+		available = append(available, group)
+	}
+	return available
+}
 
 // CreateVirtualGroupRequest 创建虚拟互联组请求
 type CreateVirtualGroupRequest struct {
@@ -322,6 +344,7 @@ func UpdateVirtualGroup(c *gin.Context) {
 	// 通知 udphub 刷新群组缓存和互联路由缓存
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache() // 状态变更后立即刷新互联路由，确保转发立刻生效
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -393,17 +416,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 		return
 	}
 
-	// 删除所有关联关系
-	linkRepo := gormdb.NewGroupLinkRepository()
-	if err := linkRepo.DeleteLinksByLinkGroup(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "删除关联关系失败",
-		})
-		return
-	}
-
-	// 删除群组
+	// 群组和全部关联关系由同一仓库事务删除，不能先在事务外删除关联。
 	if err := repo.DeleteGroupWithCascade(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -421,6 +434,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 	// 通知 udphub 刷新群组缓存和互联缓存
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -554,7 +568,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 		return
 	}
 
-	// 验证目标群组是否存在且不是虚拟组
+	// 写入端必须独立校验目标，不能依赖候选列表阻止非法 ID 直提。
 	targetGroup, err := groupRepo.GetGroupByID(req.TargetGroupID)
 	if err != nil || targetGroup == nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -563,10 +577,10 @@ func AddGroupLinkTarget(c *gin.Context) {
 		})
 		return
 	}
-	if targetGroup.IsVirtual {
+	if !canUseGroupAsLinkTarget(targetGroup) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "不能关联另一个虚拟互联组",
+			"message": "只能关联已启用的公开或私有实体群组",
 		})
 		return
 	}
@@ -626,6 +640,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 
 	// 通知 udphub 刷新互联缓存
 	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -713,6 +728,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 通知 udphub 刷新互联缓存
 	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -730,8 +746,9 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 	})
 }
 
-// GetAvailableTargetGroups 获取可关联的群组列表（仅管理员）
-// 返回所有非虚拟的公开群组，供管理员选择关联
+// GetAvailableTargetGroups 获取可关联的群组列表（仅管理员）。
+// 已启用的公开和私有实体群组都可以作为互联目标；禁用、虚拟和已经被其他
+// 互联组占用的实体群组不会返回。
 func GetAvailableTargetGroups(c *gin.Context) {
 	// 获取当前登录用户
 	username, _ := c.Get("username")
@@ -754,9 +771,9 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		return
 	}
 
-	// 获取所有公开群组（非虚拟）
+	// 获取所有已启用实体群组（公开 + 私有，排除虚拟互联组）。
 	repo := gormdb.NewGroupRepository()
-	groups, err := repo.ListPublicGroups()
+	groups, err := repo.ListGroupsExcludeVirtual()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -780,17 +797,7 @@ func GetAvailableTargetGroups(c *gin.Context) {
 		linkedTargetSet[id] = struct{}{}
 	}
 
-	// 过滤掉虚拟组和已被占用的实体组
-	availableGroups := make([]*gormdb.Group, 0)
-	for _, g := range groups {
-		if g.IsVirtual {
-			continue
-		}
-		if _, occupied := linkedTargetSet[g.ID]; occupied {
-			continue
-		}
-		availableGroups = append(availableGroups, g)
-	}
+	availableGroups := filterAvailableGroupLinkTargets(groups, linkedTargetSet)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,

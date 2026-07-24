@@ -63,7 +63,7 @@ func commRecordWorker() {
 }
 
 func enqueueCommRecord(deviceID int, deviceSSID uint8, groupID *uint, userID *uint, audioData []byte) {
-	if globalCommRecorder == nil || !globalCommRecorder.running || globalCommRecorder.config == nil || !globalCommRecorder.config.Enabled {
+	if globalCommRecorder == nil || !globalCommRecorder.canRecord() {
 		return
 	}
 	ensureCommRecordWorker()

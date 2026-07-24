@@ -3,6 +3,7 @@ package gormdb
 import (
 	"errors"
 
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -38,7 +39,7 @@ func (r *GroupLinkRepository) AddLink(linkGroupID, targetGroupID int) error {
 		LinkGroupID:   linkGroupID,
 		TargetGroupID: targetGroupID,
 	}
-	return r.db.Create(link).Error
+	return normalizeGroupLinkWriteError(r.db.Create(link).Error)
 }
 
 // RemoveLink 移除互联关系
@@ -153,14 +154,50 @@ func (r *GroupLinkRepository) BatchAddLinks(linkGroupID int, targetGroupIDs []in
 	if len(targetGroupIDs) == 0 {
 		return nil
 	}
-	links := make([]*GroupLink, len(targetGroupIDs))
-	for i, targetID := range targetGroupIDs {
-		links[i] = &GroupLink{
-			LinkGroupID:   linkGroupID,
-			TargetGroupID: targetID,
+
+	// 去重后在一个事务中先检查跨互联组冲突，再统一写入。数据库模型上的
+	// target_group_id 唯一索引负责兜住并发写入，避免批量接口绕过 AddLink 的约束。
+	uniqueTargetIDs := make([]int, 0, len(targetGroupIDs))
+	seen := make(map[int]struct{}, len(targetGroupIDs))
+	for _, targetID := range targetGroupIDs {
+		if _, exists := seen[targetID]; exists {
+			continue
 		}
+		seen[targetID] = struct{}{}
+		uniqueTargetIDs = append(uniqueTargetIDs, targetID)
 	}
-	return r.db.CreateInBatches(links, 100).Error
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var conflictCount int64
+		if err := tx.Model(&GroupLink{}).
+			Where("target_group_id IN ? AND link_group_id <> ?", uniqueTargetIDs, linkGroupID).
+			Count(&conflictCount).Error; err != nil {
+			return err
+		}
+		if conflictCount > 0 {
+			return ErrTargetGroupAlreadyLinked
+		}
+
+		links := make([]*GroupLink, len(uniqueTargetIDs))
+		for i, targetID := range uniqueTargetIDs {
+			links[i] = &GroupLink{
+				LinkGroupID:   linkGroupID,
+				TargetGroupID: targetID,
+			}
+		}
+		return normalizeGroupLinkWriteError(tx.CreateInBatches(links, 100).Error)
+	})
+}
+
+func normalizeGroupLinkWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		return ErrTargetGroupAlreadyLinked
+	}
+	return err
 }
 
 // GetLinkGroupsForTarget 获取目标群组所属的所有互联组详情

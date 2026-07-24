@@ -15,6 +15,10 @@ import {
   Stack,
   Tooltip,
   IconButton,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material'
 import Delete from '@mui/icons-material/Delete'
 import Lock from '@mui/icons-material/Lock'
@@ -47,6 +51,8 @@ export function DevicesPage() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [defaultGroupId, setDefaultGroupId] = useState<number | ''>('')
+  const [savingDefaultGroup, setSavingDefaultGroup] = useState(false)
 
   // 切换群组对话框状态
   const [switchDialogOpen, setSwitchDialogOpen] = useState(false)
@@ -78,6 +84,7 @@ export function DevicesPage() {
   useEffect(() => {
     loadDevices()
     loadGroups()
+    loadDefaultGroup()
   }, [])
 
   const loadDevices = async () => {
@@ -98,6 +105,28 @@ export function DevicesPage() {
       setGroups(data)
     } catch (err) {
       console.error('Failed to load groups:', err)
+    }
+  }
+
+  const loadDefaultGroup = async () => {
+    try {
+      const groupId = await deviceService.getDefaultGroup()
+      setDefaultGroupId(groupId ?? '')
+    } catch (err) {
+      console.error('Failed to load device default group:', err)
+    }
+  }
+
+  const handleDefaultGroupChange = async (value: number | '') => {
+    setSavingDefaultGroup(true)
+    setError('')
+    try {
+      const saved = await deviceService.setDefaultGroup(value === '' ? null : value)
+      setDefaultGroupId(saved ?? '')
+    } catch (err: any) {
+      setError(err.response?.data?.message || '保存新设备默认群组失败')
+    } finally {
+      setSavingDefaultGroup(false)
     }
   }
 
@@ -229,6 +258,31 @@ export function DevicesPage() {
       />
 
       <Paper sx={{ mb: 2, p: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
+          <FormControl size="small" sx={{ minWidth: 280 }}>
+            <InputLabel id="device-default-group-label">新设备默认群组</InputLabel>
+            <Select
+              labelId="device-default-group-label"
+              label="新设备默认群组"
+              value={defaultGroupId}
+              disabled={savingDefaultGroup}
+              onChange={(event) => handleDefaultGroupChange(String(event.target.value) === '' ? '' : Number(event.target.value))}
+            >
+              <MenuItem value="">未设置（只登记，不参与转发）</MenuItem>
+              {groups.filter(group => group.status === undefined || group.status === 1).map((group) => (
+                <MenuItem key={group.id} value={group.id}>
+                  {group.name}（{group.id}）
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Typography variant="body2" color="text.secondary">
+            仅影响之后首次登记的设备；单台设备切换群组后以设备自己的设置为准。
+          </Typography>
+        </Stack>
+      </Paper>
+
+      <Paper sx={{ mb: 2, p: 2 }}>
         <SearchBar
           value={searchKeyword}
           onChange={setSearchKeyword}
@@ -240,7 +294,7 @@ export function DevicesPage() {
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 800, tableLayout: 'fixed' }}>
+        <Table sx={{ minWidth: 920, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
               <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
@@ -248,6 +302,7 @@ export function DevicesPage() {
               <TableCell align="center">设备类型</TableCell>
               <TableCell align="center">呼号-SSID</TableCell>
               <TableCell align="center">最新上线IP</TableCell>
+              <TableCell align="center">入口服务器</TableCell>
               <TableCell align="center">所在群组</TableCell>
               <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
               <TableCell align="center" sx={{ width: 120 }}>操作</TableCell>
@@ -256,13 +311,13 @@ export function DevicesPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={9} align="center">
                   加载中...
                 </TableCell>
               </TableRow>
             ) : paginatedDevices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} align="center">
+                <TableCell colSpan={9} align="center">
                   暂无设备数据
                 </TableCell>
               </TableRow>
@@ -296,13 +351,21 @@ export function DevicesPage() {
                       )}
                     </TableCell>
                     <TableCell align="center">
+                      <Typography variant="body2">{device.entry_node_name || '-'}</Typography>
+                      {device.entry_node_name && (
+                        <Typography variant="caption" color="text.secondary">
+                          {device.is_online ? '当前入口' : '最近入口'}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell align="center">
                       <Button
                         size="small"
                         variant="outlined"
                         onClick={() => handleOpenSwitchDialog(device)}
                         endIcon={group?.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
                       >
-                        {group?.name || '无群组'}
+                        {group?.name || (device.group_id === 0 ? '未分组' : '群组 ' + device.group_id + ' 不可用')}
                       </Button>
                     </TableCell>
                     <TableCell align="center">

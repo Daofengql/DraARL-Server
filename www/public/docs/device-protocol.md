@@ -100,14 +100,11 @@
 
 | 值 | 常量名 | 说明 | DATA 内容 |
 |----|--------|------|-----------|
-| 0 | TypeControl | 控制指令 | 控制命令数据 |
 | 1 | TypeJWTAuth | JWT 认证 | JWT Token 字符串 |
 | 2 | TypeHeartbeat | 心跳包 | 可选携带 GPS 位置信息，并可在 DATA 末尾追加 MAC |
 | 3 | TypeConfig | 设备配置 | TLV 格式配置数据（见下方「Config 包协议」章节）|
 | 4 | TypeTextMessage | 文本消息 | UTF-8 编码文本 |
 | 5 | TypeOpus16K | Opus 16K 语音 | Opus 16kHz 编码语音帧 |
-| 6 | TypeServerVoice | 服务器互联语音 | 服务器间转发的语音数据 |
-| 7 | TypeATPassThrough | AT 透传 | AT 命令透传 |
 
 ---
 

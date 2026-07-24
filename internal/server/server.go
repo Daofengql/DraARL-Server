@@ -65,6 +65,9 @@ func New(cfg *config.Configuration) *Server {
 func (s *Server) setupRoutes() {
 	// 前端静态文件服务（根据编译标签选择嵌入模式或磁盘模式）
 	setupFrontend(s.engine, s.config)
+	s.engine.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	// 本地存储文件服务
 	s.engine.GET("/files/*key", handler.ServeLocalFile)
@@ -117,7 +120,10 @@ func (s *Server) setupRoutes() {
 			device.POST("/pre-check", middleware.PreCheckRateLimit(), handler.PreCheck)
 			device.POST("/request-code", middleware.RequestCodeRateLimit(), handler.RequestCode)
 			device.POST("/confirm-bind", middleware.ConfirmBindRateLimit(), handler.ConfirmBind)
+			device.POST("/access-points/token", middleware.AccessDiscoveryTokenRateLimit(), handler.IssueDeviceAccessPointToken)
 		}
+
+		api.GET("/access-points", middleware.AccessDiscoveryListIPRateLimit(), middleware.AccessDiscoveryAuth(), middleware.AccessDiscoveryListUserRateLimit(), handler.ListAccessPoints)
 
 		// 需要认证的路由
 		protected := api.Group("")
@@ -179,6 +185,10 @@ func (s *Server) setupRoutes() {
 				admin.DELETE("/users/:id", handler.DeleteUser)
 				admin.PUT("/users/:id/status", handler.UpdateUserStatus)
 				admin.GET("/users/:id", handler.GetUserDetail)
+				admin.GET("/admin/users/:id/device-password", handler.AdminGetUserDevicePassword)
+				// 放在 /auth 路径下，使浏览器携带限定为 /api/auth 的 refresh cookie，
+				// 切换成功时可以吊销当前管理员会话。
+				admin.POST("/auth/switch-login/:id", handler.AdminSwitchLogin)
 
 				// 用户审批相关
 				admin.GET("/approvals/pending", handler.GetPendingApprovals)
@@ -200,6 +210,9 @@ func (s *Server) setupRoutes() {
 				admin.PUT("/admin/logbooks/:id", handler.AdminUpdateLogbook)
 				admin.DELETE("/admin/logbooks/:id", handler.AdminDeleteLogbook)
 				admin.DELETE("/admin/logbooks/batch", handler.AdminBatchDeleteLogbooks)
+
+				// 管理员群组管理使用独立的全量视角，避免复用普通用户可见性过滤。
+				admin.GET("/admin/groups", handler.GetAdminGroups)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）
@@ -216,18 +229,15 @@ func (s *Server) setupRoutes() {
 				approved.GET("/devices", handler.GetDevices)
 				approved.GET("/devices/list", handler.GetDevices) // 兼容旧接口
 				approved.GET("/device/get", handler.GetDevice)
+				approved.GET("/devices/:id", handler.GetDevice)
 				approved.GET("/device/qths", handler.GetDeviceQTHs)
+				approved.GET("/user/device-default-group", handler.GetDeviceDefaultGroup)
+				approved.PUT("/user/device-default-group", handler.UpdateDeviceDefaultGroup)
 				approved.PUT("/devices/:id", handler.UpdateDevice)
 				approved.DELETE("/devices/:id", handler.DeleteDevice)
 				approved.POST("/device/changegroup", handler.ChangeDeviceGroup)
 				approved.PUT("/devices/:id/group", handler.ChangeDeviceGroup) // RESTful 风格
 
-				// 设备 AT 命令和参数
-				approved.POST("/device/at", handler.DeviceAT)
-				approved.POST("/device/query", handler.QueryDeviceParm)
-				approved.POST("/device/change", handler.ChangeDeviceParm)
-				approved.POST("/device/change1w", handler.Change1W)
-				approved.POST("/device/change2w", handler.Change2W)
 				approved.GET("/device/qth", handler.GetDevice) // 兼容旧接口
 
 				// 设备配置同步 API（UDP 普通设备）
@@ -255,12 +265,14 @@ func (s *Server) setupRoutes() {
 				groupOwner.Use(middleware.RequireAdminOrOwner())
 				{
 					groupOwner.PUT("/groups/:id", handler.UpdateGroup)
-					groupOwner.POST("/group/update", handler.UpdateGroup) // 兼容旧接口
 					groupOwner.DELETE("/groups/:id", handler.DeleteGroup)
-					groupOwner.POST("/group/delete", handler.DeleteGroup) // 兼容旧接口
 					// 踢出设备
 					groupOwner.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
+					groupOwner.PUT("/groups/:id/devices/:deviceId/comm-control", handler.UpdateGroupDeviceCommControl)
 				}
+				// 兼容旧接口没有 :id 路径参数，处理器从 JSON/query 读取 ID 并自行执行同等权限校验。
+				approved.POST("/group/update", handler.UpdateGroup)
+				approved.POST("/group/delete", handler.DeleteGroup)
 			}
 
 			// 虚拟互联组管理（需要管理员权限）
@@ -285,6 +297,13 @@ func (s *Server) setupRoutes() {
 			admin.POST("/server/create", handler.CreateServer)
 			admin.POST("/server/update", handler.UpdateServer)
 			admin.POST("/server/delete", handler.DeleteServer)
+			admin.GET("/edge-nodes", handler.ListEdgeNodes)
+			admin.POST("/edge-nodes", handler.CreateEdgeNode)
+			admin.PUT("/edge-nodes/:id", handler.UpdateEdgeNode)
+			admin.DELETE("/edge-nodes/:id", handler.DeleteEdgeNode)
+			admin.POST("/edge-nodes/:id/rotate-credential", handler.RotateEdgeNodeCredential)
+			admin.POST("/edge-nodes/:id/revoke-credential", handler.RevokeEdgeNodeCredential)
+			admin.POST("/edge-nodes/:id/disconnect", handler.DisconnectEdgeNode)
 
 			// 设备配置管理（管理员权限，可操作任意设备）
 			admin.GET("/admin/devices/:id/config", handler.AdminGetDeviceConfig)
@@ -316,6 +335,7 @@ func (s *Server) setupRoutes() {
 			admin.GET("/cache/metrics", cacheHandler.GetCacheMetrics)
 			admin.POST("/cache/metrics/reset", cacheHandler.ResetCacheMetrics)
 			admin.POST("/cache/clear", cacheHandler.ClearAllCache)
+			admin.GET("/udp/metrics", handler.GetUDPMetrics)
 
 			// 站点配置管理（读取需要登录，修改需要管理员权限）
 			configHandler := handler.NewSiteConfigHandler()
@@ -326,6 +346,8 @@ func (s *Server) setupRoutes() {
 			admin.PUT("/config/icp", configHandler.UpdateICPConfig)
 			admin.PUT("/config/system", configHandler.UpdateSystemInfoConfig)
 			admin.PUT("/config/aprs", configHandler.UpdateAPRSConfig)
+			admin.GET("/config/access-discovery", configHandler.GetAccessDiscoveryConfig)
+			admin.PUT("/config/access-discovery", configHandler.UpdateAccessDiscoveryConfig)
 			admin.PUT("/config/openai", configHandler.UpdateOpenAIConfig)
 			admin.GET("/config/registration", configHandler.GetRegistrationConfig)
 			admin.PUT("/config/registration", configHandler.UpdateRegistrationConfig)

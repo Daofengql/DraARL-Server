@@ -20,13 +20,62 @@ var configFilePath string
 var configMu sync.RWMutex
 var releaseBuild atomic.Bool
 
+const DefaultConfigFileName = "config.yaml"
+
 type MinIOConfig struct {
-	Endpoint  string `yaml:"Endpoint" json:"endpoint"`
-	AccessKey string `yaml:"AccessKey" json:"access_key"`
-	SecretKey string `yaml:"SecretKey" json:"secret_key"`
-	UseSSL    bool   `yaml:"UseSSL" json:"use_ssl"`
-	Bucket    string `yaml:"Bucket" json:"bucket"`
-	BasePath  string `yaml:"BasePath" json:"base_path"`
+	Endpoint       string `yaml:"Endpoint" json:"endpoint"`
+	PublicEndpoint string `yaml:"PublicEndpoint" json:"public_endpoint"`
+	AccessKey      string `yaml:"AccessKey" json:"access_key"`
+	SecretKey      string `yaml:"SecretKey" json:"secret_key"`
+	UseSSL         bool   `yaml:"UseSSL" json:"use_ssl"`
+	PublicUseSSL   bool   `yaml:"PublicUseSSL" json:"public_use_ssl"`
+	Bucket         string `yaml:"Bucket" json:"bucket"`
+	BasePath       string `yaml:"BasePath" json:"base_path"`
+}
+
+type UDPConfig struct {
+	SendWorkers      int `yaml:"SendWorkers" json:"send_workers"`
+	IngressWorkers   int `yaml:"IngressWorkers" json:"ingress_workers"`
+	FrameQueueSize   int `yaml:"FrameQueueSize" json:"frame_queue_size"`
+	MaxFrameAgeMS    int `yaml:"MaxFrameAgeMS" json:"max_frame_age_ms"`
+	ReadBufferBytes  int `yaml:"ReadBufferBytes" json:"read_buffer_bytes"`
+	WriteBufferBytes int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
+}
+
+// InterconnectConfig controls the optional centre-side Type 0 node services.
+// It is ignored unless Enabled is true, preserving existing single-node startup.
+type InterconnectConfig struct {
+	Enabled                        bool   `yaml:"Enabled" json:"enabled"`
+	ControlListen                  string `yaml:"ControlListen" json:"control_listen"`
+	TLSCertFile                    string `yaml:"TLSCertFile" json:"tls_cert_file"`
+	TLSKeyFile                     string `yaml:"TLSKeyFile" json:"tls_key_file"`
+	TLSClientCAFile                string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
+	AllowSelfSigned                bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
+	RegistrationTokenTTL           int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
+	CredentialRotationGraceSeconds int    `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
+	SessionRecoveryWindowSeconds   int    `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
+	// NodeTokens is a development/bootstrap map. Production deployments should
+	// replace it with hashed, rotatable credentials managed by the admin API.
+	NodeTokens map[string]string          `yaml:"NodeTokens" json:"node_tokens"`
+	Resources  InterconnectResourceConfig `yaml:"Resources" json:"resources"`
+}
+
+type InterconnectResourceConfig struct {
+	MaxNodes                   int `yaml:"MaxNodes" json:"max_nodes"`
+	MaxPendingHandshakes       int `yaml:"MaxPendingHandshakes" json:"max_pending_handshakes"`
+	AuthAttemptsPerMinutePerIP int `yaml:"AuthAttemptsPerMinutePerIP" json:"auth_attempts_per_minute_per_ip"`
+	DataSoftPPSPerNode         int `yaml:"DataSoftPPSPerNode" json:"data_soft_pps_per_node"`
+	DataHardPPSPerNode         int `yaml:"DataHardPPSPerNode" json:"data_hard_pps_per_node"`
+	DataHardMbpsPerNode        int `yaml:"DataHardMbpsPerNode" json:"data_hard_mbps_per_node"`
+	DataQueuePerNode           int `yaml:"DataQueuePerNode" json:"data_queue_per_node"`
+	DataQueueGlobal            int `yaml:"DataQueueGlobal" json:"data_queue_global"`
+	DataWorkers                int `yaml:"DataWorkers" json:"data_workers"`
+	DataMaxQueueAgeMS          int `yaml:"DataMaxQueueAgeMS" json:"data_max_queue_age_ms"`
+	ControlSoftPPSPerNode      int `yaml:"ControlSoftPPSPerNode" json:"control_soft_pps_per_node"`
+	ControlHardPPSPerNode      int `yaml:"ControlHardPPSPerNode" json:"control_hard_pps_per_node"`
+	ControlHardMbpsPerNode     int `yaml:"ControlHardMbpsPerNode" json:"control_hard_mbps_per_node"`
+	DeviceAuthPPSPerNode       int `yaml:"DeviceAuthPPSPerNode" json:"device_auth_pps_per_node"`
+	MaxDeviceSessionsPerNode   int `yaml:"MaxDeviceSessionsPerNode" json:"max_device_sessions_per_node"`
 }
 
 // SetReleaseBuild 设置是否为 release 构建产物。
@@ -48,6 +97,9 @@ type Configuration struct {
 		IPFile        string `yaml:"IPfile" json:"ipfile"`
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
+
+	UDP          UDPConfig          `yaml:"UDP" json:"udp"`
+	Interconnect InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -156,12 +208,12 @@ func Load(configPath string) (*Configuration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("get config filepath err: %w", err)
 		}
-		configPath = filepath.Join(dir, "udphub.yaml")
+		configPath = filepath.Join(dir, DefaultConfigFileName)
 	}
 
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("udphub.yaml open err: %w", err)
+		return nil, fmt.Errorf("config file open err: %w", err)
 	}
 
 	cfg := &Configuration{}
@@ -185,6 +237,88 @@ func Load(configPath string) (*Configuration, error) {
 func (c *Configuration) SetDefaults() error {
 	c.migrateLegacyStorageConfig()
 
+	if c.UDP.SendWorkers < 0 {
+		c.UDP.SendWorkers = 0
+	}
+	if c.UDP.IngressWorkers < 0 {
+		c.UDP.IngressWorkers = 0
+	}
+	if c.UDP.FrameQueueSize <= 0 {
+		c.UDP.FrameQueueSize = 64
+	}
+	if c.UDP.MaxFrameAgeMS <= 0 {
+		c.UDP.MaxFrameAgeMS = 120
+	}
+	if c.UDP.ReadBufferBytes <= 0 {
+		c.UDP.ReadBufferBytes = 4 * 1024 * 1024
+	}
+	if c.UDP.WriteBufferBytes <= 0 {
+		c.UDP.WriteBufferBytes = 4 * 1024 * 1024
+	}
+	if strings.TrimSpace(c.Interconnect.ControlListen) == "" {
+		c.Interconnect.ControlListen = ":60100"
+	}
+	if c.Interconnect.RegistrationTokenTTL <= 0 {
+		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60
+	}
+	if c.Interconnect.CredentialRotationGraceSeconds <= 0 {
+		c.Interconnect.CredentialRotationGraceSeconds = 10 * 60
+	}
+	if c.Interconnect.CredentialRotationGraceSeconds > 60*60 {
+		c.Interconnect.CredentialRotationGraceSeconds = 60 * 60
+	}
+	if c.Interconnect.SessionRecoveryWindowSeconds <= 0 {
+		c.Interconnect.SessionRecoveryWindowSeconds = 3 * 60
+	}
+	if c.Interconnect.SessionRecoveryWindowSeconds < 30 {
+		c.Interconnect.SessionRecoveryWindowSeconds = 30
+	}
+	if c.Interconnect.SessionRecoveryWindowSeconds > 10*60 {
+		c.Interconnect.SessionRecoveryWindowSeconds = 10 * 60
+	}
+	resources := &c.Interconnect.Resources
+	if resources.MaxNodes == 0 {
+		resources.MaxNodes = 256
+	}
+	if resources.MaxPendingHandshakes == 0 {
+		resources.MaxPendingHandshakes = 64
+	}
+	if resources.AuthAttemptsPerMinutePerIP == 0 {
+		resources.AuthAttemptsPerMinutePerIP = 30
+	}
+	if resources.DataSoftPPSPerNode == 0 {
+		resources.DataSoftPPSPerNode = 50000
+	}
+	if resources.DataHardPPSPerNode == 0 {
+		resources.DataHardPPSPerNode = 100000
+	}
+	if resources.DataHardMbpsPerNode == 0 {
+		resources.DataHardMbpsPerNode = 1000
+	}
+	if resources.DataQueuePerNode == 0 {
+		resources.DataQueuePerNode = 512
+	}
+	if resources.DataQueueGlobal == 0 {
+		resources.DataQueueGlobal = 4096
+	}
+	if resources.DataMaxQueueAgeMS == 0 {
+		resources.DataMaxQueueAgeMS = 200
+	}
+	if resources.ControlSoftPPSPerNode == 0 {
+		resources.ControlSoftPPSPerNode = 1000
+	}
+	if resources.ControlHardPPSPerNode == 0 {
+		resources.ControlHardPPSPerNode = 2000
+	}
+	if resources.ControlHardMbpsPerNode == 0 {
+		resources.ControlHardMbpsPerNode = 256
+	}
+	if resources.DeviceAuthPPSPerNode == 0 {
+		resources.DeviceAuthPPSPerNode = 500
+	}
+	if resources.MaxDeviceSessionsPerNode == 0 {
+		resources.MaxDeviceSessionsPerNode = 25000
+	}
 	// 数据库默认值
 	if c.Database.Port == 0 {
 		c.Database.Port = 3306
@@ -313,6 +447,13 @@ func Get() *Configuration {
 	if Config == nil {
 		panic("config not loaded, call Load() first")
 	}
+	return Config
+}
+
+// TryGet 返回当前配置；配置尚未加载时返回 nil，便于底层组件和单元测试安全取默认值。
+func TryGet() *Configuration {
+	configMu.RLock()
+	defer configMu.RUnlock()
 	return Config
 }
 

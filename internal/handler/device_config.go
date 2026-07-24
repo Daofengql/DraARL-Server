@@ -30,13 +30,8 @@ func GetDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
 		return
 	}
 
@@ -52,15 +47,12 @@ func GetDeviceConfig(c *gin.Context) {
 	}
 
 	// 检查设备归属（必须为设备所有者或管理员）
-	if device.OwnerID != userID {
-		username, _ := c.Get("username")
-		if !isAdmin(username.(string)) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":    403,
-				"message": "无权访问此设备的配置",
-			})
-			return
-		}
+	if !canManageDevice(currentUser, device) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "无权访问此设备的配置",
+		})
+		return
 	}
 
 	// 获取设备配置
@@ -117,15 +109,11 @@ func UpdateDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
 		return
 	}
+	userID := currentUser.ID
 
 	// 验证设备归属
 	repo := gormdb.NewDeviceRepository()
@@ -139,15 +127,12 @@ func UpdateDeviceConfig(c *gin.Context) {
 	}
 
 	// 检查设备归属（必须为设备所有者或管理员）
-	if device.OwnerID != userID {
-		username, _ := c.Get("username")
-		if !isAdmin(username.(string)) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":    403,
-				"message": "无权修改此设备的配置",
-			})
-			return
-		}
+	if !canManageDevice(currentUser, device) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "无权修改此设备的配置",
+		})
+		return
 	}
 
 	// 解析请求
@@ -276,15 +261,11 @@ func SyncDeviceConfig(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
+	currentUser, ok := requireCurrentUser(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
 		return
 	}
+	userID := currentUser.ID
 
 	// 验证设备归属
 	repo := gormdb.NewDeviceRepository()
@@ -298,15 +279,12 @@ func SyncDeviceConfig(c *gin.Context) {
 	}
 
 	// 检查设备归属（必须为设备所有者或管理员）
-	if device.OwnerID != userID {
-		username, _ := c.Get("username")
-		if !isAdmin(username.(string)) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":    403,
-				"message": "无权同步此设备的配置",
-			})
-			return
-		}
+	if !canManageDevice(currentUser, device) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "无权同步此设备的配置",
+		})
+		return
 	}
 
 	// 获取设备配置
@@ -367,16 +345,6 @@ func SyncDeviceConfig(c *gin.Context) {
 		"code":    200,
 		"message": "配置已发送到设备",
 	})
-}
-
-// isAdmin 检查用户是否为管理员
-func isAdmin(username string) bool {
-	userRepo := gormdb.NewUserRepository()
-	user, err := userRepo.GetUserByName(username)
-	if err != nil || user == nil {
-		return false
-	}
-	return user.HasRole("admin")
 }
 
 func getDeviceConfigAuditOperator(c *gin.Context, fallbackUserID int) (int, string, string) {

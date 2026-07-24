@@ -58,6 +58,9 @@ func DecodeWSPacket(data []byte) (*WSPacket, error) {
 
 	// 解析 Type (48)
 	packet.Type = data[48]
+	if !protocol.IsSupportedDraARLType(packet.Type) {
+		return nil, fmt.Errorf("unsupported packet type: %d", packet.Type)
+	}
 
 	// 解析 DevModel (49)
 	packet.DevModel = data[49]
@@ -205,8 +208,8 @@ func uint24ToBytes(v uint32, b []byte) {
 // GetPacketTypeName 获取数据包类型名称
 func GetPacketTypeName(packetType byte) string {
 	switch packetType {
-	case protocol.DraARLTypeControl:
-		return "Control"
+	case protocol.DraARLTypeJWTAuth:
+		return "JWTAuth"
 	case protocol.DraARLTypeHeartbeat:
 		return "Heartbeat"
 	case protocol.DraARLTypeConfig:
@@ -215,10 +218,6 @@ func GetPacketTypeName(packetType byte) string {
 		return "TextMessage"
 	case protocol.DraARLTypeOpus16K:
 		return "Voice"
-	case protocol.DraARLTypeServerVoice:
-		return "ServerVoice"
-	case protocol.DraARLTypeATPassThrough:
-		return "ATPassThrough"
 	default:
 		return fmt.Sprintf("Unknown(%d)", packetType)
 	}

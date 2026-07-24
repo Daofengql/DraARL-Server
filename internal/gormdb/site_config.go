@@ -34,13 +34,14 @@ type SiteConfigValue interface{}
 
 // ConfigCategory 配置分类
 const (
-	CategoryICP          = "icp"
-	CategorySystem       = "system"
-	CategoryAPRS         = "aprs"
-	CategoryOpenAI       = "openai"
-	CategoryCommConfig   = "comm_config"
-	CategorySMTP         = "smtp"
-	CategoryRegistration = "registration"
+	CategoryICP             = "icp"
+	CategorySystem          = "system"
+	CategoryAPRS            = "aprs"
+	CategoryOpenAI          = "openai"
+	CategoryCommConfig      = "comm_config"
+	CategorySMTP            = "smtp"
+	CategoryRegistration    = "registration"
+	CategoryAccessDiscovery = "access_discovery"
 )
 
 // ICPConfig ICP配置
@@ -68,6 +69,26 @@ type APRSConfig struct {
 	Latitude       float64 `json:"latitude"`
 	Longitude      float64 `json:"longitude"`
 	Altitude       string  `json:"altitude"`
+}
+
+// AccessDiscoveryCenterConfig 中心直连接入点配置。
+type AccessDiscoveryCenterConfig struct {
+	Enabled     bool   `json:"enabled"`
+	PublicID    string `json:"public_id"`
+	DisplayName string `json:"display_name"`
+	UDPHost     string `json:"udp_host"`
+	UDPPort     int    `json:"udp_port"`
+	Region      string `json:"region"`
+	Network     string `json:"network"`
+	Priority    int    `json:"priority"`
+}
+
+// AccessDiscoveryConfig 设备接入点发现配置。
+type AccessDiscoveryConfig struct {
+	TokenTTLSeconds      int                         `json:"token_ttl_seconds"`
+	EdgeHealthTTLSeconds int                         `json:"edge_health_ttl_seconds"`
+	CacheMaxAgeSeconds   int                         `json:"cache_max_age_seconds"`
+	Center               AccessDiscoveryCenterConfig `json:"center"`
 }
 
 // OpenAIConfig OpenAI配置
@@ -313,6 +334,83 @@ func (r *SiteConfigRepository) SetAPRSConfig(config APRSConfig) error {
 		{Key: "aprs.latitude", Value: fmt.Sprintf("%.6f", config.Latitude), Category: CategoryAPRS, Description: "纬度"},
 		{Key: "aprs.longitude", Value: fmt.Sprintf("%.6f", config.Longitude), Category: CategoryAPRS, Description: "经度"},
 		{Key: "aprs.altitude", Value: config.Altitude, Category: CategoryAPRS, Description: "海拔高度"},
+	}
+	return r.SetBatch(configs)
+}
+
+// GetAccessDiscoveryConfig 获取设备接入点发现配置。
+func (r *SiteConfigRepository) GetAccessDiscoveryConfig() (*AccessDiscoveryConfig, error) {
+	configs, err := r.GetByCategory(CategoryAccessDiscovery)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &AccessDiscoveryConfig{
+		TokenTTLSeconds:      300,
+		EdgeHealthTTLSeconds: 20,
+		CacheMaxAgeSeconds:   5,
+		Center: AccessDiscoveryCenterConfig{
+			PublicID:    "center",
+			DisplayName: "中心直连",
+			UDPPort:     60050,
+			Priority:    100,
+		},
+	}
+
+	for _, config := range configs {
+		switch config.Key {
+		case "access_discovery.token_ttl_seconds":
+			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
+				result.TokenTTLSeconds = value
+			}
+		case "access_discovery.edge_health_ttl_seconds":
+			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
+				result.EdgeHealthTTLSeconds = value
+			}
+		case "access_discovery.cache_max_age_seconds":
+			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
+				result.CacheMaxAgeSeconds = value
+			}
+		case "access_discovery.center.enabled":
+			result.Center.Enabled = config.Value == "true"
+		case "access_discovery.center.public_id":
+			result.Center.PublicID = config.Value
+		case "access_discovery.center.display_name":
+			result.Center.DisplayName = config.Value
+		case "access_discovery.center.udp_host":
+			result.Center.UDPHost = config.Value
+		case "access_discovery.center.udp_port":
+			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
+				result.Center.UDPPort = value
+			}
+		case "access_discovery.center.region":
+			result.Center.Region = config.Value
+		case "access_discovery.center.network":
+			result.Center.Network = config.Value
+		case "access_discovery.center.priority":
+			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
+				result.Center.Priority = value
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// SetAccessDiscoveryConfig 设置设备接入点发现配置。
+func (r *SiteConfigRepository) SetAccessDiscoveryConfig(config AccessDiscoveryConfig) error {
+	configs := []SiteConfig{
+		{Key: "access_discovery.token_ttl_seconds", Value: strconv.Itoa(config.TokenTTLSeconds), Category: CategoryAccessDiscovery, Description: "发现凭证有效期（秒）"},
+		{Key: "access_discovery.edge_health_ttl_seconds", Value: strconv.Itoa(config.EdgeHealthTTLSeconds), Category: CategoryAccessDiscovery, Description: "边缘节点健康有效期（秒）"},
+		{Key: "access_discovery.cache_max_age_seconds", Value: strconv.Itoa(config.CacheMaxAgeSeconds), Category: CategoryAccessDiscovery, Description: "发现列表客户端缓存时间（秒）"},
+		{Key: "access_discovery.center.enabled", Value: strconv.FormatBool(config.Center.Enabled), Category: CategoryAccessDiscovery, Description: "是否发布中心直连接入点"},
+		{Key: "access_discovery.center.public_id", Value: config.Center.PublicID, Category: CategoryAccessDiscovery, Description: "中心接入点公开 ID"},
+		{Key: "access_discovery.center.display_name", Value: config.Center.DisplayName, Category: CategoryAccessDiscovery, Description: "中心接入点名称"},
+		{Key: "access_discovery.center.udp_host", Value: config.Center.UDPHost, Category: CategoryAccessDiscovery, Description: "中心公网 UDP 地址"},
+		{Key: "access_discovery.center.udp_port", Value: strconv.Itoa(config.Center.UDPPort), Category: CategoryAccessDiscovery, Description: "中心公网 UDP 端口"},
+		{Key: "access_discovery.center.region", Value: config.Center.Region, Category: CategoryAccessDiscovery, Description: "中心接入点地区"},
+		{Key: "access_discovery.center.network", Value: config.Center.Network, Category: CategoryAccessDiscovery, Description: "中心接入点网络标签"},
+		{Key: "access_discovery.center.priority", Value: strconv.Itoa(config.Center.Priority), Category: CategoryAccessDiscovery, Description: "中心接入点优先级"},
 	}
 	return r.SetBatch(configs)
 }

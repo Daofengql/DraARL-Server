@@ -33,6 +33,10 @@ interface BackendDevice {
   owner_id?: number
   owner_name?: string
   owner_callsign?: string
+  entry_node_id?: string
+  entry_node_name?: string
+  entry_mode?: string
+  entry_seen_at?: string
   create_time?: string
   update_time?: string
 }
@@ -59,6 +63,10 @@ const normalizeDevice = (d: BackendDevice): Device => ({
   owner_id: d.owner_id,
   owner_name: d.owner_name,
   owner_callsign: d.owner_callsign,
+  entry_node_id: d.entry_node_id,
+  entry_node_name: d.entry_node_name,
+  entry_mode: d.entry_mode,
+  entry_seen_at: d.entry_seen_at,
   online_time: d.online_time,
   last_heartbeat: d.online_time,
   create_time: d.create_time,
@@ -75,15 +83,47 @@ export const deviceService = {
     keyword?: string
     group_id?: number
   }): Promise<ListResponse<Device>> {
-    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[]; total: number }>>('/api/devices', { params })
+    const query = params ? {
+      ...params,
+      limit: params.page_size,
+      page_size: undefined,
+    } : undefined
+    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[]; total: number }>>('/api/devices', { params: query })
     const items = (res.data?.items || []).map(normalizeDevice)
     return { items, total: res.data?.total || 0, page: params?.page || 1, page_size: params?.page_size || 10 }
   },
 
   // 获取设备列表（兼容旧接口）
   async list(): Promise<Device[]> {
-    const res = await apiClient.get<BackendResponse<{ items: BackendDevice[] }>>('/api/devices')
-    return (res.data?.items || []).map(normalizeDevice)
+    return this.listAll()
+  },
+
+  async listAll(): Promise<Device[]> {
+    const pageSize = 100
+    const result: Device[] = []
+    let page = 1
+    let total = Number.POSITIVE_INFINITY
+
+    while (result.length < total) {
+      const current = await this.getList({ page, page_size: pageSize })
+      result.push(...current.items)
+      total = current.total
+      if (current.items.length === 0 || current.items.length < pageSize) break
+      page += 1
+    }
+    return result
+  },
+
+  async getDefaultGroup(): Promise<number | null> {
+    const res = await apiClient.get<BackendResponse<{ group_id: number | null }>>('/api/user/device-default-group')
+    return res.data?.group_id ?? null
+  },
+
+  async setDefaultGroup(groupId: number | null): Promise<number | null> {
+    const res = await apiClient.put<BackendResponse<{ group_id: number | null }>>('/api/user/device-default-group', {
+      group_id: groupId,
+    })
+    return res.data?.group_id ?? null
   },
 
   // 获取单个设备
@@ -142,32 +182,6 @@ export const deviceService = {
   // 修改设备群组
   async changeGroup(data: { device_id: number; group_id: number; password?: string }): Promise<void> {
     await apiClient.post<BackendResponse<unknown>>('/api/device/changegroup', data)
-  },
-
-  // 执行AT命令
-  async executeAT(data: { device_id: number; command: string }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/at', data)
-  },
-
-  // 查询设备参数
-  async query(data: { device_id: number; param: string }): Promise<any> {
-    const res = await apiClient.post<BackendResponse<any>>('/api/device/query', data)
-    return res.data
-  },
-
-  // 修改设备参数
-  async change(data: { device_id: number; params: Record<string, any> }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/change', data)
-  },
-
-  // 修改1W模块参数
-  async change1W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/change1w', data)
-  },
-
-  // 修改2W模块参数
-  async change2W(data: { device_id: number; params: Record<string, any> }): Promise<void> {
-    await apiClient.post<BackendResponse<unknown>>('/api/device/change2w', data)
   },
 
   // 切换设备群组

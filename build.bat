@@ -6,14 +6,15 @@ REM DraARL Release Build Script
 REM Frontend + Backend, multi-platform
 REM ==========================================
 
-set BINARY_NAME=DraARL.exe
+set BINARY_NAME=draarl.exe
 
-if "%~1"=="" (
-    echo Usage: %~nx0 ^<version^>
-    echo Example: %~nx0 v1.2.3
+set VERSION=%~1
+if not defined VERSION if exist VERSION set /p VERSION=<VERSION
+if not defined VERSION (
+    echo No version argument provided and VERSION file is missing or empty.
+    echo Usage: %~nx0 [version]
     exit /b 1
 )
-set VERSION=%~1
 
 for /f "tokens=*" %%i in ('powershell -Command "Get-Date -Format yyyy-MM-ddTHH:mm:ssZ"') do set BUILD_TIME=%%i
 if not defined BUILD_TIME set BUILD_TIME=unknown
@@ -55,7 +56,7 @@ if errorlevel 1 (
 echo.
 echo [4/4] Building backend with embedded frontend...
 set CGO_ENABLED=0
-go build -ldflags="-s -w -X draarl/internal/buildinfo.Version=%VERSION% -X draarl/internal/buildinfo.BuildTime=%BUILD_TIME% -X draarl/internal/buildinfo.Release=true" -tags=embed -o %BINARY_NAME% ./cmd/udphub
+go build -ldflags="-s -w -X draarl/internal/buildinfo.Version=%VERSION% -X draarl/internal/buildinfo.BuildTime=%BUILD_TIME% -X draarl/internal/buildinfo.Release=true" -tags=embed -o %BINARY_NAME% ./cmd/draarl
 
 if %ERRORLEVEL% equ 0 (
     echo.

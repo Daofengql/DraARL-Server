@@ -548,10 +548,44 @@ func buildTimeSyncPacket() []byte {
 // 配置同步核心函数
 // ==========================================
 
+const deviceConfigDeliveryTimeout = 3 * time.Second
+
+func encodeDeviceConfigPacket(dev *models.Device, data []byte) ([]byte, error) {
+	if dev == nil || dev.ID <= 0 || !protocol.IsValidNormalSSID(dev.SSID) {
+		return nil, fmt.Errorf("device not ready")
+	}
+	return protocol.EncodeDraARLv1(
+		dev.Username,
+		"",
+		dev.SSID,
+		protocol.DraARLTypeConfig,
+		0,
+		0,
+		dev.CallSign,
+		data,
+	), nil
+}
+
+func sendDeviceConfigPacket(dev *models.Device, packet []byte) error {
+	if dev == nil || len(packet) < protocol.DraARLv1HeaderSize {
+		return fmt.Errorf("device not ready")
+	}
+	if handled, err := sendRemoteDeviceConfig(dev.ID, packet, deviceConfigDeliveryTimeout); handled {
+		return err
+	}
+	if dev.UDPAddr == nil || globalConn == nil {
+		return fmt.Errorf("device not ready")
+	}
+	if _, err := globalConn.WriteToUDP(packet, dev.UDPAddr); err != nil {
+		return fmt.Errorf("send config failed: %w", err)
+	}
+	return nil
+}
+
 // sendConfigToDevice 向设备下发配置
 // 仅下发指定的配置项（动态下发）
 func sendConfigToDevice(dev *models.Device, configs map[string]string) error {
-	if dev == nil || dev.UDPAddr == nil || globalConn == nil {
+	if dev == nil {
 		return fmt.Errorf("device not ready")
 	}
 
@@ -560,23 +594,12 @@ func sendConfigToDevice(dev *models.Device, configs map[string]string) error {
 		return nil // 无配置需要下发
 	}
 
-	// 构建 Config 包
-	data := buildConfigSetPacket(configs)
-	packet := protocol.EncodeDraARLv1(
-		dev.Username,
-		"", // 密码为空
-		dev.SSID,
-		protocol.DraARLTypeConfig,
-		0, // DevModel
-		0, // DMRID
-		dev.CallSign,
-		data,
-	)
-
-	// 发送到设备
-	_, err := globalConn.WriteToUDP(packet, dev.UDPAddr)
+	packet, err := encodeDeviceConfigPacket(dev, buildConfigSetPacket(configs))
 	if err != nil {
-		return fmt.Errorf("send config failed: %w", err)
+		return err
+	}
+	if err := sendDeviceConfigPacket(dev, packet); err != nil {
+		return err
 	}
 
 	log.Printf("[CONFIG] 发送配置到设备 %s-%d: %d 项", dev.CallSign, dev.SSID, len(configs))
@@ -585,26 +608,11 @@ func sendConfigToDevice(dev *models.Device, configs map[string]string) error {
 
 // queryDeviceConfig 向设备发送配置查询请求
 func queryDeviceConfig(dev *models.Device) error {
-	if dev == nil || dev.UDPAddr == nil || globalConn == nil {
-		return fmt.Errorf("device not ready")
-	}
-
-	// 构建查询包
-	data := buildConfigQueryPacket()
-	packet := protocol.EncodeDraARLv1(
-		dev.Username,
-		"", // 密码为空
-		dev.SSID,
-		protocol.DraARLTypeConfig,
-		0, // DevModel
-		0, // DMRID
-		dev.CallSign,
-		data,
-	)
-
-	// 发送到设备
-	_, err := globalConn.WriteToUDP(packet, dev.UDPAddr)
+	packet, err := encodeDeviceConfigPacket(dev, buildConfigQueryPacket())
 	if err != nil {
+		return err
+	}
+	if err := sendDeviceConfigPacket(dev, packet); err != nil {
 		return fmt.Errorf("send query failed: %w", err)
 	}
 
@@ -614,31 +622,76 @@ func queryDeviceConfig(dev *models.Device) error {
 
 // sendTimeSync 向设备发送时间同步
 func sendTimeSync(dev *models.Device) error {
-	if dev == nil || dev.UDPAddr == nil || globalConn == nil {
-		return fmt.Errorf("device not ready")
-	}
-
-	// 构建时间同步包
-	data := buildTimeSyncPacket()
-	packet := protocol.EncodeDraARLv1(
-		dev.Username,
-		"", // 密码为空
-		dev.SSID,
-		protocol.DraARLTypeConfig,
-		0, // DevModel
-		0, // DMRID
-		dev.CallSign,
-		data,
-	)
-
-	// 发送到设备
-	_, err := globalConn.WriteToUDP(packet, dev.UDPAddr)
+	packet, err := encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 	if err != nil {
+		return err
+	}
+	if err := sendDeviceConfigPacket(dev, packet); err != nil {
 		return fmt.Errorf("send time sync failed: %w", err)
 	}
 
 	log.Printf("[CONFIG] 发送时间同步到设备 %s-%d", dev.CallSign, dev.SSID)
 	return nil
+}
+
+// BuildDeviceConfigSyncPackets builds the same initial query/set and time
+// synchronization packets used by a centre-direct device. The caller may
+// deliver them to an exact remote edge session without exposing database
+// access to the edge process.
+func BuildDeviceConfigSyncPackets(deviceID int) ([][]byte, error) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil || !protocol.IsValidNormalSSID(dev.SSID) {
+		return nil, fmt.Errorf("device not found")
+	}
+	repo := gormdb.NewDeviceConfigRepository()
+	hasConfigs, err := repo.HasDeviceConfigs(dev.ID)
+	if err != nil {
+		return nil, err
+	}
+	packets := make([][]byte, 0, 2)
+	if hasConfigs {
+		configs, err := repo.GetDeviceConfigs(dev.ID)
+		if err != nil {
+			return nil, err
+		}
+		configs = filterConfigsForDevice(dev, buildConfigSnapshotForOverwrite(configs))
+		if len(configs) > 0 {
+			packet, err := encodeDeviceConfigPacket(dev, buildConfigSetPacket(configs))
+			if err != nil {
+				return nil, err
+			}
+			packets = append(packets, packet)
+		}
+	} else {
+		packet, err := encodeDeviceConfigPacket(dev, buildConfigQueryPacket())
+		if err != nil {
+			return nil, err
+		}
+		packets = append(packets, packet)
+	}
+	timePacket, err := encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
+	if err != nil {
+		return nil, err
+	}
+	return append(packets, timePacket), nil
+}
+
+// SaveDeviceConfigReportAndBuildAck persists one current-session Type 3
+// report and returns the ordinary time-sync acknowledgement packet.
+func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil || !protocol.IsValidNormalSSID(dev.SSID) {
+		return nil, fmt.Errorf("device not found")
+	}
+	if len(data) < 2 || data[0] != ConfigTypeSet {
+		return nil, fmt.Errorf("invalid device config report")
+	}
+	configs := buildConfigSnapshotForOverwrite(decodeTLV(data[2:]))
+	if err := gormdb.NewDeviceConfigRepository().SetDeviceConfigs(dev.ID, configs); err != nil {
+		return nil, err
+	}
+	log.Printf("[CONFIG] 设备 %s-%d 上报配置，已覆盖写入 %d 项", dev.CallSign, dev.SSID, len(configs))
+	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 }
 
 // SyncDeviceConfig 设备上线时同步配置
@@ -690,29 +743,15 @@ func SyncDeviceConfig(dev *models.Device) {
 // 解析 TLV 数据，与数据库比对，存储变化的配置
 // 处理完成后发送时间同步包作为 ACK
 func HandleDeviceConfigReport(dev *models.Device, data []byte) {
-	if dev == nil || len(data) < 2 {
+	if dev == nil {
 		return
 	}
-
-	// 检查是否为配置上报包 (DATA[0] = 0x02)
-	if data[0] != ConfigTypeSet {
-		return
-	}
-
-	// 解析 TLV 数据
-	configs := buildConfigSnapshotForOverwrite(decodeTLV(data[2:]))
-
-	// 存储到数据库（全量覆盖，读取失败字段写空值/无亚音）
-	repo := gormdb.NewDeviceConfigRepository()
-	if err := repo.SetDeviceConfigs(dev.ID, configs); err != nil {
+	packet, err := SaveDeviceConfigReportAndBuildAck(dev.ID, data)
+	if err != nil {
 		log.Printf("[CONFIG] 保存设备配置失败: %v", err)
 		return
 	}
-
-	log.Printf("[CONFIG] 设备 %s-%d 上报配置，已覆盖写入 %d 项", dev.CallSign, dev.SSID, len(configs))
-
-	// 发送时间同步包作为 ACK（同时同步时间）
-	if err := sendTimeSync(dev); err != nil {
+	if err := sendDeviceConfigPacket(dev, packet); err != nil {
 		log.Printf("[CONFIG] 发送时间同步ACK失败: %v", err)
 	}
 }
@@ -725,7 +764,7 @@ func SendConfigToDeviceByID(deviceID int, configs map[string]string) error {
 		return fmt.Errorf("device not found")
 	}
 
-	if !dev.ISOnline || dev.UDPAddr == nil {
+	if !dev.ISOnline {
 		return fmt.Errorf("device is offline")
 	}
 
@@ -758,7 +797,7 @@ func SaveDeviceConfigsToDB(deviceID int, configs map[string]string) error {
 
 	// 如果设备在线，下发配置
 	dev := GetDeviceByID(deviceID)
-	if dev != nil && dev.ISOnline && dev.UDPAddr != nil {
+	if dev != nil && dev.ISOnline {
 		if err := sendConfigToDevice(dev, configs); err != nil {
 			log.Printf("[CONFIG] 下发配置到在线设备失败: %v", err)
 			// 不返回错误，因为数据库已保存成功

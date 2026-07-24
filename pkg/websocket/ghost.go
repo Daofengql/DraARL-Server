@@ -55,16 +55,20 @@ func NewGhostDeviceManager() *GhostDeviceManager {
 }
 
 // CreateGhostDevice 创建幽灵设备
-func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, username, callsign, nickname string, ssid byte) *GhostDevice {
+func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, username, callsign, nickname string, groupID int) *GhostDevice {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ssid = m.fixedSSID
+	ssid := m.fixedSSID
+	if groupID <= 0 {
+		groupID = models.GroupIDPublicMin
+	}
 	if wsDevice != nil {
 		wsDevice.SSID = ssid
 		wsDevice.CallSign = callsign
 		wsDevice.Username = username
 		wsDevice.Nickname = nickname
+		wsDevice.GroupID = groupID
 	}
 
 	// 检查是否已存在
@@ -77,6 +81,7 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, u
 		existing.Nickname = nickname
 		existing.Username = username
 		existing.SSID = ssid
+		existing.GroupID = groupID
 		if existing.Conn != nil {
 			existing.Conn.CallSign = callsign
 			existing.Conn.SSID = ssid
@@ -94,7 +99,7 @@ func (m *GhostDeviceManager) CreateGhostDevice(wsDevice *WSDevice, userID int, u
 		Username:       username,
 		SSID:           ssid,
 		Conn:           wsDevice,
-		GroupID:        models.GroupIDPublicMin, // 默认公共群组 (999)，与 UDP 和 WSDevice 保持一致
+		GroupID:        groupID,
 		ISOnline:       true,
 		LastPacketTime: time.Now(),
 	}

@@ -81,7 +81,7 @@ func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConn
 		manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
 
 		// 同时创建 GhostDevice 并建立与 WSDevice 的关联
-		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
+		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, authResult.GroupID)
 
 		return device, authResult
 	}
@@ -100,7 +100,7 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	}
 
 	// 解析 JWT Token
-	claims, err := jwt.ParseToken(tokenString)
+	claims, err := jwt.ValidateAccessToken(tokenString)
 	if err != nil {
 		result.Error = "invalid_token"
 		log.Printf("[WS-AUTH] JWT parse failed: %v", err)
@@ -143,8 +143,41 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 		log.Printf("[WS-AUTH] 获取用户 %d 的群组偏好失败: %v，使用默认群组", user.ID, err)
 		lastGroupID = models.GroupIDPublicMin
 	}
+	if lastGroupID != models.GroupIDPublicMin {
+		group, groupErr := gormdb.NewGroupRepository().GetGroupByID(lastGroupID)
+		isVerifiedMember := false
+		if groupErr == nil && group != nil && group.Status == 1 && !group.IsVirtual &&
+			group.Type == 2 && !user.HasRole("admin") && group.OwerID != user.ID {
+			member, memberErr := gormdb.NewGroupMemberRepository().GetVerifiedMemberByGroupAndUser(group.ID, user.ID)
+			if memberErr != nil {
+				groupErr = memberErr
+			} else {
+				isVerifiedMember = member != nil
+			}
+		}
+		if groupErr != nil || !canUseGroupForWebGhost(user, lastGroupID, group, isVerifiedMember) {
+			log.Printf("[WS-AUTH] 用户 %d 的群组偏好 %d 已失效，回退默认群组", user.ID, lastGroupID)
+			lastGroupID = models.GroupIDPublicMin
+		}
+	}
 	result.GroupID = lastGroupID
 
 	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s) group-%d", user.ID, user.CallSign, result.GroupID)
 	return result
+}
+
+func canUseGroupForWebGhost(user *gormdb.User, groupID int, group *gormdb.Group, isVerifiedMember bool) bool {
+	if user == nil || groupID <= 0 {
+		return false
+	}
+	if groupID == models.GroupIDPublicMin {
+		return true
+	}
+	if group == nil || group.ID != groupID || group.Status != 1 || group.IsVirtual {
+		return false
+	}
+	if group.Type == 1 {
+		return true
+	}
+	return group.Type == 2 && (user.HasRole("admin") || group.OwerID == user.ID || isVerifiedMember)
 }

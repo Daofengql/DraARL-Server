@@ -79,3 +79,29 @@ func TestDynamicCodeRateLimitDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessDiscoveryTokenLimiterSupportsSharedNATButCapsEachUser(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	if got := accessDiscoveryTokenPrincipalKey("203.0.113.10", " Alice "); got != "203.0.113.10\x00alice" {
+		t.Fatalf("normalized discovery principal = %q", got)
+	}
+	for i := 0; i < 50; i++ {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-ip-burst", "203.0.113.10"); !allowed {
+			t.Fatalf("shared NAT was blocked at distinct request %d", i+1)
+		}
+		if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "user-"+intToStr(i))); !allowed {
+			t.Fatalf("distinct user %d under shared NAT was blocked", i)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "one-user")); !allowed {
+			t.Fatalf("one user was blocked before configured limit at %d", i+1)
+		}
+	}
+	if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "one-user")); allowed {
+		t.Fatal("one user exceeded the configured minute limit")
+	}
+	if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("198.51.100.20", "one-user")); !allowed {
+		t.Fatal("one source IP exhausted another source IP's unauthenticated username bucket")
+	}
+}

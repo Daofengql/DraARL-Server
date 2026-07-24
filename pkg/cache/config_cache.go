@@ -67,6 +67,10 @@ func aprsConfigKey() string {
 	return "config:system:aprs"
 }
 
+func accessDiscoveryConfigKey() string {
+	return "config:system:access_discovery"
+}
+
 // openAIConfigKey OpenAI配置缓存键
 func openAIConfigKey() string {
 	return "config:system:openai"
@@ -204,6 +208,26 @@ func (c *ConfigCache) GetAPRSConfig(ctx context.Context) (*gormdb.APRSConfig, er
 	return dbConfig, nil
 }
 
+// GetAccessDiscoveryConfig 获取设备接入点发现配置（带缓存）。
+func (c *ConfigCache) GetAccessDiscoveryConfig(ctx context.Context) (*gormdb.AccessDiscoveryConfig, error) {
+	key := accessDiscoveryConfigKey()
+
+	var config gormdb.AccessDiscoveryConfig
+	if err := c.cache.Get(ctx, key, &config); err == nil {
+		return &config, nil
+	}
+
+	dbConfig, err := gormdb.GetSiteConfigRepo().GetAccessDiscoveryConfig()
+	if err != nil {
+		return nil, err
+	}
+	if dbConfig == nil {
+		return nil, nil
+	}
+	_ = c.cache.Set(ctx, key, dbConfig, 0)
+	return dbConfig, nil
+}
+
 // GetOpenAIConfig 获取OpenAI配置（带缓存）
 func (c *ConfigCache) GetOpenAIConfig(ctx context.Context) (*gormdb.OpenAIConfig, error) {
 	key := openAIConfigKey()
@@ -281,6 +305,11 @@ func (c *ConfigCache) InvalidateAPRSConfig(ctx context.Context) error {
 	return c.cache.Delete(ctx, aprsConfigKey())
 }
 
+// InvalidateAccessDiscoveryConfig 使设备接入点发现配置缓存失效。
+func (c *ConfigCache) InvalidateAccessDiscoveryConfig(ctx context.Context) error {
+	return c.cache.Delete(ctx, accessDiscoveryConfigKey())
+}
+
 // InvalidateOpenAIConfig 使OpenAI配置缓存失效
 func (c *ConfigCache) InvalidateOpenAIConfig(ctx context.Context) error {
 	return c.cache.Delete(ctx, openAIConfigKey())
@@ -293,6 +322,7 @@ func (c *ConfigCache) InvalidateAll(ctx context.Context) error {
 		icpConfigKey(),
 		systemInfoConfigKey(),
 		aprsConfigKey(),
+		accessDiscoveryConfigKey(),
 		openAIConfigKey(),
 	)
 }

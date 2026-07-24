@@ -275,11 +275,13 @@ func (m *UDPGhostManager) GetOnlineCount() int {
 func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 	m.mu.Lock()
 	removed := false
+	expired := make([]*models.Device, 0)
 
 	now := time.Now()
 	for key, dev := range m.devices {
 		if now.Sub(dev.LastPacketTime) > timeout {
 			removed = true
+			expired = append(expired, dev)
 			log.Printf("[UDP-GHOST] 设备超时下线: %s (用户: %s, 超时: %v)",
 				key, dev.Username, now.Sub(dev.LastPacketTime))
 
@@ -296,6 +298,9 @@ func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 		}
 	}
 	m.mu.Unlock()
+	for _, dev := range expired {
+		RevokeCenterLocalDevice(dev)
+	}
 	if removed {
 		InvalidateDomainReceiverCache()
 	}

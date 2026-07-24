@@ -1,0 +1,274 @@
+// Package interconnect implements the private Type 0 protocol used between a
+// DraARL centre and authenticated edge nodes. It deliberately lives outside
+// the ordinary device protocol: public device decoders must reject Type 0.
+package interconnect
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"time"
+)
+
+const (
+	NodeMagic                   = "DraA"
+	NodePacketType         byte = 0
+	NodeProtocolVersion    byte = 1
+	NodeProtocolMinVersion      = NodeProtocolVersion
+	NodeProtocolMaxVersion      = NodeProtocolVersion
+	NodeIDSize                  = 32
+	NodeAuthTagSize             = sha256.Size
+	DraARLHeaderSize            = 90
+	NodeDataHeaderSize          = 53
+	NodeHeaderSize              = DraARLHeaderSize + NodeDataHeaderSize
+	NodeMaxDatagramSize         = 1400
+	NodeMaxControlSize          = 65535
+)
+
+const (
+	SubtypeNodeEnroll           byte = 0x01
+	SubtypeNodeAuth             byte = 0x03
+	SubtypeNodeHeartbeat        byte = 0x05
+	SubtypeNodeDataBind         byte = 0x06
+	SubtypeNodeCredential       byte = 0x07
+	SubtypeRouteSnapshotBegin   byte = 0x10
+	SubtypeRouteSnapshotChunk   byte = 0x11
+	SubtypeRouteSnapshotCommit  byte = 0x12
+	SubtypeRouteDelta           byte = 0x13
+	SubtypeRouteAck             byte = 0x14
+	SubtypeRouteResyncRequest   byte = 0x15
+	SubtypeDeviceAuth           byte = 0x20
+	SubtypeDeviceSessionRenew   byte = 0x21
+	SubtypeDeviceSessionReport  byte = 0x22
+	SubtypeDeviceSessionRevoke  byte = 0x23
+	SubtypeDeviceConfig         byte = 0x24
+	SubtypeDeviceSessionConfirm byte = 0x25
+	SubtypeSpeakerLease         byte = 0x28
+	SubtypeRelayUpstream        byte = 0x30
+	SubtypeRelayDownstream      byte = 0x31
+)
+
+const (
+	FlagAck uint16 = 1 << iota
+	FlagEncrypted
+	FlagChunked
+	FlagControl
+	// FlagCritical requires a peer that does not understand the subtype to
+	// reject the node session instead of silently ignoring the envelope.
+	FlagCritical
+)
+
+const (
+	NodeFeatureRouteSync uint64 = 1 << iota
+	NodeFeatureUDPRelay
+	NodeFeatureDeviceSessions
+	NodeFeatureDeviceConfig
+	NodeFeatureSpeakerLease
+	NodeFeatureRuntimeMetrics
+	NodeFeatureCredentialRotation
+	NodeFeatureSessionReconfirm
+)
+
+const (
+	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
+		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation |
+		NodeFeatureSessionReconfirm
+	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
+)
+
+func IsKnownSubtype(subtype byte) bool {
+	switch subtype {
+	case SubtypeNodeEnroll, SubtypeNodeAuth, SubtypeNodeHeartbeat, SubtypeNodeDataBind, SubtypeNodeCredential,
+		SubtypeRouteSnapshotBegin, SubtypeRouteSnapshotChunk, SubtypeRouteSnapshotCommit,
+		SubtypeRouteDelta, SubtypeRouteAck, SubtypeRouteResyncRequest,
+		SubtypeDeviceAuth, SubtypeDeviceSessionRenew, SubtypeDeviceSessionReport,
+		SubtypeDeviceSessionRevoke, SubtypeDeviceConfig, SubtypeDeviceSessionConfirm, SubtypeSpeakerLease,
+		SubtypeRelayUpstream, SubtypeRelayDownstream:
+		return true
+	default:
+		return false
+	}
+}
+
+type Envelope struct {
+	Version           byte
+	Subtype           byte
+	Flags             uint16
+	ClusterEpoch      uint64
+	ProjectionVersion uint64
+	SourceNodeID      string
+	NodeSessionID     uint64
+	MessageID         uint64
+	SentAtMillis      int64
+	HopCount          byte
+	KeyEpoch          uint32
+	Payload           []byte
+	AuthTag           []byte
+	// Duplicate is local receive metadata and is never serialized. Reliable
+	// control retries reuse MessageID; the edge uses this bit to re-ACK an
+	// already applied update without applying it twice.
+	Duplicate bool
+	// receivedAt is local receive metadata and is never serialized. Short
+	// real-time queue deadlines must use this monotonic timestamp instead of
+	// comparing wall clocks from different servers.
+	receivedAt time.Time
+}
+
+func (e Envelope) locallyExpired(now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		maxAge = 2 * time.Second
+	}
+	if e.receivedAt.IsZero() {
+		return e.Expired(now, maxAge)
+	}
+	age := now.Sub(e.receivedAt)
+	return age < 0 || age > maxAge
+}
+
+func NewEnvelope(subtype byte, sourceNode string, sessionID, messageID uint64, payload []byte) Envelope {
+	return Envelope{Version: NodeProtocolVersion, Subtype: subtype, SourceNodeID: sourceNode, NodeSessionID: sessionID, MessageID: messageID, SentAtMillis: time.Now().UnixMilli(), Payload: payload}
+}
+
+func (e Envelope) validateForEncode(maxSize int) error {
+	if len(e.SourceNodeID) == 0 || len(e.SourceNodeID) > NodeIDSize {
+		return fmt.Errorf("node id must be 1..%d bytes", NodeIDSize)
+	}
+	if e.Version != NodeProtocolVersion {
+		return fmt.Errorf("unsupported node protocol version %d", e.Version)
+	}
+	if maxSize < NodeHeaderSize+NodeAuthTagSize || len(e.Payload) > maxSize-NodeHeaderSize-NodeAuthTagSize {
+		return errors.New("node payload exceeds datagram limit")
+	}
+	if e.HopCount > 2 {
+		return errors.New("hop count exceeds limit")
+	}
+	if len(e.AuthTag) != 0 {
+		return errors.New("auth tag is generated by Marshal")
+	}
+	return nil
+}
+
+// Marshal returns a real DraARL Type 0 datagram. The ordinary public device
+// decoder intentionally rejects it; only this authenticated node decoder may
+// inspect its DATA region. HMAC-SHA256 covers the full header and payload.
+func (e Envelope) Marshal(key []byte) ([]byte, error) {
+	return e.marshal(key, NodeMaxDatagramSize)
+}
+
+func (e Envelope) MarshalControl(key []byte) ([]byte, error) {
+	return e.marshal(key, NodeMaxControlSize)
+}
+
+func (e Envelope) marshal(key []byte, maxSize int) ([]byte, error) {
+	if len(key) < 8 {
+		return nil, errors.New("node session key is too short")
+	}
+	if err := e.validateForEncode(maxSize); err != nil {
+		return nil, err
+	}
+	out := make([]byte, NodeHeaderSize+len(e.Payload)+NodeAuthTagSize)
+	copy(out[:4], NodeMagic)
+	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
+	copy(out[6:38], e.SourceNodeID)
+	out[48] = NodePacketType
+	copy(out[86:90], "NOD0")
+
+	offset := DraARLHeaderSize
+	out[offset] = e.Version
+	out[offset+1] = e.Subtype
+	binary.BigEndian.PutUint16(out[offset+2:offset+4], e.Flags)
+	binary.BigEndian.PutUint64(out[offset+4:offset+12], e.ClusterEpoch)
+	binary.BigEndian.PutUint64(out[offset+12:offset+20], e.ProjectionVersion)
+	binary.BigEndian.PutUint64(out[offset+20:offset+28], e.NodeSessionID)
+	binary.BigEndian.PutUint64(out[offset+28:offset+36], e.MessageID)
+	binary.BigEndian.PutUint64(out[offset+36:offset+44], uint64(e.SentAtMillis))
+	out[offset+44] = e.HopCount
+	binary.BigEndian.PutUint32(out[offset+45:offset+49], e.KeyEpoch)
+	binary.BigEndian.PutUint32(out[offset+49:offset+53], uint32(len(e.Payload)))
+	copy(out[NodeHeaderSize:], e.Payload)
+	tag := hmac.New(sha256.New, key)
+	_, _ = tag.Write(out[:NodeHeaderSize+len(e.Payload)])
+	copy(out[NodeHeaderSize+len(e.Payload):], tag.Sum(nil))
+	return out, nil
+}
+
+func Unmarshal(data, key []byte) (Envelope, error) {
+	return unmarshal(data, key, NodeMaxDatagramSize)
+}
+
+func UnmarshalControl(data, key []byte) (Envelope, error) {
+	return unmarshal(data, key, NodeMaxControlSize)
+}
+
+func unmarshal(data, key []byte, maxSize int) (Envelope, error) {
+	var e Envelope
+	if len(key) < 8 {
+		return e, errors.New("node session key is too short")
+	}
+	if len(data) < NodeHeaderSize+NodeAuthTagSize || len(data) > maxSize {
+		return e, errors.New("invalid node packet size")
+	}
+	if string(data[:4]) != NodeMagic {
+		return e, errors.New("invalid node packet magic")
+	}
+	if int(binary.BigEndian.Uint16(data[4:6])) != len(data) {
+		return e, errors.New("invalid node packet total length")
+	}
+	if data[48] != NodePacketType {
+		return e, errors.New("packet is not DraARL Type 0")
+	}
+	if string(data[86:90]) != "NOD0" {
+		return e, errors.New("invalid node packet marker")
+	}
+	for i, b := range data[6:38] {
+		if b == 0 {
+			e.SourceNodeID = string(data[6 : 6+i])
+			break
+		}
+		if i == NodeIDSize-1 {
+			e.SourceNodeID = string(data[6:38])
+		}
+	}
+	if e.SourceNodeID == "" {
+		return e, errors.New("node id is empty")
+	}
+
+	offset := DraARLHeaderSize
+	e.Version, e.Subtype = data[offset], data[offset+1]
+	if e.Version != NodeProtocolVersion {
+		return e, fmt.Errorf("unsupported node protocol version %d", e.Version)
+	}
+	e.Flags = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+	e.ClusterEpoch = binary.BigEndian.Uint64(data[offset+4 : offset+12])
+	e.ProjectionVersion = binary.BigEndian.Uint64(data[offset+12 : offset+20])
+	e.NodeSessionID = binary.BigEndian.Uint64(data[offset+20 : offset+28])
+	e.MessageID = binary.BigEndian.Uint64(data[offset+28 : offset+36])
+	e.SentAtMillis = int64(binary.BigEndian.Uint64(data[offset+36 : offset+44]))
+	e.HopCount = data[offset+44]
+	e.KeyEpoch = binary.BigEndian.Uint32(data[offset+45 : offset+49])
+	payloadLen := int(binary.BigEndian.Uint32(data[offset+49 : offset+53]))
+	if payloadLen > maxSize-NodeHeaderSize-NodeAuthTagSize || NodeHeaderSize+payloadLen+NodeAuthTagSize != len(data) {
+		return e, errors.New("invalid node payload length")
+	}
+	e.Payload = append([]byte(nil), data[NodeHeaderSize:NodeHeaderSize+payloadLen]...)
+	e.AuthTag = append([]byte(nil), data[NodeHeaderSize+payloadLen:]...)
+	tag := hmac.New(sha256.New, key)
+	_, _ = tag.Write(data[:NodeHeaderSize+payloadLen])
+	if !hmac.Equal(e.AuthTag, tag.Sum(nil)) {
+		return Envelope{}, errors.New("invalid node packet authentication tag")
+	}
+	if e.HopCount > 2 {
+		return Envelope{}, errors.New("hop count exceeds limit")
+	}
+	return e, nil
+}
+
+func (e Envelope) Expired(now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		maxAge = 2 * time.Second
+	}
+	age := now.Sub(time.UnixMilli(e.SentAtMillis))
+	return age < -maxAge || age > maxAge
+}

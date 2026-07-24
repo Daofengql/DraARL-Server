@@ -90,14 +90,14 @@ func TestGhostChangesInvalidateDomainReceiverCache(t *testing.T) {
 	GlobalUDPGhostManager.Register(ghost)
 
 	entries := getDomainReceiverEntries(groupID)
-	if len(entries) != 1 || !sameUDPAddr(entries[0].addr, oldAddr) {
+	if len(entries) != 1 || entries[0].addr != oldAddr.AddrPort() {
 		t.Fatalf("registered ghost not visible immediately: %#v", entries)
 	}
 
 	newAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 30002}
 	GlobalUDPGhostManager.UpdateActivity(ghost.Username, ghost.SSID, newAddr)
 	entries = getDomainReceiverEntries(groupID)
-	if len(entries) != 1 || !sameUDPAddr(entries[0].addr, newAddr) {
+	if len(entries) != 1 || entries[0].addr != newAddr.AddrPort() {
 		t.Fatalf("updated ghost address not visible immediately: %#v", entries)
 	}
 

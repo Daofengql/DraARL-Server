@@ -2,9 +2,45 @@ package gormdb
 
 import (
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
+	updates := map[string]interface{}{
+		"current_entry_node_id":    nodeID,
+		"current_entry_session_id": sessionID,
+		"last_entry_node_id":       nodeID,
+		"last_entry_at":            now,
+		"entry_mode":               mode,
+		"is_online":                online,
+	}
+	if online {
+		updates["online_time"] = now
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var device Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&device, deviceID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Device{}).Where("id = ?", deviceID).Updates(updates).Error
+	})
+}
+
+// ClearDeviceEntryIfSession prevents a delayed centre timeout from clearing a
+// newer edge assignment for the same persistent device.
+func (r *DeviceRepository) ClearDeviceEntryIfSession(deviceID int, nodeID string, sessionID uint64) (bool, error) {
+	result := r.db.Model(&Device{}).
+		Where("id = ? AND current_entry_node_id = ? AND current_entry_session_id = ?", deviceID, nodeID, sessionID).
+		Updates(map[string]interface{}{
+			"current_entry_node_id": "", "current_entry_session_id": 0, "is_online": false,
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
+var ErrDeviceNotInGroup = errors.New("device is no longer in the expected group")
 
 // DeviceRepository 设备仓库
 type DeviceRepository struct {
@@ -36,6 +72,15 @@ func (r *DeviceRepository) ListDevices(limit, page int) ([]*Device, int64, error
 	return devices, total, nil
 }
 
+// ListAllDevices 返回运行时路由缓存需要的完整设备集合，不设置分页硬上限。
+func (r *DeviceRepository) ListAllDevices() ([]*Device, error) {
+	var devices []*Device
+	if err := r.db.Order("id DESC").Find(&devices).Error; err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
 // ListDevicesByGroupID 获取指定群组的设备列表
 func (r *DeviceRepository) ListDevicesByGroupID(groupID int) ([]*Device, error) {
 	var devices []*Device
@@ -54,6 +99,17 @@ func (r *DeviceRepository) GetDeviceByID(id int) (*Device, error) {
 		return nil, err
 	}
 	return &device, nil
+}
+
+// ListDevicesByIDsWithOwner loads one bounded confirmation batch and its
+// owners without issuing one query per device.
+func (r *DeviceRepository) ListDevicesByIDsWithOwner(ids []int) ([]*Device, error) {
+	if len(ids) == 0 {
+		return []*Device{}, nil
+	}
+	var devices []*Device
+	err := r.db.Preload("Owner").Where("id IN ?", ids).Find(&devices).Error
+	return devices, err
 }
 
 // GetDeviceByOwnerSSID 根据 owner_id + ssid 查询设备（设备唯一性）
@@ -95,6 +151,47 @@ func (r *DeviceRepository) UpdateDeviceFields(id int, fields map[string]interfac
 	return r.db.Model(&Device{}).Where("id = ?", id).Updates(fields).Error
 }
 
+// UpdateDeviceCommControlInGroup 原子更新当前仍属于指定群组的设备收发状态。
+// 行锁保证群主校验与更新期间设备不能并发切换群组。
+func (r *DeviceRepository) UpdateDeviceCommControlInGroup(
+	deviceID, groupID int,
+	disableSend, disableRecv *bool,
+) (before, after *Device, err error) {
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		var device Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&device, deviceID).Error; err != nil {
+			return err
+		}
+		if device.GroupID != groupID {
+			return ErrDeviceNotInGroup
+		}
+
+		original := device
+		updates := make(map[string]interface{}, 2)
+		if disableSend != nil {
+			updates["disable_send"] = *disableSend
+			device.DisableSend = *disableSend
+		}
+		if disableRecv != nil {
+			updates["disable_recv"] = *disableRecv
+			device.DisableRecv = *disableRecv
+		}
+		if len(updates) > 0 {
+			result := tx.Model(&Device{}).
+				Where("id = ? AND group_id = ?", deviceID, groupID).
+				Updates(updates)
+			if result.Error != nil {
+				return result.Error
+			}
+		}
+
+		before = &original
+		after = &device
+		return nil
+	})
+	return before, after, err
+}
+
 // DeleteDeviceByID 删除设备（仅删除设备记录，不清理关联数据）
 // 注意： 请使用 DeleteDeviceWithCascade 进行完整的级联删除
 func (r *DeviceRepository) DeleteDeviceByID(id int) error {
@@ -110,8 +207,9 @@ func (r *DeviceRepository) DeleteDeviceWithCascade(id int) error {
 			return err
 		}
 
-		// 2. 清除通信记录中的设备引用（将 device_id 设为 NULL，保留记录用于统计）
-		if err := tx.Model(&CommRecord{}).Where("device_id = ?", id).Update("device_id", nil).Error; err != nil {
+		// 2. 清除通信记录中的设备引用。CommRecord.DeviceID 为非空字段，
+		// 协议约定 0 表示无普通设备引用（幽灵/历史记录），因此不能写 NULL。
+		if err := tx.Model(&CommRecord{}).Where("device_id = ?", id).Update("device_id", 0).Error; err != nil {
 			return err
 		}
 
@@ -138,18 +236,54 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 	return count, err
 }
 
-// MarkAllDevicesOffline 在服务冷启动时统一清理历史在线状态。
-// 设计目标：服务异常退出后，避免数据库残留的 is_online=true 被新进程继续当作在线设备。
+// PrepareDevicesForStartup marks every device offline. When interconnect is
+// enabled, remote ownership is retained briefly so a still-running edge can
+// prove its previous node/control-session assignment after a centre restart.
+func (r *DeviceRepository) PrepareDevicesForStartup(preserveRemoteEntries bool) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Device{}).Where("is_online = ?", true).Update("is_online", false).Error; err != nil {
+			return err
+		}
+		query := tx.Model(&Device{})
+		if preserveRemoteEntries {
+			query = query.Where("current_entry_node_id = ?", "center")
+		} else {
+			query = query.Where("current_entry_node_id <> ? OR current_entry_session_id <> ?", "", 0)
+		}
+		return query.Updates(map[string]interface{}{"current_entry_node_id": "", "current_entry_session_id": 0}).Error
+	})
+}
+
+// MarkAllDevicesOffline preserves the historical single-node behaviour.
 func (r *DeviceRepository) MarkAllDevicesOffline() error {
-	return r.db.Model(&Device{}).
-		Where("is_online = ?", true).
-		Update("is_online", false).Error
+	return r.PrepareDevicesForStartup(false)
+}
+
+type DeviceEntrySession struct {
+	NodeID    string `gorm:"column:current_entry_node_id"`
+	SessionID uint64 `gorm:"column:current_entry_session_id"`
+}
+
+// ListOfflineRemoteEntrySessions captures only ownership left by the previous
+// centre process. The control listener is started after this query, so later
+// disconnects cannot be swept by the startup recovery timer.
+func (r *DeviceRepository) ListOfflineRemoteEntrySessions() ([]DeviceEntrySession, error) {
+	var sessions []DeviceEntrySession
+	err := r.db.Model(&Device{}).
+		Select("DISTINCT current_entry_node_id, current_entry_session_id").
+		Where("is_online = ? AND current_entry_node_id <> ? AND current_entry_session_id <> ?", false, "", 0).
+		Find(&sessions).Error
+	return sessions, err
 }
 
 // UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）
 func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime, lastOnlineIP string) error {
 	updates := map[string]interface{}{
 		"is_online": isOnline,
+	}
+	if !isOnline {
+		updates["current_entry_node_id"] = ""
+		updates["current_entry_session_id"] = 0
 	}
 	if onlineTime != "" {
 		updates["online_time"] = onlineTime
@@ -227,6 +361,32 @@ func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID in
 // ============================================================
 // 以下方法支持数据库层面分页（解决内存分页性能问题）
 // ============================================================
+
+// ListDevicesByKeywordPaginated 按设备名称或所有者呼号模糊搜索并分页。
+// LEFT JOIN 保证历史上没有有效所有者关联的设备仍可按设备名称检索。
+func (r *DeviceRepository) ListDevicesByKeywordPaginated(keyword string, ownerID int, limit, page int) ([]*Device, int64, error) {
+	var devices []*Device
+	var total int64
+
+	offset := (page - 1) * limit
+	like := "%" + keyword + "%"
+	query := r.db.Model(&Device{}).
+		Joins("LEFT JOIN users ON devices.owner_id = users.id").
+		Where("devices.name LIKE ? OR users.callsign LIKE ?", like, like)
+
+	if ownerID > 0 {
+		query = query.Where("devices.owner_id = ?", ownerID)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := query.Select("devices.*").Order("devices.id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return devices, total, nil
+}
 
 // ListDevicesByCallSignPaginated 按呼号搜索设备并分页（数据库层分页）
 func (r *DeviceRepository) ListDevicesByCallSignPaginated(callsign string, ownerID int, limit, page int) ([]*Device, int64, error) {

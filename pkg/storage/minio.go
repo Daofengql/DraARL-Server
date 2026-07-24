@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -16,11 +17,12 @@ import (
 )
 
 type minioStorage struct {
-	client   *minio.Client
-	bucket   string
-	basePath string
-	endpoint string
-	useSSL   bool
+	client         *minio.Client
+	publicClient   *minio.Client
+	bucket         string
+	basePath       string
+	publicEndpoint string
+	publicUseSSL   bool
 }
 
 func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
@@ -52,6 +54,17 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 MinIO 客户端失败: %w", err)
 	}
+	publicEndpoint, publicUseSSL := resolveMinIOPublicTarget(mc)
+	publicClient := client
+	if publicEndpoint != endpoint || publicUseSSL != mc.UseSSL {
+		publicClient, err = minio.New(publicEndpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(mc.AccessKey, mc.SecretKey, ""),
+			Secure: publicUseSSL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("初始化 MinIO 对外签名客户端失败: %w", err)
+		}
+	}
 
 	bucket := mc.Bucket
 	if bucket == "" {
@@ -71,14 +84,58 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 			return nil, fmt.Errorf("创建 bucket 失败: %w", err)
 		}
 	}
+	policy, err := publicReadBucketPolicy(bucket)
+	if err != nil {
+		return nil, fmt.Errorf("生成 bucket 公共读策略失败: %w", err)
+	}
+	policyCtx, policyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer policyCancel()
+	if err := client.SetBucketPolicy(policyCtx, bucket, policy); err != nil {
+		return nil, fmt.Errorf("配置 bucket 公共读策略失败: %w", err)
+	}
 
 	return &minioStorage{
-		client:   client,
-		bucket:   bucket,
-		basePath: strings.TrimRight(strings.TrimSpace(mc.BasePath), "/"),
-		endpoint: endpoint,
-		useSSL:   mc.UseSSL,
+		client:         client,
+		publicClient:   publicClient,
+		bucket:         bucket,
+		basePath:       strings.TrimRight(strings.TrimSpace(mc.BasePath), "/"),
+		publicEndpoint: publicEndpoint,
+		publicUseSSL:   publicUseSSL,
 	}, nil
+}
+
+func publicReadBucketPolicy(bucket string) (string, error) {
+	type statement struct {
+		Effect    string              `json:"Effect"`
+		Principal map[string][]string `json:"Principal"`
+		Action    []string            `json:"Action"`
+		Resource  []string            `json:"Resource"`
+	}
+	type policyDocument struct {
+		Version   string      `json:"Version"`
+		Statement []statement `json:"Statement"`
+	}
+
+	encoded, err := json.Marshal(policyDocument{
+		Version: "2012-10-17",
+		Statement: []statement{{
+			Effect:    "Allow",
+			Principal: map[string][]string{"AWS": {"*"}},
+			Action:    []string{"s3:GetObject"},
+			Resource:  []string{"arn:aws:s3:::" + bucket + "/*"},
+		}},
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func resolveMinIOPublicTarget(config config.MinIOConfig) (string, bool) {
+	if endpoint := strings.TrimSpace(config.PublicEndpoint); endpoint != "" {
+		return endpoint, config.PublicUseSSL
+	}
+	return strings.TrimSpace(config.Endpoint), config.UseSSL
 }
 
 func (s *minioStorage) Driver() string          { return DriverMinIO }
@@ -182,14 +239,14 @@ func (s *minioStorage) PublicURL(key string) string {
 		return s.basePath + "/" + clean
 	}
 	protocol := "http"
-	if s.useSSL {
+	if s.publicUseSSL {
 		protocol = "https"
 	}
-	return fmt.Sprintf("%s://%s/%s/%s", protocol, s.endpoint, s.bucket, clean)
+	return fmt.Sprintf("%s://%s/%s/%s", protocol, s.publicEndpoint, s.bucket, clean)
 }
 
 func (s *minioStorage) PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	u, err := s.client.PresignedGetObject(ctx, s.bucket, strings.TrimLeft(key, "/"), expiry, nil)
+	u, err := s.publicClient.PresignedGetObject(ctx, s.bucket, strings.TrimLeft(key, "/"), expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("生成预签名下载 URL 失败: %w", err)
 	}
@@ -201,7 +258,7 @@ func (s *minioStorage) PresignPut(ctx context.Context, key string, expiry time.D
 	if expiry <= 0 {
 		expiry = 15 * time.Minute
 	}
-	u, err := s.client.PresignedPutObject(ctx, s.bucket, strings.TrimLeft(key, "/"), expiry)
+	u, err := s.publicClient.PresignedPutObject(ctx, s.bucket, strings.TrimLeft(key, "/"), expiry)
 	if err != nil {
 		return PresignPutResult{}, fmt.Errorf("生成预签名上传 URL 失败: %w", err)
 	}

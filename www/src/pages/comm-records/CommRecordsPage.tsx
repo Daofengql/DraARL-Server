@@ -35,6 +35,9 @@ import Download from '@mui/icons-material/Download'
 import Refresh from '@mui/icons-material/Refresh'
 import Message from '@mui/icons-material/Message'
 import { apiClient } from '../../services/api'
+import { groupService } from '../../services/group'
+import { deviceService } from '../../services/device'
+import { userService } from '../../services/user'
 import { opusPlayer, getWavBlobFromOpusUrl } from '../../utils/opusDecoder'
 import { PageHeader } from '../../components/common/PageHeader'
 import { getDevModelIcon, formatDeviceDisplayName } from '../../utils/deviceModel'
@@ -119,6 +122,36 @@ export function CommRecordsPage() {
     }
   }, [filterDeviceId, filterGroupId, filterUserId, isAdminPage, page, rowsPerPage])
 
+  const loadUsers = useCallback(async () => {
+    try {
+      const users = await userService.listAll()
+      setUserList(users)
+    } catch (err) {
+      console.error('Failed to load users:', err)
+      setUserList([])
+    }
+  }, [])
+
+  const loadDevices = useCallback(async () => {
+    try {
+      const devices = await deviceService.listAll()
+      setDeviceList(devices)
+    } catch (err) {
+      console.error('Failed to load devices:', err)
+      setDeviceList([])
+    }
+  }, [])
+
+  const loadGroups = useCallback(async () => {
+    try {
+      const groups = await groupService.listAll({ admin: isAdminPage })
+      setGroupList(groups)
+    } catch (err) {
+      console.error('Failed to load groups:', err)
+      setGroupList([])
+    }
+  }, [isAdminPage])
+
   useEffect(() => {
     loadRecords()
     if (showUserFilter) {
@@ -126,46 +159,7 @@ export function CommRecordsPage() {
     }
     loadDevices()
     loadGroups()
-  }, [loadRecords, showUserFilter])
-
-  const loadUsers = async () => {
-    try {
-      const res = await apiClient.get<any>('/api/users')
-      if (res.code === 200) {
-        const users = res.data?.items || res.data?.data || res.data || []
-        setUserList(Array.isArray(users) ? users : [])
-      }
-    } catch (err) {
-      console.error('Failed to load users:', err)
-      setUserList([])
-    }
-  }
-
-  const loadDevices = async () => {
-    try {
-      const res = await apiClient.get<any>('/api/devices')
-      if (res.code === 200) {
-        const devices = res.data?.items || res.data?.data || res.data || []
-        setDeviceList(Array.isArray(devices) ? devices : [])
-      }
-    } catch (err) {
-      console.error('Failed to load devices:', err)
-      setDeviceList([])
-    }
-  }
-
-  const loadGroups = async () => {
-    try {
-      const res = await apiClient.get<any>('/api/groups')
-      if (res.code === 200) {
-        const groups = res.data?.items || res.data?.data || res.data || []
-        setGroupList(Array.isArray(groups) ? groups : [])
-      }
-    } catch (err) {
-      console.error('Failed to load groups:', err)
-      setGroupList([])
-    }
-  }
+  }, [loadDevices, loadGroups, loadRecords, loadUsers, showUserFilter])
 
   const formatDuration = (ms: number) => {
     if (ms < 1000) return `${ms}ms`

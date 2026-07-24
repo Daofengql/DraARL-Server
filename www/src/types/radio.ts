@@ -21,13 +21,11 @@ export type MessageType =
 
 // DraARLv1 数据包类型
 export const PacketType = {
-  CONTROL: 0,
+  JWT_AUTH: 1,
   HEARTBEAT: 2,
   CONFIG: 3,
   TEXT_MESSAGE: 4,
   OPUS_16K: 5,
-  SERVER_VOICE: 6,
-  AT_PASSTHROUGH: 7,
 } as const
 
 // 设备型号
@@ -88,7 +86,6 @@ export interface RadioMessage {
 export interface RadioGroup {
   id: number
   name: string
-  callsign?: string
   type: number
   status: number
   onlineCount: number // 在线设备数

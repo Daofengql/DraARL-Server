@@ -90,7 +90,7 @@ export function AdminDevicePage() {
 
   const loadGroups = async () => {
     try {
-      const data = await groupService.list()
+      const data = await groupService.listAll({ admin: true })
       setGroups(data)
     } catch (err) {
       console.error('Failed to load groups:', err)
@@ -99,8 +99,8 @@ export function AdminDevicePage() {
 
   const loadUsers = async () => {
     try {
-      const data = await userService.getList()
-      setUsers(data.items || data)
+      const data = await userService.listAll()
+      setUsers(data)
     } catch (err) {
       console.error('Failed to load users:', err)
     }
@@ -237,7 +237,7 @@ export function AdminDevicePage() {
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 900, tableLayout: 'fixed' }}>
+        <Table sx={{ minWidth: 1020, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'grey.50' }}>
             <TableRow>
               <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
@@ -245,6 +245,7 @@ export function AdminDevicePage() {
               <TableCell align="center">设备类型</TableCell>
               <TableCell align="center">呼号-SSID</TableCell>
               <TableCell align="center">最新上线IP</TableCell>
+              <TableCell align="center">入口服务器</TableCell>
               <TableCell align="center">所有者</TableCell>
               <TableCell align="center">所在群组</TableCell>
               <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
@@ -253,9 +254,9 @@ export function AdminDevicePage() {
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={9} align="center">加载中...</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} align="center">加载中...</TableCell></TableRow>
             ) : devices.length === 0 ? (
-              <TableRow><TableCell colSpan={9} align="center">暂无设备数据</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} align="center">暂无设备数据</TableCell></TableRow>
             ) : (
               devices.map((device) => {
                 const group = getGroupInfo(device.group_id)
@@ -279,6 +280,14 @@ export function AdminDevicePage() {
                       {device.last_online_ip_location && (
                         <Typography variant="caption" color="text.secondary">
                           {device.last_online_ip_location}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Typography variant="body2">{device.entry_node_name || '-'}</Typography>
+                      {device.entry_node_name && (
+                        <Typography variant="caption" color="text.secondary">
+                          {device.is_online ? '当前入口' : '最近入口'}
                         </Typography>
                       )}
                     </TableCell>
@@ -318,7 +327,7 @@ export function AdminDevicePage() {
                         onClick={() => handleOpenSwitchDialog(device)}
                         endIcon={group?.type === GROUP_TYPE_PRIVATE ? <Lock fontSize="small" /> : undefined}
                       >
-                        {group?.name || '无群组'}
+                        {group?.name || (device.group_id === 0 ? '未分组' : '群组 ' + device.group_id + ' 不可用')}
                       </Button>
                     </TableCell>
                     <TableCell align="center">
@@ -396,6 +405,8 @@ export function AdminDevicePage() {
           currentGroupId={switchingDevice.group_id}
           onSelect={handleSwitchGroup}
           title="切换设备群组"
+          adminMode
+          showSearchTab={false}
         />
       )}
 

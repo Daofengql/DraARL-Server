@@ -48,34 +48,24 @@ type Device struct {
 	LastCtlDuration    int               `json:"last_ctl_duration"`
 	UDPSocket          *net.UDPConn      `json:"-"`
 	CallSignSSID       string            `json:"callsign_ssid"`
-	LastATcommand      *ATCommand        `json:"last_at_command,omitempty"`
 	Username           string            `json:"username"` // 运行时字段：从认证结果获取，用于索引
 	MAC                string            `json:"mac"`      // 运行时字段：设备上报的 MAC，用于快速重连判定
 
 	// Connection state tracking
-	LastDisconnectTime time.Time `json:"last_disconnect_time"` // Last time device went offline
-	ReconnectCount     int       `json:"reconnect_count"`      // Number of reconnections
-	PreviousUDPAddr    string    `json:"previous_udp_addr"`    // Previous connection address
-	IsReconnecting     bool      `json:"is_reconnecting"`      // Currently in reconnection grace period
+	LastDisconnectTime       time.Time  `json:"last_disconnect_time"` // Last time device went offline
+	ReconnectCount           int        `json:"reconnect_count"`      // Number of reconnections
+	PreviousUDPAddr          string     `json:"previous_udp_addr"`    // Previous connection address
+	IsReconnecting           bool       `json:"is_reconnecting"`      // Currently in reconnection grace period
+	CurrentEntryNodeID       string     `json:"current_entry_node_id,omitempty"`
+	CurrentEntrySessionID    uint64     `json:"-"`
+	LastEntryNodeID          string     `json:"last_entry_node_id,omitempty"`
+	LastEntryAt              *time.Time `json:"last_entry_at,omitempty"`
+	EntryMode                string     `json:"entry_mode,omitempty"`
+	InterconnectSessionID    uint64     `json:"-"`
+	InterconnectSessionEpoch uint64     `json:"-"`
 }
 
 // GetCallSignSSID returns the combined callsign and SSID
 func (d *Device) GetCallSignSSID() string {
 	return d.CallSign + "-" + string(rune(d.SSID))
-}
-
-// ATCommand AT指令
-type ATCommand struct {
-	CallSign  string `json:"callsign"`
-	SSID      byte   `json:"ssid"`
-	Type      byte   `json:"type"`
-	ATcommand string `json:"at_command"`
-	Data      string `json:"data"`
-}
-
-// ControlPacket 控制数据包
-type ControlPacket struct {
-	CallSign string `json:"callsign"`
-	SSID     byte   `json:"ssid"`
-	Data     []byte `json:"data"`
 }

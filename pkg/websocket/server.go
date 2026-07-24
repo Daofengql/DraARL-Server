@@ -159,6 +159,7 @@ func startPingPong(device *WSDevice) {
 // handleAuthenticatedConnection 处理已认证的连接（只支持幽灵设备）
 func handleAuthenticatedConnection(device *WSDevice) {
 	defer func() {
+		udphub.RevokeCenterLocalWS(device)
 		device.StopWriter() // 先停止 writer goroutine
 		device.Conn.Close()
 		GlobalManager.UnregisterDevice(device)

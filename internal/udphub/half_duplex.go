@@ -19,10 +19,23 @@ const (
 )
 
 type halfDuplexDomainState struct {
-	speakerID      string
-	speakerLabel   string
+	speaker        halfDuplexSpeaker
 	lastVoiceAt    time.Time
 	lastBlockLogAt time.Time
+}
+
+type halfDuplexSpeaker struct {
+	key       uint64
+	labelBase string
+	ssid      byte
+}
+
+func (s halfDuplexSpeaker) label() string {
+	base := s.labelBase
+	if base == "" {
+		base = "unknown"
+	}
+	return base + "-" + strconv.Itoa(int(s.ssid))
 }
 
 type halfDuplexShard struct {
@@ -50,8 +63,8 @@ func halfDuplexShardIndex(domainKey string) int {
 
 // tryAcquireHalfDuplex 严格半双工仲裁：
 // 同一转发域内同一时刻仅允许一个说话人发包，其他说话人语音包会被丢弃。
-func tryAcquireHalfDuplex(groupID int, speakerID, speakerLabel string, ts time.Time) bool {
-	if groupID <= 0 || speakerID == "" {
+func tryAcquireHalfDuplex(groupID int, speaker halfDuplexSpeaker, ts time.Time) bool {
+	if groupID <= 0 || speaker.key == 0 {
 		return true
 	}
 	if ts.IsZero() {
@@ -67,24 +80,21 @@ func tryAcquireHalfDuplex(groupID int, speakerID, speakerLabel string, ts time.T
 	state, exists := shard.states[domainKey]
 	if !exists {
 		shard.states[domainKey] = &halfDuplexDomainState{
-			speakerID:    speakerID,
-			speakerLabel: speakerLabel,
-			lastVoiceAt:  ts,
+			speaker:     speaker,
+			lastVoiceAt: ts,
 		}
 		return true
 	}
 
 	// 当前占用者续期
-	if state.speakerID == speakerID {
+	if state.speaker.key == speaker.key {
 		state.lastVoiceAt = ts
-		state.speakerLabel = speakerLabel
 		return true
 	}
 
 	// 占用者超时，移交发言权
 	if ts.Sub(state.lastVoiceAt) > halfDuplexVoiceHoldTimeout {
-		state.speakerID = speakerID
-		state.speakerLabel = speakerLabel
+		state.speaker = speaker
 		state.lastVoiceAt = ts
 		state.lastBlockLogAt = time.Time{}
 		return true
@@ -93,7 +103,7 @@ func tryAcquireHalfDuplex(groupID int, speakerID, speakerLabel string, ts time.T
 	// 被阻塞：当前有其他说话人占用发言权
 	if ts.Sub(state.lastBlockLogAt) > halfDuplexBlockLogInterval {
 		log.Printf("[HALF_DUPLEX] blocked speaker=%s domain=%s active=%s",
-			speakerLabel, domainKey, state.speakerLabel)
+			speaker.label(), domainKey, state.speaker.label())
 		state.lastBlockLogAt = ts
 	}
 	return false
@@ -104,6 +114,7 @@ func tryAcquireHalfDuplex(groupID int, speakerID, speakerLabel string, ts time.T
 func resetHalfDuplexDomainCache() {
 	halfDuplexDomainKeyCache = sync.Map{}
 	halfDuplexDomainGroupsCache = sync.Map{}
+	resetDomainGroupReverseCache()
 
 	// 仅回收明显过期的占用状态，防止状态表长期增长。
 	expireBefore := time.Now().Add(-3 * halfDuplexVoiceHoldTimeout)
@@ -149,6 +160,31 @@ func GetHalfDuplexDomainGroupIDs(groupID int) []int {
 	sort.Ints(ids)
 	halfDuplexDomainGroupsCache.Store(domainKey, append([]int(nil), ids...))
 	return ids
+}
+
+// GetCommunicationDomainID returns a stable opaque ID for the current linked
+// group domain. It is shared with Type 0 grants so centre and edge make the
+// same local/remote routing decision without sharing database state.
+func GetCommunicationDomainID(groupID int) uint64 {
+	key := getHalfDuplexDomainKey(groupID)
+	if key == "" {
+		return 0
+	}
+	return uint64(fnv32String(key))
+}
+
+// GetActiveCommunicationDomainID also applies the authoritative group enabled
+// state. Disabled, missing, ungrouped and virtual groups never form a live
+// forwarding domain on an edge.
+func GetActiveCommunicationDomainID(groupID int) uint64 {
+	if groupID <= 0 {
+		return 0
+	}
+	group, ok := GetGroupFromCache(groupID)
+	if !ok || group == nil || group.Status != 1 || group.IsVirtual {
+		return 0
+	}
+	return GetCommunicationDomainID(groupID)
 }
 
 // collectHalfDuplexDomainGroupIDs 计算一个群组可达的“语音转发连通域”。

@@ -254,6 +254,7 @@ func (m *Manager) Warmup(ctx context.Context) error {
 		_, _ = m.Config.GetICPConfig(ctx)
 		_, _ = m.Config.GetSystemInfoConfig(ctx)
 		_, _ = m.Config.GetAPRSConfig(ctx)
+		_, _ = m.Config.GetAccessDiscoveryConfig(ctx)
 	}
 
 	// 可以根据需要预热其他热点数据

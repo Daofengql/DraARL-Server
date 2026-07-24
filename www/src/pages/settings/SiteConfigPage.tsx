@@ -71,6 +71,22 @@ interface APRSConfig {
   altitude: string
 }
 
+interface AccessDiscoveryConfig {
+  token_ttl_seconds: number
+  edge_health_ttl_seconds: number
+  cache_max_age_seconds: number
+  center: {
+    enabled: boolean
+    public_id: string
+    display_name: string
+    udp_host: string
+    udp_port: number
+    region: string
+    network: string
+    priority: number
+  }
+}
+
 // OpenAI配置
 interface OpenAIConfig {
   base_url: string
@@ -107,6 +123,7 @@ const EVENT_TYPES = [
   { value: '', label: '全部' },
   { value: 'login', label: '登录' },
   { value: 'logout', label: '登出' },
+  { value: 'admin_switch_login', label: '管理员切换登录' },
   { value: 'login_failed', label: '登录失败' },
   { value: 'register', label: '注册' },
   { value: 'user_create', label: '创建用户' },
@@ -145,6 +162,7 @@ const EVENT_TYPES = [
 const EVENT_TYPE_COLORS: Record<string, any> = {
   login: 'info',
   logout: 'default',
+  admin_switch_login: 'warning',
   login_failed: 'error',
   register: 'success',
   user_create: 'success',
@@ -183,6 +201,7 @@ const EVENT_TYPE_COLORS: Record<string, any> = {
 const EVENT_TYPE_LABELS: Record<string, string> = {
   login: '登录',
   logout: '登出',
+  admin_switch_login: '管理员切换登录',
   login_failed: '登录失败',
   register: '注册',
   user_create: '创建用户',
@@ -250,6 +269,22 @@ export function SiteConfigPage() {
     altitude: '',
   })
 
+  const [accessDiscovery, setAccessDiscovery] = useState<AccessDiscoveryConfig>({
+    token_ttl_seconds: 300,
+    edge_health_ttl_seconds: 20,
+    cache_max_age_seconds: 5,
+    center: {
+      enabled: false,
+      public_id: 'center',
+      display_name: '中心直连',
+      udp_host: '',
+      udp_port: 60050,
+      region: '',
+      network: '',
+      priority: 100,
+    },
+  })
+
   // OpenAI配置
   const [openai, setOpenAI] = useState<OpenAIConfig>({
     base_url: '',
@@ -304,9 +339,10 @@ export function SiteConfigPage() {
   const loadConfigs = useCallback(async () => {
     try {
       // 并行获取所有配置
-      const [icpRes, systemRes, aprsRes, openaiRes, commSettingsRes, registrationRes, smtpRes] = await Promise.all([
+      const [icpRes, systemRes, accessDiscoveryRes, aprsRes, openaiRes, commSettingsRes, registrationRes, smtpRes] = await Promise.all([
         apiClient.get<any>('/api/config/category/icp'),
         apiClient.get<any>('/api/config/category/system'),
+        apiClient.get<any>('/api/config/access-discovery'),
         apiClient.get<any>('/api/config/aprs'),
         apiClient.get<any>('/api/config/openai'),
         apiClient.get<any>('/api/config/comm-settings'),
@@ -327,6 +363,10 @@ export function SiteConfigPage() {
             : '',
         }
         setSystemInfo(newSystemInfo)
+      }
+
+      if (accessDiscoveryRes.code === 200 && accessDiscoveryRes.data) {
+        setAccessDiscovery(accessDiscoveryRes.data)
       }
 
       // 解析APRS配置
@@ -402,6 +442,42 @@ export function SiteConfigPage() {
       showMessage('success', 'APRS配置保存成功')
     } catch {
       showMessage('error', '保存APRS配置失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSaveAccessDiscovery = async () => {
+    if (accessDiscovery.token_ttl_seconds < 1 || accessDiscovery.token_ttl_seconds > 300) {
+      showMessage('error', '发现凭证有效期必须在 1-300 秒之间')
+      return
+    }
+    if (accessDiscovery.edge_health_ttl_seconds < 1 || accessDiscovery.edge_health_ttl_seconds > 300) {
+      showMessage('error', '边缘健康有效期必须在 1-300 秒之间')
+      return
+    }
+    if (accessDiscovery.cache_max_age_seconds < 1 || accessDiscovery.cache_max_age_seconds > 30) {
+      showMessage('error', '客户端缓存时间必须在 1-30 秒之间')
+      return
+    }
+    if (accessDiscovery.center.enabled && accessDiscovery.center.udp_host.trim() === '') {
+      showMessage('error', '启用中心直连时必须填写公网 UDP 地址')
+      return
+    }
+    if (accessDiscovery.center.udp_port < 1 || accessDiscovery.center.udp_port > 65535) {
+      showMessage('error', '中心公网 UDP 端口必须在 1-65535 之间')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const res = await apiClient.put<any>('/api/config/access-discovery', accessDiscovery)
+      if (res.code === 200 && res.data) {
+        setAccessDiscovery(res.data)
+      }
+      showMessage('success', '接入点配置保存成功')
+    } catch {
+      showMessage('error', '保存接入点配置失败')
     } finally {
       setLoading(false)
     }
@@ -639,7 +715,7 @@ export function SiteConfigPage() {
 
   // 加载APRS日志当切换到APRS标签页时
   useEffect(() => {
-    if (tabValue === 1) {
+    if (tabValue === 2) {
       loadAPRSLogs()
       // 每10秒刷新一次日志
       const interval = setInterval(loadAPRSLogs, 10000)
@@ -668,14 +744,14 @@ export function SiteConfigPage() {
 
   // 加载操作日志当切换到操作日志标签页时
   useEffect(() => {
-    if (tabValue === 6) {
+    if (tabValue === 7) {
       loadOpLogs()
     }
   }, [tabValue, loadOpLogs])
 
   // 同步两个卡片的高度
   useEffect(() => {
-    if (tabValue === 1 && configCardRef.current) {
+    if (tabValue === 2 && configCardRef.current) {
       const updateHeight = () => {
         if (configCardRef.current) {
           setConfigCardHeight(configCardRef.current.offsetHeight)
@@ -714,8 +790,11 @@ export function SiteConfigPage() {
           value={tabValue}
           onChange={(_, newValue) => setTabValue(newValue)}
           sx={{ borderBottom: 1, borderColor: 'divider', px: 2 }}
+          variant="scrollable"
+          scrollButtons="auto"
         >
           <Tab label="系统信息" />
+          <Tab label="接入点" />
           <Tab label="APRS" />
           <Tab label="OpenAI" />
           <Tab label="通信设置" />
@@ -944,8 +1023,147 @@ export function SiteConfigPage() {
           </Box>
         </TabPanel>
 
-        {/* APRS标签页 */}
+        {/* 接入点标签页 */}
         <TabPanel value={tabValue} index={1}>
+          <Box sx={{ px: 2, maxWidth: 760 }}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  设备接入点发现
+                </Typography>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+                    <TextField
+                      label="发现凭证有效期"
+                      type="number"
+                      value={accessDiscovery.token_ttl_seconds}
+                      onChange={(e) => setAccessDiscovery({ ...accessDiscovery, token_ttl_seconds: Number(e.target.value) })}
+                      inputProps={{ min: 1, max: 300 }}
+                      InputProps={{ endAdornment: <InputAdornment position="end">秒</InputAdornment> }}
+                    />
+                    <TextField
+                      label="边缘健康有效期"
+                      type="number"
+                      value={accessDiscovery.edge_health_ttl_seconds}
+                      onChange={(e) => setAccessDiscovery({ ...accessDiscovery, edge_health_ttl_seconds: Number(e.target.value) })}
+                      inputProps={{ min: 1, max: 300 }}
+                      InputProps={{ endAdornment: <InputAdornment position="end">秒</InputAdornment> }}
+                    />
+                    <TextField
+                      label="客户端缓存时间"
+                      type="number"
+                      value={accessDiscovery.cache_max_age_seconds}
+                      onChange={(e) => setAccessDiscovery({ ...accessDiscovery, cache_max_age_seconds: Number(e.target.value) })}
+                      inputProps={{ min: 1, max: 30 }}
+                      InputProps={{ endAdornment: <InputAdornment position="end">秒</InputAdornment> }}
+                    />
+                  </Box>
+
+                  <Divider />
+
+                  <FormControlLabel
+                    control={(
+                      <Switch
+                        checked={accessDiscovery.center.enabled}
+                        onChange={(e) => setAccessDiscovery({
+                          ...accessDiscovery,
+                          center: { ...accessDiscovery.center, enabled: e.target.checked },
+                        })}
+                      />
+                    )}
+                    label="发布中心直连入口"
+                  />
+
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
+                    <TextField
+                      label="公开 ID"
+                      value={accessDiscovery.center.public_id}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, public_id: e.target.value },
+                      })}
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                    <TextField
+                      label="显示名称"
+                      value={accessDiscovery.center.display_name}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, display_name: e.target.value },
+                      })}
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                    <TextField
+                      label="公网 UDP 地址"
+                      value={accessDiscovery.center.udp_host}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, udp_host: e.target.value },
+                      })}
+                      placeholder="radio.example.com"
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                    <TextField
+                      label="公网 UDP 端口"
+                      type="number"
+                      value={accessDiscovery.center.udp_port}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, udp_port: Number(e.target.value) },
+                      })}
+                      inputProps={{ min: 1, max: 65535 }}
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                    <TextField
+                      label="地区"
+                      value={accessDiscovery.center.region}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, region: e.target.value },
+                      })}
+                      placeholder="福建省 福州市"
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                    <TextField
+                      label="网络标签"
+                      value={accessDiscovery.center.network}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, network: e.target.value },
+                      })}
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                    <TextField
+                      label="优先级"
+                      type="number"
+                      value={accessDiscovery.center.priority}
+                      onChange={(e) => setAccessDiscovery({
+                        ...accessDiscovery,
+                        center: { ...accessDiscovery.center, priority: Number(e.target.value) },
+                      })}
+                      disabled={!accessDiscovery.center.enabled}
+                    />
+                  </Box>
+
+                  <Box>
+                    <Button
+                      variant="contained"
+                      startIcon={<Save />}
+                      onClick={handleSaveAccessDiscovery}
+                      disabled={loading}
+                    >
+                      保存接入点配置
+                    </Button>
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
+          </Box>
+        </TabPanel>
+
+        {/* APRS标签页 */}
+        <TabPanel value={tabValue} index={2}>
           <Box sx={{ px: 2 }}>
             <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, alignItems: { xs: 'stretch', md: 'flex-start' } }}>
               {/* APRS配置卡片 */}
@@ -1165,7 +1383,7 @@ export function SiteConfigPage() {
         </TabPanel>
 
         {/* OpenAI标签页 */}
-        <TabPanel value={tabValue} index={2}>
+        <TabPanel value={tabValue} index={3}>
           <Box sx={{ px: 2, maxWidth: 600 }}>
             <Card>
               <CardContent>
@@ -1221,7 +1439,7 @@ export function SiteConfigPage() {
         </TabPanel>
 
         {/* 通信设置标签页 */}
-        <TabPanel value={tabValue} index={3}>
+        <TabPanel value={tabValue} index={4}>
           <Box sx={{ px: 2, maxWidth: 600 }}>
             <Card>
               <CardContent>
@@ -1321,7 +1539,7 @@ export function SiteConfigPage() {
         </TabPanel>
 
         {/* SMTP配置标签页 */}
-        <TabPanel value={tabValue} index={4}>
+        <TabPanel value={tabValue} index={5}>
           <Box sx={{ px: 2, maxWidth: 600 }}>
             <Card>
               <CardContent>
@@ -1409,7 +1627,7 @@ export function SiteConfigPage() {
         </TabPanel>
 
         {/* 注册设置标签页 */}
-        <TabPanel value={tabValue} index={5}>
+        <TabPanel value={tabValue} index={6}>
           <Box sx={{ px: 2, maxWidth: 600 }}>
             <Card>
               <CardContent>
@@ -1456,7 +1674,7 @@ export function SiteConfigPage() {
         </TabPanel>
 
         {/* 操作日志标签页 */}
-        <TabPanel value={tabValue} index={6}>
+        <TabPanel value={tabValue} index={7}>
           <Box sx={{ px: 2 }}>
             <Card>
               <CardContent>

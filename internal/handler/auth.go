@@ -12,7 +12,10 @@ import (
 	"draarl/internal/email"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/models"
 	"draarl/internal/protocol"
+	"draarl/internal/routesync"
+	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	appcrypto "draarl/pkg/crypto"
 	"draarl/pkg/minio"
@@ -159,7 +162,6 @@ func Login(c *gin.Context) {
 	}
 
 	// 生成 JWT token
-	roles := user.GetRoles()
 	issued, err := issueAuthTokens(c, user)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -181,44 +183,7 @@ func Login(c *gin.Context) {
 		c.ClientIP(),
 	)
 
-	// 获取用户 Web 端的群组偏好
-	userRepo := gormdb.NewUserRepository()
-	lastGroupID, _ := userRepo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
-
-	// 构建用户数据
-	userData := gin.H{
-		"id":              user.ID,
-		"username":        user.Name,
-		"nickname":        user.NickName,
-		"callsign":        user.CallSign,
-		"role":            getRoleName(roles),
-		"roles":           roles,
-		"status":          user.Status,
-		"approval_status": user.ApprovalStatus,
-		"avatar":          minio.GetAvatarURL(user.Avatar),
-		"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
-		"phone":           user.Phone,
-		"address":         user.Address,
-		"introduction":    user.Introduction,
-		"sex":             user.Sex,
-		"birthday":        user.Birthday,
-		"isAdmin":         hasRoleGORM(user, "admin"),
-		"dmrid":           user.DMRID,
-		"mdcid":           user.MDCID,
-		"alarm_msg":       user.AlarmMsg,
-		"last_group_id":   lastGroupID, // 用户最后选中的群组（从设备偏好表获取）
-		"last_login_time": func() string {
-			if user.LastLoginTime != nil {
-				return user.LastLoginTime.Format("2006-01-02 15:04:05")
-			}
-			return ""
-		}(),
-		"last_login_ip":          user.LastLoginIP,
-		"last_login_ip_location": getIPLocation(user.LastLoginIP),
-		"login_err_times":        user.LoginErrTimes,
-		"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
-		"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
-	}
+	userData := buildLoginUserData(user)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -241,6 +206,47 @@ func getRoleName(roles []string) string {
 		}
 	}
 	return "user"
+}
+
+// buildLoginUserData 构建浏览器登录态使用的完整用户数据。
+// 密码、设备准入密码等敏感字段不会进入响应。
+func buildLoginUserData(user *gormdb.User) gin.H {
+	roles := user.GetRoles()
+	lastGroupID, _ := gormdb.NewUserRepository().GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
+
+	return gin.H{
+		"id":              user.ID,
+		"username":        user.Name,
+		"nickname":        user.NickName,
+		"callsign":        user.CallSign,
+		"role":            getRoleName(roles),
+		"roles":           roles,
+		"status":          user.Status,
+		"approval_status": user.ApprovalStatus,
+		"avatar":          minio.GetAvatarURL(user.Avatar),
+		"avatar_thumb":    minio.GetAvatarThumbURL(user.Avatar),
+		"phone":           user.Phone,
+		"address":         user.Address,
+		"introduction":    user.Introduction,
+		"sex":             user.Sex,
+		"birthday":        user.Birthday,
+		"isAdmin":         hasRoleGORM(user, "admin"),
+		"dmrid":           user.DMRID,
+		"mdcid":           user.MDCID,
+		"alarm_msg":       user.AlarmMsg,
+		"last_group_id":   lastGroupID,
+		"last_login_time": func() string {
+			if user.LastLoginTime != nil {
+				return user.LastLoginTime.Format("2006-01-02 15:04:05")
+			}
+			return ""
+		}(),
+		"last_login_ip":          user.LastLoginIP,
+		"last_login_ip_location": getIPLocation(user.LastLoginIP),
+		"login_err_times":        user.LoginErrTimes,
+		"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
+		"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
+	}
 }
 
 // Logout 用户登出
@@ -869,7 +875,8 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := repo.DeleteUserWithCascade(id); err != nil {
+	cascadeResult, err := repo.DeleteUserWithCascade(id)
+	if err != nil {
 		log.Printf("删除用户失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -877,11 +884,46 @@ func DeleteUser(c *gin.Context) {
 		})
 		return
 	}
+	routesync.RevokeOwner(id, "user_deleted")
+	for _, device := range cascadeResult.DeletedDevices {
+		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
+		routesync.RevokeDevice(device.ID, "user_deleted")
+	}
+	for _, device := range cascadeResult.MovedDevices {
+		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
+			log.Printf("[WARN] 删除群主后同步设备 %d 默认群组失败: %v", device.ID, err)
+		}
+	}
 
 	// 使用户缓存失效
 	if userCache := cache.GetUserCache(); userCache != nil {
 		_ = userCache.InvalidateUser(c.Request.Context(), targetUser.ID, targetUser.Name)
 	}
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		for _, device := range cascadeResult.DeletedDevices {
+			_ = deviceCache.InvalidateDevice(c.Request.Context(), device.ID, device.OwnerID, uint8(device.SSID))
+			if device.GroupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), device.GroupID)
+			}
+		}
+		for _, device := range cascadeResult.MovedDevices {
+			_ = deviceCache.InvalidateDevice(c.Request.Context(), device.ID, device.OwnerID, uint8(device.SSID))
+		}
+		_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), models.GroupIDPublicMin)
+		_ = deviceCache.InvalidateDeviceList(c.Request.Context())
+	}
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		for _, groupID := range cascadeResult.OwnedGroupIDs {
+			_ = groupCache.InvalidateGroup(c.Request.Context(), groupID)
+		}
+		_ = groupCache.InvalidateGroupList(c.Request.Context())
+	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	for _, device := range cascadeResult.MovedDevices {
+		routesync.PublishDevice(device.ID)
+	}
+	routesync.RefreshTopology()
 
 	// 获取当前操作用户信息
 	if username, exists := c.Get("username"); exists {
@@ -970,6 +1012,9 @@ func UpdateUserStatus(c *gin.Context) {
 			"message": "更新用户状态失败",
 		})
 		return
+	}
+	if req.Status == 0 {
+		routesync.RevokeOwner(id, "user_disabled")
 	}
 
 	// 使用户缓存失效

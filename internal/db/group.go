@@ -19,12 +19,12 @@ func NewGroupRepository() *GroupRepository {
 
 // AddPublicGroup 添加公共群组
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
-	query := `INSERT INTO public_groups (name, type, call_sign, password, allow_callsign_ssid,
+	query := `INSERT INTO public_groups (name, type, password,
 		ower_id, dev_list, master_server, slave_server, status, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
-	result, err := r.db.Exec(query, group.Name, group.Type, group.CallSign, group.Password,
-		group.AllowCallSignSSID, group.OwerID, group.DevList, group.MasterServer,
+	result, err := r.db.Exec(query, group.Name, group.Type, group.Password,
+		group.OwerID, group.DevList, group.MasterServer,
 		group.SlaveServer, group.Status)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 
 // GetPublicGroup 获取公共群组
 func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
-	query := `SELECT id, name, type, call_sign, password, allow_callsign_ssid,
+	query := `SELECT id, name, type, password,
 		ower_id, dev_list, master_server, slave_server, status,
 		create_time, update_time, note FROM public_groups WHERE id = ?`
 	return r.scanGroup(r.db.QueryRow(query, id))
@@ -49,7 +49,7 @@ func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
 
 // ListPublicGroups 列出所有公共群组
 func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
-	query := `SELECT id, name, type, call_sign, password, allow_callsign_ssid,
+	query := `SELECT id, name, type, password,
 		ower_id, dev_list, master_server, slave_server, status,
 		create_time, update_time, note FROM public_groups ORDER BY id`
 	rows, err := r.db.Query(query)
@@ -73,11 +73,11 @@ func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
 
 // UpdatePublicGroup 更新公共群组
 func (r *GroupRepository) UpdatePublicGroup(group *models.Group) error {
-	query := `UPDATE public_groups SET name = ?, type = ?, call_sign = ?, password = ?, allow_callsign_ssid = ?,
+	query := `UPDATE public_groups SET name = ?, type = ?, password = ?,
 		update_time = NOW() WHERE id = ?`
 
-	_, err := r.db.Exec(query, group.Name, group.Type, group.CallSign, group.Password,
-		group.AllowCallSignSSID, group.ID)
+	_, err := r.db.Exec(query, group.Name, group.Type, group.Password,
+		group.ID)
 	return err
 }
 
@@ -92,11 +92,10 @@ func (r *GroupRepository) DeletePublicGroup(id int) error {
 func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	group := &models.Group{}
 
-	var nullCallSign, nullPassword, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
+	var nullPassword, nullNote, nullDevList sql.NullString
 
-	err := row.Scan(&group.ID, &group.Name, &group.Type, &nullCallSign, &nullPassword,
-		&nullAllowCallSignSSID, &group.OwerID,
-		&nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
+	err := row.Scan(&group.ID, &group.Name, &group.Type, &nullPassword,
+		&group.OwerID, &nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
 		&group.CreateTime, &group.UpdateTime, &nullNote)
 
 	if err == sql.ErrNoRows {
@@ -107,14 +106,8 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	}
 
 	// 处理可能为 NULL 的字符串字段
-	if nullCallSign.Valid {
-		group.CallSign = nullCallSign.String
-	}
 	if nullPassword.Valid {
 		group.Password = nullPassword.String
-	}
-	if nullAllowCallSignSSID.Valid {
-		group.AllowCallSignSSID = nullAllowCallSignSSID.String
 	}
 	if nullNote.Valid {
 		group.Note = nullNote.String
@@ -132,11 +125,10 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 func (r *GroupRepository) scanGroupFromRows(rows *sql.Rows) (*models.Group, error) {
 	group := &models.Group{}
 
-	var nullCallSign, nullPassword, nullAllowCallSignSSID, nullNote, nullDevList sql.NullString
+	var nullPassword, nullNote, nullDevList sql.NullString
 
-	err := rows.Scan(&group.ID, &group.Name, &group.Type, &nullCallSign, &nullPassword,
-		&nullAllowCallSignSSID, &group.OwerID,
-		&nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
+	err := rows.Scan(&group.ID, &group.Name, &group.Type, &nullPassword,
+		&group.OwerID, &nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
 		&group.CreateTime, &group.UpdateTime, &nullNote)
 
 	if err != nil {
@@ -144,14 +136,8 @@ func (r *GroupRepository) scanGroupFromRows(rows *sql.Rows) (*models.Group, erro
 	}
 
 	// 处理可能为 NULL 的字符串字段
-	if nullCallSign.Valid {
-		group.CallSign = nullCallSign.String
-	}
 	if nullPassword.Valid {
 		group.Password = nullPassword.String
-	}
-	if nullAllowCallSignSSID.Valid {
-		group.AllowCallSignSSID = nullAllowCallSignSSID.String
 	}
 	if nullNote.Valid {
 		group.Note = nullNote.String

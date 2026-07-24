@@ -2,6 +2,12 @@ package config
 
 import "testing"
 
+func TestDefaultConfigFileName(t *testing.T) {
+	if DefaultConfigFileName != "config.yaml" {
+		t.Fatalf("default config file = %q, want config.yaml", DefaultConfigFileName)
+	}
+}
+
 func TestGetAllowedOriginsIncludesFrontendURL(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.Web.AllowedOrigins = []string{
@@ -81,6 +87,25 @@ func TestExplicitLocalDriverDoesNotMigrateLegacyMinIO(t *testing.T) {
 
 	if cfg.Storage.MinIO.Endpoint != "" {
 		t.Fatal("explicit local driver must not inherit legacy MinIO config")
+	}
+}
+
+func TestInterconnectResourceDefaults(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	r := cfg.Interconnect.Resources
+	if r.MaxNodes != 256 || r.MaxPendingHandshakes != 64 || r.DataHardPPSPerNode != 100000 ||
+		r.DataQueueGlobal != 4096 || r.ControlHardPPSPerNode != 2000 || r.MaxDeviceSessionsPerNode != 25000 {
+		t.Fatalf("unexpected interconnect resource defaults: %#v", r)
+	}
+	if cfg.Interconnect.CredentialRotationGraceSeconds != 600 {
+		t.Fatalf("credential rotation grace=%d", cfg.Interconnect.CredentialRotationGraceSeconds)
+	}
+	if cfg.Interconnect.SessionRecoveryWindowSeconds != 180 {
+		t.Fatalf("session recovery window=%d", cfg.Interconnect.SessionRecoveryWindowSeconds)
 	}
 }
 

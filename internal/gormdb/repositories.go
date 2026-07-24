@@ -2,6 +2,10 @@ package gormdb
 
 import (
 	"errors"
+	"time"
+
+	"draarl/internal/models"
+
 	"gorm.io/gorm"
 )
 
@@ -60,6 +64,24 @@ func (r *GroupRepository) CreateGroup(group *Group) error {
 	return r.db.Create(group).Error
 }
 
+// CreateGroupWithOwnerMember 原子创建群组及群主的已验证成员资格。
+func (r *GroupRepository) CreateGroupWithOwnerMember(group *Group) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(group).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		member := &GroupMember{
+			GroupID:    group.ID,
+			UserID:     group.OwerID,
+			IsVerified: true,
+			JoinTime:   now,
+			LastVerify: now,
+		}
+		return tx.Create(member).Error
+	})
+}
+
 // UpdateGroup 更新群组
 func (r *GroupRepository) UpdateGroup(group *Group) error {
 	return r.db.Save(group).Error
@@ -76,8 +98,8 @@ func (r *GroupRepository) DeleteGroup(id int) error {
 	return r.db.Delete(&Group{}, id).Error
 }
 
-// DeleteGroupWithCascade 删除群组及其所有关联数据（事务级联删除）
-// 包括： group_members, group_links, 以及设备中的群组引用
+// DeleteGroupWithCascade 删除群组及其所有关联数据（事务级联删除）。
+// 关联设备统一迁移到系统默认公共群组 999，不能留下 NULL 群组。
 func (r *GroupRepository) DeleteGroupWithCascade(id int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// 1. 删除群组的所有成员
@@ -90,18 +112,51 @@ func (r *GroupRepository) DeleteGroupWithCascade(id int) error {
 			return err
 		}
 
-		// 3. 清除设备中的群组引用（将 group_id 设为 NULL）
-		if err := tx.Model(&Device{}).Where("group_id = ?", id).Update("group_id", nil).Error; err != nil {
+		// 3. 将设备迁移到默认公共群组。
+		if err := tx.Model(&Device{}).Where("group_id = ?", id).Update("group_id", models.GroupIDPublicMin).Error; err != nil {
 			return err
 		}
 
-		// 4. 最后删除群组本身
+		// 4. 清除所有引用该群组的平台/新设备默认偏好。
+		if err := tx.Model(&UserDevicePreference{}).
+			Where("last_group_id = ?", id).
+			Update("last_group_id", 0).Error; err != nil {
+			return err
+		}
+
+		// 5. 最后删除群组本身
 		if err := tx.Delete(&Group{}, id).Error; err != nil {
 			return err
 		}
 
 		return nil
 	})
+}
+
+// LeaveGroupAndMoveDevices 原子移除用户成员资格，并将其在该群组中的
+// 所有设备迁移到默认公共群组。返回迁移前的设备信息供缓存和运行时同步。
+func (r *GroupRepository) LeaveGroupAndMoveDevices(groupID, userID int) ([]*Device, error) {
+	movedDevices := make([]*Device, 0)
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("group_id = ? AND owner_id = ?", groupID, userID).Find(&movedDevices).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Device{}).
+			Where("group_id = ? AND owner_id = ?", groupID, userID).
+			Update("group_id", models.GroupIDPublicMin).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&UserDevicePreference{}).
+			Where("user_id = ? AND last_group_id = ?", userID, groupID).
+			Update("last_group_id", 0).Error; err != nil {
+			return err
+		}
+		return tx.Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return movedDevices, nil
 }
 
 // GroupCount 获取群组总数
@@ -115,7 +170,9 @@ func (r *GroupRepository) GroupCount() (int64, error) {
 func (r *GroupRepository) SearchGroups(keyword string) ([]*Group, error) {
 	var groups []*Group
 	like := "%" + keyword + "%"
-	err := r.db.Where("CAST(id AS CHAR) LIKE ? OR name LIKE ?", like, like).Find(&groups).Error
+	err := r.db.
+		Where("(CAST(id AS CHAR) LIKE ? OR name LIKE ?) AND type IN ? AND (is_virtual = ? OR is_virtual IS NULL)", like, like, []int{1, 2}, false).
+		Find(&groups).Error
 	return groups, err
 }
 
@@ -140,10 +197,13 @@ func (r *GroupRepository) ListVirtualGroups() ([]*Group, error) {
 	return groups, err
 }
 
-// ListGroupsExcludeVirtual 获取所有群组（排除虚拟互联组）
+// ListGroupsExcludeVirtual 获取所有已启用的实体群组（排除虚拟互联组）
 func (r *GroupRepository) ListGroupsExcludeVirtual() ([]*Group, error) {
 	var groups []*Group
-	err := r.db.Where("is_virtual = ? OR is_virtual IS NULL", false).Order("id DESC").Find(&groups).Error
+	err := r.db.
+		Where("type IN ? AND status = ? AND (is_virtual = ? OR is_virtual IS NULL)", []int{1, 2}, 1, false).
+		Order("id DESC").
+		Find(&groups).Error
 	return groups, err
 }
 

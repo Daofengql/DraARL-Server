@@ -81,6 +81,10 @@ export interface Device {
   owner_id?: number       // 设备所有者ID
   owner_name?: string     // 设备所有者名称
   owner_callsign?: string // 设备所有者呼号
+  entry_node_id?: string  // 入口节点内部 ID（仅管理员接口返回）
+  entry_node_name?: string // 当前在线入口或最近一次入口昵称
+  entry_mode?: string
+  entry_seen_at?: string
   create_time?: string
   created_at?: string // 前端兼容字段
   update_time?: string
@@ -100,11 +104,9 @@ export interface DeviceQTH {
 export interface Group {
   id: number
   name: string
-  type: number  // 1=公开, 2=私有
-  callsign?: string
-  password?: string
-  allow_callsign_ssid?: string
-  ower_id?: number
+	type: number  // 1=公开, 2=私有
+	password?: string
+	ower_id?: number
   ower_callsign?: string
   ower_name?: string     // 群组创建者名称
   devlist?: string

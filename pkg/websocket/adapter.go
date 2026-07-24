@@ -27,35 +27,68 @@ func (a *WSManagerAdapter) GetDevicesByGroup(groupID int) []interfaces.WSDeviceI
 	return result
 }
 
-// ForEachDeviceByGroup 遍历指定群组的在线设备（避免额外接口切片转换）
-func (a *WSManagerAdapter) ForEachDeviceByGroup(groupID int, fn func(interfaces.WSDeviceInterface)) {
-	if a == nil || a.manager == nil || fn == nil {
-		return
+// BroadcastToGroups 为整次广播只复制一份 payload，各连接队列共享只读引用。
+func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messageType int, filter interfaces.WSBroadcastFilter) (sent, dropped int) {
+	if a == nil || a.manager == nil || len(groupIDs) == 0 || len(data) == 0 {
+		return 0, 0
 	}
-	devices := a.manager.GetDevicesByGroup(groupID)
-	for _, d := range devices {
-		fn(d)
+	var payload *sharedWritePayload
+	defer func() {
+		if payload != nil {
+			payload.release()
+		}
+	}()
+	for _, groupID := range groupIDs {
+		for _, device := range a.manager.GetDevicesByGroup(groupID) {
+			if device == nil || device.DisableRecv {
+				continue
+			}
+			if udphub.CenterIdentityOwnedByRemote(device.UserID, device.SSID) {
+				continue
+			}
+			if filter.ExcludeDeviceID != 0 && !device.IsGhost() && device.GetDeviceID() == filter.ExcludeDeviceID {
+				continue
+			}
+			if filter.ExcludeUserID != 0 && device.IsGhost() &&
+				device.UserID == filter.ExcludeUserID && device.SSID == filter.ExcludeSSID {
+				continue
+			}
+			if payload == nil {
+				payload = newSharedWritePayload(data)
+			}
+			if device.asyncWriteShared(messageType, payload) {
+				sent++
+			} else {
+				dropped++
+			}
+		}
 	}
+	return sent, dropped
 }
 
-// SendToDevice 向设备发送数据（异步非阻塞）
-// 优化：
-// 1. 直接使用传入的 device 引用，消除二次查找
-// 2. 使用异步写通道，避免同步阻塞
-// 3. 通道满时丢帧而非阻塞整条转发链路
-func (a *WSManagerAdapter) SendToDevice(device interfaces.WSDeviceInterface, data []byte, messageType int) error {
-	if device.IsGhost() {
-		// 直接类型断言，消除二次查找
-		wsDevice, ok := device.(*WSDevice)
-		if !ok {
-			return nil // 类型断言失败，静默忽略
-		}
-		// 异步非阻塞投递
-		if !wsDevice.AsyncWrite(messageType, data) {
-			// 通道满丢帧，但不返回错误（实时语音丢帧优于阻塞）
-		}
+func (a *WSManagerAdapter) RevokeInterconnectSession(ownerID int, ssid byte, sessionID, sessionEpoch uint64) bool {
+	if a == nil || a.manager == nil || ownerID <= 0 || sessionID == 0 {
+		return false
 	}
-	return nil
+	for _, device := range a.manager.GetAllOnlineDevices() {
+		if device == nil || device.UserID != ownerID || device.SSID != ssid {
+			continue
+		}
+		currentID, currentEpoch := device.GetInterconnectSession()
+		if currentID != sessionID || currentEpoch != sessionEpoch {
+			continue
+		}
+		device.SetInterconnectSession(0, 0)
+		if device.Conn != nil {
+			_ = device.Conn.Close()
+		}
+		return true
+	}
+	return false
+}
+
+func (a *WSManagerAdapter) GetDeliveryStats() map[string]int64 {
+	return getWSDeliveryStats()
 }
 
 // GetOnlineCount 获取在线设备数量
@@ -143,6 +176,12 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 	if device.DisableSend {
 		return
 	}
+	if !udphub.AuthorizeCenterLocalWS(device, device.GroupID) {
+		return
+	}
+	if !udphub.AcquireCenterLocalWSVoice(device, device.GroupID) {
+		return
+	}
 
 	// 2. 通信录制：记录 WebSocket 客户端的上行语音数据
 	if len(packet.DATA) > 0 {
@@ -180,6 +219,9 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 func handleTextMessage(device *WSDevice, packet *WSPacket) {
 	// 1. 权限检查
 	if device.DisableSend {
+		return
+	}
+	if !udphub.AuthorizeCenterLocalWS(device, device.GroupID) {
 		return
 	}
 

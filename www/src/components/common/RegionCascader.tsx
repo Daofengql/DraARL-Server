@@ -73,6 +73,11 @@ const provinces: Province[] = [
 const cities = citiesData as City[]
 const areas = areasData as Area[]
 
+export function isChineseAdministrativeRegion(value: string) {
+  const [provinceName] = value.trim().split(/\s+/)
+  return provinces.some((province) => province.name === provinceName)
+}
+
 interface RegionCascaderProps {
   value: string           // 完整位置字符串，如 "广东省 深圳市 南山区"
   onChange: (value: string) => void
@@ -195,13 +200,13 @@ export function RegionCascader({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: fullWidth ? '100%' : 'auto' }}>
-      <Box sx={{ display: 'flex', gap: 1 }}>
-        <FormControl size={size} sx={{ minWidth: 100, flex: 1 }} required={required} error={error}>
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1 }}>
+        <FormControl size={size} sx={{ minWidth: 0, flex: 1 }} required={required} error={error}>
           <InputLabel shrink>{label}</InputLabel>
           <Select
             value={provinceCode}
             onChange={handleProvinceChange}
-            label={`${label}${required ? ' *' : ''}`}
+            label={label}
             disabled={disabled}
             displayEmpty
             notched
@@ -219,7 +224,7 @@ export function RegionCascader({
 
         <FormControl
           size={size}
-          sx={{ minWidth: 100, flex: 1 }}
+          sx={{ minWidth: 0, flex: 1 }}
           disabled={disabled || !provinceCode}
           required={required}
           error={error}
@@ -228,7 +233,7 @@ export function RegionCascader({
           <Select
             value={cityCode}
             onChange={handleCityChange}
-            label="城市 *"
+            label="城市"
             displayEmpty
             notched
           >
@@ -245,7 +250,7 @@ export function RegionCascader({
 
         <FormControl
           size={size}
-          sx={{ minWidth: 100, flex: 1 }}
+          sx={{ minWidth: 0, flex: 1 }}
           disabled={disabled || !cityCode}
         >
           <InputLabel shrink>区县</InputLabel>

@@ -6,69 +6,85 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"draarl/internal/config"
 )
 
-// UDP 收包流水线：少量 reader + worker 池，避免多 goroutine 争抢同一 socket。
+// Type0Handler handles authenticated DraARL node packets on the same UDP
+// socket as ordinary device traffic. Interconnect implements this interface;
+// udphub remains independent of the interconnect package.
+type Type0Handler interface {
+	Handle(data []byte, addr *net.UDPAddr) bool
+}
+
+type Type0Writer interface {
+	SetWriter(func(*net.UDPAddr, []byte) error)
+}
+
+var (
+	type0HandlerMu sync.RWMutex
+	type0Handler   Type0Handler
+)
+
+func SetType0Handler(handler Type0Handler) {
+	type0HandlerMu.Lock()
+	type0Handler = handler
+	type0HandlerMu.Unlock()
+	if writer, ok := handler.(Type0Writer); ok && globalConn != nil {
+		conn := globalConn
+		writer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
+			if addr == nil {
+				return net.ErrClosed
+			}
+			_, err := conn.WriteToUDP(data, addr)
+			return err
+		})
+	}
+}
+
+func getType0Handler() Type0Handler {
+	type0HandlerMu.RLock()
+	handler := type0Handler
+	type0HandlerMu.RUnlock()
+	return handler
+}
+
+// AllowEdgeDevicePacket applies the same ordinary-device IP/IP:Port limiter
+// in the database-free edge endpoint. Authenticated Type 0 is checked before
+// callers invoke this function and therefore uses its separate NodeSession
+// resource accounting.
+func AllowEdgeDevicePacket(addr *net.UDPAddr) bool {
+	return addr == nil || checkRateLimit(addr)
+}
+
 const (
-	udpJobQueueSize   = 4096
-	udpPacketBufSize  = 1460
-	defaultUDPReaders = 1
+	udpJobQueueSize  = 4096
+	udpPacketBufSize = 1460
 )
 
 type udpDatagramJob struct {
 	data       []byte
+	baseBuffer []byte
 	remoteAddr *net.UDPAddr
 	realAddr   *net.UDPAddr
+	receivedAt time.Time
 }
 
 var (
-	udpJobQueue     chan udpDatagramJob
-	udpWorkerWg     sync.WaitGroup
-	udpReaderWg     sync.WaitGroup
-	udpPipelineOnce sync.Once
-	udpJobsDropped  int64
-	udpJobsHandled  int64
+	udpJobQueues      []chan udpDatagramJob
+	udpWorkerWg       sync.WaitGroup
+	udpReaderWg       sync.WaitGroup
+	udpJobsRead       int64
+	udpJobsDropped    int64
+	udpJobsHandled    int64
+	udpRateLimitDrops int64
+	udpQueueHighWater int64
+	udpQueueNanos     int64
+	udpMaxQueueNanos  int64
 )
 
-var udpJobBufPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, udpPacketBufSize)
-		return &b
-	},
-}
-
-func getUDPJobBuf(n int) []byte {
-	bp := udpJobBufPool.Get().(*[]byte)
-	buf := *bp
-	if cap(buf) < n {
-		buf = make([]byte, n)
-		return buf
-	}
-	return buf[:n]
-}
-
-func putUDPJobBuf(buf []byte) {
-	if buf == nil || cap(buf) < udpPacketBufSize || cap(buf) > 8192 {
-		return
-	}
-	b := buf[:cap(buf)]
-	udpJobBufPool.Put(&b)
-}
-
-func cloneUDPAddr(addr *net.UDPAddr) *net.UDPAddr {
-	if addr == nil {
-		return nil
-	}
-	ip := make(net.IP, len(addr.IP))
-	copy(ip, addr.IP)
-	return &net.UDPAddr{IP: ip, Port: addr.Port, Zone: addr.Zone}
-}
-
-// startUDPPipeline 启动 reader + worker。调用方已设置 globalConn / udpShutdown。
-func startUDPPipeline(conn *net.UDPConn) {
-	udpPipelineOnce = sync.Once{} // 允许重启
+func udpWorkerCount() int {
 	workers := runtime.GOMAXPROCS(0)
 	if workers < 2 {
 		workers = 2
@@ -76,13 +92,23 @@ func startUDPPipeline(conn *net.UDPConn) {
 	if workers > 16 {
 		workers = 16
 	}
-	readers := defaultUDPReaders
-	if workers >= 8 {
-		// 高核数时最多 2 个 reader，仍避免过多争抢
-		readers = 2
+	if cfg := config.TryGet(); cfg != nil && cfg.UDP.IngressWorkers > 0 {
+		workers = cfg.UDP.IngressWorkers
+		if workers > 64 {
+			workers = 64
+		}
 	}
+	return workers
+}
 
-	udpJobQueue = make(chan udpDatagramJob, udpJobQueueSize)
+// startUDPPipeline 使用单 reader 避免同 FD readLock 竞争，再按源地址稳定分片。
+func startUDPPipeline(conn *net.UDPConn) {
+	workers := udpWorkerCount()
+	perQueue := udpJobQueueSize / workers
+	if perQueue < 64 {
+		perQueue = 64
+	}
+	udpJobQueues = make([]chan udpDatagramJob, workers)
 
 	proxyEnabled := false
 	if cfg := config.Get(); cfg != nil {
@@ -90,27 +116,37 @@ func startUDPPipeline(conn *net.UDPConn) {
 	}
 
 	for i := 0; i < workers; i++ {
+		udpJobQueues[i] = make(chan udpDatagramJob, perQueue)
 		udpWorkerWg.Add(1)
-		go udpWorkerLoop(conn)
+		go udpWorkerLoop(conn, udpJobQueues[i])
 	}
-	for i := 0; i < readers; i++ {
-		udpReaderWg.Add(1)
-		go udpReaderLoop(conn, proxyEnabled)
+	if handler := getType0Handler(); handler != nil {
+		if writer, ok := handler.(Type0Writer); ok {
+			writer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
+				if conn == nil || addr == nil {
+					return net.ErrClosed
+				}
+				_, err := conn.WriteToUDP(data, addr)
+				return err
+			})
+		}
 	}
+	udpReaderWg.Add(1)
+	go udpReaderLoop(conn, proxyEnabled)
 
-	log.Printf("[UDP] pipeline started: readers=%d workers=%d queue=%d", readers, workers, udpJobQueueSize)
+	log.Printf("[UDP] pipeline started: readers=1 workers=%d queue=%d", workers, perQueue*workers)
 }
 
 func stopUDPPipeline() {
-	// 关闭连接会让 reader 退出；再关闭队列排空 worker
 	udpReaderWg.Wait()
-	if udpJobQueue != nil {
-		close(udpJobQueue)
+	for _, queue := range udpJobQueues {
+		close(queue)
 	}
 	udpWorkerWg.Wait()
-	udpJobQueue = nil
-	log.Printf("[UDP] pipeline stopped (handled=%d dropped=%d)",
-		atomic.LoadInt64(&udpJobsHandled), atomic.LoadInt64(&udpJobsDropped))
+	udpJobQueues = nil
+	log.Printf("[UDP] pipeline stopped (read=%d handled=%d dropped=%d rate_limited=%d)",
+		atomic.LoadInt64(&udpJobsRead), atomic.LoadInt64(&udpJobsHandled),
+		atomic.LoadInt64(&udpJobsDropped), atomic.LoadInt64(&udpRateLimitDrops))
 }
 
 func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
@@ -120,20 +156,19 @@ func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
 		if isUDPShuttingDown() {
 			return
 		}
-		buf := packetPool.Get().([]byte)
-		n, remoteAddr, err := conn.ReadFromUDP(buf)
+		base := packetPool.Get().([]byte)
+		n, remoteAddr, err := conn.ReadFromUDP(base)
 		if err != nil {
-			packetPool.Put(buf)
+			packetPool.Put(base)
 			if isClosedConnError(err) || isUDPShuttingDown() {
 				return
 			}
 			log.Printf("[ERROR] Read from UDP failed: %v", err)
-			// 短暂错误：继续读
 			continue
 		}
+		atomic.AddInt64(&udpJobsRead, 1)
 
-		// 限速尽量在 reader 侧尽早丢弃，避免打满 worker 队列
-		packetData := buf[:n]
+		packetData := base[:n]
 		realAddr := remoteAddr
 		if proxyEnabled {
 			proxyInfo, payload, isProxy := ParseProxyProtocolV2(packetData)
@@ -142,37 +177,75 @@ func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
 				packetData = payload
 			}
 		}
-		if realAddr != nil && !checkRateLimit(realAddr.String()) {
-			packetPool.Put(buf)
+		// Authenticated Type 0 is verified before the ordinary device limiter.
+		// The exemption is bound to a live TLS-created NodeSession, never to an
+		// IP address. Forged packets return false and remain rate-limited.
+		if handler := getType0Handler(); handler != nil && handler.Handle(packetData, remoteAddr) {
+			packetPool.Put(base)
+			continue
+		}
+		if realAddr != nil && !checkRateLimit(realAddr) {
+			atomic.AddInt64(&udpRateLimitDrops, 1)
+			packetPool.Put(base)
 			continue
 		}
 
-		// 拷贝到 job buffer，立刻归还读缓冲
-		jobData := getUDPJobBuf(len(packetData))
-		copy(jobData, packetData)
-		packetPool.Put(buf)
-
 		job := udpDatagramJob{
-			data:       jobData,
-			remoteAddr: cloneUDPAddr(remoteAddr),
-			realAddr:   cloneUDPAddr(realAddr),
+			data: packetData, baseBuffer: base,
+			remoteAddr: remoteAddr, realAddr: realAddr, receivedAt: time.Now(),
 		}
+		index := udpDatagramShard(packetData, realAddr, len(udpJobQueues))
+		queue := udpJobQueues[index]
 		select {
-		case udpJobQueue <- job:
+		case queue <- job:
+			updateMaxInt64(&udpQueueHighWater, int64(totalUDPQueued()))
 		default:
-			// 队列满：丢包保活实时性
 			atomic.AddInt64(&udpJobsDropped, 1)
-			putUDPJobBuf(jobData)
+			packetPool.Put(base)
 		}
 	}
 }
 
-func udpWorkerLoop(conn *net.UDPConn) {
+func udpDatagramShard(data []byte, fallback *net.UDPAddr, shards int) int {
+	if shards <= 1 {
+		return 0
+	}
+	if len(data) >= 51 && data[0] == 'D' && data[1] == 'r' && data[2] == 'a' && data[3] == 'A' {
+		const offset64 = uint64(1469598103934665603)
+		const prime64 = uint64(1099511628211)
+		h := offset64
+		nonZero := false
+		for _, value := range data[6:38] {
+			if value != 0 {
+				nonZero = true
+			}
+			h ^= uint64(value)
+			h *= prime64
+		}
+		if nonZero {
+			h ^= uint64(data[50])
+			h *= prime64
+			return int(h % uint64(shards))
+		}
+	}
+	return udpAddrShard(fallback, shards)
+}
+
+func udpWorkerLoop(conn *net.UDPConn, queue <-chan udpDatagramJob) {
 	defer udpWorkerWg.Done()
-	for job := range udpJobQueue {
+	localHandled := int64(0)
+	defer func() { atomic.AddInt64(&udpJobsHandled, localHandled) }()
+	for job := range queue {
+		queuedFor := time.Since(job.receivedAt).Nanoseconds()
+		atomic.AddInt64(&udpQueueNanos, queuedFor)
+		updateMaxInt64(&udpMaxQueueNanos, queuedFor)
 		processUDPJob(conn, job)
-		putUDPJobBuf(job.data)
-		atomic.AddInt64(&udpJobsHandled, 1)
+		packetPool.Put(job.baseBuffer)
+		localHandled++
+		if localHandled >= 256 {
+			atomic.AddInt64(&udpJobsHandled, localHandled)
+			localHandled = 0
+		}
 	}
 }
 
@@ -183,33 +256,33 @@ func processUDPJob(conn *net.UDPConn, job udpDatagramJob) {
 		}
 	}()
 
-	packetData := job.data
-	remoteAddr := job.remoteAddr
 	realAddr := job.realAddr
 	if realAddr == nil {
-		realAddr = remoteAddr
+		realAddr = job.remoteAddr
 	}
-
-	if len(packetData) >= 4 &&
-		packetData[0] == 'D' &&
-		packetData[1] == 'r' &&
-		packetData[2] == 'a' &&
-		packetData[3] == 'A' {
-		processDraARLPacket(packetData, remoteAddr, realAddr, conn)
-		return
+	if len(job.data) >= 4 && job.data[0] == 'D' && job.data[1] == 'r' && job.data[2] == 'a' && job.data[3] == 'A' {
+		processDraARLPacket(job.data, job.remoteAddr, realAddr, conn)
 	}
-	// 未知协议：热路径静默丢弃，避免日志放大
 }
 
-// GetUDPPipelineStats 监控统计。
-func GetUDPPipelineStats() map[string]int64 {
-	qlen := int64(0)
-	if udpJobQueue != nil {
-		qlen = int64(len(udpJobQueue))
+func totalUDPQueued() int {
+	total := 0
+	for _, queue := range udpJobQueues {
+		total += len(queue)
 	}
+	return total
+}
+
+func GetUDPPipelineStats() map[string]int64 {
 	return map[string]int64{
-		"handled": atomic.LoadInt64(&udpJobsHandled),
-		"dropped": atomic.LoadInt64(&udpJobsDropped),
-		"queued":  qlen,
+		"read":             atomic.LoadInt64(&udpJobsRead),
+		"handled":          atomic.LoadInt64(&udpJobsHandled),
+		"dropped":          atomic.LoadInt64(&udpJobsDropped),
+		"rate_limit_drops": atomic.LoadInt64(&udpRateLimitDrops),
+		"queued":           int64(totalUDPQueued()),
+		"queue_high_water": atomic.LoadInt64(&udpQueueHighWater),
+		"queue_ns":         atomic.LoadInt64(&udpQueueNanos),
+		"max_queue_ns":     atomic.LoadInt64(&udpMaxQueueNanos),
+		"workers":          int64(len(udpJobQueues)),
 	}
 }

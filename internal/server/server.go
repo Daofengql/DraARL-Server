@@ -346,6 +346,8 @@ func (s *Server) setupRoutes() {
 			admin.PUT("/config/icp", configHandler.UpdateICPConfig)
 			admin.PUT("/config/system", configHandler.UpdateSystemInfoConfig)
 			admin.PUT("/config/aprs", configHandler.UpdateAPRSConfig)
+			admin.GET("/config/access-discovery", configHandler.GetAccessDiscoveryConfig)
+			admin.PUT("/config/access-discovery", configHandler.UpdateAccessDiscoveryConfig)
 			admin.PUT("/config/openai", configHandler.UpdateOpenAIConfig)
 			admin.GET("/config/registration", configHandler.GetRegistrationConfig)
 			admin.PUT("/config/registration", configHandler.UpdateRegistrationConfig)

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"draarl/internal/accesspoint"
 	"draarl/internal/aprs"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
@@ -434,6 +436,124 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 		Code:    200,
 		Message: "更新成功，APRS服务正在重启",
 	})
+}
+
+// GetAccessDiscoveryConfig 获取设备接入点发现配置（管理员）。
+func (h *SiteConfigHandler) GetAccessDiscoveryConfig(c *gin.Context) {
+	if _, exists := c.Get("user"); !exists {
+		c.JSON(http.StatusUnauthorized, Response{Code: 401, Message: "未授权"})
+		return
+	}
+
+	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "获取接入点配置失败"})
+		return
+	}
+	c.JSON(http.StatusOK, Response{Code: 200, Message: "获取成功", Data: settings})
+}
+
+// UpdateAccessDiscoveryConfig 更新设备接入点发现配置（管理员）。
+func (h *SiteConfigHandler) UpdateAccessDiscoveryConfig(c *gin.Context) {
+	user, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, Response{Code: 401, Message: "未授权"})
+		return
+	}
+
+	var req gormdb.AccessDiscoveryConfig
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "请求参数错误"})
+		return
+	}
+	normalized, err := normalizeAccessDiscoveryConfig(&req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := h.repo.SetAccessDiscoveryConfig(*normalized); err != nil {
+		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "更新接入点配置失败"})
+		return
+	}
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		_ = configCache.InvalidateAll(c.Request.Context())
+		_ = configCache.InvalidateCategory(c.Request.Context(), gormdb.CategoryAccessDiscovery)
+	}
+
+	userModel := user.(*gormdb.User)
+	oplog.AddLog(
+		fmt.Sprintf("更新接入点配置: 中心直连=%t, 中心入口=%s:%d", normalized.Center.Enabled, normalized.Center.UDPHost, normalized.Center.UDPPort),
+		"config_update",
+		userModel.ID,
+		userModel.Name,
+		userModel.CallSign,
+		c.ClientIP(),
+	)
+	c.JSON(http.StatusOK, Response{Code: 200, Message: "更新成功", Data: normalized})
+}
+
+func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*gormdb.AccessDiscoveryConfig, error) {
+	if settings == nil {
+		return nil, fmt.Errorf("接入点配置不存在")
+	}
+	result := *settings
+	if result.TokenTTLSeconds < 1 || result.TokenTTLSeconds > 300 {
+		return nil, fmt.Errorf("发现凭证有效期必须在 1-300 秒之间")
+	}
+	if result.EdgeHealthTTLSeconds < 1 || result.EdgeHealthTTLSeconds > 300 {
+		return nil, fmt.Errorf("边缘健康有效期必须在 1-300 秒之间")
+	}
+	if result.CacheMaxAgeSeconds < 1 || result.CacheMaxAgeSeconds > 30 {
+		return nil, fmt.Errorf("客户端缓存时间必须在 1-30 秒之间")
+	}
+
+	if strings.TrimSpace(result.Center.PublicID) == "" {
+		result.Center.PublicID = "center"
+	}
+	publicID, err := accesspoint.NormalizePublicID(result.Center.PublicID)
+	if err != nil {
+		return nil, fmt.Errorf("中心公开 ID 无效: %w", err)
+	}
+	result.Center.PublicID = publicID
+
+	if strings.TrimSpace(result.Center.DisplayName) == "" {
+		result.Center.DisplayName = "中心直连"
+	}
+	displayName, err := accesspoint.NormalizeLabel(result.Center.DisplayName, 100)
+	if err != nil || displayName == "" {
+		return nil, fmt.Errorf("中心显示名称无效")
+	}
+	result.Center.DisplayName = displayName
+
+	host := strings.TrimSpace(result.Center.UDPHost)
+	if host != "" {
+		host, err = accesspoint.NormalizeUDPHost(host)
+		if err != nil {
+			return nil, fmt.Errorf("中心公网 UDP 地址无效: %w", err)
+		}
+	}
+	if result.Center.Enabled && host == "" {
+		return nil, fmt.Errorf("启用中心直连时必须填写公网 UDP 地址")
+	}
+	result.Center.UDPHost = host
+	if result.Center.UDPPort == 0 {
+		result.Center.UDPPort = 60050
+	}
+	if err := accesspoint.ValidateUDPPort(result.Center.UDPPort); err != nil {
+		return nil, fmt.Errorf("中心公网 UDP 端口无效: %w", err)
+	}
+
+	region, err := accesspoint.NormalizeLabel(result.Center.Region, 100)
+	if err != nil {
+		return nil, fmt.Errorf("中心地区无效: %w", err)
+	}
+	result.Center.Region = region
+	network, err := accesspoint.NormalizeLabel(result.Center.Network, 100)
+	if err != nil {
+		return nil, fmt.Errorf("中心网络标签无效: %w", err)
+	}
+	result.Center.Network = network
+	return &result, nil
 }
 
 // UpdateOpenAIConfig 更新OpenAI配置（管理员）

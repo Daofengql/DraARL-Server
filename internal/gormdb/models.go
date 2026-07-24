@@ -305,7 +305,7 @@ type SiteConfig struct {
 	ID          int       `gorm:"primaryKey;autoIncrement" json:"id"`
 	Key         string    `gorm:"type:varchar(100);uniqueIndex;not null;column:config_key" json:"key"`
 	Value       string    `gorm:"type:text;column:config_value" json:"value"`
-	Category    string    `gorm:"type:varchar(50);index;column:category" json:"category"` // icp, system, aprs
+	Category    string    `gorm:"type:varchar(50);index;column:category" json:"category"`
 	Description string    `gorm:"type:varchar(255);column:description" json:"description"`
 	CreateTime  time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
 	UpdateTime  time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`

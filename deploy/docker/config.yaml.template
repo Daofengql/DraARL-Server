@@ -16,9 +16,6 @@ UDP:
 Interconnect:
   Enabled: false
 
-AccessDiscovery:
-  Enabled: false
-
 Database:
   Host: mysql
   Port: 3306

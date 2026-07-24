@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strconv"
@@ -11,10 +12,10 @@ import (
 	"github.com/gin-gonic/gin/binding"
 
 	"draarl/internal/accesspoint"
-	"draarl/internal/config"
 	"draarl/internal/gormdb"
 	"draarl/internal/interconnect"
 	"draarl/internal/udphub"
+	"draarl/pkg/cache"
 	appjwt "draarl/pkg/jwt"
 )
 
@@ -36,9 +37,9 @@ type publicAccessPoint struct {
 
 func IssueDeviceAccessPointToken(c *gin.Context) {
 	setNoStore(c)
-	cfg := config.TryGet()
-	if cfg == nil || !cfg.AccessDiscovery.Enabled {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "设备接入点发现服务未启用"})
+	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取设备接入点配置失败"})
 		return
 	}
 	var req deviceAccessPointTokenRequest
@@ -52,7 +53,7 @@ func IssueDeviceAccessPointToken(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "设备认证失败"})
 		return
 	}
-	ttl := time.Duration(cfg.AccessDiscovery.TokenTTLSeconds) * time.Second
+	ttl := time.Duration(settings.TokenTTLSeconds) * time.Second
 	token, expiresAt, err := appjwt.GenerateEdgeDiscoveryToken(result.User.Name, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "签发发现凭证失败"})
@@ -62,17 +63,28 @@ func IssueDeviceAccessPointToken(c *gin.Context) {
 }
 
 func ListAccessPoints(c *gin.Context) {
-	cfg := config.TryGet()
-	if cfg == nil || !cfg.AccessDiscovery.Enabled {
+	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
+	if err != nil {
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "设备接入点发现服务未启用"})
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取设备接入点配置失败"})
 		return
 	}
 	now := time.Now()
-	healthTTL := time.Duration(cfg.AccessDiscovery.EdgeHealthTTLSeconds) * time.Second
+	healthTTL := time.Duration(settings.EdgeHealthTTLSeconds) * time.Second
 	items := make([]publicAccessPoint, 0)
-	if cfg.AccessDiscovery.Center.Enabled {
-		items = append(items, publicAccessPoint{ID: cfg.AccessDiscovery.Center.PublicID, DisplayName: cfg.AccessDiscovery.Center.DisplayName, UDPHost: cfg.AccessDiscovery.Center.UDPHost, UDPPort: cfg.AccessDiscovery.Center.UDPPort, Region: cfg.AccessDiscovery.Center.Region, Network: cfg.AccessDiscovery.Center.Network, Priority: cfg.AccessDiscovery.Center.Priority, HealthySampleAt: now})
+	if settings.Center.Enabled {
+		if item, ok := centerAccessPoint(
+			settings.Center.PublicID,
+			settings.Center.DisplayName,
+			settings.Center.UDPHost,
+			settings.Center.UDPPort,
+			settings.Center.Region,
+			settings.Center.Network,
+			settings.Center.Priority,
+			now,
+		); ok {
+			items = append(items, item)
+		}
 	}
 	nodes, err := gormdb.NewServerRepository().ListDiscoverableNodes()
 	if err != nil {
@@ -90,29 +102,6 @@ func ListAccessPoints(c *gin.Context) {
 			}
 		}
 	}
-	if len(items) == 0 && !cfg.AccessDiscovery.Center.Enabled {
-		siteConfig, siteErr := gormdb.GetSiteConfigRepo().GetAPRSConfig()
-		if siteErr != nil {
-			c.Header("Cache-Control", "no-store")
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询主节点接入配置失败"})
-			return
-		}
-		port, portErr := strconv.Atoi(strings.TrimSpace(siteConfig.SelfPort))
-		if portErr == nil {
-			if item, ok := centerAccessPoint(
-				cfg.AccessDiscovery.Center.PublicID,
-				cfg.AccessDiscovery.Center.DisplayName,
-				siteConfig.SelfAddress,
-				port,
-				cfg.AccessDiscovery.Center.Region,
-				cfg.AccessDiscovery.Center.Network,
-				cfg.AccessDiscovery.Center.Priority,
-				now,
-			); ok {
-				items = append(items, item)
-			}
-		}
-	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Priority != items[j].Priority {
 			return items[i].Priority < items[j].Priority
@@ -122,10 +111,26 @@ func ListAccessPoints(c *gin.Context) {
 		}
 		return items[i].ID < items[j].ID
 	})
-	maxAge := cfg.AccessDiscovery.CacheMaxAgeSeconds
+	maxAge := settings.CacheMaxAgeSeconds
 	c.Header("Cache-Control", "private, max-age="+strconv.Itoa(maxAge))
 	c.Header("Vary", "Authorization")
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "成功", "data": gin.H{"items": items, "server_time": now, "cache_max_age": maxAge}})
+}
+
+func loadAccessDiscoveryConfig(ctx context.Context) (*gormdb.AccessDiscoveryConfig, error) {
+	var (
+		settings *gormdb.AccessDiscoveryConfig
+		err      error
+	)
+	if configCache := cache.GetConfigCache(); configCache != nil {
+		settings, err = configCache.GetAccessDiscoveryConfig(ctx)
+	} else {
+		settings, err = gormdb.GetSiteConfigRepo().GetAccessDiscoveryConfig()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return normalizeAccessDiscoveryConfig(settings)
 }
 
 func centerAccessPoint(id, displayName, host string, port int, region, network string, priority int, now time.Time) (publicAccessPoint, bool) {

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"draarl/internal/config"
 	"draarl/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
@@ -55,8 +54,7 @@ func shouldUseSecureCookie(c *gin.Context) bool {
 		return true
 	}
 
-	cfg := config.Config
-	return cfg != nil && cfg.IsProduction()
+	return false
 }
 
 // SyncWSTokenCookie 从 Authorization header 同步 ws_token（HttpOnly）到 Cookie。

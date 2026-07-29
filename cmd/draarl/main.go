@@ -52,7 +52,7 @@ func main() {
 	showVersion := flag.Bool("v", false, "显示版本信息")
 	printConfig := flag.String("p", "", "打印配置信息")
 	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
-	migrateStorage := flag.String("migrate-storage", "", "迁移存储引擎，格式 from:to（如 minio:local），不启动主服务")
+	migrateStorage := flag.String("migrate-storage", "", "迁移存储驱动或 profile，格式 from:to（如 minio:local 或 minio-prod:r2-prod），不启动主服务")
 	migrateDelete := flag.Bool("migrate-delete-source", false, "迁移成功并校验后删除源端对象（默认保留源端）")
 	migrateDryRun := flag.Bool("migrate-dry-run", false, "仅统计迁移计划，不实际写入目标端")
 	flag.Parse()
@@ -414,7 +414,7 @@ func resetAdminPassword(newPassword, configPath string) {
 func migrateStorageEngine(spec, configPath string, deleteSource, dryRun bool) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		stdlog.Fatalf("迁移参数格式错误，应为 from:to（如 minio:local），已注册驱动: %v", storage.KnownDrivers())
+		stdlog.Fatalf("迁移参数格式错误，应为 from:to（如 minio:local 或 minio-prod:r2-prod），已注册驱动: %v", storage.KnownDrivers())
 	}
 	from := strings.TrimSpace(parts[0])
 	to := strings.TrimSpace(parts[1])

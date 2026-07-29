@@ -3,7 +3,9 @@ package storage
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"draarl/internal/config"
+
+	"github.com/minio/minio-go/v7"
 )
 
 func TestResolveDriver(t *testing.T) {
@@ -42,6 +46,356 @@ func TestResolveDriver(t *testing.T) {
 			t.Fatalf("got %s want local", got)
 		}
 	})
+	t.Run("active profile wins", func(t *testing.T) {
+		cfg := &config.Configuration{}
+		cfg.Storage.Driver = "local"
+		cfg.Storage.ActiveProfile = "r2-prod"
+		cfg.Storage.Profiles = map[string]config.StorageProfile{
+			"r2-prod": {Driver: DriverS3, S3: config.S3Config{Provider: "r2"}},
+		}
+		if got := ResolveDriver(cfg); got != DriverS3 {
+			t.Fatalf("got %s want s3", got)
+		}
+	})
+}
+
+func TestNewDriverFromLocalProfile(t *testing.T) {
+	cfg := &config.Configuration{}
+	cfg.JWT.Secret = "test-secret-key-for-local-storage-32b"
+	cfg.Storage.Profiles = map[string]config.StorageProfile{
+		"archive": {Driver: DriverLocal, Local: config.LocalStorageConfig{RootPath: t.TempDir(), BaseURL: "/archive"}},
+	}
+	store, err := NewDriver(cfg, "archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Driver() != DriverLocal || store.PublicURL("uploads/avatar/items/a.bin") != "/archive/uploads/avatar/items/a.bin" {
+		t.Fatalf("unexpected profile storage: driver=%s url=%s", store.Driver(), store.PublicURL("uploads/avatar/items/a.bin"))
+	}
+}
+
+func TestNormalizeS3Endpoint(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"https://example.r2.cloudflarestorage.com/", "example.r2.cloudflarestorage.com"},
+		{"http://minio:9000", "minio:9000"},
+		{"oss.example.com", "oss.example.com"},
+	} {
+		if got := normalizeS3Endpoint(tc.input); got != tc.want {
+			t.Fatalf("endpoint %q => %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestResolveS3EndpointSchemeOverridesBoolean(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		configured bool
+		wantHost   string
+		wantSSL    bool
+	}{
+		{name: "HTTPS enables TLS", value: "https://storage.example.com/", wantHost: "storage.example.com", wantSSL: true},
+		{name: "HTTP disables TLS", value: "http://minio:9000", configured: true, wantHost: "minio:9000", wantSSL: false},
+		{name: "host uses configured TLS", value: "storage.example.com", configured: true, wantHost: "storage.example.com", wantSSL: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			host, useSSL := resolveS3Endpoint(test.value, test.configured)
+			if host != test.wantHost || useSSL != test.wantSSL {
+				t.Fatalf("resolved=(%q,%t), want=(%q,%t)", host, useSSL, test.wantHost, test.wantSSL)
+			}
+		})
+	}
+}
+
+func TestResolveCredentialReference(t *testing.T) {
+	t.Setenv("DRAARL_TEST_S3_SECRET", "resolved-secret")
+	tests := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "literal", value: "literal-secret", want: "literal-secret"},
+		{name: "environment", value: "${DRAARL_TEST_S3_SECRET}", want: "resolved-secret"},
+		{name: "missing", value: "${DRAARL_TEST_S3_MISSING}", wantErr: true},
+		{name: "invalid name", value: "${1INVALID}", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveCredentialReference(test.value, "SecretKey")
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("resolved %q, want error", got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("resolved=%q err=%v, want %q", got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveS3BucketLookupDefaults(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   config.S3Config
+		driver   string
+		expected minio.BucketLookupType
+	}{
+		{name: "explicit wins", config: config.S3Config{Provider: "cos", BucketLookup: "path"}, driver: "cos", expected: minio.BucketLookupPath},
+		{name: "r2 path", config: config.S3Config{Provider: "r2"}, driver: DriverS3, expected: minio.BucketLookupPath},
+		{name: "cos dns", config: config.S3Config{Provider: "cos"}, driver: DriverS3, expected: minio.BucketLookupDNS},
+		{name: "oss alias dns", config: config.S3Config{}, driver: "oss", expected: minio.BucketLookupDNS},
+		{name: "generic auto", config: config.S3Config{}, driver: DriverS3, expected: minio.BucketLookupAuto},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveS3BucketLookup(test.config, test.driver)
+			if err != nil || got != test.expected {
+				t.Fatalf("lookup=%v err=%v want=%v", got, err, test.expected)
+			}
+		})
+	}
+	if _, err := resolveS3BucketLookup(config.S3Config{BucketLookup: "dnz"}, DriverS3); err == nil {
+		t.Fatal("invalid bucket lookup must not silently fall back to auto")
+	}
+}
+
+func TestPrepareS3ConfigProviderRequirements(t *testing.T) {
+	base := config.S3Config{
+		Endpoint: "https://storage.example.com", AccessKey: "test-access", SecretKey: "test-secret",
+	}
+	t.Run("R2 defaults", func(t *testing.T) {
+		sc := base
+		sc.Provider = "r2"
+		prepared, lookup, err := prepareS3Config(sc, DriverS3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prepared.Endpoint != "storage.example.com" || !prepared.UseSSL || prepared.PresignEndpoint != prepared.Endpoint || !prepared.PresignUseSSL {
+			t.Fatalf("prepared R2 endpoints=%#v", prepared)
+		}
+		if prepared.Region != "auto" || lookup != minio.BucketLookupPath {
+			t.Fatalf("R2 region=%q lookup=%v", prepared.Region, lookup)
+		}
+	})
+	for _, provider := range []string{"cos", "oss"} {
+		t.Run(provider+" requires region", func(t *testing.T) {
+			sc := base
+			sc.Provider = provider
+			if _, _, err := prepareS3Config(sc, DriverS3); err == nil {
+				t.Fatalf("provider %s accepted an empty region", provider)
+			}
+		})
+	}
+	t.Run("credentials are required", func(t *testing.T) {
+		sc := base
+		sc.AccessKey = ""
+		if _, _, err := prepareS3Config(sc, DriverS3); err == nil {
+			t.Fatal("empty access key was accepted")
+		}
+		sc = base
+		sc.SecretKey = ""
+		if _, _, err := prepareS3Config(sc, DriverS3); err == nil {
+			t.Fatal("empty secret key was accepted")
+		}
+	})
+}
+
+func TestS3ProviderPresignedURLShapes(t *testing.T) {
+	tests := []struct {
+		name         string
+		provider     string
+		endpoint     string
+		region       string
+		bucket       string
+		sessionToken string
+		wantHost     string
+		wantPath     string
+	}{
+		{
+			name: "Cloudflare R2", provider: "r2", endpoint: "https://012345.r2.cloudflarestorage.com",
+			bucket: "draarl-contract", wantHost: "012345.r2.cloudflarestorage.com",
+			wantPath: "/draarl-contract/client-releases/app.apk",
+		},
+		{
+			name: "Tencent COS", provider: "cos", endpoint: "https://cos.ap-guangzhou.myqcloud.com",
+			region: "ap-guangzhou", bucket: "draarl-1250000000", sessionToken: "temporary-token",
+			wantHost: "draarl-1250000000.cos.ap-guangzhou.myqcloud.com", wantPath: "/client-releases/app.apk",
+		},
+		{
+			name: "Alibaba OSS", provider: "oss", endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
+			region: "cn-hangzhou", bucket: "draarl-contract",
+			wantHost: "draarl-contract.oss-cn-hangzhou.aliyuncs.com", wantPath: "/client-releases/app.apk",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, lookup, err := prepareS3Config(config.S3Config{
+				Provider: test.provider, Endpoint: test.endpoint, Region: test.region,
+				AccessKey: "test-access", SecretKey: "test-secret", SessionToken: test.sessionToken,
+			}, test.provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := newS3APIClient(prepared, prepared.PresignEndpoint, prepared.PresignUseSSL, lookup, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &minioStorage{publicClient: client, bucket: test.bucket}
+			put, err := store.PresignPut(context.Background(), "client-releases/app.apk", 5*time.Minute, "application/octet-stream", 123)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if put.Method != "PUT" || put.Headers["Content-Type"] != "application/octet-stream" {
+				t.Fatalf("presigned PUT metadata=%#v", put)
+			}
+			assertS3PresignedURLShape(t, put.UploadURL, test.wantHost, test.wantPath, prepared.Region, test.sessionToken)
+			get, err := store.PresignGet(context.Background(), "client-releases/app.apk", 5*time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertS3PresignedURLShape(t, get, test.wantHost, test.wantPath, prepared.Region, test.sessionToken)
+		})
+	}
+}
+
+func assertS3PresignedURLShape(t *testing.T, rawURL, wantHost, wantPath, region, sessionToken string) {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != wantHost || parsed.Path != wantPath {
+		t.Fatalf("presigned URL target=%s://%s%s, want=https://%s%s", parsed.Scheme, parsed.Host, parsed.Path, wantHost, wantPath)
+	}
+	query := parsed.Query()
+	if query.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" || query.Get("X-Amz-Expires") != "300" || query.Get("X-Amz-Signature") == "" {
+		t.Fatalf("presigned URL omitted V4 fields: %s", rawURL)
+	}
+	if !strings.Contains(query.Get("X-Amz-Credential"), "/"+region+"/s3/aws4_request") {
+		t.Fatalf("credential scope=%q, want region %q", query.Get("X-Amz-Credential"), region)
+	}
+	if !headerContainsToken(strings.ReplaceAll(query.Get("X-Amz-SignedHeaders"), ";", ","), "host") {
+		t.Fatalf("signed headers=%q, want host", query.Get("X-Amz-SignedHeaders"))
+	}
+	if got := query.Get("X-Amz-Security-Token"); got != sessionToken {
+		t.Fatalf("session token=%q, want %q", got, sessionToken)
+	}
+}
+
+func TestS3PublicURLRespectsBucketLookup(t *testing.T) {
+	tests := []struct {
+		name  string
+		store *minioStorage
+		want  string
+	}{
+		{
+			name:  "path style",
+			store: &minioStorage{bucket: "draarl", publicEndpoint: "storage.example.com", publicUseSSL: true, bucketLookup: minio.BucketLookupPath},
+			want:  "https://storage.example.com/draarl/client/app.apk",
+		},
+		{
+			name:  "dns style",
+			store: &minioStorage{bucket: "draarl", publicEndpoint: "oss-cn-hangzhou.aliyuncs.com", publicUseSSL: true, bucketLookup: minio.BucketLookupDNS},
+			want:  "https://draarl.oss-cn-hangzhou.aliyuncs.com/client/app.apk",
+		},
+		{
+			name:  "explicit public base",
+			store: &minioStorage{bucket: "draarl", basePath: "https://downloads.example.com", publicEndpoint: "ignored.example.com", bucketLookup: minio.BucketLookupDNS},
+			want:  "https://downloads.example.com/client/app.apk",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.store.PublicURL("client/app.apk"); got != test.want {
+				t.Fatalf("url=%q want=%q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestS3PublicURLEncodesObjectKeySegments(t *testing.T) {
+	store := &minioStorage{basePath: "https://downloads.example.com"}
+	got := store.PublicURL("client releases/桌面 #1?/client package.apk")
+	want := "https://downloads.example.com/client%20releases/%E6%A1%8C%E9%9D%A2%20%231%3F/client%20package.apk"
+	if got != want {
+		t.Fatalf("public URL=%q want=%q", got, want)
+	}
+}
+
+func TestS3PublicURLCapabilityRequiresExplicitPublicBase(t *testing.T) {
+	privateStore := &minioStorage{}
+	if privateStore.Capabilities().PublicURL {
+		t.Fatal("private S3 storage must not advertise unsigned public reads")
+	}
+	publicStore := &minioStorage{basePath: "https://downloads.example.com"}
+	if !publicStore.Capabilities().PublicURL {
+		t.Fatal("configured S3 public base must advertise public URL support")
+	}
+}
+
+type readURLTestStorage struct {
+	Storage
+	capabilities Capabilities
+	publicURL    string
+	presignedURL string
+	publicCalls  int
+	presignCalls int
+}
+
+func (s *readURLTestStorage) Capabilities() Capabilities {
+	return s.capabilities
+}
+
+func (s *readURLTestStorage) PublicURL(string) string {
+	s.publicCalls++
+	return s.publicURL
+}
+
+func (s *readURLTestStorage) PresignGet(context.Context, string, time.Duration) (string, error) {
+	s.presignCalls++
+	return s.presignedURL, nil
+}
+
+func TestReadURLUsesPublicCapabilityOrSignedFallback(t *testing.T) {
+	previousStore := Get()
+	t.Cleanup(func() {
+		mu.Lock()
+		current = previousStore
+		mu.Unlock()
+	})
+
+	publicStore := &readURLTestStorage{
+		capabilities: Capabilities{PublicURL: true, PresignGet: true},
+		publicURL:    "https://cdn.example.com/assets/a.bin",
+		presignedURL: "https://signed.example.com/assets/a.bin",
+	}
+	mu.Lock()
+	current = publicStore
+	mu.Unlock()
+	got, err := ReadURL(context.Background(), "assets/a.bin", time.Minute)
+	if err != nil || got != publicStore.publicURL || publicStore.publicCalls != 1 || publicStore.presignCalls != 0 {
+		t.Fatalf("public read URL=%q err=%v calls=%d/%d", got, err, publicStore.publicCalls, publicStore.presignCalls)
+	}
+
+	privateStore := &readURLTestStorage{
+		capabilities: Capabilities{PresignGet: true},
+		publicURL:    "https://unsigned.example.com/assets/a.bin",
+		presignedURL: "https://signed.example.com/assets/a.bin",
+	}
+	mu.Lock()
+	current = privateStore
+	mu.Unlock()
+	got, err = ReadURL(context.Background(), "assets/a.bin", time.Minute)
+	if err != nil || got != privateStore.presignedURL || privateStore.publicCalls != 0 || privateStore.presignCalls != 1 {
+		t.Fatalf("private read URL=%q err=%v calls=%d/%d", got, err, privateStore.publicCalls, privateStore.presignCalls)
+	}
+	if got := PublicURL("assets/a.bin"); got != "" {
+		t.Fatalf("private storage exposed unsigned public URL %q", got)
+	}
 }
 
 func TestResolveMinIOPublicTarget(t *testing.T) {
@@ -56,45 +410,8 @@ func TestResolveMinIOPublicTarget(t *testing.T) {
 	}
 }
 
-func TestPublicReadBucketPolicy(t *testing.T) {
-	encoded, err := publicReadBucketPolicy("draarl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document struct {
-		Version   string `json:"Version"`
-		Statement []struct {
-			Effect    string              `json:"Effect"`
-			Principal map[string][]string `json:"Principal"`
-			Action    []string            `json:"Action"`
-			Resource  []string            `json:"Resource"`
-		} `json:"Statement"`
-	}
-	if err := json.Unmarshal([]byte(encoded), &document); err != nil {
-		t.Fatal(err)
-	}
-	if document.Version != "2012-10-17" || len(document.Statement) != 1 {
-		t.Fatalf("unexpected policy document: %s", encoded)
-	}
-	statement := document.Statement[0]
-	if statement.Effect != "Allow" || len(statement.Principal["AWS"]) != 1 || statement.Principal["AWS"][0] != "*" {
-		t.Fatalf("unexpected policy principal: %s", encoded)
-	}
-	if len(statement.Action) != 1 || statement.Action[0] != "s3:GetObject" {
-		t.Fatalf("public policy must only allow object reads: %s", encoded)
-	}
-	if len(statement.Resource) != 1 || statement.Resource[0] != "arn:aws:s3:::draarl/*" {
-		t.Fatalf("unexpected policy resource: %s", encoded)
-	}
-	for _, forbidden := range []string{"s3:ListBucket", "s3:PutObject", "s3:DeleteObject"} {
-		if strings.Contains(encoded, forbidden) {
-			t.Fatalf("public policy contains forbidden action %s: %s", forbidden, encoded)
-		}
-	}
-}
-
 func TestShouldPresignUpload(t *testing.T) {
-	for _, ft := range []string{"assets", "firmware", "operator_cert"} {
+	for _, ft := range []string{"assets", "client_package", "firmware", "operator_cert"} {
 		if !ShouldPresignUpload(ft) {
 			t.Fatalf("should presign %s", ft)
 		}
@@ -127,8 +444,22 @@ func TestKnownDrivers(t *testing.T) {
 	for _, d := range drivers {
 		found[d] = true
 	}
-	if !found[DriverLocal] || !found[DriverMinIO] {
-		t.Fatalf("expected local+minio registered, got %v", drivers)
+	for _, driver := range []string{DriverLocal, DriverMinIO, DriverS3, "r2", "cos", "oss"} {
+		if !found[driver] {
+			t.Fatalf("expected %s to be registered, got %v", driver, drivers)
+		}
+	}
+}
+
+func TestClientPackageUploadLimitCanBeConfigured(t *testing.T) {
+	cfg := &config.Configuration{}
+	cfg.Storage.UploadLimits.ClientPackageBytes = 64 * 1024 * 1024
+	previous := config.Config
+	config.Config = cfg
+	t.Cleanup(func() { config.Config = previous })
+
+	if got := MaxSizeForFileType("client_package"); got != 64*1024*1024 {
+		t.Fatalf("client package limit = %d, want %d", got, int64(64*1024*1024))
 	}
 }
 
@@ -177,6 +508,24 @@ func TestLocalStoragePathTraversal(t *testing.T) {
 	}
 }
 
+func TestLocalStorageRejectsSymlinkedParentForMissingTarget(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "uploads")); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+	cfg := &config.Configuration{}
+	cfg.Storage.Local.RootPath = root
+	cfg.JWT.Secret = "test-secret-key-for-local-storage-32b"
+	store, err := newLocalStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.(*localStorage).resolvePath("uploads/assets/new.bin"); err == nil {
+		t.Fatal("missing target beneath an out-of-root symlink must be rejected")
+	}
+}
+
 func TestLocalPutAndPublicURL(t *testing.T) {
 	root := t.TempDir()
 	cfg := &config.Configuration{}
@@ -189,7 +538,7 @@ func TestLocalPutAndPublicURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key := "uploads/assets/test.bin"
+	key := "uploads/avatar/test.bin"
 	data := []byte("hello-storage")
 	if err := store.Put(context.Background(), key, bytes.NewReader(data), int64(len(data)), "application/octet-stream"); err != nil {
 		t.Fatal(err)
@@ -201,6 +550,18 @@ func TestLocalPutAndPublicURL(t *testing.T) {
 	url := store.PublicURL(key)
 	if url != "/files/"+key {
 		t.Fatalf("public url: %s", url)
+	}
+	encodedKey := "uploads/avatar/user photo #1?.jpg"
+	if got := store.PublicURL(encodedKey); got != "/files/uploads/avatar/user%20photo%20%231%3F.jpg" {
+		t.Fatalf("encoded public url: %s", got)
+	}
+	if protectedURL := store.PublicURL("uploads/assets/private.bin"); protectedURL != "" {
+		t.Fatalf("protected local object exposed permanent URL: %s", protectedURL)
+	}
+	for _, invalid := range []string{"uploads/avatar/../firmware/private.bin", "uploads/avatar//private.jpg", "uploads/avatar/./private.jpg"} {
+		if IsLocalPublicObjectKey(invalid) {
+			t.Fatalf("invalid public object key accepted: %q", invalid)
+		}
 	}
 }
 
@@ -244,6 +605,85 @@ func TestLocalPutToken(t *testing.T) {
 	}
 }
 
+func TestLocalPresignGetUsesExpiringToken(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Configuration{}
+	cfg.Storage.Local.RootPath = root
+	cfg.JWT.Secret = "test-secret-key-for-local-storage-32b"
+
+	prev := config.Config
+	config.Config = cfg
+	t.Cleanup(func() { config.Config = prev })
+
+	store, err := newLocalStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "client-releases/draarl-client/stable/1.0.0/android/arm64/client.apk"
+	if err := store.Put(context.Background(), key, bytes.NewReader([]byte("apk")), 3, "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	presigned, err := store.PresignGet(context.Background(), key, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(presigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Path != "/api/storage/get" {
+		t.Fatalf("presign path=%q", parsed.Path)
+	}
+	if err := VerifyLocalGetToken(parsed.Query().Get("token"), parsed.Query().Get("key")); err != nil {
+		t.Fatalf("valid signed download rejected: %v", err)
+	}
+	if err := VerifyLocalGetToken(parsed.Query().Get("token"), "client-releases/other.apk"); err == nil {
+		t.Fatal("download token must be bound to its object key")
+	}
+}
+
+func TestLocalPromoteDoesNotOverwriteFinalObject(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Configuration{}
+	cfg.Storage.Local.RootPath = root
+	cfg.JWT.Secret = "test-secret-key-for-local-storage-32b"
+	storeValue, err := newLocalStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storeValue.(*localStorage)
+	ctx := context.Background()
+	staged := "staging/client-package/1/first.apk"
+	final := "client-releases/app/stable/1.0.0/android/arm64/app.apk"
+	first := []byte("first package")
+	if err := store.Put(ctx, staged, bytes.NewReader(first), int64(len(first)), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Promote(ctx, staged, final); err != nil {
+		t.Fatal(err)
+	}
+	secondStaged := "staging/client-package/1/second.apk"
+	second := []byte("replacement package")
+	if err := store.Put(ctx, secondStaged, bytes.NewReader(second), int64(len(second)), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Promote(ctx, secondStaged, final); !errors.Is(err, ErrFinalObjectAlreadyExists) {
+		t.Fatalf("second promote error=%v, want immutable-final conflict", err)
+	}
+	reader, err := store.Open(ctx, final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, first) {
+		t.Fatalf("final object was overwritten: got %q want %q", got, first)
+	}
+}
+
 func TestUploadGrantIsBoundToUserTypeAndSize(t *testing.T) {
 	cfg := &config.Configuration{}
 	cfg.JWT.Secret = "test-secret-key-for-local-storage-32b"
@@ -268,6 +708,63 @@ func TestUploadGrantIsBoundToUserTypeAndSize(t *testing.T) {
 	}
 	if _, err := VerifyUploadGrant(token, key, "firmware", 42); err == nil {
 		t.Fatal("grant must not be valid for another file type")
+	}
+	expired, err := signToken(cfg.JWT.Secret, UploadGrant{
+		ObjectKey: key, FileType: "assets", UserID: 42, Size: 123,
+		ContentType: "application/octet-stream", ExpiresAt: time.Now().Add(-time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyUploadGrant(expired, key, "assets", 42); err == nil {
+		t.Fatal("expired upload grant should fail")
+	}
+}
+
+func TestValidateStagedUploadRejectsWrongPrefixAndSize(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Configuration{}
+	cfg.Storage.Local.RootPath = root
+	cfg.JWT.Secret = "test-secret-key-for-local-storage-32b"
+	storeValue, err := newLocalStorage(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousConfig := config.Config
+	previousStore := Get()
+	config.Config = cfg
+	mu.Lock()
+	current = storeValue
+	mu.Unlock()
+	t.Cleanup(func() {
+		config.Config = previousConfig
+		mu.Lock()
+		current = previousStore
+		mu.Unlock()
+	})
+
+	wrongKey := "uploads/assets/not-staging.bin"
+	wrongToken, err := CreateUploadGrant(wrongKey, "assets", 42, 3, "application/octet-stream", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ValidateStagedUpload(context.Background(), wrongToken, wrongKey, "assets", 42); err == nil {
+		t.Fatal("non-staging object key should fail validation")
+	}
+
+	stagedKey := NewStagingObjectKey("assets", 42, ".bin")
+	if err := Put(context.Background(), stagedKey, bytes.NewReader([]byte("short")), 5, "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	sizeToken, err := CreateUploadGrant(stagedKey, "assets", 42, 6, "application/octet-stream", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ValidateStagedUpload(context.Background(), sizeToken, stagedKey, "assets", 42); err == nil {
+		t.Fatal("uploaded size mismatch should fail validation")
+	}
+	if _, _, err := Stat(context.Background(), stagedKey); err == nil {
+		t.Fatal("size-mismatched staging object should be removed")
 	}
 }
 

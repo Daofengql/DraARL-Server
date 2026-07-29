@@ -2,11 +2,12 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -23,13 +24,40 @@ type minioStorage struct {
 	basePath       string
 	publicEndpoint string
 	publicUseSSL   bool
+	bucketLookup   minio.BucketLookupType
+	driver         string
 }
+
+// s3Storage is the generic S3-compatible implementation. minioStorage remains
+// an alias to preserve the old helper API while R2, COS, and OSS use the same
+// implementation and object lifecycle.
+type s3Storage = minioStorage
 
 func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 	mc := cfg.Storage.MinIO
-	endpoint := strings.TrimSpace(mc.Endpoint)
-	if endpoint == "" {
-		return nil, fmt.Errorf("MinIO Endpoint 为空")
+	publicEndpoint, publicUseSSL := resolveMinIOPublicTarget(mc)
+	return newS3StorageWithConfig(config.S3Config{
+		Provider:         "minio",
+		Endpoint:         mc.Endpoint,
+		PresignEndpoint:  publicEndpoint,
+		PublicBaseURL:    mc.BasePath,
+		AccessKey:        mc.AccessKey,
+		SecretKey:        mc.SecretKey,
+		UseSSL:           mc.UseSSL,
+		PresignUseSSL:    publicUseSSL,
+		Bucket:           mc.Bucket,
+		AutoCreateBucket: true,
+	}, DriverMinIO)
+}
+
+func newS3Storage(cfg *config.Configuration) (Storage, error) {
+	return newS3StorageWithConfig(cfg.Storage.S3, DriverS3)
+}
+
+func newS3StorageWithConfig(sc config.S3Config, driver string) (Storage, error) {
+	sc, bucketLookup, err := prepareS3Config(sc, driver)
+	if err != nil {
+		return nil, err
 	}
 
 	transport := &http.Transport{
@@ -46,27 +74,20 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 		ResponseHeaderTimeout: 5 * time.Second,
 	}
 
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:     credentials.NewStaticV4(mc.AccessKey, mc.SecretKey, ""),
-		Secure:    mc.UseSSL,
-		Transport: transport,
-	})
+	client, err := newS3APIClient(sc, sc.Endpoint, sc.UseSSL, bucketLookup, transport)
 	if err != nil {
-		return nil, fmt.Errorf("初始化 MinIO 客户端失败: %w", err)
+		return nil, fmt.Errorf("初始化 S3 客户端失败: %w", err)
 	}
-	publicEndpoint, publicUseSSL := resolveMinIOPublicTarget(mc)
+	publicEndpoint, publicUseSSL := sc.PresignEndpoint, sc.PresignUseSSL
 	publicClient := client
-	if publicEndpoint != endpoint || publicUseSSL != mc.UseSSL {
-		publicClient, err = minio.New(publicEndpoint, &minio.Options{
-			Creds:  credentials.NewStaticV4(mc.AccessKey, mc.SecretKey, ""),
-			Secure: publicUseSSL,
-		})
+	if publicEndpoint != sc.Endpoint || publicUseSSL != sc.UseSSL {
+		publicClient, err = newS3APIClient(sc, publicEndpoint, publicUseSSL, bucketLookup, nil)
 		if err != nil {
-			return nil, fmt.Errorf("初始化 MinIO 对外签名客户端失败: %w", err)
+			return nil, fmt.Errorf("初始化 S3 对外签名客户端失败: %w", err)
 		}
 	}
 
-	bucket := mc.Bucket
+	bucket := strings.TrimSpace(sc.Bucket)
 	if bucket == "" {
 		bucket = "draarl"
 	}
@@ -76,6 +97,9 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 	exists, err := client.BucketExists(ctx, bucket)
 	if err != nil {
 		return nil, fmt.Errorf("检查 bucket 失败: %w", err)
+	}
+	if !exists && !sc.AutoCreateBucket {
+		return nil, fmt.Errorf("S3 bucket 不存在: %s（请在对象存储侧预创建，或仅对 MinIO 开启 AutoCreateBucket）", bucket)
 	}
 	if !exists {
 		createCtx, createCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -90,37 +114,135 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 		client:         client,
 		publicClient:   publicClient,
 		bucket:         bucket,
-		basePath:       strings.TrimRight(strings.TrimSpace(mc.BasePath), "/"),
+		basePath:       strings.TrimRight(strings.TrimSpace(sc.PublicBaseURL), "/"),
 		publicEndpoint: publicEndpoint,
 		publicUseSSL:   publicUseSSL,
+		bucketLookup:   bucketLookup,
+		driver:         normalizeS3Driver(driver),
 	}, nil
 }
 
-func publicReadBucketPolicy(bucket string) (string, error) {
-	type statement struct {
-		Effect    string              `json:"Effect"`
-		Principal map[string][]string `json:"Principal"`
-		Action    []string            `json:"Action"`
-		Resource  []string            `json:"Resource"`
+func prepareS3Config(sc config.S3Config, driver string) (config.S3Config, minio.BucketLookupType, error) {
+	var err error
+	if sc.AccessKey, err = resolveCredentialReference(sc.AccessKey, "AccessKey"); err != nil {
+		return config.S3Config{}, minio.BucketLookupAuto, err
 	}
-	type policyDocument struct {
-		Version   string      `json:"Version"`
-		Statement []statement `json:"Statement"`
+	if sc.SecretKey, err = resolveCredentialReference(sc.SecretKey, "SecretKey"); err != nil {
+		return config.S3Config{}, minio.BucketLookupAuto, err
+	}
+	if sc.SessionToken, err = resolveCredentialReference(sc.SessionToken, "SessionToken"); err != nil {
+		return config.S3Config{}, minio.BucketLookupAuto, err
+	}
+	if sc.AccessKey == "" {
+		return config.S3Config{}, minio.BucketLookupAuto, fmt.Errorf("S3 AccessKey 为空")
+	}
+	if sc.SecretKey == "" {
+		return config.S3Config{}, minio.BucketLookupAuto, fmt.Errorf("S3 SecretKey 为空")
 	}
 
-	encoded, err := json.Marshal(policyDocument{
-		Version: "2012-10-17",
-		Statement: []statement{{
-			Effect:    "Allow",
-			Principal: map[string][]string{"AWS": {"*"}},
-			Action:    []string{"s3:GetObject"},
-			Resource:  []string{"arn:aws:s3:::" + bucket + "/*"},
-		}},
-	})
-	if err != nil {
-		return "", err
+	sc.Endpoint, sc.UseSSL = resolveS3Endpoint(sc.Endpoint, sc.UseSSL)
+	if sc.Endpoint == "" {
+		return config.S3Config{}, minio.BucketLookupAuto, fmt.Errorf("S3 Endpoint 为空")
 	}
-	return string(encoded), nil
+	if strings.TrimSpace(sc.PresignEndpoint) == "" {
+		sc.PresignEndpoint, sc.PresignUseSSL = sc.Endpoint, sc.UseSSL
+	} else {
+		sc.PresignEndpoint, sc.PresignUseSSL = resolveS3Endpoint(sc.PresignEndpoint, sc.PresignUseSSL)
+		if sc.PresignEndpoint == "" {
+			return config.S3Config{}, minio.BucketLookupAuto, fmt.Errorf("S3 PresignEndpoint 为空")
+		}
+	}
+
+	sc.Provider = effectiveS3Provider(sc.Provider, driver)
+	sc.Region = strings.TrimSpace(sc.Region)
+	switch sc.Provider {
+	case "r2":
+		if sc.Region == "" {
+			sc.Region = "auto"
+		}
+	case "cos", "oss":
+		if sc.Region == "" {
+			return config.S3Config{}, minio.BucketLookupAuto, fmt.Errorf("S3 provider %s 必须配置 Region", sc.Provider)
+		}
+	}
+	bucketLookup, err := resolveS3BucketLookup(sc, driver)
+	if err != nil {
+		return config.S3Config{}, minio.BucketLookupAuto, err
+	}
+	return sc, bucketLookup, nil
+}
+
+func newS3APIClient(sc config.S3Config, endpoint string, useSSL bool, bucketLookup minio.BucketLookupType, transport http.RoundTripper) (*minio.Client, error) {
+	options := &minio.Options{
+		Creds:        credentials.NewStaticV4(sc.AccessKey, sc.SecretKey, sc.SessionToken),
+		Secure:       useSSL,
+		Region:       sc.Region,
+		BucketLookup: bucketLookup,
+	}
+	if transport != nil {
+		options.Transport = transport
+	}
+	return minio.New(endpoint, options)
+}
+
+// resolveCredentialReference expands exact ${ENV_NAME} values at driver
+// construction time. It deliberately operates on the driver's config copy so
+// later config saves retain references instead of writing secrets to disk.
+func resolveCredentialReference(value, field string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
+		return value, nil
+	}
+	name := strings.TrimSpace(value[2 : len(value)-1])
+	if !validCredentialEnvName(name) {
+		return "", fmt.Errorf("S3 %s 环境变量引用无效: %s", field, value)
+	}
+	resolved, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(resolved) == "" {
+		return "", fmt.Errorf("S3 %s 引用的环境变量未设置或为空: %s", field, name)
+	}
+	return strings.TrimSpace(resolved), nil
+}
+
+func validCredentialEnvName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i, ch := range value {
+		if ch == '_' || ch >= 'A' && ch <= 'Z' || ch >= 'a' && ch <= 'z' || i > 0 && ch >= '0' && ch <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func normalizeS3Endpoint(value string) string {
+	endpoint, _ := resolveS3Endpoint(value, false)
+	return endpoint
+}
+
+func resolveS3Endpoint(value string, useSSL bool) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", useSSL
+	}
+	value = strings.TrimRight(value, "/")
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "https://") {
+		value, useSSL = value[len("https://"):], true
+	} else if strings.HasPrefix(lower, "http://") {
+		value, useSSL = value[len("http://"):], false
+	}
+	return strings.TrimRight(value, "/"), useSSL
+}
+
+func normalizeS3Driver(driver string) string {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		return DriverS3
+	}
+	return driver
 }
 
 func resolveMinIOPublicTarget(config config.MinIOConfig) (string, bool) {
@@ -130,8 +252,62 @@ func resolveMinIOPublicTarget(config config.MinIOConfig) (string, bool) {
 	return strings.TrimSpace(config.Endpoint), config.UseSSL
 }
 
-func (s *minioStorage) Driver() string          { return DriverMinIO }
+func resolveS3PresignTarget(sc config.S3Config) (string, bool) {
+	if endpoint := strings.TrimSpace(sc.PresignEndpoint); endpoint != "" {
+		return resolveS3Endpoint(endpoint, sc.PresignUseSSL)
+	}
+	return resolveS3Endpoint(sc.Endpoint, sc.UseSSL)
+}
+
+func parseBucketLookup(value string) (minio.BucketLookupType, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "path":
+		return minio.BucketLookupPath, nil
+	case "dns", "virtual", "virtual-host":
+		return minio.BucketLookupDNS, nil
+	case "", "auto":
+		return minio.BucketLookupAuto, nil
+	}
+	return minio.BucketLookupAuto, fmt.Errorf("S3 BucketLookup 无效: %s（只支持 auto、path 或 dns）", value)
+}
+
+func effectiveS3Provider(provider, driver string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider != "" {
+		return provider
+	}
+	provider = strings.ToLower(strings.TrimSpace(driver))
+	if provider == "" {
+		return DriverS3
+	}
+	return provider
+}
+
+func resolveS3BucketLookup(sc config.S3Config, driver string) (minio.BucketLookupType, error) {
+	if strings.TrimSpace(sc.BucketLookup) != "" {
+		return parseBucketLookup(sc.BucketLookup)
+	}
+	provider := effectiveS3Provider(sc.Provider, driver)
+	switch provider {
+	case "r2", DriverMinIO:
+		return minio.BucketLookupPath, nil
+	case "cos", "oss":
+		return minio.BucketLookupDNS, nil
+	default:
+		return minio.BucketLookupAuto, nil
+	}
+}
+
+func (s *minioStorage) Driver() string          { return s.driver }
 func (s *minioStorage) SupportsDirectPut() bool { return true }
+func (s *minioStorage) Capabilities() Capabilities {
+	return Capabilities{
+		DirectPut: true, PresignGet: true, PresignPut: true, ServerCopy: true,
+		// S3 buckets are private by default. A configured public/CDN base is the
+		// explicit signal that unsigned browser reads are available.
+		PublicURL: s.basePath != "",
+	}
+}
 
 func (s *minioStorage) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
 	_, err := s.client.PutObject(ctx, s.bucket, strings.TrimLeft(key, "/"), r, size, minio.PutObjectOptions{
@@ -151,7 +327,7 @@ func (s *minioStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 		return fmt.Errorf("staging and final keys are required")
 	}
 	if _, err := s.client.StatObject(ctx, s.bucket, finalKey, minio.StatObjectOptions{}); err == nil {
-		return fmt.Errorf("final object already exists")
+		return fmt.Errorf("%w: %s", ErrFinalObjectAlreadyExists, finalKey)
 	} else {
 		code := minio.ToErrorResponse(err).Code
 		if code != "NoSuchKey" && code != "NoSuchObject" && code != "NotFound" {
@@ -169,8 +345,10 @@ func (s *minioStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 		return fmt.Errorf("copy staging object: %w", err)
 	}
 	if err := s.client.RemoveObject(ctx, s.bucket, stagedKey, minio.RemoveObjectOptions{}); err != nil {
-		_ = s.client.RemoveObject(ctx, s.bucket, finalKey, minio.RemoveObjectOptions{})
-		return fmt.Errorf("delete staging object: %w", err)
+		// A successful CopyObject has already committed the immutable final key.
+		// Do not delete it to compensate for a staging-cleanup failure: that can
+		// destroy a package that has already been recorded by the caller.
+		log.Printf("[STORAGE] final object promoted but S3 staging cleanup failed key=%s err=%v", stagedKey, err)
 	}
 	return nil
 }
@@ -227,14 +405,18 @@ func (s *minioStorage) PublicURL(key string) string {
 	if clean == "" {
 		return ""
 	}
+	escapedKey := escapeObjectKeyForURL(clean)
 	if s.basePath != "" {
-		return s.basePath + "/" + clean
+		return s.basePath + "/" + escapedKey
 	}
 	protocol := "http"
 	if s.publicUseSSL {
 		protocol = "https"
 	}
-	return fmt.Sprintf("%s://%s/%s/%s", protocol, s.publicEndpoint, s.bucket, clean)
+	if s.bucketLookup == minio.BucketLookupDNS {
+		return fmt.Sprintf("%s://%s.%s/%s", protocol, s.bucket, s.publicEndpoint, escapedKey)
+	}
+	return fmt.Sprintf("%s://%s/%s/%s", protocol, s.publicEndpoint, s.bucket, escapedKey)
 }
 
 func (s *minioStorage) PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
@@ -288,4 +470,27 @@ func MinIOBucket() string {
 		return "draarl"
 	}
 	return s.bucket
+}
+
+// BucketName returns the active S3 bucket when the current driver is an S3
+// compatible implementation. It is a compatibility helper for legacy model
+// fields that still store the bucket alongside an object key.
+func BucketName() string {
+	if s, ok := Get().(*minioStorage); ok && s != nil {
+		return s.bucket
+	}
+	if cfg := config.TryGet(); cfg != nil {
+		if _, profile, ok := cfg.ActiveStorageProfile(); ok {
+			if profile.S3.Bucket != "" {
+				return profile.S3.Bucket
+			}
+		}
+		if cfg.Storage.S3.Bucket != "" {
+			return cfg.Storage.S3.Bucket
+		}
+		if cfg.Storage.MinIO.Bucket != "" {
+			return cfg.Storage.MinIO.Bucket
+		}
+	}
+	return "draarl"
 }

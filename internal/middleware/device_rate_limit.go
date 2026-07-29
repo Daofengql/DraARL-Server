@@ -88,6 +88,12 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 				Window:      time.Minute,
 				Description: "同一 IP 每分钟 10 次",
 			},
+			"public-client-release-ip": {
+				Key:         "ip",
+				Limit:       30,
+				Window:      time.Minute,
+				Description: "同一 IP 每分钟 30 次",
+			},
 			"captcha-ip-burst": {
 				Key:         "ip",
 				Limit:       5,
@@ -445,6 +451,33 @@ func PublicRelaySearchRateLimit() gin.HandlerFunc {
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// PublicClientReleaseRateLimit limits anonymous update checks independently
+// from relay discovery so an installation fleet cannot consume unrelated API
+// capacity.
+func PublicClientReleaseRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deviceRateLimiter == nil {
+			c.Next()
+			return
+		}
+
+		allowed, retryAfter := deviceRateLimiter.checkLimit("public-client-release-ip", c.ClientIP())
+		if !allowed {
+			c.Header("Retry-After", intToStr(maxInt(1, int(retryAfter.Seconds()))))
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":    http.StatusTooManyRequests,
+				"message": "请求过于频繁，请稍后重试",
+				"data": gin.H{
+					"retry_after": maxInt(1, int(retryAfter.Seconds())),
+				},
+			})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }

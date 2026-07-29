@@ -1099,8 +1099,8 @@ func (h *AssetHandler) GetDownloadURL(c *gin.Context) {
 		return
 	}
 
-	// 生成临时下载链接（7天有效期）
-	downloadURL, err := minio.PresignedURL(c.Request.Context(), asset.Path, 7*24*60*60*time.Second)
+	// 生成短期下载链接，统一支持 local 与全部 S3 兼容驱动。
+	downloadURL, err := storage.PresignGet(c.Request.Context(), asset.Path, 15*time.Minute)
 	if err != nil {
 		log.Printf("生成下载链接失败: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
@@ -1108,6 +1108,9 @@ func (h *AssetHandler) GetDownloadURL(c *gin.Context) {
 			Message: "生成下载链接失败",
 		})
 		return
+	}
+	if strings.HasPrefix(downloadURL, "/") {
+		downloadURL = publicAPIBase(c) + downloadURL
 	}
 
 	c.JSON(http.StatusOK, Response{

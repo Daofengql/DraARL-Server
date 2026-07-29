@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"draarl/internal/config"
 )
 
 // UploadMultipartFile 上传 multipart 文件，返回 object key 与大小。
@@ -153,7 +155,7 @@ func DeleteFile(ctx context.Context, objectName string) error {
 
 // GetFileURL 兼容旧命名。
 func GetFileURL(objectName string) string {
-	return PublicURL(objectName)
+	return readURLOrEmpty(objectName)
 }
 
 // MaxSizeForFileType 各类型大小上限。
@@ -161,6 +163,11 @@ func MaxSizeForFileType(fileType string) int64 {
 	switch strings.ToLower(fileType) {
 	case "firmware":
 		return 16 * 1024 * 1024
+	case "client_package":
+		if cfg := config.TryGet(); cfg != nil && cfg.Storage.UploadLimits.ClientPackageBytes > 0 {
+			return cfg.Storage.UploadLimits.ClientPackageBytes
+		}
+		return config.DefaultClientPackageMaxBytes
 	case "assets":
 		return 100 * 1024 * 1024
 	case "operator_cert":

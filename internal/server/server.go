@@ -52,12 +52,18 @@ func New(cfg *config.Configuration) *Server {
 		engine: engine,
 	}
 
-	s.setupRoutes()
-
-	// 初始化对象存储（local 同步；minio 后台重试）。FrontendCDN 可能在 setupFrontend 中同步初始化 minio。
+	// Initialize local storage synchronously and make a best-effort synchronous
+	// connection for object storage. A remote provider may be temporarily down;
+	// the background retry keeps startup resilient while frontend CDN falls back
+	// to embedded assets until the next process restart.
 	if !storage.IsEnabled() {
-		storage.StartInitInBackground(cfg)
+		if err := storage.Init(cfg); err != nil {
+			log.Printf("[STORAGE] initial storage setup failed: %v", err)
+			storage.StartInitInBackground(cfg)
+		}
 	}
+
+	s.setupRoutes()
 
 	return s
 }
@@ -77,6 +83,7 @@ func (s *Server) setupRoutes() {
 	{
 		// 本地存储直传（token 鉴权，无需 JWT）
 		api.PUT("/storage/put", handler.StorageDirectPut)
+		api.GET("/storage/get", handler.StorageDirectGet)
 
 		// 认证路由（无需 JWT）
 		auth := api.Group("/auth")
@@ -105,6 +112,7 @@ func (s *Server) setupRoutes() {
 		// 公开接口（无需认证）
 		api.GET("/public/relays", middleware.PublicRelaySearchRateLimit(), handler.PublicSearchRelays)
 		api.GET("/public/firmware/latest", handler.GetLatestFirmware)
+		api.GET("/public/client/latest", middleware.PublicClientReleaseRateLimit(), handler.GetLatestClientRelease)
 
 		// Keycloak SSO 路由（无需认证）
 		sso := api.Group("/sso")
@@ -377,6 +385,15 @@ func (s *Server) setupRoutes() {
 			admin.POST("/firmware/complete", handler.CompleteFirmwareUpload)
 			admin.DELETE("/firmware/:id", handler.DeleteFirmware)
 
+			// 客户端安装包发布管理（管理员权限）
+			admin.GET("/client-releases", handler.ListClientReleases)
+			admin.POST("/client-releases", handler.CreateClientRelease)
+			admin.GET("/client-releases/:id", handler.GetClientRelease)
+			admin.POST("/client-releases/:id/artifacts/complete", handler.CompleteClientReleaseArtifact)
+			admin.POST("/client-releases/:id/publish", handler.PublishClientRelease)
+			admin.POST("/client-releases/:id/withdraw", handler.WithdrawClientRelease)
+			admin.DELETE("/client-releases/:id", handler.DeleteClientRelease)
+
 			// 资源公开接口（前台下载中心使用）
 			api.GET("/assets/tree", assetHandler.GetAssetTree)           // 获取目录树
 			api.GET("/assets/folder/:id", assetHandler.GetFolderFiles)   // 获取文件夹下的文件
@@ -528,8 +545,9 @@ func originGuardMiddleware(allowedOriginSet map[string]struct{}) gin.HandlerFunc
 			return
 		}
 
-		isLocalStoragePut := c.Request.Method == http.MethodPut && c.Request.URL.Path == "/api/storage/put"
-		if hasTokenLikeQuery(c.Request.URL.RawQuery) && !isLocalStoragePut {
+		isLocalStorageTransfer := (c.Request.Method == http.MethodPut && c.Request.URL.Path == "/api/storage/put") ||
+			(c.Request.Method == http.MethodGet && c.Request.URL.Path == "/api/storage/get")
+		if hasTokenLikeQuery(c.Request.URL.RawQuery) && !isLocalStorageTransfer {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "token_query_not_allowed",

@@ -99,8 +99,8 @@ Web:
     AllowedOrigins:            # CORS / WS Origin 白名单：填写真正发起 API/WS 请求的页面域名
         - "http://localhost:5173"
     FrontendCDN:
-        Enabled: false         # 开启后，启动时会将嵌入的前端静态资源同步到 MinIO
-        ObjectPrefix: "frontend" # MinIO 中的前端资源根目录，实际会按版本写入如 frontend/v1.2.3/assets、frontend/v1.2.3/docs
+        Enabled: false         # 开启后，启动时会将嵌入的前端静态资源同步到当前 Storage
+        ObjectPrefix: "frontend" # 对象存储中的前端资源根目录，实际会按版本写入如 frontend/v1.2.3/assets、frontend/v1.2.3/docs
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:
@@ -113,9 +113,12 @@ Keycloak:
     RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后端API）
 
 # 统一存储配置（主块）
-# Driver 为空时：若 Storage.MinIO.Endpoint 非空 → minio，否则 local
+# Driver 为空时：若 Storage.MinIO.Endpoint 非空 → minio，否则 local。
+# 新部署建议使用 ActiveProfile + Profiles；MinIO 旧配置仍保持兼容。
 Storage:
-    Driver: ""                        # minio | local；空则自动推断
+    Driver: ""                        # minio | s3 | r2 | cos | oss | local；空则自动推断
+    UploadLimits:
+        ClientPackageBytes: 536870912 # 客户端安装包直传上限，默认 512 MiB
     Local:
         RootPath: "./data/storage"    # 本地磁盘根目录（已做路径穿越防护）
         BaseURL: ""                   # 公开访问前缀，空则使用 /files
@@ -128,6 +131,78 @@ Storage:
         PublicUseSSL: false           # PublicEndpoint 是否使用 HTTPS
         Bucket: "draarl"             # 默认存储桶
         BasePath: "/minio"            # URL 访问基础路径
+    # 统一 S3 兼容配置。Driver=s3/r2/cos/oss 时使用此块。
+    S3:
+        Provider: ""                  # minio | r2 | cos | oss（标识与文档用途）
+        Endpoint: ""                  # 后端 S3 API host:port 或完整 http(s):// URL；scheme 会覆盖 UseSSL
+        PresignEndpoint: ""           # 浏览器可访问的 S3 API 地址；空则使用 Endpoint，scheme 会覆盖 PresignUseSSL
+        PublicBaseURL: ""             # 可选公开 CDN/bucket 基础 URL；前端 CDN 启用时必填，不参与预签名
+        Region: ""                    # R2 留空时自动使用 auto；COS/OSS 必须按 Bucket 地域填写
+        BucketLookup: "auto"          # auto | path | dns；非法值会拒绝启动
+        AccessKey: ""
+        SecretKey: ""
+        SessionToken: ""              # 可选 STS 临时凭据
+        UseSSL: true
+        PresignUseSSL: true
+        Bucket: "draarl"
+        AutoCreateBucket: false        # 公有云默认由部署侧预先创建 bucket
+
+    # 多 profile 示例。运行时用 ActiveProfile 指定一个 profile；存储迁移可在命令中同时引用任意两个 profile。
+    # AccessKey/SecretKey/SessionToken 可写为精确的 ${ENV_NAME}，运行时解析且不会将解析后的密钥写回配置文件。
+    # ActiveProfile: "r2-prod"
+    # Profiles:
+    #     minio-prod:
+    #         Driver: s3
+    #         S3:
+    #             Provider: minio
+    #             Endpoint: "minio.internal:9000"
+    #             PresignEndpoint: "storage.example.com"
+    #             Region: "us-east-1"
+    #             BucketLookup: path
+    #             AccessKey: "${MINIO_ACCESS_KEY}"
+    #             SecretKey: "${MINIO_SECRET_KEY}"
+    #             UseSSL: false
+    #             PresignUseSSL: true
+    #             Bucket: "draarl"
+    #             AutoCreateBucket: true
+    #     r2-prod:
+    #         Driver: s3
+    #         S3:
+    #             Provider: r2
+    #             Endpoint: "<account-id>.r2.cloudflarestorage.com"
+    #             Region: "auto"
+    #             BucketLookup: path
+    #             AccessKey: "${R2_ACCESS_KEY}"
+    #             SecretKey: "${R2_SECRET_KEY}"
+    #             UseSSL: true
+    #             Bucket: "draarl"
+    #             AutoCreateBucket: false
+    #     cos-prod:
+    #         Driver: cos
+    #         S3:
+    #             Endpoint: "cos.ap-guangzhou.myqcloud.com"
+    #             PresignEndpoint: "cos.ap-guangzhou.myqcloud.com"
+    #             Region: "ap-guangzhou"
+    #             BucketLookup: dns
+    #             AccessKey: "${COS_SECRET_ID}"
+    #             SecretKey: "${COS_SECRET_KEY}"
+    #             UseSSL: true
+    #             PresignUseSSL: true
+    #             Bucket: "draarl-<appid>"
+    #             AutoCreateBucket: false
+    #     oss-prod:
+    #         Driver: oss
+    #         S3:
+    #             Endpoint: "oss-cn-hangzhou.aliyuncs.com"
+    #             PresignEndpoint: "oss-cn-hangzhou.aliyuncs.com"
+    #             Region: "cn-hangzhou"
+    #             BucketLookup: dns
+    #             AccessKey: "${OSS_ACCESS_KEY_ID}"
+    #             SecretKey: "${OSS_ACCESS_KEY_SECRET}"
+    #             UseSSL: true
+    #             PresignUseSSL: true
+    #             Bucket: "draarl"
+    #             AutoCreateBucket: false
 
 # JWT 配置
 JWT:

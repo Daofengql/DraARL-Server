@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"path"
@@ -21,7 +22,11 @@ type localStorage struct {
 }
 
 func newLocalStorage(cfg *config.Configuration) (Storage, error) {
-	root := strings.TrimSpace(cfg.Storage.Local.RootPath)
+	return newLocalStorageWithConfig(cfg.Storage.Local, cfg.JWT.Secret)
+}
+
+func newLocalStorageWithConfig(local config.LocalStorageConfig, secret string) (Storage, error) {
+	root := strings.TrimSpace(local.RootPath)
 	if root == "" {
 		root = "./data/storage"
 	}
@@ -35,13 +40,20 @@ func newLocalStorage(cfg *config.Configuration) (Storage, error) {
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return nil, fmt.Errorf("创建本地存储目录失败: %w", err)
 	}
+	realRoot, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, fmt.Errorf("解析本地存储真实路径失败: %w", err)
+	}
+	abs, err = filepath.Abs(realRoot)
+	if err != nil {
+		return nil, fmt.Errorf("解析本地存储真实路径失败: %w", err)
+	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.Storage.Local.BaseURL), "/")
+	baseURL := strings.TrimRight(strings.TrimSpace(local.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = "/files"
 	}
 
-	secret := cfg.JWT.Secret
 	if secret == "" {
 		return nil, fmt.Errorf("JWT Secret 为空，无法初始化本地存储签名")
 	}
@@ -55,6 +67,15 @@ func newLocalStorage(cfg *config.Configuration) (Storage, error) {
 
 func (s *localStorage) Driver() string          { return DriverLocal }
 func (s *localStorage) SupportsDirectPut() bool { return true }
+func (s *localStorage) Capabilities() Capabilities {
+	return Capabilities{
+		DirectPut:  true,
+		PresignGet: true,
+		PresignPut: true,
+		ServerCopy: true,
+		PublicURL:  true,
+	}
+}
 
 func (s *localStorage) resolvePath(key string) (string, error) {
 	if key == "" || strings.ContainsRune(key, 0) {
@@ -88,18 +109,42 @@ func (s *localStorage) resolvePath(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root := s.root
-	if absFull != root && !strings.HasPrefix(absFull, root+string(os.PathSeparator)) {
+	if !pathWithinRoot(s.root, absFull) {
 		return "", fmt.Errorf("路径越界")
 	}
-	// 已存在路径再解析符号链接，防止 root 内 symlink 指向外部
-	if real, err := filepath.EvalSymlinks(absFull); err == nil {
-		if real != root && !strings.HasPrefix(real, root+string(os.PathSeparator)) {
+	// Resolve the closest existing ancestor as well as an existing target. A
+	// missing final file beneath a symlinked directory must not bypass the root
+	// check merely because EvalSymlinks on the full path returns ENOENT.
+	probe := absFull
+	for {
+		real, evalErr := filepath.EvalSymlinks(probe)
+		if evalErr == nil {
+			real, evalErr = filepath.Abs(real)
+			if evalErr != nil {
+				return "", evalErr
+			}
+			if !pathWithinRoot(s.root, real) {
+				return "", fmt.Errorf("路径越界")
+			}
+			if probe == absFull {
+				return real, nil
+			}
+			break
+		}
+		if !os.IsNotExist(evalErr) {
+			return "", evalErr
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
 			return "", fmt.Errorf("路径越界")
 		}
-		return real, nil
+		probe = parent
 	}
 	return absFull, nil
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	return candidate == root || strings.HasPrefix(candidate, root+string(os.PathSeparator))
 }
 
 func (s *localStorage) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
@@ -190,16 +235,23 @@ func (s *localStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("staging object is not a regular file")
 	}
-	if _, err := os.Stat(destination); err == nil {
-		return fmt.Errorf("final object already exists")
-	} else if !os.IsNotExist(err) {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
-	if err := os.Rename(source, destination); err != nil {
+	// Link creation is atomic and fails when destination already exists. Rename
+	// would silently replace destination on both Linux and Windows, which breaks
+	// the immutability guarantee for published artifacts. Source and destination
+	// live beneath the same local-storage root, so a hard link is available.
+	if err := os.Link(source, destination); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("%w: %s", ErrFinalObjectAlreadyExists, finalKey)
+		}
 		return fmt.Errorf("promote staging object: %w", err)
+	}
+	// The final object is already atomically committed. Leave a duplicate
+	// staging object for scheduled cleanup if removal is temporarily unavailable.
+	if err := os.Remove(source); err != nil {
+		log.Printf("[STORAGE] final object promoted but local staging cleanup failed key=%s err=%v", stagedKey, err)
 	}
 	return nil
 }
@@ -311,17 +363,57 @@ func (s *localStorage) Stat(ctx context.Context, key string) (int64, string, err
 
 func (s *localStorage) PublicURL(key string) string {
 	clean := strings.TrimLeft(filepath.ToSlash(key), "/")
-	if clean == "" {
+	if clean == "" || !IsLocalPublicObjectKey(clean) {
 		return ""
 	}
-	return s.baseURL + "/" + clean
+	return s.baseURL + "/" + escapeObjectKeyForURL(clean)
+}
+
+// IsLocalPublicObjectKey defines the narrow set of objects intentionally
+// exposed through the permanent /files route. User documents, recordings,
+// firmware, release packages, and staging objects require signed GET URLs.
+func IsLocalPublicObjectKey(key string) bool {
+	clean := strings.TrimLeft(filepath.ToSlash(key), "/")
+	if clean == "" {
+		return false
+	}
+	for _, segment := range strings.Split(clean, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	for _, prefix := range []string{
+		"uploads/avatar/",
+		"thumb/uploads/avatar/",
+		"uploads/logo/",
+		"uploads/favicon/",
+		"frontend/",
+	} {
+		if strings.HasPrefix(clean, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *localStorage) PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	_ = ctx
-	// local 下公开路径即可；若需鉴权可扩展 token，首版与公开桶对齐
-	_ = expiry
-	return s.PublicURL(key), nil
+	if expiry <= 0 {
+		expiry = 15 * time.Minute
+	}
+	cleanKey := strings.TrimLeft(filepath.ToSlash(key), "/")
+	if _, err := s.resolvePath(cleanKey); err != nil {
+		return "", err
+	}
+	exp := time.Now().Add(expiry)
+	token, err := s.signGetToken(cleanKey, exp)
+	if err != nil {
+		return "", err
+	}
+	q := url.Values{}
+	q.Set("token", token)
+	q.Set("key", cleanKey)
+	return "/api/storage/get?" + q.Encode(), nil
 }
 
 func (s *localStorage) PresignPut(ctx context.Context, key string, expiry time.Duration, contentType string, size int64) (PresignPutResult, error) {
@@ -359,6 +451,11 @@ type localPutGrant struct {
 	ExpiresAt   int64  `json:"expires_at"`
 }
 
+type localGetGrant struct {
+	ObjectKey string `json:"object_key"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
 func (s *localStorage) signPutToken(key string, exp time.Time, contentType string, size int64) (string, error) {
 	if size <= 0 {
 		return "", fmt.Errorf("invalid upload size")
@@ -368,6 +465,13 @@ func (s *localStorage) signPutToken(key string, exp time.Time, contentType strin
 		Size:        size,
 		ContentType: contentType,
 		ExpiresAt:   exp.Unix(),
+	})
+}
+
+func (s *localStorage) signGetToken(key string, exp time.Time) (string, error) {
+	return signToken(s.secret, localGetGrant{
+		ObjectKey: key,
+		ExpiresAt: exp.Unix(),
 	})
 }
 
@@ -395,6 +499,27 @@ func VerifyLocalPutToken(token, key, contentType string) (int64, error) {
 		return 0, fmt.Errorf("token 文件大小无效")
 	}
 	return grant.Size, nil
+}
+
+// VerifyLocalGetToken validates a short-lived local download URL. Unlike the
+// public /files compatibility endpoint it can safely serve private release
+// artifacts without exposing a permanent object URL.
+func VerifyLocalGetToken(token, key string) error {
+	cfg := config.Get()
+	if cfg.JWT.Secret == "" {
+		return fmt.Errorf("storage signing secret is empty")
+	}
+	var grant localGetGrant
+	if err := verifyToken(cfg.JWT.Secret, token, &grant); err != nil {
+		return fmt.Errorf("无效 token")
+	}
+	if grant.ObjectKey != strings.TrimLeft(filepath.ToSlash(key), "/") {
+		return fmt.Errorf("token 与 key 不匹配")
+	}
+	if grant.ExpiresAt <= 0 || time.Now().Unix() > grant.ExpiresAt {
+		return fmt.Errorf("token 已过期")
+	}
+	return nil
 }
 
 // AbsoluteLocalPath 供文件服务使用。

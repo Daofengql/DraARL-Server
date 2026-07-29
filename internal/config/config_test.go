@@ -109,6 +109,17 @@ func TestInterconnectResourceDefaults(t *testing.T) {
 	}
 }
 
+func TestClientPackageUploadLimitDefault(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Storage.UploadLimits.ClientPackageBytes != DefaultClientPackageMaxBytes {
+		t.Fatalf("client package limit=%d want=%d", cfg.Storage.UploadLimits.ClientPackageBytes, DefaultClientPackageMaxBytes)
+	}
+}
+
 func containsOrigin(origins []string, target string) bool {
 	for _, origin := range origins {
 		if origin == target {

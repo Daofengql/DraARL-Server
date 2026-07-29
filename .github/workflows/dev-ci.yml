@@ -29,5 +29,96 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: www/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: www
+        run: npm ci
+
+      - name: Lint and build frontend
+        working-directory: www
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Start MinIO contract service
+        run: |
+          docker run --detach --rm \
+            --name draarl-ci-minio \
+            --publish 9000:9000 \
+            --env MINIO_ROOT_USER=draarl-ci-access \
+            --env MINIO_ROOT_PASSWORD=draarl-ci-secret-key \
+            --env MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:5173 \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z \
+            server /data
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs draarl-ci-minio
+          exit 1
+
+      - name: Test S3 contract against MinIO
+        env:
+          DRAARL_S3_TEST_PROVIDER: minio
+          DRAARL_S3_TEST_ENDPOINT: 127.0.0.1:9000
+          DRAARL_S3_TEST_PRESIGN_ENDPOINT: 127.0.0.1:9000
+          DRAARL_S3_TEST_ACCESS_KEY: draarl-ci-access
+          DRAARL_S3_TEST_SECRET_KEY: draarl-ci-secret-key
+          DRAARL_S3_TEST_BUCKET: draarl-ci-contract
+          DRAARL_S3_TEST_REGION: us-east-1
+          DRAARL_S3_TEST_BUCKET_LOOKUP: path
+          DRAARL_S3_TEST_AUTO_CREATE_BUCKET: "true"
+          DRAARL_S3_TEST_DESTRUCTIVE_CLEANUP: "true"
+          DRAARL_S3_TEST_CORS_ORIGIN: http://localhost:5173
+        run: go test ./pkg/storage -run '^TestS3CompatibleContract$' -count=1 -v
+
+      - name: Start MySQL integration service
+        run: |
+          docker run --detach --rm \
+            --name draarl-ci-mysql \
+            --publish 3306:3306 \
+            --env MYSQL_DATABASE=draarl_test_client_release_http \
+            --env MYSQL_USER=draarl-ci \
+            --env MYSQL_PASSWORD=draarl-ci-mysql-secret \
+            --env MYSQL_ROOT_PASSWORD=draarl-ci-root-secret \
+            mysql:8.4
+          for attempt in $(seq 1 60); do
+            if docker exec draarl-ci-mysql mysqladmin ping --silent --user=root --password=draarl-ci-root-secret; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs draarl-ci-mysql
+          exit 1
+
+      - name: Test client release HTTP lifecycle
+        env:
+          DRAARL_CLIENT_RELEASE_E2E: "true"
+          DRAARL_TEST_MYSQL_DSN: "draarl-ci:draarl-ci-mysql-secret@tcp(127.0.0.1:3306)/draarl_test_client_release_http?charset=utf8mb4&parseTime=true&loc=Local"
+          DRAARL_S3_TEST_PROVIDER: minio
+          DRAARL_S3_TEST_ENDPOINT: 127.0.0.1:9000
+          DRAARL_S3_TEST_PRESIGN_ENDPOINT: 127.0.0.1:9000
+          DRAARL_S3_TEST_ACCESS_KEY: draarl-ci-access
+          DRAARL_S3_TEST_SECRET_KEY: draarl-ci-secret-key
+          DRAARL_S3_TEST_BUCKET: draarl-ci-contract
+          DRAARL_S3_TEST_REGION: us-east-1
+          DRAARL_S3_TEST_BUCKET_LOOKUP: path
+          DRAARL_S3_TEST_AUTO_CREATE_BUCKET: "true"
+        run: go test ./internal/handler -run '^TestClientReleaseHTTPE2E$' -count=1 -v
+
+      - name: Stop integration services
+        if: always()
+        run: |
+          docker rm --force draarl-ci-mysql 2>/dev/null || true
+          docker rm --force draarl-ci-minio 2>/dev/null || true
+
       - name: Vet
         run: go vet ./...

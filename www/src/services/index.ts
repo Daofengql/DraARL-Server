@@ -14,3 +14,11 @@ export { commStatsService } from './commStats'
 export { groupLinkService } from './groupLink'
 export { listFirmware, uploadFirmware, deleteFirmware, getLatestFirmware } from './firmware'
 export type { FirmwareRelease } from './firmware'
+export {
+  listClientReleases, getClientRelease, createClientRelease, completeClientReleaseArtifact,
+  publishClientRelease, withdrawClientRelease, deleteClientRelease,
+} from './clientRelease'
+export type {
+  ClientRelease, ClientReleaseArtifact, ClientReleaseStatus, ClientReleaseChannel,
+  ClientPlatform, ClientArch, ClientPackageType,
+} from './clientRelease'

@@ -33,6 +33,61 @@ type MinIOConfig struct {
 	BasePath       string `yaml:"BasePath" json:"base_path"`
 }
 
+// LocalStorageConfig defines one local filesystem storage profile.
+type LocalStorageConfig struct {
+	RootPath string `yaml:"RootPath" json:"root_path"`
+	BaseURL  string `yaml:"BaseURL" json:"base_url"`
+}
+
+// S3Config describes an S3-compatible object-storage endpoint. It is used by
+// MinIO and by public-cloud S3 compatibility endpoints such as R2, COS, and
+// OSS. PresignEndpoint must be an externally reachable S3 API endpoint; it is
+// deliberately separate from PublicBaseURL, which is only for public/CDN URLs.
+type S3Config struct {
+	Provider         string `yaml:"Provider" json:"provider"`
+	Endpoint         string `yaml:"Endpoint" json:"endpoint"`
+	PresignEndpoint  string `yaml:"PresignEndpoint" json:"presign_endpoint"`
+	PublicBaseURL    string `yaml:"PublicBaseURL" json:"public_base_url"`
+	Region           string `yaml:"Region" json:"region"`
+	BucketLookup     string `yaml:"BucketLookup" json:"bucket_lookup"`
+	AccessKey        string `yaml:"AccessKey" json:"access_key"`
+	SecretKey        string `yaml:"SecretKey" json:"secret_key"`
+	SessionToken     string `yaml:"SessionToken" json:"session_token"`
+	UseSSL           bool   `yaml:"UseSSL" json:"use_ssl"`
+	PresignUseSSL    bool   `yaml:"PresignUseSSL" json:"presign_use_ssl"`
+	Bucket           string `yaml:"Bucket" json:"bucket"`
+	AutoCreateBucket bool   `yaml:"AutoCreateBucket" json:"auto_create_bucket"`
+}
+
+const DefaultClientPackageMaxBytes int64 = 512 * 1024 * 1024
+
+// StorageUploadLimitsConfig keeps large direct-upload limits deployment
+// configurable without changing the limits of unrelated upload types.
+type StorageUploadLimitsConfig struct {
+	ClientPackageBytes int64 `yaml:"ClientPackageBytes" json:"client_package_bytes"`
+}
+
+// StorageProfile permits a deployment to name independent storage targets.
+// The active profile is used at runtime; any two profiles can be selected by
+// the migration command without sharing endpoints or credentials.
+type StorageProfile struct {
+	Driver string             `yaml:"Driver" json:"driver"`
+	Local  LocalStorageConfig `yaml:"Local" json:"local"`
+	S3     S3Config           `yaml:"S3" json:"s3"`
+}
+
+// StorageConfig keeps the legacy Local/MinIO fields intact while introducing
+// named profiles for generic S3-compatible providers.
+type StorageConfig struct {
+	Driver        string                    `yaml:"Driver" json:"driver"`
+	Local         LocalStorageConfig        `yaml:"Local" json:"local"`
+	MinIO         MinIOConfig               `yaml:"MinIO" json:"minio"`
+	S3            S3Config                  `yaml:"S3" json:"s3"`
+	UploadLimits  StorageUploadLimitsConfig `yaml:"UploadLimits" json:"upload_limits"`
+	ActiveProfile string                    `yaml:"ActiveProfile" json:"active_profile"`
+	Profiles      map[string]StorageProfile `yaml:"Profiles" json:"profiles"`
+}
+
 type UDPConfig struct {
 	SendWorkers      int `yaml:"SendWorkers" json:"send_workers"`
 	IngressWorkers   int `yaml:"IngressWorkers" json:"ingress_workers"`
@@ -152,15 +207,9 @@ type Configuration struct {
 		RedirectURI  string `yaml:"RedirectURI" json:"redirect_uri"`   // http://localhost:9000/callback
 	} `yaml:"Keycloak" json:"keycloak"`
 
-	// Storage 存储主配置（Driver 为空时按 Storage.MinIO.Endpoint 推断）
-	Storage struct {
-		Driver string `yaml:"Driver" json:"driver"` // minio | local；后续可扩展 oss/cos/r2
-		Local  struct {
-			RootPath string `yaml:"RootPath" json:"root_path"`
-			BaseURL  string `yaml:"BaseURL" json:"base_url"`
-		} `yaml:"Local" json:"local"`
-		MinIO MinIOConfig `yaml:"MinIO" json:"minio"`
-	} `yaml:"Storage" json:"storage"`
+	// Storage 存储主配置（Driver 为空时按 Storage.MinIO.Endpoint 推断）。
+	// 新部署推荐配置 ActiveProfile + Profiles，旧字段继续兼容。
+	Storage StorageConfig `yaml:"Storage" json:"storage"`
 	// LegacyMinIO is read only for upgrading configurations created before Storage was introduced.
 	LegacyMinIO MinIOConfig `yaml:"MinIO,omitempty" json:"-"`
 
@@ -377,6 +426,21 @@ func (c *Configuration) SetDefaults() error {
 	if c.Storage.MinIO.BasePath != "" {
 		c.Storage.MinIO.BasePath = strings.TrimRight(c.Storage.MinIO.BasePath, "/")
 	}
+	if c.Storage.UploadLimits.ClientPackageBytes <= 0 {
+		c.Storage.UploadLimits.ClientPackageBytes = DefaultClientPackageMaxBytes
+	}
+	c.Storage.ActiveProfile = strings.TrimSpace(c.Storage.ActiveProfile)
+	for name, profile := range c.Storage.Profiles {
+		profile.Driver = strings.ToLower(strings.TrimSpace(profile.Driver))
+		if profile.Driver == "local" && strings.TrimSpace(profile.Local.RootPath) == "" {
+			profile.Local.RootPath = "./data/storage"
+		}
+		profile.Local.BaseURL = strings.TrimRight(strings.TrimSpace(profile.Local.BaseURL), "/")
+		profile.S3.PublicBaseURL = strings.TrimRight(strings.TrimSpace(profile.S3.PublicBaseURL), "/")
+		profile.S3.Provider = strings.ToLower(strings.TrimSpace(profile.S3.Provider))
+		profile.S3.BucketLookup = strings.ToLower(strings.TrimSpace(profile.S3.BucketLookup))
+		c.Storage.Profiles[name] = profile
+	}
 
 	// AES 密钥默认值：如果不符合要求则自动生成并写入配置文件
 	if c.ValidateAESKey() != nil {
@@ -395,13 +459,44 @@ func (c *Configuration) SetDefaults() error {
 }
 
 func (c *Configuration) migrateLegacyStorageConfig() {
-	if strings.EqualFold(strings.TrimSpace(c.Storage.Driver), "local") {
+	if strings.TrimSpace(c.Storage.ActiveProfile) != "" || len(c.Storage.Profiles) > 0 ||
+		strings.EqualFold(strings.TrimSpace(c.Storage.Driver), "local") {
 		return
 	}
 	if strings.TrimSpace(c.Storage.MinIO.Endpoint) == "" && strings.TrimSpace(c.LegacyMinIO.Endpoint) != "" {
 		c.Storage.MinIO = c.LegacyMinIO
 		c.LegacyMinIO = MinIOConfig{}
 	}
+}
+
+// StorageProfile returns a named storage profile. Empty names resolve to the
+// configured active profile. Legacy Local/MinIO configuration is intentionally
+// not returned here; callers can fall back to the legacy driver path.
+func (c *Configuration) StorageProfile(name string) (StorageProfile, bool) {
+	if c == nil {
+		return StorageProfile{}, false
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = strings.TrimSpace(c.Storage.ActiveProfile)
+	}
+	if name == "" || len(c.Storage.Profiles) == 0 {
+		return StorageProfile{}, false
+	}
+	profile, ok := c.Storage.Profiles[name]
+	return profile, ok
+}
+
+// ActiveStorageProfile returns the runtime storage profile when profiles are
+// configured. A missing configured profile is reported as absent so startup can
+// return a clear error instead of silently selecting another provider.
+func (c *Configuration) ActiveStorageProfile() (string, StorageProfile, bool) {
+	if c == nil || strings.TrimSpace(c.Storage.ActiveProfile) == "" {
+		return "", StorageProfile{}, false
+	}
+	name := strings.TrimSpace(c.Storage.ActiveProfile)
+	profile, ok := c.StorageProfile(name)
+	return name, profile, ok
 }
 
 // JWTSecretMinLength JWT密钥最小长度

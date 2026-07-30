@@ -262,6 +262,49 @@ func TestS3ProviderPresignedURLShapes(t *testing.T) {
 	}
 }
 
+func TestS3DownloadURLPrefixOnlyRewritesGet(t *testing.T) {
+	prepared, lookup, err := prepareS3Config(config.S3Config{
+		Provider: "minio", Endpoint: "https://storage.example.com",
+		Region: "us-east-1", AccessKey: "test-access", SecretKey: "test-secret",
+	}, DriverMinIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := newS3APIClient(prepared, prepared.PresignEndpoint, prepared.PresignUseSSL, lookup, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &minioStorage{
+		publicClient:      client,
+		bucket:            "draarl",
+		downloadURLPrefix: "https://downloads.example.com/files",
+	}
+
+	put, err := store.PresignPut(context.Background(), "client/app.apk", 5*time.Minute, "application/octet-stream", 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putURL, err := url.Parse(put.UploadURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if putURL.Host != "storage.example.com" || putURL.Path != "/draarl/client/app.apk" {
+		t.Fatalf("PUT URL was rewritten: %s", put.UploadURL)
+	}
+
+	get, err := store.PresignGet(context.Background(), "client/app.apk", 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getURL, err := url.Parse(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getURL.Host != "downloads.example.com" || getURL.Path != "/files/client/app.apk" || getURL.Query().Get("X-Amz-Signature") == "" {
+		t.Fatalf("GET URL prefix/signature mismatch: %s", get)
+	}
+}
+
 func assertS3PresignedURLShape(t *testing.T, rawURL, wantHost, wantPath, region, sessionToken string) {
 	t.Helper()
 	parsed, err := url.Parse(rawURL)
@@ -286,54 +329,80 @@ func assertS3PresignedURLShape(t *testing.T, rawURL, wantHost, wantPath, region,
 	}
 }
 
-func TestS3PublicURLRespectsBucketLookup(t *testing.T) {
+func TestRewritePresignedDownloadURL(t *testing.T) {
+	rawURL := "https://origin.example/draarl/client%20releases/app.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value"
 	tests := []struct {
-		name  string
-		store *minioStorage
-		want  string
+		name      string
+		prefix    string
+		objectKey string
+		want      string
 	}{
 		{
-			name:  "path style",
-			store: &minioStorage{bucket: "draarl", publicEndpoint: "storage.example.com", publicUseSSL: true, bucketLookup: minio.BucketLookupPath},
-			want:  "https://storage.example.com/draarl/client/app.apk",
+			name:      "absolute prefix with bucket path",
+			prefix:    "https://downloads.example.com/draarl",
+			objectKey: "client releases/app.apk",
+			want:      "https://downloads.example.com/draarl/client%20releases/app.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
 		},
 		{
-			name:  "dns style",
-			store: &minioStorage{bucket: "draarl", publicEndpoint: "oss-cn-hangzhou.aliyuncs.com", publicUseSSL: true, bucketLookup: minio.BucketLookupDNS},
-			want:  "https://draarl.oss-cn-hangzhou.aliyuncs.com/client/app.apk",
+			name:      "same-site proxy path",
+			prefix:    "/object-downloads",
+			objectKey: "client releases/app.apk",
+			want:      "/object-downloads/client%20releases/app.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
 		},
 		{
-			name:  "explicit public base",
-			store: &minioStorage{bucket: "draarl", basePath: "https://downloads.example.com", publicEndpoint: "ignored.example.com", bucketLookup: minio.BucketLookupDNS},
-			want:  "https://downloads.example.com/client/app.apk",
+			name:      "same-site root",
+			prefix:    "/",
+			objectKey: "client releases/app.apk",
+			want:      "/client%20releases/app.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
+		},
+		{
+			name:      "reserved object characters",
+			prefix:    "https://downloads.example.com/draarl",
+			objectKey: "桌面 #1?/client package.apk",
+			want:      "https://downloads.example.com/draarl/%E6%A1%8C%E9%9D%A2%20%231%3F/client%20package.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := test.store.PublicURL("client/app.apk"); got != test.want {
+			got, err := rewritePresignedDownloadURL(rawURL, test.prefix, test.objectKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
 				t.Fatalf("url=%q want=%q", got, test.want)
 			}
 		})
 	}
 }
 
-func TestS3PublicURLEncodesObjectKeySegments(t *testing.T) {
-	store := &minioStorage{basePath: "https://downloads.example.com"}
-	got := store.PublicURL("client releases/桌面 #1?/client package.apk")
-	want := "https://downloads.example.com/client%20releases/%E6%A1%8C%E9%9D%A2%20%231%3F/client%20package.apk"
-	if got != want {
-		t.Fatalf("public URL=%q want=%q", got, want)
+func TestRewritePresignedDownloadURLWithoutPrefixIsUnchanged(t *testing.T) {
+	rawURL := "https://origin.example/draarl/app.apk?X-Amz-Signature=original"
+	got, err := rewritePresignedDownloadURL(rawURL, "", "app.apk")
+	if err != nil || got != rawURL {
+		t.Fatalf("url=%q err=%v want=%q", got, err, rawURL)
 	}
 }
 
-func TestS3PublicURLCapabilityRequiresExplicitPublicBase(t *testing.T) {
-	privateStore := &minioStorage{}
-	if privateStore.Capabilities().PublicURL {
-		t.Fatal("private S3 storage must not advertise unsigned public reads")
+func TestValidateDownloadURLPrefix(t *testing.T) {
+	for _, valid := range []string{"", "/objects", "https://downloads.example.com/draarl", "http://localhost:9000/files"} {
+		if err := validateDownloadURLPrefix(valid); err != nil {
+			t.Fatalf("valid prefix %q rejected: %v", valid, err)
+		}
 	}
-	publicStore := &minioStorage{basePath: "https://downloads.example.com"}
-	if !publicStore.Capabilities().PublicURL {
-		t.Fatal("configured S3 public base must advertise public URL support")
+	for _, invalid := range []string{"objects", "ftp://example.com/files", "https://user@example.com/files", "https://example.com/files?token=x", "https://example.com/files#part"} {
+		if err := validateDownloadURLPrefix(invalid); err == nil {
+			t.Fatalf("invalid prefix %q accepted", invalid)
+		}
+	}
+}
+
+func TestS3NeverAdvertisesUnsignedPublicURL(t *testing.T) {
+	store := &minioStorage{downloadURLPrefix: "https://downloads.example.com/draarl"}
+	if store.Capabilities().PublicURL {
+		t.Fatal("S3 storage must never advertise unsigned public reads")
+	}
+	if got := store.PublicURL("client/app.apk"); got != "" {
+		t.Fatalf("S3 storage exposed unsigned URL %q", got)
 	}
 }
 

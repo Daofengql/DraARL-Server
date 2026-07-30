@@ -109,5 +109,5 @@
   <path class="arrow-green dash" d="M660 266 L660 538"/>
 
   <rect x="48" y="704" width="1184" height="34" rx="10" fill="#e2e8f0"/>
-  <text class="small" x="72" y="726">发布模式：前端可嵌入 Go 二进制；若启用 FrontendCDN，嵌入静态资源会同步到 MinIO 并由对象存储承载静态资产。</text>
+  <text class="small" x="72" y="726">发布模式：前端嵌入 Go 二进制并由主程序直接提供；对象存储保持私有，文件读取使用短期预签名 URL。</text>
 </svg>

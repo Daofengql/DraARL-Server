@@ -239,7 +239,7 @@ func NewObjectKey(fileType, ext string) string {
 	return fmt.Sprintf("uploads/%s/%d/%02d/%s%s", fileType, now.Year(), int(now.Month()), uuid.New().String(), strings.ToLower(ext))
 }
 
-// NewStagingObjectKey creates a user-scoped key that is never exposed as a public object.
+// NewStagingObjectKey creates a user-scoped key that is never exposed as a final object.
 func NewStagingObjectKey(fileType string, userID int, ext string) string {
 	if ext != "" && !strings.HasPrefix(ext, ".") {
 		ext = "." + ext
@@ -260,7 +260,7 @@ func ExtFromFilename(name string) string {
 }
 
 // escapeObjectKeyForURL encodes each object-key segment while preserving the
-// slash hierarchy. Public/CDN URLs must not let spaces, fragments, or query
+// slash hierarchy. URL prefixes must not let spaces, fragments, or query
 // delimiters in legacy object keys alter the requested object.
 func escapeObjectKeyForURL(key string) string {
 	segments := strings.Split(strings.TrimLeft(key, "/"), "/")
@@ -318,9 +318,9 @@ func PublicURL(key string) string {
 	return s.PublicURL(key)
 }
 
-// ReadURL returns a browser-readable object URL without assuming the active
-// bucket is public. Public/CDN storage uses its stable URL; private storage
-// falls back to a short-lived signed GET URL.
+// ReadURL returns a browser-readable object URL. Local storage may expose a
+// stable URL for explicitly safe keys; S3-compatible storage always uses a
+// short-lived signed GET URL.
 func ReadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -398,7 +398,7 @@ func Delete(ctx context.Context, key string) error {
 	return s.Delete(ctx, key)
 }
 
-// Promote moves a validated staging object to a new public object key.
+// Promote moves a validated staging object to a final object key.
 func Promote(ctx context.Context, stagedKey, finalKey string) error {
 	s := Get()
 	if s == nil {

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -18,14 +19,11 @@ import (
 )
 
 type minioStorage struct {
-	client         *minio.Client
-	publicClient   *minio.Client
-	bucket         string
-	basePath       string
-	publicEndpoint string
-	publicUseSSL   bool
-	bucketLookup   minio.BucketLookupType
-	driver         string
+	client            *minio.Client
+	publicClient      *minio.Client
+	bucket            string
+	downloadURLPrefix string
+	driver            string
 }
 
 // s3Storage is the generic S3-compatible implementation. minioStorage remains
@@ -37,16 +35,16 @@ func newMinIOStorage(cfg *config.Configuration) (Storage, error) {
 	mc := cfg.Storage.MinIO
 	publicEndpoint, publicUseSSL := resolveMinIOPublicTarget(mc)
 	return newS3StorageWithConfig(config.S3Config{
-		Provider:         "minio",
-		Endpoint:         mc.Endpoint,
-		PresignEndpoint:  publicEndpoint,
-		PublicBaseURL:    mc.BasePath,
-		AccessKey:        mc.AccessKey,
-		SecretKey:        mc.SecretKey,
-		UseSSL:           mc.UseSSL,
-		PresignUseSSL:    publicUseSSL,
-		Bucket:           mc.Bucket,
-		AutoCreateBucket: true,
+		Provider:          "minio",
+		Endpoint:          mc.Endpoint,
+		PresignEndpoint:   publicEndpoint,
+		DownloadURLPrefix: firstNonEmpty(mc.DownloadURLPrefix, mc.BasePath),
+		AccessKey:         mc.AccessKey,
+		SecretKey:         mc.SecretKey,
+		UseSSL:            mc.UseSSL,
+		PresignUseSSL:     publicUseSSL,
+		Bucket:            mc.Bucket,
+		AutoCreateBucket:  true,
 	}, DriverMinIO)
 }
 
@@ -111,14 +109,11 @@ func newS3StorageWithConfig(sc config.S3Config, driver string) (Storage, error) 
 	// Bucket policies are managed by the object-storage provider. Runtime
 	// credentials only need bucket and object access, not policy administration.
 	return &minioStorage{
-		client:         client,
-		publicClient:   publicClient,
-		bucket:         bucket,
-		basePath:       strings.TrimRight(strings.TrimSpace(sc.PublicBaseURL), "/"),
-		publicEndpoint: publicEndpoint,
-		publicUseSSL:   publicUseSSL,
-		bucketLookup:   bucketLookup,
-		driver:         normalizeS3Driver(driver),
+		client:            client,
+		publicClient:      publicClient,
+		bucket:            bucket,
+		downloadURLPrefix: sc.DownloadURLPrefix,
+		driver:            normalizeS3Driver(driver),
 	}, nil
 }
 
@@ -152,6 +147,10 @@ func prepareS3Config(sc config.S3Config, driver string) (config.S3Config, minio.
 			return config.S3Config{}, minio.BucketLookupAuto, fmt.Errorf("S3 PresignEndpoint 为空")
 		}
 	}
+	sc.DownloadURLPrefix = normalizeDownloadURLPrefix(firstNonEmpty(sc.DownloadURLPrefix, sc.PublicBaseURL))
+	if err := validateDownloadURLPrefix(sc.DownloadURLPrefix); err != nil {
+		return config.S3Config{}, minio.BucketLookupAuto, err
+	}
 
 	sc.Provider = effectiveS3Provider(sc.Provider, driver)
 	sc.Region = strings.TrimSpace(sc.Region)
@@ -170,6 +169,47 @@ func prepareS3Config(sc config.S3Config, driver string) (config.S3Config, minio.
 		return config.S3Config{}, minio.BucketLookupAuto, err
 	}
 	return sc, bucketLookup, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func normalizeDownloadURLPrefix(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "/" {
+		return value
+	}
+	return strings.TrimRight(value, "/")
+}
+
+func validateDownloadURLPrefix(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	prefix, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("S3 DownloadURLPrefix 无效: %w", err)
+	}
+	if prefix.RawQuery != "" || prefix.Fragment != "" || prefix.User != nil {
+		return fmt.Errorf("S3 DownloadURLPrefix 不能包含用户信息、查询参数或 fragment")
+	}
+	if prefix.IsAbs() {
+		if (prefix.Scheme != "http" && prefix.Scheme != "https") || prefix.Host == "" {
+			return fmt.Errorf("S3 DownloadURLPrefix 必须使用 http 或 https")
+		}
+		return nil
+	}
+	if prefix.Host != "" || !strings.HasPrefix(prefix.Path, "/") {
+		return fmt.Errorf("S3 DownloadURLPrefix 必须是 http(s) URL 或以 / 开头的站内路径")
+	}
+	return nil
 }
 
 func newS3APIClient(sc config.S3Config, endpoint string, useSSL bool, bucketLookup minio.BucketLookupType, transport http.RoundTripper) (*minio.Client, error) {
@@ -303,9 +343,6 @@ func (s *minioStorage) SupportsDirectPut() bool { return true }
 func (s *minioStorage) Capabilities() Capabilities {
 	return Capabilities{
 		DirectPut: true, PresignGet: true, PresignPut: true, ServerCopy: true,
-		// S3 buckets are private by default. A configured public/CDN base is the
-		// explicit signal that unsigned browser reads are available.
-		PublicURL: s.basePath != "",
 	}
 }
 
@@ -401,30 +438,46 @@ func (s *minioStorage) Stat(ctx context.Context, key string) (int64, string, err
 }
 
 func (s *minioStorage) PublicURL(key string) string {
-	clean := strings.TrimLeft(key, "/")
-	if clean == "" {
-		return ""
-	}
-	escapedKey := escapeObjectKeyForURL(clean)
-	if s.basePath != "" {
-		return s.basePath + "/" + escapedKey
-	}
-	protocol := "http"
-	if s.publicUseSSL {
-		protocol = "https"
-	}
-	if s.bucketLookup == minio.BucketLookupDNS {
-		return fmt.Sprintf("%s://%s.%s/%s", protocol, s.bucket, s.publicEndpoint, escapedKey)
-	}
-	return fmt.Sprintf("%s://%s/%s/%s", protocol, s.publicEndpoint, s.bucket, escapedKey)
+	return ""
 }
 
 func (s *minioStorage) PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	u, err := s.publicClient.PresignedGetObject(ctx, s.bucket, strings.TrimLeft(key, "/"), expiry, nil)
+	cleanKey := strings.TrimLeft(key, "/")
+	u, err := s.publicClient.PresignedGetObject(ctx, s.bucket, cleanKey, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("生成预签名下载 URL 失败: %w", err)
 	}
-	return u.String(), nil
+	return rewritePresignedDownloadURL(u.String(), s.downloadURLPrefix, cleanKey)
+}
+
+func rewritePresignedDownloadURL(rawURL, prefix, objectKey string) (string, error) {
+	prefix = normalizeDownloadURLPrefix(prefix)
+	if prefix == "" {
+		return rawURL, nil
+	}
+	if err := validateDownloadURLPrefix(prefix); err != nil {
+		return "", err
+	}
+
+	signedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("解析 S3 预签名下载 URL 失败: %w", err)
+	}
+	prefixURL, err := url.Parse(prefix)
+	if err != nil {
+		return "", fmt.Errorf("解析 S3 DownloadURLPrefix 失败: %w", err)
+	}
+
+	escapedPath := strings.TrimRight(prefixURL.EscapedPath(), "/") + "/" + escapeObjectKeyForURL(objectKey)
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		return "", fmt.Errorf("解析 S3 DownloadURLPrefix 路径失败: %w", err)
+	}
+	prefixURL.Path = decodedPath
+	prefixURL.RawPath = escapedPath
+	prefixURL.RawQuery = signedURL.RawQuery
+	prefixURL.ForceQuery = signedURL.ForceQuery
+	return prefixURL.String(), nil
 }
 
 func (s *minioStorage) PresignPut(ctx context.Context, key string, expiry time.Duration, contentType string, size int64) (PresignPutResult, error) {
@@ -450,7 +503,7 @@ func (s *minioStorage) PresignPut(ctx context.Context, key string, expiry time.D
 	}, nil
 }
 
-// MinIOClient 暴露底层 client（前端 CDN 同步等场景）。
+// MinIOClient exposes the underlying client for legacy integrations.
 func MinIOClient() *minio.Client {
 	s, ok := Get().(*minioStorage)
 	if !ok || s == nil {

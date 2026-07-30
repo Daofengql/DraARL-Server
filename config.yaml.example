@@ -98,9 +98,6 @@ Web:
     FrontendURL: "http://localhost:5173"  # 前端地址，用于SSO回调后重定向
     AllowedOrigins:            # CORS / WS Origin 白名单：填写真正发起 API/WS 请求的页面域名
         - "http://localhost:5173"
-    FrontendCDN:
-        Enabled: false         # 开启后，启动时会将嵌入的前端静态资源同步到当前 Storage
-        ObjectPrefix: "frontend" # 对象存储中的前端资源根目录，实际会按版本写入如 frontend/v1.2.3/assets、frontend/v1.2.3/docs
 
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:
@@ -130,13 +127,13 @@ Storage:
         UseSSL: false                 # 是否使用 HTTPS
         PublicUseSSL: false           # PublicEndpoint 是否使用 HTTPS
         Bucket: "draarl"             # 默认存储桶
-        BasePath: "/minio"            # URL 访问基础路径
+        DownloadURLPrefix: ""         # 可选：预签名 GET 的访问前缀；仅供用户自行配置的反向代理使用
     # 统一 S3 兼容配置。Driver=s3/r2/cos/oss 时使用此块。
     S3:
         Provider: ""                  # minio | r2 | cos | oss（标识与文档用途）
         Endpoint: ""                  # 后端 S3 API host:port 或完整 http(s):// URL；scheme 会覆盖 UseSSL
         PresignEndpoint: ""           # 浏览器可访问的 S3 API 地址；空则使用 Endpoint，scheme 会覆盖 PresignUseSSL
-        PublicBaseURL: ""             # 可选公开 CDN/bucket 基础 URL；前端 CDN 启用时必填，不参与预签名
+        DownloadURLPrefix: ""         # 可选：替换预签名 GET 的 URL 前缀；不影响 PUT，不代表对象公开
         Region: ""                    # R2 留空时自动使用 auto；COS/OSS 必须按 Bucket 地域填写
         BucketLookup: "auto"          # auto | path | dns；非法值会拒绝启动
         AccessKey: ""
@@ -157,6 +154,7 @@ Storage:
     #             Provider: minio
     #             Endpoint: "minio.internal:9000"
     #             PresignEndpoint: "storage.example.com"
+    #             DownloadURLPrefix: "" # 高级选项：用户自管反向代理的下载路径前缀
     #             Region: "us-east-1"
     #             BucketLookup: path
     #             AccessKey: "${MINIO_ACCESS_KEY}"

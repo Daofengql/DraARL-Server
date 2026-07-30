@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -78,6 +80,12 @@ func TestS3CompatibleContract(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	assertStoredObject(t, ctx, store, putKey, payload)
+	s3Store, ok := store.(*minioStorage)
+	if !ok {
+		t.Fatalf("contract storage type=%T, want S3-compatible storage", store)
+	}
+	assertAnonymousGetDenied(t, ctx, s3Store, putKey)
+	assertDownloadURLPrefixRoundTrip(t, ctx, s3Store, putKey, payload)
 
 	found := false
 	if err := store.Walk(ctx, prefix+"/", func(object ObjectInfo) error {
@@ -193,6 +201,104 @@ func TestS3CompatibleContract(t *testing.T) {
 			t.Fatalf("CleanupStaging deleted an active object: %v", err)
 		}
 	}
+}
+
+func assertAnonymousGetDenied(t *testing.T, ctx context.Context, store *minioStorage, key string) {
+	t.Helper()
+	signedURL, err := store.PresignGet(ctx, key, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("generate anonymous-read probe URL: %v", err)
+	}
+	target, err := urlWithoutSignature(signedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("anonymous GET request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		t.Fatalf("private S3 object accepted anonymous GET with status %d", response.StatusCode)
+	}
+}
+
+func assertDownloadURLPrefixRoundTrip(t *testing.T, ctx context.Context, store *minioStorage, key string, want []byte) {
+	t.Helper()
+	originSignedURL, err := store.PresignGet(ctx, key, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("generate origin URL for prefix proxy: %v", err)
+	}
+	originTarget, err := url.Parse(originSignedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originTarget.RawQuery = ""
+	originTarget.ForceQuery = false
+
+	proxyPrefixPath := "/signed-downloads"
+	proxy := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		wantPath := proxyPrefixPath + "/" + escapeObjectKeyForURL(key)
+		if request.URL.EscapedPath() != wantPath {
+			http.Error(responseWriter, "unexpected proxy path", http.StatusBadRequest)
+			return
+		}
+		target := *originTarget
+		target.RawQuery = request.URL.RawQuery
+		originRequest, requestErr := http.NewRequestWithContext(request.Context(), http.MethodGet, target.String(), nil)
+		if requestErr != nil {
+			http.Error(responseWriter, requestErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		originRequest.Header = request.Header.Clone()
+		originResponse, requestErr := (&http.Client{Timeout: 30 * time.Second}).Do(originRequest)
+		if requestErr != nil {
+			http.Error(responseWriter, requestErr.Error(), http.StatusBadGateway)
+			return
+		}
+		defer originResponse.Body.Close()
+		for name, values := range originResponse.Header {
+			for _, value := range values {
+				responseWriter.Header().Add(name, value)
+			}
+		}
+		responseWriter.WriteHeader(originResponse.StatusCode)
+		_, _ = io.Copy(responseWriter, originResponse.Body)
+	}))
+	defer proxy.Close()
+
+	prefixedStore := *store
+	prefixedStore.downloadURLPrefix = proxy.URL + proxyPrefixPath
+	prefixedURL, err := prefixedStore.PresignGet(ctx, key, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("generate prefixed URL: %v", err)
+	}
+	response, err := (&http.Client{Timeout: 30 * time.Second}).Get(prefixedURL)
+	if err != nil {
+		t.Fatalf("prefixed GET request: %v", err)
+	}
+	defer response.Body.Close()
+	got, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !bytes.Equal(got, want) {
+		t.Fatalf("prefixed GET status=%d payload_match=%t", response.StatusCode, bytes.Equal(got, want))
+	}
+}
+
+func urlWithoutSignature(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse signed URL: %w", err)
+	}
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	return parsed.String(), nil
 }
 
 func assertPresignedPutCORS(t *testing.T, ctx context.Context, uploadURL, origin string) {

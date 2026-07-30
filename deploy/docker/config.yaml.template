@@ -45,9 +45,6 @@ Web:
   FrontendURL: "${DRAARL_PUBLIC_URL}"
   AllowedOrigins:
     - "${DRAARL_PUBLIC_URL}"
-  FrontendCDN:
-    Enabled: false
-    ObjectPrefix: frontend
 
 Storage:
   Driver: minio
@@ -59,7 +56,7 @@ Storage:
     UseSSL: ${DRAARL_MINIO_USE_SSL}
     PublicUseSSL: ${DRAARL_MINIO_USE_SSL}
     Bucket: draarl
-    BasePath: ""
+    DownloadURLPrefix: ""
 
 JWT:
   Secret: "${DRAARL_JWT_SECRET}"

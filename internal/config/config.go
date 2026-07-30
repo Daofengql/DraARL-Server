@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,14 +24,17 @@ var releaseBuild atomic.Bool
 const DefaultConfigFileName = "config.yaml"
 
 type MinIOConfig struct {
-	Endpoint       string `yaml:"Endpoint" json:"endpoint"`
-	PublicEndpoint string `yaml:"PublicEndpoint" json:"public_endpoint"`
-	AccessKey      string `yaml:"AccessKey" json:"access_key"`
-	SecretKey      string `yaml:"SecretKey" json:"secret_key"`
-	UseSSL         bool   `yaml:"UseSSL" json:"use_ssl"`
-	PublicUseSSL   bool   `yaml:"PublicUseSSL" json:"public_use_ssl"`
-	Bucket         string `yaml:"Bucket" json:"bucket"`
-	BasePath       string `yaml:"BasePath" json:"base_path"`
+	Endpoint          string `yaml:"Endpoint" json:"endpoint"`
+	PublicEndpoint    string `yaml:"PublicEndpoint" json:"public_endpoint"`
+	DownloadURLPrefix string `yaml:"DownloadURLPrefix" json:"download_url_prefix"`
+	AccessKey         string `yaml:"AccessKey" json:"access_key"`
+	SecretKey         string `yaml:"SecretKey" json:"secret_key"`
+	UseSSL            bool   `yaml:"UseSSL" json:"use_ssl"`
+	PublicUseSSL      bool   `yaml:"PublicUseSSL" json:"public_use_ssl"`
+	Bucket            string `yaml:"Bucket" json:"bucket"`
+	// BasePath is accepted only to migrate configurations created before
+	// DownloadURLPrefix. It no longer means that objects are anonymously readable.
+	BasePath string `yaml:"BasePath,omitempty" json:"-"`
 }
 
 // LocalStorageConfig defines one local filesystem storage profile.
@@ -41,22 +45,26 @@ type LocalStorageConfig struct {
 
 // S3Config describes an S3-compatible object-storage endpoint. It is used by
 // MinIO and by public-cloud S3 compatibility endpoints such as R2, COS, and
-// OSS. PresignEndpoint must be an externally reachable S3 API endpoint; it is
-// deliberately separate from PublicBaseURL, which is only for public/CDN URLs.
+// OSS. PresignEndpoint must be an externally reachable S3 API endpoint.
+// DownloadURLPrefix optionally rewrites signed GET URLs for a user-managed
+// reverse proxy; it does not enable public access or affect signed PUT URLs.
 type S3Config struct {
-	Provider         string `yaml:"Provider" json:"provider"`
-	Endpoint         string `yaml:"Endpoint" json:"endpoint"`
-	PresignEndpoint  string `yaml:"PresignEndpoint" json:"presign_endpoint"`
-	PublicBaseURL    string `yaml:"PublicBaseURL" json:"public_base_url"`
-	Region           string `yaml:"Region" json:"region"`
-	BucketLookup     string `yaml:"BucketLookup" json:"bucket_lookup"`
-	AccessKey        string `yaml:"AccessKey" json:"access_key"`
-	SecretKey        string `yaml:"SecretKey" json:"secret_key"`
-	SessionToken     string `yaml:"SessionToken" json:"session_token"`
-	UseSSL           bool   `yaml:"UseSSL" json:"use_ssl"`
-	PresignUseSSL    bool   `yaml:"PresignUseSSL" json:"presign_use_ssl"`
-	Bucket           string `yaml:"Bucket" json:"bucket"`
-	AutoCreateBucket bool   `yaml:"AutoCreateBucket" json:"auto_create_bucket"`
+	Provider          string `yaml:"Provider" json:"provider"`
+	Endpoint          string `yaml:"Endpoint" json:"endpoint"`
+	PresignEndpoint   string `yaml:"PresignEndpoint" json:"presign_endpoint"`
+	DownloadURLPrefix string `yaml:"DownloadURLPrefix" json:"download_url_prefix"`
+	Region            string `yaml:"Region" json:"region"`
+	BucketLookup      string `yaml:"BucketLookup" json:"bucket_lookup"`
+	AccessKey         string `yaml:"AccessKey" json:"access_key"`
+	SecretKey         string `yaml:"SecretKey" json:"secret_key"`
+	SessionToken      string `yaml:"SessionToken" json:"session_token"`
+	UseSSL            bool   `yaml:"UseSSL" json:"use_ssl"`
+	PresignUseSSL     bool   `yaml:"PresignUseSSL" json:"presign_use_ssl"`
+	Bucket            string `yaml:"Bucket" json:"bucket"`
+	AutoCreateBucket  bool   `yaml:"AutoCreateBucket" json:"auto_create_bucket"`
+	// PublicBaseURL is a deprecated alias for DownloadURLPrefix. It no longer
+	// advertises or produces an unsigned public object URL.
+	PublicBaseURL string `yaml:"PublicBaseURL,omitempty" json:"-"`
 }
 
 const DefaultClientPackageMaxBytes int64 = 512 * 1024 * 1024
@@ -190,10 +198,6 @@ type Configuration struct {
 		// 允许访问 API / WebSocket 的页面来源白名单（格式: https://example.com）。
 		// FrontendURL 对应的 Origin 会自动加入此集合；若 index.html 由后端提供，通常这里应配置后端对外页面域名。
 		AllowedOrigins []string `yaml:"AllowedOrigins" json:"allowed_origins"`
-		FrontendCDN    struct {
-			Enabled      bool   `yaml:"Enabled" json:"enabled"`
-			ObjectPrefix string `yaml:"ObjectPrefix" json:"object_prefix"` // MinIO 中的前端资源前缀目录
-		} `yaml:"FrontendCDN" json:"frontend_cdn"`
 	} `yaml:"Web" json:"web"`
 
 	// Keycloak SSO 配置
@@ -411,11 +415,6 @@ func (c *Configuration) SetDefaults() error {
 		c.Redis.PoolSize = 20
 	}
 
-	// 前端 CDN 默认值
-	if strings.TrimSpace(c.Web.FrontendCDN.ObjectPrefix) == "" {
-		c.Web.FrontendCDN.ObjectPrefix = "frontend"
-	}
-
 	// 存储默认值
 	if strings.TrimSpace(c.Storage.Local.RootPath) == "" {
 		c.Storage.Local.RootPath = "./data/storage"
@@ -423,9 +422,13 @@ func (c *Configuration) SetDefaults() error {
 	if c.Storage.Local.BaseURL != "" {
 		c.Storage.Local.BaseURL = strings.TrimRight(c.Storage.Local.BaseURL, "/")
 	}
-	if c.Storage.MinIO.BasePath != "" {
-		c.Storage.MinIO.BasePath = strings.TrimRight(c.Storage.MinIO.BasePath, "/")
-	}
+	c.Storage.MinIO.DownloadURLPrefix = migrateDownloadURLPrefix(
+		c.Storage.MinIO.DownloadURLPrefix,
+		c.Storage.MinIO.BasePath,
+		"Storage.MinIO.BasePath",
+	)
+	c.Storage.MinIO.BasePath = ""
+	normalizeS3Config(&c.Storage.S3, "Storage.S3.PublicBaseURL")
 	if c.Storage.UploadLimits.ClientPackageBytes <= 0 {
 		c.Storage.UploadLimits.ClientPackageBytes = DefaultClientPackageMaxBytes
 	}
@@ -436,9 +439,7 @@ func (c *Configuration) SetDefaults() error {
 			profile.Local.RootPath = "./data/storage"
 		}
 		profile.Local.BaseURL = strings.TrimRight(strings.TrimSpace(profile.Local.BaseURL), "/")
-		profile.S3.PublicBaseURL = strings.TrimRight(strings.TrimSpace(profile.S3.PublicBaseURL), "/")
-		profile.S3.Provider = strings.ToLower(strings.TrimSpace(profile.S3.Provider))
-		profile.S3.BucketLookup = strings.ToLower(strings.TrimSpace(profile.S3.BucketLookup))
+		normalizeS3Config(&profile.S3, fmt.Sprintf("Storage.Profiles.%s.S3.PublicBaseURL", name))
 		c.Storage.Profiles[name] = profile
 	}
 
@@ -456,6 +457,38 @@ func (c *Configuration) SetDefaults() error {
 	}
 
 	return nil
+}
+
+func normalizeS3Config(sc *S3Config, deprecatedField string) {
+	if sc == nil {
+		return
+	}
+	sc.DownloadURLPrefix = migrateDownloadURLPrefix(sc.DownloadURLPrefix, sc.PublicBaseURL, deprecatedField)
+	sc.PublicBaseURL = ""
+	sc.Provider = strings.ToLower(strings.TrimSpace(sc.Provider))
+	sc.BucketLookup = strings.ToLower(strings.TrimSpace(sc.BucketLookup))
+}
+
+func migrateDownloadURLPrefix(current, deprecated, deprecatedField string) string {
+	current = normalizeDownloadURLPrefix(current)
+	deprecated = normalizeDownloadURLPrefix(deprecated)
+	if deprecated == "" {
+		return current
+	}
+	if current != "" {
+		log.Printf("[CONFIG] %s 已弃用且被 DownloadURLPrefix 覆盖", deprecatedField)
+		return current
+	}
+	log.Printf("[CONFIG] %s 已弃用，按 DownloadURLPrefix 的签名 URL 前缀替换语义迁移", deprecatedField)
+	return deprecated
+}
+
+func normalizeDownloadURLPrefix(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "/" {
+		return value
+	}
+	return strings.TrimRight(value, "/")
 }
 
 func (c *Configuration) migrateLegacyStorageConfig() {

@@ -59,6 +59,7 @@ func TestValidateAllowedOriginsRejectsMissingOriginsInRelease(t *testing.T) {
 
 func TestLegacyMinIOConfigMigratesToStorage(t *testing.T) {
 	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
 	cfg.LegacyMinIO = MinIOConfig{
 		Endpoint:  "minio.example.com",
 		AccessKey: "access",
@@ -68,13 +69,45 @@ func TestLegacyMinIOConfigMigratesToStorage(t *testing.T) {
 		BasePath:  "https://cdn.example.com/draarl",
 	}
 
-	cfg.migrateLegacyStorageConfig()
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
 
 	if cfg.Storage.MinIO.Endpoint != "minio.example.com" || cfg.Storage.MinIO.AccessKey != "access" {
 		t.Fatalf("legacy MinIO config was not migrated: %+v", cfg.Storage.MinIO)
 	}
+	if cfg.Storage.MinIO.DownloadURLPrefix != "https://cdn.example.com/draarl" {
+		t.Fatalf("legacy BasePath was not migrated to DownloadURLPrefix: %+v", cfg.Storage.MinIO)
+	}
+	if cfg.Storage.MinIO.BasePath != "" {
+		t.Fatalf("legacy BasePath was retained after migration: %+v", cfg.Storage.MinIO)
+	}
 	if cfg.LegacyMinIO.Endpoint != "" {
 		t.Fatal("legacy MinIO config should be cleared after migration")
+	}
+}
+
+func TestDeprecatedS3PublicBaseURLMigratesToDownloadURLPrefix(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.Storage.S3.PublicBaseURL = "https://downloads.example.com/draarl/"
+	cfg.Storage.Profiles = map[string]StorageProfile{
+		"archive": {S3: S3Config{PublicBaseURL: "/archive/"}},
+	}
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Storage.S3.DownloadURLPrefix != "https://downloads.example.com/draarl" {
+		t.Fatalf("top-level prefix=%q", cfg.Storage.S3.DownloadURLPrefix)
+	}
+	if cfg.Storage.S3.PublicBaseURL != "" {
+		t.Fatalf("deprecated top-level PublicBaseURL was retained: %q", cfg.Storage.S3.PublicBaseURL)
+	}
+	if got := cfg.Storage.Profiles["archive"].S3.DownloadURLPrefix; got != "/archive" {
+		t.Fatalf("profile prefix=%q", got)
+	}
+	if got := cfg.Storage.Profiles["archive"].S3.PublicBaseURL; got != "" {
+		t.Fatalf("deprecated profile PublicBaseURL was retained: %q", got)
 	}
 }
 

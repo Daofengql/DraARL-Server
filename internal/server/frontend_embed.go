@@ -4,24 +4,12 @@
 package server
 
 import (
-	"bytes"
-	"context"
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"io/fs"
 	"log"
-	"mime"
 	"net/http"
-	"path"
 	"strings"
-	"time"
 
-	"draarl/internal/buildinfo"
 	"draarl/internal/common"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
@@ -36,46 +24,15 @@ var webFS embed.FS
 // 缓存的 index.html 内容（不含 title）
 var indexHTMLTemplate string
 
-const (
-	defaultFrontendCDNManifest = ".draarl-frontend-manifest.json"
-	frontendCDNSyncTimeout     = 2 * time.Minute
-	frontendIndexFile          = "index.html"
-)
-
-type embeddedFrontendAsset struct {
-	Path        string
-	Data        []byte
-	ContentType string
-	Digest      string
-}
-
-type frontendCDNManifest struct {
-	Checksum string                    `json:"checksum"`
-	Files    []frontendCDNManifestFile `json:"files"`
-}
-
-type frontendCDNManifestFile struct {
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	ContentType string `json:"content_type"`
-	Digest      string `json:"digest"`
-}
-
-type frontendCDNVersionEntry struct {
-	Size        int64
-	ContentType string
-	Digest      string
-}
-
-// setupFrontend 设置前端静态文件服务（嵌入模式）
-func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
+// setupFrontend 设置前端静态文件服务（嵌入模式）。前端资源始终由主程序
+// 提供；如需 CDN，部署方可以直接在主站 HTTP 层外置配置。
+func setupFrontend(engine *gin.Engine, _ *config.Configuration) {
 	webStaticFS, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
 		log.Println("Frontend static files not found, running in API-only mode")
 		return
 	}
 
-	// 预加载 index.html 模板
 	indexContent, err := fs.ReadFile(webStaticFS, "index.html")
 	if err != nil {
 		log.Printf("Failed to read index.html: %v", err)
@@ -83,52 +40,38 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 		indexHTMLTemplate = string(indexContent)
 	}
 
-	assetBaseURL := "/"
-	if cfg != nil && cfg.Web.FrontendCDN.Enabled {
-		cdnBaseURL, err := ensureFrontendAssetsInStorage(webStaticFS, cfg)
-		if err != nil {
-			log.Printf("Frontend CDN sync failed, fallback to embedded assets: %v", err)
-		} else {
-			assetBaseURL = normalizeAssetBaseURL(cdnBaseURL)
-			log.Printf("Frontend static assets served by storage: %s", assetBaseURL)
-		}
-	}
-
-	// 禁用 Gin 的自动尾随斜杠重定向，避免重定向循环
 	engine.RedirectTrailingSlash = false
 	engine.RedirectFixedPath = false
 
-	// 静态资源路由（优先匹配）
 	engine.GET("/assets/*filepath", func(c *gin.Context) {
-		c.FileFromFS("assets/"+c.Param("filepath"), http.FS(webStaticFS))
+		setFrontendAssetCache(c, true)
+		c.FileFromFS("assets/"+strings.TrimPrefix(c.Param("filepath"), "/"), http.FS(webStaticFS))
 	})
 
-	// 其他静态资源目录
 	for _, dir := range []string{"css", "js", "fonts", "img", "docs"} {
-		d := dir // 捕获循环变量
+		d := dir
 		engine.GET("/"+d+"/*filepath", func(c *gin.Context) {
+			setFrontendAssetCache(c, false)
 			c.FileFromFS(d+c.Param("filepath"), http.FS(webStaticFS))
 		})
 	}
 
-	// 根目录静态文件（如默认 favicon）
 	for _, fileName := range []string{"vite.svg"} {
 		staticFile := fileName
 		engine.GET("/"+staticFile, func(c *gin.Context) {
+			setFrontendAssetCache(c, false)
 			c.FileFromFS(staticFile, http.FS(webStaticFS))
 		})
 	}
 
-	// 渲染 index.html 并动态替换 title 和 favicon
 	renderIndex := func(c *gin.Context) {
 		if indexHTMLTemplate == "" {
-			c.String(500, "index.html not found")
+			c.String(http.StatusInternalServerError, "index.html not found")
 			return
 		}
 
-		// 获取站点名称和 favicon URL
-		siteName := common.SiteName // 默认值
-		faviconURL := assetBaseURL + "vite.svg"
+		siteName := common.SiteName
+		faviconURL := "/vite.svg"
 		if repo := gormdb.GetSiteConfigRepo(); repo != nil {
 			if systemConfig, err := repo.GetSystemInfoConfig(); err == nil {
 				if systemConfig.Name != "" {
@@ -140,437 +83,87 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 			}
 		}
 
-		// 根据 path 确定页面标题后缀（与前端 routeTitleMap 保持一致）
-		path := c.Request.URL.Path
-		titleSuffix := ""
-		switch path {
-		case "/login":
-			titleSuffix = " - 登录"
-		case "/register":
-			titleSuffix = " - 注册"
-		case "/dashboard":
-			titleSuffix = " - 仪表盘"
-		case "/devices":
-			titleSuffix = " - 我的设备"
-		case "/groups":
-			titleSuffix = " - 我的群组"
-		case "/profile":
-			titleSuffix = " - 个人中心"
-		case "/comm-records":
-			titleSuffix = " - 通信记录"
-		case "/relays":
-			titleSuffix = " - 中继台查询"
-		case "/tools":
-			titleSuffix = " - 工具"
-		case "/docs":
-			titleSuffix = " - 技术支持"
-		case "/admin/dashboard":
-			titleSuffix = " - 仪表盘"
-		case "/admin/users":
-			titleSuffix = " - 用户管理"
-		case "/admin/approvals":
-			titleSuffix = " - 用户审批"
-		case "/admin/certificate-approvals":
-			titleSuffix = " - 操作证审批"
-		case "/admin/devices":
-			titleSuffix = " - 设备管理"
-		case "/admin/relays":
-			titleSuffix = " - 中继台"
-		case "/admin/servers":
-			titleSuffix = " - 服务器"
-		case "/admin/groups":
-			titleSuffix = " - 群组管理"
-		case "/admin/group-links":
-			titleSuffix = " - 互联管理"
-		case "/admin/comm-records":
-			titleSuffix = " - 通信记录"
-		case "/admin/assets":
-			titleSuffix = " - 资源管理"
-		case "/admin/settings":
-			titleSuffix = " - 站点配置"
-		default:
-			// 其他管理后台路由
-			if strings.HasPrefix(path, "/admin/") {
-				titleSuffix = " - 管理后台"
-			}
-		}
+		titleSuffix := frontendTitleSuffix(c.Request.URL.Path)
+		html := strings.ReplaceAll(indexHTMLTemplate, "{{siteName}}", siteName)
+		html = strings.ReplaceAll(html, "{{titleSuffix}}", titleSuffix)
+		html = strings.ReplaceAll(html, "{{faviconURL}}", faviconURL)
+		html = strings.ReplaceAll(html, "{{assetBaseURL}}", "/")
+		html = strings.ReplaceAll(html, "./assets/", "/assets/")
 
-		// 动态替换模板占位符
-		html := strings.Replace(indexHTMLTemplate, "{{siteName}}", siteName, -1)
-		html = strings.Replace(html, "{{titleSuffix}}", titleSuffix, -1)
-		html = strings.Replace(html, "{{faviconURL}}", faviconURL, -1)
-		html = strings.Replace(html, "{{assetBaseURL}}", assetBaseURL, -1)
-		html = strings.ReplaceAll(html, "./assets/", assetBaseURL+"assets/")
-
-		c.Data(200, "text/html; charset=utf-8", []byte(html))
+		c.Header("Cache-Control", "no-cache")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
 	}
 
-	// 根路径返回 index.html
 	engine.GET("/", renderIndex)
-
-	// SPA fallback：所有非 API 和非 /ws 的路由都返回 index.html 页面内容
 	engine.NoRoute(func(c *gin.Context) {
-		// 跳过后端专属路由
 		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/ws") {
-			c.JSON(404, gin.H{"error": "not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-
-		// 使用动态渲染的 index.html
 		renderIndex(c)
 	})
 
 	log.Println("Frontend static files enabled (embedded)")
 }
 
-func ensureFrontendAssetsInStorage(webStaticFS fs.FS, cfg *config.Configuration) (string, error) {
-	if cfg == nil {
-		return "", fmt.Errorf("configuration is nil")
+func setFrontendAssetCache(c *gin.Context, immutable bool) {
+	if immutable {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		return
 	}
-
-	prefix := normalizeObjectPrefix(cfg.Web.FrontendCDN.ObjectPrefix)
-	if prefix == "" {
-		return "", fmt.Errorf("frontend CDN object prefix is empty")
-	}
-	versionedPrefix := joinObjectPath(prefix, buildinfo.FrontendAssetVersion())
-
-	store := storage.Get()
-	if store == nil {
-		if err := storage.Init(cfg); err != nil {
-			return "", fmt.Errorf("init storage: %w", err)
-		}
-		store = storage.Get()
-	}
-	if store == nil {
-		return "", fmt.Errorf("storage client is not ready")
-	}
-	publicBaseURL, err := frontendPublicBaseURL(store, versionedPrefix)
-	if err != nil {
-		return "", err
-	}
-
-	assets, manifest, err := loadEmbeddedFrontendAssets(webStaticFS)
-	if err != nil {
-		return "", fmt.Errorf("load embedded frontend assets: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), frontendCDNSyncTimeout)
-	defer cancel()
-
-	manifestObject := joinObjectPath(versionedPrefix, defaultFrontendCDNManifest)
-
-	storedManifest, err := readFrontendManifest(ctx, store, manifestObject)
-	if err != nil {
-		return "", fmt.Errorf("read frontend CDN manifest: %w", err)
-	}
-
-	if !hasFrontendManifestChanged(storedManifest, manifest) {
-		complete, err := isFrontendDeploymentComplete(ctx, store, versionedPrefix, manifest)
-		if err != nil {
-			return "", fmt.Errorf("verify frontend CDN deployment: %w", err)
-		}
-		if complete {
-			return publicBaseURL, nil
-		}
-
-		log.Printf("Frontend CDN deployment incomplete under prefix %s, re-uploading assets", versionedPrefix)
-	}
-
-	if err := purgeFrontendPrefix(ctx, store, versionedPrefix); err != nil {
-		return "", fmt.Errorf("purge frontend CDN prefix: %w", err)
-	}
-	if storedManifest != nil {
-		log.Printf("Frontend CDN manifest changed, purged storage prefix %s before re-upload", versionedPrefix)
-	}
-
-	uploadedFiles := 0
-	var uploadedBytes int64
-	for _, asset := range assets {
-		objectName := joinObjectPath(versionedPrefix, asset.Path)
-		if err := store.Put(ctx, objectName, bytes.NewReader(asset.Data), int64(len(asset.Data)), asset.ContentType); err != nil {
-			return "", fmt.Errorf("upload %s: %w", asset.Path, err)
-		}
-		uploadedFiles++
-		uploadedBytes += int64(len(asset.Data))
-	}
-
-	manifestData, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal frontend CDN manifest: %w", err)
-	}
-	if err := store.Put(ctx, manifestObject, bytes.NewReader(manifestData), int64(len(manifestData)), "application/json"); err != nil {
-		return "", fmt.Errorf("upload frontend CDN manifest: %w", err)
-	}
-
-	log.Printf("Frontend CDN assets synced to storage prefix %s (%d files, %d bytes)", versionedPrefix, uploadedFiles, uploadedBytes)
-	return publicBaseURL, nil
+	c.Header("Cache-Control", "public, max-age=3600")
 }
 
-func frontendPublicBaseURL(store storage.Storage, versionedPrefix string) (string, error) {
-	if store == nil {
-		return "", fmt.Errorf("storage client is not ready")
-	}
-	if !store.Capabilities().PublicURL {
-		return "", fmt.Errorf("active storage has no public URL; configure S3 PublicBaseURL before enabling frontend CDN")
-	}
-	publicBaseURL := store.PublicURL(versionedPrefix)
-	if strings.TrimSpace(publicBaseURL) == "" {
-		return "", fmt.Errorf("active storage returned an empty public URL")
-	}
-	return publicBaseURL, nil
-}
-
-func hasFrontendManifestChanged(stored, current *frontendCDNManifest) bool {
-	if current == nil {
-		return false
-	}
-	if stored == nil {
-		return true
-	}
-	if stored.Checksum != "" && current.Checksum != "" && stored.Checksum == current.Checksum {
-		return false
-	}
-
-	storedMap := buildFrontendManifestVersionMap(stored)
-	currentMap := buildFrontendManifestVersionMap(current)
-	if len(storedMap) != len(currentMap) {
-		return true
-	}
-	for filePath, currentEntry := range currentMap {
-		storedEntry, ok := storedMap[filePath]
-		if !ok || storedEntry != currentEntry {
-			return true
+func frontendTitleSuffix(requestPath string) string {
+	switch requestPath {
+	case "/login":
+		return " - 登录"
+	case "/register":
+		return " - 注册"
+	case "/dashboard":
+		return " - 仪表盘"
+	case "/devices":
+		return " - 我的设备"
+	case "/groups":
+		return " - 我的群组"
+	case "/profile":
+		return " - 个人中心"
+	case "/comm-records":
+		return " - 通信记录"
+	case "/relays":
+		return " - 中继台查询"
+	case "/tools":
+		return " - 工具"
+	case "/docs":
+		return " - 技术支持"
+	case "/admin/dashboard":
+		return " - 仪表盘"
+	case "/admin/users":
+		return " - 用户管理"
+	case "/admin/approvals":
+		return " - 用户审批"
+	case "/admin/certificate-approvals":
+		return " - 操作证审批"
+	case "/admin/devices":
+		return " - 设备管理"
+	case "/admin/relays":
+		return " - 中继台"
+	case "/admin/servers":
+		return " - 服务器"
+	case "/admin/groups":
+		return " - 群组管理"
+	case "/admin/group-links":
+		return " - 互联管理"
+	case "/admin/comm-records":
+		return " - 通信记录"
+	case "/admin/assets":
+		return " - 资源管理"
+	case "/admin/settings":
+		return " - 站点配置"
+	default:
+		if strings.HasPrefix(requestPath, "/admin/") {
+			return " - 管理后台"
 		}
-	}
-
-	return false
-}
-
-func buildFrontendManifestVersionMap(manifest *frontendCDNManifest) map[string]frontendCDNVersionEntry {
-	if manifest == nil {
-		return nil
-	}
-
-	versionMap := make(map[string]frontendCDNVersionEntry, len(manifest.Files))
-	for _, file := range manifest.Files {
-		versionMap[file.Path] = frontendCDNVersionEntry{
-			Size:        file.Size,
-			ContentType: file.ContentType,
-			Digest:      file.Digest,
-		}
-	}
-	return versionMap
-}
-
-func loadEmbeddedFrontendAssets(webStaticFS fs.FS) ([]embeddedFrontendAsset, *frontendCDNManifest, error) {
-	assets := make([]embeddedFrontendAsset, 0, 16)
-	manifest := &frontendCDNManifest{
-		Files: make([]frontendCDNManifestFile, 0, 16),
-	}
-	checksumHasher := sha256.New()
-
-	err := fs.WalkDir(webStaticFS, ".", func(filePath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if filePath == frontendIndexFile {
-			return nil
-		}
-
-		data, err := fs.ReadFile(webStaticFS, filePath)
-		if err != nil {
-			return fmt.Errorf("read embedded file %s: %w", filePath, err)
-		}
-
-		digestBytes := sha256.Sum256(data)
-		digest := hex.EncodeToString(digestBytes[:])
-		contentType := detectFrontendContentType(filePath, data)
-
-		assets = append(assets, embeddedFrontendAsset{
-			Path:        filePath,
-			Data:        data,
-			ContentType: contentType,
-			Digest:      digest,
-		})
-		manifest.Files = append(manifest.Files, frontendCDNManifestFile{
-			Path:        filePath,
-			Size:        int64(len(data)),
-			ContentType: contentType,
-			Digest:      digest,
-		})
-
-		checksumHasher.Write([]byte(filePath))
-		checksumHasher.Write([]byte{0})
-		checksumHasher.Write([]byte(digest))
-		checksumHasher.Write([]byte{0})
-
-		return nil
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	manifest.Checksum = hex.EncodeToString(checksumHasher.Sum(nil))
-	return assets, manifest, nil
-}
-
-func readFrontendManifest(ctx context.Context, store storage.Storage, objectName string) (*frontendCDNManifest, error) {
-	object, err := store.Open(ctx, objectName)
-	if err != nil {
-		if isStorageNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer object.Close()
-
-	data, err := io.ReadAll(object)
-	if err != nil {
-		if isStorageNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	manifest := &frontendCDNManifest{}
-	if err := json.Unmarshal(data, manifest); err != nil {
-		return nil, err
-	}
-	return manifest, nil
-}
-
-func isFrontendDeploymentComplete(ctx context.Context, store storage.Storage, prefix string, manifest *frontendCDNManifest) (bool, error) {
-	if manifest == nil {
-		return false, nil
-	}
-
-	objectPrefix := normalizeObjectPrefix(prefix)
-	if objectPrefix == "" {
-		return false, fmt.Errorf("frontend CDN object prefix is empty")
-	}
-	listPrefix := objectPrefix + "/"
-
-	expectedFiles := make(map[string]frontendCDNManifestFile, len(manifest.Files))
-	for _, file := range manifest.Files {
-		expectedFiles[file.Path] = file
-	}
-
-	manifestFound := false
-	err := store.Walk(ctx, listPrefix, func(objectInfo storage.ObjectInfo) error {
-		relativePath := strings.TrimPrefix(objectInfo.Key, listPrefix)
-		if relativePath == defaultFrontendCDNManifest {
-			manifestFound = true
-			return nil
-		}
-
-		expected, ok := expectedFiles[relativePath]
-		if !ok {
-			return errFrontendDeploymentIncomplete
-		}
-		if objectInfo.Size != expected.Size {
-			return errFrontendDeploymentIncomplete
-		}
-		delete(expectedFiles, relativePath)
-		return nil
-	})
-	if errors.Is(err, errFrontendDeploymentIncomplete) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-
-	return manifestFound && len(expectedFiles) == 0, nil
-}
-
-var errFrontendDeploymentIncomplete = errors.New("frontend deployment incomplete")
-
-func purgeFrontendPrefix(ctx context.Context, store storage.Storage, prefix string) error {
-	objectPrefix := normalizeObjectPrefix(prefix)
-	if objectPrefix == "" {
-		return fmt.Errorf("frontend CDN object prefix is empty")
-	}
-
-	keys := make([]string, 0, 16)
-	if err := store.Walk(ctx, objectPrefix+"/", func(objectInfo storage.ObjectInfo) error {
-		keys = append(keys, objectInfo.Key)
-		return nil
-	}); err != nil {
-		if isStorageNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	for _, key := range keys {
-		if err := store.Delete(ctx, key); err != nil && !isStorageNotFound(err) {
-			return err
-		}
-	}
-	return nil
-}
-
-func isStorageNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "nosuchkey") || strings.Contains(message, "nosuchobject") || strings.Contains(message, "not found") || strings.Contains(message, "notfound")
-}
-
-func detectFrontendContentType(filePath string, data []byte) string {
-	ext := strings.ToLower(path.Ext(filePath))
-	switch ext {
-	case ".css":
-		return "text/css; charset=utf-8"
-	case ".js":
-		return "application/javascript"
-	case ".json":
-		return "application/json"
-	case ".md":
-		return "text/markdown; charset=utf-8"
-	case ".svg":
-		return "image/svg+xml"
-	case ".woff":
-		return "font/woff"
-	case ".woff2":
-		return "font/woff2"
-	}
-
-	if contentType := mime.TypeByExtension(ext); contentType != "" {
-		return contentType
-	}
-	return http.DetectContentType(data)
-}
-
-func joinObjectPath(prefix, filePath string) string {
-	cleanPrefix := normalizeObjectPrefix(prefix)
-	cleanPath := strings.TrimPrefix(path.Clean(filePath), "./")
-	if cleanPrefix == "" {
-		return cleanPath
-	}
-	return strings.TrimPrefix(path.Join(cleanPrefix, cleanPath), "/")
-}
-
-func normalizeObjectPrefix(prefix string) string {
-	clean := strings.TrimSpace(prefix)
-	clean = strings.ReplaceAll(clean, "\\", "/")
-	clean = strings.Trim(clean, "/")
-	if clean == "." {
 		return ""
 	}
-	return clean
-}
-
-func normalizeAssetBaseURL(baseURL string) string {
-	trimmed := strings.TrimSpace(baseURL)
-	if trimmed == "" {
-		return "/"
-	}
-	if !strings.HasSuffix(trimmed, "/") {
-		trimmed += "/"
-	}
-	return trimmed
 }

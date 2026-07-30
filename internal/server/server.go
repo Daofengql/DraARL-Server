@@ -54,8 +54,7 @@ func New(cfg *config.Configuration) *Server {
 
 	// Initialize local storage synchronously and make a best-effort synchronous
 	// connection for object storage. A remote provider may be temporarily down;
-	// the background retry keeps startup resilient while frontend CDN falls back
-	// to embedded assets until the next process restart.
+	// the background retry keeps API startup resilient.
 	if !storage.IsEnabled() {
 		if err := storage.Init(cfg); err != nil {
 			log.Printf("[STORAGE] initial storage setup failed: %v", err)

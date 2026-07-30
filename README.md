@@ -93,7 +93,7 @@ DraARL-Server/
 - Node.js 20+
 - MySQL 5.7+ 或 MariaDB 10.3+
 - Redis 6.0+（推荐；不可用时 refresh token 会降级到内存存储）
-- MinIO（可选，用于资源、头像、通信录音、固件和前端 CDN）
+- MinIO（可选，用于资源、头像、通信录音和固件）
 - Keycloak（可选，用于 SSO）
 - Python 3.11+（仅本地预览/构建 MkDocs 文档时需要）
 
@@ -146,7 +146,7 @@ cp config.yaml.example config.yaml
 - `Web.FrontendURL` 与 `Web.AllowedOrigins`：登录回调、CORS 和 WebSocket Origin 白名单。
 - `JWT.Secret`：至少 32 字符；不符合要求时程序会自动生成并写回配置。
 - `DeviceAuth.AESKey`：16、24 或 32 字节；留空时程序会自动生成并写回配置。
-- `MinIO`：如需资源中心、头像、固件、通信录音或前端 CDN，需要配置。
+- `MinIO`：如需资源中心、头像、固件或通信录音，需要配置。
 
 ### 4. 安装依赖并构建前端
 

@@ -1,0 +1,107 @@
+name: Cloud Storage Contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: S3-compatible provider to verify
+        required: true
+        type: choice
+        options:
+          - r2
+          - cos
+          - oss
+      destructive_cleanup:
+        description: Delete every object currently under staging/ in the dedicated test bucket
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-storage-contract-${{ inputs.provider }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Verify ${{ inputs.provider }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: storage-contract-${{ inputs.provider }}
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: draarl_test_cloud_storage_contract
+          MYSQL_USER: draarl-ci
+          MYSQL_PASSWORD: draarl-ci-mysql-secret
+          MYSQL_ROOT_PASSWORD: draarl-ci-root-secret
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent --user=root --password=draarl-ci-root-secret"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DRAARL_S3_TEST_PROVIDER: ${{ inputs.provider }}
+      DRAARL_S3_TEST_ENDPOINT: ${{ vars.DRAARL_S3_TEST_ENDPOINT }}
+      DRAARL_S3_TEST_PRESIGN_ENDPOINT: ${{ vars.DRAARL_S3_TEST_PRESIGN_ENDPOINT }}
+      DRAARL_S3_TEST_REGION: ${{ vars.DRAARL_S3_TEST_REGION }}
+      DRAARL_S3_TEST_BUCKET_LOOKUP: ${{ vars.DRAARL_S3_TEST_BUCKET_LOOKUP }}
+      DRAARL_S3_TEST_BUCKET: ${{ vars.DRAARL_S3_TEST_BUCKET }}
+      DRAARL_S3_TEST_CORS_ORIGIN: ${{ vars.DRAARL_S3_TEST_CORS_ORIGIN }}
+      DRAARL_S3_TEST_ACCESS_KEY: ${{ secrets.DRAARL_S3_TEST_ACCESS_KEY }}
+      DRAARL_S3_TEST_SECRET_KEY: ${{ secrets.DRAARL_S3_TEST_SECRET_KEY }}
+      DRAARL_S3_TEST_SESSION_TOKEN: ${{ secrets.DRAARL_S3_TEST_SESSION_TOKEN }}
+      DRAARL_S3_TEST_USE_SSL: "true"
+      DRAARL_S3_TEST_PRESIGN_USE_SSL: "true"
+      DRAARL_S3_TEST_AUTO_CREATE_BUCKET: "false"
+      DRAARL_S3_TEST_DESTRUCTIVE_CLEANUP: ${{ inputs.destructive_cleanup }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate protected environment
+        shell: bash
+        run: |
+          required=(
+            DRAARL_S3_TEST_ENDPOINT
+            DRAARL_S3_TEST_BUCKET
+            DRAARL_S3_TEST_CORS_ORIGIN
+            DRAARL_S3_TEST_ACCESS_KEY
+            DRAARL_S3_TEST_SECRET_KEY
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing protected environment value: ${name}" >&2
+              exit 1
+            fi
+          done
+          if [[ "${DRAARL_S3_TEST_PROVIDER}" != "r2" && -z "${DRAARL_S3_TEST_REGION}" ]]; then
+            echo "COS and OSS require DRAARL_S3_TEST_REGION" >&2
+            exit 1
+          fi
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Test provider S3 contract
+        run: go test ./pkg/storage -run '^TestS3CompatibleContract$' -count=1 -v
+
+      - name: Test client release HTTP lifecycle
+        env:
+          DRAARL_CLIENT_RELEASE_E2E: "true"
+          DRAARL_TEST_MYSQL_DSN: draarl-ci:draarl-ci-mysql-secret@tcp(127.0.0.1:3306)/draarl_test_cloud_storage_contract?charset=utf8mb4&parseTime=true&loc=Local
+        run: go test ./internal/handler -run '^TestClientReleaseHTTPE2E$' -count=1 -v

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"draarl/internal/config"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/routesync"
@@ -374,11 +373,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 	}
 
 	// 写入或更新操作证待审核记录
-	cfg := config.Get()
-	bucket := cfg.Storage.MinIO.Bucket
-	if bucket == "" {
-		bucket = "draarl"
-	}
+	bucket := storage.BucketName()
 
 	var cert *gormdb.OperatorCert
 	if pendingCert != nil {

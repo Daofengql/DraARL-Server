@@ -55,6 +55,7 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/relays', label: '中继台', icon: <Radio /> },
       { path: '/admin/servers', label: '服务器', icon: <Dns /> },
       { path: '/admin/firmware', label: '固件管理', icon: <SystemUpdate /> },
+      { path: '/admin/client-releases', label: '客户端发布', icon: <SystemUpdate /> },
     ]
   },
   {
@@ -105,7 +106,7 @@ export function AdminLayout() {
   // 当路由变化时，如果焦点不在子菜单上，自动折叠
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
-    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers', '/admin/firmware']
+    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers', '/admin/firmware', '/admin/client-releases']
     const groupPaths = ['/admin/groups', '/admin/group-links']
     const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']
 
@@ -114,10 +115,8 @@ export function AdminLayout() {
       setUserMenuExpanded(false)
     }
 
-    // 如果当前路径不在设备管理子菜单下，折叠
-    if (!devicePaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
-      setDeviceMenuExpanded(false)
-    }
+    // 直接打开或刷新子页面时也展开对应菜单，确保当前入口可见。
+    setDeviceMenuExpanded(devicePaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/')))
 
     // 如果当前路径不在群组管理子菜单下，折叠
     if (!groupPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {

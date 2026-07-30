@@ -52,7 +52,7 @@ func PresignPut(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在"})
 		return
 	}
-	if (fileType == "assets" || fileType == "firmware") && !hasRoleGORM(user, "admin") {
+	if (fileType == "assets" || fileType == "firmware" || fileType == "client_package") && !hasRoleGORM(user, "admin") {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "该文件类型需要管理员权限"})
 		return
 	}
@@ -159,6 +159,40 @@ func StorageDirectPut(c *gin.Context) {
 	})
 }
 
+// StorageDirectGet serves a short-lived local-storage download URL.
+// GET /api/storage/get?token=...&key=...
+func StorageDirectGet(c *gin.Context) {
+	if !storage.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
+		return
+	}
+	if storage.ResolveDriver(config.Get()) != storage.DriverLocal {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	token := c.Query("token")
+	key := strings.TrimLeft(c.Query("key"), "/")
+	if token == "" || key == "" || strings.ContainsRune(key, 0) || strings.Contains(key, "..") {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	if err := storage.VerifyLocalGetToken(token, key); err != nil {
+		c.Status(http.StatusForbidden)
+		return
+	}
+	fullPath, err := storage.AbsoluteLocalPath(key)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if strings.HasPrefix(key, "client-releases/") || strings.HasPrefix(key, "uploads/firmware/") {
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(key)}))
+	}
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.File(fullPath)
+}
+
 // ServeLocalFile 提供 local 存储文件访问。
 // GET /files/*key
 func ServeLocalFile(c *gin.Context) {
@@ -182,6 +216,10 @@ func ServeLocalFile(c *gin.Context) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
+	if !storage.IsLocalPublicObjectKey(key) {
+		c.Status(http.StatusNotFound)
+		return
+	}
 
 	fullPath, err := storage.AbsoluteLocalPath(key)
 	if err != nil {
@@ -191,9 +229,6 @@ func ServeLocalFile(c *gin.Context) {
 	c.Header("Cache-Control", "public, max-age=86400")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'")
-	if strings.HasPrefix(key, "uploads/assets/") || strings.HasPrefix(key, "uploads/firmware/") {
-		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(key)}))
-	}
 	c.File(fullPath)
 }
 

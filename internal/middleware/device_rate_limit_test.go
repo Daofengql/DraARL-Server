@@ -80,6 +80,17 @@ func TestDynamicCodeRateLimitDefaults(t *testing.T) {
 	}
 }
 
+func TestPublicClientReleaseRateLimitDefaults(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	rule, ok := limiter.rules["public-client-release-ip"]
+	if !ok {
+		t.Fatal("missing public client release IP rate limit")
+	}
+	if rule.Limit != 30 || rule.Window != time.Minute || rule.Key != "ip" {
+		t.Fatalf("public client release rule=%#v, want 30 requests per IP per minute", rule)
+	}
+}
+
 func TestAccessDiscoveryTokenLimiterSupportsSharedNATButCapsEachUser(t *testing.T) {
 	limiter := newDeviceRateLimiter()
 	if got := accessDiscoveryTokenPrincipalKey("203.0.113.10", " Alice "); got != "203.0.113.10\x00alice" {

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"draarl/internal/firmwareversion"
 	gormdb "draarl/internal/gormdb"
@@ -22,7 +23,9 @@ import (
 
 const maxFirmwareSize = 16 * 1024 * 1024 // 16MB
 
-var semverRegex = regexp.MustCompile(`^\d+\.\d+\.\d+(-[\w.]+)?$`)
+// Preserve the historical firmware-version contract. Client releases use a
+// separate strict SemVer 2.0.0 validator in internal/clientversion.
+var firmwareSemverRegex = regexp.MustCompile(`^\d+\.\d+\.\d+(-[\w.]+)?$`)
 
 // UploadFirmware 上传固件（管理员权限）
 func UploadFirmware(c *gin.Context) {
@@ -52,7 +55,7 @@ func UploadFirmware(c *gin.Context) {
 	}
 
 	// 版本格式校验
-	if !semverRegex.MatchString(version) {
+	if !firmwareSemverRegex.MatchString(version) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "版本号格式无效，应为 semver 格式如 1.0.0 或 1.0.0-beta.1",
@@ -178,7 +181,11 @@ func ListFirmware(c *gin.Context) {
 
 	items := make([]firmwareItem, 0, len(list))
 	for _, fw := range list {
-		downloadURL := minio.GetFileURL(fw.MinioPath)
+		downloadURL, err := firmwareDownloadURL(c, fw.MinioPath)
+		if err != nil {
+			log.Printf("生成固件下载链接失败 (id=%d): %v", fw.ID, err)
+			downloadURL = ""
+		}
 		items = append(items, firmwareItem{
 			FirmwareRelease: fw,
 			DownloadURL:     downloadURL,
@@ -216,7 +223,7 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": fmt.Sprintf("设备型号 %d 不支持固件升级", req.DevModel)})
 		return
 	}
-	if !semverRegex.MatchString(req.Version) {
+	if !firmwareSemverRegex.MatchString(req.Version) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "版本号格式无效"})
 		return
 	}
@@ -339,7 +346,7 @@ func GetLatestFirmware(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数无效"})
 		return
 	}
-	if currentVersion != "" && !semverRegex.MatchString(currentVersion) {
+	if currentVersion != "" && !firmwareSemverRegex.MatchString(currentVersion) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "current_version 参数无效"})
 		return
 	}
@@ -363,9 +370,9 @@ func GetLatestFirmware(c *gin.Context) {
 		return
 	}
 
-	// 生成下载 URL（优先走 BasePath）
-	downloadURL := minio.GetFileURL(fw.MinioPath)
-	if downloadURL == "" {
+	// 所有驱动统一生成短期下载 URL；local 也使用签名 GET。
+	downloadURL, err := firmwareDownloadURL(c, fw.MinioPath)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成下载链接失败"})
 		return
 	}
@@ -387,4 +394,15 @@ func GetLatestFirmware(c *gin.Context) {
 			"create_time":  fw.CreateTime,
 		},
 	})
+}
+
+func firmwareDownloadURL(c *gin.Context, objectKey string) (string, error) {
+	downloadURL, err := storage.PresignGet(c.Request.Context(), objectKey, time.Hour)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(downloadURL, "/") {
+		downloadURL = publicAPIBase(c) + downloadURL
+	}
+	return downloadURL, nil
 }

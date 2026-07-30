@@ -10,6 +10,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,11 +25,9 @@ import (
 	"draarl/internal/common"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
-	miniohelper "draarl/pkg/minio"
 	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
-	minioapi "github.com/minio/minio-go/v7"
 )
 
 //go:embed web/dist
@@ -86,16 +85,12 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 
 	assetBaseURL := "/"
 	if cfg != nil && cfg.Web.FrontendCDN.Enabled {
-		if storage.ResolveDriver(cfg) != storage.DriverMinIO {
-			log.Printf("Frontend CDN enabled but storage driver is not minio, fallback to embedded assets")
+		cdnBaseURL, err := ensureFrontendAssetsInStorage(webStaticFS, cfg)
+		if err != nil {
+			log.Printf("Frontend CDN sync failed, fallback to embedded assets: %v", err)
 		} else {
-			cdnBaseURL, err := ensureFrontendAssetsInMinIO(webStaticFS, cfg)
-			if err != nil {
-				log.Printf("Frontend CDN sync failed, fallback to embedded assets: %v", err)
-			} else {
-				assetBaseURL = normalizeAssetBaseURL(cdnBaseURL)
-				log.Printf("Frontend static assets served by MinIO: %s", assetBaseURL)
-			}
+			assetBaseURL = normalizeAssetBaseURL(cdnBaseURL)
+			log.Printf("Frontend static assets served by storage: %s", assetBaseURL)
 		}
 	}
 
@@ -228,7 +223,7 @@ func setupFrontend(engine *gin.Engine, cfg *config.Configuration) {
 	log.Println("Frontend static files enabled (embedded)")
 }
 
-func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (string, error) {
+func ensureFrontendAssetsInStorage(webStaticFS fs.FS, cfg *config.Configuration) (string, error) {
 	if cfg == nil {
 		return "", fmt.Errorf("configuration is nil")
 	}
@@ -239,15 +234,19 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 	}
 	versionedPrefix := joinObjectPath(prefix, buildinfo.FrontendAssetVersion())
 
-	if !miniohelper.IsEnabled() {
-		if err := miniohelper.InitMinIO(); err != nil {
-			return "", fmt.Errorf("init minio: %w", err)
+	store := storage.Get()
+	if store == nil {
+		if err := storage.Init(cfg); err != nil {
+			return "", fmt.Errorf("init storage: %w", err)
 		}
+		store = storage.Get()
 	}
-
-	client := miniohelper.GetClient()
-	if client == nil {
-		return "", fmt.Errorf("minio client is not ready")
+	if store == nil {
+		return "", fmt.Errorf("storage client is not ready")
+	}
+	publicBaseURL, err := frontendPublicBaseURL(store, versionedPrefix)
+	if err != nil {
+		return "", err
 	}
 
 	assets, manifest, err := loadEmbeddedFrontendAssets(webStaticFS)
@@ -258,42 +257,37 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 	ctx, cancel := context.WithTimeout(context.Background(), frontendCDNSyncTimeout)
 	defer cancel()
 
-	bucket := cfg.Storage.MinIO.Bucket
-	if bucket == "" {
-		bucket = "draarl"
-	}
-
 	manifestObject := joinObjectPath(versionedPrefix, defaultFrontendCDNManifest)
 
-	storedManifest, err := readFrontendManifest(ctx, client, bucket, manifestObject)
+	storedManifest, err := readFrontendManifest(ctx, store, manifestObject)
 	if err != nil {
 		return "", fmt.Errorf("read frontend CDN manifest: %w", err)
 	}
 
 	if !hasFrontendManifestChanged(storedManifest, manifest) {
-		complete, err := isFrontendDeploymentComplete(ctx, client, bucket, versionedPrefix, manifest)
+		complete, err := isFrontendDeploymentComplete(ctx, store, versionedPrefix, manifest)
 		if err != nil {
 			return "", fmt.Errorf("verify frontend CDN deployment: %w", err)
 		}
 		if complete {
-			return miniohelper.GetFileURL(versionedPrefix), nil
+			return publicBaseURL, nil
 		}
 
 		log.Printf("Frontend CDN deployment incomplete under prefix %s, re-uploading assets", versionedPrefix)
 	}
 
-	if err := purgeFrontendPrefix(ctx, client, bucket, versionedPrefix); err != nil {
+	if err := purgeFrontendPrefix(ctx, store, versionedPrefix); err != nil {
 		return "", fmt.Errorf("purge frontend CDN prefix: %w", err)
 	}
 	if storedManifest != nil {
-		log.Printf("Frontend CDN manifest changed, purged MinIO prefix %s before re-upload", versionedPrefix)
+		log.Printf("Frontend CDN manifest changed, purged storage prefix %s before re-upload", versionedPrefix)
 	}
 
 	uploadedFiles := 0
 	var uploadedBytes int64
 	for _, asset := range assets {
 		objectName := joinObjectPath(versionedPrefix, asset.Path)
-		if err := miniohelper.UploadFile(ctx, bucket, objectName, bytes.NewReader(asset.Data), int64(len(asset.Data)), asset.ContentType); err != nil {
+		if err := store.Put(ctx, objectName, bytes.NewReader(asset.Data), int64(len(asset.Data)), asset.ContentType); err != nil {
 			return "", fmt.Errorf("upload %s: %w", asset.Path, err)
 		}
 		uploadedFiles++
@@ -304,12 +298,26 @@ func ensureFrontendAssetsInMinIO(webStaticFS fs.FS, cfg *config.Configuration) (
 	if err != nil {
 		return "", fmt.Errorf("marshal frontend CDN manifest: %w", err)
 	}
-	if err := miniohelper.UploadFile(ctx, bucket, manifestObject, bytes.NewReader(manifestData), int64(len(manifestData)), "application/json"); err != nil {
+	if err := store.Put(ctx, manifestObject, bytes.NewReader(manifestData), int64(len(manifestData)), "application/json"); err != nil {
 		return "", fmt.Errorf("upload frontend CDN manifest: %w", err)
 	}
 
-	log.Printf("Frontend CDN assets synced to MinIO prefix %s (%d files, %d bytes)", versionedPrefix, uploadedFiles, uploadedBytes)
-	return miniohelper.GetFileURL(versionedPrefix), nil
+	log.Printf("Frontend CDN assets synced to storage prefix %s (%d files, %d bytes)", versionedPrefix, uploadedFiles, uploadedBytes)
+	return publicBaseURL, nil
+}
+
+func frontendPublicBaseURL(store storage.Storage, versionedPrefix string) (string, error) {
+	if store == nil {
+		return "", fmt.Errorf("storage client is not ready")
+	}
+	if !store.Capabilities().PublicURL {
+		return "", fmt.Errorf("active storage has no public URL; configure S3 PublicBaseURL before enabling frontend CDN")
+	}
+	publicBaseURL := store.PublicURL(versionedPrefix)
+	if strings.TrimSpace(publicBaseURL) == "" {
+		return "", fmt.Errorf("active storage returned an empty public URL")
+	}
+	return publicBaseURL, nil
 }
 
 func hasFrontendManifestChanged(stored, current *frontendCDNManifest) bool {
@@ -409,11 +417,10 @@ func loadEmbeddedFrontendAssets(webStaticFS fs.FS) ([]embeddedFrontendAsset, *fr
 	return assets, manifest, nil
 }
 
-func readFrontendManifest(ctx context.Context, client *minioapi.Client, bucket, objectName string) (*frontendCDNManifest, error) {
-	object, err := client.GetObject(ctx, bucket, objectName, minioapi.GetObjectOptions{})
+func readFrontendManifest(ctx context.Context, store storage.Storage, objectName string) (*frontendCDNManifest, error) {
+	object, err := store.Open(ctx, objectName)
 	if err != nil {
-		resp := minioapi.ToErrorResponse(err)
-		if resp.Code == "NoSuchKey" || resp.Code == "NoSuchObject" || resp.Code == "NotFound" {
+		if isStorageNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -422,8 +429,7 @@ func readFrontendManifest(ctx context.Context, client *minioapi.Client, bucket, 
 
 	data, err := io.ReadAll(object)
 	if err != nil {
-		resp := minioapi.ToErrorResponse(err)
-		if resp.Code == "NoSuchKey" || resp.Code == "NoSuchObject" || resp.Code == "NotFound" {
+		if isStorageNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -436,7 +442,7 @@ func readFrontendManifest(ctx context.Context, client *minioapi.Client, bucket, 
 	return manifest, nil
 }
 
-func isFrontendDeploymentComplete(ctx context.Context, client *minioapi.Client, bucket, prefix string, manifest *frontendCDNManifest) (bool, error) {
+func isFrontendDeploymentComplete(ctx context.Context, store storage.Storage, prefix string, manifest *frontendCDNManifest) (bool, error) {
 	if manifest == nil {
 		return false, nil
 	}
@@ -453,85 +459,65 @@ func isFrontendDeploymentComplete(ctx context.Context, client *minioapi.Client, 
 	}
 
 	manifestFound := false
-	for objectInfo := range client.ListObjects(ctx, bucket, minioapi.ListObjectsOptions{
-		Prefix:    listPrefix,
-		Recursive: true,
-	}) {
-		if objectInfo.Err != nil {
-			return false, objectInfo.Err
-		}
-
+	err := store.Walk(ctx, listPrefix, func(objectInfo storage.ObjectInfo) error {
 		relativePath := strings.TrimPrefix(objectInfo.Key, listPrefix)
 		if relativePath == defaultFrontendCDNManifest {
 			manifestFound = true
-			continue
+			return nil
 		}
 
 		expected, ok := expectedFiles[relativePath]
 		if !ok {
-			return false, nil
+			return errFrontendDeploymentIncomplete
 		}
 		if objectInfo.Size != expected.Size {
-			return false, nil
+			return errFrontendDeploymentIncomplete
 		}
 		delete(expectedFiles, relativePath)
+		return nil
+	})
+	if errors.Is(err, errFrontendDeploymentIncomplete) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
 	}
 
 	return manifestFound && len(expectedFiles) == 0, nil
 }
 
-func purgeFrontendPrefix(ctx context.Context, client *minioapi.Client, bucket, prefix string) error {
+var errFrontendDeploymentIncomplete = errors.New("frontend deployment incomplete")
+
+func purgeFrontendPrefix(ctx context.Context, store storage.Storage, prefix string) error {
 	objectPrefix := normalizeObjectPrefix(prefix)
 	if objectPrefix == "" {
 		return fmt.Errorf("frontend CDN object prefix is empty")
 	}
 
-	return purgeFrontendObjects(ctx, client, bucket, objectPrefix+"/", false)
-}
-
-func deleteObjectIfExists(ctx context.Context, client *minioapi.Client, bucket, objectName string) error {
-	if objectName == "" {
+	keys := make([]string, 0, 16)
+	if err := store.Walk(ctx, objectPrefix+"/", func(objectInfo storage.ObjectInfo) error {
+		keys = append(keys, objectInfo.Key)
 		return nil
+	}); err != nil {
+		if isStorageNotFound(err) {
+			return nil
+		}
+		return err
 	}
-
-	return purgeFrontendObjects(ctx, client, bucket, objectName, true)
+	for _, key := range keys {
+		if err := store.Delete(ctx, key); err != nil && !isStorageNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
-func purgeFrontendObjects(ctx context.Context, client *minioapi.Client, bucket, prefix string, exactMatch bool) error {
-	objectsCh := make(chan minioapi.ObjectInfo)
-	go func() {
-		defer close(objectsCh)
-
-		for objectInfo := range client.ListObjects(ctx, bucket, minioapi.ListObjectsOptions{
-			Prefix:       prefix,
-			Recursive:    true,
-			WithVersions: true,
-		}) {
-			if objectInfo.Err != nil {
-				objectsCh <- minioapi.ObjectInfo{Err: objectInfo.Err}
-				return
-			}
-			if exactMatch && objectInfo.Key != prefix {
-				continue
-			}
-			objectsCh <- minioapi.ObjectInfo{
-				Key:       objectInfo.Key,
-				VersionID: objectInfo.VersionID,
-			}
-		}
-	}()
-
-	for removeErr := range client.RemoveObjects(ctx, bucket, objectsCh, minioapi.RemoveObjectsOptions{}) {
-		if removeErr.Err != nil {
-			resp := minioapi.ToErrorResponse(removeErr.Err)
-			if resp.Code == "NoSuchKey" || resp.Code == "NoSuchObject" || resp.Code == "NotFound" {
-				continue
-			}
-			return removeErr.Err
-		}
+func isStorageNotFound(err error) bool {
+	if err == nil {
+		return false
 	}
-
-	return nil
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "nosuchkey") || strings.Contains(message, "nosuchobject") || strings.Contains(message, "not found") || strings.Contains(message, "notfound")
 }
 
 func detectFrontendContentType(filePath string, data []byte) string {

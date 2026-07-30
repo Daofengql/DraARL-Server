@@ -14,6 +14,8 @@ func TestCompareVersions(t *testing.T) {
 		{name: "PrereleaseNumeric", lhs: "1.0.0-beta.10", rhs: "1.0.0-beta.2", expected: 1},
 		{name: "PrereleaseLexical", lhs: "1.0.0-rc.1", rhs: "1.0.0-beta.9", expected: 1},
 		{name: "ShorterPrereleaseLower", lhs: "1.0.0-beta", rhs: "1.0.0-beta.1", expected: -1},
+		{name: "LegacyLeadingZero", lhs: "010.0.0", rhs: "2.0.0", expected: 1},
+		{name: "LegacyUnderscorePrerelease", lhs: "2.0.0-preview_2", rhs: "2.0.0-preview_1", expected: 1},
 		{name: "Equal", lhs: "2.3.4", rhs: "2.3.4", expected: 0},
 	}
 

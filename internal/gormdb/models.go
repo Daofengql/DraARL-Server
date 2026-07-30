@@ -505,6 +505,62 @@ func (FirmwareRelease) TableName() string {
 	return "firmware_releases"
 }
 
+const (
+	ClientReleaseStatusDraft     = "draft"
+	ClientReleaseStatusPublished = "published"
+	ClientReleaseStatusWithdrawn = "withdrawn"
+)
+
+// ClientRelease is a versioned client application release. One release can
+// carry several platform-specific artifacts, such as Android armv7 and arm64.
+type ClientRelease struct {
+	ID                  int                     `gorm:"primaryKey;autoIncrement" json:"id"`
+	AppID               string                  `gorm:"type:varchar(100);not null;uniqueIndex:uk_client_release_version,priority:1;index:idx_client_release_lookup,priority:1;column:app_id" json:"app_id"`
+	Version             string                  `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_release_version,priority:3;index:idx_client_release_lookup,priority:3;column:version" json:"version"`
+	Channel             string                  `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_release_version,priority:2;index:idx_client_release_lookup,priority:2;column:channel" json:"channel"`
+	Title               string                  `gorm:"type:varchar(255);column:title" json:"title"`
+	Changelog           string                  `gorm:"type:mediumtext;column:changelog" json:"changelog"`
+	Status              string                  `gorm:"type:varchar(32);not null;default:draft;index:idx_client_release_lookup,priority:4;column:status" json:"status"`
+	ForceUpdate         bool                    `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
+	MinSupportedVersion string                  `gorm:"type:varchar(64);column:min_supported_version" json:"min_supported_version"`
+	PublishedAt         *time.Time              `gorm:"column:published_at" json:"published_at,omitempty"`
+	CreatedBy           int                     `gorm:"type:int;index;column:created_by" json:"created_by"`
+	CreateTime          time.Time               `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime          time.Time               `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Artifacts           []ClientReleaseArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
+}
+
+func (ClientRelease) TableName() string {
+	return "client_releases"
+}
+
+// ClientReleaseArtifact is one installable (or store-distributed) target of a
+// client release. storage_key is immutable once the release is published.
+type ClientReleaseArtifact struct {
+	ID                 int            `gorm:"primaryKey;autoIncrement" json:"id"`
+	ReleaseID          int            `gorm:"not null;uniqueIndex:uk_client_release_artifact,priority:1;index:idx_client_artifact_lookup,priority:1;column:release_id" json:"release_id"`
+	Platform           string         `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_release_artifact,priority:2;index:idx_client_artifact_lookup,priority:2;column:platform" json:"platform"`
+	Arch               string         `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_release_artifact,priority:3;index:idx_client_artifact_lookup,priority:3;column:arch" json:"arch"`
+	AndroidABI         string         `gorm:"type:varchar(32);column:android_abi" json:"android_abi,omitempty"`
+	PackageType        string         `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_release_artifact,priority:4;column:package_type" json:"package_type"`
+	BuildNumber        string         `gorm:"type:varchar(64);column:build_number" json:"build_number,omitempty"`
+	MinOSVersion       string         `gorm:"type:varchar(64);column:min_os_version" json:"min_os_version,omitempty"`
+	MinAndroidAPI      int            `gorm:"type:int;column:min_android_api" json:"min_android_api,omitempty"`
+	FileName           string         `gorm:"type:varchar(255);column:file_name" json:"file_name"`
+	StorageKey         string         `gorm:"type:varchar(512);column:storage_key" json:"storage_key,omitempty"`
+	ExternalURL        string         `gorm:"type:varchar(1024);column:external_url" json:"external_url,omitempty"`
+	FileSize           int64          `gorm:"type:bigint;column:file_size" json:"file_size"`
+	SHA256             string         `gorm:"type:char(64);column:sha256" json:"sha256,omitempty"`
+	Signature          string         `gorm:"type:text;column:signature" json:"signature,omitempty"`
+	SignatureAlgorithm string         `gorm:"type:varchar(64);column:signature_algorithm" json:"signature_algorithm,omitempty"`
+	CreateTime         time.Time      `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	Release            *ClientRelease `gorm:"foreignKey:ReleaseID;references:ID" json:"release,omitempty"`
+}
+
+func (ClientReleaseArtifact) TableName() string {
+	return "client_release_artifacts"
+}
+
 // AutoMigrate 自动清洗脏数据并迁移主结构与外键约束
 // 前置逻辑：
 // 1. 使用原生 SQL 优先清理违反外键原则的悬空记录。
@@ -600,6 +656,8 @@ func AutoMigrate() error {
 		&Logbook{},
 		&UserRadioPreset{},
 		&FirmwareRelease{},
+		&ClientRelease{},
+		&ClientReleaseArtifact{},
 	)
 
 	if err != nil {

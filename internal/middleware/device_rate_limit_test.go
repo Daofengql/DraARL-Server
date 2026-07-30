@@ -80,14 +80,14 @@ func TestDynamicCodeRateLimitDefaults(t *testing.T) {
 	}
 }
 
-func TestPublicClientReleaseRateLimitDefaults(t *testing.T) {
+func TestPublicClientResourceRateLimitDefaults(t *testing.T) {
 	limiter := newDeviceRateLimiter()
-	rule, ok := limiter.rules["public-client-release-ip"]
+	rule, ok := limiter.rules["public-client-resource-ip"]
 	if !ok {
-		t.Fatal("missing public client release IP rate limit")
+		t.Fatal("missing public client resource IP rate limit")
 	}
 	if rule.Limit != 30 || rule.Window != time.Minute || rule.Key != "ip" {
-		t.Fatalf("public client release rule=%#v, want 30 requests per IP per minute", rule)
+		t.Fatalf("public client resource rule=%#v, want 30 requests per IP per minute", rule)
 	}
 }
 

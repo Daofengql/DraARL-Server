@@ -168,6 +168,11 @@ class ApiClient {
     return response.data
   }
 
+  async patch<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.patch<T>(url, data, config)
+    return response.data
+  }
+
   async delete<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {
     const response: AxiosResponse<T> = await this.client.delete<T>(url, config)
     return response.data

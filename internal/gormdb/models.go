@@ -506,59 +506,93 @@ func (FirmwareRelease) TableName() string {
 }
 
 const (
-	ClientReleaseStatusDraft     = "draft"
-	ClientReleaseStatusPublished = "published"
-	ClientReleaseStatusWithdrawn = "withdrawn"
+	ClientResourceReleaseStatusDraft     = "draft"
+	ClientResourceReleaseStatusPublished = "published"
+	ClientResourceReleaseStatusWithdrawn = "withdrawn"
 )
 
-// ClientRelease is a versioned client application release. One release can
-// carry several platform-specific artifacts, such as Android armv7 and arm64.
-type ClientRelease struct {
-	ID                  int                     `gorm:"primaryKey;autoIncrement" json:"id"`
-	AppID               string                  `gorm:"type:varchar(100);not null;uniqueIndex:uk_client_release_version,priority:1;index:idx_client_release_lookup,priority:1;column:app_id" json:"app_id"`
-	Version             string                  `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_release_version,priority:3;index:idx_client_release_lookup,priority:3;column:version" json:"version"`
-	Channel             string                  `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_release_version,priority:2;index:idx_client_release_lookup,priority:2;column:channel" json:"channel"`
-	Title               string                  `gorm:"type:varchar(255);column:title" json:"title"`
-	Changelog           string                  `gorm:"type:mediumtext;column:changelog" json:"changelog"`
-	Status              string                  `gorm:"type:varchar(32);not null;default:draft;index:idx_client_release_lookup,priority:4;column:status" json:"status"`
-	ForceUpdate         bool                    `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
-	MinSupportedVersion string                  `gorm:"type:varchar(64);column:min_supported_version" json:"min_supported_version"`
-	PublishedAt         *time.Time              `gorm:"column:published_at" json:"published_at,omitempty"`
-	CreatedBy           int                     `gorm:"type:int;index;column:created_by" json:"created_by"`
-	CreateTime          time.Time               `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime          time.Time               `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	Artifacts           []ClientReleaseArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
+// ClientResource is a managed resource identity. Releases always reference a
+// pre-created resource instead of accepting an arbitrary type at publish time.
+type ClientResource struct {
+	ID          int                     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ResourceKey string                  `gorm:"type:varchar(191);not null;uniqueIndex:uk_client_resource_key;column:resource_key" json:"resource_key"`
+	Name        string                  `gorm:"type:varchar(255);not null;column:name" json:"name"`
+	Category    string                  `gorm:"type:varchar(64);column:category" json:"category,omitempty"`
+	Description string                  `gorm:"type:mediumtext;column:description" json:"description,omitempty"`
+	Required    bool                    `gorm:"type:tinyint(1);not null;default:0;column:required" json:"required"`
+	Enabled     bool                    `gorm:"type:tinyint(1);not null;index:idx_client_resource_enabled;column:enabled" json:"enabled"`
+	CreatedBy   int                     `gorm:"type:int;index;column:created_by" json:"created_by"`
+	CreateTime  time.Time               `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime  time.Time               `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Releases    []ClientResourceRelease `gorm:"foreignKey:ResourceID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"releases,omitempty"`
 }
 
-func (ClientRelease) TableName() string {
-	return "client_releases"
+func (ClientResource) TableName() string {
+	return "client_resources"
 }
 
-// ClientReleaseArtifact is one installable (or store-distributed) target of a
-// client release. storage_key is immutable once the release is published.
-type ClientReleaseArtifact struct {
-	ID                 int            `gorm:"primaryKey;autoIncrement" json:"id"`
-	ReleaseID          int            `gorm:"not null;uniqueIndex:uk_client_release_artifact,priority:1;index:idx_client_artifact_lookup,priority:1;column:release_id" json:"release_id"`
-	Platform           string         `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_release_artifact,priority:2;index:idx_client_artifact_lookup,priority:2;column:platform" json:"platform"`
-	Arch               string         `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_release_artifact,priority:3;index:idx_client_artifact_lookup,priority:3;column:arch" json:"arch"`
-	AndroidABI         string         `gorm:"type:varchar(32);column:android_abi" json:"android_abi,omitempty"`
-	PackageType        string         `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_release_artifact,priority:4;column:package_type" json:"package_type"`
-	BuildNumber        string         `gorm:"type:varchar(64);column:build_number" json:"build_number,omitempty"`
-	MinOSVersion       string         `gorm:"type:varchar(64);column:min_os_version" json:"min_os_version,omitempty"`
-	MinAndroidAPI      int            `gorm:"type:int;column:min_android_api" json:"min_android_api,omitempty"`
-	FileName           string         `gorm:"type:varchar(255);column:file_name" json:"file_name"`
-	StorageKey         string         `gorm:"type:varchar(512);column:storage_key" json:"storage_key,omitempty"`
-	ExternalURL        string         `gorm:"type:varchar(1024);column:external_url" json:"external_url,omitempty"`
-	FileSize           int64          `gorm:"type:bigint;column:file_size" json:"file_size"`
-	SHA256             string         `gorm:"type:char(64);column:sha256" json:"sha256,omitempty"`
-	Signature          string         `gorm:"type:text;column:signature" json:"signature,omitempty"`
-	SignatureAlgorithm string         `gorm:"type:varchar(64);column:signature_algorithm" json:"signature_algorithm,omitempty"`
-	CreateTime         time.Time      `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	Release            *ClientRelease `gorm:"foreignKey:ReleaseID;references:ID" json:"release,omitempty"`
+// ClientResourceRelease is one immutable version in a resource channel.
+type ClientResourceRelease struct {
+	ID               int                      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ResourceID       int                      `gorm:"not null;uniqueIndex:uk_client_resource_release,priority:1;index:idx_client_resource_release_lookup,priority:1;column:resource_id" json:"resource_id"`
+	Version          string                   `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_resource_release,priority:3;index:idx_client_resource_release_lookup,priority:3;column:version" json:"version"`
+	Channel          string                   `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_resource_release,priority:2;index:idx_client_resource_release_lookup,priority:2;column:channel" json:"channel"`
+	Title            string                   `gorm:"type:varchar(255);column:title" json:"title"`
+	Changelog        string                   `gorm:"type:mediumtext;column:changelog" json:"changelog"`
+	Status           string                   `gorm:"type:varchar(32);not null;default:draft;index:idx_client_resource_release_lookup,priority:4;column:status" json:"status"`
+	ForceUpdate      bool                     `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
+	MinClientVersion string                   `gorm:"type:varchar(64);column:min_client_version" json:"min_client_version,omitempty"`
+	PublishedAt      *time.Time               `gorm:"column:published_at" json:"published_at,omitempty"`
+	CreatedBy        int                      `gorm:"type:int;index;column:created_by" json:"created_by"`
+	CreateTime       time.Time                `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime       time.Time                `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Resource         *ClientResource          `gorm:"foreignKey:ResourceID;references:ID" json:"resource,omitempty"`
+	Artifacts        []ClientResourceArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
 }
 
-func (ClientReleaseArtifact) TableName() string {
-	return "client_release_artifacts"
+func (ClientResourceRelease) TableName() string {
+	return "client_resource_releases"
+}
+
+// ClientResourceArtifact is one immutable file. Applicability is represented
+// by explicit target rows so one object can serve several platform/arch pairs.
+type ClientResourceArtifact struct {
+	ID                 int                            `gorm:"primaryKey;autoIncrement" json:"id"`
+	ReleaseID          int                            `gorm:"not null;index:idx_client_resource_artifact_release;column:release_id" json:"release_id"`
+	Format             string                         `gorm:"type:varchar(64);not null;column:format" json:"format"`
+	Runtime            string                         `gorm:"type:varchar(64);not null;default:default;column:runtime" json:"runtime"`
+	Variant            string                         `gorm:"type:varchar(64);not null;default:default;column:variant" json:"variant"`
+	BuildNumber        string                         `gorm:"type:varchar(64);column:build_number" json:"build_number,omitempty"`
+	FileName           string                         `gorm:"type:varchar(255);not null;column:file_name" json:"file_name"`
+	StorageKey         string                         `gorm:"type:varchar(512);column:storage_key" json:"storage_key,omitempty"`
+	ExternalURL        string                         `gorm:"type:varchar(1024);column:external_url" json:"external_url,omitempty"`
+	FileSize           int64                          `gorm:"type:bigint;not null;default:0;column:file_size" json:"file_size"`
+	SHA256             string                         `gorm:"type:char(64);column:sha256" json:"sha256,omitempty"`
+	ContentSignature   string                         `gorm:"type:text;column:content_signature" json:"content_signature,omitempty"`
+	SignatureAlgorithm string                         `gorm:"type:varchar(64);column:signature_algorithm" json:"signature_algorithm,omitempty"`
+	Metadata           string                         `gorm:"type:json;column:metadata" json:"metadata,omitempty"`
+	CreateTime         time.Time                      `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	Release            *ClientResourceRelease         `gorm:"foreignKey:ReleaseID;references:ID" json:"release,omitempty"`
+	Targets            []ClientResourceArtifactTarget `gorm:"foreignKey:ArtifactID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"targets"`
+}
+
+func (ClientResourceArtifact) TableName() string {
+	return "client_resource_artifacts"
+}
+
+type ClientResourceArtifactTarget struct {
+	ID            int                     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ArtifactID    int                     `gorm:"not null;uniqueIndex:uk_client_resource_artifact_target,priority:1;index:idx_client_resource_target_lookup,priority:1;column:artifact_id" json:"artifact_id"`
+	Platform      string                  `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_resource_artifact_target,priority:2;index:idx_client_resource_target_lookup,priority:2;column:platform" json:"platform"`
+	Arch          string                  `gorm:"type:varchar(32);not null;uniqueIndex:uk_client_resource_artifact_target,priority:3;index:idx_client_resource_target_lookup,priority:3;column:arch" json:"arch"`
+	MinOSVersion  string                  `gorm:"type:varchar(64);column:min_os_version" json:"min_os_version,omitempty"`
+	MinAndroidAPI int                     `gorm:"type:int;column:min_android_api" json:"min_android_api,omitempty"`
+	CreateTime    time.Time               `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	Artifact      *ClientResourceArtifact `gorm:"foreignKey:ArtifactID;references:ID" json:"-"`
+}
+
+func (ClientResourceArtifactTarget) TableName() string {
+	return "client_resource_artifact_targets"
 }
 
 // AutoMigrate 自动清洗脏数据并迁移主结构与外键约束
@@ -568,6 +602,9 @@ func (ClientReleaseArtifact) TableName() string {
 // 3. 将最终的约束控制权完全交接给 GORM。
 func AutoMigrate() error {
 	db := Get()
+	if err := dropEmptyLegacyClientReleaseTables(db); err != nil {
+		return err
+	}
 
 	// ==========================================
 	// 阶段一：数据清洗 (Data Cleansing)
@@ -656,8 +693,10 @@ func AutoMigrate() error {
 		&Logbook{},
 		&UserRadioPreset{},
 		&FirmwareRelease{},
-		&ClientRelease{},
-		&ClientReleaseArtifact{},
+		&ClientResource{},
+		&ClientResourceRelease{},
+		&ClientResourceArtifact{},
+		&ClientResourceArtifactTarget{},
 	)
 
 	if err != nil {
@@ -682,6 +721,30 @@ func AutoMigrate() error {
 	}
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
+	return nil
+}
+
+func dropEmptyLegacyClientReleaseTables(db *gorm.DB) error {
+	legacyTables := []string{"client_release_artifacts", "client_releases"}
+	for _, tableName := range legacyTables {
+		if !db.Migrator().HasTable(tableName) {
+			continue
+		}
+		var count int64
+		if err := db.Table(tableName).Count(&count).Error; err != nil {
+			return fmt.Errorf("inspect legacy table %s: %w", tableName, err)
+		}
+		if count != 0 {
+			return fmt.Errorf("legacy table %s contains %d rows; refusing destructive client resource migration", tableName, count)
+		}
+	}
+	for _, tableName := range legacyTables {
+		if db.Migrator().HasTable(tableName) {
+			if err := db.Migrator().DropTable(tableName); err != nil {
+				return fmt.Errorf("drop empty legacy table %s: %w", tableName, err)
+			}
+		}
+	}
 	return nil
 }
 

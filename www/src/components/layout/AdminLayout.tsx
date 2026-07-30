@@ -54,8 +54,15 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/devices', label: '客户端', icon: <Devices /> },
       { path: '/admin/relays', label: '中继台', icon: <Radio /> },
       { path: '/admin/servers', label: '服务器', icon: <Dns /> },
-      { path: '/admin/firmware', label: '固件管理', icon: <SystemUpdate /> },
-      { path: '/admin/client-releases', label: '客户端发布', icon: <SystemUpdate /> },
+    ]
+  },
+  {
+    path: '/admin/client-resources',
+    label: '客户端资源分发',
+    icon: <SystemUpdate />,
+    children: [
+      { path: '/admin/client-resources', label: '通用资源', icon: <SystemUpdate /> },
+      { path: '/admin/firmware', label: '设备固件', icon: <Devices /> },
     ]
   },
   {
@@ -88,6 +95,7 @@ export function AdminLayout() {
   const [userMenuExpanded, setUserMenuExpanded] = useState(false)
   // 设备管理菜单的展开/折叠状态
   const [deviceMenuExpanded, setDeviceMenuExpanded] = useState(false)
+  const [resourceMenuExpanded, setResourceMenuExpanded] = useState(false)
   // 群组管理菜单的展开/折叠状态
   const [groupMenuExpanded, setGroupMenuExpanded] = useState(false)
   // 通信记录菜单的展开/折叠状态
@@ -106,7 +114,8 @@ export function AdminLayout() {
   // 当路由变化时，如果焦点不在子菜单上，自动折叠
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
-    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers', '/admin/firmware', '/admin/client-releases']
+    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers']
+    const resourcePaths = ['/admin/client-resources', '/admin/firmware']
     const groupPaths = ['/admin/groups', '/admin/group-links']
     const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']
 
@@ -117,6 +126,7 @@ export function AdminLayout() {
 
     // 直接打开或刷新子页面时也展开对应菜单，确保当前入口可见。
     setDeviceMenuExpanded(devicePaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/')))
+    setResourceMenuExpanded(resourcePaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/')))
 
     // 如果当前路径不在群组管理子菜单下，折叠
     if (!groupPaths.some(path => location.pathname === path || location.pathname.startsWith(path + '/'))) {
@@ -155,6 +165,10 @@ export function AdminLayout() {
   // 切换设备管理菜单展开/折叠
   const toggleDeviceMenu = () => {
     setDeviceMenuExpanded(!deviceMenuExpanded)
+  }
+
+  const toggleResourceMenu = () => {
+    setResourceMenuExpanded(!resourceMenuExpanded)
   }
 
   // 切换群组管理菜单展开/折叠
@@ -200,12 +214,14 @@ export function AdminLayout() {
         {adminMenuItems.map((item) => {
           const isUserMenu = item.path === '/admin/users'
           const isDeviceMenu = item.path === '/admin/devices'
+          const isResourceMenu = item.path === '/admin/client-resources'
           const isGroupMenu = item.path === '/admin/groups'
           const isCommRecordsMenu = item.path === '/admin/comm-records'
-          const isExpandableMenu = isUserMenu || isDeviceMenu || isGroupMenu || isCommRecordsMenu
+          const isExpandableMenu = isUserMenu || isDeviceMenu || isResourceMenu || isGroupMenu || isCommRecordsMenu
           const getMenuExpanded = () => {
             if (isUserMenu) return userMenuExpanded
             if (isDeviceMenu) return deviceMenuExpanded
+            if (isResourceMenu) return resourceMenuExpanded
             if (isGroupMenu) return groupMenuExpanded
             if (isCommRecordsMenu) return commRecordsMenuExpanded
             return false
@@ -214,6 +230,7 @@ export function AdminLayout() {
           const toggleMenu = () => {
             if (isUserMenu) toggleUserMenu()
             if (isDeviceMenu) toggleDeviceMenu()
+            if (isResourceMenu) toggleResourceMenu()
             if (isGroupMenu) toggleGroupMenu()
             if (isCommRecordsMenu) toggleCommRecordsMenu()
           }

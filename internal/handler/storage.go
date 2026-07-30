@@ -52,7 +52,7 @@ func PresignPut(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在"})
 		return
 	}
-	if (fileType == "assets" || fileType == "firmware" || fileType == "client_package") && !hasRoleGORM(user, "admin") {
+	if (fileType == "assets" || fileType == "firmware" || fileType == "client_resource") && !hasRoleGORM(user, "admin") {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "该文件类型需要管理员权限"})
 		return
 	}
@@ -185,7 +185,7 @@ func StorageDirectGet(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	if strings.HasPrefix(key, "client-releases/") || strings.HasPrefix(key, "uploads/firmware/") {
+	if strings.HasPrefix(key, "client-resources/") || strings.HasPrefix(key, "firmware/") || strings.HasPrefix(key, "uploads/firmware/") {
 		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(key)}))
 	}
 	c.Header("Cache-Control", "private, no-store")

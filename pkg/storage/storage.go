@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +24,10 @@ import (
 // treat it as a conflict and must never overwrite the existing object.
 var ErrFinalObjectAlreadyExists = errors.New("final object already exists")
 
+// ErrObjectTooLarge indicates that a streamed object exceeded its allowed
+// size. Callers can use the returned byte count for diagnostics.
+var ErrObjectTooLarge = errors.New("object exceeds size limit")
+
 const (
 	DriverMinIO = "minio"
 	DriverS3    = "s3"
@@ -39,10 +45,10 @@ const (
 // 直传业务类型：无需服务端图像处理的大文件。
 // 头像/Logo/Favicon 仍走 multipart 代理（需服务端处理）。
 var presignFileTypes = map[string]struct{}{
-	"assets":         {},
-	"client_package": {},
-	"firmware":       {},
-	"operator_cert":  {},
+	"assets":          {},
+	"client_resource": {},
+	"firmware":        {},
+	"operator_cert":   {},
 }
 
 // PresignPutResult 预签名上传结果。
@@ -222,7 +228,7 @@ func IsAllowedPresignFileType(fileType string) bool {
 }
 
 // ShouldPresignUpload 是否对指定业务类型使用直传。
-// 固定策略：assets / client_package / firmware / operator_cert 直传；头像/Logo 等走代理。
+// 固定策略：assets / client_resource / firmware / operator_cert 直传；头像/Logo 等走代理。
 func ShouldPresignUpload(fileType string) bool {
 	return IsAllowedPresignFileType(fileType)
 }
@@ -414,6 +420,30 @@ func Open(ctx context.Context, key string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("存储未初始化")
 	}
 	return s.Open(ctx, key)
+}
+
+// HashObjectSHA256 streams an object and returns its size and SHA-256 digest.
+// maxSize must be positive; at most maxSize+1 bytes are read so oversized
+// objects are rejected without loading them into memory.
+func HashObjectSHA256(ctx context.Context, key string, maxSize int64) (int64, string, error) {
+	if maxSize <= 0 {
+		return 0, "", fmt.Errorf("invalid object size limit")
+	}
+	reader, err := Open(ctx, key)
+	if err != nil {
+		return 0, "", err
+	}
+	defer reader.Close()
+
+	hasher := sha256.New()
+	written, err := io.Copy(hasher, io.LimitReader(reader, maxSize+1))
+	if err != nil {
+		return written, "", err
+	}
+	if written > maxSize {
+		return written, "", ErrObjectTooLarge
+	}
+	return written, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // Stat 便捷方法。

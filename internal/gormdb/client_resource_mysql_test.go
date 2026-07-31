@@ -103,6 +103,34 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 	if _, err := repo.UpdateResource(resource.ID, ClientResourceUpdate{ResourceKey: key + "-changed", Name: resource.Name, Category: resource.Category, Enabled: false}); !errors.Is(err, ErrClientResourceKeyImmutable) {
 		t.Fatalf("immutable key err=%v", err)
 	}
+
+	deleted, err := repo.DeleteResource(resource.ID)
+	if err != nil {
+		t.Fatalf("delete resource: %v", err)
+	}
+	if len(deleted.Releases) != 1 || len(deleted.Releases[0].Artifacts) != 1 || len(deleted.Releases[0].Artifacts[0].Targets) != 2 {
+		t.Fatalf("deleted resource graph=%#v", deleted)
+	}
+	for name, model := range map[string]any{
+		"resources": &ClientResource{}, "releases": &ClientResourceRelease{},
+		"artifacts": &ClientResourceArtifact{}, "targets": &ClientResourceArtifactTarget{},
+	} {
+		var count int64
+		query := db.Model(model)
+		switch name {
+		case "resources":
+			query = query.Where("id = ?", resource.ID)
+		case "releases":
+			query = query.Where("resource_id = ?", resource.ID)
+		case "artifacts":
+			query = query.Where("release_id = ?", release.ID)
+		case "targets":
+			query = query.Where("artifact_id = ?", artifact.ID)
+		}
+		if err := query.Count(&count).Error; err != nil || count != 0 {
+			t.Fatalf("cascade delete %s count=%d err=%v", name, count, err)
+		}
+	}
 }
 
 func TestLegacyClientReleaseMigrationGuardMySQL(t *testing.T) {

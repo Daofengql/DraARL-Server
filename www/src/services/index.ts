@@ -15,7 +15,7 @@ export { groupLinkService } from './groupLink'
 export { listFirmware, uploadFirmware, deleteFirmware, getLatestFirmware } from './firmware'
 export type { FirmwareRelease } from './firmware'
 export {
-  listClientResources, getClientResource, createClientResource, updateClientResource,
+  listClientResources, getClientResource, createClientResource, updateClientResource, deleteClientResource,
   listClientResourceStaging, retryClientResourceStaging, auditClientResourceStorage,
   listClientResourceReleases, getClientResourceRelease, createClientResourceRelease,
   completeClientResourceArtifact, publishClientResourceRelease,
@@ -25,5 +25,5 @@ export type {
   ClientResource, ClientResourceRelease, ClientResourceArtifact,
   ClientResourceArtifactTarget, ClientResourceReleaseStatus, ClientResourceChannel,
   ClientResourceStagingItem, ClientResourceStagingListResult, ClientResourceStagingRetryResult,
-  ClientResourceStorageAuditResult, ClientResourceStorageAuditResponse,
+  ClientResourceStorageAuditResult, ClientResourceStorageAuditResponse, ClientResourceDeleteResult,
 } from './clientResource'

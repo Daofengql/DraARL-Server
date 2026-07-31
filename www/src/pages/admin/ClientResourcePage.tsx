@@ -23,7 +23,7 @@ import type {
 } from '../../services/clientResource'
 import {
   auditClientResourceStorage, completeClientResourceArtifact, createClientResource, createClientResourceRelease,
-  deleteClientResourceRelease, getClientResourceRelease, listClientResourceReleases,
+  deleteClientResource, deleteClientResourceRelease, getClientResourceRelease, listClientResourceReleases,
   listClientResourceStaging, listClientResources, publishClientResourceRelease,
   retryClientResourceStaging, updateClientResource,
   withdrawClientResourceRelease,
@@ -178,6 +178,7 @@ export function ClientResourcePage() {
   const [resourceFormOpen, setResourceFormOpen] = useState(false)
   const [editingResource, setEditingResource] = useState<ClientResource | null>(null)
   const [resourceForm, setResourceForm] = useState<ResourceForm>(emptyResourceForm())
+  const [resourceToDelete, setResourceToDelete] = useState<ClientResource | null>(null)
 
   const [resourceDetailOpen, setResourceDetailOpen] = useState(false)
   const [selectedResource, setSelectedResource] = useState<ClientResource | null>(null)
@@ -327,6 +328,32 @@ export function ClientResourcePage() {
       await fetchResources()
     } catch (err) {
       setError((err as Error).message || '保存资源失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runResourceDelete = async () => {
+    if (!resourceToDelete) return
+    const deleting = resourceToDelete
+    setResourceToDelete(null)
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await deleteClientResource(deleting.id)
+      if (selectedResource?.id === deleting.id) {
+        setResourceDetailOpen(false)
+        setSelectedResource(null)
+        setSelectedRelease(null)
+      }
+      const cleanup = result.object_cleanup_failures > 0
+        ? `，${result.object_cleanup_failures} 个对象清理失败，请运行对象审计`
+        : ''
+      setSuccess(`资源已删除，级联删除 ${result.deleted_releases} 个版本、${result.deleted_artifacts} 个文件${cleanup}`)
+      if (resources.length === 1 && page > 0) setPage(page - 1)
+      else await fetchResources()
+    } catch (err) {
+      setError((err as Error).message || '删除客户端资源失败')
     } finally {
       setBusy(false)
     }
@@ -569,7 +596,7 @@ export function ClientResourcePage() {
               <TableCell>{resource.current_stable_version || '-'}</TableCell>
               <TableCell>{resource.current_beta_version || '-'}</TableCell>
               <TableCell><Chip size="small" label={resource.enabled ? '已启用' : '已停用'} color={resource.enabled ? 'success' : 'default'} variant={resource.enabled ? 'filled' : 'outlined'} />{resource.required && <Chip size="small" label="必需" color="warning" variant="outlined" sx={{ ml: 0.5 }} />}</TableCell>
-              <TableCell align="right"><Tooltip title="编辑"><IconButton size="small" onClick={() => openResourceEdit(resource)}><Edit fontSize="small" /></IconButton></Tooltip><Tooltip title="版本管理"><IconButton size="small" onClick={() => void openResourceDetail(resource)}><Info fontSize="small" /></IconButton></Tooltip></TableCell>
+              <TableCell align="right"><Tooltip title="编辑"><IconButton size="small" onClick={() => openResourceEdit(resource)}><Edit fontSize="small" /></IconButton></Tooltip><Tooltip title="版本管理"><IconButton size="small" onClick={() => void openResourceDetail(resource)}><Info fontSize="small" /></IconButton></Tooltip><Tooltip title="删除资源"><IconButton size="small" color="error" onClick={() => setResourceToDelete(resource)}><Delete fontSize="small" /></IconButton></Tooltip></TableCell>
             </TableRow>)}
           </TableBody>
         </Table>
@@ -669,6 +696,7 @@ export function ClientResourcePage() {
       </Dialog>
 
       <ConfirmDialog isOpen={confirmAction !== null} title={confirmAction === 'publish' ? '发布资源版本' : confirmAction === 'withdraw' ? '撤回资源版本' : '删除资源草稿'} message={confirmAction === 'publish' ? `确定发布 ${selectedRelease?.version} 吗？\n\n${releasePublishSummary}` : confirmAction === 'withdraw' ? `确定撤回 ${selectedRelease?.version} 吗？\n\n${withdrawSummary}` : `确定删除 ${selectedRelease?.version} 草稿及其文件吗？`} type={confirmAction === 'delete' ? 'danger' : 'warning'} onConfirm={() => void runReleaseAction()} onCancel={() => setConfirmAction(null)} />
+      <ConfirmDialog isOpen={resourceToDelete !== null} title="删除客户端资源" message={`确定删除“${resourceToDelete?.name || ''}”吗？这会级联删除所有草稿、已发布/已撤回版本、适用目标和对象文件，且无法恢复。`} confirmText="删除资源" type="danger" onConfirm={() => void runResourceDelete()} onCancel={() => !busy && setResourceToDelete(null)} />
     </Box>
   )
 }

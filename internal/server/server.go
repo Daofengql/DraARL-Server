@@ -393,6 +393,7 @@ func (s *Server) setupRoutes() {
 			admin.POST("/client-resources", handler.CreateClientResource)
 			admin.GET("/client-resources/:resource_id", handler.GetClientResource)
 			admin.PATCH("/client-resources/:resource_id", handler.UpdateClientResource)
+			admin.DELETE("/client-resources/:resource_id", handler.DeleteClientResource)
 			admin.GET("/client-resources/:resource_id/releases", handler.ListClientResourceReleases)
 			admin.POST("/client-resources/:resource_id/releases", handler.CreateClientResourceRelease)
 			admin.GET("/client-resources/:resource_id/releases/:release_id", handler.GetClientResourceRelease)

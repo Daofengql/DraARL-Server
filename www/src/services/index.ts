@@ -19,11 +19,12 @@ export {
   listClientResourceStaging, retryClientResourceStaging, auditClientResourceStorage,
   listClientResourceReleases, getClientResourceRelease, createClientResourceRelease,
   completeClientResourceArtifact, publishClientResourceRelease,
-  withdrawClientResourceRelease, deleteClientResourceRelease,
+  deleteClientResourceRelease,
 } from './clientResource'
 export type {
   ClientResource, ClientResourceRelease, ClientResourceArtifact,
   ClientResourceArtifactTarget, ClientResourceReleaseStatus, ClientResourceChannel,
   ClientResourceStagingItem, ClientResourceStagingListResult, ClientResourceStagingRetryResult,
   ClientResourceStorageAuditResult, ClientResourceStorageAuditResponse, ClientResourceDeleteResult,
+  ClientResourceReleaseDeleteResult,
 } from './clientResource'

@@ -152,7 +152,7 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 
 			resourceKey := "model/e2e-" + variant.name + "-" + suffix
 			stagingKeys := make([]string, 0, 4)
-			var resourceID, releaseID, artifactID, firmwareID int
+			var resourceID, releaseID, artifactID, appendedArtifactID, firmwareID int
 			var firmwareKey string
 			t.Cleanup(func() {
 				for _, key := range stagingKeys {
@@ -160,13 +160,15 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 				}
 				var artifacts []gormdb.ClientResourceArtifact
 				_ = db.Where("release_id = ?", releaseID).Find(&artifacts).Error
+				artifactIDs := make([]int, 0, len(artifacts))
 				for _, artifact := range artifacts {
+					artifactIDs = append(artifactIDs, artifact.ID)
 					if artifact.StorageKey != "" {
 						_ = storage.Delete(context.Background(), artifact.StorageKey)
 					}
 				}
-				if artifactID != 0 {
-					_ = db.Where("artifact_id = ?", artifactID).Delete(&gormdb.ClientResourceArtifactTarget{}).Error
+				if len(artifactIDs) > 0 {
+					_ = db.Where("artifact_id IN ?", artifactIDs).Delete(&gormdb.ClientResourceArtifactTarget{}).Error
 				}
 				if releaseID != 0 {
 					_ = db.Where("release_id = ?", releaseID).Delete(&gormdb.ClientResourceArtifact{}).Error
@@ -286,6 +288,42 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 				t.Fatalf("unselected platform received resources: %#v", got)
 			}
 
+			appendedPayload := []byte("client-resource-published-append-e2e-" + variant.name)
+			appendPresign := clientResourceE2EPresignAndUpload(t, client, server.URL, adminToken, "client_resource", "denoise-linux.onnx", "application/octet-stream", appendedPayload)
+			stagingKeys = append(stagingKeys, appendPresign.ObjectKey)
+			appendResult := clientResourceE2EJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/client-resources/%d/releases/%d/artifacts/complete", server.URL, resourceID, releaseID), adminToken, map[string]any{
+				"format": "onnx", "runtime": "gpu", "variant": "default", "file_name": "denoise-linux.onnx",
+				"object_key": appendPresign.ObjectKey, "upload_token": appendPresign.UploadToken,
+				"metadata": map[string]any{"backend": "cuda"},
+				"targets":  []map[string]any{{"platform": "linux", "arch": "x86_64"}},
+			}, nil)
+			clientResourceE2ERequireStatus(t, appendResult, http.StatusOK)
+			release = clientResourceE2EDecode[clientResourceReleaseResponse](t, appendResult).Data
+			var appendedArtifactStorageKey string
+			for _, candidate := range release.Artifacts {
+				if candidate.FileName == "denoise-linux.onnx" {
+					appendedArtifactID = candidate.ID
+					appendedArtifactStorageKey = candidate.StorageKey
+					if candidate.SHA256 != fmt.Sprintf("%x", sha256.Sum256(appendedPayload)) || len(candidate.Targets) != 1 {
+						t.Fatalf("appended artifact=%#v", candidate)
+					}
+				}
+			}
+			if len(release.Artifacts) != 2 || appendedArtifactID == 0 || appendedArtifactStorageKey == "" {
+				t.Fatalf("published append release=%#v", release)
+			}
+			linuxManifestURL := server.URL + "/api/public/client-resources/manifest?platform=linux&arch=x86_64&channel=stable&client_version=1.0.0"
+			linuxManifest := clientResourceE2EJSON(t, client, http.MethodGet, linuxManifestURL, "", nil, nil)
+			clientResourceE2ERequireStatus(t, linuxManifest, http.StatusOK)
+			if got := clientResourceE2EDecode[clientResourceManifestResponse](t, linuxManifest).Data; len(got.Resources) != 1 || got.Resources[0].Release.ID != releaseID || len(got.Resources[0].Artifacts) != 1 || got.Resources[0].Artifacts[0].ID != appendedArtifactID {
+				t.Fatalf("linux appended manifest=%#v", got)
+			}
+			windowsAfterAppend := clientResourceE2EJSON(t, client, http.MethodGet, manifestURL, "", nil, nil)
+			clientResourceE2ERequireStatus(t, windowsAfterAppend, http.StatusOK)
+			if got := clientResourceE2EDecode[clientResourceManifestResponse](t, windowsAfterAppend).Data; len(got.Resources) != 1 || got.Resources[0].Artifacts[0].ID != artifactID {
+				t.Fatalf("original target disappeared after append: %#v", got)
+			}
+
 			downloadResult := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, artifactID), "", nil, nil)
 			clientResourceE2ERequireStatus(t, downloadResult, http.StatusOK)
 			downloadData := clientResourceE2EDecode[clientResourceE2EDownloadData](t, downloadResult).Data
@@ -347,37 +385,58 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 				t.Fatalf("firmware latest=%#v", latestFirmware)
 			}
 
-			withdraw := clientResourceE2EJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/client-resources/%d/releases/%d/withdraw", server.URL, resourceID, releaseID), adminToken, nil, nil)
-			clientResourceE2ERequireStatus(t, withdraw, http.StatusOK)
-			withdrawnManifest := clientResourceE2EJSON(t, client, http.MethodGet, manifestURL, "", nil, nil)
-			clientResourceE2ERequireStatus(t, withdrawnManifest, http.StatusOK)
-			if got := clientResourceE2EDecode[clientResourceManifestResponse](t, withdrawnManifest).Data; len(got.Resources) != 0 {
-				t.Fatalf("withdrawn resource remained in manifest: %#v", got)
+			deleteRelease := clientResourceE2EJSON(t, client, http.MethodDelete, fmt.Sprintf("%s/api/client-resources/%d/releases/%d", server.URL, resourceID, releaseID), adminToken, nil, nil)
+			clientResourceE2ERequireStatus(t, deleteRelease, http.StatusOK)
+			deletedRelease := clientResourceE2EDecode[clientResourceReleaseDeleteResponse](t, deleteRelease).Data
+			if deletedRelease.DeletedArtifacts != 2 || deletedRelease.DeletedObjects != 2 || deletedRelease.ObjectCleanupFailures != 0 {
+				t.Fatalf("delete release cleanup=%#v body=%s", deletedRelease, deleteRelease.Body)
 			}
-			withdrawnDownload := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, artifactID), "", nil, nil)
-			clientResourceE2ERequireStatus(t, withdrawnDownload, http.StatusNotFound)
-
-			deleteResource := clientResourceE2EJSON(t, client, http.MethodDelete, fmt.Sprintf("%s/api/client-resources/%d", server.URL, resourceID), adminToken, nil, nil)
-			clientResourceE2ERequireStatus(t, deleteResource, http.StatusOK)
+			deletedWindowsManifest := clientResourceE2EJSON(t, client, http.MethodGet, manifestURL, "", nil, nil)
+			clientResourceE2ERequireStatus(t, deletedWindowsManifest, http.StatusOK)
+			if got := clientResourceE2EDecode[clientResourceManifestResponse](t, deletedWindowsManifest).Data; len(got.Resources) != 0 {
+				t.Fatalf("deleted release remained in windows manifest: %#v", got)
+			}
+			deletedLinuxManifest := clientResourceE2EJSON(t, client, http.MethodGet, linuxManifestURL, "", nil, nil)
+			clientResourceE2ERequireStatus(t, deletedLinuxManifest, http.StatusOK)
+			if got := clientResourceE2EDecode[clientResourceManifestResponse](t, deletedLinuxManifest).Data; len(got.Resources) != 0 {
+				t.Fatalf("deleted release remained in linux manifest: %#v", got)
+			}
+			deletedOriginalDownload := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, artifactID), "", nil, nil)
+			clientResourceE2ERequireStatus(t, deletedOriginalDownload, http.StatusNotFound)
+			deletedAppendedDownload := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, appendedArtifactID), "", nil, nil)
+			clientResourceE2ERequireStatus(t, deletedAppendedDownload, http.StatusNotFound)
 			if _, _, err := storage.Stat(context.Background(), artifactStorageKey); err == nil {
-				t.Fatalf("cascade delete retained client resource object %q", artifactStorageKey)
+				t.Fatalf("delete release retained client resource object %q", artifactStorageKey)
+			}
+			if _, _, err := storage.Stat(context.Background(), appendedArtifactStorageKey); err == nil {
+				t.Fatalf("delete release retained appended client resource object %q", appendedArtifactStorageKey)
 			}
 			for name, model := range map[string]any{
-				"resources": &gormdb.ClientResource{}, "releases": &gormdb.ClientResourceRelease{},
-				"artifacts": &gormdb.ClientResourceArtifact{}, "targets": &gormdb.ClientResourceArtifactTarget{},
+				"releases": &gormdb.ClientResourceRelease{}, "artifacts": &gormdb.ClientResourceArtifact{},
+				"targets": &gormdb.ClientResourceArtifactTarget{},
 			} {
 				var count int64
 				query := db.Model(model)
 				switch name {
-				case "resources":
-					query = query.Where("id = ?", resourceID)
 				case "releases":
 					query = query.Where("resource_id = ?", resourceID)
 				case "artifacts":
 					query = query.Where("release_id = ?", releaseID)
 				case "targets":
-					query = query.Where("artifact_id = ?", artifactID)
+					query = query.Where("artifact_id IN ?", []int{artifactID, appendedArtifactID})
 				}
+				if err := query.Count(&count).Error; err != nil || count != 0 {
+					t.Fatalf("release delete %s count=%d err=%v", name, count, err)
+				}
+			}
+
+			deleteResource := clientResourceE2EJSON(t, client, http.MethodDelete, fmt.Sprintf("%s/api/client-resources/%d", server.URL, resourceID), adminToken, nil, nil)
+			clientResourceE2ERequireStatus(t, deleteResource, http.StatusOK)
+			for name, model := range map[string]any{
+				"resources": &gormdb.ClientResource{},
+			} {
+				var count int64
+				query := db.Model(model).Where("id = ?", resourceID)
 				if err := query.Count(&count).Error; err != nil || count != 0 {
 					t.Fatalf("cascade delete %s count=%d err=%v", name, count, err)
 				}
@@ -416,7 +475,6 @@ func clientResourceE2ERouter() *gin.Engine {
 	admin.GET("/client-resources/:resource_id/releases/:release_id", GetClientResourceRelease)
 	admin.POST("/client-resources/:resource_id/releases/:release_id/artifacts/complete", CompleteClientResourceArtifact)
 	admin.POST("/client-resources/:resource_id/releases/:release_id/publish", PublishClientResourceRelease)
-	admin.POST("/client-resources/:resource_id/releases/:release_id/withdraw", WithdrawClientResourceRelease)
 	admin.DELETE("/client-resources/:resource_id/releases/:release_id", DeleteClientResourceRelease)
 	admin.POST("/firmware/complete", CompleteFirmwareUpload)
 	return engine

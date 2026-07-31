@@ -138,6 +138,12 @@ export interface ClientResourceDeleteResult {
   object_cleanup_failures: number
 }
 
+export interface ClientResourceReleaseDeleteResult {
+  deleted_artifacts: number
+  deleted_objects: number
+  object_cleanup_failures: number
+}
+
 function queryString(params?: Record<string, unknown>): string {
   const qs = new URLSearchParams()
   for (const [key, value] of Object.entries(params || {})) {
@@ -305,12 +311,7 @@ export async function publishClientResourceRelease(resourceId: number, releaseId
   return requireData(response, '发布资源版本失败')
 }
 
-export async function withdrawClientResourceRelease(resourceId: number, releaseId: number): Promise<ClientResourceRelease> {
-  const response = await apiClient.post<BackendResponse<ClientResourceRelease>>(`/api/client-resources/${resourceId}/releases/${releaseId}/withdraw`, {})
-  return requireData(response, '撤回资源版本失败')
-}
-
-export async function deleteClientResourceRelease(resourceId: number, releaseId: number): Promise<void> {
-  const response = await apiClient.delete<BackendResponse<void>>(`/api/client-resources/${resourceId}/releases/${releaseId}`)
-  if (response.code !== 200) throw new Error(response.message || '删除资源发布草稿失败')
+export async function deleteClientResourceRelease(resourceId: number, releaseId: number): Promise<ClientResourceReleaseDeleteResult> {
+  const response = await apiClient.delete<BackendResponse<ClientResourceReleaseDeleteResult>>(`/api/client-resources/${resourceId}/releases/${releaseId}`)
+  return requireData(response, '删除资源版本失败')
 }

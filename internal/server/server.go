@@ -399,7 +399,6 @@ func (s *Server) setupRoutes() {
 			admin.GET("/client-resources/:resource_id/releases/:release_id", handler.GetClientResourceRelease)
 			admin.POST("/client-resources/:resource_id/releases/:release_id/artifacts/complete", handler.CompleteClientResourceArtifact)
 			admin.POST("/client-resources/:resource_id/releases/:release_id/publish", handler.PublishClientResourceRelease)
-			admin.POST("/client-resources/:resource_id/releases/:release_id/withdraw", handler.WithdrawClientResourceRelease)
 			admin.DELETE("/client-resources/:resource_id/releases/:release_id", handler.DeleteClientResourceRelease)
 
 			// 资源公开接口（前台下载中心使用）

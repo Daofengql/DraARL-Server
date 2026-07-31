@@ -371,7 +371,7 @@ func (s *localStorage) PublicURL(key string) string {
 
 // IsLocalPublicObjectKey defines the narrow set of objects intentionally
 // exposed through the permanent /files route. User documents, recordings,
-// firmware, release packages, and staging objects require signed GET URLs.
+// Firmware, client resources, and staging objects require signed GET URLs.
 func IsLocalPublicObjectKey(key string) bool {
 	clean := strings.TrimLeft(filepath.ToSlash(key), "/")
 	if clean == "" {

@@ -163,11 +163,11 @@ func MaxSizeForFileType(fileType string) int64 {
 	switch strings.ToLower(fileType) {
 	case "firmware":
 		return 16 * 1024 * 1024
-	case "client_package":
-		if cfg := config.TryGet(); cfg != nil && cfg.Storage.UploadLimits.ClientPackageBytes > 0 {
-			return cfg.Storage.UploadLimits.ClientPackageBytes
+	case "client_resource":
+		if cfg := config.TryGet(); cfg != nil && cfg.Storage.UploadLimits.ClientResourceBytes > 0 {
+			return cfg.Storage.UploadLimits.ClientResourceBytes
 		}
-		return config.DefaultClientPackageMaxBytes
+		return config.DefaultClientResourceMaxBytes
 	case "assets":
 		return 100 * 1024 * 1024
 	case "operator_cert":

@@ -1,6 +1,6 @@
 import { apiClient } from './api'
 
-export type PresignFileType = 'assets' | 'client_package' | 'firmware' | 'operator_cert'
+export type PresignFileType = 'assets' | 'client_resource' | 'firmware' | 'operator_cert'
 
 export interface PresignPutResult {
   mode: 's3' | 'local' | string

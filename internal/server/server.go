@@ -111,7 +111,8 @@ func (s *Server) setupRoutes() {
 		// 公开接口（无需认证）
 		api.GET("/public/relays", middleware.PublicRelaySearchRateLimit(), handler.PublicSearchRelays)
 		api.GET("/public/firmware/latest", handler.GetLatestFirmware)
-		api.GET("/public/client/latest", middleware.PublicClientReleaseRateLimit(), handler.GetLatestClientRelease)
+		api.GET("/public/client-resources/manifest", middleware.PublicClientResourceRateLimit(), handler.GetClientResourceManifest)
+		api.GET("/public/client-resources/artifacts/:artifact_id/download", middleware.PublicClientResourceRateLimit(), handler.GetClientResourceArtifactDownload)
 
 		// Keycloak SSO 路由（无需认证）
 		sso := api.Group("/sso")
@@ -384,14 +385,21 @@ func (s *Server) setupRoutes() {
 			admin.POST("/firmware/complete", handler.CompleteFirmwareUpload)
 			admin.DELETE("/firmware/:id", handler.DeleteFirmware)
 
-			// 客户端安装包发布管理（管理员权限）
-			admin.GET("/client-releases", handler.ListClientReleases)
-			admin.POST("/client-releases", handler.CreateClientRelease)
-			admin.GET("/client-releases/:id", handler.GetClientRelease)
-			admin.POST("/client-releases/:id/artifacts/complete", handler.CompleteClientReleaseArtifact)
-			admin.POST("/client-releases/:id/publish", handler.PublishClientRelease)
-			admin.POST("/client-releases/:id/withdraw", handler.WithdrawClientRelease)
-			admin.DELETE("/client-releases/:id", handler.DeleteClientRelease)
+			// 客户端资源分发（管理员权限）
+			admin.GET("/storage/audit", handler.AuditStorage)
+			admin.GET("/client-resources/staging", handler.ListClientResourceStaging)
+			admin.POST("/client-resources/staging/retry", handler.RetryClientResourceStaging)
+			admin.GET("/client-resources", handler.ListClientResources)
+			admin.POST("/client-resources", handler.CreateClientResource)
+			admin.GET("/client-resources/:resource_id", handler.GetClientResource)
+			admin.PATCH("/client-resources/:resource_id", handler.UpdateClientResource)
+			admin.GET("/client-resources/:resource_id/releases", handler.ListClientResourceReleases)
+			admin.POST("/client-resources/:resource_id/releases", handler.CreateClientResourceRelease)
+			admin.GET("/client-resources/:resource_id/releases/:release_id", handler.GetClientResourceRelease)
+			admin.POST("/client-resources/:resource_id/releases/:release_id/artifacts/complete", handler.CompleteClientResourceArtifact)
+			admin.POST("/client-resources/:resource_id/releases/:release_id/publish", handler.PublishClientResourceRelease)
+			admin.POST("/client-resources/:resource_id/releases/:release_id/withdraw", handler.WithdrawClientResourceRelease)
+			admin.DELETE("/client-resources/:resource_id/releases/:release_id", handler.DeleteClientResourceRelease)
 
 			// 资源公开接口（前台下载中心使用）
 			api.GET("/assets/tree", assetHandler.GetAssetTree)           // 获取目录树

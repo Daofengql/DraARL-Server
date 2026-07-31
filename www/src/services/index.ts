@@ -15,10 +15,15 @@ export { groupLinkService } from './groupLink'
 export { listFirmware, uploadFirmware, deleteFirmware, getLatestFirmware } from './firmware'
 export type { FirmwareRelease } from './firmware'
 export {
-  listClientReleases, getClientRelease, createClientRelease, completeClientReleaseArtifact,
-  publishClientRelease, withdrawClientRelease, deleteClientRelease,
-} from './clientRelease'
+  listClientResources, getClientResource, createClientResource, updateClientResource,
+  listClientResourceStaging, retryClientResourceStaging, auditClientResourceStorage,
+  listClientResourceReleases, getClientResourceRelease, createClientResourceRelease,
+  completeClientResourceArtifact, publishClientResourceRelease,
+  withdrawClientResourceRelease, deleteClientResourceRelease,
+} from './clientResource'
 export type {
-  ClientRelease, ClientReleaseArtifact, ClientReleaseStatus, ClientReleaseChannel,
-  ClientPlatform, ClientArch, ClientPackageType,
-} from './clientRelease'
+  ClientResource, ClientResourceRelease, ClientResourceArtifact,
+  ClientResourceArtifactTarget, ClientResourceReleaseStatus, ClientResourceChannel,
+  ClientResourceStagingItem, ClientResourceStagingListResult, ClientResourceStagingRetryResult,
+  ClientResourceStorageAuditResult, ClientResourceStorageAuditResponse,
+} from './clientResource'

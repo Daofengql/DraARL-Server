@@ -142,14 +142,14 @@ func TestInterconnectResourceDefaults(t *testing.T) {
 	}
 }
 
-func TestClientPackageUploadLimitDefault(t *testing.T) {
+func TestClientResourceUploadLimitDefault(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
 	if err := cfg.SetDefaults(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Storage.UploadLimits.ClientPackageBytes != DefaultClientPackageMaxBytes {
-		t.Fatalf("client package limit=%d want=%d", cfg.Storage.UploadLimits.ClientPackageBytes, DefaultClientPackageMaxBytes)
+	if cfg.Storage.UploadLimits.ClientResourceBytes != DefaultClientResourceMaxBytes {
+		t.Fatalf("client resource limit=%d want=%d", cfg.Storage.UploadLimits.ClientResourceBytes, DefaultClientResourceMaxBytes)
 	}
 }
 

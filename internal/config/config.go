@@ -67,12 +67,12 @@ type S3Config struct {
 	PublicBaseURL string `yaml:"PublicBaseURL,omitempty" json:"-"`
 }
 
-const DefaultClientPackageMaxBytes int64 = 512 * 1024 * 1024
+const DefaultClientResourceMaxBytes int64 = 512 * 1024 * 1024
 
 // StorageUploadLimitsConfig keeps large direct-upload limits deployment
 // configurable without changing the limits of unrelated upload types.
 type StorageUploadLimitsConfig struct {
-	ClientPackageBytes int64 `yaml:"ClientPackageBytes" json:"client_package_bytes"`
+	ClientResourceBytes int64 `yaml:"ClientResourceBytes" json:"client_resource_bytes"`
 }
 
 // StorageProfile permits a deployment to name independent storage targets.
@@ -429,8 +429,8 @@ func (c *Configuration) SetDefaults() error {
 	)
 	c.Storage.MinIO.BasePath = ""
 	normalizeS3Config(&c.Storage.S3, "Storage.S3.PublicBaseURL")
-	if c.Storage.UploadLimits.ClientPackageBytes <= 0 {
-		c.Storage.UploadLimits.ClientPackageBytes = DefaultClientPackageMaxBytes
+	if c.Storage.UploadLimits.ClientResourceBytes <= 0 {
+		c.Storage.UploadLimits.ClientResourceBytes = DefaultClientResourceMaxBytes
 	}
 	c.Storage.ActiveProfile = strings.TrimSpace(c.Storage.ActiveProfile)
 	for name, profile := range c.Storage.Profiles {

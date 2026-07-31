@@ -115,7 +115,7 @@ Keycloak:
 Storage:
     Driver: ""                        # minio | s3 | r2 | cos | oss | local；空则自动推断
     UploadLimits:
-        ClientPackageBytes: 536870912 # 客户端安装包直传上限，默认 512 MiB
+        ClientResourceBytes: 536870912 # 客户端资源直传上限，默认 512 MiB
     Local:
         RootPath: "./data/storage"    # 本地磁盘根目录（已做路径穿越防护）
         BaseURL: ""                   # 公开访问前缀，空则使用 /files

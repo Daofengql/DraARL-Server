@@ -218,17 +218,17 @@ func TestS3ProviderPresignedURLShapes(t *testing.T) {
 		{
 			name: "Cloudflare R2", provider: "r2", endpoint: "https://012345.r2.cloudflarestorage.com",
 			bucket: "draarl-contract", wantHost: "012345.r2.cloudflarestorage.com",
-			wantPath: "/draarl-contract/client-releases/app.apk",
+			wantPath: "/draarl-contract/client-resources/app.apk",
 		},
 		{
 			name: "Tencent COS", provider: "cos", endpoint: "https://cos.ap-guangzhou.myqcloud.com",
 			region: "ap-guangzhou", bucket: "draarl-1250000000", sessionToken: "temporary-token",
-			wantHost: "draarl-1250000000.cos.ap-guangzhou.myqcloud.com", wantPath: "/client-releases/app.apk",
+			wantHost: "draarl-1250000000.cos.ap-guangzhou.myqcloud.com", wantPath: "/client-resources/app.apk",
 		},
 		{
 			name: "Alibaba OSS", provider: "oss", endpoint: "https://oss-cn-hangzhou.aliyuncs.com",
 			region: "cn-hangzhou", bucket: "draarl-contract",
-			wantHost: "draarl-contract.oss-cn-hangzhou.aliyuncs.com", wantPath: "/client-releases/app.apk",
+			wantHost: "draarl-contract.oss-cn-hangzhou.aliyuncs.com", wantPath: "/client-resources/app.apk",
 		},
 	}
 	for _, test := range tests {
@@ -245,7 +245,7 @@ func TestS3ProviderPresignedURLShapes(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := &minioStorage{publicClient: client, bucket: test.bucket}
-			put, err := store.PresignPut(context.Background(), "client-releases/app.apk", 5*time.Minute, "application/octet-stream", 123)
+			put, err := store.PresignPut(context.Background(), "client-resources/app.apk", 5*time.Minute, "application/octet-stream", 123)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -253,7 +253,7 @@ func TestS3ProviderPresignedURLShapes(t *testing.T) {
 				t.Fatalf("presigned PUT metadata=%#v", put)
 			}
 			assertS3PresignedURLShape(t, put.UploadURL, test.wantHost, test.wantPath, prepared.Region, test.sessionToken)
-			get, err := store.PresignGet(context.Background(), "client-releases/app.apk", 5*time.Minute)
+			get, err := store.PresignGet(context.Background(), "client-resources/app.apk", 5*time.Minute)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -352,14 +352,14 @@ func TestRewritePresignedDownloadURL(t *testing.T) {
 		{
 			name:      "same-site root",
 			prefix:    "/",
-			objectKey: "client releases/app.apk",
-			want:      "/client%20releases/app.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
+			objectKey: "client resources/app.apk",
+			want:      "/client%20resources/app.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
 		},
 		{
 			name:      "reserved object characters",
 			prefix:    "https://downloads.example.com/draarl",
-			objectKey: "桌面 #1?/client package.apk",
-			want:      "https://downloads.example.com/draarl/%E6%A1%8C%E9%9D%A2%20%231%3F/client%20package.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
+			objectKey: "桌面 #1?/client resource.bin",
+			want:      "https://downloads.example.com/draarl/%E6%A1%8C%E9%9D%A2%20%231%3F/client%20resource.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signed-value",
 		},
 	}
 	for _, test := range tests {
@@ -480,7 +480,7 @@ func TestResolveMinIOPublicTarget(t *testing.T) {
 }
 
 func TestShouldPresignUpload(t *testing.T) {
-	for _, ft := range []string{"assets", "client_package", "firmware", "operator_cert"} {
+	for _, ft := range []string{"assets", "client_resource", "firmware", "operator_cert"} {
 		if !ShouldPresignUpload(ft) {
 			t.Fatalf("should presign %s", ft)
 		}
@@ -520,15 +520,15 @@ func TestKnownDrivers(t *testing.T) {
 	}
 }
 
-func TestClientPackageUploadLimitCanBeConfigured(t *testing.T) {
+func TestClientResourceUploadLimitCanBeConfigured(t *testing.T) {
 	cfg := &config.Configuration{}
-	cfg.Storage.UploadLimits.ClientPackageBytes = 64 * 1024 * 1024
+	cfg.Storage.UploadLimits.ClientResourceBytes = 64 * 1024 * 1024
 	previous := config.Config
 	config.Config = cfg
 	t.Cleanup(func() { config.Config = previous })
 
-	if got := MaxSizeForFileType("client_package"); got != 64*1024*1024 {
-		t.Fatalf("client package limit = %d, want %d", got, int64(64*1024*1024))
+	if got := MaxSizeForFileType("client_resource"); got != 64*1024*1024 {
+		t.Fatalf("client resource limit = %d, want %d", got, int64(64*1024*1024))
 	}
 }
 
@@ -688,7 +688,7 @@ func TestLocalPresignGetUsesExpiringToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "client-releases/draarl-client/stable/1.0.0/android/arm64/client.apk"
+	key := "client-resources/app/draarl/stable/1.0.0/apk/default/default/client.apk"
 	if err := store.Put(context.Background(), key, bytes.NewReader([]byte("apk")), 3, "application/octet-stream"); err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,7 @@ func TestLocalPresignGetUsesExpiringToken(t *testing.T) {
 	if err := VerifyLocalGetToken(parsed.Query().Get("token"), parsed.Query().Get("key")); err != nil {
 		t.Fatalf("valid signed download rejected: %v", err)
 	}
-	if err := VerifyLocalGetToken(parsed.Query().Get("token"), "client-releases/other.apk"); err == nil {
+	if err := VerifyLocalGetToken(parsed.Query().Get("token"), "client-resources/other.apk"); err == nil {
 		t.Fatal("download token must be bound to its object key")
 	}
 }
@@ -722,8 +722,8 @@ func TestLocalPromoteDoesNotOverwriteFinalObject(t *testing.T) {
 	}
 	store := storeValue.(*localStorage)
 	ctx := context.Background()
-	staged := "staging/client-package/1/first.apk"
-	final := "client-releases/app/stable/1.0.0/android/arm64/app.apk"
+	staged := "staging/client_resource/1/first.apk"
+	final := "client-resources/app/stable/1.0.0/apk/default/default/app.apk"
 	first := []byte("first package")
 	if err := store.Put(ctx, staged, bytes.NewReader(first), int64(len(first)), "application/octet-stream"); err != nil {
 		t.Fatal(err)
@@ -731,7 +731,7 @@ func TestLocalPromoteDoesNotOverwriteFinalObject(t *testing.T) {
 	if err := store.Promote(ctx, staged, final); err != nil {
 		t.Fatal(err)
 	}
-	secondStaged := "staging/client-package/1/second.apk"
+	secondStaged := "staging/client_resource/1/second.apk"
 	second := []byte("replacement package")
 	if err := store.Put(ctx, secondStaged, bytes.NewReader(second), int64(len(second)), "application/octet-stream"); err != nil {
 		t.Fatal(err)

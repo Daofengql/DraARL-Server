@@ -88,7 +88,7 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 				Window:      time.Minute,
 				Description: "同一 IP 每分钟 10 次",
 			},
-			"public-client-release-ip": {
+			"public-client-resource-ip": {
 				Key:         "ip",
 				Limit:       30,
 				Window:      time.Minute,
@@ -455,17 +455,16 @@ func PublicRelaySearchRateLimit() gin.HandlerFunc {
 	}
 }
 
-// PublicClientReleaseRateLimit limits anonymous update checks independently
-// from relay discovery so an installation fleet cannot consume unrelated API
-// capacity.
-func PublicClientReleaseRateLimit() gin.HandlerFunc {
+// PublicClientResourceRateLimit limits anonymous manifest and download-link
+// requests independently from relay discovery.
+func PublicClientResourceRateLimit() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if deviceRateLimiter == nil {
 			c.Next()
 			return
 		}
 
-		allowed, retryAfter := deviceRateLimiter.checkLimit("public-client-release-ip", c.ClientIP())
+		allowed, retryAfter := deviceRateLimiter.checkLimit("public-client-resource-ip", c.ClientIP())
 		if !allowed {
 			c.Header("Retry-After", intToStr(maxInt(1, int(retryAfter.Seconds()))))
 			c.JSON(http.StatusTooManyRequests, gin.H{

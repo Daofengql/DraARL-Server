@@ -47,4 +47,12 @@ func TestAuditPrefixIsReadOnlyAndReportsOrphansAndMissingReferences(t *testing.T
 	if _, _, err := Stat(ctx, "client-resources/model/orphan/sha/b.bin"); err != nil {
 		t.Fatalf("audit unexpectedly mutated storage: %v", err)
 	}
+
+	empty, err := AuditPrefix(ctx, "firmware/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.UnreferencedObjects == nil || empty.MissingReferences == nil {
+		t.Fatalf("empty audit collections must encode as arrays: %#v", empty)
+	}
 }

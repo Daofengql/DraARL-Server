@@ -38,7 +38,11 @@ func AuditPrefix(ctx context.Context, prefix string, references map[string]struc
 	if prefix == "" {
 		return AuditResult{}, ErrInvalidObjectKey
 	}
-	result := AuditResult{Prefix: prefix, UnreferencedObjects: make([]AuditObject, 0)}
+	result := AuditResult{
+		Prefix:              prefix,
+		UnreferencedObjects: make([]AuditObject, 0),
+		MissingReferences:   make([]string, 0),
+	}
 	seen := make(map[string]struct{})
 	store := Get()
 	if store == nil {

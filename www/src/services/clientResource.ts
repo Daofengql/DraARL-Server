@@ -168,7 +168,15 @@ export async function retryClientResourceStaging(objectKey: string): Promise<Cli
 
 export async function auditClientResourceStorage(): Promise<ClientResourceStorageAuditResponse> {
   const response = await apiClient.get<BackendResponse<ClientResourceStorageAuditResponse>>('/api/storage/audit')
-  return requireData(response, '存储审计失败')
+  const data = requireData(response, '存储审计失败')
+  return {
+    ...data,
+    prefixes: (data.prefixes ?? []).map((prefix) => ({
+      ...prefix,
+      unreferenced_objects: prefix.unreferenced_objects ?? [],
+      missing_references: prefix.missing_references ?? [],
+    })),
+  }
 }
 
 export async function getClientResource(id: number): Promise<ClientResource> {

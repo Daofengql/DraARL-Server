@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   Alert, Autocomplete, Badge, Box, Button, Checkbox, Chip, Dialog, DialogActions,
   DialogContent, DialogTitle, FormControl, FormControlLabel, IconButton,
@@ -13,7 +12,6 @@ import CloudUpload from '@mui/icons-material/CloudUpload'
 import Delete from '@mui/icons-material/Delete'
 import Edit from '@mui/icons-material/Edit'
 import Info from '@mui/icons-material/Info'
-import Memory from '@mui/icons-material/Memory'
 import FactCheck from '@mui/icons-material/FactCheck'
 import Publish from '@mui/icons-material/Publish'
 import Refresh from '@mui/icons-material/Refresh'
@@ -165,7 +163,6 @@ function highestPublishedRelease(candidates: ClientResourceRelease[]) {
 }
 
 export function ClientResourcePage() {
-  const navigate = useNavigate()
   const [resources, setResources] = useState<ClientResource[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
@@ -540,7 +537,6 @@ export function ClientResourcePage() {
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 600, flex: 1, minWidth: 220 }}>客户端资源分发</Typography>
-        <Tooltip title="设备固件"><Button variant="outlined" startIcon={<Memory />} onClick={() => navigate('/admin/firmware')}>设备固件</Button></Tooltip>
         <Button variant="outlined" startIcon={<CloudUpload />} onClick={() => { setStagingDialogOpen(true); void fetchStaging(true) }}><Badge badgeContent={stagingItems.length} color="warning" max={99}>待完成上传</Badge></Button>
         <Tooltip title="只读扫描 immutable final 对象"><Button variant="outlined" startIcon={<FactCheck />} onClick={() => void openAudit()}>对象审计</Button></Tooltip>
         <Tooltip title="刷新"><IconButton onClick={() => void fetchResources()} disabled={loading}><Refresh /></IconButton></Tooltip>

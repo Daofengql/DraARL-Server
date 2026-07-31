@@ -79,18 +79,24 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 	if err != nil || published.Status != ClientResourceReleaseStatusPublished || published.PublishedAt == nil {
 		t.Fatalf("published=%#v err=%v", published, err)
 	}
-	if err := repo.CompleteArtifact(&ClientResourceArtifact{ReleaseID: release.ID, Format: "onnx", Runtime: "gpu", Variant: "default", Targets: []ClientResourceArtifactTarget{{Platform: "windows", Arch: "x86_64"}}}, nil, nil); !errors.Is(err, ErrClientResourceReleaseNotDraft) {
-		t.Fatalf("published mutation err=%v", err)
+	appended := &ClientResourceArtifact{
+		ReleaseID: release.ID, Format: "onnx", Runtime: "gpu", Variant: "default", FileName: "model-linux.onnx",
+		StorageKey: "client-resources/test/model-linux.onnx", FileSize: 20, SHA256: strings.Repeat("b", 64),
+		Targets: []ClientResourceArtifactTarget{{Platform: "linux", Arch: "x86_64"}},
 	}
-	manifest, err := repo.ListManifestArtifacts(ClientResourceManifestLookup{Channel: "stable", Platform: "macos", Arch: "arm64"})
-	if err != nil || len(manifest) != 1 || len(manifest[0].Targets) != 2 {
-		t.Fatalf("manifest=%#v err=%v", manifest, err)
+	if err := repo.CompleteArtifact(appended, nil, nil); err != nil {
+		t.Fatalf("append published artifact: %v", err)
 	}
-	if _, err := repo.WithdrawRelease(release.ID); err != nil {
-		t.Fatal(err)
+	macOSManifest, err := repo.ListManifestArtifacts(ClientResourceManifestLookup{Channel: "stable", Platform: "macos", Arch: "arm64"})
+	if err != nil || len(macOSManifest) != 1 || macOSManifest[0].ID != artifact.ID {
+		t.Fatalf("macOS manifest=%#v err=%v", macOSManifest, err)
 	}
-	if _, err := repo.GetDownloadableArtifact(artifact.ID); !errors.Is(err, ErrClientResourceNotPublished) {
-		t.Fatalf("withdrawn download err=%v", err)
+	linuxManifest, err := repo.ListManifestArtifacts(ClientResourceManifestLookup{Channel: "stable", Platform: "linux", Arch: "x86_64"})
+	if err != nil || len(linuxManifest) != 1 || linuxManifest[0].ID != appended.ID {
+		t.Fatalf("linux manifest=%#v err=%v", linuxManifest, err)
+	}
+	if _, err := repo.GetDownloadableArtifact(artifact.ID); err != nil {
+		t.Fatalf("original artifact became unavailable after append: %v", err)
 	}
 
 	updated, err := repo.UpdateResource(resource.ID, ClientResourceUpdate{ResourceKey: resource.ResourceKey, Name: resource.Name, Category: resource.Category, Enabled: false})
@@ -104,29 +110,45 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 		t.Fatalf("immutable key err=%v", err)
 	}
 
-	deleted, err := repo.DeleteResource(resource.ID)
+	deletedRelease, err := repo.DeleteRelease(release.ID)
 	if err != nil {
-		t.Fatalf("delete resource: %v", err)
+		t.Fatalf("delete release: %v", err)
 	}
-	if len(deleted.Releases) != 1 || len(deleted.Releases[0].Artifacts) != 1 || len(deleted.Releases[0].Artifacts[0].Targets) != 2 {
-		t.Fatalf("deleted resource graph=%#v", deleted)
+	if len(deletedRelease.Artifacts) != 2 {
+		t.Fatalf("deleted release artifacts=%#v", deletedRelease.Artifacts)
 	}
 	for name, model := range map[string]any{
-		"resources": &ClientResource{}, "releases": &ClientResourceRelease{},
-		"artifacts": &ClientResourceArtifact{}, "targets": &ClientResourceArtifactTarget{},
+		"releases": &ClientResourceRelease{}, "artifacts": &ClientResourceArtifact{},
+		"targets": &ClientResourceArtifactTarget{},
 	} {
 		var count int64
 		query := db.Model(model)
 		switch name {
-		case "resources":
-			query = query.Where("id = ?", resource.ID)
 		case "releases":
-			query = query.Where("resource_id = ?", resource.ID)
+			query = query.Where("id = ?", release.ID)
 		case "artifacts":
 			query = query.Where("release_id = ?", release.ID)
 		case "targets":
-			query = query.Where("artifact_id = ?", artifact.ID)
+			query = query.Where("artifact_id IN ?", []int{artifact.ID, appended.ID})
 		}
+		if err := query.Count(&count).Error; err != nil || count != 0 {
+			t.Fatalf("release cascade delete %s count=%d err=%v", name, count, err)
+		}
+	}
+
+	deleted, err := repo.DeleteResource(resource.ID)
+	if err != nil {
+		t.Fatalf("delete resource: %v", err)
+	}
+	if len(deleted.Releases) != 0 {
+		t.Fatalf("deleted resource graph=%#v", deleted)
+	}
+	for name, model := range map[string]any{
+		"resources": &ClientResource{},
+	} {
+		var count int64
+		query := db.Model(model)
+		query = query.Where("id = ?", resource.ID)
 		if err := query.Count(&count).Error; err != nil || count != 0 {
 			t.Fatalf("cascade delete %s count=%d err=%v", name, count, err)
 		}

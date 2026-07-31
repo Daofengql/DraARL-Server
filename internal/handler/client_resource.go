@@ -125,6 +125,12 @@ type clientResourceDeleteResponse struct {
 	ObjectCleanupFailures int `json:"object_cleanup_failures"`
 }
 
+type clientResourceReleaseDeleteResponse struct {
+	DeletedArtifacts      int `json:"deleted_artifacts"`
+	DeletedObjects        int `json:"deleted_objects"`
+	ObjectCleanupFailures int `json:"object_cleanup_failures"`
+}
+
 type clientResourceResponse struct {
 	ID                   int       `json:"id"`
 	ResourceKey          string    `json:"resource_key"`
@@ -509,8 +515,8 @@ func CompleteClientResourceArtifact(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if release.Status != gormdb.ClientResourceReleaseStatusDraft {
-		writeClientResourceError(c, http.StatusConflict, "只有草稿可以添加文件")
+	if release.Status != gormdb.ClientResourceReleaseStatusDraft && release.Status != gormdb.ClientResourceReleaseStatusPublished {
+		writeClientResourceError(c, http.StatusConflict, "当前版本状态不允许添加文件")
 		return
 	}
 	if release.Resource == nil || !release.Resource.Enabled {
@@ -619,8 +625,8 @@ func CompleteClientResourceArtifact(c *gin.Context) {
 		switch {
 		case errors.Is(err, gormdb.ErrClientResourceTargetConflict), gormdb.IsDuplicateKeyError(err):
 			writeClientResourceError(c, http.StatusConflict, "相同格式、runtime、variant 的适用目标已存在")
-		case errors.Is(err, gormdb.ErrClientResourceReleaseNotDraft):
-			writeClientResourceError(c, http.StatusConflict, "只有草稿可以添加文件")
+		case errors.Is(err, gormdb.ErrClientResourceReleaseNotEditable):
+			writeClientResourceError(c, http.StatusConflict, "当前版本状态不允许添加文件")
 		case errors.Is(err, gormdb.ErrClientResourceDisabled):
 			writeClientResourceError(c, http.StatusConflict, "资源已停用")
 		case errors.Is(err, storage.ErrFinalObjectAlreadyExists):
@@ -665,28 +671,6 @@ func PublishClientResourceRelease(c *gin.Context) {
 	writeClientResourceSuccess(c, "资源版本发布成功", clientResourceReleaseToResponse(published))
 }
 
-func WithdrawClientResourceRelease(c *gin.Context) {
-	user, ok := requireClientResourceAdmin(c)
-	if !ok {
-		return
-	}
-	release, ok := loadNestedClientResourceRelease(c)
-	if !ok {
-		return
-	}
-	withdrawn, err := gormdb.NewClientResourceRepository().WithdrawRelease(release.ID)
-	if err != nil {
-		if errors.Is(err, gormdb.ErrClientResourceNotPublished) {
-			writeClientResourceError(c, http.StatusConflict, "只有已发布版本可以撤回")
-		} else {
-			writeClientResourceRepositoryError(c, err, "撤回客户端资源失败")
-		}
-		return
-	}
-	oplog.AddLog(fmt.Sprintf("撤回客户端资源版本: resource_id=%d version=%s", withdrawn.ResourceID, withdrawn.Version), "client_resource_release_withdraw", user.ID, user.Name, user.CallSign, c.ClientIP())
-	writeClientResourceSuccess(c, "资源版本已撤回", clientResourceReleaseToResponse(withdrawn))
-}
-
 func DeleteClientResourceRelease(c *gin.Context) {
 	user, ok := requireClientResourceAdmin(c)
 	if !ok {
@@ -696,22 +680,17 @@ func DeleteClientResourceRelease(c *gin.Context) {
 	if !ok {
 		return
 	}
-	deleted, err := gormdb.NewClientResourceRepository().DeleteDraft(release.ID)
+	deleted, err := gormdb.NewClientResourceRepository().DeleteRelease(release.ID)
 	if err != nil {
-		if errors.Is(err, gormdb.ErrClientResourceReleaseNotDraft) {
-			writeClientResourceError(c, http.StatusConflict, "只有草稿可以删除")
-		} else {
-			writeClientResourceRepositoryError(c, err, "删除资源草稿失败")
-		}
+		writeClientResourceRepositoryError(c, err, "删除资源版本失败")
 		return
 	}
-	for _, artifact := range deleted.Artifacts {
-		if artifact.StorageKey != "" {
-			cleanupClientResourceObject(c, artifact.StorageKey, "删除草稿对象失败")
-		}
-	}
-	oplog.AddLog(fmt.Sprintf("删除客户端资源发布草稿: release_id=%d", release.ID), "client_resource_release_delete", user.ID, user.Name, user.CallSign, c.ClientIP())
-	writeClientResourceSuccess(c, "资源发布草稿已删除", nil)
+	result := cleanupDeletedClientResourceReleaseObjects(c, deleted)
+	oplog.AddLog(
+		fmt.Sprintf("删除客户端资源版本: release_id=%d status=%s artifacts=%d objects=%d cleanup_failures=%d", release.ID, release.Status, result.DeletedArtifacts, result.DeletedObjects, result.ObjectCleanupFailures),
+		"client_resource_release_delete", user.ID, user.Name, user.CallSign, c.ClientIP(),
+	)
+	writeClientResourceSuccess(c, "资源版本已删除", result)
 }
 
 func GetClientResourceManifest(c *gin.Context) {
@@ -1268,6 +1247,36 @@ func cleanupClientResourceObject(c *gin.Context, key, message string) {
 	if err := storage.Delete(cleanupCtx, key); err != nil {
 		logClientResourceStorageError(message, key, err)
 	}
+}
+
+func cleanupDeletedClientResourceReleaseObjects(c *gin.Context, release *gormdb.ClientResourceRelease) clientResourceReleaseDeleteResponse {
+	result := clientResourceReleaseDeleteResponse{}
+	if release == nil {
+		return result
+	}
+	keys := make(map[string]struct{})
+	for _, artifact := range release.Artifacts {
+		result.DeletedArtifacts++
+		if key := strings.TrimSpace(artifact.StorageKey); key != "" {
+			keys[key] = struct{}{}
+		}
+	}
+	orderedKeys := make([]string, 0, len(keys))
+	for key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), clientResourceDeleteCleanupTimeout)
+	defer cancel()
+	for _, key := range orderedKeys {
+		if err := storage.Delete(cleanupCtx, key); err != nil {
+			result.ObjectCleanupFailures++
+			logClientResourceStorageError("删除客户端资源版本对象失败", key, err)
+			continue
+		}
+		result.DeletedObjects++
+	}
+	return result
 }
 
 func cleanupDeletedClientResourceObjects(c *gin.Context, resource *gormdb.ClientResource) clientResourceDeleteResponse {

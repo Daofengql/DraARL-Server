@@ -11,13 +11,14 @@ import (
 )
 
 var (
-	ErrClientResourceDisabled        = errors.New("client resource is disabled")
-	ErrClientResourceKeyImmutable    = errors.New("client resource key is immutable after publishing")
-	ErrClientResourceReleaseNotDraft = errors.New("client resource release is not a draft")
-	ErrClientResourceNotPublished    = errors.New("client resource release is not published")
-	ErrClientResourceHasNoArtifact   = errors.New("client resource release has no artifacts")
-	ErrClientResourceTargetRequired  = errors.New("client resource artifact has no targets")
-	ErrClientResourceTargetConflict  = errors.New("client resource artifact target conflicts with an existing artifact")
+	ErrClientResourceDisabled           = errors.New("client resource is disabled")
+	ErrClientResourceKeyImmutable       = errors.New("client resource key is immutable after publishing")
+	ErrClientResourceReleaseNotDraft    = errors.New("client resource release is not a draft")
+	ErrClientResourceReleaseNotEditable = errors.New("client resource release does not accept artifacts")
+	ErrClientResourceNotPublished       = errors.New("client resource release is not published")
+	ErrClientResourceHasNoArtifact      = errors.New("client resource release has no artifacts")
+	ErrClientResourceTargetRequired     = errors.New("client resource artifact has no targets")
+	ErrClientResourceTargetConflict     = errors.New("client resource artifact target conflicts with an existing artifact")
 )
 
 type ClientResourceRepository struct {
@@ -274,8 +275,8 @@ func (r *ClientResourceRepository) CompleteArtifact(
 		if err := tx.Clauses(clauseForUpdate()).Preload("Resource").First(&release, artifact.ReleaseID).Error; err != nil {
 			return err
 		}
-		if release.Status != ClientResourceReleaseStatusDraft {
-			return ErrClientResourceReleaseNotDraft
+		if release.Status != ClientResourceReleaseStatusDraft && release.Status != ClientResourceReleaseStatusPublished {
+			return ErrClientResourceReleaseNotEditable
 		}
 		if release.Resource == nil || !release.Resource.Enabled {
 			return ErrClientResourceDisabled
@@ -295,7 +296,7 @@ func (r *ClientResourceRepository) CompleteArtifact(
 		if err := tx.Omit("Release").Create(artifact).Error; err != nil {
 			return err
 		}
-		return nil
+		return tx.Model(&ClientResourceRelease{}).Where("id = ?", release.ID).Update("update_time", time.Now()).Error
 	})
 	if err != nil && finalized && onCreateFailure != nil {
 		onCreateFailure()
@@ -368,37 +369,13 @@ func (r *ClientResourceRepository) PublishRelease(id int) (*ClientResourceReleas
 	return &release, nil
 }
 
-func (r *ClientResourceRepository) WithdrawRelease(id int) (*ClientResourceRelease, error) {
-	var release ClientResourceRelease
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clauseForUpdate()).First(&release, id).Error; err != nil {
-			return err
-		}
-		if release.Status != ClientResourceReleaseStatusPublished {
-			return ErrClientResourceNotPublished
-		}
-		if err := tx.Model(&ClientResourceRelease{}).Where("id = ?", id).Update("status", ClientResourceReleaseStatusWithdrawn).Error; err != nil {
-			return err
-		}
-		release.Status = ClientResourceReleaseStatusWithdrawn
-		return preloadClientResourceRelease(tx).First(&release, id).Error
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &release, nil
-}
-
-// DeleteDraft returns stored artifacts so the caller can delete their objects
-// after the database transaction commits.
-func (r *ClientResourceRepository) DeleteDraft(id int) (*ClientResourceRelease, error) {
+// DeleteRelease removes a release in any lifecycle state and returns its
+// artifacts so the caller can delete their objects after the transaction.
+func (r *ClientResourceRepository) DeleteRelease(id int) (*ClientResourceRelease, error) {
 	var release ClientResourceRelease
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clauseForUpdate()).Preload("Artifacts.Targets").First(&release, id).Error; err != nil {
 			return err
-		}
-		if release.Status != ClientResourceReleaseStatusDraft {
-			return ErrClientResourceReleaseNotDraft
 		}
 		artifactIDs := make([]int, 0, len(release.Artifacts))
 		for _, artifact := range release.Artifacts {

@@ -15,7 +15,6 @@ import Info from '@mui/icons-material/Info'
 import FactCheck from '@mui/icons-material/FactCheck'
 import Publish from '@mui/icons-material/Publish'
 import Refresh from '@mui/icons-material/Refresh'
-import Undo from '@mui/icons-material/Undo'
 import type {
   ClientResource, ClientResourceArtifactTarget, ClientResourceChannel,
   ClientResourceRelease, ClientResourceReleaseStatus, ClientResourceStagingItem,
@@ -26,7 +25,6 @@ import {
   deleteClientResource, deleteClientResourceRelease, getClientResourceRelease, listClientResourceReleases,
   listClientResourceStaging, listClientResources, publishClientResourceRelease,
   retryClientResourceStaging, updateClientResource,
-  withdrawClientResourceRelease,
 } from '../../services/clientResource'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
@@ -139,29 +137,6 @@ function targetKey(target: ClientResourceArtifactTarget) {
   return `${target.platform}/${target.arch}`
 }
 
-function compareSemver(left: string, right: string) {
-  const parse = (value: string) => {
-    const [core, pre = ''] = value.split('-', 2)
-    return { nums: core.split('.').map((part) => Number(part) || 0), pre }
-  }
-  const a = parse(left)
-  const b = parse(right)
-  for (let i = 0; i < 3; i += 1) {
-    if (a.nums[i] !== b.nums[i]) return a.nums[i] - b.nums[i]
-  }
-  if (!a.pre && b.pre) return 1
-  if (a.pre && !b.pre) return -1
-  return a.pre.localeCompare(b.pre)
-}
-
-function highestPublishedRelease(candidates: ClientResourceRelease[]) {
-  return candidates.reduce<ClientResourceRelease | null>((best, current) => {
-    if (current.status !== 'published') return best
-    if (!best || compareSemver(current.version, best.version) > 0) return current
-    return best
-  }, null)
-}
-
 export function ClientResourcePage() {
   const [resources, setResources] = useState<ClientResource[]>([])
   const [total, setTotal] = useState(0)
@@ -187,10 +162,11 @@ export function ClientResourcePage() {
   const [releaseFormVisible, setReleaseFormVisible] = useState(false)
   const [releaseForm, setReleaseForm] = useState<ReleaseForm>(emptyReleaseForm())
   const [selectedRelease, setSelectedRelease] = useState<ClientResourceRelease | null>(null)
+  const [publishedEditMode, setPublishedEditMode] = useState(false)
 
   const [artifactForm, setArtifactForm] = useState<ArtifactForm>(emptyArtifactForm())
   const [uploadProgress, setUploadProgress] = useState(0)
-  const [confirmAction, setConfirmAction] = useState<'publish' | 'withdraw' | 'delete' | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'publish' | 'delete' | null>(null)
   const [stagingItems, setStagingItems] = useState<ClientResourceStagingItem[]>([])
   const [stagingDialogOpen, setStagingDialogOpen] = useState(false)
   const [stagingLoading, setStagingLoading] = useState(false)
@@ -246,8 +222,8 @@ export function ClientResourcePage() {
   }
 
   const adoptStaging = async (item: ClientResourceStagingItem) => {
-    if (!selectedRelease || selectedRelease.status !== 'draft') {
-      setError('请先打开一个草稿版本，再选择待完成上传')
+    if (!selectedRelease || (selectedRelease.status !== 'draft' && selectedRelease.status !== 'published')) {
+      setError('请先打开草稿或已发布版本，再选择待完成上传')
       return
     }
     setStagingLoading(true)
@@ -262,6 +238,7 @@ export function ClientResourcePage() {
         stagingObjectKey: retry.object_key,
         stagingUploadToken: retry.upload_token,
       })
+      if (selectedRelease.status === 'published') setPublishedEditMode(true)
       setStagingDialogOpen(false)
       setSuccess('已载入待完成上传，可继续填写目标并提交')
     } catch (err) {
@@ -362,6 +339,7 @@ export function ClientResourcePage() {
   const openResourceDetail = async (resource: ClientResource) => {
     setSelectedResource(resource)
     setSelectedRelease(null)
+    setPublishedEditMode(false)
     setReleaseFormVisible(false)
     setResourceDetailOpen(true)
     await fetchReleases(resource.id)
@@ -405,6 +383,7 @@ export function ClientResourcePage() {
     try {
       const detail = await getClientResourceRelease(selectedResource.id, release.id)
       setSelectedRelease(detail)
+      setPublishedEditMode(false)
       setArtifactForm(emptyArtifactForm())
       setUploadProgress(0)
     } catch (err) {
@@ -523,15 +502,17 @@ export function ClientResourcePage() {
     setError(null)
     try {
       if (confirmAction === 'delete') {
-        await deleteClientResourceRelease(selectedResource.id, selectedRelease.id)
+        const result = await deleteClientResourceRelease(selectedResource.id, selectedRelease.id)
         setSelectedRelease(null)
-        setSuccess('资源发布草稿已删除')
+        setPublishedEditMode(false)
+        const cleanup = result.object_cleanup_failures > 0
+          ? `，${result.object_cleanup_failures} 个对象清理失败，请运行对象审计`
+          : ''
+        setSuccess(`资源版本已删除，删除 ${result.deleted_artifacts} 个文件和 ${result.deleted_objects} 个对象${cleanup}`)
       } else {
-        const updated = confirmAction === 'publish'
-          ? await publishClientResourceRelease(selectedResource.id, selectedRelease.id)
-          : await withdrawClientResourceRelease(selectedResource.id, selectedRelease.id)
+        const updated = await publishClientResourceRelease(selectedResource.id, selectedRelease.id)
         setSelectedRelease(updated)
-        setSuccess(confirmAction === 'publish' ? '资源版本已发布' : '资源版本已撤回')
+        setSuccess('资源版本已发布')
       }
       setConfirmAction(null)
       await Promise.all([fetchReleases(selectedResource.id), fetchResources()])
@@ -543,6 +524,8 @@ export function ClientResourcePage() {
   }
 
   const formatOptions = FORMAT_OPTIONS[selectedResource?.category || ''] || []
+  const releaseAllowsArtifacts = selectedRelease?.status === 'draft' || selectedRelease?.status === 'published'
+  const artifactEditorVisible = selectedRelease?.status === 'draft' || (selectedRelease?.status === 'published' && publishedEditMode)
   const releasePublishSummary = selectedRelease?.artifacts.map((artifact) => [
     `${artifact.format} / ${artifact.runtime} / ${artifact.variant}`,
     `key=${artifact.storage_key || 'external'}`,
@@ -550,15 +533,9 @@ export function ClientResourcePage() {
     `sha256=${artifact.sha256 || '-'}`,
     `targets=${artifact.targets.map(targetKey).join(', ')}`,
   ].join('\n')).join('\n\n') || ''
-  const withdrawFallbackRelease = useMemo(() => {
-    if (!selectedRelease) return null
-    const others = releases.filter((release) => release.id !== selectedRelease.id)
-    if (selectedRelease.channel === 'stable') return highestPublishedRelease(others.filter((release) => release.channel === 'stable'))
-    return highestPublishedRelease(others.filter((release) => release.channel === 'beta')) || highestPublishedRelease(others.filter((release) => release.channel === 'stable'))
-  }, [releases, selectedRelease])
-  const withdrawSummary = withdrawFallbackRelease
-    ? `撤回后同频道查询将回退到 ${withdrawFallbackRelease.channel}/${withdrawFallbackRelease.version}${withdrawFallbackRelease.min_client_version ? `（最低客户端 ${withdrawFallbackRelease.min_client_version}）` : ''}。`
-    : '撤回后当前资源没有可回退的已发布版本，manifest 将不再返回该资源。'
+  const releaseDeleteSummary = selectedRelease?.status === 'published'
+    ? '删除后该版本会立即从 manifest 消失，并清理其全部文件；已有下载链接也将失效。'
+    : '该版本及其全部文件将被永久删除。'
 
   return (
     <Box>
@@ -618,7 +595,7 @@ export function ClientResourcePage() {
       <Dialog open={resourceDetailOpen} onClose={() => !busy && setResourceDetailOpen(false)} maxWidth="lg" fullWidth>
         <DialogTitle>
           <Stack direction="row" alignItems="center" spacing={1}>
-            {selectedRelease && <IconButton size="small" onClick={() => setSelectedRelease(null)}><ArrowBack /></IconButton>}
+            {selectedRelease && <IconButton size="small" onClick={() => { setSelectedRelease(null); setPublishedEditMode(false) }}><ArrowBack /></IconButton>}
             <Box sx={{ flex: 1, minWidth: 0 }}><Typography variant="h6" noWrap>{selectedResource?.name || '资源版本'}</Typography><Typography variant="caption" fontFamily="monospace" color="text.secondary">{selectedResource?.resource_key}</Typography></Box>
             {!selectedRelease && <Button startIcon={<Add />} onClick={() => setReleaseFormVisible(!releaseFormVisible)} disabled={!selectedResource?.enabled}>新建版本</Button>}
           </Stack>
@@ -647,8 +624,8 @@ export function ClientResourcePage() {
               {selectedRelease.artifacts.map((artifact) => <TableRow key={artifact.id}><TableCell>{artifact.format}</TableCell><TableCell>{artifact.runtime} / {artifact.variant}</TableCell><TableCell>{artifact.targets.map((target) => <Chip key={targetKey(target)} size="small" label={`${target.platform}/${target.arch}`} sx={{ mr: 0.5, mb: 0.5 }} />)}</TableCell><TableCell><Typography variant="body2">{artifact.file_name}</Typography>{artifact.storage_key && <Typography variant="caption" fontFamily="monospace" sx={{ display: 'block', wordBreak: 'break-all' }}>{artifact.storage_key}</Typography>}</TableCell><TableCell>{formatFileSize(artifact.file_size)}</TableCell><TableCell><Typography variant="caption" fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>{artifact.sha256 || '-'}</Typography></TableCell></TableRow>)}
             </TableBody></Table></TableContainer>
 
-            {selectedRelease.status === 'draft' && <Paper variant="outlined" sx={{ p: 2 }}><Stack spacing={1.5}>
-              <Typography variant="subtitle2">添加资源文件</Typography>
+            {artifactEditorVisible && <Paper variant="outlined" sx={{ p: 2 }}><Stack spacing={1.5}>
+              <Typography variant="subtitle2">{selectedRelease.status === 'published' ? '追加资源文件' : '添加资源文件'}</Typography>
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1.5 }}><Autocomplete freeSolo size="small" options={formatOptions} value={artifactForm.format} onInputChange={(_, value) => setArtifactForm({ ...artifactForm, format: value.toLowerCase(), file: null })} renderInput={(params) => <TextField {...params} label="格式" required />} /><TextField size="small" label="Runtime" value={artifactForm.runtime} onChange={(event) => setArtifactForm({ ...artifactForm, runtime: event.target.value })} /><TextField size="small" label="Variant" value={artifactForm.variant} onChange={(event) => setArtifactForm({ ...artifactForm, variant: event.target.value })} /><TextField size="small" label="构建号" value={artifactForm.buildNumber} onChange={(event) => setArtifactForm({ ...artifactForm, buildNumber: event.target.value })} /></Box>
               {artifactForm.format === 'app_store' ? <TextField size="small" type="url" label="App Store / TestFlight 地址" value={artifactForm.externalURL} onChange={(event) => setArtifactForm({ ...artifactForm, externalURL: event.target.value })} required /> : <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }}><Button component="label" variant="outlined" startIcon={<CloudUpload />} disabled={!artifactForm.format || !!artifactForm.stagingObjectKey} sx={{ flexShrink: 0, minWidth: { sm: 136 } }}>选择文件<input hidden type="file" accept={artifactForm.format ? `.${artifactForm.format}` : undefined} onChange={(event) => { const file = event.target.files?.[0] || null; setArtifactForm({ ...artifactForm, file, fileName: file?.name || '', stagingObjectKey: '', stagingUploadToken: '' }) }} /></Button><TextField size="small" label="文件名" value={artifactForm.fileName} onChange={(event) => setArtifactForm({ ...artifactForm, fileName: event.target.value })} disabled={!!artifactForm.stagingObjectKey} fullWidth /></Stack>}
               {artifactForm.stagingObjectKey && <Alert severity="info" action={<Button size="small" onClick={() => setArtifactForm({ ...artifactForm, stagingObjectKey: '', stagingUploadToken: '', fileName: '', file: null })}>改用本地文件</Button>}>已选择待完成上传：<Typography component="span" fontFamily="monospace">{artifactForm.stagingObjectKey}</Typography></Alert>}
@@ -663,10 +640,10 @@ export function ClientResourcePage() {
           </Stack>}
         </DialogContent>
         <DialogActions>
-          {selectedRelease?.status === 'draft' && <Button color="error" startIcon={<Delete />} onClick={() => setConfirmAction('delete')} disabled={busy}>删除草稿</Button>}
+          {selectedRelease && <Button color="error" startIcon={<Delete />} onClick={() => setConfirmAction('delete')} disabled={busy}>{selectedRelease.status === 'draft' ? '删除草稿' : '删除版本'}</Button>}
           <Box sx={{ flex: 1 }} />
           {selectedRelease?.status === 'draft' && <Button variant="contained" startIcon={<Publish />} onClick={() => setConfirmAction('publish')} disabled={busy || selectedRelease.artifacts.length === 0}>发布</Button>}
-          {selectedRelease?.status === 'published' && <Button color="warning" variant="contained" startIcon={<Undo />} onClick={() => setConfirmAction('withdraw')} disabled={busy}>撤回</Button>}
+          {selectedRelease?.status === 'published' && <Button variant={publishedEditMode ? 'outlined' : 'contained'} startIcon={<Edit />} onClick={() => setPublishedEditMode(!publishedEditMode)} disabled={busy}>{publishedEditMode ? '结束编辑' : '编辑'}</Button>}
           <Button onClick={() => setResourceDetailOpen(false)} disabled={busy}>关闭</Button>
         </DialogActions>
       </Dialog>
@@ -675,7 +652,7 @@ export function ClientResourcePage() {
         <DialogTitle>待完成上传</DialogTitle>
         <DialogContent>
           {stagingItems.length === 0 && <Alert severity="info" sx={{ mt: 1 }}>当前管理员没有可继续完成的客户端资源上传。</Alert>}
-          {stagingItems.length > 0 && <TableContainer component={Paper} variant="outlined" sx={{ mt: 1 }}><Table size="small"><TableHead><TableRow><TableCell>对象</TableCell><TableCell>大小</TableCell><TableCell>类型</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{stagingItems.map((item) => <TableRow key={item.object_key}><TableCell><Typography variant="body2" fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>{item.object_key}</Typography><Typography variant="caption" color="text.secondary">默认文件名：{item.file_name}</Typography></TableCell><TableCell>{formatFileSize(item.size)}</TableCell><TableCell>{item.content_type || '-'}</TableCell><TableCell align="right"><Button size="small" variant="contained" onClick={() => void adoptStaging(item)} disabled={stagingLoading || !selectedRelease || selectedRelease.status !== 'draft'}>载入草稿</Button></TableCell></TableRow>)}</TableBody></Table></TableContainer>}
+          {stagingItems.length > 0 && <TableContainer component={Paper} variant="outlined" sx={{ mt: 1 }}><Table size="small"><TableHead><TableRow><TableCell>对象</TableCell><TableCell>大小</TableCell><TableCell>类型</TableCell><TableCell align="right">操作</TableCell></TableRow></TableHead><TableBody>{stagingItems.map((item) => <TableRow key={item.object_key}><TableCell><Typography variant="body2" fontFamily="monospace" sx={{ wordBreak: 'break-all' }}>{item.object_key}</Typography><Typography variant="caption" color="text.secondary">默认文件名：{item.file_name}</Typography></TableCell><TableCell>{formatFileSize(item.size)}</TableCell><TableCell>{item.content_type || '-'}</TableCell><TableCell align="right"><Button size="small" variant="contained" onClick={() => void adoptStaging(item)} disabled={stagingLoading || !releaseAllowsArtifacts}>载入版本</Button></TableCell></TableRow>)}</TableBody></Table></TableContainer>}
         </DialogContent>
         <DialogActions><Button onClick={() => void fetchStaging(true)} disabled={stagingLoading}>刷新</Button><Button onClick={() => setStagingDialogOpen(false)} disabled={stagingLoading}>关闭</Button></DialogActions>
       </Dialog>
@@ -695,7 +672,7 @@ export function ClientResourcePage() {
         <DialogActions><Button onClick={() => void openAudit()} disabled={auditLoading}>重新扫描</Button><Button onClick={() => setAuditDialogOpen(false)} disabled={auditLoading}>关闭</Button></DialogActions>
       </Dialog>
 
-      <ConfirmDialog isOpen={confirmAction !== null} title={confirmAction === 'publish' ? '发布资源版本' : confirmAction === 'withdraw' ? '撤回资源版本' : '删除资源草稿'} message={confirmAction === 'publish' ? `确定发布 ${selectedRelease?.version} 吗？\n\n${releasePublishSummary}` : confirmAction === 'withdraw' ? `确定撤回 ${selectedRelease?.version} 吗？\n\n${withdrawSummary}` : `确定删除 ${selectedRelease?.version} 草稿及其文件吗？`} type={confirmAction === 'delete' ? 'danger' : 'warning'} onConfirm={() => void runReleaseAction()} onCancel={() => setConfirmAction(null)} />
+      <ConfirmDialog isOpen={confirmAction !== null} title={confirmAction === 'publish' ? '发布资源版本' : '删除资源版本'} message={confirmAction === 'publish' ? `确定发布 ${selectedRelease?.version} 吗？\n\n${releasePublishSummary}` : `确定删除 ${selectedRelease?.version} 吗？\n\n${releaseDeleteSummary}`} confirmText={confirmAction === 'delete' ? '删除版本' : '确认'} type={confirmAction === 'delete' ? 'danger' : 'warning'} onConfirm={() => void runReleaseAction()} onCancel={() => setConfirmAction(null)} />
       <ConfirmDialog isOpen={resourceToDelete !== null} title="删除客户端资源" message={`确定删除“${resourceToDelete?.name || ''}”吗？这会级联删除所有草稿、已发布/已撤回版本、适用目标和对象文件，且无法恢复。`} confirmText="删除资源" type="danger" onConfirm={() => void runResourceDelete()} onCancel={() => !busy && setResourceToDelete(null)} />
     </Box>
   )

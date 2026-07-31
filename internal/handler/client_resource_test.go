@@ -1,12 +1,19 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"draarl/internal/config"
 	"draarl/internal/gormdb"
+	"draarl/pkg/storage"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestNormalizeClientResourceDefinition(t *testing.T) {
@@ -18,6 +25,37 @@ func TestNormalizeClientResourceDefinition(t *testing.T) {
 		if _, _, _, _, err := normalizeClientResourceDefinition(invalid, "name", "", ""); err == nil {
 			t.Fatalf("resource_key %q was accepted", invalid)
 		}
+	}
+}
+
+func TestCleanupDeletedClientResourceObjects(t *testing.T) {
+	cfg := &config.Configuration{}
+	cfg.JWT.Secret = "client-resource-delete-test-secret"
+	cfg.Storage.ActiveProfile = "delete-local"
+	cfg.Storage.Profiles = map[string]config.StorageProfile{
+		"delete-local": {Driver: storage.DriverLocal, Local: config.LocalStorageConfig{RootPath: t.TempDir()}},
+	}
+	if err := storage.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	key := "client-resources/app/test/stable/1.0.0/apk/android/default/hash/app.apk"
+	payload := "apk"
+	if err := storage.Put(context.Background(), key, strings.NewReader(payload), int64(len(payload)), "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/client-resources/1", nil)
+	resource := &gormdb.ClientResource{Releases: []gormdb.ClientResourceRelease{
+		{Artifacts: []gormdb.ClientResourceArtifact{{StorageKey: key}, {StorageKey: key}, {ExternalURL: "https://example.invalid/app"}}},
+	}}
+	result := cleanupDeletedClientResourceObjects(c, resource)
+	if result.DeletedReleases != 1 || result.DeletedArtifacts != 3 || result.DeletedObjects != 1 || result.ObjectCleanupFailures != 0 {
+		t.Fatalf("cleanup result=%#v", result)
+	}
+	if _, _, err := storage.Stat(context.Background(), key); err == nil {
+		t.Fatal("deleted client resource object still exists")
 	}
 }
 

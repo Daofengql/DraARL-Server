@@ -231,6 +231,7 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 			if release.Artifacts[0].StorageKey == "" || !strings.HasPrefix(release.Artifacts[0].StorageKey, "client-resources/") {
 				t.Fatalf("admin response omitted final storage key: %#v", release.Artifacts[0])
 			}
+			artifactStorageKey := release.Artifacts[0].StorageKey
 			artifactID = release.Artifacts[0].ID
 			draftDownload := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, artifactID), "", nil, nil)
 			clientResourceE2ERequireStatus(t, draftDownload, http.StatusNotFound)
@@ -355,6 +356,35 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 			}
 			withdrawnDownload := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, artifactID), "", nil, nil)
 			clientResourceE2ERequireStatus(t, withdrawnDownload, http.StatusNotFound)
+
+			deleteResource := clientResourceE2EJSON(t, client, http.MethodDelete, fmt.Sprintf("%s/api/client-resources/%d", server.URL, resourceID), adminToken, nil, nil)
+			clientResourceE2ERequireStatus(t, deleteResource, http.StatusOK)
+			if _, _, err := storage.Stat(context.Background(), artifactStorageKey); err == nil {
+				t.Fatalf("cascade delete retained client resource object %q", artifactStorageKey)
+			}
+			for name, model := range map[string]any{
+				"resources": &gormdb.ClientResource{}, "releases": &gormdb.ClientResourceRelease{},
+				"artifacts": &gormdb.ClientResourceArtifact{}, "targets": &gormdb.ClientResourceArtifactTarget{},
+			} {
+				var count int64
+				query := db.Model(model)
+				switch name {
+				case "resources":
+					query = query.Where("id = ?", resourceID)
+				case "releases":
+					query = query.Where("resource_id = ?", resourceID)
+				case "artifacts":
+					query = query.Where("release_id = ?", releaseID)
+				case "targets":
+					query = query.Where("artifact_id = ?", artifactID)
+				}
+				if err := query.Count(&count).Error; err != nil || count != 0 {
+					t.Fatalf("cascade delete %s count=%d err=%v", name, count, err)
+				}
+			}
+			if _, _, err := storage.Stat(context.Background(), firmwareKey); err != nil {
+				t.Fatalf("client resource cascade deleted firmware object: %v", err)
+			}
 		})
 	}
 }
@@ -380,6 +410,7 @@ func clientResourceE2ERouter() *gin.Engine {
 	admin.POST("/client-resources/staging/retry", RetryClientResourceStaging)
 	admin.GET("/client-resources/:resource_id", GetClientResource)
 	admin.PATCH("/client-resources/:resource_id", UpdateClientResource)
+	admin.DELETE("/client-resources/:resource_id", DeleteClientResource)
 	admin.GET("/client-resources/:resource_id/releases", ListClientResourceReleases)
 	admin.POST("/client-resources/:resource_id/releases", CreateClientResourceRelease)
 	admin.GET("/client-resources/:resource_id/releases/:release_id", GetClientResourceRelease)

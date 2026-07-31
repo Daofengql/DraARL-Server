@@ -30,6 +30,7 @@ import (
 const (
 	clientResourceDefaultChannel        = "stable"
 	clientResourceFinalizeTimeout       = 30 * time.Minute
+	clientResourceDeleteCleanupTimeout  = 2 * time.Minute
 	clientResourceMaxKeyLength          = 191
 	clientResourceMaxNameLength         = 255
 	clientResourceMaxCategoryLength     = 64
@@ -115,6 +116,13 @@ type clientResourceReleaseListResponse struct {
 	Total    int64                           `json:"total"`
 	Page     int                             `json:"page"`
 	PageSize int                             `json:"page_size"`
+}
+
+type clientResourceDeleteResponse struct {
+	DeletedReleases       int `json:"deleted_releases"`
+	DeletedArtifacts      int `json:"deleted_artifacts"`
+	DeletedObjects        int `json:"deleted_objects"`
+	ObjectCleanupFailures int `json:"object_cleanup_failures"`
 }
 
 type clientResourceResponse struct {
@@ -363,6 +371,36 @@ func UpdateClientResource(c *gin.Context) {
 	}
 	oplog.AddLog(fmt.Sprintf("更新客户端资源: %s (%s)", updated.Name, updated.ResourceKey), action, user.ID, user.Name, user.CallSign, c.ClientIP())
 	writeClientResourceSuccess(c, "客户端资源更新成功", clientResourceToResponse(updated))
+}
+
+// DeleteClientResource removes a resource identity, all release metadata, and
+// every managed object referenced by its artifacts.
+func DeleteClientResource(c *gin.Context) {
+	user, ok := requireClientResourceAdmin(c)
+	if !ok {
+		return
+	}
+	resourceID, err := clientResourcePathID(c, "resource_id")
+	if err != nil {
+		writeClientResourceError(c, http.StatusBadRequest, "无效的资源 ID")
+		return
+	}
+	deleted, err := gormdb.NewClientResourceRepository().DeleteResource(resourceID)
+	if err != nil {
+		writeClientResourceRepositoryError(c, err, "删除客户端资源失败")
+		return
+	}
+
+	result := cleanupDeletedClientResourceObjects(c, deleted)
+	message := "客户端资源及关联版本已删除"
+	if result.ObjectCleanupFailures > 0 {
+		message = fmt.Sprintf("客户端资源已删除，%d 个对象清理失败，请通过对象审计检查", result.ObjectCleanupFailures)
+	}
+	oplog.AddLog(
+		fmt.Sprintf("删除客户端资源: resource_id=%d resource_key=%s releases=%d artifacts=%d objects=%d cleanup_failures=%d", deleted.ID, deleted.ResourceKey, result.DeletedReleases, result.DeletedArtifacts, result.DeletedObjects, result.ObjectCleanupFailures),
+		"client_resource_delete", user.ID, user.Name, user.CallSign, c.ClientIP(),
+	)
+	writeClientResourceSuccess(c, message, result)
 }
 
 func ListClientResourceReleases(c *gin.Context) {
@@ -1230,6 +1268,39 @@ func cleanupClientResourceObject(c *gin.Context, key, message string) {
 	if err := storage.Delete(cleanupCtx, key); err != nil {
 		logClientResourceStorageError(message, key, err)
 	}
+}
+
+func cleanupDeletedClientResourceObjects(c *gin.Context, resource *gormdb.ClientResource) clientResourceDeleteResponse {
+	result := clientResourceDeleteResponse{}
+	if resource == nil {
+		return result
+	}
+	keys := make(map[string]struct{})
+	for _, release := range resource.Releases {
+		result.DeletedReleases++
+		for _, artifact := range release.Artifacts {
+			result.DeletedArtifacts++
+			if key := strings.TrimSpace(artifact.StorageKey); key != "" {
+				keys[key] = struct{}{}
+			}
+		}
+	}
+	orderedKeys := make([]string, 0, len(keys))
+	for key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), clientResourceDeleteCleanupTimeout)
+	defer cancel()
+	for _, key := range orderedKeys {
+		if err := storage.Delete(cleanupCtx, key); err != nil {
+			result.ObjectCleanupFailures++
+			logClientResourceStorageError("级联删除客户端资源对象失败", key, err)
+			continue
+		}
+		result.DeletedObjects++
+	}
+	return result
 }
 
 func logClientResourceStorageError(message, key string, err error) {

@@ -152,6 +152,45 @@ func (r *ClientResourceRepository) UpdateResource(id int, update ClientResourceU
 	return &resource, nil
 }
 
+// DeleteResource removes the resource and every release, artifact, and target
+// in one transaction. The returned graph lets the caller clean up object files
+// after the database commit.
+func (r *ClientResourceRepository) DeleteResource(id int) (*ClientResource, error) {
+	var resource ClientResource
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clauseForUpdate()).Preload("Releases.Artifacts.Targets").First(&resource, id).Error; err != nil {
+			return err
+		}
+
+		releaseIDs := make([]int, 0, len(resource.Releases))
+		artifactIDs := make([]int, 0)
+		for _, release := range resource.Releases {
+			releaseIDs = append(releaseIDs, release.ID)
+			for _, artifact := range release.Artifacts {
+				artifactIDs = append(artifactIDs, artifact.ID)
+			}
+		}
+		if len(artifactIDs) > 0 {
+			if err := tx.Where("artifact_id IN ?", artifactIDs).Delete(&ClientResourceArtifactTarget{}).Error; err != nil {
+				return err
+			}
+		}
+		if len(releaseIDs) > 0 {
+			if err := tx.Where("release_id IN ?", releaseIDs).Delete(&ClientResourceArtifact{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("resource_id = ?", id).Delete(&ClientResourceRelease{}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&ClientResource{}, id).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &resource, nil
+}
+
 func (r *ClientResourceRepository) CreateRelease(release *ClientResourceRelease) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var resource ClientResource

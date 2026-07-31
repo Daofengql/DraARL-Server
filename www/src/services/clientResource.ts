@@ -131,6 +131,13 @@ export interface ClientResourceStorageAuditResponse {
   }
 }
 
+export interface ClientResourceDeleteResult {
+  deleted_releases: number
+  deleted_artifacts: number
+  deleted_objects: number
+  object_cleanup_failures: number
+}
+
 function queryString(params?: Record<string, unknown>): string {
   const qs = new URLSearchParams()
   for (const [key, value] of Object.entries(params || {})) {
@@ -168,7 +175,15 @@ export async function retryClientResourceStaging(objectKey: string): Promise<Cli
 
 export async function auditClientResourceStorage(): Promise<ClientResourceStorageAuditResponse> {
   const response = await apiClient.get<BackendResponse<ClientResourceStorageAuditResponse>>('/api/storage/audit')
-  return requireData(response, '存储审计失败')
+  const data = requireData(response, '存储审计失败')
+  return {
+    ...data,
+    prefixes: (data.prefixes ?? []).map((prefix) => ({
+      ...prefix,
+      unreferenced_objects: prefix.unreferenced_objects ?? [],
+      missing_references: prefix.missing_references ?? [],
+    })),
+  }
 }
 
 export async function getClientResource(id: number): Promise<ClientResource> {
@@ -198,6 +213,11 @@ export async function updateClientResource(id: number, data: Partial<{
 }>): Promise<ClientResource> {
   const response = await apiClient.patch<BackendResponse<ClientResource>>(`/api/client-resources/${id}`, data)
   return requireData(response, '更新客户端资源失败')
+}
+
+export async function deleteClientResource(id: number): Promise<ClientResourceDeleteResult> {
+  const response = await apiClient.delete<BackendResponse<ClientResourceDeleteResult>>(`/api/client-resources/${id}`)
+  return requireData(response, '删除客户端资源失败')
 }
 
 export async function listClientResourceReleases(resourceId: number, params?: {

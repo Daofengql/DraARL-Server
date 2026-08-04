@@ -421,6 +421,43 @@ func (UserDevicePreference) TableName() string {
 	return "user_device_preferences"
 }
 
+// GhostClientPreference stores routing defaults for one installed ghost
+// client. Online state remains runtime-only and is never inferred from this
+// table.
+type GhostClientPreference struct {
+	ID               uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID           int       `gorm:"not null;uniqueIndex:uk_ghost_client_instance,priority:1;index;column:user_id" json:"user_id"`
+	DevModel         uint8     `gorm:"not null;uniqueIndex:uk_ghost_client_instance,priority:2;column:dev_model" json:"dev_model"`
+	ClientInstanceID string    `gorm:"type:char(36);not null;uniqueIndex:uk_ghost_client_instance,priority:3;column:client_instance_id" json:"client_instance_id"`
+	TxGroupID        *int      `gorm:"index;column:tx_group_id" json:"tx_group_id,omitempty"`
+	CreatedAt        time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt        time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	User          *User                     `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	TxGroup       *Group                    `gorm:"foreignKey:TxGroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	Subscriptions []GhostClientSubscription `gorm:"foreignKey:PreferenceID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"subscriptions,omitempty"`
+}
+
+func (GhostClientPreference) TableName() string {
+	return "ghost_client_preferences"
+}
+
+// GhostClientSubscription keeps receive groups queryable and independently
+// constrained instead of encoding them in a comma-separated preference.
+type GhostClientSubscription struct {
+	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	PreferenceID uint      `gorm:"not null;uniqueIndex:uk_ghost_client_subscription,priority:1;index;column:preference_id" json:"preference_id"`
+	GroupID      int       `gorm:"not null;uniqueIndex:uk_ghost_client_subscription,priority:2;index;column:group_id" json:"group_id"`
+	CreatedAt    time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+
+	Preference *GhostClientPreference `gorm:"foreignKey:PreferenceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Group      *Group                 `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (GhostClientSubscription) TableName() string {
+	return "ghost_client_subscriptions"
+}
+
 // DeviceConfig 设备配置模型
 // 用于存储 UDP 普通设备的参数配置，支持双向同步
 // 前置逻辑：配置参数依附于具体设备存在，设备销毁时配置毫无保留价值。
@@ -700,6 +737,8 @@ func AutoMigrate() error {
 		&CommRecord{},
 		&Asset{},
 		&UserDevicePreference{},
+		&GhostClientPreference{},
+		&GhostClientSubscription{},
 		&DeviceConfig{},
 		&Logbook{},
 		&UserRadioPreset{},

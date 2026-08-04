@@ -123,6 +123,9 @@ func (r *GroupRepository) DeleteGroupWithCascade(id int) error {
 			Update("last_group_id", 0).Error; err != nil {
 			return err
 		}
+		if err := clearGhostClientGroupReferences(tx, nil, []int{id}); err != nil {
+			return err
+		}
 
 		// 5. 最后删除群组本身
 		if err := tx.Delete(&Group{}, id).Error; err != nil {
@@ -149,6 +152,9 @@ func (r *GroupRepository) LeaveGroupAndMoveDevices(groupID, userID int) ([]*Devi
 		if err := tx.Model(&UserDevicePreference{}).
 			Where("user_id = ? AND last_group_id = ?", userID, groupID).
 			Update("last_group_id", 0).Error; err != nil {
+			return err
+		}
+		if err := clearGhostClientGroupReferences(tx, &userID, []int{groupID}); err != nil {
 			return err
 		}
 		return tx.Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{}).Error

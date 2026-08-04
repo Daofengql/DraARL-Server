@@ -52,6 +52,15 @@ type Device struct {
 	Nickname           string            `json:"nickname"` // 运行时字段：发送者昵称快照
 	MAC                string            `json:"mac"`      // 运行时字段：设备上报的 MAC，用于快速重连判定
 
+	// UDP ghost session state. These fields are runtime-only and are never
+	// persisted to the physical devices table.
+	GhostSessionID       string   `json:"ghost_session_id,omitempty"`
+	GhostSessionTag      uint32   `json:"-"`
+	ClientInstanceID     string   `json:"client_instance_id,omitempty"`
+	GhostRxGroupIDs      []int    `json:"rx_group_ids,omitempty"`
+	GhostProtocolVersion uint16   `json:"ghost_protocol_version,omitempty"`
+	GhostCapabilities    []string `json:"ghost_capabilities,omitempty"`
+
 	// Connection state tracking
 	LastDisconnectTime       time.Time  `json:"last_disconnect_time"` // Last time device went offline
 	ReconnectCount           int        `json:"reconnect_count"`      // Number of reconnections

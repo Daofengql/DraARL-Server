@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/interfaces"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
@@ -166,7 +167,12 @@ func RevokeCenterLocalSession(deviceID, ownerID int, ssid byte, sessionID, sessi
 	for _, ghost := range GlobalUDPGhostManager.GetAll() {
 		if ghost != nil && ghost.OwnerID == ownerID && ghost.SSID == ssid && ghost.InterconnectSessionID == sessionID && ghost.InterconnectSessionEpoch == sessionEpoch {
 			ghost.InterconnectSessionID, ghost.InterconnectSessionEpoch = 0, 0
-			GlobalUDPGhostManager.Remove(ghost.Username, ghost.SSID)
+			if ghost.GhostSessionID != "" {
+				GlobalUDPGhostManager.RemoveSession(ghost.GhostSessionID)
+				ghostsession.Global.Remove(ghost.GhostSessionID)
+			} else {
+				GlobalUDPGhostManager.Remove(ghost.Username, ghost.SSID)
+			}
 			revoked = true
 		}
 	}
@@ -297,7 +303,7 @@ func DeliverInterconnectPacket(domainID uint64, data []byte) bool {
 	if groupID == 0 {
 		return false
 	}
-	writeUDPDomain(data, getDomainReceiverSnap(groupID), 0, "", 0)
+	writeUDPDomain(data, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		GlobalMessageRouter.wsManager.BroadcastToGroups(
 			activeDomainGroupIDs(groupID), data, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},

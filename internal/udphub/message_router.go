@@ -138,11 +138,8 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 	// 1-2. 连通域 UDP fan-out（普通设备 + ghost + 互联）
 	// 构造临时 source 设备视图供排除与身份使用
 	srcDev := &models.Device{
-		ID:       source.GetDeviceID(),
-		Username: source.GetUsername(),
-		SSID:     source.GetSSID(),
-		CallSign: source.GetCallSign(),
-		OwnerID:  source.GetUserID(),
+		ID: source.GetDeviceID(), Username: source.GetUsername(), SSID: source.GetSSID(),
+		CallSign: source.GetCallSign(), OwnerID: source.GetUserID(), GhostSessionID: source.GetSessionID(),
 	}
 	forwardVoiceDomain(srcDev, voicePacket, groupID)
 
@@ -183,11 +180,8 @@ func (r *MessageRouter) RouteTextToUDP(source interfaces.WSDeviceInterface, text
 
 	// 文本：连通域 UDP fan-out
 	srcDev := &models.Device{
-		ID:       source.GetDeviceID(),
-		Username: source.GetUsername(),
-		SSID:     source.GetSSID(),
-		CallSign: source.GetCallSign(),
-		OwnerID:  source.GetUserID(),
+		ID: source.GetDeviceID(), Username: source.GetUsername(), SSID: source.GetSSID(),
+		CallSign: source.GetCallSign(), OwnerID: source.GetUserID(), GhostSessionID: source.GetSessionID(),
 	}
 	forwardVoiceDomain(srcDev, textPacket, groupID)
 

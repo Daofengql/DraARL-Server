@@ -359,6 +359,12 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	}
 	copy(out[54:86], callsignBytes)
 
+	// Reserved contains hop-local authentication metadata on modern UDP
+	// uplinks. Never relay a sender's session tag to legacy recipients.
+	for i := DraARLv1ReservedOffset; i < DraARLv1HeaderSize; i++ {
+		out[i] = 0
+	}
+
 	// 长度字段保持与实际一致
 	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
 	return out

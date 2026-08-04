@@ -13,10 +13,12 @@ import (
 const domainReceiverTTL = 30 * time.Second
 
 type domainReceiverEntry struct {
-	addr     netip.AddrPort
-	deviceID int
-	username string
-	ssid     byte
+	addr          netip.AddrPort
+	deviceID      int
+	username      string
+	ssid          byte
+	sessionID     string
+	sourceGroupV1 bool
 }
 
 type domainReceiverSnap struct {
@@ -104,7 +106,12 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 	seen := make(map[netip.AddrPort]struct{}, 64)
 
 	addDev := func(dev *models.Device, expectedGroupID int) {
-		if dev == nil || dev.GroupID != expectedGroupID || !dev.ISOnline || dev.UDPAddr == nil || dev.DisableRecv {
+		if dev == nil || !dev.ISOnline || dev.UDPAddr == nil || dev.DisableRecv {
+			return
+		}
+		// Physical and legacy devices are single-channel. Modern UDP ghost
+		// sessions are already selected through their multi-group RX index.
+		if dev.GhostSessionID == "" && dev.GroupID != expectedGroupID {
 			return
 		}
 		addr, ok := udpAddrPort(dev.UDPAddr)
@@ -117,6 +124,8 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 		seen[addr] = struct{}{}
 		entries = append(entries, domainReceiverEntry{
 			addr: addr, deviceID: dev.ID, username: dev.Username, ssid: dev.SSID,
+			sessionID:     dev.GhostSessionID,
+			sourceGroupV1: dev.GhostProtocolVersion > 0 && ghostCapability(dev.GhostCapabilities, "source_group_v1"),
 		})
 	}
 
@@ -196,7 +205,7 @@ func forwardVoiceDomain(source *models.Device, data []byte, sourceGroupID int) {
 	if source == nil || len(data) == 0 {
 		return
 	}
-	writeUDPDomain(data, getDomainReceiverSnap(sourceGroupID), source.ID, source.Username, source.SSID)
+	writeUDPDomain(data, getDomainReceiverSnap(sourceGroupID), source.ID, source.Username, source.SSID, source.GhostSessionID, sourceGroupID)
 }
 
 func GetDomainReceiverCacheStats() map[string]int64 {

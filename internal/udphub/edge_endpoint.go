@@ -233,7 +233,7 @@ func (e *EdgeEndpoint) FanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID in
 	result := fanoutWriteResult{}
 	for i := range plan.entries {
 		target := &plan.entries[i]
-		if isSourceTarget(target, sourceID, sourceUser, sourceSSID) {
+		if isSourceTarget(target, sourceID, sourceUser, sourceSSID, "") {
 			continue
 		}
 		result.attempted++

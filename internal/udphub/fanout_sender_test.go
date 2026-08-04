@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 func newUDPTestPair(t *testing.T) (*net.UDPConn, *net.UDPConn, *net.UDPAddr) {
@@ -41,7 +43,7 @@ func enqueueTestFrame(sender *FanoutSender, payload []byte, addr *net.UDPAddr) b
 		entries: []domainReceiverEntry{entry}, partitions: partitions,
 		workers: len(sender.writers), gen: atomic.LoadUint64(&domainReceiverGen),
 	}
-	return sender.enqueueDomainFrame(payload, snap, 0, "", 0)
+	return sender.enqueueDomainFrame(payload, snap, 0, "", 0, "", 0)
 }
 
 func TestFanoutSenderPreservesOrderPerAddress(t *testing.T) {
@@ -79,6 +81,67 @@ func TestFanoutSenderPreservesOrderPerAddress(t *testing.T) {
 				t.Fatalf("packet order mismatch: got %d, want %d", got, want)
 			}
 		}
+	}
+}
+
+func TestFanoutSenderAddsSourceGroupOnlyForCapableSession(t *testing.T) {
+	senderConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		senderConn.Close()
+		t.Fatal(err)
+	}
+	modernConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		senderConn.Close()
+		legacyConn.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		senderConn.Close()
+		legacyConn.Close()
+		modernConn.Close()
+	})
+
+	sender := newFanoutSender(senderConn, 2, 8)
+	defer sender.stop()
+	legacyAddr, _ := udpAddrPort(legacyConn.LocalAddr().(*net.UDPAddr))
+	modernAddr, _ := udpAddrPort(modernConn.LocalAddr().(*net.UDPAddr))
+	entries := []domainReceiverEntry{
+		{addr: legacyAddr},
+		{addr: modernAddr, sessionID: "modern", sourceGroupV1: true},
+	}
+	partitions := make([][]domainReceiverEntry, len(sender.writers))
+	for _, entry := range entries {
+		partitions[addrPortShard(entry.addr, len(sender.writers))] = append(partitions[addrPortShard(entry.addr, len(sender.writers))], entry)
+	}
+	snap := &domainReceiverSnap{entries: entries, partitions: partitions, workers: len(sender.writers), gen: atomic.LoadUint64(&domainReceiverGen)}
+	wire := protocol.EncodeDraARLv1("alice", "", protocol.SSIDGhostAndroid, protocol.DraARLTypeTextMessage, protocol.DraARLDevModelAndroid, 0, "BG7AAA", []byte("hello"))
+	if !sender.enqueueDomainFrame(wire, snap, 0, "source", 1, "source-session", 1234) {
+		t.Fatal("fan-out frame was rejected")
+	}
+
+	readReserved := func(conn *net.UDPConn) uint32 {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buffer := make([]byte, protocol.DraARLv1MaxPacketSize)
+		n, _, readErr := conn.ReadFromUDP(buffer)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if n < protocol.DraARLv1HeaderSize {
+			t.Fatalf("short packet: %d", n)
+		}
+		return protocol.ReservedUint32(buffer[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize])
+	}
+	if got := readReserved(legacyConn); got != 0 {
+		t.Fatalf("legacy Reserved=%d, want 0", got)
+	}
+	if got := readReserved(modernConn); got != 1234 {
+		t.Fatalf("modern source group=%d, want 1234", got)
 	}
 }
 

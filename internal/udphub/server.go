@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"draarl/internal/config"
+	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
@@ -374,10 +375,15 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	// 普通设备不能使用保留 SSID 范围 (100-105 和 255)
 	// ==========================================
 	// 先查找设备（包括幽灵设备），避免误拦截已认证的幽灵设备
-	dev, isGhost := getDeviceFromMemory(packet.Username, packet.SSID, packet.UDPAddr)
+	dev, isGhost := getDeviceForPacket(packet, packet.UDPAddr)
 
 	// 只有当设备不存在（未认证的新设备）且 SSID 为保留范围时才拒绝
 	if dev == nil && protocol.IsReservedSSID(packet.SSID) {
+		// A non-zero tag means this was an attempted modern ghost packet. Do
+		// not answer an unauthenticated or forged endpoint with legacy status.
+		if protocol.ReservedUint32(packet.Reserved) != 0 {
+			return
+		}
 		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusReservedSSID, "reserved_ssid")
 		return
 	}
@@ -453,6 +459,9 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	if (packet.Type == protocol.DraARLTypeTextMessage || packet.Type == protocol.DraARLTypeOpus16K) && !CenterLocalDeviceAuthoritative(dev) {
 		return
 	}
+	if isGhost && dev.GhostSessionID != "" {
+		GlobalUDPGhostManager.UpdateSessionActivity(dev.GhostSessionID, packet.TimeStamp)
+	}
 
 	// 已存在的设备，更新状态
 	dev.LastPacketTime = packet.TimeStamp
@@ -527,13 +536,39 @@ func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*mod
 	// 2. username 为空时，通过 SSID + UDP 地址查找幽灵设备
 	// 幽灵设备发送数据包时 username 为空，需要通过地址匹配
 	if protocol.IsGhostSSID(ssid) && udpAddr != nil {
-		ghost := GlobalUDPGhostManager.FindBySSIDAndAddr(ssid, udpAddr)
+		ghost := GlobalUDPGhostManager.FindLegacyBySSIDAndAddr(ssid, udpAddr)
 		if ghost != nil {
 			return ghost, true
 		}
 	}
 
 	return nil, false
+}
+
+// getDeviceForPacket enforces the modern UDP ghost session binding. The tag
+// is only interpreted for reserved ghost SSIDs, so physical devices retain
+// their existing lookup and single-endpoint behavior even if Reserved is set.
+func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (*models.Device, bool) {
+	if packet == nil {
+		return nil, false
+	}
+	tag := protocol.ReservedUint32(packet.Reserved)
+	if tag == 0 || !protocol.IsGhostSSID(packet.SSID) {
+		return getDeviceFromMemory(packet.Username, packet.SSID, udpAddr)
+	}
+	device := GlobalUDPGhostManager.FindBySessionTag(tag)
+	if device == nil || device.GhostProtocolVersion == 0 || device.GhostSessionTag != tag ||
+		device.Username != packet.Username || device.SSID != packet.SSID || device.DevModel != packet.DevModel ||
+		!sameUDPAddr(device.UDPAddr, udpAddr) {
+		return nil, false
+	}
+	session, exists := ghostsession.Global.FindByTag(tag)
+	if !exists || !session.Connected || session.Transport != ghostsession.TransportUDP ||
+		session.SessionID != device.GhostSessionID || session.OwnerID != device.OwnerID ||
+		session.Username != device.Username || session.SSID != device.SSID || session.DevModel != device.DevModel {
+		return nil, false
+	}
+	return device, true
 }
 
 // applyClientReportedDevModel 处理客户端上报的 DevModel：
@@ -814,18 +849,20 @@ func buildUDPSpeaker(dev *models.Device, packet *protocol.DraARLv1Packet) halfDu
 	switch {
 	case dev.ID > 0:
 		key = 0x4000000000000000 | uint64(uint32(dev.ID))
+	case dev.GhostSessionID != "":
+		key = 0x5000000000000000 | (fnv64String(dev.GhostSessionID) & 0x0fffffffffffffff)
 	case dev.OwnerID > 0:
-		key = 0x5000000000000000 | uint64(uint32(dev.OwnerID))<<8 | uint64(ssid)
+		key = 0x6000000000000000 | uint64(uint32(dev.OwnerID))<<8 | uint64(ssid)
 	case dev.Username != "":
-		key = 0x6000000000000000 | uint64(fnv32String(dev.Username))<<8 | uint64(ssid)
+		key = 0x7000000000000000 | uint64(fnv32String(dev.Username))<<8 | uint64(ssid)
 	case packet != nil && packet.Username != "":
-		key = 0x6000000000000000 | uint64(fnv32String(packet.Username))<<8 | uint64(ssid)
+		key = 0x7000000000000000 | uint64(fnv32String(packet.Username))<<8 | uint64(ssid)
 	case dev.UDPAddr != nil:
 		if addr, ok := udpAddrPort(dev.UDPAddr); ok {
-			key = 0x7000000000000000 | (hashAddrPort(addr) & 0x0fffffffffffffff)
+			key = 0x8000000000000000 | (hashAddrPort(addr) & 0x0fffffffffffffff)
 		}
 	default:
-		key = 0x7000000000000000 | uint64(ssid)
+		key = 0x8000000000000000 | uint64(ssid)
 	}
 	return halfDuplexSpeaker{key: key, labelBase: labelBase, ssid: ssid}
 }
@@ -901,11 +938,14 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 		sourceKey := PhysicalCommRecordSourceKey(recordDeviceID)
 		if protocol.IsGhostSSID(dev.SSID) {
 			recordDeviceID = 0
-			endpoint := "unknown"
-			if dev.UDPAddr != nil {
-				endpoint = dev.UDPAddr.String()
+			connectionIdentity := dev.GhostSessionID
+			if connectionIdentity == "" {
+				connectionIdentity = "unknown"
+				if dev.UDPAddr != nil {
+					connectionIdentity = dev.UDPAddr.String()
+				}
 			}
-			sourceKey = GhostCommRecordSourceKey("udp", dev.OwnerID, uint8(dev.SSID), endpoint)
+			sourceKey = GhostCommRecordSourceKey("udp", dev.OwnerID, uint8(dev.SSID), connectionIdentity)
 		}
 		sender := CommSenderSnapshot{Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, DevModel: int(dev.DevModel)}
 		RecordCommPacket(sourceKey, recordDeviceID, uint8(dev.SSID), groupID, userID, sender, packet.DATA)

@@ -1,22 +1,20 @@
 package udphub
 
 import (
+	"errors"
 	"log"
 	"net"
+	"strings"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
+	"draarl/internal/groupaccess"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
 	"draarl/pkg/jwt"
 )
 
-// ==========================================
-// UDP JWT 认证处理
-// 处理 Type=1 的 JWT 认证包
-// ==========================================
-
-// JWTAuthResult JWT 认证结果
 type JWTAuthResult struct {
 	Success   bool
 	User      *gormdb.User
@@ -26,234 +24,301 @@ type JWTAuthResult struct {
 	ErrorMsg  string
 }
 
-// HandleJWTAuthPacket 处理 JWT 认证包 (Type=1)
-// 流程:
-// 1. 从 packet.DATA 提取 JWT Token
-// 2. 调用 jwt.ParseToken() 验证 Token
-// 3. 验证失败 → 发送错误响应，返回
-// 4. 从 Token 获取 username
-// 5. 查询数据库获取用户信息
-// 6. 检查用户状态 (Status, ApprovalStatus)
-// 7. 验证 DevModel 是否为有效的 UDP 幽灵设备型号 (101-104)
-// 8. 计算 SSID: ssid = GetGhostSSID(packet.DevModel)
-// 9. 获取用户该平台的群组偏好
-// 10. 创建 UDPGhostDevice 结构
-// 11. 调用 GlobalUDPGhostManager.Register() 注册
-// 12. 发送成功响应
+// HandleJWTAuthPacket accepts both the historical raw-JWT payload and the
+// versioned session payload. Only the latter enables independent multi-device
+// sessions and session-tag packet authentication.
 func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn) {
-	// 1. 提取 JWT Token
-	token := string(packet.DATA)
-	if token == "" {
-		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Token is empty")
-		return
-	}
-
-	// 2. 验证 Token
-	claims, err := jwt.ValidateAccessToken(token)
+	request, legacy, err := protocol.DecodeGhostAuthRequest(packet.DATA)
 	if err != nil {
-		log.Printf("[UDP-JWT] Token 解析失败: %v (地址: %v)", err, realAddr)
-		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Invalid or expired token")
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Invalid authentication payload")
 		return
 	}
+	if !legacy {
+		instanceID, normalizedLegacy, normalizeErr := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
+		if normalizeErr != nil || normalizedLegacy {
+			sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Invalid client instance id")
+			return
+		}
+		request.ClientInstanceID = instanceID
+	}
 
-	// 3. 验证 DevModel 是否为有效的 UDP 幽灵设备型号 (101-104)
-	// 注意: 105 (Web) 使用 WebSocket，不在此范围内
+	result := AuthenticateJWT(request.Token)
+	if !result.Success || result.User == nil {
+		log.Printf("[UDP-JWT] authentication failed: addr=%v err=%s", realAddr, result.ErrorMsg)
+		sendJWTAuthResponse(packet, conn, false, "", result.ErrorCode, result.ErrorMsg)
+		return
+	}
 	if !protocol.IsGhostDevModel(packet.DevModel) {
-		log.Printf("[UDP-JWT] 无效的设备型号: %d (用户: %s, 地址: %v)",
-			packet.DevModel, claims.Username, realAddr)
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidDevModel, "Invalid device model for UDP")
 		return
 	}
 
-	// 4. 查询用户信息
-	userRepo := gormdb.NewUserRepository()
-	user, err := userRepo.GetUserByName(claims.Username)
-	if err != nil || user == nil {
-		log.Printf("[UDP-JWT] 用户不存在: %s (地址: %v)", claims.Username, realAddr)
-		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthUserNotFound, "User not found")
-		return
-	}
-
-	// 5. 检查用户状态
-	if user.Status != 1 {
-		log.Printf("[UDP-JWT] 用户已禁用: %s (状态: %d)", claims.Username, user.Status)
-		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthUserDisabled, "User is disabled")
-		return
-	}
-
-	// 6. 检查审核状态
-	if user.ApprovalStatus != 1 {
-		log.Printf("[UDP-JWT] 用户未审核: %s (审核状态: %d)", claims.Username, user.ApprovalStatus)
-		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthUserNotApproved, "User is not approved")
-		return
-	}
-
+	user := result.User
 	ssid := protocol.GetGhostSSID(packet.DevModel)
-	if existingGhost := GlobalUDPGhostManager.Get(user.Name, ssid); existingGhost != nil {
-		if existingGhost.ISOnline && isRecentlyActiveDevice(existingGhost) && !sameUDPAddr(existingGhost.UDPAddr, packet.UDPAddr) {
-			log.Printf("[UDP-JWT] 幽灵设备冲突: user=%s dev_model=%d old_addr=%v new_addr=%v",
-				user.Name, packet.DevModel, existingGhost.UDPAddr, packet.UDPAddr)
-			sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthGhostDeviceConflict, "Ghost device already online")
-			return
-		}
-
-		if existingGhost.ISOnline && sameUDPAddr(existingGhost.UDPAddr, packet.UDPAddr) {
-			existingGhost.LastPacketTime = time.Now()
-			existingGhost.CallSign = user.CallSign
-			existingGhost.Nickname = user.NickName
-			existingGhost.OwnerID = user.ID
-			existingGhost.CallSignSSID = protocol.GetCallSignSSID(user.CallSign, ssid)
-			if err := ActivateCenterLocalDevice(existingGhost); err != nil {
-				log.Printf("[UDP-JWT] 中心会话激活失败: user=%s err=%v", user.Name, err)
-				sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
+	if legacy {
+		if existing := GlobalUDPGhostManager.Get(user.Name, ssid); existing != nil {
+			if isRecentlyActiveDevice(existing) && !sameUDPAddr(existing.UDPAddr, packet.UDPAddr) {
+				log.Printf("[UDP-JWT] legacy ghost conflict: user=%s model=%d old=%v new=%v", user.Name, packet.DevModel, existing.UDPAddr, packet.UDPAddr)
+				sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthGhostDeviceConflict, "Ghost device already online")
 				return
 			}
-			sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
-			log.Printf("[UDP-JWT] 设备重连复用认证态: %s (地址: %v)", getDeviceKey(user.Name, ssid), realAddr)
+			if isRecentlyActiveDevice(existing) && existing.GhostSessionID != "" {
+				if session, exists := ghostsession.Global.Get(existing.GhostSessionID); exists && session.Transport == ghostsession.TransportUDP {
+					refreshAuthenticatedGhost(existing, user, packet.UDPAddr)
+					GlobalUDPGhostManager.UpdateSessionActivity(existing.GhostSessionID, time.Now())
+					if err := ActivateCenterLocalDevice(existing); err != nil {
+						sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
+						return
+					}
+					sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
+					return
+				}
+			}
+			if existing.GhostSessionID != "" {
+				GlobalUDPGhostManager.RemoveSession(existing.GhostSessionID)
+				ghostsession.Global.Remove(existing.GhostSessionID)
+			} else {
+				GlobalUDPGhostManager.Remove(existing.Username, existing.SSID)
+			}
+			RevokeCenterLocalDevice(existing)
+		}
+	}
+
+	fallbackGroupID := GetGhostDeviceGroupID(user.ID, packet.DevModel)
+	routing, err := loadUDPGhostRouting(user, packet.DevModel, request.ClientInstanceID, legacy, request.Capabilities, fallbackGroupID)
+	if err != nil {
+		log.Printf("[UDP-JWT] load routing failed: user=%d model=%d err=%v", user.ID, packet.DevModel, err)
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "client_preference_unavailable")
+		return
+	}
+
+	now := time.Now()
+	device := &models.Device{
+		Username: user.Name, CallSign: user.CallSign, Nickname: user.NickName,
+		SSID: ssid, OwnerID: user.ID, CallSignSSID: protocol.GetCallSignSSID(user.CallSign, ssid),
+		DevModel: packet.DevModel, GroupID: routing.TxGroupID, Priority: 100, Status: 0,
+		ISOnline: true, UDPAddr: packet.UDPAddr, LastPacketTime: now, OnlineTime: now,
+		ClientInstanceID: request.ClientInstanceID, GhostRxGroupIDs: append([]int(nil), routing.RxGroupIDs...),
+		GhostCapabilities: append([]string(nil), request.Capabilities...),
+	}
+	if !legacy {
+		device.GhostProtocolVersion = request.Version
+	}
+
+	controller := ghostsession.Controller{
+		ApplyRouting: func(next ghostsession.Routing) error {
+			if device.GhostSessionID != "" && GlobalUDPGhostManager.GetSession(device.GhostSessionID) == device {
+				return GlobalUDPGhostManager.SetSessionRouting(device.GhostSessionID, next)
+			}
+			device.GroupID = next.TxGroupID
+			device.GhostRxGroupIDs = append([]int(nil), next.RxGroupIDs...)
+			return nil
+		},
+		Disconnect: func(string) {
+			removed := GlobalUDPGhostManager.RemoveSession(device.GhostSessionID)
+			if removed != nil {
+				RevokeCenterLocalDevice(removed)
+			}
+		},
+	}
+	session, err := ghostsession.Global.Register(ghostsession.Registration{
+		ClientInstanceID: request.ClientInstanceID, ReplaceExisting: legacy,
+		OwnerID: user.ID, Username: user.Name, CallSign: user.CallSign, Nickname: user.NickName,
+		DevModel: packet.DevModel, SSID: ssid, Transport: ghostsession.TransportUDP,
+		Endpoint: udpEndpointString(packet.UDPAddr), ProtocolVersion: device.GhostProtocolVersion,
+		Capabilities: request.Capabilities, Routing: routing, Now: now,
+	}, controller)
+	if err != nil {
+		code := protocol.JWTAuthInvalidToken
+		message := "ghost_session_registration_failed"
+		if errors.Is(err, ghostsession.ErrInstanceAlreadyOnline) {
+			code, message = protocol.JWTAuthGhostDeviceConflict, "Ghost device already online"
+		}
+		sendJWTAuthResponse(packet, conn, false, "", code, message)
+		return
+	}
+	device.GhostSessionID = session.SessionID
+	device.GhostSessionTag = session.SessionTag
+	device.ClientInstanceID = session.ClientInstanceID
+	device.GhostCapabilities = append([]string(nil), session.Capabilities...)
+	device.GroupID = session.TxGroupID
+	device.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+
+	// Reload after registration so an API update racing with authentication
+	// cannot be overwritten by a stale pre-auth preference snapshot.
+	if !legacy {
+		refreshed, refreshErr := ghostsession.Global.RefreshRouting(session.SessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
+			return loadUDPGhostRouting(user, packet.DevModel, session.ClientInstanceID, false, session.Capabilities, fallbackGroupID)
+		})
+		if refreshErr != nil {
+			ghostsession.Global.Remove(session.SessionID)
+			sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "client_preference_unavailable")
 			return
 		}
+		session = refreshed
+		device.GroupID = session.TxGroupID
+		device.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
 	}
 
-	// 8. 获取用户该平台的群组偏好
-	groupID, err := userRepo.GetUserLastGroupID(user.ID, packet.DevModel)
-	if err != nil {
-		log.Printf("[UDP-JWT] 获取群组偏好失败: %v (用户: %s)", err, claims.Username)
-		groupID = models.GroupIDPublicMin // 使用默认群组
+	if _, err := GlobalUDPGhostManager.RegisterSession(device); err != nil {
+		ghostsession.Global.Remove(session.SessionID)
+		log.Printf("[UDP-JWT] publish session failed: session=%s err=%v", session.SessionID, err)
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "ghost_session_registration_failed")
+		return
 	}
-
-	// 9. 验证群组是否存在且未禁用
-	if groupID > 0 {
-		if gp, exists := GetGroupFromCache(int(groupID)); !exists || gp.Status != 1 {
-			log.Printf("[UDP-JWT] 群组无效或已禁用: %d (用户: %s)", groupID, claims.Username)
-			groupID = models.GroupIDPublicMin // 回退到默认群组
-		}
-	}
-
-	// 10. 创建 UDP 幽灵设备
-	now := time.Now()
-	ghostDevice := &models.Device{
-		Username:       user.Name,
-		CallSign:       user.CallSign,
-		Nickname:       user.NickName,
-		SSID:           ssid,
-		OwnerID:        user.ID,
-		CallSignSSID:   protocol.GetCallSignSSID(user.CallSign, ssid),
-		DevModel:       packet.DevModel,
-		GroupID:        int(groupID),
-		Priority:       100,
-		Status:         0,
-		ISOnline:       true,
-		UDPAddr:        packet.UDPAddr,
-		LastPacketTime: now,
-		OnlineTime:     now,
-	}
-
-	// 11. 注册设备（在准入前已完成冲突检查）
-	ghostDevice = GlobalUDPGhostManager.Register(ghostDevice)
-	if err := ActivateCenterLocalDevice(ghostDevice); err != nil {
-		GlobalUDPGhostManager.Remove(ghostDevice.Username, ghostDevice.SSID)
-		log.Printf("[UDP-JWT] 中心会话激活失败: user=%s err=%v", user.Name, err)
+	if err := ActivateCenterLocalDevice(device); err != nil {
+		GlobalUDPGhostManager.RemoveSession(session.SessionID)
+		ghostsession.Global.Remove(session.SessionID)
+		log.Printf("[UDP-JWT] center activation failed: session=%s err=%v", session.SessionID, err)
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
 		return
 	}
 
-	// 12. 发送成功响应
-	sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
-
-	log.Printf("[UDP-JWT] 认证成功: %s (%s-%d) 群组: %d 地址: %v",
-		user.Name, user.CallSign, ssid, groupID, realAddr)
+	if legacy {
+		sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
+	} else {
+		sendJWTAuthSessionResponse(packet, conn, user.CallSign, protocol.GhostAuthSuccess{
+			Version: protocol.GhostAuthPayloadVersion, SessionID: session.SessionID, SessionTag: session.SessionTag,
+			ClientInstanceID: session.ClientInstanceID, TxGroupID: session.TxGroupID,
+			RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
+		})
+	}
+	log.Printf("[UDP-JWT] authenticated: session=%s user=%s model=%d tx=%d rx=%v legacy=%v addr=%v",
+		session.SessionID, user.Name, packet.DevModel, session.TxGroupID, session.RxGroupIDs, legacy, realAddr)
 }
 
-// sendJWTAuthResponse 发送 JWT 认证响应包
-func sendJWTAuthResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn,
-	success bool, callSign string, errorCode byte, errorMsg string) {
+func udpEndpointString(addr *net.UDPAddr) string {
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
 
-	var data []byte
-	var responseCallSign string
+func refreshAuthenticatedGhost(device *models.Device, user *gormdb.User, addr *net.UDPAddr) {
+	if device == nil || user == nil {
+		return
+	}
+	device.Username = user.Name
+	device.CallSign = user.CallSign
+	device.Nickname = user.NickName
+	device.OwnerID = user.ID
+	device.CallSignSSID = protocol.GetCallSignSSID(user.CallSign, device.SSID)
+	device.UDPAddr = addr
+	device.LastPacketTime = time.Now()
+	device.ISOnline = true
+}
 
-	if success {
-		data = []byte{protocol.JWTAuthSuccess} // 状态码 0 = 成功
-		responseCallSign = callSign
-	} else {
+func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, legacy bool, capabilities []string, fallbackGroupID int) (ghostsession.Routing, error) {
+	if user == nil {
+		return ghostsession.Routing{}, errors.New("authenticated user is required")
+	}
+	routing := ghostsession.Routing{TxGroupID: fallbackGroupID, RxGroupIDs: []int{fallbackGroupID}}
+	if legacy {
+		sanitized, _, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.DefaultMaxSubscriptions)
+		if err != nil {
+			return ghostsession.Routing{}, err
+		}
+		sanitized.RxGroupIDs = []int{sanitized.TxGroupID}
+		return sanitized, nil
+	}
+
+	repository := gormdb.NewGhostClientPreferenceRepository()
+	preference, err := repository.GetOrCreate(user.ID, devModel, instanceID, fallbackGroupID)
+	if err != nil || preference == nil {
+		return ghostsession.Routing{}, errors.New("client preference unavailable")
+	}
+	routing = ghostsession.Routing{TxGroupID: preference.TxGroupID, RxGroupIDs: preference.RxGroupIDs}
+	routing, changed, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.DefaultMaxSubscriptions)
+	if err != nil {
+		return ghostsession.Routing{}, err
+	}
+	if changed {
+		if err := repository.ReplaceRouting(user.ID, devModel, instanceID, routing.TxGroupID, routing.RxGroupIDs); err != nil {
+			return ghostsession.Routing{}, err
+		}
+	}
+	if !ghostCapability(capabilities, "multi_receive_v1") || !ghostCapability(capabilities, "source_group_v1") {
+		routing.RxGroupIDs = []int{routing.TxGroupID}
+	}
+	return routing, nil
+}
+
+func ghostCapability(capabilities []string, wanted string) bool {
+	for _, capability := range capabilities {
+		if strings.EqualFold(strings.TrimSpace(capability), wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func sendJWTAuthResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn, success bool, callSign string, errorCode byte, errorMsg string) {
+	data := []byte{protocol.JWTAuthSuccess}
+	responseCallSign := callSign
+	if !success {
 		data = append([]byte{errorCode}, []byte(errorMsg)...)
 		responseCallSign = ""
 	}
-
-	// 计算服务器分配的 SSID (等于 DevModel)
-	ssid := protocol.GetGhostSSID(packet.DevModel)
-	if ssid == 0 {
-		ssid = packet.DevModel // 如果不是幽灵设备，使用原始 DevModel
+	response := encodeJWTAuthResponse(packet, responseCallSign, data)
+	if conn != nil && packet != nil && packet.UDPAddr != nil {
+		_, _ = conn.WriteToUDP(response, packet.UDPAddr)
 	}
-
-	// 组装响应数据包
-	response := protocol.EncodeDraARLv1(
-		packet.Username,            // 回显用户名
-		"",                         // password 空
-		ssid,                       // 服务器分配的 SSID
-		protocol.DraARLTypeJWTAuth, // Type=1
-		packet.DevModel,            // 回显设备型号
-		0,                          // dmrid
-		responseCallSign,           // 呼号
-		data,                       // DATA 区域
-	)
-
-	conn.WriteToUDP(response, packet.UDPAddr)
 }
 
-// AuthenticateJWT 进行 JWT 认证（供外部调用）
+func sendJWTAuthSessionResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn, callSign string, success protocol.GhostAuthSuccess) {
+	data, err := protocol.EncodeGhostAuthSuccessData(success)
+	if err != nil {
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "authentication_response_failed")
+		return
+	}
+	response := encodeJWTAuthResponse(packet, callSign, data)
+	if tagged, ok := protocol.WithReservedUint32(response, success.SessionTag); ok {
+		response = tagged
+	}
+	if conn != nil && packet != nil && packet.UDPAddr != nil {
+		_, _ = conn.WriteToUDP(response, packet.UDPAddr)
+	}
+}
+
+func encodeJWTAuthResponse(packet *protocol.DraARLv1Packet, callSign string, data []byte) []byte {
+	ssid := protocol.GetGhostSSID(packet.DevModel)
+	if ssid == 0 {
+		ssid = packet.DevModel
+	}
+	return protocol.EncodeDraARLv1(packet.Username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, callSign, data)
+}
+
 func AuthenticateJWT(token string) *JWTAuthResult {
 	result := &JWTAuthResult{}
-
-	// 解析 Token
 	claims, err := jwt.ValidateAccessToken(token)
 	if err != nil {
-		result.ErrorCode = protocol.JWTAuthInvalidToken
-		result.ErrorMsg = "Invalid or expired token"
+		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthInvalidToken, "Invalid or expired token"
 		return result
 	}
-
-	// 查询用户
-	userRepo := gormdb.NewUserRepository()
-	user, err := userRepo.GetUserByName(claims.Username)
+	user, err := gormdb.NewUserRepository().GetUserByName(claims.Username)
 	if err != nil || user == nil {
-		result.ErrorCode = protocol.JWTAuthUserNotFound
-		result.ErrorMsg = "User not found"
+		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthUserNotFound, "User not found"
 		return result
 	}
-
-	// 检查用户状态
 	if user.Status != 1 {
-		result.ErrorCode = protocol.JWTAuthUserDisabled
-		result.ErrorMsg = "User is disabled"
+		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthUserDisabled, "User is disabled"
 		return result
 	}
-
-	// 检查审核状态
 	if user.ApprovalStatus != 1 {
-		result.ErrorCode = protocol.JWTAuthUserNotApproved
-		result.ErrorMsg = "User is not approved"
+		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthUserNotApproved, "User is not approved"
 		return result
 	}
-
-	result.Success = true
-	result.User = user
-	result.CallSign = user.CallSign
+	result.Success, result.User, result.CallSign = true, user, user.CallSign
 	return result
 }
 
-// GetGhostDeviceGroupID 获取幽灵设备的群组 ID
-// 优先从 user_device_preferences 读取，如果没有或为 0 则返回默认群组
 func GetGhostDeviceGroupID(userID int, devModel byte) int {
-	userRepo := gormdb.NewUserRepository()
-	groupID, err := userRepo.GetUserLastGroupID(userID, devModel)
+	groupID, err := gormdb.NewUserRepository().GetUserLastGroupID(userID, devModel)
 	if err != nil || groupID == 0 {
-		return models.GroupIDPublicMin // 默认公共群组
+		return models.GroupIDPublicMin
 	}
-
-	// 验证群组是否存在且未禁用
-	if gp, exists := GetGroupFromCache(groupID); exists && gp.Status == 1 {
+	if group, exists := GetGroupFromCache(groupID); exists && group.Status == 1 {
 		return groupID
 	}
-
 	return models.GroupIDPublicMin
 }

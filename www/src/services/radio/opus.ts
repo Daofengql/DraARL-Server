@@ -872,6 +872,234 @@ export class AudioPlayer {
   }
 }
 
+interface MixerStream {
+  groupId: number
+  decoder: OpusDecoder<16000> | null
+  decoderReady: Promise<void> | null
+  nextStartTime: number
+  chain: Promise<void>
+  sources: Set<AudioBufferSourceNode>
+  lastActiveAt: number
+}
+
+/**
+ * 多流 Opus 混音器。
+ * 每个来源流使用独立解码器和时间轴，各频道经独立增益节点汇入主混音总线。
+ */
+export class MultiChannelAudioMixer {
+  private audioContext: AudioContext | null = null
+  private masterGain: GainNode | null = null
+  private compressor: DynamicsCompressorNode | null = null
+  private streams = new Map<string, MixerStream>()
+  private channelGains = new Map<number, GainNode>()
+  private channelVolumes = new Map<number, number>()
+  private volume = 0.8
+  private muted = false
+
+  async init(): Promise<void> {
+    if (!this.audioContext) {
+      this.audioContext = new AudioContext({
+        sampleRate: OPUS_SAMPLE_RATE,
+        latencyHint: 'interactive',
+      })
+      this.masterGain = this.audioContext.createGain()
+      this.compressor = this.audioContext.createDynamicsCompressor()
+      this.masterGain.gain.value = this.muted ? 0 : this.volume
+      this.masterGain.connect(this.compressor)
+      this.compressor.connect(this.audioContext.destination)
+    }
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume()
+    }
+  }
+
+  async play(streamKey: string, groupId: number, opusData: Uint8Array): Promise<void> {
+    if (!streamKey || groupId <= 0 || opusData.length === 0) return
+    await this.init()
+    if (!this.audioContext || this.audioContext.state === 'suspended') return
+
+    const stream = this.getOrCreateStream(streamKey, groupId)
+    const frameCopy = new Uint8Array(opusData)
+    stream.chain = stream.chain
+      .then(() => this.decodeAndSchedule(stream, frameCopy))
+      .catch(error => console.error(`[AudioMixer] Stream ${streamKey} failed:`, error))
+    await stream.chain
+  }
+
+  private getOrCreateStream(streamKey: string, groupId: number): MixerStream {
+    const existing = this.streams.get(streamKey)
+    if (existing) return existing
+
+    const stream: MixerStream = {
+      groupId,
+      decoder: null,
+      decoderReady: null,
+      nextStartTime: 0,
+      chain: Promise.resolve(),
+      sources: new Set(),
+      lastActiveAt: Date.now(),
+    }
+    this.streams.set(streamKey, stream)
+    return stream
+  }
+
+  private async ensureDecoder(stream: MixerStream): Promise<OpusDecoder<16000>> {
+    if (!stream.decoder) {
+      stream.decoder = new OpusDecoder({
+        sampleRate: OPUS_SAMPLE_RATE,
+        channels: OPUS_CHANNELS,
+      })
+      stream.decoderReady = stream.decoder.ready
+    }
+    await stream.decoderReady
+    return stream.decoder
+  }
+
+  private async decodeAndSchedule(stream: MixerStream, opusData: Uint8Array): Promise<void> {
+    if (!this.audioContext) return
+    const decoder = await this.ensureDecoder(stream)
+    const decodedFrames: Float32Array[] = []
+    let totalSamples = 0
+
+    for (const frame of this.parseMergedFrames(opusData)) {
+      const decoded = decoder.decodeFrame(frame)
+      const channel = decoded?.channelData?.[0]
+      if (channel?.length) {
+        decodedFrames.push(channel)
+        totalSamples += channel.length
+      }
+    }
+    if (totalSamples === 0) return
+
+    const combined = new Float32Array(totalSamples)
+    let offset = 0
+    for (const frame of decodedFrames) {
+      combined.set(frame, offset)
+      offset += frame.length
+    }
+
+    const context = this.audioContext
+    const now = context.currentTime
+    if (stream.nextStartTime - now > 1.2) {
+      console.warn('[AudioMixer] Dropping delayed frame to keep playback realtime')
+      return
+    }
+
+    const audioBuffer = context.createBuffer(OPUS_CHANNELS, combined.length, OPUS_SAMPLE_RATE)
+    audioBuffer.copyToChannel(combined, 0)
+    const source = context.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(this.getChannelGain(stream.groupId))
+
+    const startTime = Math.max(stream.nextStartTime, now + 0.08)
+    stream.nextStartTime = startTime + audioBuffer.duration
+    stream.lastActiveAt = Date.now()
+    stream.sources.add(source)
+    source.onended = () => stream.sources.delete(source)
+    source.start(startTime)
+    this.pruneInactiveStreams()
+  }
+
+  private parseMergedFrames(data: Uint8Array): Uint8Array[] {
+    const frames: Uint8Array[] = []
+    let offset = 0
+    while (offset + 2 <= data.length) {
+      const frameLength = (data[offset] << 8) | data[offset + 1]
+      if (frameLength === 0 || frameLength > 1000 || offset + 2 + frameLength > data.length) {
+        return offset === 0 ? [data] : frames
+      }
+      frames.push(data.slice(offset + 2, offset + 2 + frameLength))
+      offset += 2 + frameLength
+    }
+    return frames.length > 0 ? frames : [data]
+  }
+
+  private getChannelGain(groupId: number): GainNode {
+    const existing = this.channelGains.get(groupId)
+    if (existing) return existing
+    if (!this.audioContext || !this.masterGain) {
+      throw new Error('audio mixer is not initialized')
+    }
+
+    const gain = this.audioContext.createGain()
+    gain.gain.value = this.channelVolumes.get(groupId) ?? 1
+    gain.connect(this.masterGain)
+    this.channelGains.set(groupId, gain)
+    return gain
+  }
+
+  setVolume(volume: number): void {
+    this.volume = Math.max(0, Math.min(1, volume))
+    if (this.masterGain && !this.muted) this.masterGain.gain.value = this.volume
+  }
+
+  setChannelVolume(groupId: number, volume: number): void {
+    const normalized = Math.max(0, Math.min(1, volume))
+    this.channelVolumes.set(groupId, normalized)
+    const gain = this.channelGains.get(groupId)
+    if (gain) gain.gain.value = normalized
+  }
+
+  getChannelVolume(groupId: number): number {
+    return this.channelVolumes.get(groupId) ?? 1
+  }
+
+  mute(): void {
+    this.muted = true
+    if (this.masterGain) this.masterGain.gain.value = 0
+  }
+
+  unmute(): void {
+    this.muted = false
+    if (this.masterGain) this.masterGain.gain.value = this.volume
+  }
+
+  resetStream(streamKey: string): void {
+    const stream = this.streams.get(streamKey)
+    if (!stream) return
+    for (const source of stream.sources) {
+      try {
+        source.stop()
+      } catch {
+        // 已结束的节点无需再次停止。
+      }
+      source.disconnect()
+    }
+    stream.decoder?.free()
+    this.streams.delete(streamKey)
+  }
+
+  removeChannel(groupId: number): void {
+    for (const [streamKey, stream] of this.streams) {
+      if (stream.groupId === groupId) this.resetStream(streamKey)
+    }
+    const gain = this.channelGains.get(groupId)
+    gain?.disconnect()
+    this.channelGains.delete(groupId)
+  }
+
+  private pruneInactiveStreams(): void {
+    const cutoff = Date.now() - 60_000
+    for (const [streamKey, stream] of this.streams) {
+      if (stream.sources.size === 0 && stream.lastActiveAt < cutoff) {
+        this.resetStream(streamKey)
+      }
+    }
+  }
+
+  destroy(): void {
+    for (const streamKey of [...this.streams.keys()]) this.resetStream(streamKey)
+    for (const gain of this.channelGains.values()) gain.disconnect()
+    this.channelGains.clear()
+    this.masterGain?.disconnect()
+    this.compressor?.disconnect()
+    void this.audioContext?.close()
+    this.audioContext = null
+    this.masterGain = null
+    this.compressor = null
+  }
+}
+
 /**
  * 音频可视化
  * 提供音频波形/频谱数据
@@ -934,6 +1162,7 @@ export { OPUS_SAMPLE_RATE, OPUS_FRAME_SIZE }
 // 导出单例工厂
 let audioCaptureInstance: AudioCapture | null = null
 let audioPlayerInstance: AudioPlayer | null = null
+let audioMixerInstance: MultiChannelAudioMixer | null = null
 
 export function getAudioCapture(): AudioCapture {
   if (!audioCaptureInstance) {
@@ -949,6 +1178,13 @@ export function getAudioPlayer(): AudioPlayer {
   return audioPlayerInstance
 }
 
+export function getAudioMixer(): MultiChannelAudioMixer {
+  if (!audioMixerInstance) {
+    audioMixerInstance = new MultiChannelAudioMixer()
+  }
+  return audioMixerInstance
+}
+
 export function destroyAudioInstances(): void {
   if (audioCaptureInstance) {
     audioCaptureInstance.destroy()
@@ -957,5 +1193,9 @@ export function destroyAudioInstances(): void {
   if (audioPlayerInstance) {
     audioPlayerInstance.destroy()
     audioPlayerInstance = null
+  }
+  if (audioMixerInstance) {
+    audioMixerInstance.destroy()
+    audioMixerInstance = null
   }
 }

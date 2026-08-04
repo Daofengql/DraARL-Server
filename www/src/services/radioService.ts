@@ -4,7 +4,7 @@
  */
 
 import { RadioWebSocket, getRadioWebSocket, closeRadioWebSocket } from './radio/websocket'
-import { AudioCapture, AudioPlayer, getAudioCapture, getAudioPlayer, destroyAudioInstances } from './radio/opus'
+import { AudioCapture, MultiChannelAudioMixer, getAudioCapture, getAudioMixer, destroyAudioInstances } from './radio/opus'
 import { groupManagerService, toRadioGroup } from './radio/groupManager'
 import { apiClient } from './api'
 import { PacketType, defaultRadioUserConfig } from '../types/radio'
@@ -16,6 +16,8 @@ import type {
   RadioUserConfig,
   DraARLPacket,
   OnlineDevice,
+  RadioSessionRouting,
+  RadioSpeaker,
 } from '../types/radio'
 import { OpusDecoder } from 'opus-decoder'
 
@@ -174,6 +176,7 @@ export type VoiceStateCallback = (state: VoiceState, callsign?: string) => void
 export type MessageCallback = (message: RadioMessage) => void
 export type DeviceListCallback = (devices: OnlineDevice[]) => void
 export type ErrorCallback = (error: string) => void
+export type RoutingCallback = (routing: RadioSessionRouting) => void
 
 // 事件类型
 export type RadioEventType =
@@ -182,9 +185,8 @@ export type RadioEventType =
   | 'message'
   | 'deviceListUpdate'
   | 'error'
-  | 'speaking'
-  | 'speakingEnd'
-  | 'conflict' // 【新增】连接冲突事件
+  | 'speakersChange'
+  | 'routingChange'
 
 export interface RadioEventHandlers {
   connectionStateChange?: ConnectionStateCallback
@@ -192,9 +194,20 @@ export interface RadioEventHandlers {
   message?: MessageCallback
   deviceListUpdate?: DeviceListCallback
   error?: ErrorCallback
-  speaking?: (callsign: string, ssid: number) => void
-  speakingEnd?: (callsign: string, ssid: number) => void
-  conflict?: () => void // 【新增】连接冲突回调
+  speakersChange?: (speakers: RadioSpeaker[]) => void
+  routingChange?: RoutingCallback
+}
+
+interface IncomingVoiceStream {
+  key: string
+  groupId: number
+  callsign: string
+  ssid: number
+  username: string
+  chunks: Uint8Array[]
+  startedAt: number
+  uiTimer: ReturnType<typeof setTimeout> | null
+  commitTimer: ReturnType<typeof setTimeout> | null
 }
 
 /**
@@ -206,7 +219,7 @@ export class RadioService {
 
   // 音频
   private audioCapture: AudioCapture | null = null
-  private audioPlayer: AudioPlayer | null = null
+  private audioMixer: MultiChannelAudioMixer | null = null
 
   // 配置
   private config: RadioUserConfig
@@ -214,7 +227,12 @@ export class RadioService {
   // 状态
   private connectionState: WSConnectionState = 'disconnected'
   private voiceState: VoiceState = 'idle'
-  private currentGroupId: number = 999
+  private routing: RadioSessionRouting = {
+    sessionId: '',
+    clientInstanceId: '',
+    txGroupId: 999,
+    rxGroupIds: [999],
+  }
 
   // 用户信息
   private token: string = ''
@@ -229,19 +247,8 @@ export class RadioService {
   // 设备列表
   private onlineDevices: OnlineDevice[] = []
 
-  // 当前说话人
-  private currentSpeaker: { callsign: string; ssid: number } | null = null
-
-  // 语音结束检测
-  private voiceEndTimer: ReturnType<typeof setTimeout> | null = null
-  private voiceUiTimer: ReturnType<typeof setTimeout> | null = null   // UI 状态更新定时器
-
-  // 语音消息缓存（用于记录接收的语音）
-  private voiceChunks: Uint8Array[] = []
-  private voiceStartTime: number = 0
-  private currentVoiceCallsign: string = ''
-  private currentVoiceSSID: number = 0
-  private currentVoiceUsername: string = '' // 发送方用户名/昵称
+  private incomingVoiceStreams = new Map<string, IncomingVoiceStream>()
+  private activeSpeakers = new Map<string, RadioSpeaker>()
 
   // 发送语音缓存（用于记录自己发送的语音）
   private sendingVoiceChunks: Uint8Array[] = []
@@ -268,7 +275,8 @@ export class RadioService {
     // 【核心修复】优先使用服务端返回的 lastGroupId
     // 这样可以确保跨设备/跨会话的群组偏好一致
     if (lastGroupId && lastGroupId > 0) {
-      this.currentGroupId = lastGroupId
+      this.routing.txGroupId = lastGroupId
+      this.routing.rxGroupIds = [lastGroupId]
       this.config.defaultGroupId = lastGroupId
     }
 
@@ -280,11 +288,15 @@ export class RadioService {
       this.connectionState = state
       this.emit('connectionStateChange', state)
 
-      // 【核心修复】WS 重连后自动同步群组到服务端
-      // 无论初次连接还是断线重连，只要状态变为 online，就调用 API 确保服务端群组同步
-      if (state === 'online' && this.currentGroupId > 0) {
-        this.syncGroupToServer(this.currentGroupId)
-      }
+    })
+
+    this.ws.setOnRoutingChange((routing) => {
+      this.applyRouting({
+        sessionId: routing.sessionId,
+        clientInstanceId: routing.clientInstanceId,
+        txGroupId: routing.txGroupId,
+        rxGroupIds: routing.rxGroupIds,
+      })
     })
 
     this.ws.setOnPacket((packet, rawData) => {
@@ -295,14 +307,14 @@ export class RadioService {
       this.emit('error', error)
     })
 
-    // 【新增】设置连接冲突回调
-    this.ws.setOnConflict(() => {
-      this.emit('conflict')
-    })
-
     // 初始化音频
     this.audioCapture = getAudioCapture()
-    this.audioPlayer = getAudioPlayer()
+    this.audioMixer = getAudioMixer()
+    this.audioMixer.setVolume(this.config.volume)
+    if (this.config.muted) this.audioMixer.mute()
+    for (const [groupId, volume] of Object.entries(this.config.channelVolumes)) {
+      this.audioMixer.setChannelVolume(Number(groupId), volume)
+    }
 
     this.audioCapture.onData((opusData) => {
       this.sendVoiceData(opusData)
@@ -312,7 +324,7 @@ export class RadioService {
       if (state === 'capturing') {
         this.setVoiceState('sending')
       } else {
-        this.setVoiceState('idle')
+        this.setVoiceState(this.activeSpeakers.size > 0 ? 'receiving' : 'idle')
         if (this.ws) {
           // 发送语音结束标记
         }
@@ -347,7 +359,7 @@ export class RadioService {
 
     this.connectionState = 'disconnected'
     this.voiceState = 'idle'
-    this.currentSpeaker = null
+    this.clearIncomingVoiceStreams()
   }
 
   /**
@@ -356,9 +368,6 @@ export class RadioService {
   destroy(): void {
     this.disconnect()
     this.saveConfig()
-
-    if (this.voiceEndTimer) clearTimeout(this.voiceEndTimer)
-    if (this.voiceUiTimer) clearTimeout(this.voiceUiTimer)
 
     if (this.audioCapture) {
       this.audioCapture.stop()
@@ -369,7 +378,7 @@ export class RadioService {
 
     this.ws = null
     this.audioCapture = null
-    this.audioPlayer = null
+    this.audioMixer = null
   }
 
   /**
@@ -417,7 +426,11 @@ export class RadioService {
    * 获取当前群组 ID
    */
   getCurrentGroupId(): number {
-    return this.currentGroupId
+    return this.routing.txGroupId
+  }
+
+  getRouting(): RadioSessionRouting {
+    return { ...this.routing, rxGroupIds: [...this.routing.rxGroupIds] }
   }
 
   /**
@@ -430,8 +443,12 @@ export class RadioService {
   /**
    * 获取当前说话人
    */
-  getCurrentSpeaker(): { callsign: string; ssid: number } | null {
-    return this.currentSpeaker
+  getActiveSpeakers(): RadioSpeaker[] {
+    return Array.from(this.activeSpeakers.values())
+  }
+
+  async activateAudio(): Promise<void> {
+    await this.audioMixer?.init()
   }
 
   /**
@@ -468,7 +485,7 @@ export class RadioService {
     // 保存发送的语音消息
     this.saveSendingVoiceMessage()
 
-    this.setVoiceState('idle')
+    this.setVoiceState(this.activeSpeakers.size > 0 ? 'receiving' : 'idle')
   }
 
   /**
@@ -487,9 +504,10 @@ export class RadioService {
 
       // 创建消息
       const radioMessage: RadioMessage = {
-        id: generateMessageId(this.currentGroupId, this.sendingVoiceStartTime, this.callsign),
+        id: generateMessageId(this.routing.txGroupId, this.sendingVoiceStartTime, this.callsign),
         type: 'voice',
-        groupId: this.currentGroupId,
+        groupId: this.routing.txGroupId,
+        groupName: groupManagerService.getCachedGroup(this.routing.txGroupId)?.name,
         senderId: `ghost-${this.ssid}`,
         senderCallsign: this.callsign,
         senderSSID: this.ssid,
@@ -523,9 +541,10 @@ export class RadioService {
 
     // 直接触发事件，不再存储到 IndexedDB
     const radioMessage: RadioMessage = {
-      id: generateMessageId(this.currentGroupId, Date.now(), this.callsign),
+      id: generateMessageId(this.routing.txGroupId, Date.now(), this.callsign),
       type: 'text',
-      groupId: this.currentGroupId,
+      groupId: this.routing.txGroupId,
+      groupName: groupManagerService.getCachedGroup(this.routing.txGroupId)?.name,
       senderId: `ghost-${this.ssid}`,
       senderCallsign: this.callsign,
       senderSSID: this.ssid,
@@ -537,40 +556,53 @@ export class RadioService {
     this.emit('message', radioMessage)
   }
 
-  /**
-   * 切换群组
-   * 【关键修复】幽灵设备切换群组需要调用 HTTP API 来同步更新内存状态
-   * 这会同时更新 WSDevice.GroupID 和 GhostDevice.GroupID，实现跨协议通信
-   */
   async switchGroup(groupId: number): Promise<boolean> {
+    return this.updateRouting(groupId, this.routing.rxGroupIds)
+  }
+
+  async setReceiveGroups(groupIds: number[]): Promise<boolean> {
+    return this.updateRouting(this.routing.txGroupId, groupIds)
+  }
+
+  async updateRouting(txGroupId: number, rxGroupIds: number[]): Promise<boolean> {
     if (!this.ws || this.connectionState !== 'online') {
       this.emit('error', '未连接')
       return false
     }
+    if (!this.routing.sessionId) {
+      this.emit('error', '在线会话尚未就绪')
+      return false
+    }
 
-    // 【核心修改】调用 HTTP API 而不是 WebSocket Config 包
-    // 这样后端可以同步更新幽灵设备的内存群组状态
     try {
-      const response = await apiClient.put<{ code: number; message: string }>(`/api/radio/group`, {
-        group_id: groupId,
+      const normalizedRx = Array.from(new Set([...rxGroupIds, txGroupId])).filter(groupId => groupId > 0)
+      const response = await apiClient.put<{
+        code: number
+        message: string
+        data: {
+          session_id: string
+          client_instance_id: string
+          tx_group_id: number
+          rx_group_ids: number[]
+        }
+      }>(`/api/radio/sessions/${this.routing.sessionId}/routing`, {
+        tx_group_id: txGroupId,
+        rx_group_ids: normalizedRx,
       })
 
-      if (response.code === 200) {
-        // 更新本地状态
-        this.currentGroupId = groupId
-        this.config.defaultGroupId = groupId
-        this.saveConfig()
-
-        // 加载新群组的历史消息
-        await this.loadHistoryMessages()
-
-        return true
-      }
-      this.emit('error', response.message || '切换群组失败')
-      return false
+      if (response.code !== 200 || !response.data) throw new Error(response.message || '频道路由更新失败')
+      this.applyRouting({
+        sessionId: response.data.session_id,
+        clientInstanceId: response.data.client_instance_id || this.routing.clientInstanceId,
+        txGroupId: response.data.tx_group_id,
+        rxGroupIds: response.data.rx_group_ids,
+      })
+      return true
     } catch (error) {
-      console.error('[RadioService] Failed to switch group:', error)
-      this.emit('error', '切换群组失败')
+      console.error('[RadioService] Failed to update routing:', error)
+      const message = (error as { response?: { data?: { message?: string } }; message?: string })
+        .response?.data?.message || (error as Error).message || '频道路由更新失败'
+      this.emit('error', message)
       return false
     }
   }
@@ -580,9 +612,7 @@ export class RadioService {
    */
   setVolume(volume: number): void {
     this.config.volume = volume
-    if (this.audioPlayer) {
-      this.audioPlayer.setVolume(volume)
-    }
+    this.audioMixer?.setVolume(volume)
     this.saveConfig()
   }
 
@@ -591,11 +621,11 @@ export class RadioService {
    */
   setMuted(muted: boolean): void {
     this.config.muted = muted
-    if (this.audioPlayer) {
+    if (this.audioMixer) {
       if (muted) {
-        this.audioPlayer.mute()
+        this.audioMixer.mute()
       } else {
-        this.audioPlayer.unmute()
+        this.audioMixer.unmute()
       }
     }
     this.saveConfig()
@@ -613,7 +643,14 @@ export class RadioService {
    * 获取配置
    */
   getConfig(): RadioUserConfig {
-    return { ...this.config }
+    return { ...this.config, channelVolumes: { ...this.config.channelVolumes } }
+  }
+
+  setChannelVolume(groupId: number, volume: number): void {
+    const normalized = Math.max(0, Math.min(1, volume))
+    this.config.channelVolumes[String(groupId)] = normalized
+    this.audioMixer?.setChannelVolume(groupId, normalized)
+    this.saveConfig()
   }
 
   /**
@@ -649,12 +686,8 @@ export class RadioService {
    */
   public async clearAllMessageCache(): Promise<boolean> {
     try {
-      // 清空 Service 内部的语音缓存
-      this.voiceChunks = []
       this.sendingVoiceChunks = []
-      this.currentVoiceCallsign = ''
-      this.currentVoiceSSID = 0
-      this.currentVoiceUsername = ''
+      this.clearIncomingVoiceStreams()
 
       return true
     } catch {
@@ -664,19 +697,22 @@ export class RadioService {
 
   // ==================== 私有方法 ====================
 
-  /**
-   * 【核心修复】同步群组到服务端
-   * 在 WS 重连后调用，确保后端的游离 WS 实例被拉回到用户期望的群组
-   */
-  private async syncGroupToServer(groupId: number): Promise<void> {
-    try {
-      await apiClient.put<{ code: number; message: string }>(`/api/radio/group`, {
-        group_id: groupId,
-      })
-      // 静默处理同步结果
-    } catch {
-      // 静默处理同步失败
+  private applyRouting(routing: RadioSessionRouting): void {
+    const rxGroupIds = Array.from(new Set([...routing.rxGroupIds, routing.txGroupId]))
+      .filter(groupId => Number.isInteger(groupId) && groupId > 0)
+    const previousRx = new Set(this.routing.rxGroupIds)
+    const nextRx = new Set(rxGroupIds)
+    for (const groupId of previousRx) {
+      if (!nextRx.has(groupId)) {
+        this.removeIncomingGroup(groupId)
+        this.audioMixer?.removeChannel(groupId)
+      }
     }
+
+    this.routing = { ...routing, rxGroupIds }
+    this.config.defaultGroupId = routing.txGroupId
+    this.saveConfig()
+    this.emit('routingChange', this.getRouting())
   }
 
   /**
@@ -717,36 +753,37 @@ export class RadioService {
    * 处理语音包
    */
   private handleVoicePacket(packet: DraARLPacket, _rawData: ArrayBuffer): void {
-    // 更新说话人
-    this.updateSpeaker(packet.callsign, packet.ssid)
+    if (!packet.data?.length) return
+    const groupId = packet.sourceGroupId || this.routing.txGroupId
+    const streamKey = `${groupId}:${packet.username || packet.callsign}:${packet.ssid}`
+    let stream = this.incomingVoiceStreams.get(streamKey)
+    if (!stream) {
+      stream = {
+        key: streamKey,
+        groupId,
+        callsign: packet.callsign,
+        ssid: packet.ssid,
+        username: packet.username || '',
+        chunks: [],
+        startedAt: Date.now(),
+        uiTimer: null,
+        commitTimer: null,
+      }
+      this.incomingVoiceStreams.set(streamKey, stream)
+      this.activeSpeakers.set(streamKey, {
+        key: streamKey,
+        groupId,
+        callsign: packet.callsign,
+        ssid: packet.ssid,
+        username: packet.username || undefined,
+      })
+      this.emitSpeakersChange()
+    }
 
-    // 设置语音状态
+    stream.chunks.push(new Uint8Array(packet.data))
+    void this.audioMixer?.play(streamKey, groupId, packet.data)
     this.setVoiceState('receiving')
-
-    // 收集语音数据用于消息记录
-    if (packet.data && packet.data.length > 0) {
-      // 如果是新说话人，重置缓存
-      if (this.currentVoiceCallsign !== packet.callsign || this.currentVoiceSSID !== packet.ssid) {
-        this.voiceChunks = []
-        this.voiceStartTime = Date.now()
-        this.currentVoiceCallsign = packet.callsign
-        this.currentVoiceSSID = packet.ssid
-        this.currentVoiceUsername = packet.username || ''
-      }
-      // 收集语音数据
-      this.voiceChunks.push(new Uint8Array(packet.data))
-    }
-
-    // 播放音频
-    if (this.audioPlayer && !this.config.muted) {
-      const opusData = packet.data
-      if (opusData && opusData.length > 0) {
-        this.audioPlayer.play(opusData)
-      }
-    }
-
-    // 重置语音结束检测
-    this.resetVoiceEndTimer()
+    this.resetIncomingVoiceTimers(stream)
   }
 
   /**
@@ -757,16 +794,18 @@ export class RadioService {
 
     const message = new TextDecoder().decode(packet.data)
 
+    const groupId = packet.sourceGroupId || this.routing.txGroupId
     const radioMessage: RadioMessage = {
-      id: generateMessageId(this.currentGroupId, Date.now(), packet.callsign),
+      id: generateMessageId(groupId, Date.now(), packet.callsign),
       type: 'text',
-      groupId: this.currentGroupId,
+      groupId,
+      groupName: groupManagerService.getCachedGroup(groupId)?.name,
       senderId: packet.username || packet.callsign,
       senderCallsign: packet.callsign,
       senderSSID: packet.ssid,
       content: message,
       timestamp: Date.now(),
-      isSelf: false,
+      isSelf: packet.username === this.username && packet.callsign === this.callsign && packet.ssid === this.ssid,
     }
 
     // 直接触发事件，不再存储到 IndexedDB
@@ -786,129 +825,82 @@ export class RadioService {
   }
 
   /**
-   * 更新说话人
-   */
-  private updateSpeaker(callsign: string, ssid: number): void {
-    const newSpeaker = { callsign, ssid }
-    const isDifferent = !this.currentSpeaker ||
-      this.currentSpeaker.callsign !== callsign ||
-      this.currentSpeaker.ssid !== ssid
-
-    if (isDifferent) {
-      // 旧说话人结束
-      if (this.currentSpeaker) {
-        this.emit('speakingEnd', this.currentSpeaker.callsign, this.currentSpeaker.ssid)
-      }
-
-      // 新说话人开始 - 重置解码器和播放队列，避免旧状态干扰
-      // 【关键修复】：resetDecoder() 会重置 Opus 解码器的内部状态，
-      // 解决 WebSocket 重连后"重音和卡顿"的问题
-      if (this.audioPlayer) {
-        this.audioPlayer.resetDecoder()
-      }
-
-      // 新说话人开始
-      this.currentSpeaker = newSpeaker
-      this.emit('speaking', callsign, ssid)
-    }
-  }
-
-  /**
    * 设置语音状态
    */
   private setVoiceState(state: VoiceState): void {
     if (this.voiceState !== state) {
       this.voiceState = state
-      this.emit('voiceStateChange', state, this.currentSpeaker?.callsign)
+      this.emit('voiceStateChange', state, this.getActiveSpeakers()[0]?.callsign)
     }
   }
 
-  /**
-   * 重置语音结束检测
-   * UI 响应：600ms 无包后更新说话指示灯（视觉延迟可接受）
-   * 消息提交：1500ms 无包后才真正保存（抵御移动端网络抖动）
-   */
-  private resetVoiceEndTimer(): void {
-    // 同时重置两个定时器
-    if (this.voiceEndTimer) clearTimeout(this.voiceEndTimer)
-    if (this.voiceUiTimer) clearTimeout(this.voiceUiTimer)
-
-    // UI 响应：600ms 无包后更新说话指示灯
-    this.voiceUiTimer = setTimeout(() => {
-      if (this.currentSpeaker) {
-        this.emit('speakingEnd', this.currentSpeaker.callsign, this.currentSpeaker.ssid)
-        this.currentSpeaker = null
-      }
-      this.setVoiceState('idle')
+  private resetIncomingVoiceTimers(stream: IncomingVoiceStream): void {
+    if (stream.uiTimer) clearTimeout(stream.uiTimer)
+    if (stream.commitTimer) clearTimeout(stream.commitTimer)
+    stream.uiTimer = setTimeout(() => {
+      this.activeSpeakers.delete(stream.key)
+      this.emitSpeakersChange()
+      if (this.activeSpeakers.size === 0 && this.voiceState !== 'sending') this.setVoiceState('idle')
     }, 600)
-
-    // 消息提交：1500ms 无包后才真正保存
-    this.voiceEndTimer = setTimeout(async () => {
-      try {
-        await this.saveVoiceMessage()
-      } catch (error) {
-        console.error('[RadioService] Failed to save voice message:', error)
-      }
+    stream.commitTimer = setTimeout(() => {
+      this.incomingVoiceStreams.delete(stream.key)
+      this.audioMixer?.resetStream(stream.key)
+      void this.saveIncomingVoiceStream(stream)
     }, 1500)
   }
 
-  /**
-   * 保存语音消息到缓存（仅保存接收的语音，自己发送的由 saveSendingVoiceMessage 处理）
-   * 不再存储到 IndexedDB，只触发事件通知 UI
-   */
-  private async saveVoiceMessage(): Promise<void> {
-    // 检查是否有语音数据
-    if (this.voiceChunks.length === 0) {
-      return
-    }
-    if (!this.currentVoiceCallsign) {
-      return
-    }
-
-    // 【关键修复】如果是自己发送的语音，跳过保存
-    if (this.currentVoiceCallsign === this.callsign && this.currentVoiceSSID === this.ssid) {
-      this.voiceChunks = []
-      this.currentVoiceCallsign = ''
-      this.currentVoiceSSID = 0
-      this.currentVoiceUsername = ''
-      return
-    }
-
-    // 计算语音时长
-    const duration = Date.now() - this.voiceStartTime
+  private async saveIncomingVoiceStream(stream: IncomingVoiceStream): Promise<void> {
+    if (stream.chunks.length === 0) return
 
     try {
-      // 将 Opus 帧转换为 WAV 格式
-      const voiceBlob = await opusFramesToWav(this.voiceChunks)
-
-      // 创建消息
-      const isSelf = this.currentVoiceCallsign === this.callsign && this.currentVoiceSSID === this.ssid
+      const voiceBlob = await opusFramesToWav(stream.chunks)
+      const isSelf = stream.username === this.username && stream.callsign === this.callsign && stream.ssid === this.ssid
       const radioMessage: RadioMessage = {
-        id: generateMessageId(this.currentGroupId, this.voiceStartTime, this.currentVoiceCallsign),
+        id: generateMessageId(stream.groupId, stream.startedAt, stream.callsign),
         type: 'voice',
-        groupId: this.currentGroupId,
-        senderId: isSelf ? `ghost-${this.ssid}` : `${this.currentVoiceCallsign}-${this.currentVoiceSSID}`,
-        senderCallsign: this.currentVoiceCallsign,
-        senderSSID: this.currentVoiceSSID,
-        senderNickname: this.currentVoiceUsername || undefined,
+        groupId: stream.groupId,
+        groupName: groupManagerService.getCachedGroup(stream.groupId)?.name,
+        senderId: `${stream.callsign}-${stream.ssid}`,
+        senderCallsign: stream.callsign,
+        senderSSID: stream.ssid,
+        senderUsername: stream.username || undefined,
         content: voiceBlob,
-        duration: duration,
-        timestamp: this.voiceStartTime,
-        isSelf: isSelf,
-        isPlayed: true, // 接收的语音默认已播放（实时听到）
+        duration: Date.now() - stream.startedAt,
+        timestamp: stream.startedAt,
+        isSelf,
+        isPlayed: true,
       }
-
-      // 直接触发事件，不再存储到 IndexedDB
       this.emit('message', radioMessage)
     } catch (error) {
       console.error('[RadioService] Failed to save voice message:', error)
-    } finally {
-      // 清空缓存
-      this.voiceChunks = []
-      this.currentVoiceCallsign = ''
-      this.currentVoiceSSID = 0
-      this.currentVoiceUsername = ''
     }
+  }
+
+  private emitSpeakersChange(): void {
+    this.emit('speakersChange', this.getActiveSpeakers())
+  }
+
+  private removeIncomingGroup(groupId: number): void {
+    for (const [streamKey, stream] of this.incomingVoiceStreams) {
+      if (stream.groupId !== groupId) continue
+      if (stream.uiTimer) clearTimeout(stream.uiTimer)
+      if (stream.commitTimer) clearTimeout(stream.commitTimer)
+      this.incomingVoiceStreams.delete(streamKey)
+      this.activeSpeakers.delete(streamKey)
+      this.audioMixer?.resetStream(streamKey)
+    }
+    this.emitSpeakersChange()
+  }
+
+  private clearIncomingVoiceStreams(): void {
+    for (const stream of this.incomingVoiceStreams.values()) {
+      if (stream.uiTimer) clearTimeout(stream.uiTimer)
+      if (stream.commitTimer) clearTimeout(stream.commitTimer)
+      this.audioMixer?.resetStream(stream.key)
+    }
+    this.incomingVoiceStreams.clear()
+    this.activeSpeakers.clear()
+    this.emitSpeakersChange()
   }
 
   /**
@@ -918,7 +910,14 @@ export class RadioService {
     try {
       const saved = localStorage.getItem('radio-config')
       if (saved) {
-        this.config = { ...defaultRadioUserConfig, ...JSON.parse(saved) }
+        const parsed = JSON.parse(saved) as Partial<RadioUserConfig>
+        this.config = {
+          ...defaultRadioUserConfig,
+          ...parsed,
+          channelVolumes: parsed.channelVolumes && typeof parsed.channelVolumes === 'object'
+            ? { ...parsed.channelVolumes }
+            : {},
+        }
       }
     } catch (error) {
       console.error('[RadioService] Failed to load config:', error)
@@ -947,13 +946,15 @@ export class RadioService {
       if (this.config.defaultGroupId) {
         const defaultGroup = groups.find(g => g.id === this.config.defaultGroupId)
         if (defaultGroup) {
-          this.currentGroupId = defaultGroup.id
+          this.routing.txGroupId = defaultGroup.id
+          this.routing.rxGroupIds = [defaultGroup.id]
         }
       }
 
       // 如果没有默认群组，使用第一个可用群组
-      if (!this.currentGroupId && groups.length > 0) {
-        this.currentGroupId = groups[0].id
+      if (!this.routing.txGroupId && groups.length > 0) {
+        this.routing.txGroupId = groups[0].id
+        this.routing.rxGroupIds = [groups[0].id]
       }
     } catch (error) {
       console.error('[RadioService] Failed to load groups:', error)

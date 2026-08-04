@@ -22,8 +22,8 @@ type ConnectionMonitor struct {
 	mu sync.RWMutex
 
 	// 连接状态
-	State           ConnectionState
-	VoiceState      VoiceState
+	State      ConnectionState
+	VoiceState VoiceState
 
 	// 时间记录
 	ConnectTime         time.Time
@@ -38,12 +38,12 @@ type ConnectionMonitor struct {
 	PendingReconnect bool
 
 	// 配置
-	AuthTimeout       time.Duration
-	HeartbeatTimeout  time.Duration
-	ReconnectGrace    time.Duration
-	ProxyTimeout      time.Duration
-	PreReconnectTime  time.Duration
-	VoiceEndTimeout   time.Duration // 语音结束检测超时（200ms）
+	AuthTimeout      time.Duration
+	HeartbeatTimeout time.Duration
+	ReconnectGrace   time.Duration
+	ProxyTimeout     time.Duration
+	PreReconnectTime time.Duration
+	VoiceEndTimeout  time.Duration // 语音结束检测超时（200ms）
 
 	// 事件回调
 	OnDisconnect       func()
@@ -56,14 +56,14 @@ type ConnectionMonitor struct {
 // NewConnectionMonitor 创建新的连接监控器
 func NewConnectionMonitor() *ConnectionMonitor {
 	return &ConnectionMonitor{
-		State:             StateDisconnected,
-		VoiceState:        VoiceStateIdle,
-		AuthTimeout:       30 * time.Second,
-		HeartbeatTimeout:  20 * time.Second,
-		ReconnectGrace:    30 * time.Second,
-		ProxyTimeout:      300 * time.Second,
-		PreReconnectTime:  240 * time.Second,
-		VoiceEndTimeout:   200 * time.Millisecond,
+		State:            StateDisconnected,
+		VoiceState:       VoiceStateIdle,
+		AuthTimeout:      30 * time.Second,
+		HeartbeatTimeout: 20 * time.Second,
+		ReconnectGrace:   30 * time.Second,
+		ProxyTimeout:     300 * time.Second,
+		PreReconnectTime: 240 * time.Second,
+		VoiceEndTimeout:  200 * time.Millisecond,
 	}
 }
 
@@ -258,8 +258,8 @@ type ReconnectManager struct {
 	mu sync.RWMutex
 
 	// 连接信息
-	conn   *websocket.Conn
-	device *WSDevice
+	conn    *websocket.Conn
+	device  *WSDevice
 	manager *WSConnectionManager
 
 	// 监控器
@@ -372,10 +372,10 @@ func (r *ReconnectManager) saveSessionData() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.sessionData["group_id"] = r.device.GroupID
+	r.sessionData["group_id"] = r.device.GetGroupID()
 	r.sessionData["ssid"] = r.device.SSID
-	r.sessionData["username"] = r.device.Username
-	r.sessionData["callsign"] = r.device.CallSign
+	r.sessionData["username"] = r.device.GetUsername()
+	r.sessionData["callsign"] = r.device.GetCallSign()
 }
 
 // OnVoicePacket 收到语音包时调用

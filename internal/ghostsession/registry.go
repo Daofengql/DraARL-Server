@@ -3,6 +3,7 @@ package ghostsession
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -13,7 +14,7 @@ import (
 
 const (
 	DefaultMaxSessionsPerOwner = 8
-	DefaultMaxSubscriptions    = 8
+	DefaultMaxSubscriptions    = 16
 )
 
 type Controller struct {
@@ -46,6 +47,7 @@ type registryEntry struct {
 }
 
 type Registry struct {
+	mutationMu       sync.Mutex
 	mu               sync.RWMutex
 	sessions         map[string]*registryEntry
 	ownerSessions    map[int]map[string]struct{}
@@ -118,12 +120,14 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 
 	key := instanceKey(registration.OwnerID, registration.DevModel, clientInstanceID, legacy)
 	var replaced *registryEntry
+	r.mutationMu.Lock()
 	r.mu.Lock()
 	oldSessionID := r.instanceSessions[key]
 	if oldSessionID != "" {
 		old := r.sessions[oldSessionID]
 		if old != nil && legacy && !registration.ReplaceExisting {
 			r.mu.Unlock()
+			r.mutationMu.Unlock()
 			return Session{}, ErrInstanceAlreadyOnline
 		}
 	}
@@ -134,11 +138,13 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	}
 	if ownerCount >= r.maxOwnerSessions {
 		r.mu.Unlock()
+		r.mutationMu.Unlock()
 		return Session{}, ErrSessionLimit
 	}
 	tag, err := randomSessionTag(r.tagSessions)
 	if err != nil {
 		r.mu.Unlock()
+		r.mutationMu.Unlock()
 		return Session{}, err
 	}
 	if oldSessionID != "" {
@@ -162,6 +168,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	r.instanceSessions[key] = session.SessionID
 	r.tagSessions[tag] = session.SessionID
 	r.mu.Unlock()
+	r.mutationMu.Unlock()
 
 	if replaced != nil && replaced.controller.Disconnect != nil {
 		replaced.controller.Disconnect("client_instance_reconnected")
@@ -190,9 +197,11 @@ func (r *Registry) removeLocked(sessionID string) *registryEntry {
 }
 
 func (r *Registry) Remove(sessionID string) bool {
+	r.mutationMu.Lock()
 	r.mu.Lock()
 	removed := r.removeLocked(sessionID)
 	r.mu.Unlock()
+	r.mutationMu.Unlock()
 	return removed != nil
 }
 
@@ -239,6 +248,28 @@ func (r *Registry) ListOwner(ownerID int) []Session {
 	return result
 }
 
+func (r *Registry) ListByGroup(groupID int) []Session {
+	if groupID <= 0 {
+		return nil
+	}
+	r.mu.RLock()
+	result := make([]Session, 0)
+	for _, entry := range r.sessions {
+		if entry == nil {
+			continue
+		}
+		for _, subscribedGroupID := range entry.session.RxGroupIDs {
+			if subscribedGroupID == groupID {
+				result = append(result, cloneSession(entry.session))
+				break
+			}
+		}
+	}
+	r.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].SessionID < result[j].SessionID })
+	return result
+}
+
 func (r *Registry) UpdateActivity(sessionID, endpoint string, now time.Time) bool {
 	if now.IsZero() {
 		now = time.Now()
@@ -256,21 +287,42 @@ func (r *Registry) UpdateActivity(sessionID, endpoint string, now time.Time) boo
 }
 
 func (r *Registry) UpdateRouting(sessionID string, routing Routing) (Session, error) {
+	return r.UpdateRoutingPersisted(sessionID, routing, nil)
+}
+
+// UpdateRoutingPersisted serializes reconnect, disconnect, persistence, the
+// transport projection, and the registry snapshot as one logical mutation.
+// The callback is invoked again with the previous routing if runtime
+// projection fails.
+func (r *Registry) UpdateRoutingPersisted(sessionID string, routing Routing, persist func(Session, Routing) error) (Session, error) {
 	routing, err := NormalizeRouting(routing, r.maxSubscriptions)
 	if err != nil {
 		return Session{}, err
 	}
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
 	r.mu.RLock()
 	entry := r.sessions[sessionID]
 	if entry == nil {
 		r.mu.RUnlock()
 		return Session{}, ErrSessionNotFound
 	}
+	current := cloneSession(entry.session)
+	previous := current.Routing()
 	controller := entry.controller
 	r.mu.RUnlock()
+	if persist != nil {
+		if err := persist(current, routing); err != nil {
+			return Session{}, err
+		}
+	}
 	if controller.ApplyRouting != nil {
 		if err := controller.ApplyRouting(routing); err != nil {
-			return Session{}, err
+			var rollbackErr error
+			if persist != nil {
+				rollbackErr = persist(current, previous)
+			}
+			return Session{}, errors.Join(err, rollbackErr)
 		}
 	}
 	r.mu.Lock()
@@ -286,15 +338,58 @@ func (r *Registry) UpdateRouting(sessionID string, routing Routing) (Session, er
 	return session, nil
 }
 
+// RefreshRouting resolves the latest authoritative routing while reconnect,
+// disconnect, and API routing mutations are excluded. It is intended for the
+// authentication handoff before a transport is published to its live index.
+func (r *Registry) RefreshRouting(sessionID string, resolve func(Session) (Routing, error)) (Session, error) {
+	if resolve == nil {
+		return Session{}, errors.New("routing resolver is required")
+	}
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
+	r.mu.RLock()
+	entry := r.sessions[sessionID]
+	if entry == nil {
+		r.mu.RUnlock()
+		return Session{}, ErrSessionNotFound
+	}
+	current := cloneSession(entry.session)
+	controller := entry.controller
+	r.mu.RUnlock()
+	routing, err := resolve(current)
+	if err != nil {
+		return Session{}, err
+	}
+	routing, err = NormalizeRouting(routing, r.maxSubscriptions)
+	if err != nil {
+		return Session{}, err
+	}
+	if controller.ApplyRouting != nil {
+		if err := controller.ApplyRouting(routing); err != nil {
+			return Session{}, err
+		}
+	}
+	r.mu.Lock()
+	entry = r.sessions[sessionID]
+	entry.session.TxGroupID = routing.TxGroupID
+	entry.session.RxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	session := cloneSession(entry.session)
+	r.mu.Unlock()
+	return session, nil
+}
+
 func (r *Registry) DisconnectOwned(ownerID int, sessionID, reason string) error {
+	r.mutationMu.Lock()
 	r.mu.Lock()
 	entry := r.sessions[sessionID]
 	if entry == nil || entry.session.OwnerID != ownerID {
 		r.mu.Unlock()
+		r.mutationMu.Unlock()
 		return ErrSessionNotFound
 	}
 	removed := r.removeLocked(sessionID)
 	r.mu.Unlock()
+	r.mutationMu.Unlock()
 	if removed != nil && removed.controller.Disconnect != nil {
 		removed.controller.Disconnect(reason)
 	}

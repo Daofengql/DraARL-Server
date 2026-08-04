@@ -2,6 +2,7 @@ package ghostsession
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ const (
 
 var (
 	ErrInvalidClientInstance = errors.New("invalid client instance id")
+	ErrInvalidRouting        = errors.New("invalid ghost routing")
 	ErrSessionNotFound       = errors.New("ghost session not found")
 	ErrSessionLimit          = errors.New("ghost session limit reached")
 	ErrSubscriptionLimit     = errors.New("ghost subscription limit reached")
@@ -32,18 +34,18 @@ type Routing struct {
 
 func NormalizeRouting(routing Routing, maxSubscriptions int) (Routing, error) {
 	if routing.TxGroupID <= 0 {
-		return Routing{}, errors.New("transmit group is required")
+		return Routing{}, fmt.Errorf("%w: transmit group is required", ErrInvalidRouting)
 	}
-	set := make(map[int]struct{}, len(routing.RxGroupIDs))
+	set := make(map[int]struct{}, len(routing.RxGroupIDs)+1)
 	for _, groupID := range routing.RxGroupIDs {
 		if groupID <= 0 {
-			return Routing{}, errors.New("receive group must be positive")
+			return Routing{}, fmt.Errorf("%w: receive group must be positive", ErrInvalidRouting)
 		}
 		set[groupID] = struct{}{}
 	}
-	if len(set) == 0 {
-		return Routing{}, errors.New("at least one receive group is required")
-	}
+	// A sender must also receive its selected transmit channel. Adding it here
+	// keeps every protocol and API path on the same invariant.
+	set[routing.TxGroupID] = struct{}{}
 	if maxSubscriptions > 0 && len(set) > maxSubscriptions {
 		return Routing{}, ErrSubscriptionLimit
 	}

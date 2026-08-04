@@ -37,6 +37,7 @@ func (d *routeTestWSDevice) GetGroupID() int              { return d.groupID }
 func (d *routeTestWSDevice) IsGhost() bool                { return d.ghost }
 func (d *routeTestWSDevice) GetUserID() int               { return d.userID }
 func (d *routeTestWSDevice) GetDeviceID() int             { return d.deviceID }
+func (d *routeTestWSDevice) GetSessionID() string         { return d.identifier }
 func (d *routeTestWSDevice) GetUsername() string          { return d.username }
 func (d *routeTestWSDevice) GetNickname() string          { return d.nickname }
 func (d *routeTestWSDevice) GetCallSign() string          { return d.callsign }
@@ -109,6 +110,9 @@ func (m *routeTestWSManager) BroadcastToGroups(groupIDs []int, data []byte, mess
 		if filter.ExcludeDeviceID != 0 && !device.ghost && device.deviceID == filter.ExcludeDeviceID {
 			continue
 		}
+		if filter.ExcludeSessionID != "" && device.GetSessionID() == filter.ExcludeSessionID {
+			continue
+		}
 		if filter.ExcludeUserID != 0 && device.ghost &&
 			device.userID == filter.ExcludeUserID && device.ssid == filter.ExcludeSSID {
 			continue
@@ -157,6 +161,17 @@ var (
 	_ interfaces.WSDeviceInterface  = (*routeTestWSDevice)(nil)
 	_ interfaces.WSManagerInterface = (*routeTestWSManager)(nil)
 )
+
+func TestBuildWSSpeakerUsesGhostSessionIdentity(t *testing.T) {
+	first := &routeTestWSDevice{identifier: "session-a", userID: 7, ssid: 105, ghost: true}
+	second := &routeTestWSDevice{identifier: "session-b", userID: 7, ssid: 105, ghost: true}
+	if buildWSSpeaker(first).key == buildWSSpeaker(second).key {
+		t.Fatal("same-account ghost sessions share a half-duplex speaker key")
+	}
+	if buildWSSpeaker(first).key != buildWSSpeaker(first).key {
+		t.Fatal("ghost session speaker key is unstable")
+	}
+}
 
 type routeTestEndpoint struct {
 	conn   *net.UDPConn

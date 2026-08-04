@@ -1,10 +1,15 @@
 package websocket
 
 import (
+	"errors"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
+	"draarl/internal/groupaccess"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
 	"draarl/pkg/jwt"
@@ -24,19 +29,28 @@ const (
 
 // AuthResult 认证结果
 type AuthResult struct {
-	Success  bool
-	AuthType AuthType
-	UserID   int
-	Username string
-	CallSign string
-	Nickname string
-	GroupID  int // 设备所属群组ID（从数据库读取）
-	Error    string
+	Success          bool
+	AuthType         AuthType
+	UserID           int
+	Username         string
+	CallSign         string
+	Nickname         string
+	GroupID          int // 设备所属群组ID（从数据库读取）
+	ClientInstanceID string
+	LegacySession    bool
+	ProtocolVersion  uint16
+	Capabilities     []string
+	Routing          ghostsession.Routing
+	User             *gormdb.User
+	Error            string
 }
 
 // WSPreAuthData 预认证数据（仅从 HttpOnly Cookie 中提取，避免 URL/JS 透传 token）
 type WSPreAuthData struct {
-	Token string // JWT Token
+	Token            string // JWT Token
+	ClientInstanceID string
+	ProtocolVersion  uint16
+	Capabilities     []string
 }
 
 // ParsePreAuthData 从请求中解析预认证数据
@@ -47,50 +61,163 @@ func ParsePreAuthData(r *http.Request) *WSPreAuthData {
 	if cookie, err := r.Cookie(wsTokenCookieName); err == nil {
 		data.Token = cookie.Value
 	}
+	data.ClientInstanceID = strings.TrimSpace(r.Header.Get("X-DraARL-Client-Instance-ID"))
+	if data.ClientInstanceID == "" {
+		data.ClientInstanceID = strings.TrimSpace(r.URL.Query().Get("client_instance_id"))
+	}
+	protocolVersion := strings.TrimSpace(r.Header.Get("X-DraARL-Protocol-Version"))
+	if protocolVersion == "" {
+		protocolVersion = strings.TrimSpace(r.URL.Query().Get("protocol_version"))
+	}
+	if parsed, err := strconv.ParseUint(protocolVersion, 10, 16); err == nil {
+		data.ProtocolVersion = uint16(parsed)
+	}
+	capabilities := strings.TrimSpace(r.Header.Get("X-DraARL-Capabilities"))
+	if capabilities == "" {
+		capabilities = strings.TrimSpace(r.URL.Query().Get("capabilities"))
+	}
+	if capabilities != "" {
+		data.Capabilities = strings.Split(capabilities, ",")
+	}
 
 	return data
 }
 
 // HandleAuthentication 处理 WebSocket 认证流程（仅支持 JWT 认证）
-func HandleAuthentication(conn *websocket.Conn, r *http.Request, manager *WSConnectionManager) (*WSDevice, *AuthResult) {
-	preAuth := ParsePreAuthData(r)
-
+func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnectionManager, authResult *AuthResult) (*WSDevice, error) {
 	// 注册连接
 	device := manager.RegisterConnection(conn)
-
-	// 必须提供 JWT Token
-	if preAuth.Token == "" {
-		conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "token_required"))
-		manager.UnregisterDevice(device)
-		return nil, &AuthResult{Error: "token_required"}
-	}
-
-	// JWT 认证
 	device.ConnState = StateAuthenticating
-	authResult := AuthenticateJWT(preAuth.Token)
-
-	if authResult.Success {
-		// JWT 认证的设备 SSID 和 DevModel 统一为 105（Web 浏览器）
-		// 注意：不同平台客户端（100-104）应通过心跳包更新 DevModel
-		device.SSID = fixedWebGhostSSID
-		device.DevModel = protocol.DraARLDevModelBrowser
-		device.GroupID = authResult.GroupID
-		log.Printf("[WS-AUTH] JWT 认证成功: 用户 %d (%s), 群组 %d", authResult.UserID, authResult.CallSign, authResult.GroupID)
-
-		manager.RegisterGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, fixedWebGhostSSID)
-
-		// 同时创建 GhostDevice 并建立与 WSDevice 的关联
-		GlobalGhostManager.CreateGhostDevice(device, authResult.UserID, authResult.Username, authResult.CallSign, authResult.Nickname, authResult.GroupID)
-
-		return device, authResult
+	if authResult == nil || !authResult.Success {
+		manager.UnregisterDevice(device)
+		return nil, errors.New("authentication result is not successful")
 	}
 
-	// JWT 认证失败，关闭连接
-	conn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, authResult.Error))
-	manager.UnregisterDevice(device)
-	return nil, authResult
+	controller := ghostsession.Controller{
+		ApplyRouting: func(routing ghostsession.Routing) error {
+			if current, exists := manager.GetGhostSession(device.SessionID); exists && current == device {
+				return manager.SetDeviceRouting(device, routing)
+			}
+			device.setRouting(routing)
+			return nil
+		},
+		Disconnect: func(string) {
+			manager.DisconnectDevice(device)
+		},
+	}
+	session, err := ghostsession.Global.Register(ghostsession.Registration{
+		ClientInstanceID: authResult.ClientInstanceID, OwnerID: authResult.UserID,
+		Username: authResult.Username, CallSign: authResult.CallSign, Nickname: authResult.Nickname,
+		DevModel: protocol.DraARLDevModelBrowser, SSID: fixedWebGhostSSID, Transport: ghostsession.TransportWebSocket,
+		Endpoint: conn.RemoteAddr().String(), ProtocolVersion: authResult.ProtocolVersion,
+		Capabilities: authResult.Capabilities, Routing: authResult.Routing,
+	}, controller)
+	if err != nil {
+		manager.UnregisterDevice(device)
+		return nil, err
+	}
+	device.SessionID = session.SessionID
+	device.SessionTag = session.SessionTag
+	device.ClientInstanceID = session.ClientInstanceID
+	device.LegacySession = session.Legacy
+	device.ProtocolVersion = session.ProtocolVersion
+	device.Capabilities = append([]string(nil), session.Capabilities...)
+	if !session.Legacy {
+		registeredSessionID := session.SessionID
+		clientInstanceID := session.ClientInstanceID
+		refreshed, refreshErr := ghostsession.Global.RefreshRouting(registeredSessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
+			return loadWebSocketInstanceRouting(authResult.User, clientInstanceID, authResult.GroupID, authResult.Capabilities)
+		})
+		if refreshErr != nil {
+			ghostsession.Global.Remove(registeredSessionID)
+			manager.UnregisterDevice(device)
+			return nil, refreshErr
+		}
+		session = refreshed
+	}
+	device.SSID = session.SSID
+	device.DevModel = session.DevModel
+	device.GroupID = session.TxGroupID
+	device.RxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	if err := manager.RegisterGhostDevice(device, session.OwnerID, session.Username, session.CallSign, session.Nickname, session.SSID); err != nil {
+		ghostsession.Global.Remove(session.SessionID)
+		manager.UnregisterDevice(device)
+		return nil, err
+	}
+	log.Printf("[WS-AUTH] session authenticated: session=%s user=%d tx=%d rx=%v legacy=%v", session.SessionID, session.OwnerID, session.TxGroupID, session.RxGroupIDs, session.Legacy)
+	return device, nil
+}
+
+func AuthenticateWebSocketRequest(r *http.Request) *AuthResult {
+	preAuth := ParsePreAuthData(r)
+	if preAuth.Token == "" {
+		return &AuthResult{Error: "token_required"}
+	}
+	result := AuthenticateJWT(preAuth.Token)
+	if !result.Success {
+		return result
+	}
+	instanceID, legacy, err := ghostsession.NormalizeClientInstanceID(preAuth.ClientInstanceID)
+	if err != nil {
+		result.Success = false
+		result.Error = "invalid_client_instance_id"
+		return result
+	}
+	result.ClientInstanceID = instanceID
+	result.LegacySession = legacy
+	result.ProtocolVersion = preAuth.ProtocolVersion
+	result.Capabilities = preAuth.Capabilities
+	result.Routing = ghostsession.Routing{TxGroupID: result.GroupID, RxGroupIDs: []int{result.GroupID}}
+	if legacy {
+		return result
+	}
+	routing, err := loadWebSocketInstanceRouting(result.User, instanceID, result.GroupID, preAuth.Capabilities)
+	if err != nil {
+		result.Success = false
+		result.Error = "client_preference_unavailable"
+		return result
+	}
+	result.Routing = routing
+	return result
+}
+
+func loadWebSocketInstanceRouting(user *gormdb.User, instanceID string, fallbackGroupID int, capabilities []string) (ghostsession.Routing, error) {
+	if user == nil {
+		return ghostsession.Routing{}, errors.New("authenticated user is required")
+	}
+	repository := gormdb.NewGhostClientPreferenceRepository()
+	pref, err := repository.GetOrCreate(user.ID, protocol.DraARLDevModelBrowser, instanceID, fallbackGroupID)
+	if err != nil || pref == nil {
+		return ghostsession.Routing{}, errors.New("client preference unavailable")
+	}
+	routing, changed, err := sanitizePersistedRouting(user, ghostsession.Routing{
+		TxGroupID: pref.TxGroupID, RxGroupIDs: pref.RxGroupIDs,
+	}, models.GroupIDPublicMin)
+	if err != nil {
+		return ghostsession.Routing{}, err
+	}
+	if changed {
+		if err := repository.ReplaceRouting(user.ID, protocol.DraARLDevModelBrowser, instanceID, routing.TxGroupID, routing.RxGroupIDs); err != nil {
+			return ghostsession.Routing{}, err
+		}
+	}
+	if !hasCapability(capabilities, "multi_receive_v1") || !hasCapability(capabilities, "source_group_v1") {
+		routing.RxGroupIDs = []int{routing.TxGroupID}
+	}
+	return routing, nil
+}
+
+func sanitizePersistedRouting(user *gormdb.User, routing ghostsession.Routing, fallbackGroupID int) (ghostsession.Routing, bool, error) {
+	return groupaccess.SanitizeRouting(gormdb.Get(), user, routing, fallbackGroupID, ghostsession.DefaultMaxSubscriptions)
+}
+
+func hasCapability(capabilities []string, wanted string) bool {
+	for _, capability := range capabilities {
+		if strings.EqualFold(strings.TrimSpace(capability), wanted) {
+			return true
+		}
+	}
+	return false
 }
 
 // AuthenticateJWT 进行 JWT 认证（幽灵设备）
@@ -132,6 +259,7 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 
 	result.Success = true
 	result.UserID = user.ID
+	result.User = user
 	result.Username = user.Name
 	result.CallSign = user.CallSign
 	result.Nickname = user.NickName
@@ -173,11 +301,8 @@ func canUseGroupForWebGhost(user *gormdb.User, groupID int, group *gormdb.Group,
 	if groupID == models.GroupIDPublicMin {
 		return true
 	}
-	if group == nil || group.ID != groupID || group.Status != 1 || group.IsVirtual {
+	if group == nil || group.ID != groupID {
 		return false
 	}
-	if group.Type == 1 {
-		return true
-	}
-	return group.Type == 2 && (user.HasRole("admin") || group.OwerID == user.ID || isVerifiedMember)
+	return groupaccess.CanView(user, group, isVerifiedMember)
 }

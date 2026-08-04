@@ -411,9 +411,12 @@ func (s *Server) setupRoutes() {
 			// 在线收发 API（需要审核通过）
 			radio := approved.Group("/radio")
 			{
-				radio.GET("/config", handler.GetRadioConfig)                   // 获取在线收发配置
-				radio.PUT("/ssid", handler.UpdateRadioSSID)                    // 已废弃：Web 幽灵设备 SSID 固定为 105
-				radio.GET("/status", handler.GetRadioStatus)                   // 获取幽灵设备状态
+				radio.GET("/config", handler.GetRadioConfig) // 获取在线收发配置
+				radio.PUT("/ssid", handler.UpdateRadioSSID)  // 已废弃：Web 幽灵设备 SSID 固定为 105
+				radio.GET("/status", handler.GetRadioStatus) // 获取幽灵设备状态
+				radio.GET("/sessions", handler.GetRadioSessions)
+				radio.PUT("/sessions/:session_id/routing", handler.UpdateRadioSessionRouting)
+				radio.DELETE("/sessions/:session_id", handler.DeleteRadioSession)
 				radio.GET("/groups/stats", handler.GetRadioGroupStats)         // 获取所有群组实时统计（含 WS 设备）
 				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices) // 获取群组在线设备
 				radio.PUT("/group", handler.UpdateRadioGroup)                  // 【新增】切换幽灵设备群组

@@ -36,6 +36,8 @@ const DraARLv1HeaderSize = 90
 // 计算：90B 头部 + 3帧×(2B长度+~200B Opus) ≈ 700B，取整 800B
 const DraARLv1MaxPacketSize = 800
 
+const DraARLv1ReservedOffset = 86
+
 const (
 	HeartbeatGPSPayloadSize = 24
 )
@@ -52,6 +54,17 @@ const (
 // IsSupportedDraARLType 报告类型是否属于当前 DraARLv1 核心协议。
 func IsSupportedDraARLType(packetType byte) bool {
 	return packetType >= DraARLTypeJWTAuth && packetType <= DraARLTypeOpus16K
+}
+
+// WithSourceGroupID returns an isolated packet copy whose Reserved field
+// carries the source group for clients that negotiated source_group_v1.
+func WithSourceGroupID(data []byte, groupID int) ([]byte, bool) {
+	if len(data) < DraARLv1HeaderSize || groupID <= 0 || uint64(groupID) > uint64(^uint32(0)) {
+		return nil, false
+	}
+	result := append([]byte(nil), data...)
+	binary.BigEndian.PutUint32(result[DraARLv1ReservedOffset:DraARLv1ReservedOffset+4], uint32(groupID))
+	return result, true
 }
 
 // DraARLv1 设备型号常量

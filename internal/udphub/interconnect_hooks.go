@@ -300,7 +300,7 @@ func DeliverInterconnectPacket(domainID uint64, data []byte) bool {
 	writeUDPDomain(data, getDomainReceiverSnap(groupID), 0, "", 0)
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		GlobalMessageRouter.wsManager.BroadcastToGroups(
-			activeDomainGroupIDs(groupID), data, 2, interfaces.WSBroadcastFilter{},
+			activeDomainGroupIDs(groupID), data, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
 		)
 	}
 	return true

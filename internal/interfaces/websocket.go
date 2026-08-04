@@ -11,6 +11,7 @@ type WSDeviceInterface interface {
 	IsGhost() bool
 	GetUserID() int
 	GetDeviceID() int
+	GetSessionID() string
 	GetUsername() string
 	GetNickname() string
 	GetCallSign() string
@@ -25,9 +26,11 @@ type WSDeviceInterface interface {
 }
 
 type WSBroadcastFilter struct {
-	ExcludeDeviceID int
-	ExcludeUserID   int
-	ExcludeSSID     byte
+	ExcludeDeviceID  int
+	ExcludeUserID    int
+	ExcludeSSID      byte
+	ExcludeSessionID string
+	SourceGroupID    int
 }
 
 // WSManagerInterface WebSocket 连接管理器接口

@@ -884,6 +884,7 @@ func DeleteUser(c *gin.Context) {
 		})
 		return
 	}
+	reconcileOwnerGhostSessions(id)
 	routesync.RevokeOwner(id, "user_deleted")
 	for _, device := range cascadeResult.DeletedDevices {
 		udphub.RemoveRuntimeDevice(device.OwnerID, device.SSID)
@@ -1014,6 +1015,7 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 	if req.Status == 0 {
+		reconcileOwnerGhostSessions(id)
 		routesync.RevokeOwner(id, "user_disabled")
 	}
 

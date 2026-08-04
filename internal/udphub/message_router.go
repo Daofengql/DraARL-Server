@@ -62,12 +62,27 @@ func buildWSSpeaker(source interfaces.WSDeviceInterface) halfDuplexSpeaker {
 	switch {
 	case source.GetDeviceID() > 0:
 		key = 0x1000000000000000 | uint64(uint32(source.GetDeviceID()))
+	case source.IsGhost() && source.GetSessionID() != "":
+		key = 0x2000000000000000 | (fnv64String(source.GetSessionID()) & 0x0fffffffffffffff)
 	case source.GetUserID() > 0:
-		key = 0x2000000000000000 | uint64(uint32(source.GetUserID()))<<8 | uint64(source.GetSSID())
+		key = 0x3000000000000000 | uint64(uint32(source.GetUserID()))<<8 | uint64(source.GetSSID())
 	default:
-		key = 0x3000000000000000 | uint64(fnv32String(source.GetIdentifier()))<<8 | uint64(source.GetSSID())
+		key = 0x4000000000000000 | uint64(fnv32String(source.GetIdentifier()))<<8 | uint64(source.GetSSID())
 	}
 	return halfDuplexSpeaker{key: key, labelBase: labelBase, ssid: source.GetSSID()}
+}
+
+func fnv64String(value string) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	hash := offset
+	for i := 0; i < len(value); i++ {
+		hash ^= uint64(value[i])
+		hash *= prime
+	}
+	return hash
 }
 
 // RouteVoiceToUDP 转发 WebSocket 语音到 UDP 设备
@@ -230,7 +245,7 @@ func BroadcastVoiceFromUDPDomain(source *models.Device, data []byte, sourceGroup
 	}
 	GlobalMessageRouter.wsManager.BroadcastToGroups(
 		activeDomainGroupIDs(sourceGroupID), data, 2,
-		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID},
+		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID, SourceGroupID: sourceGroupID},
 	)
 }
 
@@ -241,7 +256,7 @@ func BroadcastTextFromUDPDomain(source *models.Device, data []byte, sourceGroupI
 	}
 	GlobalMessageRouter.wsManager.BroadcastToGroups(
 		activeDomainGroupIDs(sourceGroupID), data, 2,
-		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID},
+		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID, SourceGroupID: sourceGroupID},
 	)
 }
 
@@ -252,7 +267,7 @@ func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterfac
 	}
 	r.wsManager.BroadcastToGroups(
 		activeDomainGroupIDs(sourceGroupID), data, 2,
-		interfaces.WSBroadcastFilter{ExcludeUserID: source.GetUserID(), ExcludeSSID: source.GetSSID()},
+		interfaces.WSBroadcastFilter{ExcludeSessionID: source.GetSessionID(), SourceGroupID: sourceGroupID},
 	)
 }
 
@@ -263,6 +278,6 @@ func (r *MessageRouter) RouteTextToWSClients(source interfaces.WSDeviceInterface
 	}
 	r.wsManager.BroadcastToGroups(
 		activeDomainGroupIDs(sourceGroupID), data, 2,
-		interfaces.WSBroadcastFilter{ExcludeUserID: source.GetUserID(), ExcludeSSID: source.GetSSID()},
+		interfaces.WSBroadcastFilter{ExcludeSessionID: source.GetSessionID(), SourceGroupID: sourceGroupID},
 	)
 }

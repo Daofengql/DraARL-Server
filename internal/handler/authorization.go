@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	gormdb "draarl/internal/gormdb"
+	"draarl/internal/groupaccess"
 
 	"github.com/gin-gonic/gin"
 )
@@ -43,25 +44,7 @@ func canAdminSwitchLogin(actor, target *gormdb.User) bool {
 }
 
 func canViewGroup(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool) bool {
-	if user == nil || group == nil {
-		return false
-	}
-	if group.Status != 1 {
-		return false
-	}
-	if group.IsVirtual {
-		return false
-	}
-	if !isSupportedGroupType(group.Type) {
-		return false
-	}
-	if isAdminUser(user) {
-		return true
-	}
-	if group.Type == groupTypePublic || group.OwerID == user.ID {
-		return true
-	}
-	return group.Type == groupTypePrivate && isVerifiedMember
+	return groupaccess.CanView(user, group, isVerifiedMember)
 }
 
 func requireCurrentUser(c *gin.Context) (*gormdb.User, bool) {

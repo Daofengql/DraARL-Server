@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gormdb "draarl/internal/gormdb"
+	"draarl/internal/groupaccess"
 	oplog "draarl/internal/log"
 	"draarl/internal/models"
 	"draarl/internal/routesync"
@@ -21,12 +22,12 @@ import (
 )
 
 const (
-	groupTypePublic  = 1
-	groupTypePrivate = 2
+	groupTypePublic  = groupaccess.TypePublic
+	groupTypePrivate = groupaccess.TypePrivate
 )
 
 func isSupportedGroupType(groupType int) bool {
-	return groupType == groupTypePublic || groupType == groupTypePrivate
+	return groupaccess.IsSupportedType(groupType)
 }
 
 // GroupInfo 群组信息响应
@@ -478,6 +479,7 @@ func UpdateGroup(c *gin.Context) {
 	}
 	udphub.RefreshGroupCache()
 	routesync.RefreshTopology()
+	reconcileGhostSessionsForGroup(id)
 
 	// Get owner callsign from user table
 	var ownerCallSign string
@@ -606,6 +608,7 @@ func DeleteGroup(c *gin.Context) {
 	}
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
+	reconcileGhostSessionsForGroup(id)
 	for _, device := range movedDevices {
 		routesync.PublishDevice(device.ID)
 	}
@@ -1451,6 +1454,7 @@ func LeaveGroup(c *gin.Context) {
 	for _, device := range movedDevices {
 		routesync.PublishDevice(device.ID)
 	}
+	reconcileOwnerGhostSessions(currentUser.ID)
 
 	// 使设备缓存和群组设备列表缓存失效
 	ctx := c.Request.Context()

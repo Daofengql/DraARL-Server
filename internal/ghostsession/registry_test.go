@@ -2,6 +2,7 @@ package ghostsession
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,4 +115,92 @@ func TestNormalizeClientInstanceID(t *testing.T) {
 	if _, _, err := NormalizeClientInstanceID("hardware-id"); !errors.Is(err, ErrInvalidClientInstance) {
 		t.Fatalf("invalid instance error=%v", err)
 	}
+}
+
+func TestNormalizeRoutingAlwaysSubscribesTransmitGroup(t *testing.T) {
+	routing, err := NormalizeRouting(Routing{TxGroupID: 7, RxGroupIDs: []int{3, 3}}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routing.RxGroupIDs) != 2 || routing.RxGroupIDs[0] != 3 || routing.RxGroupIDs[1] != 7 {
+		t.Fatalf("normalized routing=%#v", routing)
+	}
+	if _, err := NormalizeRouting(Routing{TxGroupID: 7, RxGroupIDs: []int{1, 2}}, 2); !errors.Is(err, ErrSubscriptionLimit) {
+		t.Fatalf("limit after adding transmit group error=%v", err)
+	}
+}
+
+func TestUpdateRoutingPersistedRollsBackOnRuntimeFailure(t *testing.T) {
+	registry := NewRegistry(4, 4)
+	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{
+		ApplyRouting: func(routing Routing) error {
+			if routing.TxGroupID == 9 {
+				return errors.New("runtime rejected")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted []Routing
+	_, err = registry.UpdateRoutingPersisted(session.SessionID, Routing{TxGroupID: 9, RxGroupIDs: []int{9}}, func(_ Session, routing Routing) error {
+		persisted = append(persisted, routing)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("runtime failure was ignored")
+	}
+	if len(persisted) != 2 || persisted[0].TxGroupID != 9 || persisted[1].TxGroupID != session.TxGroupID {
+		t.Fatalf("persistence sequence=%#v", persisted)
+	}
+	current, _ := registry.Get(session.SessionID)
+	if current.TxGroupID != session.TxGroupID {
+		t.Fatalf("registry changed after rollback: %#v", current)
+	}
+}
+
+func TestRegistryConcurrentSessionLifecycle(t *testing.T) {
+	const sessionCount = 24
+	registry := NewRegistry(sessionCount+1, 4)
+	sessions := make([]Session, sessionCount)
+	var registerWG sync.WaitGroup
+	for i := range sessions {
+		registerWG.Add(1)
+		go func(index int) {
+			defer registerWG.Done()
+			registration := testRegistration(uuid.NewString(), time.Now())
+			registration.OwnerID = 77
+			session, err := registry.Register(registration, Controller{})
+			if err != nil {
+				t.Errorf("register %d: %v", index, err)
+				return
+			}
+			sessions[index] = session
+		}(i)
+	}
+	registerWG.Wait()
+	if got := len(registry.ListOwner(77)); got != sessionCount {
+		t.Fatalf("sessions=%d, want %d", got, sessionCount)
+	}
+
+	var mutationWG sync.WaitGroup
+	for _, session := range sessions {
+		session := session
+		mutationWG.Add(1)
+		go func() {
+			defer mutationWG.Done()
+			for i := 0; i < 20; i++ {
+				registry.UpdateActivity(session.SessionID, "", time.Now())
+				groupID := 1 + i%2
+				if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: groupID, RxGroupIDs: []int{groupID, 3}}); err != nil {
+					t.Errorf("update %s: %v", session.SessionID, err)
+					return
+				}
+				_, _ = registry.FindByTag(session.SessionTag)
+				_ = registry.ListOwner(77)
+			}
+		}()
+	}
+	mutationWG.Wait()
 }

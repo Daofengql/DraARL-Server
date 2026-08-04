@@ -21,12 +21,13 @@ type DeviceConfigHandler func(deviceID int, kind string, data []byte) ([][]byte,
 type AcceptedRelayHandler func(AcceptedRelay)
 
 type AcceptedRelay struct {
-	DeviceID int
-	OwnerID  int
-	SSID     byte
-	GroupID  int
-	Type     byte
-	Payload  []byte
+	SessionID uint64
+	DeviceID  int
+	OwnerID   int
+	SSID      byte
+	GroupID   int
+	Type      byte
+	Payload   []byte
 }
 
 const defaultDeviceGrantTTL = 2 * time.Minute
@@ -425,7 +426,7 @@ func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) 
 	}
 	if onAcceptedRelay != nil {
 		onAcceptedRelay(AcceptedRelay{
-			DeviceID: route.DeviceID, OwnerID: owner.OwnerID, SSID: route.SSID, GroupID: route.GroupID,
+			SessionID: frame.SessionID, DeviceID: route.DeviceID, OwnerID: owner.OwnerID, SSID: route.SSID, GroupID: route.GroupID,
 			Type: frame.InnerPacket[48], Payload: frame.InnerPacket[DraARLHeaderSize:],
 		})
 	}

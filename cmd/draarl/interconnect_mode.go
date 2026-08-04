@@ -327,7 +327,8 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		}
 		switch relay.Type {
 		case protocol.DraARLTypeOpus16K:
-			udphub.RecordCommPacket(relay.DeviceID, relay.SSID, groupID, ownerID, relay.Payload)
+			sourceKey := udphub.InterconnectCommRecordSourceKey(relay.SessionID)
+			udphub.RecordCommPacket(sourceKey, relay.DeviceID, relay.SSID, groupID, ownerID, relay.Payload)
 		case protocol.DraARLTypeTextMessage:
 			udphub.RecordTextMessage(relay.DeviceID, relay.SSID, groupID, ownerID, string(relay.Payload))
 		}

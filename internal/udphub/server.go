@@ -892,8 +892,17 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 			uid := uint(dev.OwnerID)
 			userID = &uid
 		}
-		// 使用正数 ID 表示普通设备
-		RecordCommPacket(int(dev.ID), uint8(dev.SSID), groupID, userID, packet.DATA)
+		recordDeviceID := dev.ID
+		sourceKey := PhysicalCommRecordSourceKey(recordDeviceID)
+		if protocol.IsGhostSSID(dev.SSID) {
+			recordDeviceID = 0
+			endpoint := "unknown"
+			if dev.UDPAddr != nil {
+				endpoint = dev.UDPAddr.String()
+			}
+			sourceKey = GhostCommRecordSourceKey("udp", dev.OwnerID, uint8(dev.SSID), endpoint)
+		}
+		RecordCommPacket(sourceKey, recordDeviceID, uint8(dev.SSID), groupID, userID, packet.DATA)
 	}
 
 	forwardDraARLVoice(packet, dev, data, gp)

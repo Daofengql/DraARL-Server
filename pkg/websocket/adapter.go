@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -200,12 +201,11 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 			userID = &uid
 		}
 
-		// 幽灵设备：使用负数 UserID 作为录制缓冲池的 Session Key
-		recordDevID := -device.UserID
 		// 使用实际的设备型号（100-105）作为 SSID
 		recordSSID := device.DevModel
+		sourceKey := udphub.GhostCommRecordSourceKey("ws", device.UserID, recordSSID, fmt.Sprintf("%p", device))
 
-		udphub.RecordCommPacket(recordDevID, recordSSID, groupID, userID, packet.DATA)
+		udphub.RecordCommPacket(sourceKey, 0, recordSSID, groupID, userID, packet.DATA)
 	}
 
 	// 3. 路由语音到 UDP 设备

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	minio_local "draarl/pkg/minio"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // CommRecordResponse 通信记录响应结构（用于前端显示）
@@ -43,6 +45,7 @@ type CommRecordResponse struct {
 type CommRecordWithDetails struct {
 	ID            uint      `gorm:"column:id"`
 	DeviceID      uint      `gorm:"column:device_id"`
+	DeviceOwnerID int       `gorm:"column:device_owner_id"`
 	DeviceSSID    uint8     `gorm:"column:device_ssid"`
 	DevModel      int       `gorm:"column:dev_model"`
 	OwnerCallSign string    `gorm:"column:owner_call_sign"`
@@ -59,6 +62,22 @@ type CommRecordWithDetails struct {
 	AudioPath     string    `gorm:"column:audio_path"`
 	AudioSize     int64     `gorm:"column:audio_size"`
 	Status        int       `gorm:"column:status"`
+}
+
+// canViewOwnCommRecord applies the communication-record ownership boundary.
+// UserID is the sender snapshot. Device ownership is only a fallback for
+// legacy physical records that predate that snapshot.
+func canViewOwnCommRecord(user *gormdb.User, record *CommRecordWithDetails) bool {
+	if user == nil || record == nil {
+		return false
+	}
+	if isAdminUser(user) {
+		return true
+	}
+	if record.UserID != nil {
+		return int(*record.UserID) == user.ID
+	}
+	return record.DeviceID > 0 && record.DeviceOwnerID == user.ID
 }
 
 // getDevModelName 获取设备型号名称（100-105）
@@ -145,69 +164,6 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 }
 
-// userHasGroupAccess 检查用户是否有权限访问指定群组的记录
-// 权限判断规则：
-// 1. 用户拥有属于该群组的设备
-// 2. 用户曾在该群组发送过消息（幽灵设备记录）
-// 3. 用户拥有属于该群组互联组的设备（互联组权限传递）
-func userHasGroupAccess(userID int, groupID int) (bool, error) {
-	// 1. 检查用户是否有设备属于该群组
-	var deviceCount int64
-	if err := gormdb.Get().Table("devices").
-		Where("owner_id = ? AND group_id = ?", userID, groupID).
-		Count(&deviceCount).Error; err != nil {
-		return false, err
-	}
-	if deviceCount > 0 {
-		return true, nil
-	}
-
-	// 2. 检查用户是否在该群组有过通信记录（幽灵设备）
-	var recordCount int64
-	if err := gormdb.Get().Table("comm_records").
-		Where("user_id = ? AND group_id = ?", userID, groupID).
-		Count(&recordCount).Error; err != nil {
-		return false, err
-	}
-	if recordCount > 0 {
-		return true, nil
-	}
-
-	// 3. 检查互联组：用户是否有设备属于互联组中的其他群组
-	// 使用单次 JOIN 查询获取所有活跃互联组关联的目标群组
-	var targetGroupIDs []int
-	if err := gormdb.Get().Table("group_links gl1").
-		Select("DISTINCT gl2.target_group_id").
-		Joins("INNER JOIN public_groups pg ON gl1.link_group_id = pg.id AND pg.status = 1").
-		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
-		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", groupID, groupID).
-		Pluck("target_group_id", &targetGroupIDs).Error; err != nil {
-		return false, err
-	}
-
-	if len(targetGroupIDs) == 0 {
-		return false, nil
-	}
-
-	// 4. 批量检查用户是否有设备属于互联组中的任何群组
-	if err := gormdb.Get().Table("devices").
-		Where("owner_id = ? AND group_id IN ?", userID, targetGroupIDs).
-		Count(&deviceCount).Error; err != nil {
-		return false, err
-	}
-	if deviceCount > 0 {
-		return true, nil
-	}
-
-	// 5. 批量检查用户是否在互联组的任何群组有过通信记录
-	if err := gormdb.Get().Table("comm_records").
-		Where("user_id = ? AND group_id IN ?", userID, targetGroupIDs).
-		Count(&recordCount).Error; err != nil {
-		return false, err
-	}
-	return recordCount > 0, nil
-}
-
 // getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
 // 只有互联组状态开启(status=1)时才包含互联组内的其他群组
 func getRelatedGroupIDs(groupID int) ([]int, error) {
@@ -251,12 +207,55 @@ func GetCommRecords(c *gin.Context) {
 	userIDStr := c.Query("user_id")
 	// 获取管理员模式参数：只有管理员在后台页面时才为 true
 	adminMode := c.Query("admin_mode") == "true"
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	canViewGlobal := isAdminUser(currentUser) && adminMode
+
+	var requestedGroupID *uint
+	if groupIDStr != "" {
+		parsedGroupID, err := strconv.ParseUint(groupIDStr, 10, 32)
+		if err != nil || parsedGroupID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    http.StatusBadRequest,
+				"message": "无效的群组ID",
+			})
+			return
+		}
+
+		group, err := gormdb.NewGroupRepository().GetGroupByID(int(parsedGroupID))
+		if err != nil {
+			log.Printf("[COMM_RECORDS] 查询群组失败 group=%d err=%v", parsedGroupID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    http.StatusInternalServerError,
+				"message": "查询群组失败",
+			})
+			return
+		}
+		if group == nil {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    http.StatusNotFound,
+				"message": "群组不存在",
+			})
+			return
+		}
+		if !canViewGlobal {
+			if _, allowed := requireGroupViewAccess(c, group); !allowed {
+				return
+			}
+		}
+
+		value := uint(parsedGroupID)
+		requestedGroupID = &value
+	}
 
 	db := gormdb.Get().Table("comm_records cr").
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE d.dev_model END as dev_model,
+			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
 			u.name as user_name, u.callsign as user_call_sign, u.nickname as user_nick_name
@@ -267,86 +266,16 @@ func GetCommRecords(c *gin.Context) {
 		Joins("LEFT JOIN users u ON cr.user_id = u.id").
 		Where("cr.status = ?", 2) // 只返回已完成的记录
 
-	// 检查是否是管理员（优先从 user 对象获取，其次从 roles 获取）
-	isAdmin := false
-	if userInterface, exists := c.Get("user"); exists {
-		if user, ok := userInterface.(*gormdb.User); ok && user.Roles == "admin" {
-			isAdmin = true
-		}
-	} else if roles, exists := c.Get("roles"); exists {
-		// roles 是 []string 类型，需要正确处理
-		if rolesSlice, ok := roles.([]string); ok {
-			for _, role := range rolesSlice {
-				if role == "admin" {
-					isAdmin = true
-					break
-				}
-			}
-		}
-	}
-
-	// 判断是否可以查看全局记录：必须是管理员且在后台模式
-	canViewGlobal := isAdmin && adminMode
-
-	// 获取当前用户信息（用于权限过滤）
-	var currentUser *gormdb.User
-	username, hasUsername := c.Get("username")
-	if hasUsername {
-		userRepo := gormdb.NewUserRepository()
-		currentUser, _ = userRepo.GetUserByName(username.(string))
-	}
-
 	// 权限过滤逻辑：
 	// 1. 管理员后台模式：可查看所有记录
 	// 2. 指定了群组筛选：可查看该群组（及互联组）内的所有记录
-	// 3. 其他情况：只能查看自己设备的记录
-	if !canViewGlobal {
-		// 检查是否指定了群组筛选
-		if groupIDStr != "" {
-			// 指定了群组：验证用户是否有权限访问该群组
-			groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
-			if err == nil && currentUser != nil {
-				// 验证用户是否有权限访问该群组（通过设备所属群组或群组成员关系）
-				allowed, accessErr := userHasGroupAccess(currentUser.ID, int(groupID))
-				if accessErr != nil {
-					log.Printf("[COMM_RECORDS] 验证群组访问权限失败 user=%d group=%d err=%v", currentUser.ID, groupID, accessErr)
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"code":    500,
-						"message": "查询群组权限失败",
-					})
-					return
-				}
-				if allowed {
-					// 用户有权限访问该群组，不添加 owner_id/user_id 过滤
-					// 但仍然通过群组筛选来限制可见范围
-				} else {
-					// 用户无权访问该群组，只能看自己的记录
-					db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
-				}
-			} else {
-				// 参数错误或用户信息缺失，只能看自己的记录
-				if currentUser != nil {
-					db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
-				} else {
-					c.JSON(http.StatusUnauthorized, gin.H{
-						"code":    401,
-						"message": "未授权",
-					})
-					return
-				}
-			}
-		} else {
-			// 未指定群组：只能查看自己设备的记录
-			if currentUser != nil {
-				db = db.Where("d.owner_id = ? OR cr.user_id = ?", currentUser.ID, currentUser.ID)
-			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"code":    401,
-					"message": "未授权",
-				})
-				return
-			}
-		}
+	// 3. 其他情况：按发送者快照查看自己的记录；旧物理记录才回退到当前设备所有者
+	if !canViewGlobal && requestedGroupID == nil {
+		db = db.Where(
+			"cr.user_id = ? OR (cr.user_id IS NULL AND cr.device_id > 0 AND d.owner_id = ?)",
+			currentUser.ID,
+			currentUser.ID,
+		)
 	}
 
 	// 筛选条件
@@ -356,27 +285,21 @@ func GetCommRecords(c *gin.Context) {
 			db = db.Where("cr.device_id = ?", deviceID)
 		}
 	}
-	if groupIDStr != "" {
-		groupID, err := strconv.ParseUint(groupIDStr, 10, 32)
-		if err == nil {
-			// 【互联组支持】获取所有相关群组的消息
-			// 逻辑：
-			// 1. 当前群组本身
-			// 2. 如果互联组状态开启(status=1)，则包含互联组内其他群组的记录
-			relatedGroupIDs, relatedErr := getRelatedGroupIDs(int(groupID))
-			if relatedErr != nil {
-				log.Printf("[COMM_RECORDS] 获取互联群组失败 group=%d err=%v", groupID, relatedErr)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"code":    500,
-					"message": "查询互联群组失败",
-				})
-				return
-			}
-			if len(relatedGroupIDs) > 1 {
-				db = db.Where("cr.group_id IN ?", relatedGroupIDs)
-			} else {
-				db = db.Where("cr.group_id = ?", groupID)
-			}
+	if requestedGroupID != nil {
+		// 兼容旧客户端：群组筛选仍包含当前启用互联域中的消息。
+		relatedGroupIDs, relatedErr := getRelatedGroupIDs(int(*requestedGroupID))
+		if relatedErr != nil {
+			log.Printf("[COMM_RECORDS] 获取互联群组失败 group=%d err=%v", *requestedGroupID, relatedErr)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    http.StatusInternalServerError,
+				"message": "查询互联群组失败",
+			})
+			return
+		}
+		if len(relatedGroupIDs) > 1 {
+			db = db.Where("cr.group_id IN ?", relatedGroupIDs)
+		} else {
+			db = db.Where("cr.group_id = ?", *requestedGroupID)
 		}
 	}
 	// 全局模式下可以按 user_id 筛选
@@ -433,6 +356,11 @@ func GetCommRecords(c *gin.Context) {
 
 // GetCommRecord 获取单个通信记录
 func GetCommRecord(c *gin.Context) {
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
@@ -449,9 +377,10 @@ func GetCommRecord(c *gin.Context) {
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE d.dev_model END as dev_model,
+			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
-			u.callsign as user_call_sign, u.nickname as user_nick_name
+			u.name as user_name, u.callsign as user_call_sign, u.nickname as user_nick_name
 		`).
 		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
 		Joins("LEFT JOIN users d_owner ON d.owner_id = d_owner.id").
@@ -460,10 +389,25 @@ func GetCommRecord(c *gin.Context) {
 		Where("cr.id = ?", id).
 		First(&result).Error
 
-	if err != nil {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{
-			"code":    404,
+			"code":    http.StatusNotFound,
 			"message": "记录不存在",
+		})
+		return
+	}
+	if err != nil {
+		log.Printf("[COMM_RECORDS] 查询通信记录详情失败 id=%d err=%v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    http.StatusInternalServerError,
+			"message": "查询通信记录失败",
+		})
+		return
+	}
+	if !canViewOwnCommRecord(currentUser, &result) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": "无权访问该通信记录",
 		})
 		return
 	}

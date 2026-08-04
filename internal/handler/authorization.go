@@ -46,6 +46,9 @@ func canViewGroup(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool)
 	if user == nil || group == nil {
 		return false
 	}
+	if group.Status != 1 {
+		return false
+	}
 	if group.IsVirtual {
 		return false
 	}

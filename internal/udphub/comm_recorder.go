@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -128,8 +129,9 @@ func (cr *CommRecorder) canRecord() bool {
 // RecordPacket 录制音频包（在转发前调用）
 // audioData 是 Opus 编码的数据，直接存储为 .raw 格式
 // 注意：由于 CGO 限制，服务端不解码 Opus，直接存储原始数据
-// deviceID: 设备ID，正数为普通设备，负数为幽灵设备
+// deviceID: 持久化设备ID，正数为普通设备，幽灵设备为0
 func (cr *CommRecorder) RecordPacket(
+	sourceKey string,
 	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
@@ -141,7 +143,7 @@ func (cr *CommRecorder) RecordPacket(
 	}
 
 	// 直接存储 Opus 数据（标记为 Opus 格式）
-	cr.buffer.AppendPacket(deviceID, deviceSSID, groupID, userID, audioData)
+	cr.buffer.AppendPacket(sourceKey, deviceID, deviceSSID, groupID, userID, audioData)
 }
 
 // Stop 停止录制管理器
@@ -254,10 +256,23 @@ func StopCommRecorder() {
 	}
 }
 
+func PhysicalCommRecordSourceKey(deviceID int) string {
+	return fmt.Sprintf("device:%d", deviceID)
+}
+
+func GhostCommRecordSourceKey(transport string, ownerID int, ssid uint8, connectionIdentity string) string {
+	return fmt.Sprintf("ghost:%s:%d:%d:%s", transport, ownerID, ssid, connectionIdentity)
+}
+
+func InterconnectCommRecordSourceKey(sessionID uint64) string {
+	return fmt.Sprintf("relay-session:%d", sessionID)
+}
+
 // RecordCommPacket 录制通信数据包（全局接口，异步入队，不阻塞转发热路径）
 // 传入的 audioData 是 Opus 编码数据，直接存储为 .opus 文件
-// deviceID: 设备ID，正数为普通设备，负数为幽灵设备
+// sourceKey: 运行时来源会话键；deviceID 仅用于最终持久化，幽灵设备为 0
 func RecordCommPacket(
+	sourceKey string,
 	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
@@ -268,7 +283,7 @@ func RecordCommPacket(
 		return
 	}
 	// 异步录制：拷贝 payload 后投递有界队列，满则丢弃录制不堵转发
-	enqueueCommRecord(deviceID, deviceSSID, groupID, userID, audioData)
+	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, audioData)
 }
 
 // ReloadCommSettings 重新加载通信设置

@@ -2,7 +2,9 @@ package udphub
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -10,8 +12,9 @@ import (
 
 // AudioSession 单次通信会话（精简版，只保留 ID）
 type AudioSession struct {
-	SessionID      string        // 会话唯一标识 (DeviceID_Timestamp)
-	DeviceID       int           // 设备ID (负数表示幽灵设备，0表示异常)
+	SessionID      string        // 文件安全的会话唯一标识
+	SourceKey      string        // 运行时录音来源，不持久化
+	DeviceID       int           // 持久化设备ID（0表示幽灵设备）
 	DeviceSSID     uint8         // 设备 SSID
 	GroupID        *uint         // 群组ID
 	UserID         *uint         // 用户ID
@@ -32,7 +35,7 @@ const (
 
 // CommBuffer 通信缓冲管理器
 type CommBuffer struct {
-	sessions     map[string]*AudioSession // 活跃会话 (key: deviceID)
+	sessions     map[string]*AudioSession // 活跃会话 (key: runtime source key)
 	mu           sync.RWMutex
 	config       *CommSettingsConfig // 通信配置
 	onSessionEnd func(*AudioSession) // 会话结束回调
@@ -55,9 +58,18 @@ func NewCommBuffer(config *CommSettingsConfig) *CommBuffer {
 	}
 }
 
-// generateSessionID 生成会话ID
-func generateSessionID(deviceID int) string {
-	return fmt.Sprintf("%d", deviceID)
+func normalizeCommRecordSourceKey(sourceKey string, deviceID int) string {
+	if sourceKey != "" {
+		return sourceKey
+	}
+	return PhysicalCommRecordSourceKey(deviceID)
+}
+
+// generateAudioSessionID hashes the runtime source so object names never leak
+// network endpoints, account IDs, or client instance identifiers.
+func generateAudioSessionID(sourceKey string, now time.Time) string {
+	digest := sha256.Sum256([]byte(sourceKey))
+	return fmt.Sprintf("%s_%s", hex.EncodeToString(digest[:12]), now.UTC().Format("20060102T150405.000000000Z"))
 }
 
 // parseMergedFrames 解析合并帧格式
@@ -101,8 +113,9 @@ func parseMergedFrames(data []byte) [][]byte {
 
 // AppendPacket 追加音频数据包（精简版，只记录 ID）
 // pcmData 可能是合并帧格式（包含多个 Opus 子帧），需要先解析再存储
-// deviceID: 设备ID，正数为普通设备，负数为幽灵设备
+// sourceKey: 运行时来源会话键；deviceID: 持久化设备ID，幽灵设备为0
 func (cb *CommBuffer) AppendPacket(
+	sourceKey string,
 	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
@@ -113,7 +126,7 @@ func (cb *CommBuffer) AppendPacket(
 		return
 	}
 
-	sessionKey := generateSessionID(deviceID)
+	sessionKey := normalizeCommRecordSourceKey(sourceKey, deviceID)
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -130,7 +143,8 @@ func (cb *CommBuffer) AppendPacket(
 		}
 		// 创建新会话
 		session = &AudioSession{
-			SessionID:      fmt.Sprintf("%d_%s", deviceID, now.Format("20060102_150405.000")),
+			SessionID:      generateAudioSessionID(sessionKey, now),
+			SourceKey:      sessionKey,
 			DeviceID:       deviceID,
 			DeviceSSID:     deviceSSID,
 			GroupID:        groupID,
@@ -187,6 +201,7 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 		// 复制会话数据，避免后续修改影响
 		sessionCopy := &AudioSession{
 			SessionID:      session.SessionID,
+			SourceKey:      session.SourceKey,
 			DeviceID:       session.DeviceID,
 			DeviceSSID:     session.DeviceSSID,
 			GroupID:        session.GroupID,

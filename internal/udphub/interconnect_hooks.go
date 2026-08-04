@@ -20,6 +20,7 @@ type CenterLocalSource struct {
 	OwnerID      int
 	Username     string
 	CallSign     string
+	Nickname     string
 	SSID         byte
 	DevModel     byte
 	DMRID        uint32
@@ -68,7 +69,7 @@ func centerSourceFromDevice(dev *models.Device) CenterLocalSource {
 	}
 	return CenterLocalSource{
 		SessionID: dev.InterconnectSessionID, SessionEpoch: dev.InterconnectSessionEpoch,
-		DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign,
+		DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname,
 		SSID: dev.SSID, DevModel: dev.DevModel, DMRID: dev.DMRID, GroupID: dev.GroupID,
 		DomainID:    GetActiveCommunicationDomainID(dev.GroupID),
 		DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv,
@@ -180,7 +181,7 @@ func centerSourceFromWS(source interfaces.WSDeviceInterface, groupID int) Center
 	return CenterLocalSource{
 		SessionID: sessionID, SessionEpoch: sessionEpoch,
 		DeviceID: source.GetDeviceID(), OwnerID: source.GetUserID(), Username: source.GetUsername(),
-		CallSign: source.GetCallSign(), SSID: source.GetSSID(), DevModel: source.GetDevModel(),
+		CallSign: source.GetCallSign(), Nickname: source.GetNickname(), SSID: source.GetSSID(), DevModel: source.GetDevModel(),
 		GroupID: groupID, DomainID: GetActiveCommunicationDomainID(groupID),
 		DisableSend: source.IsDisabledSend(), DisableRecv: source.IsDisabledRecv(),
 	}

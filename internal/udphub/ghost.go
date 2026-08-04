@@ -65,6 +65,7 @@ func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
 
 		existing.Username = device.Username
 		existing.CallSign = device.CallSign
+		existing.Nickname = device.Nickname
 		existing.OwnerID = device.OwnerID
 		existing.SSID = device.SSID
 		existing.CallSignSSID = device.CallSignSSID

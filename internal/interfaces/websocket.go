@@ -12,6 +12,7 @@ type WSDeviceInterface interface {
 	GetUserID() int
 	GetDeviceID() int
 	GetUsername() string
+	GetNickname() string
 	GetCallSign() string
 	GetSSID() byte
 	GetDevModel() byte

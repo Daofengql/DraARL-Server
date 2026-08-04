@@ -60,6 +60,7 @@ type DeviceGrant struct {
 	OwnerID         int    `json:"owner_id"`
 	Username        string `json:"username"`
 	CallSign        string `json:"callsign"`
+	Nickname        string `json:"nickname"`
 	SSID            byte   `json:"ssid"`
 	DevModel        byte   `json:"dev_model"`
 	DMRID           uint32 `json:"dmrid"`
@@ -71,7 +72,7 @@ type DeviceGrant struct {
 }
 
 func (g DeviceGrant) Route() DeviceRoute {
-	return DeviceRoute{SessionID: g.SessionID, DeviceID: g.DeviceID, Username: g.Username, CallSign: g.CallSign, SSID: g.SSID, GroupID: g.GroupID, DomainID: g.DomainID, SessionEpoch: g.SessionEpoch, DisableSend: g.DisableSend, DisableRecv: g.DisableRecv}
+	return DeviceRoute{SessionID: g.SessionID, DeviceID: g.DeviceID, Username: g.Username, CallSign: g.CallSign, Nickname: g.Nickname, SSID: g.SSID, DevModel: g.DevModel, GroupID: g.GroupID, DomainID: g.DomainID, SessionEpoch: g.SessionEpoch, DisableSend: g.DisableSend, DisableRecv: g.DisableRecv}
 }
 
 type DeviceAuthResponse struct {

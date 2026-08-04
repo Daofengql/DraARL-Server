@@ -20,6 +20,7 @@ type routeTestWSDevice struct {
 	userID       int
 	deviceID     int
 	username     string
+	nickname     string
 	callsign     string
 	ssid         byte
 	devModel     byte
@@ -37,6 +38,7 @@ func (d *routeTestWSDevice) IsGhost() bool                { return d.ghost }
 func (d *routeTestWSDevice) GetUserID() int               { return d.userID }
 func (d *routeTestWSDevice) GetDeviceID() int             { return d.deviceID }
 func (d *routeTestWSDevice) GetUsername() string          { return d.username }
+func (d *routeTestWSDevice) GetNickname() string          { return d.nickname }
 func (d *routeTestWSDevice) GetCallSign() string          { return d.callsign }
 func (d *routeTestWSDevice) GetSSID() byte                { return d.ssid }
 func (d *routeTestWSDevice) GetDevModel() byte            { return d.devModel }

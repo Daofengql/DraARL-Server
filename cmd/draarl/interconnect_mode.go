@@ -27,7 +27,7 @@ func localSourceGrant(source *udphub.CenterLocalSource) interconnect.DeviceGrant
 	}
 	return interconnect.DeviceGrant{
 		SessionID: source.SessionID, SessionEpoch: source.SessionEpoch, DeviceID: source.DeviceID, OwnerID: source.OwnerID,
-		Username: source.Username, CallSign: source.CallSign, SSID: source.SSID, DevModel: source.DevModel, DMRID: source.DMRID,
+		Username: source.Username, CallSign: source.CallSign, Nickname: source.Nickname, SSID: source.SSID, DevModel: source.DevModel, DMRID: source.DMRID,
 		GroupID: source.GroupID, DomainID: source.DomainID, DisableSend: source.DisableSend, DisableRecv: source.DisableRecv,
 	}
 }
@@ -148,7 +148,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		if !result.Success {
 			return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: false, Error: result.Error, ResponsePacket: result.ResponsePacket}, nil
 		}
-		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
+		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, Nickname: result.Nickname, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
 	}
 	confirmHandler := func(session *interconnect.NodeSession, items []interconnect.DeviceSessionConfirmItem) ([]interconnect.DeviceSessionConfirmResult, error) {
@@ -179,7 +179,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			}
 			result.Success = true
 			result.Grant = &interconnect.DeviceGrant{
-				DeviceID: device.ID, OwnerID: device.OwnerID, Username: device.Owner.Name, CallSign: device.Owner.CallSign,
+				DeviceID: device.ID, OwnerID: device.OwnerID, Username: device.Owner.Name, CallSign: device.Owner.CallSign, Nickname: device.Owner.NickName,
 				SSID: byte(device.SSID), DevModel: byte(device.DevModel), DMRID: uint32(device.DMRID),
 				GroupID: device.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(device.GroupID),
 				DisableSend: device.DisableSend, DisableRecv: device.DisableRecv,
@@ -325,12 +325,15 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			value := uint(relay.OwnerID)
 			ownerID = &value
 		}
+		sender := udphub.CommSenderSnapshot{
+			Username: relay.Username, CallSign: relay.CallSign, Nickname: relay.Nickname, DevModel: int(relay.DevModel),
+		}
 		switch relay.Type {
 		case protocol.DraARLTypeOpus16K:
 			sourceKey := udphub.InterconnectCommRecordSourceKey(relay.SessionID)
-			udphub.RecordCommPacket(sourceKey, relay.DeviceID, relay.SSID, groupID, ownerID, relay.Payload)
+			udphub.RecordCommPacket(sourceKey, relay.DeviceID, relay.SSID, groupID, ownerID, sender, relay.Payload)
 		case protocol.DraARLTypeTextMessage:
-			udphub.RecordTextMessage(relay.DeviceID, relay.SSID, groupID, ownerID, string(relay.Payload))
+			udphub.RecordTextMessage(relay.DeviceID, relay.SSID, groupID, ownerID, sender, string(relay.Payload))
 		}
 	}
 	runtime, err := interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{

@@ -10,14 +10,32 @@ import (
 	"time"
 )
 
+type CommSenderSnapshot struct {
+	Username string
+	CallSign string
+	Nickname string
+	DevModel int
+}
+
+func (s CommSenderSnapshot) normalized() CommSenderSnapshot {
+	if s.Nickname == "" {
+		s.Nickname = s.CallSign
+	}
+	if s.Nickname == "" {
+		s.Nickname = s.Username
+	}
+	return s
+}
+
 // AudioSession 单次通信会话（精简版，只保留 ID）
 type AudioSession struct {
-	SessionID      string        // 文件安全的会话唯一标识
-	SourceKey      string        // 运行时录音来源，不持久化
-	DeviceID       int           // 持久化设备ID（0表示幽灵设备）
-	DeviceSSID     uint8         // 设备 SSID
-	GroupID        *uint         // 群组ID
-	UserID         *uint         // 用户ID
+	SessionID      string // 文件安全的会话唯一标识
+	SourceKey      string // 运行时录音来源，不持久化
+	DeviceID       int    // 持久化设备ID（0表示幽灵设备）
+	DeviceSSID     uint8  // 设备 SSID
+	GroupID        *uint  // 群组ID
+	UserID         *uint  // 用户ID
+	Sender         CommSenderSnapshot
 	StartTime      time.Time     // 开始时间
 	LastPacketTime time.Time     // 最后一个包的时间（用于判断会话结束）
 	Buffer         *bytes.Buffer // PCM 音频数据缓冲
@@ -120,6 +138,7 @@ func (cb *CommBuffer) AppendPacket(
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,
+	sender CommSenderSnapshot,
 	pcmData []byte,
 ) {
 	if cb == nil || !cb.config.Enabled {
@@ -149,6 +168,7 @@ func (cb *CommBuffer) AppendPacket(
 			DeviceSSID:     deviceSSID,
 			GroupID:        groupID,
 			UserID:         userID,
+			Sender:         sender,
 			StartTime:      now,
 			LastPacketTime: now,
 			Buffer:         bytes.NewBuffer(nil),
@@ -206,6 +226,7 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 			DeviceSSID:     session.DeviceSSID,
 			GroupID:        session.GroupID,
 			UserID:         session.UserID,
+			Sender:         session.Sender,
 			StartTime:      session.StartTime,
 			LastPacketTime: session.LastPacketTime,
 			Buffer:         bytes.NewBuffer(session.Buffer.Bytes()),

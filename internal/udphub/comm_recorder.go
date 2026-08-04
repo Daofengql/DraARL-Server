@@ -3,6 +3,7 @@ package udphub
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -136,6 +137,7 @@ func (cr *CommRecorder) RecordPacket(
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,
+	sender CommSenderSnapshot,
 	audioData []byte,
 ) {
 	if !cr.canRecord() {
@@ -143,7 +145,7 @@ func (cr *CommRecorder) RecordPacket(
 	}
 
 	// 直接存储 Opus 数据（标记为 Opus 格式）
-	cr.buffer.AppendPacket(sourceKey, deviceID, deviceSSID, groupID, userID, audioData)
+	cr.buffer.AppendPacket(sourceKey, deviceID, deviceSSID, groupID, userID, sender.normalized(), audioData)
 }
 
 // Stop 停止录制管理器
@@ -277,13 +279,14 @@ func RecordCommPacket(
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,
+	sender CommSenderSnapshot,
 	audioData []byte,
 ) {
 	if globalCommRecorder == nil || len(audioData) == 0 {
 		return
 	}
 	// 异步录制：拷贝 payload 后投递有界队列，满则丢弃录制不堵转发
-	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, audioData)
+	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, sender, audioData)
 }
 
 // ReloadCommSettings 重新加载通信设置
@@ -307,24 +310,17 @@ func GetCommRecorderStats() map[string]interface{} {
 
 // RecordTextMessage 记录文本消息到数据库
 // 文本消息不需要上传 MinIO，直接写入 comm_records 表
-// 使用 "text:" 前缀存储在 AudioPath 字段中
+// 文本正文使用独立 TextContent 字段，不再复用 AudioPath。
 func RecordTextMessage(
 	deviceID int,
 	deviceSSID uint8,
 	groupID *uint,
 	userID *uint,
+	sender CommSenderSnapshot,
 	textContent string,
 ) {
-	// 限制文本长度（AudioPath 是 varchar(255)，按字节计算，预留 "text:" 前缀 5 字节）
-	// UTF-8 编码下中文字符占 3 字节，需要按字节长度限制
-	maxBytes := 250 // 255 - 5 ("text:" 前缀)
-	if len(textContent) > maxBytes {
-		// 截断到最大字节长度，同时确保不截断 UTF-8 字符
-		for len(textContent) > maxBytes {
-			textContent = textContent[:len(textContent)-1]
-		}
-	}
-
+	textContent = strings.ToValidUTF8(textContent, "\uFFFD")
+	sender = sender.normalized()
 	now := time.Now()
 
 	// 解析设备ID（幽灵设备使用负数ID，实际存储为0）
@@ -336,16 +332,21 @@ func RecordTextMessage(
 	}
 
 	record := &gormdb.CommRecord{
-		DeviceID:   actualDeviceID,
-		DeviceSSID: deviceSSID,
-		GroupID:    groupID,
-		UserID:     userID,
-		StartTime:  now,
-		EndTime:    now,
-		DurationMs: 0,
-		AudioPath:  "text:" + textContent, // 选用 text: 前缀标识文本消息
-		AudioSize:  int64(len(textContent)),
-		Status:     2, // 已完成（不需要上传）
+		DeviceID:       actualDeviceID,
+		DeviceSSID:     deviceSSID,
+		GroupID:        groupID,
+		UserID:         userID,
+		StartTime:      now,
+		EndTime:        now,
+		DurationMs:     0,
+		MessageType:    gormdb.CommMessageTypeText,
+		TextContent:    textContent,
+		AudioSize:      int64(len(textContent)),
+		Status:         2, // 已完成（不需要上传）
+		SenderUsername: sender.Username,
+		SenderCallSign: sender.CallSign,
+		SenderNickname: sender.Nickname,
+		SenderDevModel: sender.DevModel,
 	}
 
 	// 性能优化：使用批量写入缓冲区，减少数据库压力

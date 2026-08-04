@@ -24,7 +24,11 @@ type AcceptedRelay struct {
 	SessionID uint64
 	DeviceID  int
 	OwnerID   int
+	Username  string
+	CallSign  string
+	Nickname  string
 	SSID      byte
+	DevModel  byte
 	GroupID   int
 	Type      byte
 	Payload   []byte
@@ -426,7 +430,8 @@ func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) 
 	}
 	if onAcceptedRelay != nil {
 		onAcceptedRelay(AcceptedRelay{
-			SessionID: frame.SessionID, DeviceID: route.DeviceID, OwnerID: owner.OwnerID, SSID: route.SSID, GroupID: route.GroupID,
+			SessionID: frame.SessionID, DeviceID: route.DeviceID, OwnerID: owner.OwnerID,
+			Username: route.Username, CallSign: route.CallSign, Nickname: route.Nickname, SSID: route.SSID, DevModel: route.DevModel, GroupID: route.GroupID,
 			Type: frame.InnerPacket[48], Payload: frame.InnerPacket[DraARLHeaderSize:],
 		})
 	}

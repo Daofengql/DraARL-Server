@@ -88,6 +88,15 @@ func TestCanViewOwnCommRecord(t *testing.T) {
 	}
 }
 
+func TestCommRecordResponsePreservesUnknownSnapshotDeviceModel(t *testing.T) {
+	response := toCommRecordResponse(CommRecordWithDetails{
+		DeviceID: 7, SenderUsername: "sender-at-send-time", SenderDevModel: 0, CurrentDevModel: 105,
+	})
+	if response.DevModel != 0 {
+		t.Fatalf("unknown sender device model changed to current model: %#v", response)
+	}
+}
+
 func TestCanManageDevice(t *testing.T) {
 	owner := &gormdb.User{ID: 10, Roles: "user"}
 	otherUser := &gormdb.User{ID: 11, Roles: "user"}

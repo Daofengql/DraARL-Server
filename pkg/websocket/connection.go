@@ -188,6 +188,11 @@ func (d *WSDevice) GetUsername() string {
 	return d.Username
 }
 
+// GetNickname 获取用户昵称
+func (d *WSDevice) GetNickname() string {
+	return d.Nickname
+}
+
 // GetCallSign 获取呼号
 func (d *WSDevice) GetCallSign() string {
 	return d.CallSign

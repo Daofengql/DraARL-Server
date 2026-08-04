@@ -100,6 +100,7 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		if existingGhost.ISOnline && sameUDPAddr(existingGhost.UDPAddr, packet.UDPAddr) {
 			existingGhost.LastPacketTime = time.Now()
 			existingGhost.CallSign = user.CallSign
+			existingGhost.Nickname = user.NickName
 			existingGhost.OwnerID = user.ID
 			existingGhost.CallSignSSID = protocol.GetCallSignSSID(user.CallSign, ssid)
 			if err := ActivateCenterLocalDevice(existingGhost); err != nil {
@@ -133,6 +134,7 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	ghostDevice := &models.Device{
 		Username:       user.Name,
 		CallSign:       user.CallSign,
+		Nickname:       user.NickName,
 		SSID:           ssid,
 		OwnerID:        user.ID,
 		CallSignSSID:   protocol.GetCallSignSSID(user.CallSign, ssid),

@@ -204,8 +204,11 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 		// 使用实际的设备型号（100-105）作为 SSID
 		recordSSID := device.DevModel
 		sourceKey := udphub.GhostCommRecordSourceKey("ws", device.UserID, recordSSID, fmt.Sprintf("%p", device))
+		sender := udphub.CommSenderSnapshot{
+			Username: device.Username, CallSign: device.CallSign, Nickname: device.Nickname, DevModel: int(device.DevModel),
+		}
 
-		udphub.RecordCommPacket(sourceKey, 0, recordSSID, groupID, userID, packet.DATA)
+		udphub.RecordCommPacket(sourceKey, 0, recordSSID, groupID, userID, sender, packet.DATA)
 	}
 
 	// 3. 路由语音到 UDP 设备
@@ -239,12 +242,13 @@ func handleTextMessage(device *WSDevice, packet *WSPacket) {
 			userID = &uid
 		}
 
-		// 幽灵设备是使用负数 UserID
-		recordDevID := -device.UserID
 		// 使用实际的设备型号（100-105）作为 SSID
 		recordSSID := device.DevModel
+		sender := udphub.CommSenderSnapshot{
+			Username: device.Username, CallSign: device.CallSign, Nickname: device.Nickname, DevModel: int(device.DevModel),
+		}
 
-		udphub.RecordTextMessage(recordDevID, recordSSID, groupID, userID, string(packet.DATA))
+		udphub.RecordTextMessage(0, recordSSID, groupID, userID, sender, string(packet.DATA))
 	}
 
 	// 3. 路由文本消息到 UDP 设备

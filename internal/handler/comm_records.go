@@ -43,25 +43,31 @@ type CommRecordResponse struct {
 
 // CommRecordWithDetails 联表查询结果
 type CommRecordWithDetails struct {
-	ID            uint      `gorm:"column:id"`
-	DeviceID      uint      `gorm:"column:device_id"`
-	DeviceOwnerID int       `gorm:"column:device_owner_id"`
-	DeviceSSID    uint8     `gorm:"column:device_ssid"`
-	DevModel      int       `gorm:"column:dev_model"`
-	OwnerCallSign string    `gorm:"column:owner_call_sign"`
-	OwnerNickName string    `gorm:"column:owner_nick_name"`
-	GroupID       *uint     `gorm:"column:group_id"`
-	GroupName     string    `gorm:"column:group_name"`
-	UserID        *uint     `gorm:"column:user_id"`
-	UserName      string    `gorm:"column:user_name"`
-	UserCallSign  string    `gorm:"column:user_call_sign"`
-	UserNickName  string    `gorm:"column:user_nick_name"`
-	StartTime     time.Time `gorm:"column:start_time"`
-	EndTime       time.Time `gorm:"column:end_time"`
-	DurationMs    int       `gorm:"column:duration_ms"`
-	AudioPath     string    `gorm:"column:audio_path"`
-	AudioSize     int64     `gorm:"column:audio_size"`
-	Status        int       `gorm:"column:status"`
+	ID              uint      `gorm:"column:id"`
+	DeviceID        uint      `gorm:"column:device_id"`
+	DeviceOwnerID   int       `gorm:"column:device_owner_id"`
+	DeviceSSID      uint8     `gorm:"column:device_ssid"`
+	OwnerCallSign   string    `gorm:"column:owner_call_sign"`
+	OwnerNickName   string    `gorm:"column:owner_nick_name"`
+	GroupID         *uint     `gorm:"column:group_id"`
+	GroupName       string    `gorm:"column:group_name"`
+	UserID          *uint     `gorm:"column:user_id"`
+	UserName        string    `gorm:"column:user_name"`
+	UserCallSign    string    `gorm:"column:user_call_sign"`
+	UserNickName    string    `gorm:"column:user_nick_name"`
+	StartTime       time.Time `gorm:"column:start_time"`
+	EndTime         time.Time `gorm:"column:end_time"`
+	DurationMs      int       `gorm:"column:duration_ms"`
+	AudioPath       string    `gorm:"column:audio_path"`
+	AudioSize       int64     `gorm:"column:audio_size"`
+	Status          int       `gorm:"column:status"`
+	MessageType     uint8     `gorm:"column:message_type"`
+	TextContent     string    `gorm:"column:text_content"`
+	SenderUsername  string    `gorm:"column:sender_username"`
+	SenderCallSign  string    `gorm:"column:sender_callsign"`
+	SenderNickname  string    `gorm:"column:sender_nickname"`
+	SenderDevModel  int       `gorm:"column:sender_dev_model"`
+	CurrentDevModel int       `gorm:"column:current_dev_model"`
 }
 
 // canViewOwnCommRecord applies the communication-record ownership boundary.
@@ -106,20 +112,38 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	msgType := 0 // 默认音频
 	textContent := ""
 
-	// 判断消息类型：text: 前缀表示文本消息
-	if strings.HasPrefix(r.AudioPath, "text:") {
+	// 新记录使用显式字段；滚动升级期间兼容旧 text: 前缀。
+	if r.MessageType == gormdb.CommMessageTypeText || strings.HasPrefix(r.AudioPath, "text:") {
 		msgType = 1
-		textContent = strings.TrimPrefix(r.AudioPath, "text:")
+		textContent = r.TextContent
+		if textContent == "" && strings.HasPrefix(r.AudioPath, "text:") {
+			textContent = strings.TrimPrefix(r.AudioPath, "text:")
+		}
 	} else if r.AudioPath != "" {
 		audioURL = minio_local.GetFileURL(r.AudioPath)
+	}
+	hasSenderSnapshot := r.SenderUsername != "" || r.SenderCallSign != "" ||
+		r.SenderNickname != "" || r.SenderDevModel != 0
+	devModel := r.SenderDevModel
+	if !hasSenderSnapshot {
+		devModel = r.CurrentDevModel
 	}
 
 	// 设备名称：呼号 + 设备标识
 	deviceName := ""
+	senderCallSign := r.SenderCallSign
+	if senderCallSign == "" {
+		senderCallSign = r.UserCallSign
+	}
 	if r.DeviceID == 0 {
 		// 幽灵设备：呼号-DevModel（100-105），前端根据 dev_model 判断设备类型
-		if r.UserCallSign != "" {
-			deviceName = r.UserCallSign + "-" + strconv.Itoa(r.DevModel)
+		if senderCallSign != "" {
+			deviceName = senderCallSign + "-" + strconv.Itoa(devModel)
+		}
+	} else if r.SenderCallSign != "" {
+		deviceName = r.SenderCallSign
+		if r.DeviceSSID > 0 {
+			deviceName += "-" + strconv.Itoa(int(r.DeviceSSID))
 		}
 	} else if r.OwnerCallSign != "" {
 		// 物理设备：呼号-SSID
@@ -136,9 +160,15 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 
 	// 用户名：登录用户名（用于前端查询头像）
-	username := r.UserName
+	username := r.SenderUsername
+	if username == "" {
+		username = r.UserName
+	}
 	// 昵称：用于显示
-	nickname := r.UserNickName
+	nickname := r.SenderNickname
+	if nickname == "" {
+		nickname = r.UserNickName
+	}
 	if nickname == "" {
 		nickname = r.UserCallSign
 	}
@@ -147,7 +177,7 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 		ID:          r.ID,
 		DeviceID:    r.DeviceID,
 		DeviceName:  deviceName,
-		DevModel:    r.DevModel,
+		DevModel:    devModel,
 		GroupID:     r.GroupID,
 		GroupName:   r.GroupName,
 		UserID:      r.UserID,
@@ -167,25 +197,7 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 // getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
 // 只有互联组状态开启(status=1)时才包含互联组内的其他群组
 func getRelatedGroupIDs(groupID int) ([]int, error) {
-	groupIDs := []int{groupID}
-
-	// 使用单次 JOIN 查询获取所有活跃互联组的目标群组
-	// 查询逻辑：
-	// 1. 找到该群组所属的所有互联组（通过 group_links 表）
-	// 2. 只保留状态开启(status=1)的互联组（通过 public_groups 表）
-	// 3. 获取这些互联组关联的所有目标群组
-	var targetGroupIDs []int
-	if err := gormdb.Get().Table("group_links gl1").
-		Select("DISTINCT gl2.target_group_id").
-		Joins("INNER JOIN public_groups pg ON gl1.link_group_id = pg.id AND pg.status = 1").
-		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
-		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", groupID, groupID).
-		Pluck("target_group_id", &targetGroupIDs).Error; err != nil {
-		return groupIDs, err
-	}
-
-	groupIDs = append(groupIDs, targetGroupIDs...)
-	return groupIDs, nil
+	return gormdb.NewMessageRepository().VisibleGroupIDs(groupID)
 }
 
 // GetCommRecords 获取通信记录列表（使用联表查询）
@@ -254,7 +266,8 @@ func GetCommRecords(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE d.dev_model END as dev_model,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
+			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
 			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,
@@ -376,7 +389,8 @@ func GetCommRecord(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE d.dev_model END as dev_model,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
+			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
 			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
 			g.name as group_name,

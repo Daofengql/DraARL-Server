@@ -434,6 +434,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 				dev.CallSign = authResult.CallSign
 				if authResult.User != nil {
 					dev.Username = authResult.User.Name
+					dev.Nickname = authResult.User.NickName
 				}
 				log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 			}
@@ -628,6 +629,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 	newDevice := &models.Device{
 		Username: packet.Username,
 		CallSign: authResult.CallSign,
+		Nickname: authResult.User.NickName,
 		SSID:     packet.SSID,
 		OwnerID:  authResult.User.ID, // 设置所有者ID
 		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
@@ -658,6 +660,9 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		}
 		if dev.Username == "" && authResult.User != nil {
 			dev.Username = authResult.User.Name
+		}
+		if authResult.User != nil {
+			dev.Nickname = authResult.User.NickName
 		}
 		if incomingMAC != "" {
 			dev.MAC = incomingMAC
@@ -902,7 +907,8 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 			}
 			sourceKey = GhostCommRecordSourceKey("udp", dev.OwnerID, uint8(dev.SSID), endpoint)
 		}
-		RecordCommPacket(sourceKey, recordDeviceID, uint8(dev.SSID), groupID, userID, packet.DATA)
+		sender := CommSenderSnapshot{Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, DevModel: int(dev.DevModel)}
+		RecordCommPacket(sourceKey, recordDeviceID, uint8(dev.SSID), groupID, userID, sender, packet.DATA)
 	}
 
 	forwardDraARLVoice(packet, dev, data, gp)
@@ -1066,8 +1072,12 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 			uid := uint(dev.OwnerID)
 			userID = &uid
 		}
-		// 使用正数 ID 表示普通设备
-		RecordTextMessage(int(dev.ID), uint8(dev.SSID), groupID, userID, string(packet.DATA))
+		recordDeviceID := dev.ID
+		if protocol.IsGhostSSID(dev.SSID) {
+			recordDeviceID = 0
+		}
+		sender := CommSenderSnapshot{Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, DevModel: int(dev.DevModel)}
+		RecordTextMessage(recordDeviceID, uint8(dev.SSID), groupID, userID, sender, string(packet.DATA))
 	}
 }
 
@@ -1354,6 +1364,7 @@ func refreshDeviceCache() {
 					memDev.CallSign = owner.CallSign
 					indexRuntimeDevice(memDev)
 				}
+				memDev.Nickname = owner.NickName
 			}
 		}
 

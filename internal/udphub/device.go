@@ -59,6 +59,7 @@ func loadAllDevices() {
 			if owner, ok := userCache[dev.OwnerID]; ok && owner != nil {
 				modelDev.CallSign = owner.CallSign
 				modelDev.Username = owner.Name
+				modelDev.Nickname = owner.NickName
 			}
 		}
 
@@ -136,6 +137,7 @@ func addDevice(dev *models.Device, resolveInitialGroup func() int) (*models.Devi
 			if owner, err := userRepo.GetUserByID(existingDev.OwnerID); err == nil && owner != nil {
 				modelDev.Username = owner.Name
 				modelDev.CallSign = owner.CallSign // 从用户表获取呼号
+				modelDev.Nickname = owner.NickName
 			}
 		}
 
@@ -161,6 +163,7 @@ func addDevice(dev *models.Device, resolveInitialGroup func() int) (*models.Devi
 					if owner, ownerErr := userRepo.GetUserByID(existingDev.OwnerID); ownerErr == nil && owner != nil {
 						modelDev.Username = owner.Name
 						modelDev.CallSign = owner.CallSign
+						modelDev.Nickname = owner.NickName
 					}
 				}
 				modelDev.CallSignSSID = protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
@@ -176,6 +179,7 @@ func addDevice(dev *models.Device, resolveInitialGroup func() int) (*models.Devi
 	// 保留认证链路已经拿到的运行时字段，避免新设备首次上线时出现空呼号。
 	modelDev.CallSign = dev.CallSign
 	modelDev.Username = dev.Username
+	modelDev.Nickname = dev.Nickname
 
 	// 获取所有者信息填充 Username/CallSign（数据库为准，补齐运行时字段）
 	if gormDev.OwnerID > 0 {
@@ -183,6 +187,7 @@ func addDevice(dev *models.Device, resolveInitialGroup func() int) (*models.Devi
 		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
 			modelDev.Username = owner.Name
 			modelDev.CallSign = owner.CallSign
+			modelDev.Nickname = owner.NickName
 		}
 	}
 	modelDev.CallSignSSID = protocol.GetCallSignSSID(modelDev.CallSign, modelDev.SSID)
@@ -213,6 +218,7 @@ func getDevice(callsign string, ssid byte) *models.Device {
 		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
 			dev.Username = owner.Name
 			dev.CallSign = owner.CallSign
+			dev.Nickname = owner.NickName
 		}
 	}
 
@@ -237,6 +243,7 @@ func getDeviceByDMRID(dmrid uint32) *models.Device {
 		if owner, err := userRepo.GetUserByID(dev.OwnerID); err == nil && owner != nil {
 			dev.CallSign = owner.CallSign
 			dev.Username = owner.Name
+			dev.Nickname = owner.NickName
 		}
 	}
 
@@ -702,6 +709,7 @@ func GetDeviceByID(deviceID int) *models.Device {
 		if owner, err := userRepo.GetUserByID(gormDev.OwnerID); err == nil && owner != nil {
 			dev.Username = owner.Name
 			dev.CallSign = owner.CallSign
+			dev.Nickname = owner.NickName
 		}
 	}
 

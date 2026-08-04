@@ -49,6 +49,7 @@ type Device struct {
 	UDPSocket          *net.UDPConn      `json:"-"`
 	CallSignSSID       string            `json:"callsign_ssid"`
 	Username           string            `json:"username"` // 运行时字段：从认证结果获取，用于索引
+	Nickname           string            `json:"nickname"` // 运行时字段：发送者昵称快照
 	MAC                string            `json:"mac"`      // 运行时字段：设备上报的 MAC，用于快速重连判定
 
 	// Connection state tracking

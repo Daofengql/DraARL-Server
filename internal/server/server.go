@@ -258,6 +258,8 @@ func (s *Server) setupRoutes() {
 				approved.GET("/group/list", handler.GetGroups) // 兼容旧接口
 				approved.GET("/groups/:id", handler.GetGroup)
 				approved.GET("/groups/:id/devices", handler.GetGroupDevices)
+				approved.GET("/groups/:id/messages", handler.GetGroupMessages)
+				approved.GET("/groups/:id/messages/:message_id", handler.GetGroupMessage)
 				approved.POST("/groups", handler.CreateGroup)
 				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
 				approved.POST("/groups/search", handler.SearchGroups)

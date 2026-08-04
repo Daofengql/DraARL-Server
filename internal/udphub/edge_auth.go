@@ -20,6 +20,7 @@ type ProxiedDeviceAuthResult struct {
 	OwnerID        int
 	Username       string
 	CallSign       string
+	Nickname       string
 	SSID           byte
 	DevModel       byte
 	DMRID          uint32
@@ -58,12 +59,12 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte) ProxiedDeviceAuthRe
 	if !protocol.IsValidClientReportedDevModel(model) {
 		model = protocol.DraARLDevModelUnknown
 	}
-	newDevice := &models.Device{Username: authResult.User.Name, CallSign: authResult.CallSign, SSID: packet.SSID, OwnerID: authResult.User.ID, CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID), DevModel: model, Priority: 100, Status: 0, LastOnlineIP: sourceIP}
+	newDevice := &models.Device{Username: authResult.User.Name, CallSign: authResult.CallSign, Nickname: authResult.User.NickName, SSID: packet.SSID, OwnerID: authResult.User.ID, CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID), DevModel: model, Priority: 100, Status: 0, LastOnlineIP: sourceIP}
 	dev, err := addDevice(newDevice, func() int { return resolveAvailableNewDeviceDefaultGroup(authResult.User) })
 	if err != nil || dev == nil {
 		return ProxiedDeviceAuthResult{Error: "device_registration_failed"}
 	}
-	dev.Username, dev.CallSign, dev.DevModel = authResult.User.Name, authResult.CallSign, model
+	dev.Username, dev.CallSign, dev.Nickname, dev.DevModel = authResult.User.Name, authResult.CallSign, authResult.User.NickName, model
 	if dev.GroupID > 0 {
 		if gp, ok := GetGroupFromCache(dev.GroupID); ok {
 			attachRuntimeDeviceToGroup(gp, dev)
@@ -72,7 +73,7 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte) ProxiedDeviceAuthRe
 	response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
 	dev.ISOnline, dev.LastPacketTime, dev.OnlineTime = true, time.Now(), time.Now()
 	indexRuntimeDevice(dev)
-	return ProxiedDeviceAuthResult{Success: true, ResponsePacket: response, DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign, SSID: dev.SSID, DevModel: dev.DevModel, DMRID: dev.DMRID, GroupID: dev.GroupID, DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv}
+	return ProxiedDeviceAuthResult{Success: true, ResponsePacket: response, DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, SSID: dev.SSID, DevModel: dev.DevModel, DMRID: dev.DMRID, GroupID: dev.GroupID, DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv}
 }
 
 func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet) ProxiedDeviceAuthResult {
@@ -88,14 +89,15 @@ func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet) Pr
 	now := time.Now()
 	ghost := GlobalUDPGhostManager.Get(result.User.Name, ssid)
 	if ghost == nil {
-		ghost = &models.Device{Username: result.User.Name, CallSign: result.CallSign, SSID: ssid, OwnerID: result.User.ID, DevModel: packet.DevModel, GroupID: groupID, ISOnline: true, LastPacketTime: now, OnlineTime: now}
+		ghost = &models.Device{Username: result.User.Name, CallSign: result.CallSign, Nickname: result.User.NickName, SSID: ssid, OwnerID: result.User.ID, DevModel: packet.DevModel, GroupID: groupID, ISOnline: true, LastPacketTime: now, OnlineTime: now}
 		GlobalUDPGhostManager.Register(ghost)
 	} else {
 		ghost.ISOnline, ghost.LastPacketTime, ghost.UDPAddr = true, now, packet.UDPAddr
+		ghost.Username, ghost.CallSign, ghost.Nickname = result.User.Name, result.CallSign, result.User.NickName
 	}
 	response := protocol.EncodeDraARLv1(packet.Username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, result.CallSign, []byte{protocol.JWTAuthSuccess})
 	_ = sourceIP
-	return ProxiedDeviceAuthResult{Success: true, ResponsePacket: response, DeviceID: ghost.ID, OwnerID: ghost.OwnerID, Username: ghost.Username, CallSign: ghost.CallSign, SSID: ghost.SSID, DevModel: ghost.DevModel, DMRID: ghost.DMRID, GroupID: ghost.GroupID, DisableSend: ghost.DisableSend, DisableRecv: ghost.DisableRecv}
+	return ProxiedDeviceAuthResult{Success: true, ResponsePacket: response, DeviceID: ghost.ID, OwnerID: ghost.OwnerID, Username: ghost.Username, CallSign: ghost.CallSign, Nickname: ghost.Nickname, SSID: ghost.SSID, DevModel: ghost.DevModel, DMRID: ghost.DMRID, GroupID: ghost.GroupID, DisableSend: ghost.DisableSend, DisableRecv: ghost.DisableRecv}
 }
 
 // DeviceSourceAddr is a small helper for callers that need a valid source IP.

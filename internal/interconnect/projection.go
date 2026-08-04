@@ -16,7 +16,9 @@ type DeviceRoute struct {
 	DeviceID     int    `json:"device_id"`
 	Username     string `json:"username"`
 	CallSign     string `json:"callsign"`
+	Nickname     string `json:"nickname"`
 	SSID         byte   `json:"ssid"`
+	DevModel     byte   `json:"dev_model"`
 	GroupID      int    `json:"group_id"`
 	DomainID     uint64 `json:"domain_id"`
 	SessionEpoch uint64 `json:"session_epoch"`

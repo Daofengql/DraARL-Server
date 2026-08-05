@@ -45,8 +45,23 @@ DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 DraARL 平台的�
 | 50 | 1B | SSID | byte | 设备子号 (0-255) |
 | 51 | 3B | DMRID | uint24 BE | DMR ID |
 | 54 | 32B | CallSign | string | 业余电台呼号，服务器填充，设备发送时留空 |
-| 86 | 4B | Reserved | - | 保留字段，填 0 |
+| 86 | 4B | Reserved | uint32 BE | 按客户端能力和方向解释，见下述 Reserved 语义 |
 | 90 | 变长 | DATA | []byte | 负载数据 |
+
+---
+
+### Reserved 字段语义
+
+Reserved 只对幽灵设备的现代会话启用，标准 UDP 实体设备和 legacy 幽灵设备继续填 0：
+
+| 场景 | 值 |
+|---|---|
+| 现代 UDP 幽灵上行心跳、文本、语音 | 认证成功响应中的 `session_tag` |
+| 现代 UDP 幽灵认证成功响应 | 服务端签发的 `session_tag` |
+| 声明 `source_group_v1` 的现代幽灵下行 Type 4/5 | 消息真实 `source_group_id` |
+| legacy 幽灵或标准实体设备 | `0` |
+
+`session_tag` 只用于在热路径定位已认证 Session。服务端还会联合校验 Username、SSID、DevModel、UDP 端点、账号和 Session 状态；tag 不是凭据，地址变化后必须重新认证。群组 ID 必须可表示为非零 32 位无符号整数。
 
 ---
 
@@ -335,7 +350,7 @@ DATA = [0x03, 0x00, ts(8 bytes)]
 
 #### 认证请求
 
-客户端发送 JWT Token 进行身份认证：
+legacy 客户端把 JWT Token 原文放入 DATA。该格式保留兼容，但同账号同平台只能有一个 legacy Session，且只能收听发送频道：
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -349,12 +364,28 @@ DATA = [0x03, 0x00, ts(8 bytes)]
 │    SSID: 0 (服务器会用 DevModel 作为 SSID)                    │
 │    DMRID: 0                                                  │
 │    CallSign: 空 (服务器填充)                                  │
-│    Reserved: 4字节保留                                        │
+│    Reserved: legacy 填 0；现代客户端认证请求也填 0            │
 ├─────────────────────────────────────────────────────────—────┤
 │  DATA 区域                                                    │
 │    JWT Token 字符串 (UTF-8 编码，直到包尾)                    │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+现代客户端把 UTF-8 JSON 放入 DATA：
+
+```json
+{
+  "version": 1,
+  "token": "<JWT access token>",
+  "client_instance_id": "41a065d7-f9e1-4785-bbcb-22c3ca8784ad",
+  "capabilities": ["multi_receive_v1", "source_group_v1"]
+}
+```
+
+- `client_instance_id` 是安装范围持久化的随机 UUID，不得使用 IMEI、MAC 或 Android ID。
+- `multi_receive_v1` 与 `source_group_v1` 必须同时声明才启用多收。
+- 现代客户端允许同账号多端在线；同一安装实例重连只替换自己的旧 Session。
+- Type 1 只用于 UDP 幽灵型号 `101-104`。Web `105` 在 WebSocket HTTP 握手中通过 HttpOnly Cookie 认证。
 
 #### 认证响应
 
@@ -372,7 +403,7 @@ DATA = [0x03, 0x00, ts(8 bytes)]
 │    SSID: 服务器分配 (等于 DevModel)                           │
 │    DMRID: 0                                                  │
 │    CallSign: 成功时填充用户呼号，失败时为空                    │
-│    Reserved: 4字节保留                                        │
+│    Reserved: legacy 填 0；现代成功响应为 session_tag           │
 ├──────────────────────────────────────────────────────────────┤
 │  DATA 区域                                                    │
 │    [0]: 状态码                                                │
@@ -387,11 +418,26 @@ DATA = [0x03, 0x00, ts(8 bytes)]
 └──────────────────────────────────────────────────────────────┘
 ```
 
+现代成功响应仍保留 `DATA[0] = 0`，随后为 JSON，同时 Reserved 携带相同的 `session_tag`：
+
+```json
+{
+  "version": 1,
+  "session_id": "7fbbbd37-9207-4df2-b79d-e400e0a09fd0",
+  "session_tag": 270544961,
+  "client_instance_id": "41a065d7-f9e1-4785-bbcb-22c3ca8784ad",
+  "tx_group_id": 1001,
+  "rx_group_ids": [1001, 1002]
+}
+```
+
+后续现代 UDP 上行包必须使用服务端返回的 Username/SSID/DevModel，并在 Reserved 中携带 `session_tag`。媒体包不能声明任意发送群组，服务端始终取 Session 的唯一 `tx_group_id`。
+
 #### 认证流程
 
 ![JWT认证流程](assets/diagrams/jwt-auth-flow.svg)
 
-> **注意**：JWT 认证包仅用于幽灵设备（DevModel 101-104）。普通设备（如 ESP32、互联设备、各类对讲桥接器）仍使用设备密码认证，通过心跳包完成。
+> **注意**：JWT 认证包仅用于 UDP 幽灵设备（DevModel 101-104）。普通设备（如 ESP32、互联设备、各类对讲桥接器）仍使用设备密码认证并严格保持单端；Web 幽灵设备在 WebSocket 握手中认证。
 
 ### Opus 语音格式 (TypeOpus16K)
 
@@ -510,7 +556,9 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 - **普通 UDP 在线冲突**：同一用户同一 SSID 只允许一台在线，新地址冲突时新设备收到拒绝响应，旧设备保持在线
 - **普通 UDP 同 MAC 快速重连**：如果新心跳携带的 MAC 与当前在线实例记录的 MAC 一致，则视为同一物理设备短暂断线后的重连，允许直接接管新地址
 - **普通 UDP MAC 映射生命周期**：设备在线时记录 `owner_id + ssid -> mac`；设备被彻底判定离线后删除该映射
-- **幽灵设备在线冲突**：同一用户同一平台只允许一个在线实例，冲突时新设备认证失败，旧设备保持在线
+- **现代幽灵设备多端**：携带稳定 `client_instance_id` 和版本化能力的幽灵客户端按 Session 隔离，同一账号同平台可以多端在线
+- **legacy 幽灵设备冲突**：未携带实例 ID 的旧客户端仍占用同平台单实例槽位，冲突时新连接失败，旧连接保持在线
+- **多收单发**：每个现代 Session 有一个 `tx_group_id` 和多个 `rx_group_ids`；发送频道必须包含在接收集合中
 
 ### 1. 普通设备上线认证（设备密码）
 
@@ -637,6 +685,7 @@ UDP 服务端实施以下安全策略，超出限制的数据包将被静默丢�
 | v1.2 | 2026-03 | 简化协议头，移除 Status 和 SeqNum 字段，头部从 93 字节简化为 90 字节 |
 | v1.3 | 2026-03 | 优化弱网性能：Opus 帧时长从 20ms 改为 60ms，WebSocket 客户端采用 2 帧合并发送（120ms 间隔）|
 | v1.4 | 2026-03 | 新增 JWT 认证方式（Type=1），支持幽灵设备（App/PC 客户端）接入；新增设备型号 104 (macOS)、107 (ESP32)；定义 SSID 分配规则 |
+| v1.5 | 2026-08 | 新增版本化幽灵认证、客户端实例与 Session、UDP session tag、多收单发及下行来源频道；标准实体设备保持原单端语义 |
 | v1.5 | 2026-03 | 性能优化：PTT 会话阈值从 200ms 提升到 600ms（适配 60-180ms 大包架构）；限速器从 25 PPS 放宽到 150 PPS；放弃批量发送缓冲，改用直接发送；补全 WS→UDP Ghost 路由；修复时长统计 |
 | v1.6 | 2026-03 | 新增 Config 包协议 (Type=3)，支持 UDP 普通设备配置同步（TLV 格式），包含查询、下发、上报、时间同步四种操作 |
 | v1.7 | 2026-03 | 新增动态码绑定流程，支持无输入能力的普通设备通过 Web 端完成账号绑定 |

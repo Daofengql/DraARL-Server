@@ -31,15 +31,17 @@
 |---|---|---|
 | P0 安全基线 | 服务端完成 | 通信记录详情授权、统一群组 ACL、幽灵录音会话键及 MySQL 回归测试已提交 |
 | P1 频道消息 API | 服务端完成 | 独立列表/详情、游标、发送者快照、互联群组有界查询和百万行 MySQL 验收已完成 |
-| P2 客户端消息迁移 | 部分完成 | Web 已切换频道消息 API；Android 待适配 |
+| P2 客户端消息迁移 | 完成 | Web 与 Android 均已切换频道消息 API；Android 游标、结构化发送者和来源频道映射已通过自动化门禁 |
 | P3 Session 基础 | 服务端完成 | GhostSession、安装实例偏好、订阅关系和原子 routing API 已完成 |
 | P4 Web 多端多收 | 完成 | WebSocket 多 Session、来源频道、收听选择、分流解码和可控混音已完成 |
-| P5 UDP 多端多收 | 部分完成 | 服务端协议、鉴权、Session 路由和 fan-out 已完成；Android 待适配 |
+| P5 UDP 多端多收 | 完成 | 服务端协议、鉴权、Session 路由和 fan-out 已完成；Android 已接入现代认证、Session tag、多收路由和来源流隔离 |
 | P6 节点互联 | 服务端完成 | 功能位 8、跨边缘多 Session、迁移、重确认和去重已完成 |
-| P7 验收 | 服务端专项完成 | 跨边缘 E2E、竞态、1,000 Session 压测、百万消息计划已通过；最终全量门禁和 Android 真机/E2E 待完成 |
+| P7 验收 | 自动化完成，真机待验 | 服务端全量/专项门禁与 Android `test lintDebug assembleDebug` 已通过；双 Android 真机和网络切换 E2E 待完成 |
 | P8 灰度与清理 | 未开始 | Android 完成并通过完整验收后执行；legacy 兼容路径当前保留 |
 
-进度只按已有代码和测试证据勾选。服务端完成不代表 Android 已完成；Android 相关条目在客户端实际适配和验收前保持未勾选。
+进度只按已有代码和测试证据勾选。Android 自动化完成不代表真机 E2E 已完成；涉及双机、网络切换和实际听感的条目在取得设备验收证据前保持未勾选。
+
+Android 适配已在 `DraARL-Android` 的 `5c9f645`、`e950e4b`、`ab2feb6`、`4b1661b` 等本地提交中分阶段完成，最终验证提交为 `d9a8fbd`。Ubuntu VM 隔离副本使用 JDK 21、Android SDK 36.1、NDK `28.2.13676358` 和 CMake `3.22.1` 执行 `test lintDebug assembleDebug`，53 个 Gradle task 成功，生成 44 份测试 XML、lint HTML 报告和约 49 MB 的 debug APK。该证据覆盖编译、单元测试、静态检查和打包，不替代两台 Android 真机同时在线及网络切换测试。
 
 ## 0. 目标、边界与术语
 
@@ -75,7 +77,7 @@
 - [ ] 决定是否增加账号级语音话权锁；建议同一账号同一时刻只允许一个幽灵会话发起 PTT，避免两个移动设备同时发言。
 - [ ] 明确文本消息是否受账号级话权锁限制；建议文本不占用语音 PTT 锁，但仍只能发往当前 `tx_group_id`。
 - [x] 订阅实体群组后自动接收其当前互联通信域中的消息，并按 Session 去重。
-- [ ] 多个无关频道同时出现语音时：Web 已采用按来源流隔离、按频道开关和音量的可控混音；Android 策略待实现并验收。
+- [x] 多个无关频道同时出现语音时：Web 采用按来源流隔离、按频道开关和音量的可控混音；Android 按完整讲话流隔离解码并按到达顺序串行排队播放。
 - [x] 第一版消息历史使用当前启用的互联拓扑，并已在 API 文档中说明。
 
 ## 1. 现有问题修复与安全基线
@@ -173,10 +175,10 @@
 
 ### 3.1 稳定客户端实例
 
-- [ ] Web 已生成并持久化随机 UUID `client_instance_id`；Android、iOS、Windows 和 macOS 待适配。
-- [ ] Web 已按安装范围持久化 `client_instance_id`；其他原生客户端待适配。
-- [ ] Web 已使用随机 UUID；Android 等原生客户端仍需确认不使用 IMEI、Android ID、MAC 或其他硬件指纹。
-- [ ] Web JWT/WS 认证已提交 `client_instance_id` 和能力版本；Android UDP 认证待适配。
+- [ ] Web 与 Android 已生成并持久化随机 UUID `client_instance_id`；iOS、Windows 和 macOS 待适配。
+- [ ] Web 与 Android 已按安装范围持久化 `client_instance_id`；其他原生客户端待适配。
+- [ ] Web 与 Android 已使用随机 UUID 且不使用 IMEI、Android ID、MAC 或其他硬件指纹；其他原生客户端待确认。
+- [ ] Web JWT/WS 与 Android UDP 认证已提交 `client_instance_id` 和能力版本；其他原生客户端待适配。
 - [x] 老客户端没有 `client_instance_id` 时进入 legacy 单实例槽位，并继续保持同平台单端限制。
 - [x] 新客户端不得仅凭 `client_instance_id` 获得权限；服务端始终先验证 JWT 和账号状态。
 
@@ -337,20 +339,20 @@
 
 ## 10. Android 客户端改造
 
-- [ ] 生成并安全持久化 Android `client_instance_id`。
-- [ ] 扩展 UDP JWT 认证请求与成功响应解析。
-- [ ] 在后续上行心跳、文本和语音包中携带 `session_tag`。
-- [ ] 解析下行媒体包的 `source_group_id`，不得继续使用当前 `selectedGroupId` 代替来源频道。
-- [ ] 本地消息缓存继续按 `account_key + group_id` 隔离，但以真实来源频道保存消息。
-- [ ] 增加唯一发送频道和多接收频道设置。
-- [ ] 使用 Session routing API 原子更新 `tx_group_id/rx_group_ids`。
-- [ ] App 退到后台后继续维持自己的 Session，不受其他手机上线影响。
-- [ ] 移除 `JWTAuthGhostDeviceConflict` 作为新版 Android 同平台正常多端场景的等待逻辑。
-- [ ] legacy 服务端仍返回冲突时保留兼容提示。
-- [ ] 历史同步改用新的群组消息 API 和游标。
-- [ ] 使用结构化 sender 字段判断本人消息，不再依赖 `device_name` 和固定字符串解析。
-- [ ] 接收语音组装从单个全局 incoming stream 改为按 `source_group_id + sender identity` 隔离。
-- [ ] 定义并实现多频道同时出现语音时的播放、排队、未读和自动播放策略。
+- [x] 生成并安全持久化 Android `client_instance_id`。
+- [x] 扩展 UDP JWT 认证请求与成功响应解析。
+- [x] 在后续上行心跳、文本和语音包中携带 `session_tag`。
+- [x] 解析下行媒体包的 `source_group_id`，不得继续使用当前 `selectedGroupId` 代替来源频道。
+- [x] 本地消息缓存继续按 `account_key + group_id` 隔离，并以真实来源频道保存实时消息。
+- [x] 增加唯一发送频道和多接收频道设置，并将消息查看频道与发送频道解耦。
+- [x] 使用 Session routing API 原子更新 `tx_group_id/rx_group_ids`。
+- [x] App 退到后台后继续由前台服务维持自己的 Session，不受其他手机上线影响。
+- [x] 移除 `JWTAuthGhostDeviceConflict` 作为新版 Android 同平台正常多端场景的等待逻辑。
+- [x] legacy 服务端仍返回冲突时保留兼容提示。
+- [x] 历史同步改用新的群组消息 API 和游标。
+- [x] 使用结构化 sender 字段判断本人消息，不再依赖 `device_name` 和固定字符串解析。
+- [x] 接收语音组装从单个全局 incoming stream 改为按 `source_group_id + sender identity` 隔离。
+- [x] 多频道同时出现语音时，当前流实时播放，其他完整讲话流缓存并按到达顺序串行补播；消息未听和历史自动播放继续复用现有队列。
 - [ ] 两台 Android 手机使用同一账号时均能在线、独立切换发送频道和订阅集合。
 - [ ] 一台手机断线、切换网络或重认证不得导致另一台手机离线。
 
@@ -409,7 +411,7 @@
 - [ ] Android A 订阅群组 1、2、3，收到消息后分别进入正确频道历史。
 - [ ] Web 与两台 Android 同账号同时在线，任一端下线不影响其他端。
 - [x] 服务端 E2E 已验证两个互联群组同时被订阅时，同一帧只投递一次；Android 场景仍待验收。
-- [x] 服务端按来源 Session/频道隔离流，Web 按来源流混音；Android 播放策略仍待验收。
+- [ ] 服务端按来源 Session/频道隔离流，Web 按来源流混音，Android 已实现按来源流串行排队；Android 双真机听感仍待验收。
 - [x] 实体 UDP 设备尝试第二端上线时仍保持旧设备在线并拒绝新设备。
 - [x] 中心与边缘各存在一个同平台幽灵 Session 时不会互相迁移或撤销。
 - [ ] 网络切换、NAT 端口变化、JWT 刷新和服务重启后的行为符合会话恢复设计。
@@ -441,21 +443,21 @@
 
 - [x] P0：修复通信记录详情越权、统一群组 ACL、修复幽灵录音缓冲键。
 - [x] P1：新增频道消息 API、显式消息字段和游标分页。
-- [ ] P2：Web 与 Android 切换到频道消息 API，停止把通信记录接口当聊天历史接口。（Web 已完成，Android 待适配）
+- [x] P2：Web 与 Android 切换到频道消息 API，停止把通信记录接口当聊天历史接口。
 - [x] P3：实现统一 GhostSession、实例偏好和会话 routing API。
 - [x] P4：实现 WebSocket 多端与多频道订阅。
-- [ ] P5：扩展 UDP 协议、UDP 幽灵多端、来源频道元数据和 Android 多频道接收。（服务端已完成，Android 待适配）
+- [x] P5：扩展 UDP 协议、UDP 幽灵多端、来源频道元数据和 Android 多频道接收。
 - [x] P6：扩展节点互联身份与边缘多 Session 路由。
-- [ ] P7：服务端跨节点 E2E、竞态、1,000 Session 压力、百万消息计划和滚动升级文档已完成；最终全量门禁及 Android 双机/网络切换 E2E 待完成。
+- [ ] P7：服务端跨节点 E2E、竞态、1,000 Session 压力、百万消息计划、滚动升级文档及 Android 自动化门禁已完成；Android 双机/网络切换 E2E 待完成。
 - [ ] P8：灰度开启多端，再灰度开启多频道订阅，最后清理 legacy 兼容代码。
 
 ## 16. 完成定义
 
 - [ ] 同一账号的多台 Android 设备可以同时在线且互不覆盖。
 - [ ] 同一账号的 Web、Android 和其他幽灵客户端可以同时在线且互不覆盖。
-- [x] 服务端与 Web 的每个现代幽灵 Session 可以独立配置一个发送频道和多个接收频道；Android 待接入同一契约。
-- [ ] 所有实时消息都携带可识别的真实来源频道。
-- [ ] Web 与 Android 按频道显示、缓存和同步其他用户的消息历史。
+- [x] 服务端、Web 与 Android 的每个现代幽灵 Session 可以独立配置一个发送频道和多个接收频道。
+- [x] 现代 Web 与 Android 实时消息均携带并解析真实来源频道；legacy 客户端继续按兼容语义处理。
+- [x] Web 与 Android 按频道显示、缓存和同步其他用户的消息历史。
 - [x] 通信记录与频道消息 API 的权限、返回模型和产品用途清晰分离。
 - [x] 标准 UDP 实体设备仍严格保持单端在线。
 - [ ] 中心、边缘和互联场景下均不存在会话覆盖、重复投递、串音或越权。

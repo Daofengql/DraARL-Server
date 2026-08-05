@@ -108,7 +108,10 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	controller := ghostsession.Controller{
 		ApplyRouting: func(next ghostsession.Routing) error {
 			if device.GhostSessionID != "" && GlobalUDPGhostManager.GetSession(device.GhostSessionID) == device {
-				return GlobalUDPGhostManager.SetSessionRouting(device.GhostSessionID, next)
+				if err := GlobalUDPGhostManager.SetSessionRouting(device.GhostSessionID, next); err != nil {
+					return err
+				}
+				return ActivateCenterLocalDevice(device)
 			}
 			device.GroupID = next.TxGroupID
 			device.GhostRxGroupIDs = append([]int(nil), next.RxGroupIDs...)

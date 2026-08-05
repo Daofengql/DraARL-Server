@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,20 +16,27 @@ import (
 // authoritative transport is the centre process. interconnect binds these
 // callbacks at runtime; udphub deliberately does not import that package.
 type CenterLocalSource struct {
-	SessionID    uint64
-	SessionEpoch uint64
-	DeviceID     int
-	OwnerID      int
-	Username     string
-	CallSign     string
-	Nickname     string
-	SSID         byte
-	DevModel     byte
-	DMRID        uint32
-	GroupID      int
-	DomainID     uint64
-	DisableSend  bool
-	DisableRecv  bool
+	SessionID            uint64
+	SessionEpoch         uint64
+	DeviceID             int
+	OwnerID              int
+	Username             string
+	CallSign             string
+	Nickname             string
+	SSID                 byte
+	DevModel             byte
+	DMRID                uint32
+	GroupID              int
+	DomainID             uint64
+	RxGroupIDs           []int
+	RxDomainIDs          []uint64
+	GhostSessionID       string
+	ClientInstanceID     string
+	SessionTag           uint32
+	GhostProtocolVersion uint16
+	SourceGroupV1        bool
+	DisableSend          bool
+	DisableRecv          bool
 }
 
 type CenterInterconnectHooks struct {
@@ -72,7 +80,10 @@ func centerSourceFromDevice(dev *models.Device) CenterLocalSource {
 		SessionID: dev.InterconnectSessionID, SessionEpoch: dev.InterconnectSessionEpoch,
 		DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname,
 		SSID: dev.SSID, DevModel: dev.DevModel, DMRID: dev.DMRID, GroupID: dev.GroupID,
-		DomainID:    GetActiveCommunicationDomainID(dev.GroupID),
+		DomainID:   GetActiveCommunicationDomainID(dev.GroupID),
+		RxGroupIDs: append([]int(nil), dev.GhostRxGroupIDs...), RxDomainIDs: GetActiveCommunicationDomainIDs(dev.GhostRxGroupIDs),
+		GhostSessionID: dev.GhostSessionID, ClientInstanceID: dev.ClientInstanceID, SessionTag: dev.GhostSessionTag,
+		GhostProtocolVersion: dev.GhostProtocolVersion, SourceGroupV1: dev.GhostProtocolVersion > 0 && ghostCapability(dev.GhostCapabilities, "source_group_v1"),
 		DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv,
 	}
 }
@@ -189,6 +200,9 @@ func centerSourceFromWS(source interfaces.WSDeviceInterface, groupID int) Center
 		DeviceID: source.GetDeviceID(), OwnerID: source.GetUserID(), Username: source.GetUsername(),
 		CallSign: source.GetCallSign(), Nickname: source.GetNickname(), SSID: source.GetSSID(), DevModel: source.GetDevModel(),
 		GroupID: groupID, DomainID: GetActiveCommunicationDomainID(groupID),
+		RxGroupIDs: source.GetRxGroupIDs(), RxDomainIDs: GetActiveCommunicationDomainIDs(source.GetRxGroupIDs()),
+		GhostSessionID: source.GetSessionID(), ClientInstanceID: source.GetClientInstanceID(),
+		GhostProtocolVersion: source.GetProtocolVersion(), SourceGroupV1: source.HasCapability("source_group_v1"),
 		DisableSend: source.IsDisabledSend(), DisableRecv: source.IsDisabledRecv(),
 	}
 }
@@ -266,6 +280,21 @@ func sendRemoteDeviceConfig(deviceID int, packet []byte, timeout time.Duration) 
 
 var domainGroupReverseCache sync.Map // domain ID -> representative active group ID
 
+func GetActiveCommunicationDomainIDs(groupIDs []int) []uint64 {
+	set := make(map[uint64]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if domainID := GetActiveCommunicationDomainID(groupID); domainID != 0 {
+			set[domainID] = struct{}{}
+		}
+	}
+	result := make([]uint64, 0, len(set))
+	for domainID := range set {
+		result = append(result, domainID)
+	}
+	slices.Sort(result)
+	return result
+}
+
 func resetDomainGroupReverseCache() {
 	domainGroupReverseCache = sync.Map{}
 }
@@ -299,14 +328,27 @@ func DeliverInterconnectPacket(domainID uint64, data []byte) bool {
 	if protocol.ValidateRelayInnerPacket(data) != nil {
 		return false
 	}
-	groupID := GetActiveGroupIDForCommunicationDomain(domainID)
+	groupID := 0
+	if len(data) >= protocol.DraARLv1HeaderSize {
+		candidate := int(protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]))
+		if candidate > 0 && GetActiveCommunicationDomainID(candidate) == domainID {
+			groupID = candidate
+		}
+	}
+	if groupID == 0 {
+		groupID = GetActiveGroupIDForCommunicationDomain(domainID)
+	}
 	if groupID == 0 {
 		return false
 	}
-	writeUDPDomain(data, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
+	legacyData := data
+	if cleared, ok := protocol.WithReservedUint32(data, 0); ok {
+		legacyData = cleared
+	}
+	writeUDPDomain(legacyData, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		GlobalMessageRouter.wsManager.BroadcastToGroups(
-			activeDomainGroupIDs(groupID), data, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
+			activeDomainGroupIDs(groupID), legacyData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
 		)
 	}
 	return true

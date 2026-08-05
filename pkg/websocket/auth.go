@@ -12,6 +12,7 @@ import (
 	"draarl/internal/groupaccess"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
+	"draarl/internal/udphub"
 	"draarl/pkg/jwt"
 
 	"github.com/gorilla/websocket"
@@ -96,7 +97,9 @@ func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnection
 	controller := ghostsession.Controller{
 		ApplyRouting: func(routing ghostsession.Routing) error {
 			if current, exists := manager.GetGhostSession(device.SessionID); exists && current == device {
-				return manager.SetDeviceRouting(device, routing)
+				return applyAuthenticatedRouting(manager, device, routing, func(device *WSDevice, groupID int) bool {
+					return udphub.AuthorizeCenterLocalWS(device, groupID)
+				})
 			}
 			device.setRouting(routing)
 			return nil
@@ -146,6 +149,23 @@ func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnection
 	}
 	log.Printf("[WS-AUTH] session authenticated: session=%s user=%d tx=%d rx=%v legacy=%v", session.SessionID, session.OwnerID, session.TxGroupID, session.RxGroupIDs, session.Legacy)
 	return device, nil
+}
+
+func applyAuthenticatedRouting(manager *WSConnectionManager, device *WSDevice, routing ghostsession.Routing, authorize func(*WSDevice, int) bool) error {
+	previous := ghostsession.Routing{TxGroupID: device.GetGroupID(), RxGroupIDs: device.GetRxGroupIDs()}
+	if err := manager.SetDeviceRouting(device, routing); err != nil {
+		return err
+	}
+	if authorize == nil || authorize(device, routing.TxGroupID) {
+		return nil
+	}
+
+	projectionErr := errors.New("center session route update failed")
+	rollbackErr := manager.SetDeviceRouting(device, previous)
+	if rollbackErr == nil && !authorize(device, previous.TxGroupID) {
+		rollbackErr = errors.New("center session route rollback failed")
+	}
+	return errors.Join(projectionErr, rollbackErr)
 }
 
 func AuthenticateWebSocketRequest(r *http.Request) *AuthResult {

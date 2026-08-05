@@ -221,6 +221,10 @@ func (d *WSDevice) GetSessionID() string {
 	return d.SessionID
 }
 
+func (d *WSDevice) GetClientInstanceID() string { return d.ClientInstanceID }
+
+func (d *WSDevice) GetProtocolVersion() uint16 { return d.ProtocolVersion }
+
 func (d *WSDevice) HasCapability(capability string) bool {
 	capability = strings.ToLower(strings.TrimSpace(capability))
 	index := sort.SearchStrings(d.Capabilities, capability)

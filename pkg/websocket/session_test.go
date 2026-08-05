@@ -129,6 +129,38 @@ func TestSetDeviceRoutingAtomicallyMovesAllSubscriptionIndexes(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedRoutingRollsBackIndexesWhenCenterProjectionFails(t *testing.T) {
+	manager := NewWSConnectionManager()
+	device := newTestGhostSession("routing-rollback", 12, 1001, []int{1001, 1002}, nil)
+	if err := manager.RegisterGhostDevice(device, device.UserID, device.Username, device.CallSign, "", device.SSID); err != nil {
+		t.Fatal(err)
+	}
+
+	authorizeCalls := make([]int, 0, 2)
+	err := applyAuthenticatedRouting(manager, device, ghostsession.Routing{TxGroupID: 1003, RxGroupIDs: []int{1003, 1004}}, func(_ *WSDevice, groupID int) bool {
+		authorizeCalls = append(authorizeCalls, groupID)
+		return groupID == 1001
+	})
+	if err == nil {
+		t.Fatal("failed center projection unexpectedly committed WebSocket routing")
+	}
+	if got := device.GetGroupID(); got != 1001 {
+		t.Fatalf("tx group after rollback=%d want=1001", got)
+	}
+	if got := device.GetRxGroupIDs(); len(got) != 2 || got[0] != 1001 || got[1] != 1002 {
+		t.Fatalf("rx groups after rollback=%v", got)
+	}
+	if len(manager.GetDevicesByGroup(1003)) != 0 || len(manager.GetDevicesByGroup(1004)) != 0 {
+		t.Fatal("failed routing remained in subscription indexes")
+	}
+	if len(manager.GetDevicesByGroup(1001)) != 1 || len(manager.GetDevicesByGroup(1002)) != 1 {
+		t.Fatal("previous subscription indexes were not restored")
+	}
+	if len(authorizeCalls) != 2 || authorizeCalls[0] != 1003 || authorizeCalls[1] != 1001 {
+		t.Fatalf("projection calls=%v want=[1003 1001]", authorizeCalls)
+	}
+}
+
 func TestLegacyConflictCheckIgnoresModernSessions(t *testing.T) {
 	manager := NewWSConnectionManager()
 	modern := newTestGhostSession("modern-session", 21, 1001, []int{1001}, nil)

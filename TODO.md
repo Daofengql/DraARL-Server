@@ -285,17 +285,17 @@
 
 > 多端会话必须覆盖中心直连和边缘节点，不能只在单机模式可用。
 
-- [ ] 现有实体设备互联身份继续保持 `owner_id + ssid`。
-- [ ] 幽灵设备互联身份扩展为 `owner_id + ssid + client/session identity`。
-- [ ] `DeviceGrant`、中心 active identity、Session epoch 和撤销消息增加可选幽灵实例字段。
-- [ ] legacy 实体设备与 legacy 幽灵设备保持旧身份编码，避免无条件破坏节点协议。
-- [ ] 中心不得因为第二个同平台幽灵 Session 上线而迁移或撤销第一个 Session。
-- [ ] Session 路由携带唯一发送频道和接收订阅所需信息。
-- [ ] Relay 上行继续以服务端 Session 的 `tx_group_id/domain_id` 为准。
-- [ ] Relay 下行向边缘多订阅 Session 投递时按 Session 去重。
-- [ ] 节点会话报告、批量确认、重连恢复和撤销按扩展身份精确处理。
-- [ ] `routesync.PublishIdentity` 等仅按 `user_id + dev_model` 发布的路径改为支持幽灵实例，不影响实体设备。
-- [ ] 设计节点协议能力协商；旧边缘节点不支持多端时应明确降级或拒绝，不得静默覆盖会话。
+- [x] 现有实体设备互联身份继续保持 `owner_id + ssid`。
+- [x] 幽灵设备互联身份扩展为 `owner_id + ssid + client/session identity`。
+- [x] `DeviceGrant`、中心 active identity 和 Session 确认增加可选幽灵实例字段；撤销消息继续使用全局唯一 `session_id + session_epoch` 精确定位，避免重复暴露实例字段。
+- [x] legacy 实体设备与 legacy 幽灵设备保持旧身份编码，避免无条件破坏节点协议。
+- [x] 中心不得因为第二个同平台幽灵 Session 上线而迁移或撤销第一个 Session。
+- [x] Session 路由携带唯一发送频道和接收订阅所需信息。
+- [x] Relay 上行继续以服务端 Session 的 `tx_group_id/domain_id` 为准。
+- [x] Relay 下行向边缘多订阅 Session 投递时按 Session 去重。
+- [x] 节点会话报告、批量确认、重连恢复和撤销按扩展身份精确处理。
+- [x] `routesync.PublishIdentity` 等仅按 `user_id + dev_model` 发布的路径改为支持幽灵实例，不影响实体设备。
+- [x] 设计节点协议能力协商；旧边缘节点不支持多端时应明确降级或拒绝，不得静默覆盖会话。
 - [ ] 制定滚动升级顺序：中心先兼容新旧协议，再升级边缘，最后开启多端开关。
 - [ ] 增加中心直连、边缘直连、边缘切换、控制链路断线恢复和跨节点同账号多端测试。
 
@@ -419,13 +419,13 @@
 
 ## 15. 推荐实施顺序
 
-- [ ] P0：修复通信记录详情越权、统一群组 ACL、修复幽灵录音缓冲键。
-- [ ] P1：新增频道消息 API、显式消息字段和游标分页。
-- [ ] P2：Web 与 Android 切换到频道消息 API，停止把通信记录接口当聊天历史接口。
-- [ ] P3：实现统一 GhostSession、实例偏好和会话 routing API。
-- [ ] P4：实现 WebSocket 多端与多频道订阅。
-- [ ] P5：扩展 UDP 协议、UDP 幽灵多端、来源频道元数据和 Android 多频道接收。
-- [ ] P6：扩展节点互联身份与边缘多 Session 路由。
+- [x] P0：修复通信记录详情越权、统一群组 ACL、修复幽灵录音缓冲键。
+- [x] P1：新增频道消息 API、显式消息字段和游标分页。
+- [ ] P2：Web 与 Android 切换到频道消息 API，停止把通信记录接口当聊天历史接口。（Web 已完成，Android 待适配）
+- [x] P3：实现统一 GhostSession、实例偏好和会话 routing API。
+- [x] P4：实现 WebSocket 多端与多频道订阅。
+- [ ] P5：扩展 UDP 协议、UDP 幽灵多端、来源频道元数据和 Android 多频道接收。（服务端已完成，Android 待适配）
+- [x] P6：扩展节点互联身份与边缘多 Session 路由。
 - [ ] P7：完成全量端到端、竞态、压力和滚动升级测试。
 - [ ] P8：灰度开启多端，再灰度开启多频道订阅，最后清理 legacy 兼容代码。
 

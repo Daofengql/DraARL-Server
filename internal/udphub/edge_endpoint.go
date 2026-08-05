@@ -4,20 +4,35 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 // EdgeFanoutTarget is the minimal receiver identity required by the existing
 // parallel fan-out engine. It contains no database or authentication state.
 type EdgeFanoutTarget struct {
-	Addr     *net.UDPAddr
-	DeviceID int
-	Username string
-	SSID     byte
-	addrPort netip.AddrPort
+	Addr          *net.UDPAddr
+	DeviceID      int
+	Username      string
+	SSID          byte
+	SessionID     uint64
+	SourceGroupV1 bool
+	addrPort      netip.AddrPort
+}
+
+func NewEdgeSessionFanoutTarget(addr *net.UDPAddr, sessionID uint64, deviceID int, username string, ssid byte, sourceGroupV1 bool) (EdgeFanoutTarget, bool) {
+	target, ok := NewEdgeFanoutTarget(addr, deviceID, username, ssid)
+	if !ok || sessionID == 0 {
+		return EdgeFanoutTarget{}, false
+	}
+	target.SessionID = sessionID
+	target.SourceGroupV1 = sourceGroupV1
+	return target, true
 }
 
 func NewEdgeFanoutTarget(addr *net.UDPAddr, deviceID int, username string, ssid byte) (EdgeFanoutTarget, bool) {
@@ -191,7 +206,11 @@ func (e *EdgeEndpoint) PrepareFanout(targets []EdgeFanoutTarget) *EdgeFanoutPlan
 			continue
 		}
 		seen[addr] = struct{}{}
-		entries = append(entries, domainReceiverEntry{addr: addr, deviceID: target.DeviceID, username: target.Username, ssid: target.SSID})
+		sessionID := ""
+		if target.SessionID != 0 {
+			sessionID = "edge:" + strconv.FormatUint(target.SessionID, 10)
+		}
+		entries = append(entries, domainReceiverEntry{addr: addr, deviceID: target.DeviceID, username: target.Username, ssid: target.SSID, sessionID: sessionID, sourceGroupV1: target.SourceGroupV1})
 	}
 	if len(entries) == 0 {
 		return nil
@@ -211,6 +230,18 @@ func (e *EdgeEndpoint) InvalidateFanoutPlans() {
 }
 
 func (e *EdgeEndpoint) FanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID int, sourceUser string, sourceSSID byte, onComplete func(EdgeFanoutResult)) bool {
+	return e.fanoutPlan(data, plan, sourceID, sourceUser, sourceSSID, "", 0, onComplete)
+}
+
+func (e *EdgeEndpoint) FanoutSessionPlan(data []byte, plan *EdgeFanoutPlan, sourceSessionID uint64, sourceGroupID int, onComplete func(EdgeFanoutResult)) bool {
+	identity := ""
+	if sourceSessionID != 0 {
+		identity = "edge:" + strconv.FormatUint(sourceSessionID, 10)
+	}
+	return e.fanoutPlan(data, plan, 0, "", 0, identity, sourceGroupID, onComplete)
+}
+
+func (e *EdgeEndpoint) fanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string, sourceGroupID int, onComplete func(EdgeFanoutResult)) bool {
 	if e == nil || len(data) == 0 || plan == nil || plan.endpoint != e || plan.workers == 0 || plan.workers != len(e.sender.writers) || plan.generation != e.planGeneration.Load() {
 		return false
 	}
@@ -219,9 +250,18 @@ func (e *EdgeEndpoint) FanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID in
 			onComplete(EdgeFanoutResult{Attempted: result.attempted, Sent: result.sent, Dropped: result.dropped, Errors: result.errors})
 		}
 	}
+	var sourceGroupData []byte
+	if sourceGroupID > 0 {
+		for i := range plan.entries {
+			if plan.entries[i].sourceGroupV1 {
+				sourceGroupData, _ = protocol.WithSourceGroupID(data, sourceGroupID)
+				break
+			}
+		}
+	}
 	if e.sender.enqueue(fanoutFrameJob{
-		data: append([]byte(nil), data...), partitions: plan.partitions,
-		sourceID: sourceID, sourceUser: sourceUser, sourceSSID: sourceSSID,
+		data: append([]byte(nil), data...), sourceGroupData: sourceGroupData, partitions: plan.partitions,
+		sourceID: sourceID, sourceUser: sourceUser, sourceSSID: sourceSSID, sourceSessionID: sourceSessionID,
 		enqueuedAt: time.Now(), snapshotGen: plan.generation, generation: &e.planGeneration,
 		onComplete: complete,
 	}) {
@@ -233,11 +273,15 @@ func (e *EdgeEndpoint) FanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID in
 	result := fanoutWriteResult{}
 	for i := range plan.entries {
 		target := &plan.entries[i]
-		if isSourceTarget(target, sourceID, sourceUser, sourceSSID, "") {
+		if isSourceTarget(target, sourceID, sourceUser, sourceSSID, sourceSessionID) {
 			continue
 		}
 		result.attempted++
-		if _, err := e.conn.WriteToUDPAddrPort(data, target.addr); err == nil {
+		payload := data
+		if target.sourceGroupV1 && len(sourceGroupData) > 0 {
+			payload = sourceGroupData
+		}
+		if _, err := e.conn.WriteToUDPAddrPort(payload, target.addr); err == nil {
 			result.sent++
 		} else {
 			result.errors++

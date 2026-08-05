@@ -38,6 +38,10 @@ func (d *routeTestWSDevice) IsGhost() bool                { return d.ghost }
 func (d *routeTestWSDevice) GetUserID() int               { return d.userID }
 func (d *routeTestWSDevice) GetDeviceID() int             { return d.deviceID }
 func (d *routeTestWSDevice) GetSessionID() string         { return d.identifier }
+func (d *routeTestWSDevice) GetClientInstanceID() string  { return "" }
+func (d *routeTestWSDevice) GetProtocolVersion() uint16   { return 0 }
+func (d *routeTestWSDevice) GetRxGroupIDs() []int         { return []int{d.groupID} }
+func (d *routeTestWSDevice) HasCapability(string) bool    { return false }
 func (d *routeTestWSDevice) GetUsername() string          { return d.username }
 func (d *routeTestWSDevice) GetNickname() string          { return d.nickname }
 func (d *routeTestWSDevice) GetCallSign() string          { return d.callsign }

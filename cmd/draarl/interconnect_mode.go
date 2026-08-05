@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"draarl/internal/config"
+	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
 	"draarl/internal/interconnect"
 	oplog "draarl/internal/log"
@@ -28,7 +29,10 @@ func localSourceGrant(source *udphub.CenterLocalSource) interconnect.DeviceGrant
 	return interconnect.DeviceGrant{
 		SessionID: source.SessionID, SessionEpoch: source.SessionEpoch, DeviceID: source.DeviceID, OwnerID: source.OwnerID,
 		Username: source.Username, CallSign: source.CallSign, Nickname: source.Nickname, SSID: source.SSID, DevModel: source.DevModel, DMRID: source.DMRID,
-		GroupID: source.GroupID, DomainID: source.DomainID, DisableSend: source.DisableSend, DisableRecv: source.DisableRecv,
+		GroupID: source.GroupID, DomainID: source.DomainID, RxGroupIDs: append([]int(nil), source.RxGroupIDs...), RxDomainIDs: append([]uint64(nil), source.RxDomainIDs...),
+		GhostSessionID: source.GhostSessionID, ClientInstanceID: source.ClientInstanceID, SessionTag: source.SessionTag,
+		GhostProtocolVersion: source.GhostProtocolVersion, SourceGroupV1: source.SourceGroupV1,
+		DisableSend: source.DisableSend, DisableRecv: source.DisableRecv,
 	}
 }
 
@@ -143,22 +147,57 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		}
 		return authentication, nil
 	}
+	var runtime *interconnect.CenterRuntime
 	authHandler := func(session *interconnect.NodeSession, request interconnect.DeviceAuthRequest) (interconnect.DeviceAuthResponse, error) {
-		result := udphub.AuthenticateProxiedDevice(request.SourceIP, request.Packet)
+		allowGhostMulti := session != nil && session.Features&interconnect.NodeFeatureGhostMultiSession != 0
+		endpoint := request.SourceIP
+		if session != nil {
+			endpoint = session.NodeID + "/" + request.SourceIP
+		}
+		result := udphub.AuthenticateProxiedDevice(request.SourceIP, request.Packet, udphub.ProxiedDeviceAuthOptions{
+			AllowGhostMultiSession: allowGhostMulti, Endpoint: endpoint,
+			Ghost: udphub.ProxiedGhostSessionHooks{
+				ApplyRouting: func(ghostSessionID string, _ int, _ byte, _ string, routing ghostsession.Routing) error {
+					if runtime == nil || runtime.Gateway == nil {
+						return nil
+					}
+					_, err := runtime.Gateway.UpdateActiveGhostRoute(ghostSessionID, routing.TxGroupID, routing.RxGroupIDs, udphub.GetActiveCommunicationDomainID)
+					return err
+				},
+				Disconnect: func(ghostSessionID, reason string) {
+					if runtime != nil && runtime.Gateway != nil {
+						_, _ = runtime.Gateway.RevokeActiveGhost(ghostSessionID, reason)
+					}
+				},
+			},
+		})
 		if !result.Success {
 			return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: false, Error: result.Error, ResponsePacket: result.ResponsePacket}, nil
 		}
-		grant := &interconnect.DeviceGrant{DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, Nickname: result.Nickname, SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID), DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli()}
+		grant := &interconnect.DeviceGrant{
+			DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, Nickname: result.Nickname,
+			SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID),
+			RxGroupIDs: append([]int(nil), result.RxGroupIDs...), RxDomainIDs: udphub.GetActiveCommunicationDomainIDs(result.RxGroupIDs),
+			GhostSessionID: result.GhostSessionID, ClientInstanceID: result.ClientInstanceID, SessionTag: result.SessionTag,
+			GhostProtocolVersion: result.GhostProtocolVersion, SourceGroupV1: result.SourceGroupV1,
+			DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli(),
+		}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
 	}
 	confirmHandler := func(session *interconnect.NodeSession, items []interconnect.DeviceSessionConfirmItem) ([]interconnect.DeviceSessionConfirmResult, error) {
 		ids := make([]int, 0, len(items))
 		for _, item := range items {
-			ids = append(ids, item.DeviceID)
+			if item.DeviceID > 0 {
+				ids = append(ids, item.DeviceID)
+			}
 		}
-		devices, err := gormdb.NewDeviceRepository().ListDevicesByIDsWithOwner(ids)
-		if err != nil {
-			return nil, err
+		var devices []*gormdb.Device
+		if len(ids) > 0 {
+			var err error
+			devices, err = gormdb.NewDeviceRepository().ListDevicesByIDsWithOwner(ids)
+			if err != nil {
+				return nil, err
+			}
 		}
 		byID := make(map[int]*gormdb.Device, len(devices))
 		for _, device := range devices {
@@ -168,6 +207,25 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		results := make([]interconnect.DeviceSessionConfirmResult, 0, len(items))
 		for _, item := range items {
 			result := interconnect.DeviceSessionConfirmResult{SessionID: item.SessionID, SessionEpoch: item.SessionEpoch}
+			if item.DeviceID == 0 {
+				ghost, ghostErr := udphub.ConfirmProxiedGhostSession(item.GhostSessionID, session.NodeID, item.OwnerID, item.SSID, item.DevModel, item.ClientInstanceID)
+				if ghostErr != nil {
+					result.Error = "persisted_ghost_session_mismatch"
+					results = append(results, result)
+					continue
+				}
+				result.Success = true
+				result.Grant = &interconnect.DeviceGrant{
+					OwnerID: ghost.OwnerID, Username: ghost.Username, CallSign: ghost.CallSign, Nickname: ghost.Nickname,
+					SSID: ghost.SSID, DevModel: ghost.DevModel, GroupID: ghost.TxGroupID, DomainID: udphub.GetActiveCommunicationDomainID(ghost.TxGroupID),
+					RxGroupIDs: append([]int(nil), ghost.RxGroupIDs...), RxDomainIDs: udphub.GetActiveCommunicationDomainIDs(ghost.RxGroupIDs),
+					GhostSessionID: ghost.SessionID, ClientInstanceID: ghost.ClientInstanceID, SessionTag: ghost.SessionTag,
+					GhostProtocolVersion: ghost.ProtocolVersion, SourceGroupV1: ghost.HasCapability("source_group_v1"),
+					DisableSend: ghost.DisableSend, DisableRecv: ghost.DisableRecv, ExpiresAtMillis: now.Add(2 * time.Minute).UnixMilli(),
+				}
+				results = append(results, result)
+				continue
+			}
 			device := byID[item.DeviceID]
 			valid := device != nil && device.Owner != nil && device.OwnerID == item.OwnerID && byte(device.SSID) == item.SSID &&
 				device.CurrentEntryNodeID == session.NodeID && device.CurrentEntrySessionID == item.ControlSessionID &&
@@ -336,7 +394,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			udphub.RecordTextMessage(relay.DeviceID, relay.SSID, groupID, ownerID, sender, string(relay.Payload))
 		}
 	}
-	runtime, err := interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{
+	runtime, err = interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{
 		ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode,
 		Auth: authHandler, Activate: activateDevice, Confirm: confirmHandler, Config: configHandler,
 		OnAcceptedRelay: recordAcceptedRelay, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits,
@@ -344,6 +402,11 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	if err != nil {
 		return nil, err
 	}
+	runtime.Gateway.SetGhostRecoveryWindow(recoveryWindow)
+	runtime.Gateway.SetGhostSessionHandlers(
+		func(sessionID string, now time.Time) { ghostsession.Global.UpdateActivity(sessionID, "", now) },
+		func(sessionID, _ string) { ghostsession.Global.Remove(sessionID) },
+	)
 	time.AfterFunc(recoveryWindow, func() {
 		cleared := 0
 		for _, entry := range startupEntries {

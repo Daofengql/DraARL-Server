@@ -12,18 +12,31 @@ import (
 // DeviceRoute is the only device information required by an edge for local
 // fan-out and permission checks.  It intentionally contains no credentials.
 type DeviceRoute struct {
-	SessionID    uint64 `json:"session_id"`
-	DeviceID     int    `json:"device_id"`
-	Username     string `json:"username"`
-	CallSign     string `json:"callsign"`
-	Nickname     string `json:"nickname"`
-	SSID         byte   `json:"ssid"`
-	DevModel     byte   `json:"dev_model"`
-	GroupID      int    `json:"group_id"`
-	DomainID     uint64 `json:"domain_id"`
-	SessionEpoch uint64 `json:"session_epoch"`
-	DisableSend  bool   `json:"disable_send"`
-	DisableRecv  bool   `json:"disable_recv"`
+	SessionID            uint64   `json:"session_id"`
+	DeviceID             int      `json:"device_id"`
+	Username             string   `json:"username"`
+	CallSign             string   `json:"callsign"`
+	Nickname             string   `json:"nickname"`
+	SSID                 byte     `json:"ssid"`
+	DevModel             byte     `json:"dev_model"`
+	GroupID              int      `json:"group_id"`
+	DomainID             uint64   `json:"domain_id"`
+	RxGroupIDs           []int    `json:"rx_group_ids,omitempty"`
+	RxDomainIDs          []uint64 `json:"rx_domain_ids,omitempty"`
+	GhostSessionID       string   `json:"ghost_session_id,omitempty"`
+	ClientInstanceID     string   `json:"client_instance_id,omitempty"`
+	SessionTag           uint32   `json:"session_tag,omitempty"`
+	GhostProtocolVersion uint16   `json:"ghost_protocol_version,omitempty"`
+	SourceGroupV1        bool     `json:"source_group_v1,omitempty"`
+	SessionEpoch         uint64   `json:"session_epoch"`
+	DisableSend          bool     `json:"disable_send"`
+	DisableRecv          bool     `json:"disable_recv"`
+}
+
+func (r DeviceRoute) clone() DeviceRoute {
+	r.RxGroupIDs = append([]int(nil), r.RxGroupIDs...)
+	r.RxDomainIDs = append([]uint64(nil), r.RxDomainIDs...)
+	return r
 }
 
 type Projection struct {
@@ -42,7 +55,7 @@ func (p *Projection) Clone() *Projection {
 	}
 	out := &Projection{ClusterEpoch: p.ClusterEpoch, Version: p.Version, Devices: make(map[uint64]DeviceRoute, len(p.Devices))}
 	for id, route := range p.Devices {
-		out.Devices[id] = route
+		out.Devices[id] = route.clone()
 	}
 	return out
 }
@@ -119,7 +132,7 @@ func (p *Projection) ApplyDelta(d RouteDelta) error {
 	next := p.Clone()
 	for _, op := range d.Operations {
 		if op.Kind == "upsert" {
-			next.Devices[op.Route.SessionID] = *op.Route
+			next.Devices[op.Route.SessionID] = op.Route.clone()
 		} else {
 			delete(next.Devices, op.SessionID)
 		}

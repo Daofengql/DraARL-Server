@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/protocol"
 	"draarl/internal/udphub"
 )
@@ -48,13 +51,19 @@ type CenterGateway struct {
 	deviceSessions     map[uint64]deviceSessionOwner
 	activeDevices      map[string]uint64
 	activeByID         map[int]uint64
+	activeByGhost      map[string]uint64
 	deviceEpochs       map[string]uint64
+	ghostRecovery      map[string]uint64
+	ghostRecoverySeq   uint64
+	ghostRecoveryAfter time.Duration
 	metrics            map[string]*Metrics
 	onNodeStatus       func(*NodeSession, *NodeHeartbeat, bool)
 	onLocalRevoke      func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64)
 	onDeviceRevoke     func(nodeID string, controlSessionID uint64, deviceID int, reason string)
 	onCredentialResult func(*NodeSession, NodeCredentialControl)
 	onAcceptedRelay    AcceptedRelayHandler
+	onGhostActivity    func(string, time.Time)
+	onGhostRevoke      func(string, string)
 	configHandler      DeviceConfigHandler
 	configMu           sync.Mutex
 	configPending      map[uint64]*pendingDeviceConfigDelivery
@@ -83,6 +92,14 @@ type deviceSessionOwner struct {
 	OwnerID          int
 	SSID             byte
 	Identity         string
+	GhostSessionID   string
+	ClientInstanceID string
+}
+
+type ghostRecoveryTask struct {
+	sessionID string
+	token     uint64
+	after     time.Duration
 }
 
 type pendingDeviceConfigDelivery struct {
@@ -126,10 +143,63 @@ func NewCenterGateway(cluster *ClusterManager, auth DeviceAuthHandler, activator
 	limits := DefaultResourceLimits()
 	return &CenterGateway{
 		cluster: cluster, auth: auth, activate: activate,
-		deviceSessions: make(map[uint64]deviceSessionOwner), activeDevices: make(map[string]uint64), activeByID: make(map[int]uint64), deviceEpochs: make(map[string]uint64), metrics: make(map[string]*Metrics),
+		deviceSessions: make(map[uint64]deviceSessionOwner), activeDevices: make(map[string]uint64), activeByID: make(map[int]uint64), activeByGhost: make(map[string]uint64), deviceEpochs: make(map[string]uint64), ghostRecovery: make(map[string]uint64), ghostRecoveryAfter: 3 * time.Minute, metrics: make(map[string]*Metrics),
 		resourceLimits: limits, sessionCounts: make(map[nodeControlSession]int),
 		configPending: make(map[uint64]*pendingDeviceConfigDelivery), configUpCache: make(map[deviceConfigCacheKey]cachedDeviceConfigResult), configClosed: make(chan struct{}),
 		speaker: NewSpeakerLeaseManager(),
+	}
+}
+
+func (g *CenterGateway) SetGhostRecoveryWindow(window time.Duration) {
+	if window <= 0 {
+		window = 3 * time.Minute
+	}
+	g.mu.Lock()
+	g.ghostRecoveryAfter = window
+	g.mu.Unlock()
+}
+
+func (g *CenterGateway) markGhostRecovery(owners []deviceSessionOwner) []ghostRecoveryTask {
+	g.mu.Lock()
+	if g.ghostRecovery == nil {
+		g.ghostRecovery = make(map[string]uint64)
+	}
+	if g.ghostRecoveryAfter <= 0 {
+		g.ghostRecoveryAfter = 3 * time.Minute
+	}
+	tasks := make([]ghostRecoveryTask, 0, len(owners))
+	for _, owner := range owners {
+		if owner.GhostSessionID == "" {
+			continue
+		}
+		g.ghostRecoverySeq++
+		if g.ghostRecoverySeq == 0 {
+			g.ghostRecoverySeq++
+		}
+		g.ghostRecovery[owner.GhostSessionID] = g.ghostRecoverySeq
+		tasks = append(tasks, ghostRecoveryTask{sessionID: owner.GhostSessionID, token: g.ghostRecoverySeq, after: g.ghostRecoveryAfter})
+	}
+	g.mu.Unlock()
+	return tasks
+}
+
+func (g *CenterGateway) startGhostRecoveryTimers(tasks []ghostRecoveryTask) {
+	for _, task := range tasks {
+		task := task
+		time.AfterFunc(task.after, func() {
+			g.ownershipMu.Lock()
+			g.mu.Lock()
+			expired := g.ghostRecovery[task.sessionID] == task.token && g.activeByGhost[task.sessionID] == 0
+			if expired {
+				delete(g.ghostRecovery, task.sessionID)
+			}
+			handler := g.onGhostRevoke
+			g.mu.Unlock()
+			g.ownershipMu.Unlock()
+			if expired && handler != nil {
+				handler(task.sessionID, "edge_session_recovery_expired")
+			}
+		})
 	}
 }
 
@@ -183,6 +253,13 @@ func (g *CenterGateway) SetAcceptedRelayHandler(handler AcceptedRelayHandler) {
 	g.mu.Unlock()
 }
 
+func (g *CenterGateway) SetGhostSessionHandlers(activity func(string, time.Time), revoke func(string, string)) {
+	g.mu.Lock()
+	g.onGhostActivity = activity
+	g.onGhostRevoke = revoke
+	g.mu.Unlock()
+}
+
 func (g *CenterGateway) IdentityOwnedByRemote(ownerID int, ssid byte) bool {
 	identity := deviceOwnerIdentity(ownerID, ssid)
 	if identity == "" {
@@ -197,16 +274,20 @@ func (g *CenterGateway) IdentityOwnedByRemote(ownerID int, ssid byte) bool {
 func (g *CenterGateway) OnConnect(session *NodeSession) {
 	g.ownershipMu.Lock()
 	g.mu.Lock()
+	recovering := make([]deviceSessionOwner, 0)
 	for id, owner := range g.deviceSessions {
 		if owner.NodeID == session.NodeID {
+			recovering = append(recovering, owner)
 			g.removeOwnerMapsLocked(id, owner)
 		}
 	}
 	g.mu.Unlock()
+	tasks := g.markGhostRecovery(recovering)
 	if g.cluster != nil {
 		g.cluster.OnConnect(session)
 	}
 	g.ownershipMu.Unlock()
+	g.startGhostRecoveryTimers(tasks)
 	if g.onNodeStatus != nil {
 		g.onNodeStatus(session, nil, true)
 	}
@@ -221,8 +302,10 @@ func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
 		currentSession = g.cluster.OnDisconnect(session, err)
 	}
 	g.mu.Lock()
+	recovering := make([]deviceSessionOwner, 0)
 	for id, owner := range g.deviceSessions {
 		if owner.NodeID == session.NodeID && owner.ControlSessionID == session.SessionID {
+			recovering = append(recovering, owner)
 			g.removeOwnerMapsLocked(id, owner)
 		}
 	}
@@ -230,7 +313,9 @@ func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
 		delete(g.metrics, session.NodeID)
 	}
 	g.mu.Unlock()
+	tasks := g.markGhostRecovery(recovering)
 	g.ownershipMu.Unlock()
+	g.startGhostRecoveryTimers(tasks)
 	g.failDeviceConfigsForSession(session, errors.New("node control session disconnected"))
 	if g.onNodeStatus != nil {
 		g.onNodeStatus(session, nil, false)
@@ -320,6 +405,7 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 		}
 		if response.Success && response.Grant != nil {
 			if err := g.activateDeviceSession(session, response.Grant); err != nil {
+				g.rejectGhostGrant(response.Grant, "activate_device_session_failed")
 				response.Success, response.Grant = false, nil
 				response.Error = "activate_device_session_failed"
 			}
@@ -397,6 +483,18 @@ func (g *CenterGateway) handleEnvelope(session *NodeSession, env Envelope) {
 	}
 }
 
+func (g *CenterGateway) rejectGhostGrant(grant *DeviceGrant, reason string) {
+	if grant == nil || grant.GhostSessionID == "" {
+		return
+	}
+	g.mu.RLock()
+	handler := g.onGhostRevoke
+	g.mu.RUnlock()
+	if handler != nil {
+		handler(grant.GhostSessionID, reason)
+	}
+}
+
 func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) bool {
 	if session == nil || g.cluster == nil {
 		return false
@@ -434,6 +532,9 @@ func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) 
 			Username: route.Username, CallSign: route.CallSign, Nickname: route.Nickname, SSID: route.SSID, DevModel: route.DevModel, GroupID: route.GroupID,
 			Type: frame.InnerPacket[48], Payload: frame.InnerPacket[DraARLHeaderSize:],
 		})
+	}
+	if tagged, ok := protocol.WithSourceGroupID(frame.InnerPacket, route.GroupID); ok {
+		frame.InnerPacket = tagged
 	}
 	_ = g.cluster.Relay(session.NodeID, frame)
 	return true
@@ -891,12 +992,23 @@ func (g *CenterGateway) renewDeviceSession(session *NodeSession, request DeviceS
 	}
 	response.Success = true
 	response.ExpiresAtMillis = now.Add(defaultDeviceGrantTTL).UnixMilli()
+	if owner.GhostSessionID != "" {
+		g.mu.RLock()
+		activity := g.onGhostActivity
+		g.mu.RUnlock()
+		if activity != nil {
+			activity(owner.GhostSessionID, now)
+		}
+	}
 	return response
 }
 
 func deviceGrantIdentity(grant *DeviceGrant) string {
 	if grant == nil {
 		return ""
+	}
+	if isModernGhostGrant(grant) {
+		return fmt.Sprintf("owner:%d:ssid:%d:instance:%s", grant.OwnerID, grant.SSID, strings.ToLower(strings.TrimSpace(grant.ClientInstanceID)))
 	}
 	if grant.OwnerID > 0 {
 		return fmt.Sprintf("owner:%d:ssid:%d", grant.OwnerID, grant.SSID)
@@ -908,6 +1020,29 @@ func deviceGrantIdentity(grant *DeviceGrant) string {
 		return fmt.Sprintf("username:%s:ssid:%d", grant.Username, grant.SSID)
 	}
 	return ""
+}
+
+func isModernGhostGrant(grant *DeviceGrant) bool {
+	return grant != nil && grant.OwnerID > 0 && grant.GhostProtocolVersion > 0 && grant.GhostSessionID != "" &&
+		grant.ClientInstanceID != "" && grant.SessionTag != 0 && protocol.IsGhostSSID(grant.SSID) && protocol.IsGhostDevModel(grant.DevModel)
+}
+
+func isGhostGrant(grant *DeviceGrant) bool {
+	return grant != nil && grant.OwnerID > 0 && grant.GhostSessionID != "" && protocol.IsGhostSSID(grant.SSID) && protocol.IsGhostDevModel(grant.DevModel)
+}
+
+func deviceRoutesEqual(a, b DeviceRoute) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+func routeReceiveDomains(route DeviceRoute) []uint64 {
+	if len(route.RxDomainIDs) > 0 {
+		return route.RxDomainIDs
+	}
+	if route.DomainID != 0 {
+		return []uint64{route.DomainID}
+	}
+	return nil
 }
 
 func deviceOwnerIdentity(ownerID int, ssid byte) string {
@@ -939,14 +1074,15 @@ func (g *CenterGateway) activateDeviceSessionLocked(session *NodeSession, grant 
 	oldOwner, hadOld := g.deviceSessions[oldSessionID]
 	g.mu.RUnlock()
 	if hadOld && oldOwner.NodeID == session.NodeID && oldOwner.ControlSessionID == session.SessionID &&
-		oldOwner.DeviceID == grant.DeviceID && oldOwner.OwnerID == grant.OwnerID && oldOwner.SSID == grant.SSID {
+		oldOwner.DeviceID == grant.DeviceID && oldOwner.OwnerID == grant.OwnerID && oldOwner.SSID == grant.SSID &&
+		oldOwner.GhostSessionID == grant.GhostSessionID && oldOwner.ClientInstanceID == grant.ClientInstanceID {
 		grant.SessionID, grant.SessionEpoch = oldOwner.SessionID, oldOwner.SessionEpoch
 		route, ok := g.cluster.ResolveRoute(oldOwner.SessionID)
 		if !ok || route.SessionEpoch != oldOwner.SessionEpoch {
 			return errors.New("edge owner route is missing")
 		}
 		next := grant.Route()
-		if route != next {
+		if !deviceRoutesEqual(route, next) {
 			g.releaseSpeakerForRouteChange(route, next)
 			return g.cluster.SetNodeRoute(session.NodeID, next)
 		}
@@ -994,12 +1130,16 @@ func (g *CenterGateway) activateDeviceSessionLocked(session *NodeSession, grant 
 	}
 	g.mu.Lock()
 	g.deviceEpochs[identity] = epoch
-	owner := deviceSessionOwner{NodeID: session.NodeID, ControlSessionID: session.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity}
+	owner := deviceSessionOwner{NodeID: session.NodeID, ControlSessionID: session.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity, GhostSessionID: grant.GhostSessionID, ClientInstanceID: grant.ClientInstanceID}
 	g.deviceSessions[grant.SessionID] = owner
 	g.sessionCounts[nodeControlSession{nodeID: owner.NodeID, sessionID: owner.ControlSessionID}]++
 	g.activeDevices[identity] = grant.SessionID
 	if grant.DeviceID > 0 {
 		g.activeByID[grant.DeviceID] = grant.SessionID
+	}
+	if grant.GhostSessionID != "" {
+		g.activeByGhost[grant.GhostSessionID] = grant.SessionID
+		delete(g.ghostRecovery, grant.GhostSessionID)
 	}
 	g.mu.Unlock()
 
@@ -1049,7 +1189,8 @@ func (g *CenterGateway) confirmDeviceSessions(session *NodeSession, request Devi
 			continue
 		}
 		grant := *candidate.Grant
-		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID || deviceGrantIdentity(&grant) == "" {
+		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID ||
+			grant.GhostSessionID != item.GhostSessionID || grant.ClientInstanceID != item.ClientInstanceID || deviceGrantIdentity(&grant) == "" {
 			result.Error = "session_identity_mismatch"
 			response.Results = append(response.Results, result)
 			continue
@@ -1117,7 +1258,7 @@ func (g *CenterGateway) ActivateLocalDevice(grant *DeviceGrant) error {
 			return errors.New("local owner route is missing")
 		}
 		next := grant.Route()
-		if route != next {
+		if !deviceRoutesEqual(route, next) {
 			g.releaseSpeakerForRouteChange(route, next)
 			return g.cluster.SetNodeRoute(CenterLocalNodeID, next)
 		}
@@ -1151,11 +1292,15 @@ func (g *CenterGateway) ActivateLocalDevice(grant *DeviceGrant) error {
 
 	g.mu.Lock()
 	g.deviceEpochs[identity] = epoch
-	owner := deviceSessionOwner{NodeID: CenterLocalNodeID, ControlSessionID: grant.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity}
+	owner := deviceSessionOwner{NodeID: CenterLocalNodeID, ControlSessionID: grant.SessionID, SessionID: grant.SessionID, SessionEpoch: epoch, DeviceID: grant.DeviceID, OwnerID: grant.OwnerID, SSID: grant.SSID, Identity: identity, GhostSessionID: grant.GhostSessionID, ClientInstanceID: grant.ClientInstanceID}
 	g.deviceSessions[grant.SessionID] = owner
 	g.activeDevices[identity] = grant.SessionID
 	if grant.DeviceID > 0 {
 		g.activeByID[grant.DeviceID] = grant.SessionID
+	}
+	if grant.GhostSessionID != "" {
+		g.activeByGhost[grant.GhostSessionID] = grant.SessionID
+		delete(g.ghostRecovery, grant.GhostSessionID)
 	}
 	g.mu.Unlock()
 
@@ -1197,9 +1342,13 @@ func (g *CenterGateway) RelayLocalDevice(grant DeviceGrant, inner []byte) error 
 			return errors.New("local speaker lease is not active")
 		}
 	}
+	relayInner := inner
+	if tagged, ok := protocol.WithSourceGroupID(inner, route.GroupID); ok {
+		relayInner = tagged
+	}
 	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
 		SessionID: route.SessionID, SessionEpoch: route.SessionEpoch, DomainID: route.DomainID,
-		SpeakerLeaseID: leaseID, InnerPacket: inner,
+		SpeakerLeaseID: leaseID, InnerPacket: relayInner,
 	})
 }
 
@@ -1270,6 +1419,9 @@ func (g *CenterGateway) removeOwnerMapsLocked(sessionID uint64, owner deviceSess
 	if owner.DeviceID > 0 && g.activeByID[owner.DeviceID] == sessionID {
 		delete(g.activeByID, owner.DeviceID)
 	}
+	if owner.GhostSessionID != "" && g.activeByGhost[owner.GhostSessionID] == sessionID {
+		delete(g.activeByGhost, owner.GhostSessionID)
+	}
 }
 
 func (g *CenterGateway) releaseSpeakerForRouteChange(current, next DeviceRoute) {
@@ -1288,6 +1440,9 @@ func (g *CenterGateway) restoreOwnerMapsLocked(owner deviceSessionOwner) {
 	if owner.DeviceID > 0 {
 		g.activeByID[owner.DeviceID] = owner.SessionID
 	}
+	if owner.GhostSessionID != "" {
+		g.activeByGhost[owner.GhostSessionID] = owner.SessionID
+	}
 }
 
 func (g *CenterGateway) notifyOwnerRevoke(owner deviceSessionOwner, reason string) {
@@ -1295,7 +1450,11 @@ func (g *CenterGateway) notifyOwnerRevoke(owner deviceSessionOwner, reason strin
 	g.mu.RLock()
 	deviceHandler := g.onDeviceRevoke
 	localHandler := g.onLocalRevoke
+	ghostHandler := g.onGhostRevoke
 	g.mu.RUnlock()
+	if ghostHandler != nil && owner.GhostSessionID != "" {
+		ghostHandler(owner.GhostSessionID, reason)
+	}
 	if deviceHandler != nil && owner.DeviceID > 0 {
 		deviceHandler(owner.NodeID, owner.ControlSessionID, owner.DeviceID, reason)
 	}
@@ -1388,6 +1547,56 @@ func (g *CenterGateway) UpdateActiveIdentityRoute(ownerID int, ssid byte, groupI
 	return true, g.cluster.SetNodeRoute(owner.NodeID, route)
 }
 
+// UpdateActiveGhostRoute updates one exact ghost session. Modern clients must
+// never use the legacy owner+SSID route updater because sibling installations
+// share that platform identity.
+func (g *CenterGateway) UpdateActiveGhostRoute(ghostSessionID string, groupID int, rxGroupIDs []int, resolve func(int) uint64) (bool, error) {
+	ghostSessionID = strings.TrimSpace(ghostSessionID)
+	if ghostSessionID == "" || groupID <= 0 || resolve == nil || g.cluster == nil {
+		return false, nil
+	}
+	rxSet := make(map[int]struct{}, len(rxGroupIDs)+1)
+	rxSet[groupID] = struct{}{}
+	for _, candidate := range rxGroupIDs {
+		if candidate > 0 {
+			rxSet[candidate] = struct{}{}
+		}
+	}
+	normalizedGroups := make([]int, 0, len(rxSet))
+	domainSet := make(map[uint64]struct{}, len(rxSet))
+	for candidate := range rxSet {
+		normalizedGroups = append(normalizedGroups, candidate)
+		if domainID := resolve(candidate); domainID != 0 {
+			domainSet[domainID] = struct{}{}
+		}
+	}
+	slices.Sort(normalizedGroups)
+	rxDomainIDs := make([]uint64, 0, len(domainSet))
+	for domainID := range domainSet {
+		rxDomainIDs = append(rxDomainIDs, domainID)
+	}
+	slices.Sort(rxDomainIDs)
+
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.RLock()
+	sessionID := g.activeByGhost[ghostSessionID]
+	owner, ok := g.deviceSessions[sessionID]
+	g.mu.RUnlock()
+	if !ok || sessionID == 0 || owner.GhostSessionID != ghostSessionID {
+		return false, nil
+	}
+	route, ok := g.cluster.ResolveRoute(sessionID)
+	if !ok || route.SessionEpoch != owner.SessionEpoch || route.GhostSessionID != ghostSessionID {
+		return false, nil
+	}
+	currentRoute := route
+	route.GroupID, route.DomainID = groupID, resolve(groupID)
+	route.RxGroupIDs, route.RxDomainIDs = normalizedGroups, rxDomainIDs
+	g.releaseSpeakerForRouteChange(currentRoute, route)
+	return true, g.cluster.SetNodeRoute(owner.NodeID, route)
+}
+
 // RevokeActiveDevice makes the old session non-authoritative before sending
 // any network message. Late upstream packets are therefore rejected even if
 // the edge has not received the best-effort immediate revoke yet.
@@ -1411,6 +1620,30 @@ func (g *CenterGateway) RevokeActiveDevice(deviceID int, reason string) (bool, e
 	g.sendDeviceSessionRevoke(owner, reason)
 	err := g.cluster.RemoveNodeRoute(owner.NodeID, sessionID)
 	return true, err
+}
+
+func (g *CenterGateway) RevokeActiveGhost(ghostSessionID, reason string) (bool, error) {
+	ghostSessionID = strings.TrimSpace(ghostSessionID)
+	if ghostSessionID == "" || g.cluster == nil {
+		return false, nil
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.Lock()
+	sessionID := g.activeByGhost[ghostSessionID]
+	owner, ok := g.deviceSessions[sessionID]
+	if ok && owner.GhostSessionID == ghostSessionID {
+		g.removeOwnerMapsLocked(sessionID, owner)
+	} else {
+		ok = false
+	}
+	g.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	g.notifyOwnerRevoke(owner, reason)
+	g.sendDeviceSessionRevoke(owner, reason)
+	return true, g.cluster.RemoveNodeRoute(owner.NodeID, owner.SessionID)
 }
 
 func (g *CenterGateway) RevokeActiveOwner(ownerID int, reason string) (int, error) {
@@ -1464,11 +1697,23 @@ func (g *CenterGateway) RefreshActiveDeviceDomains(resolve func(groupID int) uin
 			continue
 		}
 		domainID := resolve(route.GroupID)
-		if route.DomainID == domainID {
+		rxDomainSet := make(map[uint64]struct{}, len(route.RxGroupIDs))
+		for _, groupID := range route.RxGroupIDs {
+			if rxDomainID := resolve(groupID); rxDomainID != 0 {
+				rxDomainSet[rxDomainID] = struct{}{}
+			}
+		}
+		rxDomainIDs := make([]uint64, 0, len(rxDomainSet))
+		for rxDomainID := range rxDomainSet {
+			rxDomainIDs = append(rxDomainIDs, rxDomainID)
+		}
+		slices.Sort(rxDomainIDs)
+		if route.DomainID == domainID && slices.Equal(route.RxDomainIDs, rxDomainIDs) {
 			continue
 		}
 		currentRoute := route
 		route.DomainID = domainID
+		route.RxDomainIDs = rxDomainIDs
 		g.releaseSpeakerForRouteChange(currentRoute, route)
 		if err := g.cluster.SetNodeRoute(owner.NodeID, route); err != nil && firstErr == nil {
 			firstErr = err
@@ -1487,6 +1732,7 @@ type EdgeGateway struct {
 	mu                 sync.RWMutex
 	sessions           map[uint64]*edgeDeviceSession
 	byIdentity         map[string]uint64
+	bySessionTag       map[uint32]uint64
 	receiverGen        atomic.Uint64
 	receiverCache      atomic.Pointer[edgeReceiverSnapshot]
 	receiverBuildMu    sync.Mutex
@@ -1619,6 +1865,15 @@ type edgeSpeakerState struct {
 	buffered       []edgeBufferedVoice
 }
 
+func (g *EdgeGateway) ensureSessionIndexesLocked() {
+	if g.byIdentity == nil {
+		g.byIdentity = make(map[string]uint64)
+	}
+	if g.bySessionTag == nil {
+		g.bySessionTag = make(map[uint32]uint64)
+	}
+}
+
 const edgeAuthRequestTimeout = 5 * time.Second
 
 const maxEdgePendingDeviceConfigs = 256
@@ -1636,7 +1891,7 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 	}
 	p := NewProjection(1)
 	gateway := &EdgeGateway{
-		listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64),
+		listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), bySessionTag: make(map[uint32]uint64),
 		pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64),
 		pendingConfirms: make(map[uint64]chan DeviceSessionConfirmResponse),
 		pendingConfigUp: make(map[uint64]*pendingDeviceConfigUp), configDownResults: make(map[uint64]cachedDeviceConfigResult),
@@ -1825,15 +2080,27 @@ func (g *EdgeGateway) receiverPlan(domainID uint64) *udphub.EdgeFanoutPlan {
 
 		started := time.Now()
 		targetsByDomain := make(map[uint64][]udphub.EdgeFanoutTarget)
+		seenByDomain := make(map[uint64]map[uint64]struct{})
 		g.mu.RLock()
 		for _, session := range g.sessions {
-			if session == nil || session.Grant.DomainID == 0 || session.Grant.DisableRecv || session.Addr == nil {
+			if session == nil || session.Grant.DisableRecv || session.Addr == nil {
 				continue
 			}
-			domain := session.Grant.DomainID
-			target, ok := udphub.NewEdgeFanoutTarget(session.Addr, session.Grant.DeviceID, session.Grant.Username, session.Grant.SSID)
-			if ok {
-				targetsByDomain[domain] = append(targetsByDomain[domain], target)
+			for _, domain := range routeReceiveDomains(session.Grant.Route()) {
+				if domain == 0 {
+					continue
+				}
+				if seenByDomain[domain] == nil {
+					seenByDomain[domain] = make(map[uint64]struct{})
+				}
+				if _, duplicate := seenByDomain[domain][session.Grant.SessionID]; duplicate {
+					continue
+				}
+				target, ok := udphub.NewEdgeSessionFanoutTarget(session.Addr, session.Grant.SessionID, session.Grant.DeviceID, session.Grant.Username, session.Grant.SSID, session.Grant.SourceGroupV1)
+				if ok {
+					seenByDomain[domain][session.Grant.SessionID] = struct{}{}
+					targetsByDomain[domain] = append(targetsByDomain[domain], target)
+				}
 			}
 		}
 		g.mu.RUnlock()
@@ -1889,6 +2156,36 @@ func (g *EdgeGateway) MetricsSnapshot() MetricsSnapshot { return g.metrics.Snaps
 func (g *EdgeGateway) identity(packet *protocol.DraARLv1Packet) string {
 	return fmt.Sprintf("%s-%d", packet.Username, packet.SSID)
 }
+
+func edgeSessionIdentity(grant DeviceGrant) string {
+	if isModernGhostGrant(&grant) {
+		return deviceGrantIdentity(&grant)
+	}
+	return fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
+}
+
+func edgeAuthIdentity(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr) (string, bool, error) {
+	if packet == nil {
+		return "", false, errors.New("device packet is required")
+	}
+	if packet.Type != protocol.DraARLTypeJWTAuth || !protocol.IsGhostDevModel(packet.DevModel) {
+		return fmt.Sprintf("%s-%d", packet.Username, packet.SSID), false, nil
+	}
+	request, legacy, err := protocol.DecodeGhostAuthRequest(packet.DATA)
+	if err != nil || legacy {
+		return fmt.Sprintf("%s-%d", packet.Username, packet.SSID), false, err
+	}
+	instanceID, normalizedLegacy, err := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
+	if err != nil || normalizedLegacy {
+		return "", true, ghostsession.ErrInvalidClientInstance
+	}
+	endpoint := ""
+	if realAddr != nil {
+		endpoint = realAddr.String()
+	}
+	return fmt.Sprintf("ghost-auth:%d:%s:%s", packet.DevModel, instanceID, endpoint), true, nil
+}
+
 func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.UDPAddr) {
 	packet, err := protocol.NewDraARLv1RoutingPacket(remoteAddr, data)
 	if err != nil {
@@ -1896,10 +2193,14 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	}
 	defer protocol.ReleaseDraARLv1RoutingPacket(packet)
 	key := g.identity(packet)
+	tag := protocol.ReservedUint32(packet.Reserved)
 	g.mu.RLock()
 	sessionID, exists := g.byIdentity[key]
+	if tag != 0 && protocol.IsGhostSSID(packet.SSID) {
+		sessionID, exists = g.bySessionTag[tag]
+	}
 	session := g.sessions[sessionID]
-	if (!exists || session == nil) && packet.Username == "" {
+	if tag == 0 && (!exists || session == nil) && packet.Username == "" {
 		for id, candidate := range g.sessions {
 			if candidate.Grant.SSID == packet.SSID && udpAddrEqual(candidate.RealAddr, realAddr) {
 				sessionID, session, exists = id, candidate, true
@@ -1908,8 +2209,10 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		}
 	}
 	realAddrMatches := exists && session != nil && udpAddrEqual(session.RealAddr, realAddr)
+	identityMatches := exists && session != nil && (!isModernGhostGrant(&session.Grant) ||
+		(session.Grant.SessionTag == tag && session.Grant.Username == packet.Username && session.Grant.SSID == packet.SSID && session.Grant.DevModel == packet.DevModel))
 	g.mu.RUnlock()
-	if !exists || session == nil {
+	if !exists || session == nil || !identityMatches {
 		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
 			g.requestAuth(data, packet, remoteAddr, realAddr)
 		}
@@ -1934,7 +2237,8 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	// the gateway lock. RouteDelta may update the same grant concurrently.
 	g.mu.Lock()
 	current := g.sessions[sessionID]
-	if current == nil || !udpAddrEqual(current.RealAddr, realAddr) {
+	if current == nil || !udpAddrEqual(current.RealAddr, realAddr) ||
+		(isModernGhostGrant(&current.Grant) && (current.Grant.SessionTag != tag || current.Grant.Username != packet.Username || current.Grant.SSID != packet.SSID || current.Grant.DevModel != packet.DevModel)) {
 		g.mu.Unlock()
 		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
 			g.requestAuth(data, packet, remoteAddr, realAddr)
@@ -1991,7 +2295,7 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		g.handleEdgeVoice(grant, inner, now)
 		return
 	}
-	g.localFanout(grant.SessionID, grant.DomainID, inner)
+	g.localFanout(grant.SessionID, grant.DomainID, inner, grant.GroupID)
 	g.sendEdgeRelay(grant, inner, 0)
 }
 
@@ -2000,7 +2304,13 @@ func (g *EdgeGateway) sendEdgeRelay(grant DeviceGrant, inner []byte, leaseID uin
 	if link == nil {
 		return
 	}
-	frame := RelayFrame{SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, SpeakerLeaseID: leaseID, InnerPacket: inner}
+	relayInner := inner
+	if link.client != nil && link.client.Session != nil && link.client.Session.Features&NodeFeatureGhostMultiSession != 0 {
+		if tagged, ok := protocol.WithSourceGroupID(inner, grant.GroupID); ok {
+			relayInner = tagged
+		}
+	}
+	frame := RelayFrame{SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DomainID: grant.DomainID, RequiredProjectionVersion: g.projection.Snapshot().Version, SpeakerLeaseID: leaseID, InnerPacket: relayInner}
 	payload, err := frame.MarshalBinary()
 	if err != nil {
 		return
@@ -2024,7 +2334,7 @@ func (g *EdgeGateway) handleEdgeVoice(grant DeviceGrant, inner []byte, now time.
 	link := g.currentControl(true)
 	if link == nil {
 		if g.allowFallbackVoice(grant, now) {
-			g.localFanout(grant.SessionID, grant.DomainID, inner)
+			g.localFanout(grant.SessionID, grant.DomainID, inner, grant.GroupID)
 		}
 		return
 	}
@@ -2204,13 +2514,14 @@ func (g *EdgeGateway) deliverEdgeVoice(grant DeviceGrant, inner []byte, leaseID 
 	if !valid {
 		return
 	}
-	g.localFanout(grant.SessionID, grant.DomainID, inner)
+	g.localFanout(grant.SessionID, grant.DomainID, inner, grant.GroupID)
 	g.sendEdgeRelay(grant, inner, leaseID)
 }
 
 func (g *EdgeGateway) allowFallbackVoice(grant DeviceGrant, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.ensureSessionIndexesLocked()
 	session := g.sessions[grant.SessionID]
 	if session == nil || session.Grant.SessionEpoch != grant.SessionEpoch || session.Grant.DomainID != grant.DomainID || session.Grant.DisableSend || grant.DomainID == 0 {
 		return false
@@ -2543,6 +2854,7 @@ func (g *EdgeGateway) sendEdgeDeviceConfigResult(result DeviceConfigControl) {
 }
 
 func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, now time.Time) DeviceSessionReport {
+	g.ensureSessionIndexesLocked()
 	session := g.sessions[sessionID]
 	if session == nil {
 		return DeviceSessionReport{}
@@ -2550,9 +2862,12 @@ func (g *EdgeGateway) removeEdgeSessionLocked(sessionID uint64, reason string, n
 	delete(g.sessions, sessionID)
 	g.invalidateReceiverPlansLocked()
 	g.removeSpeakerSessionLocked(sessionID, session.Grant.SessionEpoch)
-	key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
+	key := edgeSessionIdentity(session.Grant)
 	if g.byIdentity[key] == sessionID {
 		delete(g.byIdentity, key)
+	}
+	if session.Grant.SessionTag != 0 && g.bySessionTag[session.Grant.SessionTag] == sessionID {
+		delete(g.bySessionTag, session.Grant.SessionTag)
 	}
 	g.removePendingDeviceConfigsLocked(sessionID)
 	return DeviceSessionReport{SessionID: sessionID, SessionEpoch: session.Grant.SessionEpoch, DeviceID: session.Grant.DeviceID, Reason: reason, ReportedAtMillis: now.UnixMilli()}
@@ -2643,9 +2958,11 @@ func (g *EdgeGateway) confirmActiveSessions(link *edgeControlLink) error {
 func (g *EdgeGateway) sessionConfirmSnapshot(now time.Time) []DeviceSessionConfirmItem {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.ensureSessionIndexesLocked()
 	items := make([]DeviceSessionConfirmItem, 0, len(g.sessions))
 	for sessionID, session := range g.sessions {
-		valid := session != nil && session.ControlSessionID != 0 && session.Grant.DeviceID > 0 && session.Grant.OwnerID > 0 && session.Grant.SSID != 0 &&
+		validIdentity := session != nil && (session.Grant.DeviceID > 0 || isGhostGrant(&session.Grant))
+		valid := validIdentity && session.ControlSessionID != 0 && session.Grant.OwnerID > 0 && session.Grant.SSID != 0 &&
 			session.Grant.SessionEpoch != 0 && now.Sub(session.LastSeen) <= g.sessionTimeout &&
 			session.Grant.ExpiresAtMillis > now.UnixMilli()
 		if !valid {
@@ -2654,7 +2971,8 @@ func (g *EdgeGateway) sessionConfirmSnapshot(now time.Time) []DeviceSessionConfi
 		}
 		items = append(items, DeviceSessionConfirmItem{
 			SessionID: sessionID, SessionEpoch: session.Grant.SessionEpoch, ControlSessionID: session.ControlSessionID,
-			DeviceID: session.Grant.DeviceID, OwnerID: session.Grant.OwnerID, SSID: session.Grant.SSID,
+			DeviceID: session.Grant.DeviceID, OwnerID: session.Grant.OwnerID, SSID: session.Grant.SSID, DevModel: session.Grant.DevModel,
+			GhostSessionID: session.Grant.GhostSessionID, ClientInstanceID: session.Grant.ClientInstanceID,
 		})
 	}
 	return items
@@ -2681,6 +2999,7 @@ func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.ensureSessionIndexesLocked()
 	receiversChanged := false
 	defer func() {
 		if receiversChanged {
@@ -2698,13 +3017,16 @@ func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request
 			continue
 		}
 		grant := *result.Grant
-		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID || grant.SessionID == 0 || grant.SessionEpoch == 0 || grant.ExpiresAtMillis <= now.UnixMilli() {
+		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID || (item.DeviceID == 0 && grant.DevModel != item.DevModel) ||
+			grant.GhostSessionID != item.GhostSessionID || grant.ClientInstanceID != item.ClientInstanceID ||
+			grant.SessionID == 0 || grant.SessionEpoch == 0 || grant.ExpiresAtMillis <= now.UnixMilli() {
 			return errors.New("device session confirmation changed the device identity")
 		}
 		if collision := g.sessions[grant.SessionID]; collision != nil && collision != session {
 			return errors.New("device session confirmation reused an active session ID")
 		}
-		oldKey := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
+		oldKey := edgeSessionIdentity(session.Grant)
+		oldTag := session.Grant.SessionTag
 		delete(g.sessions, item.SessionID)
 		g.removeSpeakerSessionLocked(item.SessionID, item.SessionEpoch)
 		g.removePendingDeviceConfigsLocked(item.SessionID)
@@ -2714,7 +3036,20 @@ func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request
 		if g.byIdentity[oldKey] == item.SessionID {
 			delete(g.byIdentity, oldKey)
 		}
-		g.byIdentity[fmt.Sprintf("%s-%d", grant.Username, grant.SSID)] = grant.SessionID
+		if oldTag != 0 && g.bySessionTag[oldTag] == item.SessionID {
+			delete(g.bySessionTag, oldTag)
+		}
+		key := edgeSessionIdentity(grant)
+		if previousID := g.byIdentity[key]; previousID != 0 && previousID != grant.SessionID {
+			g.removeEdgeSessionLocked(previousID, "session_reconfirm_identity_replaced", now)
+		}
+		if grant.SessionTag != 0 {
+			if previousID := g.bySessionTag[grant.SessionTag]; previousID != 0 && previousID != grant.SessionID {
+				return errors.New("device session confirmation reused an active session tag")
+			}
+			g.bySessionTag[grant.SessionTag] = grant.SessionID
+		}
+		g.byIdentity[key] = grant.SessionID
 		receiversChanged = true
 	}
 	return nil
@@ -2725,7 +3060,16 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 	if link == nil {
 		return
 	}
-	identity := g.identity(packet)
+	identity, modernGhost, identityErr := edgeAuthIdentity(packet, realAddr)
+	if identityErr != nil || identity == "" {
+		return
+	}
+	if modernGhost && (link.client == nil || link.client.Session == nil || link.client.Session.Features&NodeFeatureGhostMultiSession == 0) {
+		ssid := protocol.GetGhostSSID(packet.DevModel)
+		response := protocol.EncodeDraARLv1(packet.Username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, "", append([]byte{protocol.JWTAuthInvalidToken}, []byte("node_ghost_multi_session_unsupported")...))
+		g.writeDevice(response, remoteAddr)
+		return
+	}
 	id := g.nextRequest.Add(1)
 	g.mu.Lock()
 	if _, exists := g.pendingIdentity[identity]; exists {
@@ -2999,20 +3343,56 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	if grant.SessionID == 0 {
 		return
 	}
+	if grant.GhostProtocolVersion > 0 && !isModernGhostGrant(&grant) {
+		return
+	}
 	controlSessionID := uint64(0)
 	if link := g.currentControl(false); link != nil && link.client != nil && link.client.Session != nil {
 		controlSessionID = link.client.Session.SessionID
 	}
 	session := &edgeDeviceSession{Grant: grant, ControlSessionID: controlSessionID, Addr: cloneUDPAddr(pending.addr), RealAddr: cloneUDPAddr(pending.realAddr), LastSeen: time.Now()}
-	key := fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
+	key := edgeSessionIdentity(grant)
 	g.mu.Lock()
+	g.ensureSessionIndexesLocked()
+	for previousID, previous := range g.sessions {
+		if previousID == grant.SessionID || previous == nil || !udpAddrEqual(previous.RealAddr, session.RealAddr) {
+			continue
+		}
+		if edgeSessionIdentity(previous.Grant) == key {
+			g.removeEdgeSessionLocked(previousID, "authenticated_identity_replaced", time.Now())
+			break
+		}
+		g.mu.Unlock()
+		g.sendDeviceSessionReport(DeviceSessionReport{
+			SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DeviceID: grant.DeviceID,
+			Reason: "udp_endpoint_already_authenticated", ReportedAtMillis: time.Now().UnixMilli(),
+		})
+		return
+	}
+	if grant.SessionTag != 0 {
+		if previousID := g.bySessionTag[grant.SessionTag]; previousID != 0 && previousID != grant.SessionID {
+			g.mu.Unlock()
+			g.sendDeviceSessionReport(DeviceSessionReport{
+				SessionID: grant.SessionID, SessionEpoch: grant.SessionEpoch, DeviceID: grant.DeviceID,
+				Reason: "session_tag_already_authenticated", ReportedAtMillis: time.Now().UnixMilli(),
+			})
+			return
+		}
+	}
 	receiversChanged := false
 	if existing := g.sessions[grant.SessionID]; existing != nil {
-		receiversChanged = existing.Grant.DomainID != grant.DomainID || existing.Grant.DisableRecv != grant.DisableRecv ||
+		oldKey, oldTag := edgeSessionIdentity(existing.Grant), existing.Grant.SessionTag
+		receiversChanged = !slices.Equal(routeReceiveDomains(existing.Grant.Route()), routeReceiveDomains(grant.Route())) || existing.Grant.DisableRecv != grant.DisableRecv ||
 			existing.Grant.DeviceID != grant.DeviceID || existing.Grant.Username != grant.Username || existing.Grant.SSID != grant.SSID ||
-			!udpAddrEqual(existing.Addr, session.Addr)
+			existing.Grant.SourceGroupV1 != grant.SourceGroupV1 || !udpAddrEqual(existing.Addr, session.Addr)
 		if existing.Grant.SessionEpoch != grant.SessionEpoch || existing.Grant.DomainID != grant.DomainID || grant.DisableSend {
 			g.removeSpeakerSessionLocked(grant.SessionID, existing.Grant.SessionEpoch)
+		}
+		if oldKey != key && g.byIdentity[oldKey] == grant.SessionID {
+			delete(g.byIdentity, oldKey)
+		}
+		if oldTag != 0 && oldTag != grant.SessionTag && g.bySessionTag[oldTag] == grant.SessionID {
+			delete(g.bySessionTag, oldTag)
 		}
 		existing.Grant = grant
 		existing.Addr = session.Addr
@@ -3021,16 +3401,15 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 		existing.ControlSessionID = session.ControlSessionID
 	} else {
 		if previousID := g.byIdentity[key]; previousID != 0 && previousID != grant.SessionID {
-			if previous := g.sessions[previousID]; previous != nil {
-				g.removeSpeakerSessionLocked(previousID, previous.Grant.SessionEpoch)
-			}
-			delete(g.sessions, previousID)
-			g.removePendingDeviceConfigsLocked(previousID)
+			g.removeEdgeSessionLocked(previousID, "authenticated_identity_replaced", time.Now())
 		}
 		g.sessions[grant.SessionID] = session
 		receiversChanged = true
 	}
 	g.byIdentity[key] = grant.SessionID
+	if grant.SessionTag != 0 {
+		g.bySessionTag[grant.SessionTag] = grant.SessionID
+	}
 	if receiversChanged {
 		g.invalidateReceiverPlansLocked()
 	}
@@ -3049,31 +3428,61 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 		g.requestDeviceConfigUp(DeviceConfigKindSync, grant, nil)
 	}
 }
+
+func applyRouteToGrant(grant *DeviceGrant, route DeviceRoute) {
+	if grant == nil {
+		return
+	}
+	grant.DisableSend, grant.DisableRecv = route.DisableSend, route.DisableRecv
+	grant.GroupID, grant.DomainID = route.GroupID, route.DomainID
+	grant.RxGroupIDs = append(grant.RxGroupIDs[:0], route.RxGroupIDs...)
+	grant.RxDomainIDs = append(grant.RxDomainIDs[:0], route.RxDomainIDs...)
+	grant.GhostSessionID, grant.ClientInstanceID = route.GhostSessionID, route.ClientInstanceID
+	grant.SessionTag, grant.GhostProtocolVersion = route.SessionTag, route.GhostProtocolVersion
+	grant.SourceGroupV1, grant.SessionEpoch = route.SourceGroupV1, route.SessionEpoch
+}
+
 func (g *EdgeGateway) applyRoutes(p *Projection) {
 	if p == nil {
 		return
 	}
 	g.mu.Lock()
+	g.ensureSessionIndexesLocked()
 	receiversChanged := false
 	for id, session := range g.sessions {
 		if route, ok := p.Devices[id]; ok {
 			if session.Grant.SessionEpoch != route.SessionEpoch || session.Grant.DomainID != route.DomainID || route.DisableSend {
 				g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
 			}
-			if session.Grant.DomainID != route.DomainID || session.Grant.DisableRecv != route.DisableRecv {
+			if !slices.Equal(routeReceiveDomains(session.Grant.Route()), routeReceiveDomains(route)) || session.Grant.DisableRecv != route.DisableRecv || session.Grant.SourceGroupV1 != route.SourceGroupV1 {
 				receiversChanged = true
 			}
-			session.Grant.DisableSend, session.Grant.DisableRecv = route.DisableSend, route.DisableRecv
-			session.Grant.GroupID, session.Grant.DomainID = route.GroupID, route.DomainID
-			session.Grant.SessionEpoch = route.SessionEpoch
+			oldKey, oldTag := edgeSessionIdentity(session.Grant), session.Grant.SessionTag
+			applyRouteToGrant(&session.Grant, route)
+			newKey := edgeSessionIdentity(session.Grant)
+			if oldKey != newKey && g.byIdentity[oldKey] == id {
+				delete(g.byIdentity, oldKey)
+				g.byIdentity[newKey] = id
+			}
+			if oldTag != session.Grant.SessionTag {
+				if oldTag != 0 && g.bySessionTag[oldTag] == id {
+					delete(g.bySessionTag, oldTag)
+				}
+				if session.Grant.SessionTag != 0 {
+					g.bySessionTag[session.Grant.SessionTag] = id
+				}
+			}
 		} else {
 			receiversChanged = true
 			g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
 			delete(g.sessions, id)
 			g.removePendingDeviceConfigsLocked(id)
-			key := fmt.Sprintf("%s-%d", session.Grant.Username, session.Grant.SSID)
+			key := edgeSessionIdentity(session.Grant)
 			if g.byIdentity[key] == id {
 				delete(g.byIdentity, key)
+			}
+			if session.Grant.SessionTag != 0 && g.bySessionTag[session.Grant.SessionTag] == id {
+				delete(g.bySessionTag, session.Grant.SessionTag)
 			}
 		}
 	}
@@ -3082,11 +3491,23 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 	}
 	g.mu.Unlock()
 }
-func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
+func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, sourceGroups ...int) {
+	sourceGroupID := 0
+	if len(sourceGroups) > 0 {
+		sourceGroupID = sourceGroups[0]
+	} else if len(data) >= protocol.DraARLv1HeaderSize {
+		sourceGroupID = int(protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]))
+	}
+	legacyData := data
+	if len(data) >= protocol.DraARLv1HeaderSize && protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]) != 0 {
+		if cleared, ok := protocol.WithReservedUint32(data, 0); ok {
+			legacyData = cleared
+		}
+	}
 	if g.endpoint != nil {
 		onComplete := func(result udphub.EdgeFanoutResult) {
 			if result.Sent > 0 {
-				g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(data)))
+				g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(legacyData)))
 			}
 			if result.Errors > 0 {
 				g.metrics.AddErrorBulk(uint64(result.Errors))
@@ -3108,7 +3529,11 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
 				}
 				g.mu.RUnlock()
 			}
-			if g.endpoint.FanoutPlan(data, plan, sourceID, sourceUser, sourceSSID, onComplete) {
+			if sourceSession != 0 || sourceGroupID != 0 {
+				if g.endpoint.FanoutSessionPlan(legacyData, plan, sourceSession, sourceGroupID, onComplete) {
+					return
+				}
+			} else if g.endpoint.FanoutPlan(legacyData, plan, sourceID, sourceUser, sourceSSID, onComplete) {
 				return
 			}
 		}
@@ -3118,13 +3543,19 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte) {
 	g.mu.RLock()
 	targets := make([]udphub.EdgeFanoutTarget, 0, len(g.sessions))
 	for id, session := range g.sessions {
-		if id != sourceSession && session.Grant.DomainID == domainID && !session.Grant.DisableRecv && session.Addr != nil {
-			targets = append(targets, udphub.EdgeFanoutTarget{Addr: cloneUDPAddr(session.Addr), DeviceID: session.Grant.DeviceID, Username: session.Grant.Username, SSID: session.Grant.SSID})
+		if id != sourceSession && slices.Contains(routeReceiveDomains(session.Grant.Route()), domainID) && !session.Grant.DisableRecv && session.Addr != nil {
+			targets = append(targets, udphub.EdgeFanoutTarget{Addr: cloneUDPAddr(session.Addr), DeviceID: session.Grant.DeviceID, Username: session.Grant.Username, SSID: session.Grant.SSID, SessionID: id, SourceGroupV1: session.Grant.SourceGroupV1})
 		}
 	}
 	g.mu.RUnlock()
 	for _, target := range targets {
-		g.writeDevice(data, target.Addr)
+		payload := legacyData
+		if target.SourceGroupV1 && sourceGroupID > 0 {
+			if tagged, ok := protocol.WithSourceGroupID(legacyData, sourceGroupID); ok {
+				payload = tagged
+			}
+		}
+		g.writeDevice(payload, target.Addr)
 	}
 }
 

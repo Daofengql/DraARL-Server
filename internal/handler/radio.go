@@ -335,7 +335,7 @@ func UpdateRadioGroup(c *gin.Context) {
 		}
 	}
 
-	if devModel != protocol.DraARLDevModelBrowser {
+	if !hasSession && devModel != protocol.DraARLDevModelBrowser {
 		routesync.PublishIdentity(userID, devModel, req.GroupID, false, false)
 	}
 

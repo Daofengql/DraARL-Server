@@ -69,12 +69,13 @@ const (
 	NodeFeatureRuntimeMetrics
 	NodeFeatureCredentialRotation
 	NodeFeatureSessionReconfirm
+	NodeFeatureGhostMultiSession
 )
 
 const (
 	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
 		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation |
-		NodeFeatureSessionReconfirm
+		NodeFeatureSessionReconfirm | NodeFeatureGhostMultiSession
 	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
 )
 

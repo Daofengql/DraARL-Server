@@ -531,13 +531,15 @@ export class RadioService {
   /**
    * 发送文本消息
    */
-  sendTextMessage(message: string): void {
+  sendTextMessage(message: string): boolean {
     if (!this.ws || this.connectionState !== 'online') {
       this.emit('error', '未连接')
-      return
+      return false
     }
 
-    this.ws.sendTextMessage(message)
+    if (!this.ws.sendTextMessage(message)) {
+      return false
+    }
 
     // 直接触发事件，不再存储到 IndexedDB
     const radioMessage: RadioMessage = {
@@ -554,6 +556,7 @@ export class RadioService {
     }
 
     this.emit('message', radioMessage)
+    return true
   }
 
   async switchGroup(groupId: number): Promise<boolean> {

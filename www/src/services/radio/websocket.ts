@@ -11,6 +11,7 @@ import { apiClient } from '../api'
 // 协议常量
 const DRAARL_VERSION = 'DraA'
 const HEADER_SIZE = 90
+export const MAX_TEXT_MESSAGE_BYTES = 800 - HEADER_SIZE
 const CLIENT_INSTANCE_STORAGE_KEY = 'draarl-radio-client-instance-id'
 const PROTOCOL_VERSION = 1
 const CAPABILITIES = ['multi_receive_v1', 'source_group_v1']
@@ -290,6 +291,15 @@ export class RadioWebSocket {
 
   // 发送文本消息
   sendTextMessage(message: string): boolean {
+    const byteLength = new TextEncoder().encode(message).byteLength
+    if (byteLength === 0) {
+      if (this.onError) this.onError('消息不能为空')
+      return false
+    }
+    if (byteLength > MAX_TEXT_MESSAGE_BYTES) {
+      if (this.onError) this.onError(`消息不能超过 ${MAX_TEXT_MESSAGE_BYTES} 字节`)
+      return false
+    }
     const packet = this.buildTextPacket(message)
     return this.send(packet)
   }

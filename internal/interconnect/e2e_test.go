@@ -3,7 +3,9 @@ package interconnect
 import (
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -369,6 +371,330 @@ func TestCenterSendsOneDownstreamPerReceivingEdge(t *testing.T) {
 	if got := len(downstreamByAddr); got != 3 {
 		t.Errorf("downstream target addresses=%d want=3: %#v", got, downstreamByAddr)
 	}
+}
+
+func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testing.T) {
+	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		groupA  = 101
+		groupB  = 202
+		domainA = uint64(9001)
+		domainB = uint64(9002)
+	)
+	type ghostFixture struct {
+		instanceID string
+		sessionID  string
+		sessionTag uint32
+		groupID    int
+		domainID   uint64
+	}
+	fixtures := map[string]ghostFixture{
+		"ghost-token-a": {
+			instanceID: "11111111-1111-4111-8111-111111111111",
+			sessionID:  "ghost-session-a", sessionTag: 0x10203041,
+			groupID: groupA, domainID: domainA,
+		},
+		"ghost-token-b": {
+			instanceID: "22222222-2222-4222-8222-222222222222",
+			sessionID:  "ghost-session-b", sessionTag: 0x10203042,
+			groupID: groupB, domainID: domainB,
+		},
+	}
+	grantFor := func(fixture ghostFixture) DeviceGrant {
+		return DeviceGrant{
+			OwnerID: 77, Username: "alice", CallSign: "BG5GHOST",
+			SSID: protocol.SSIDGhostAndroid, DevModel: protocol.DraARLDevModelAndroid,
+			GroupID: fixture.groupID, DomainID: fixture.domainID,
+			RxGroupIDs: []int{groupA, groupB}, RxDomainIDs: []uint64{domainA, domainB},
+			GhostSessionID: fixture.sessionID, ClientInstanceID: fixture.instanceID,
+			SessionTag: fixture.sessionTag, GhostProtocolVersion: protocol.GhostAuthPayloadVersion,
+			SourceGroupV1: true, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli(),
+		}
+	}
+	auth := func(_ *NodeSession, req DeviceAuthRequest) (DeviceAuthResponse, error) {
+		packet, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, req.Packet)
+		if decodeErr != nil {
+			return DeviceAuthResponse{RequestID: req.RequestID, Error: "invalid_packet"}, nil
+		}
+		defer protocol.ReleaseDraARLv1RoutingPacket(packet)
+		request, legacy, decodeErr := protocol.DecodeGhostAuthRequest(packet.DATA)
+		fixture, ok := fixtures[request.Token]
+		if decodeErr != nil || legacy || !ok || request.ClientInstanceID != fixture.instanceID ||
+			!slices.Contains(request.Capabilities, "multi_receive_v1") ||
+			!slices.Contains(request.Capabilities, "source_group_v1") {
+			return DeviceAuthResponse{RequestID: req.RequestID, Error: "invalid_ghost_auth"}, nil
+		}
+		grant := grantFor(fixture)
+		responseData, encodeErr := protocol.EncodeGhostAuthSuccessData(protocol.GhostAuthSuccess{
+			SessionID: fixture.sessionID, SessionTag: fixture.sessionTag,
+			ClientInstanceID: fixture.instanceID, TxGroupID: fixture.groupID,
+			RxGroupIDs: []int{groupA, groupB},
+		})
+		if encodeErr != nil {
+			return DeviceAuthResponse{}, encodeErr
+		}
+		responsePacket := protocol.EncodeDraARLv1(
+			packet.Username, "", packet.SSID, protocol.DraARLTypeJWTAuth,
+			packet.DevModel, 0, grant.CallSign, responseData,
+		)
+		responsePacket, _ = protocol.WithReservedUint32(responsePacket, fixture.sessionTag)
+		return DeviceAuthResponse{
+			RequestID: req.RequestID, Success: true, Grant: &grant, ResponsePacket: responsePacket,
+		}, nil
+	}
+	confirm := func(_ *NodeSession, items []DeviceSessionConfirmItem) ([]DeviceSessionConfirmResult, error) {
+		results := make([]DeviceSessionConfirmResult, 0, len(items))
+		for _, item := range items {
+			var fixture ghostFixture
+			for _, candidate := range fixtures {
+				if candidate.sessionID == item.GhostSessionID && candidate.instanceID == item.ClientInstanceID {
+					fixture = candidate
+					break
+				}
+			}
+			if fixture.sessionID == "" {
+				results = append(results, DeviceSessionConfirmResult{
+					SessionID: item.SessionID, SessionEpoch: item.SessionEpoch, Error: "unknown_session",
+				})
+				continue
+			}
+			grant := grantFor(fixture)
+			results = append(results, DeviceSessionConfirmResult{
+				SessionID: item.SessionID, SessionEpoch: item.SessionEpoch, Success: true, Grant: &grant,
+			})
+		}
+		return results, nil
+	}
+	center, err := StartCenterRuntime(CenterRuntimeConfig{
+		ControlListen: "127.0.0.1:0", TLSConfig: serverTLS,
+		ValidateToken: func(_, token string) bool { return token == "node-token" },
+		Auth:          auth, Confirm: confirm,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer center.Close()
+	centerUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer centerUDP.Close()
+	center.UDPBridge.SetWriter(func(addr *net.UDPAddr, wire []byte) error {
+		_, writeErr := centerUDP.WriteToUDP(wire, addr)
+		return writeErr
+	})
+	go func() {
+		buf := make([]byte, NodeMaxDatagramSize)
+		for {
+			n, addr, readErr := centerUDP.ReadFromUDP(buf)
+			if readErr != nil {
+				return
+			}
+			center.UDPBridge.Handle(append([]byte(nil), buf[:n]...), addr)
+		}
+	}()
+
+	clientTLS := func() *tls.Config {
+		return &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
+	}
+	edges := make(map[string]*EdgeRuntime)
+	for _, nodeID := range []string{"edge-a", "edge-b", "edge-c"} {
+		edge, startErr := StartEdgeRuntime(EdgeRuntimeConfig{
+			NodeID: nodeID, Token: "node-token", CenterControl: center.Control.Addr().String(),
+			CenterUDP: centerUDP.LocalAddr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS(),
+			ReconnectMin: 20 * time.Millisecond, ReconnectMax: 100 * time.Millisecond,
+		})
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		edges[nodeID] = edge
+		defer edge.Close()
+	}
+	devices := make(map[string]*net.UDPConn)
+	for token := range fixtures {
+		device, listenErr := net.ListenUDP("udp", nil)
+		if listenErr != nil {
+			t.Fatal(listenErr)
+		}
+		devices[token] = device
+		defer device.Close()
+	}
+	login := func(token, nodeID string) {
+		t.Helper()
+		fixture := fixtures[token]
+		requestData, marshalErr := json.Marshal(protocol.GhostAuthRequest{
+			Version: protocol.GhostAuthPayloadVersion, Token: token,
+			ClientInstanceID: fixture.instanceID,
+			Capabilities:     []string{"multi_receive_v1", "source_group_v1"},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		wire := protocol.EncodeDraARLv1(
+			"alice", "", protocol.SSIDGhostAndroid, protocol.DraARLTypeJWTAuth,
+			protocol.DraARLDevModelAndroid, 0, "", requestData,
+		)
+		edgeAddr, resolveErr := net.ResolveUDPAddr("udp", edges[nodeID].Gateway.Addr().String())
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		if _, writeErr := devices[token].WriteToUDP(wire, edgeAddr); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		_ = devices[token].SetReadDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, 1400)
+		n, _, readErr := devices[token].ReadFromUDP(buf)
+		if readErr != nil {
+			t.Fatalf("%s authentication response: %v", token, readErr)
+		}
+		response, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, buf[:n])
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		defer protocol.ReleaseDraARLv1RoutingPacket(response)
+		success, decodeErr := protocol.DecodeGhostAuthSuccessData(response.DATA)
+		if decodeErr != nil || success.SessionID != fixture.sessionID ||
+			success.SessionTag != fixture.sessionTag || protocol.ReservedUint32(response.Reserved) != fixture.sessionTag {
+			t.Fatalf("%s invalid authentication response: success=%#v err=%v", token, success, decodeErr)
+		}
+	}
+	waitRoute := func(sessionID, nodeID string, rxDomains []uint64) DeviceRoute {
+		t.Helper()
+		var route DeviceRoute
+		waitForCondition(t, 3*time.Second, func() bool {
+			center.Gateway.mu.RLock()
+			wireSessionID := center.Gateway.activeByGhost[sessionID]
+			owner := center.Gateway.deviceSessions[wireSessionID]
+			center.Gateway.mu.RUnlock()
+			var ok bool
+			route, ok = center.Cluster.ResolveRoute(wireSessionID)
+			if !ok || owner.NodeID != nodeID || !slices.Equal(route.RxDomainIDs, rxDomains) {
+				return false
+			}
+			edge := edges[nodeID]
+			edge.Gateway.mu.RLock()
+			local := edge.Gateway.sessions[wireSessionID]
+			var localGrant DeviceGrant
+			if local != nil {
+				localGrant = local.Grant
+			}
+			edge.Gateway.mu.RUnlock()
+			return local != nil && localGrant.SessionEpoch == route.SessionEpoch &&
+				slices.Equal(localGrant.RxDomainIDs, rxDomains)
+		}, "modern ghost route did not reach the target edge")
+		return route
+	}
+	readText := func(token string, timeout time.Duration, wantPayload string, wantGroup int) {
+		t.Helper()
+		device := devices[token]
+		_ = device.SetReadDeadline(time.Now().Add(timeout))
+		buf := make([]byte, 1400)
+		n, _, readErr := device.ReadFromUDP(buf)
+		if readErr != nil {
+			t.Fatalf("%s did not receive %q: %v", token, wantPayload, readErr)
+		}
+		packet, decodeErr := protocol.NewDraARLv1RoutingPacket(nil, buf[:n])
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		defer protocol.ReleaseDraARLv1RoutingPacket(packet)
+		if packet.Type != protocol.DraARLTypeTextMessage || string(packet.DATA) != wantPayload ||
+			int(protocol.ReservedUint32(packet.Reserved)) != wantGroup {
+			t.Fatalf("%s received type=%d group=%d data=%q", token, packet.Type, protocol.ReservedUint32(packet.Reserved), packet.DATA)
+		}
+	}
+	assertNoPacket := func(token string) {
+		t.Helper()
+		_ = devices[token].SetReadDeadline(time.Now().Add(180 * time.Millisecond))
+		if _, _, readErr := devices[token].ReadFromUDP(make([]byte, 1400)); readErr == nil {
+			t.Fatalf("%s received an unexpected or duplicate packet", token)
+		}
+	}
+	sendText := func(token, nodeID, payload string) {
+		t.Helper()
+		fixture := fixtures[token]
+		wire := protocol.EncodeDraARLv1(
+			"alice", "", protocol.SSIDGhostAndroid, protocol.DraARLTypeTextMessage,
+			protocol.DraARLDevModelAndroid, 0, "", []byte(payload),
+		)
+		wire, _ = protocol.WithReservedUint32(wire, fixture.sessionTag)
+		edgeAddr, resolveErr := net.ResolveUDPAddr("udp", edges[nodeID].Gateway.Addr().String())
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		if _, writeErr := devices[token].WriteToUDP(wire, edgeAddr); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+
+	login("ghost-token-a", "edge-a")
+	login("ghost-token-b", "edge-b")
+	waitRoute("ghost-session-a", "edge-a", []uint64{domainA, domainB})
+	waitRoute("ghost-session-b", "edge-b", []uint64{domainA, domainB})
+
+	sendText("ghost-token-a", "edge-a", "from-a-group-a")
+	readText("ghost-token-b", 3*time.Second, "from-a-group-a", groupA)
+	assertNoPacket("ghost-token-a")
+	assertNoPacket("ghost-token-b")
+
+	sendText("ghost-token-b", "edge-b", "from-b-group-b")
+	readText("ghost-token-a", 3*time.Second, "from-b-group-b", groupB)
+	assertNoPacket("ghost-token-b")
+
+	updated, updateErr := center.Gateway.UpdateActiveGhostRoute("ghost-session-b", groupB, []int{groupB}, func(groupID int) uint64 {
+		if groupID == groupA {
+			return domainA
+		}
+		if groupID == groupB {
+			return domainB
+		}
+		return 0
+	})
+	if updateErr != nil || !updated {
+		t.Fatalf("remove receive subscription: updated=%v err=%v", updated, updateErr)
+	}
+	waitRoute("ghost-session-b", "edge-b", []uint64{domainB})
+	sendText("ghost-token-a", "edge-a", "not-subscribed")
+	assertNoPacket("ghost-token-b")
+
+	updated, updateErr = center.Gateway.UpdateActiveGhostRoute("ghost-session-b", groupB, []int{groupA, groupB}, func(groupID int) uint64 {
+		if groupID == groupA {
+			return domainA
+		}
+		if groupID == groupB {
+			return domainB
+		}
+		return 0
+	})
+	if updateErr != nil || !updated {
+		t.Fatalf("restore receive subscription: updated=%v err=%v", updated, updateErr)
+	}
+	waitRoute("ghost-session-b", "edge-b", []uint64{domainA, domainB})
+
+	login("ghost-token-b", "edge-c")
+	waitRoute("ghost-session-b", "edge-c", []uint64{domainA, domainB})
+	waitForCondition(t, 3*time.Second, func() bool {
+		return edges["edge-b"].Gateway.ConnectionCount() == 0
+	}, "migrated ghost session remained active on the old edge")
+	waitRoute("ghost-session-a", "edge-a", []uint64{domainA, domainB})
+	sendText("ghost-token-a", "edge-a", "after-node-migration")
+	readText("ghost-token-b", 3*time.Second, "after-node-migration", groupA)
+
+	oldControl := edges["edge-c"].CurrentClient()
+	if oldControl == nil || !center.Control.Disconnect("edge-c") {
+		t.Fatal("could not force the edge-c control reconnect")
+	}
+	waitForCondition(t, 3*time.Second, func() bool {
+		client := edges["edge-c"].CurrentClient()
+		return client != nil && client != oldControl && edges["edge-c"].Gateway.currentControl(true) != nil
+	}, "edge-c control session did not reconnect")
+	waitRoute("ghost-session-b", "edge-c", []uint64{domainA, domainB})
+	sendText("ghost-token-a", "edge-a", "after-control-recovery")
+	readText("ghost-token-b", 3*time.Second, "after-control-recovery", groupA)
+	assertNoPacket("ghost-token-b")
 }
 
 func TestEdgeDeviceConfigurationUsesReliableExactSessionControl(t *testing.T) {

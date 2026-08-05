@@ -44,6 +44,7 @@ func runEdgeMode(configPath string) error {
 	if err != nil {
 		return err
 	}
+	ghostsession.ConfigureGlobal(edgeCfg.GhostSessions.MaxSessionsPerOwner, edgeCfg.GhostSessions.MaxSubscriptionsPerSession)
 	rootPool, err := edgeRootPool(edgeCfg.Edge.TLSCAFile)
 	if err != nil {
 		return err

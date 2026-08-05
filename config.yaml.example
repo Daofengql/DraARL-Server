@@ -18,6 +18,11 @@ UDP:
     ReadBufferBytes: 4194304   # 请求的 UDP 接收缓冲（实际值以启动日志/指标为准）
     WriteBufferBytes: 4194304  # 请求的 UDP 发送缓冲（实际值以启动日志/指标为准）
 
+# 幽灵设备多端与多收上限。零值使用兼容默认值；范围由服务端校验。
+GhostSessions:
+    MaxSessionsPerOwner: 8             # 同一账号最多同时在线的幽灵 Session 数
+    MaxSubscriptionsPerSession: 16     # 每个幽灵 Session 最多接收的频道数
+
 # 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
 Interconnect:
     Enabled: false

@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -134,8 +135,11 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	if err != nil {
 		code := protocol.JWTAuthInvalidToken
 		message := "ghost_session_registration_failed"
-		if errors.Is(err, ghostsession.ErrInstanceAlreadyOnline) {
+		switch {
+		case errors.Is(err, ghostsession.ErrInstanceAlreadyOnline):
 			code, message = protocol.JWTAuthGhostDeviceConflict, "Ghost device already online"
+		case errors.Is(err, ghostsession.ErrSessionLimit):
+			message = fmt.Sprintf("ghost_session_limit active=%d limit=%d", len(ghostsession.Global.ListOwner(user.ID)), ghostsession.MaxSessionsPerOwner())
 		}
 		sendJWTAuthResponse(packet, conn, false, "", code, message)
 		return
@@ -217,7 +221,7 @@ func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, le
 	}
 	routing := ghostsession.Routing{TxGroupID: fallbackGroupID, RxGroupIDs: []int{fallbackGroupID}}
 	if legacy {
-		sanitized, _, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.DefaultMaxSubscriptions)
+		sanitized, _, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.MaxSubscriptions())
 		if err != nil {
 			return ghostsession.Routing{}, err
 		}
@@ -231,7 +235,7 @@ func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, le
 		return ghostsession.Routing{}, errors.New("client preference unavailable")
 	}
 	routing = ghostsession.Routing{TxGroupID: preference.TxGroupID, RxGroupIDs: preference.RxGroupIDs}
-	routing, changed, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.DefaultMaxSubscriptions)
+	routing, changed, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}

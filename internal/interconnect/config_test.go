@@ -3,6 +3,8 @@ package interconnect
 import (
 	"strings"
 	"testing"
+
+	"draarl/internal/config"
 )
 
 func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
@@ -18,6 +20,10 @@ func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 	}
 	if cfg.Edge.DeviceSessionTimeoutSeconds != 20 || cfg.Edge.GrantRenewBeforeSeconds != 30 || cfg.Edge.DisconnectedLocalGraceSeconds != 15 {
 		t.Fatalf("edge lease defaults changed: timeout=%d renew=%d grace=%d", cfg.Edge.DeviceSessionTimeoutSeconds, cfg.Edge.GrantRenewBeforeSeconds, cfg.Edge.DisconnectedLocalGraceSeconds)
+	}
+	if cfg.GhostSessions.MaxSessionsPerOwner != config.DefaultGhostSessionsPerOwner ||
+		cfg.GhostSessions.MaxSubscriptionsPerSession != config.DefaultGhostSubscriptionsPerSession {
+		t.Fatalf("edge ghost session defaults changed: %+v", cfg.GhostSessions)
 	}
 }
 

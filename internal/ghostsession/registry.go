@@ -73,6 +73,31 @@ func NewRegistry(maxOwnerSessions, maxSubscriptions int) *Registry {
 
 var Global = NewRegistry(DefaultMaxSessionsPerOwner, DefaultMaxSubscriptions)
 
+// ConfigureGlobal replaces the process-wide registry during startup. It is
+// intentionally called before any transport accepts a client, so both centre
+// and edge processes enforce the same deployment limits.
+func ConfigureGlobal(maxOwnerSessions, maxSubscriptions int) {
+	Global = NewRegistry(maxOwnerSessions, maxSubscriptions)
+}
+
+// MaxSubscriptions returns the active registry's receive subscription limit.
+// It lets transport and HTTP layers share configured limits without reaching
+// into Registry's internal state.
+func MaxSubscriptions() int {
+	if Global == nil {
+		return DefaultMaxSubscriptions
+	}
+	return Global.maxSubscriptions
+}
+
+// MaxSessionsPerOwner returns the active registry's per-owner session limit.
+func MaxSessionsPerOwner() int {
+	if Global == nil {
+		return DefaultMaxSessionsPerOwner
+	}
+	return Global.maxOwnerSessions
+}
+
 func instanceKey(ownerID int, devModel uint8, clientInstanceID string, legacy bool) string {
 	if legacy {
 		return fmt.Sprintf("%d:%d:legacy", ownerID, devModel)
@@ -139,7 +164,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	if ownerCount >= r.maxOwnerSessions {
 		r.mu.Unlock()
 		r.mutationMu.Unlock()
-		return Session{}, ErrSessionLimit
+		return Session{}, fmt.Errorf("%w: active=%d limit=%d", ErrSessionLimit, ownerCount, r.maxOwnerSessions)
 	}
 	tag, err := randomSessionTag(r.tagSessions)
 	if err != nil {

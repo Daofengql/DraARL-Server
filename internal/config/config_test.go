@@ -142,6 +142,38 @@ func TestInterconnectResourceDefaults(t *testing.T) {
 	}
 }
 
+func TestGhostSessionLimitDefaults(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GhostSessions.MaxSessionsPerOwner != DefaultGhostSessionsPerOwner {
+		t.Fatalf("ghost session default=%d want=%d", cfg.GhostSessions.MaxSessionsPerOwner, DefaultGhostSessionsPerOwner)
+	}
+	if cfg.GhostSessions.MaxSubscriptionsPerSession != DefaultGhostSubscriptionsPerSession {
+		t.Fatalf("ghost subscription default=%d want=%d", cfg.GhostSessions.MaxSubscriptionsPerSession, DefaultGhostSubscriptionsPerSession)
+	}
+}
+
+func TestGhostSessionLimitValidation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cfg  GhostSessionConfig
+	}{
+		{name: "zero sessions", cfg: GhostSessionConfig{MaxSessionsPerOwner: -1, MaxSubscriptionsPerSession: 1}},
+		{name: "too many sessions", cfg: GhostSessionConfig{MaxSessionsPerOwner: MaxGhostSessionsPerOwner + 1, MaxSubscriptionsPerSession: 1}},
+		{name: "zero subscriptions", cfg: GhostSessionConfig{MaxSessionsPerOwner: 1, MaxSubscriptionsPerSession: -1}},
+		{name: "too many subscriptions", cfg: GhostSessionConfig{MaxSessionsPerOwner: 1, MaxSubscriptionsPerSession: MaxGhostSubscriptionsPerSession + 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.cfg.SetDefaults(); err == nil {
+				t.Fatal("expected invalid ghost session limits to be rejected")
+			}
+		})
+	}
+}
+
 func TestClientResourceUploadLimitDefault(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"

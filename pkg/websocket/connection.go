@@ -921,7 +921,7 @@ func (m *WSConnectionManager) SetDeviceRouting(device *WSDevice, routing ghostse
 	if device == nil {
 		return ErrDeviceNotFound
 	}
-	routing, err := ghostsession.NormalizeRouting(routing, ghostsession.DefaultMaxSubscriptions)
+	routing, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return err
 	}

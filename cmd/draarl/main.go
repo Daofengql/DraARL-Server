@@ -19,6 +19,7 @@ import (
 	"draarl/internal/buildinfo"
 	"draarl/internal/config"
 	"draarl/internal/db"
+	"draarl/internal/ghostsession"
 	gormdb "draarl/internal/gormdb"
 	"draarl/internal/interconnect"
 	oplog "draarl/internal/log"
@@ -85,6 +86,7 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("加载配置文件失败: %v", err)
 	}
+	ghostsession.ConfigureGlobal(cfg.GhostSessions.MaxSessionsPerOwner, cfg.GhostSessions.MaxSubscriptionsPerSession)
 
 	// 初始化 JWT 密钥
 	if err := initJWTSecret(cfg); err != nil {

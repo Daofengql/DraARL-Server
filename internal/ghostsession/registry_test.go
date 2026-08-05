@@ -2,6 +2,7 @@ package ghostsession
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,11 +97,23 @@ func TestRegistryEnforcesLimitsAndTagLookup(t *testing.T) {
 	if byTag, ok := registry.FindByTag(session.SessionTag); !ok || byTag.SessionID != session.SessionID {
 		t.Fatal("session tag index did not resolve the session")
 	}
-	if _, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{}); !errors.Is(err, ErrSessionLimit) {
+	if _, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{}); !errors.Is(err, ErrSessionLimit) || !strings.Contains(err.Error(), "active=1 limit=1") {
 		t.Fatalf("session limit error=%v", err)
 	}
-	if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 1, RxGroupIDs: []int{1, 2, 3}}); !errors.Is(err, ErrSubscriptionLimit) {
+	if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 1, RxGroupIDs: []int{1, 2, 3}}); !errors.Is(err, ErrSubscriptionLimit) || !strings.Contains(err.Error(), "requested=3 limit=2") {
 		t.Fatalf("subscription limit error=%v", err)
+	}
+}
+
+func TestGlobalRegistryUsesConfiguredLimits(t *testing.T) {
+	previous := Global
+	t.Cleanup(func() { Global = previous })
+	ConfigureGlobal(3, 5)
+	if got := MaxSessionsPerOwner(); got != 3 {
+		t.Fatalf("configured session limit=%d want=3", got)
+	}
+	if got := MaxSubscriptions(); got != 5 {
+		t.Fatalf("configured subscription limit=%d want=5", got)
 	}
 }
 

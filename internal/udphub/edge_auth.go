@@ -156,8 +156,11 @@ func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, op
 	}, controller)
 	if err != nil {
 		code := "ghost_session_registration_failed"
-		if errors.Is(err, ghostsession.ErrInstanceAlreadyOnline) {
+		switch {
+		case errors.Is(err, ghostsession.ErrInstanceAlreadyOnline):
 			code = "ghost_device_already_online"
+		case errors.Is(err, ghostsession.ErrSessionLimit):
+			code = fmt.Sprintf("ghost_session_limit active=%d limit=%d", len(ghostsession.Global.ListOwner(result.User.ID)), ghostsession.MaxSessionsPerOwner())
 		}
 		return ProxiedDeviceAuthResult{Error: code}
 	}

@@ -47,7 +47,7 @@ func NormalizeRouting(routing Routing, maxSubscriptions int) (Routing, error) {
 	// keeps every protocol and API path on the same invariant.
 	set[routing.TxGroupID] = struct{}{}
 	if maxSubscriptions > 0 && len(set) > maxSubscriptions {
-		return Routing{}, ErrSubscriptionLimit
+		return Routing{}, fmt.Errorf("%w: requested=%d limit=%d", ErrSubscriptionLimit, len(set), maxSubscriptions)
 	}
 	normalized := Routing{TxGroupID: routing.TxGroupID, RxGroupIDs: make([]int, 0, len(set))}
 	for groupID := range set {

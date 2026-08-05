@@ -111,7 +111,7 @@ func sessionSupportsMultiReceive(session ghostsession.Session) bool {
 }
 
 func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routing) (ghostsession.Routing, error) {
-	normalized, err := ghostsession.NormalizeRouting(routing, ghostsession.DefaultMaxSubscriptions)
+	normalized, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}
@@ -165,7 +165,7 @@ func reconcileOwnerGhostSessions(ownerID int) {
 	}
 	for _, session := range ghostsession.Global.ListOwner(ownerID) {
 		routing, changed, err := groupaccess.SanitizeRouting(
-			gormdb.Get(), user, session.Routing(), models.GroupIDPublicMin, ghostsession.DefaultMaxSubscriptions,
+			gormdb.Get(), user, session.Routing(), models.GroupIDPublicMin, ghostsession.MaxSubscriptions(),
 		)
 		if err == nil && !sessionSupportsMultiReceive(session) {
 			routing.RxGroupIDs = []int{routing.TxGroupID}

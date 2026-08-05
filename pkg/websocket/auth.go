@@ -228,7 +228,7 @@ func loadWebSocketInstanceRouting(user *gormdb.User, instanceID string, fallback
 }
 
 func sanitizePersistedRouting(user *gormdb.User, routing ghostsession.Routing, fallbackGroupID int) (ghostsession.Routing, bool, error) {
-	return groupaccess.SanitizeRouting(gormdb.Get(), user, routing, fallbackGroupID, ghostsession.DefaultMaxSubscriptions)
+	return groupaccess.SanitizeRouting(gormdb.Get(), user, routing, fallbackGroupID, ghostsession.MaxSubscriptions())
 }
 
 func hasCapability(capabilities []string, wanted string) bool {

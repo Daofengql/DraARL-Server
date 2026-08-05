@@ -184,7 +184,7 @@ func (m *UDPGhostManager) RegisterSession(device *models.Device) (*models.Device
 	}
 	routing, err := ghostsession.NormalizeRouting(ghostsession.Routing{
 		TxGroupID: device.GroupID, RxGroupIDs: device.GhostRxGroupIDs,
-	}, ghostsession.DefaultMaxSubscriptions)
+	}, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +515,7 @@ func (m *UDPGhostManager) UpdateSessionActivity(sessionID string, now time.Time)
 }
 
 func (m *UDPGhostManager) SetSessionRouting(sessionID string, routing ghostsession.Routing) error {
-	routing, err := ghostsession.NormalizeRouting(routing, ghostsession.DefaultMaxSubscriptions)
+	routing, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return err
 	}

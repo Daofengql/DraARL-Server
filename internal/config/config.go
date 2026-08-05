@@ -105,6 +105,40 @@ type UDPConfig struct {
 	WriteBufferBytes int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
 }
 
+// GhostSessionConfig controls the per-owner and per-session bounds for the
+// multi-device ghost routing model. The defaults preserve the original
+// in-process limits while allowing deployments to choose stricter limits.
+type GhostSessionConfig struct {
+	MaxSessionsPerOwner        int `yaml:"MaxSessionsPerOwner" json:"max_sessions_per_owner"`
+	MaxSubscriptionsPerSession int `yaml:"MaxSubscriptionsPerSession" json:"max_subscriptions_per_session"`
+}
+
+const (
+	DefaultGhostSessionsPerOwner        = 8
+	DefaultGhostSubscriptionsPerSession = 16
+	MaxGhostSessionsPerOwner            = 64
+	MaxGhostSubscriptionsPerSession     = 256
+)
+
+// SetDefaults applies and validates the bounds shared by centre and edge
+// processes. Zero means the compatibility default; negative or excessive
+// values are configuration errors rather than silently weakened limits.
+func (c *GhostSessionConfig) SetDefaults() error {
+	if c.MaxSessionsPerOwner == 0 {
+		c.MaxSessionsPerOwner = DefaultGhostSessionsPerOwner
+	}
+	if c.MaxSubscriptionsPerSession == 0 {
+		c.MaxSubscriptionsPerSession = DefaultGhostSubscriptionsPerSession
+	}
+	if c.MaxSessionsPerOwner < 1 || c.MaxSessionsPerOwner > MaxGhostSessionsPerOwner {
+		return fmt.Errorf("GhostSessions.MaxSessionsPerOwner must be between 1 and %d", MaxGhostSessionsPerOwner)
+	}
+	if c.MaxSubscriptionsPerSession < 1 || c.MaxSubscriptionsPerSession > MaxGhostSubscriptionsPerSession {
+		return fmt.Errorf("GhostSessions.MaxSubscriptionsPerSession must be between 1 and %d", MaxGhostSubscriptionsPerSession)
+	}
+	return nil
+}
+
 // InterconnectConfig controls the optional centre-side Type 0 node services.
 // It is ignored unless Enabled is true, preserving existing single-node startup.
 type InterconnectConfig struct {
@@ -161,8 +195,9 @@ type Configuration struct {
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
 
-	UDP          UDPConfig          `yaml:"UDP" json:"udp"`
-	Interconnect InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
+	UDP           UDPConfig          `yaml:"UDP" json:"udp"`
+	GhostSessions GhostSessionConfig `yaml:"GhostSessions" json:"ghost_sessions"`
+	Interconnect  InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -289,6 +324,9 @@ func Load(configPath string) (*Configuration, error) {
 // SetDefaults 设置默认配置值
 func (c *Configuration) SetDefaults() error {
 	c.migrateLegacyStorageConfig()
+	if err := c.GhostSessions.SetDefaults(); err != nil {
+		return err
+	}
 
 	if c.UDP.SendWorkers < 0 {
 		c.UDP.SendWorkers = 0

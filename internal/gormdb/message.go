@@ -2,6 +2,7 @@ package gormdb
 
 import (
 	"errors"
+	"sort"
 	"time"
 
 	"gorm.io/gorm"
@@ -65,7 +66,15 @@ func (r *MessageRepository) VisibleGroupIDs(requestedGroupID int) ([]int, error)
 }
 
 func (r *MessageRepository) baseQuery(groupIDs []int) *gorm.DB {
-	return r.db.Table("comm_records cr").
+	return r.messageQuery("comm_records cr", groupIDs)
+}
+
+func (r *MessageRepository) listQuery(groupID int) *gorm.DB {
+	return r.messageQuery("comm_records cr FORCE INDEX (idx_comm_records_group_status_start_id)", []int{groupID})
+}
+
+func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB {
+	return r.db.Table(table).
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id AS source_group_id,
 			COALESCE(cr.user_id, d.owner_id) AS user_id, cr.start_time, cr.end_time, cr.duration_ms,
@@ -90,23 +99,66 @@ func (r *MessageRepository) List(query MessageQuery) ([]MessageRecord, bool, err
 		limit = 50
 	}
 
-	db := r.baseQuery(query.GroupIDs)
-	if query.Type != nil {
-		db = db.Where("cr.message_type = ?", *query.Type)
-	}
+	groupIDs := uniquePositiveGroupIDs(query.GroupIDs)
+	pageCapacity := len(groupIDs)
 	if query.BeforeTime != nil {
-		db = db.Where(
-			"cr.start_time < ? OR (cr.start_time = ? AND cr.id < ?)",
-			*query.BeforeTime,
-			*query.BeforeTime,
-			query.BeforeID,
-		)
+		pageCapacity *= 2
 	}
+	pages := make([][]MessageRecord, 0, pageCapacity)
+	for _, groupID := range groupIDs {
+		newPageQuery := func() *gorm.DB {
+			db := r.listQuery(groupID)
+			if query.Type != nil {
+				db = db.Where("cr.message_type = ?", *query.Type)
+			}
+			return db
+		}
+		queries := []*gorm.DB{newPageQuery()}
+		if query.BeforeTime != nil {
+			queries = []*gorm.DB{
+				newPageQuery().Where("cr.start_time = ? AND cr.id < ?", *query.BeforeTime, query.BeforeID),
+				newPageQuery().Where("cr.start_time < ?", *query.BeforeTime),
+			}
+		}
 
-	var records []MessageRecord
-	if err := db.Order("cr.start_time DESC").Order("cr.id DESC").Limit(limit + 1).Scan(&records).Error; err != nil {
-		return nil, false, err
+		for _, pageQuery := range queries {
+			var records []MessageRecord
+			if err := pageQuery.Order("cr.start_time DESC").Order("cr.id DESC").Limit(limit + 1).Scan(&records).Error; err != nil {
+				return nil, false, err
+			}
+			pages = append(pages, records)
+		}
 	}
+	return mergeMessagePages(pages, limit)
+}
+
+func uniquePositiveGroupIDs(groupIDs []int) []int {
+	seen := make(map[int]struct{}, len(groupIDs))
+	result := make([]int, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if groupID <= 0 {
+			continue
+		}
+		if _, exists := seen[groupID]; exists {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		result = append(result, groupID)
+	}
+	return result
+}
+
+func mergeMessagePages(pages [][]MessageRecord, limit int) ([]MessageRecord, bool, error) {
+	records := make([]MessageRecord, 0, len(pages)*min(limit+1, 101))
+	for _, page := range pages {
+		records = append(records, page...)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].StartTime.Equal(records[j].StartTime) {
+			return records[i].ID > records[j].ID
+		}
+		return records[i].StartTime.After(records[j].StartTime)
+	})
 	hasMore := len(records) > limit
 	if hasMore {
 		records = records[:limit]

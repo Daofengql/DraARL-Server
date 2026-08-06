@@ -77,10 +77,7 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	controller := ghostsession.Controller{
 		ApplyRouting: func(next ghostsession.Routing) error {
 			if device.GhostSessionID != "" && GlobalUDPGhostManager.GetSession(device.GhostSessionID) == device {
-				if err := GlobalUDPGhostManager.SetSessionRouting(device.GhostSessionID, next); err != nil {
-					return err
-				}
-				return ActivateCenterLocalDevice(device)
+				return applyAuthenticatedUDPGhostRouting(GlobalUDPGhostManager, device, next, ActivateCenterLocalDevice)
 			}
 			device.GroupID = next.TxGroupID
 			device.GhostRxGroupIDs = append([]int(nil), next.RxGroupIDs...)
@@ -154,6 +151,31 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 	})
 	log.Printf("[UDP-JWT] authenticated: session=%s user=%s model=%d tx=%d rx=%v",
 		ghostsession.ShortID(session.SessionID), user.Name, packet.DevModel, session.TxGroupID, session.RxGroupIDs)
+}
+
+func applyAuthenticatedUDPGhostRouting(manager *UDPGhostManager, device *models.Device, next ghostsession.Routing, project func(*models.Device) error) error {
+	if manager == nil || device == nil || manager.GetSession(device.GhostSessionID) != device {
+		return ghostsession.ErrSessionNotFound
+	}
+	previous := ghostsession.Routing{
+		TxGroupID: device.GroupID, RxGroupIDs: append([]int(nil), device.GhostRxGroupIDs...),
+	}
+	if err := manager.SetSessionRouting(device.GhostSessionID, next); err != nil {
+		return err
+	}
+	if project == nil {
+		return nil
+	}
+	projectionErr := project(device)
+	if projectionErr == nil {
+		return nil
+	}
+
+	rollbackErr := manager.SetSessionRouting(device.GhostSessionID, previous)
+	if rollbackErr == nil {
+		rollbackErr = project(device)
+	}
+	return errors.Join(projectionErr, rollbackErr)
 }
 
 func udpEndpointString(addr *net.UDPAddr) string {

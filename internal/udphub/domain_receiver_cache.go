@@ -143,6 +143,12 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 		}
 		if pool, ok := gp.ConnPool.(*CurrentConnPool); ok && pool != nil {
 			for _, dev := range pool.snapshotConnList() {
+				// UDP ghost delivery is governed exclusively by the session receive
+				// index below. A routing change can leave the shared device pointer
+				// in its former physical-group pool until the process is restarted.
+				if dev != nil && dev.GhostSessionID != "" {
+					continue
+				}
 				addDev(dev, gid)
 			}
 		}

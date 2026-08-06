@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/models"
 )
 
@@ -106,6 +107,46 @@ func TestGhostChangesInvalidateDomainReceiverCache(t *testing.T) {
 	GlobalUDPGhostManager.RemoveSession(ghost.GhostSessionID)
 	if entries = getDomainReceiverEntries(groupID); len(entries) != 0 {
 		t.Fatalf("removed ghost remained cached: %#v", entries)
+	}
+}
+
+func TestGhostRouteChangeDoesNotLeakThroughStalePhysicalPool(t *testing.T) {
+	const (
+		groupA = 42004
+		groupB = 42005
+	)
+	pool := setupDomainReceiverTest(t, groupA)
+	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 30003}
+	ghost := &models.Device{
+		ID:              -2,
+		OwnerID:         2,
+		Username:        "routing-ghost",
+		SSID:            101,
+		GroupID:         groupA,
+		GhostSessionID:  "routing-session-1",
+		GhostSessionTag: 42004,
+		GhostRxGroupIDs: []int{groupA},
+		ISOnline:        true,
+		UDPAddr:         addr,
+		LastPacketTime:  time.Now(),
+	}
+	if _, err := GlobalUDPGhostManager.RegisterSession(ghost); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reproduce the pre-fix state: a heartbeat placed the ghost in A's
+	// physical pool before the session API changed its routing to B.
+	syncDeviceConnPool(pool, ghost, addr)
+	if entries := getDomainReceiverEntries(groupA); len(entries) != 1 {
+		t.Fatalf("initial receiver count = %d, want 1", len(entries))
+	}
+	if err := GlobalUDPGhostManager.SetSessionRouting(ghost.GhostSessionID, ghostsession.Routing{
+		TxGroupID: groupB, RxGroupIDs: []int{groupB},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if entries := getDomainReceiverEntries(groupA); len(entries) != 0 {
+		t.Fatalf("ghost routed to B leaked through stale A pool: %#v", entries)
 	}
 }
 

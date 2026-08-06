@@ -1005,7 +1005,8 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	}
 
 	// 未分组设备没有连接池，但仍需正常响应心跳并保持在线可管理。
-	if gp != nil {
+	// UDP 幽灵设备由会话订阅索引负责接收，不能混入实体设备连接池。
+	if gp != nil && !isGhost {
 		syncDeviceConnPool(getGroupConnPool(gp), dev, packet.UDPAddr)
 	}
 

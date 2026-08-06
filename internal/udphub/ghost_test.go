@@ -60,6 +60,46 @@ func TestUDPGhostManagerKeepsSameAccountSessionsIndependent(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedUDPGhostRoutingRollsBackWhenProjectionFails(t *testing.T) {
+	manager := newUDPGhostManager()
+	device := modernUDPGhost("routing-rollback", 21, 31003, 1001, []int{1001, 1002})
+	if _, err := manager.RegisterSession(device); err != nil {
+		t.Fatal(err)
+	}
+
+	projectedGroups := make([]int, 0, 2)
+	err := applyAuthenticatedUDPGhostRouting(manager, device, ghostsession.Routing{
+		TxGroupID: 1003, RxGroupIDs: []int{1003, 1004},
+	}, func(current *models.Device) error {
+		projectedGroups = append(projectedGroups, current.GroupID)
+		if current.GroupID == 1003 {
+			return errors.New("projection rejected")
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("failed projection unexpectedly committed UDP ghost routing")
+	}
+	if device.GroupID != 1001 || len(device.GhostRxGroupIDs) != 2 || device.GhostRxGroupIDs[0] != 1001 || device.GhostRxGroupIDs[1] != 1002 {
+		t.Fatalf("routing after rollback: tx=%d rx=%v", device.GroupID, device.GhostRxGroupIDs)
+	}
+	if got := manager.GetByGroup(1003); len(got) != 0 {
+		t.Fatalf("failed routing remained in group 1003 index: %#v", got)
+	}
+	if got := manager.GetByGroup(1004); len(got) != 0 {
+		t.Fatalf("failed routing remained in group 1004 index: %#v", got)
+	}
+	if got := manager.GetByGroup(1001); len(got) != 1 || got[0] != device {
+		t.Fatalf("previous group 1001 index was not restored: %#v", got)
+	}
+	if got := manager.GetByGroup(1002); len(got) != 1 || got[0] != device {
+		t.Fatalf("previous group 1002 index was not restored: %#v", got)
+	}
+	if len(projectedGroups) != 2 || projectedGroups[0] != 1003 || projectedGroups[1] != 1001 {
+		t.Fatalf("projection calls=%v want=[1003 1001]", projectedGroups)
+	}
+}
+
 func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) {
 	previousManager := GlobalUDPGhostManager
 	previousRouter := GlobalMessageRouter

@@ -171,7 +171,7 @@ export const RadioPage: React.FC = () => {
   // 数据
   const [groups, setGroups] = useState<RadioGroup[]>([])
   const [routing, setRouting] = useState<RadioSessionRouting>(() => radioService.getRouting())
-  const [activeGroupId, setActiveGroupId] = useState(0)
+  const [activeGroupId, setActiveGroupId] = useState(() => radioService.getRouting().txGroupId)
   const [messages, setMessages] = useState<RadioMessage[]>([])
 
   // UI 状态
@@ -190,7 +190,7 @@ export const RadioPage: React.FC = () => {
   // Refs
   const messageListRef = useRef<HTMLDivElement>(null)
   const activeGroupIdRef = useRef(activeGroupId)
-  const messagesByViewRef = useRef<Map<number, RadioMessage[]>>(new Map([[0, []]]))
+  const messagesByViewRef = useRef<Map<number, RadioMessage[]>>(new Map())
   const isPlayingVoiceRef = useRef(false)
   const pendingSyncMessagesRef = useRef<{ groupId: number; messages: RadioMessage[] } | null>(null)
 
@@ -226,14 +226,11 @@ export const RadioPage: React.FC = () => {
         })
 
         radioService.on('message', (message) => {
-          const targetViews = new Set([0, message.groupId])
-          for (const viewId of targetViews) {
-            const current = messagesByViewRef.current.get(viewId) || []
-            if (current.some(existing => existing.id === message.id)) continue
-            const updated = [...current, message].sort((left, right) => left.timestamp - right.timestamp)
-            messagesByViewRef.current.set(viewId, updated)
-            if (activeGroupIdRef.current === viewId) setMessages(updated)
-          }
+          const current = messagesByViewRef.current.get(message.groupId) || []
+          if (current.some(existing => existing.id === message.id)) return
+          const updated = [...current, message].sort((left, right) => left.timestamp - right.timestamp)
+          messagesByViewRef.current.set(message.groupId, updated)
+          if (activeGroupIdRef.current === message.groupId) setMessages(updated)
         })
 
         radioService.on('speakersChange', setActiveSpeakers)
@@ -241,11 +238,9 @@ export const RadioPage: React.FC = () => {
         radioService.on('routingChange', nextRouting => {
           setRouting(nextRouting)
           setConfig(radioService.getConfig())
-          if (activeGroupIdRef.current !== 0 && !nextRouting.rxGroupIds.includes(activeGroupIdRef.current)) {
-            activeGroupIdRef.current = 0
-            setActiveGroupId(0)
-            setMessages(messagesByViewRef.current.get(0) || [])
-          }
+          activeGroupIdRef.current = nextRouting.txGroupId
+          setActiveGroupId(nextRouting.txGroupId)
+          setMessages(messagesByViewRef.current.get(nextRouting.txGroupId) || [])
         })
 
         radioService.on('error', (errorMsg) => {
@@ -262,7 +257,11 @@ export const RadioPage: React.FC = () => {
 
         // 连接
         await radioService.connect()
-        setRouting(radioService.getRouting())
+        const connectedRouting = radioService.getRouting()
+        setRouting(connectedRouting)
+        activeGroupIdRef.current = connectedRouting.txGroupId
+        setActiveGroupId(connectedRouting.txGroupId)
+        setMessages(messagesByViewRef.current.get(connectedRouting.txGroupId) || [])
 
       } catch (error) {
         console.error('Failed to init radio:', error)
@@ -461,12 +460,6 @@ export const RadioPage: React.FC = () => {
     }
   }
 
-  const handleActiveGroupChange = (groupId: number) => {
-    activeGroupIdRef.current = groupId
-    setActiveGroupId(groupId)
-    setMessages(messagesByViewRef.current.get(groupId) || [])
-  }
-
   const handleChannelVolumeChange = (groupId: number, volume: number) => {
     radioService.setChannelVolume(groupId, volume)
     setConfig(radioService.getConfig())
@@ -497,12 +490,7 @@ export const RadioPage: React.FC = () => {
   // 渲染连接状态
   const renderConnectionStatus = () => (
     <Box sx={styles.connectionStatus}>
-      <Box
-        sx={{
-          ...styles.statusDot,
-          bgcolor: stateColors[connectionState],
-        }}
-      />
+      <Box sx={{ ...styles.statusDot, bgcolor: stateColors[connectionState] }} />
       <Typography variant="body2" color="text.secondary">
         {stateTexts[connectionState]}
       </Typography>
@@ -532,27 +520,20 @@ export const RadioPage: React.FC = () => {
     <Box sx={styles.root}>
       {/* 头部 */}
       <Box sx={styles.header}>
-        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: 'stretch', gap: 0.5, minWidth: 0 }}>
-          <Box sx={styles.headerLeft}>
-            <GroupSelector
-              groups={groups}
-              txGroupId={routing.txGroupId}
-              rxGroupIds={routing.rxGroupIds}
-              activeGroupId={activeGroupId}
-              channelVolumes={config.channelVolumes}
-              onTxChange={handleTxGroupChange}
-              onRxChange={handleReceiveGroupsChange}
-              onActiveGroupChange={handleActiveGroupChange}
-              onChannelVolumeChange={handleChannelVolumeChange}
-              disabled={connectionState !== 'online'}
-              updating={routingUpdating}
-            />
-          </Box>
-
-          <Box sx={{ ...styles.headerRight, justifyContent: 'flex-end', flexShrink: 0 }}>
-            {renderConnectionStatus()}
-          </Box>
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', minWidth: 0 }}>
+          {renderConnectionStatus()}
         </Box>
+        <GroupSelector
+          groups={groups}
+          txGroupId={routing.txGroupId}
+          rxGroupIds={routing.rxGroupIds}
+          channelVolumes={config.channelVolumes}
+          onTxChange={handleTxGroupChange}
+          onRxChange={handleReceiveGroupsChange}
+          onChannelVolumeChange={handleChannelVolumeChange}
+          disabled={connectionState !== 'online'}
+          updating={routingUpdating}
+        />
         {renderSpeakingIndicator()}
       </Box>
 

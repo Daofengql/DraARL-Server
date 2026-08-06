@@ -561,11 +561,13 @@ func totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGh
 }
 
 func onlineTransportOnlineCounts() (udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline int) {
-	udpGhostOnline = GlobalUDPGhostManager.GetOnlineCount()
+	metrics := ghostsession.Global.Metrics()
+	udpGhostOnline = metrics.ByTransport[string(ghostsession.TransportUDP)]
+	wsGhostOnline = metrics.ByTransport[string(ghostsession.TransportWebSocket)]
+	edgeGhostOnline = metrics.ByTransport[string(ghostsession.TransportEdge)]
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-		wsNormalOnline, wsGhostOnline = GlobalMessageRouter.wsManager.GetOnlineCount()
+		wsNormalOnline, _ = GlobalMessageRouter.wsManager.GetOnlineCount()
 	}
-	edgeGhostOnline = ghostsession.Global.Metrics().ByTransport[string(ghostsession.TransportEdge)]
 	return udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline
 }
 
@@ -573,52 +575,17 @@ func onlineTransportOnlineCounts() (udpGhostOnline, wsNormalOnline, wsGhostOnlin
 // center-managed edge ghost sessions. Multi-receive subscriptions never
 // inflate this server-wide count.
 func GetOnlineGhostCount() int {
-	udpGhostOnline, _, wsGhostOnline, edgeGhostOnline := onlineTransportOnlineCounts()
-	return udpGhostOnline + wsGhostOnline + edgeGhostOnline
+	return ghostsession.Global.Metrics().OnlineSessions
 }
 
 // GetOnlineGhostCountByGroup returns the number of live ghost sessions
-// receiving a group. The same session is de-duplicated across transport
-// indexes defensively; normal operation keeps a session in exactly one
-// transport, but this also makes reconnect hand-off snapshots stable.
+// receiving a group. The registry is authoritative for every supported ghost
+// transport, so stale data-plane indexes cannot inflate the count.
 func GetOnlineGhostCountByGroup(groupID int) int {
 	if groupID <= 0 {
 		return 0
 	}
-	seen := make(map[string]struct{})
-	for _, device := range GlobalUDPGhostManager.GetByGroup(groupID) {
-		if device == nil || !device.ISOnline {
-			continue
-		}
-		key := device.GhostSessionID
-		if key == "" {
-			key = fmt.Sprintf("udp:%s:%d:%p", device.Username, device.SSID, device)
-		} else {
-			key = "udp:" + key
-		}
-		seen[key] = struct{}{}
-	}
-	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-		for _, device := range GlobalMessageRouter.wsManager.GetDevicesByGroup(groupID) {
-			if device == nil || !device.IsGhost() {
-				continue
-			}
-			key := device.GetSessionID()
-			if key == "" {
-				key = "ws:" + device.GetIdentifier()
-			} else {
-				key = "ws:" + key
-			}
-			seen[key] = struct{}{}
-		}
-	}
-	for _, session := range ghostsession.Global.ListByGroup(groupID) {
-		if !session.Connected || session.Transport != ghostsession.TransportEdge {
-			continue
-		}
-		seen["edge:"+session.SessionID] = struct{}{}
-	}
-	return len(seen)
+	return len(ghostsession.Global.ListByGroup(groupID))
 }
 
 func finalizeCenterLocalOffline(dev *models.Device) {

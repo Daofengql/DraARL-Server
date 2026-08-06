@@ -73,21 +73,36 @@ func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) 
 		ghostsession.Global = previousRegistry
 	})
 
-	first := modernUDPGhost("count-session-a", 21, 31101, 1001, []int{1001, 1002, 1003})
-	second := modernUDPGhost("count-session-b", 22, 31102, 1002, []int{1002, 1003})
+	register := func(instanceID string, transport ghostsession.Transport, txGroupID int, rxGroupIDs []int) ghostsession.Session {
+		t.Helper()
+		session, err := ghostsession.Global.Register(ghostsession.Registration{
+			ClientInstanceID: instanceID, OwnerID: 7, Username: "count-user",
+			DevModel: protocol.DraARLDevModelAndroid, SSID: protocol.SSIDGhostAndroid, Transport: transport,
+			ProtocolVersion: protocol.GhostAuthPayloadVersion,
+			Capabilities:    []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
+			Routing:         ghostsession.Routing{TxGroupID: txGroupID, RxGroupIDs: rxGroupIDs},
+		}, ghostsession.Controller{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+	firstSession := register("11111111-1111-4111-8111-111111111111", ghostsession.TransportUDP, 1001, []int{1001, 1002, 1003})
+	secondSession := register("22222222-2222-4222-8222-222222222222", ghostsession.TransportUDP, 1002, []int{1002, 1003})
+	register("33333333-3333-4333-8333-333333333333", ghostsession.TransportEdge, 1002, []int{1002, 1003})
+
+	first := modernUDPGhost(firstSession.SessionID, firstSession.SessionTag, 31101, 1001, []int{1001, 1002, 1003})
+	second := modernUDPGhost(secondSession.SessionID, secondSession.SessionTag, 31102, 1002, []int{1002, 1003})
+	second.ClientInstanceID = "22222222-2222-4222-8222-222222222222"
 	if _, err := GlobalUDPGhostManager.RegisterSession(first); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := GlobalUDPGhostManager.RegisterSession(second); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ghostsession.Global.Register(ghostsession.Registration{
-		ClientInstanceID: "11111111-1111-4111-8111-111111111111", OwnerID: 7, Username: "edge-user",
-		DevModel: protocol.DraARLDevModelAndroid, SSID: protocol.SSIDGhostAndroid, Transport: ghostsession.TransportEdge,
-		ProtocolVersion: protocol.GhostAuthPayloadVersion,
-		Capabilities:    []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
-		Routing:         ghostsession.Routing{TxGroupID: 1002, RxGroupIDs: []int{1002, 1003}},
-	}, ghostsession.Controller{}); err != nil {
+	orphan := modernUDPGhost("orphan-data-plane-session", 99, 31103, 1002, []int{1002})
+	orphan.ClientInstanceID = "44444444-4444-4444-8444-444444444444"
+	if _, err := GlobalUDPGhostManager.RegisterSession(orphan); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,6 +111,21 @@ func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) 
 	}
 	if got := GetOnlineGhostCountByGroup(1002); got != 3 {
 		t.Fatalf("group ghost online count=%d, want 3 sessions", got)
+	}
+	udpGhost, wsNormal, wsGhost, edgeGhost := onlineTransportOnlineCounts()
+	if udpGhost != 2 || wsNormal != 0 || wsGhost != 0 || edgeGhost != 1 {
+		t.Fatalf("transport counts udp=%d ws_normal=%d ws_ghost=%d edge=%d", udpGhost, wsNormal, wsGhost, edgeGhost)
+	}
+	register("55555555-5555-4555-8555-555555555555", ghostsession.TransportWebSocket, 1002, []int{1002})
+	if got := GetOnlineGhostCount(); got != 4 {
+		t.Fatalf("server ghost online count after websocket registration=%d, want 4 sessions", got)
+	}
+	if got := GetOnlineGhostCountByGroup(1002); got != 4 {
+		t.Fatalf("group ghost online count after websocket registration=%d, want 4 sessions", got)
+	}
+	udpGhost, wsNormal, wsGhost, edgeGhost = onlineTransportOnlineCounts()
+	if udpGhost != 2 || wsNormal != 0 || wsGhost != 1 || edgeGhost != 1 {
+		t.Fatalf("transport counts after websocket registration udp=%d ws_normal=%d ws_ghost=%d edge=%d", udpGhost, wsNormal, wsGhost, edgeGhost)
 	}
 	if got := totalOnlineDeviceCount(4, 2, 1, 3, 2); got != 12 {
 		t.Fatalf("combined online count=%d, want 12", got)

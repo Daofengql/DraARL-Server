@@ -109,60 +109,8 @@ type UDPConfig struct {
 // multi-device ghost routing model. The defaults preserve the original
 // in-process limits while allowing deployments to choose stricter limits.
 type GhostSessionConfig struct {
-	MaxSessionsPerOwner        int                    `yaml:"MaxSessionsPerOwner" json:"max_sessions_per_owner"`
-	MaxSubscriptionsPerSession int                    `yaml:"MaxSubscriptionsPerSession" json:"max_subscriptions_per_session"`
-	MultiSession               GhostFeatureGateConfig `yaml:"MultiSession" json:"multi_session"`
-	MultiReceive               GhostFeatureGateConfig `yaml:"MultiReceive" json:"multi_receive"`
-}
-
-// GhostFeatureGateConfig supports an emergency global switch while retaining
-// account and client-platform allowlists for staged rollout. A missing Enabled
-// value defaults to true.
-type GhostFeatureGateConfig struct {
-	Enabled        *bool   `yaml:"Enabled" json:"enabled"`
-	AllowOwnerIDs  []int   `yaml:"AllowOwnerIDs" json:"allow_owner_ids"`
-	AllowDevModels []uint8 `yaml:"AllowDevModels" json:"allow_dev_models"`
-}
-
-func boolPointer(value bool) *bool {
-	return &value
-}
-
-func (c *GhostFeatureGateConfig) SetDefaults(field string) error {
-	if c.Enabled == nil {
-		c.Enabled = boolPointer(true)
-	}
-	ownerSet := make(map[int]struct{}, len(c.AllowOwnerIDs))
-	owners := make([]int, 0, len(c.AllowOwnerIDs))
-	for _, ownerID := range c.AllowOwnerIDs {
-		if ownerID <= 0 {
-			return fmt.Errorf("GhostSessions.%s.AllowOwnerIDs must contain positive IDs", field)
-		}
-		if _, exists := ownerSet[ownerID]; exists {
-			continue
-		}
-		ownerSet[ownerID] = struct{}{}
-		owners = append(owners, ownerID)
-	}
-	modelSet := make(map[uint8]struct{}, len(c.AllowDevModels))
-	models := make([]uint8, 0, len(c.AllowDevModels))
-	for _, devModel := range c.AllowDevModels {
-		if devModel == 0 {
-			return fmt.Errorf("GhostSessions.%s.AllowDevModels must contain non-zero models", field)
-		}
-		if _, exists := modelSet[devModel]; exists {
-			continue
-		}
-		modelSet[devModel] = struct{}{}
-		models = append(models, devModel)
-	}
-	c.AllowOwnerIDs = owners
-	c.AllowDevModels = models
-	return nil
-}
-
-func (c GhostFeatureGateConfig) IsEnabled() bool {
-	return c.Enabled == nil || *c.Enabled
+	MaxSessionsPerOwner        int `yaml:"MaxSessionsPerOwner" json:"max_sessions_per_owner"`
+	MaxSubscriptionsPerSession int `yaml:"MaxSubscriptionsPerSession" json:"max_subscriptions_per_session"`
 }
 
 const (
@@ -187,12 +135,6 @@ func (c *GhostSessionConfig) SetDefaults() error {
 	}
 	if c.MaxSubscriptionsPerSession < 1 || c.MaxSubscriptionsPerSession > MaxGhostSubscriptionsPerSession {
 		return fmt.Errorf("GhostSessions.MaxSubscriptionsPerSession must be between 1 and %d", MaxGhostSubscriptionsPerSession)
-	}
-	if err := c.MultiSession.SetDefaults("MultiSession"); err != nil {
-		return err
-	}
-	if err := c.MultiReceive.SetDefaults("MultiReceive"); err != nil {
-		return err
 	}
 	return nil
 }

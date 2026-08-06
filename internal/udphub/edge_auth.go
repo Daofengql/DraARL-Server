@@ -170,8 +170,6 @@ func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, op
 	if err != nil {
 		code := "ghost_session_registration_failed"
 		switch {
-		case errors.Is(err, ghostsession.ErrMultiSessionDisabled):
-			code = ghostsession.StableErrorCode(err)
 		case errors.Is(err, ghostsession.ErrSessionLimit):
 			code = fmt.Sprintf("ghost_session_limit active=%d limit=%d", len(ghostsession.Global.ListOwner(result.User.ID)), ghostsession.MaxSessionsPerOwner())
 		}

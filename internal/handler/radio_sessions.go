@@ -271,8 +271,6 @@ func writeSessionRoutingError(c *gin.Context, err error) {
 		status, code = http.StatusConflict, "ambiguous_session"
 	case errors.Is(err, ghostsession.ErrSubscriptionLimit):
 		status, code = http.StatusUnprocessableEntity, "subscription_limit"
-	case errors.Is(err, ghostsession.ErrMultiReceiveDisabled):
-		status, code = http.StatusForbidden, ghostsession.StableErrorCode(err)
 	case errors.Is(err, errRoutingGroupNotFound):
 		status, code = http.StatusNotFound, "group_not_found"
 	case errors.Is(err, errRoutingGroupForbidden):

@@ -89,7 +89,6 @@ func main() {
 	ghostsession.ConfigureGlobal(
 		cfg.GhostSessions.MaxSessionsPerOwner,
 		cfg.GhostSessions.MaxSubscriptionsPerSession,
-		ghostSessionPolicy(cfg.GhostSessions),
 	)
 
 	// 初始化 JWT 密钥

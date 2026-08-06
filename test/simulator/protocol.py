@@ -77,6 +77,7 @@ class DraARLv1Packet:
         self.dmrid = 0
         self.callsign = ""
         self.reserved = b'\x00' * 4
+        self.source_group_id = 0
         self.data = b''
 
     @classmethod
@@ -102,6 +103,7 @@ class DraARLv1Packet:
             packet.dmrid = (raw_data[51] << 16) | (raw_data[52] << 8) | raw_data[53]
             packet.callsign = raw_data[54:86].rstrip(b'\x00').decode('ascii', errors='replace')
             packet.reserved = raw_data[86:90]
+            packet.source_group_id = struct.unpack('>I', packet.reserved)[0]
 
             # 解析数据区
             if len(raw_data) > DRAARL_HEADER_SIZE:

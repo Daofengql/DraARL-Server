@@ -107,10 +107,15 @@ class ClientPanel(ttk.LabelFrame):
             group_frame = ttk.Frame(self)
             group_frame.pack(fill=tk.X, padx=5, pady=2)
 
-            ttk.Label(group_frame, text="群组:").pack(side=tk.LEFT)
+            ttk.Label(group_frame, text="发送/日志:").pack(side=tk.LEFT)
             self.group_var = tk.StringVar(value="999")
             ttk.Entry(group_frame, textvariable=self.group_var, width=6).pack(side=tk.LEFT, padx=2)
             ttk.Button(group_frame, text="切换", command=self.switch_group).pack(side=tk.LEFT, padx=2)
+
+            ttk.Label(group_frame, text="收听:").pack(side=tk.LEFT, padx=(8, 0))
+            self.rx_groups_var = tk.StringVar(value="999")
+            ttk.Entry(group_frame, textvariable=self.rx_groups_var, width=14).pack(side=tk.LEFT, padx=2)
+            ttk.Button(group_frame, text="应用", command=self.update_receive_groups).pack(side=tk.LEFT, padx=2)
 
     def _build_udp_device_params(self, parent):
         """UDP 普通设备参数"""
@@ -291,6 +296,9 @@ class ClientPanel(ttk.LabelFrame):
                 )
                 if not audio_enabled:
                     self.log("[系统] 音频不可用，PTT 已禁用；文字功能不受影响")
+                if self.client_type == "udp_jwt":
+                    self.group_var.set(str(self.client.tx_group_id))
+                    self.rx_groups_var.set(",".join(map(str, self.client.rx_group_ids)))
                 self.log("[系统] 已连接")
             else:
                 self.log("[系统] 连接失败")
@@ -366,12 +374,43 @@ class ClientPanel(ttk.LabelFrame):
         if not session_id:
             self.log("[错误] 当前客户端没有可更新的 Ghost Session")
             return
-        rx_group_ids = list(getattr(self.client, "rx_group_ids", []))
-        if group_id not in rx_group_ids:
-            rx_group_ids.append(group_id)
-        if http.update_radio_session_routing(session_id, group_id, rx_group_ids):
-            self.client.tx_group_id = group_id
-            self.client.rx_group_ids = rx_group_ids
+        rx_group_ids = list(dict.fromkeys(getattr(self.client, "rx_group_ids", [])))
+        next_rx_group_ids = [group_id] if len(rx_group_ids) <= 1 else list(dict.fromkeys([*rx_group_ids, group_id]))
+        routing = http.update_radio_session_routing(session_id, group_id, next_rx_group_ids)
+        if routing:
+            self.client.tx_group_id = int(routing.get("tx_group_id", group_id))
+            self.client.rx_group_ids = [int(value) for value in routing.get("rx_group_ids", next_rx_group_ids)]
+            self.group_var.set(str(self.client.tx_group_id))
+            self.rx_groups_var.set(",".join(map(str, self.client.rx_group_ids)))
+
+    def update_receive_groups(self):
+        """更新 JWT 客户端的本地多收偏好和 Session 路由。"""
+        if not self.client or not getattr(self.client, "session_id", ""):
+            self.log("[错误] 当前客户端没有可更新的 Ghost Session")
+            return
+
+        try:
+            selected = [
+                int(value.strip())
+                for value in self.rx_groups_var.get().split(',')
+                if value.strip()
+            ]
+        except ValueError:
+            self.log("[错误] 收听频道必须是逗号分隔的数字")
+            return
+
+        tx_group_id = int(self.client.tx_group_id)
+        rx_group_ids = list(dict.fromkeys([*selected, tx_group_id]))
+        server_ip = self.app.server_ip.get()
+        http_port = self.app.http_port.get()
+        http = HTTPClient(f"http://{server_ip}:{http_port}", log_callback=self.log)
+        http.set_token(self.token_var.get())
+        routing = http.update_radio_session_routing(self.client.session_id, tx_group_id, rx_group_ids)
+        if routing:
+            self.client.tx_group_id = int(routing.get("tx_group_id", tx_group_id))
+            self.client.rx_group_ids = [int(value) for value in routing.get("rx_group_ids", rx_group_ids)]
+            self.group_var.set(str(self.client.tx_group_id))
+            self.rx_groups_var.set(",".join(map(str, self.client.rx_group_ids)))
 
     def show_config(self):
         """显示 Config 配置窗口"""

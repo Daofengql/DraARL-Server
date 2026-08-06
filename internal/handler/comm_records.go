@@ -194,12 +194,6 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 }
 
-// getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
-// 只有互联组状态开启(status=1)时才包含互联组内的其他群组
-func getRelatedGroupIDs(groupID int) ([]int, error) {
-	return gormdb.NewMessageRepository().VisibleGroupIDs(groupID)
-}
-
 // GetCommRecords 获取通信记录列表（使用联表查询）
 // 权限规则：
 // - 管理员 + admin_mode=true：可查看所有记录（管理员后台）
@@ -252,12 +246,6 @@ func GetCommRecords(c *gin.Context) {
 			})
 			return
 		}
-		if !canViewGlobal {
-			if _, allowed := requireGroupViewAccess(c, group); !allowed {
-				return
-			}
-		}
-
 		value := uint(parsedGroupID)
 		requestedGroupID = &value
 	}
@@ -280,10 +268,9 @@ func GetCommRecords(c *gin.Context) {
 		Where("cr.status = ?", 2) // 只返回已完成的记录
 
 	// 权限过滤逻辑：
-	// 1. 管理员后台模式：可查看所有记录
-	// 2. 指定了群组筛选：可查看该群组（及互联组）内的所有记录
-	// 3. 其他情况：按发送者快照查看自己的记录；旧物理记录才回退到当前设备所有者
-	if !canViewGlobal && requestedGroupID == nil {
+	// 管理员后台模式可查看所有记录；其他场景始终限制为本人发信记录。
+	// 旧物理记录缺少 user_id 时才回退到当前设备所有者。
+	if !canViewGlobal {
 		db = db.Where(
 			"cr.user_id = ? OR (cr.user_id IS NULL AND cr.device_id > 0 AND d.owner_id = ?)",
 			currentUser.ID,
@@ -299,21 +286,7 @@ func GetCommRecords(c *gin.Context) {
 		}
 	}
 	if requestedGroupID != nil {
-		// 兼容旧客户端：群组筛选仍包含当前启用互联域中的消息。
-		relatedGroupIDs, relatedErr := getRelatedGroupIDs(int(*requestedGroupID))
-		if relatedErr != nil {
-			log.Printf("[COMM_RECORDS] 获取互联群组失败 group=%d err=%v", *requestedGroupID, relatedErr)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    http.StatusInternalServerError,
-				"message": "查询互联群组失败",
-			})
-			return
-		}
-		if len(relatedGroupIDs) > 1 {
-			db = db.Where("cr.group_id IN ?", relatedGroupIDs)
-		} else {
-			db = db.Where("cr.group_id = ?", *requestedGroupID)
-		}
+		db = db.Where("cr.group_id = ?", *requestedGroupID)
 	}
 	// 全局模式下可以按 user_id 筛选
 	if canViewGlobal && userIDStr != "" {

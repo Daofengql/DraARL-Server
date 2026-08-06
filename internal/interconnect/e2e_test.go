@@ -478,6 +478,7 @@ func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testin
 		t.Fatal(err)
 	}
 	defer center.Close()
+	center.Gateway.SetGhostRecoveryWindow(time.Second)
 	centerUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
 		t.Fatal(err)
@@ -506,7 +507,7 @@ func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testin
 		edge, startErr := StartEdgeRuntime(EdgeRuntimeConfig{
 			NodeID: nodeID, Token: "node-token", CenterControl: center.Control.Addr().String(),
 			CenterUDP: centerUDP.LocalAddr().String(), Listen: "127.0.0.1:0", TLSConfig: clientTLS(),
-			ReconnectMin: 20 * time.Millisecond, ReconnectMax: 100 * time.Millisecond,
+			ReconnectMin: 20 * time.Millisecond, ReconnectMax: 100 * time.Millisecond, DisconnectedGrace: 40 * time.Millisecond,
 		})
 		if startErr != nil {
 			t.Fatal(startErr)
@@ -587,6 +588,31 @@ func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testin
 				slices.Equal(localGrant.RxDomainIDs, rxDomains)
 		}, "modern ghost route did not reach the target edge")
 		return route
+	}
+	assertStableState := func() {
+		t.Helper()
+		waitForCondition(t, 3*time.Second, func() bool {
+			center.Gateway.mu.RLock()
+			wireSessionID := center.Gateway.activeByGhost["ghost-session-b"]
+			owner := center.Gateway.deviceSessions[wireSessionID]
+			centerStable := len(center.Gateway.deviceSessions) == 2 && len(center.Gateway.activeDevices) == 2 &&
+				len(center.Gateway.activeByGhost) == 2 && len(center.Gateway.activeByID) == 0 &&
+				len(center.Gateway.sessionCounts) == 2 && len(center.Gateway.ghostRecovery) == 0 &&
+				owner.NodeID == "edge-c" && owner.ControlSessionID != 0 &&
+				center.Gateway.sessionCounts[nodeControlSession{nodeID: owner.NodeID, sessionID: owner.ControlSessionID}] == 1
+			center.Gateway.mu.RUnlock()
+			if !centerStable || len(center.Cluster.Projection().Devices) != 2 {
+				return false
+			}
+
+			edge := edges["edge-c"].Gateway
+			edge.mu.RLock()
+			edgeStable := len(edge.sessions) == 1 && len(edge.byIdentity) == 1 && len(edge.bySessionTag) == 1 &&
+				len(edge.pending) == 0 && len(edge.pendingIdentity) == 0 && len(edge.pendingRenewals) == 0 &&
+				len(edge.renewingSessions) == 0 && len(edge.pendingConfirms) == 0 && len(edge.pendingConfigUp) == 0
+			edge.mu.RUnlock()
+			return edgeStable
+		}, "ghost session state did not converge after control recovery")
 	}
 	readText := func(token string, timeout time.Duration, wantPayload string, wantGroup int) {
 		t.Helper()
@@ -684,15 +710,58 @@ func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testin
 	sendText("ghost-token-a", "edge-a", "after-node-migration")
 	readText("ghost-token-b", 3*time.Second, "after-node-migration", groupA)
 
-	oldControl := edges["edge-c"].CurrentClient()
-	if oldControl == nil || !center.Control.Disconnect("edge-c") {
-		t.Fatal("could not force the edge-c control reconnect")
+	for cycle := 1; cycle <= 6; cycle++ {
+		oldControl := edges["edge-c"].CurrentClient()
+		if oldControl == nil || !center.Control.Disconnect("edge-c") {
+			t.Fatalf("cycle %d: could not force the edge-c control reconnect", cycle)
+		}
+		waitForCondition(t, 3*time.Second, func() bool {
+			client := edges["edge-c"].CurrentClient()
+			return client != nil && client != oldControl && edges["edge-c"].Gateway.currentControl(true) != nil
+		}, "edge-c control session did not reconnect")
+		waitRoute("ghost-session-b", "edge-c", []uint64{domainA, domainB})
+		assertStableState()
+	}
+
+	edgeC := edges["edge-c"]
+	reserved, reserveErr := net.Listen("tcp", "127.0.0.1:0")
+	if reserveErr != nil {
+		t.Fatal(reserveErr)
+	}
+	unavailableControl := reserved.Addr().String()
+	_ = reserved.Close()
+	edgeC.mu.Lock()
+	centerControl := edgeC.cfg.CenterControl
+	edgeC.cfg.CenterControl = unavailableControl
+	edgeC.mu.Unlock()
+	if !center.Control.Disconnect("edge-c") {
+		t.Fatal("could not start the simulated long network partition")
 	}
 	waitForCondition(t, 3*time.Second, func() bool {
-		client := edges["edge-c"].CurrentClient()
-		return client != nil && client != oldControl && edges["edge-c"].Gateway.currentControl(true) != nil
-	}, "edge-c control session did not reconnect")
+		return edgeC.CurrentClient() == nil && edgeC.Gateway.currentControl(false) == nil
+	}, "edge-c did not enter the disconnected state")
+	time.Sleep(80 * time.Millisecond)
+	edgeC.Gateway.expireDeviceSessions(time.Now())
+	edgeC.Gateway.mu.RLock()
+	partitionClean := len(edgeC.Gateway.sessions) == 0 && len(edgeC.Gateway.byIdentity) == 0 && len(edgeC.Gateway.bySessionTag) == 0 &&
+		len(edgeC.Gateway.pending) == 0 && len(edgeC.Gateway.pendingIdentity) == 0 && len(edgeC.Gateway.pendingRenewals) == 0 &&
+		len(edgeC.Gateway.renewingSessions) == 0 && len(edgeC.Gateway.pendingConfirms) == 0 && len(edgeC.Gateway.pendingConfigUp) == 0
+	edgeC.Gateway.mu.RUnlock()
+	if !partitionClean {
+		t.Fatal("edge-c retained session state after the partition exceeded local grace")
+	}
+	edgeC.mu.Lock()
+	edgeC.cfg.CenterControl = centerControl
+	edgeC.mu.Unlock()
+	waitForReadyEdgeClient(t, edgeC, 3*time.Second)
+	if edgeC.Gateway.ConnectionCount() != 0 {
+		t.Fatal("an expired edge session was restored without re-authentication")
+	}
+	login("ghost-token-b", "edge-c")
 	waitRoute("ghost-session-b", "edge-c", []uint64{domainA, domainB})
+	assertStableState()
+	time.Sleep(1200 * time.Millisecond)
+	assertStableState()
 	sendText("ghost-token-a", "edge-a", "after-control-recovery")
 	readText("ghost-token-b", 3*time.Second, "after-control-recovery", groupA)
 	assertNoPacket("ghost-token-b")

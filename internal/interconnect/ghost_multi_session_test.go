@@ -274,3 +274,71 @@ func TestEdgeGhostRecoveryWindowExpiresOrCancelsExactSession(t *testing.T) {
 		}
 	})
 }
+
+func TestCenterRepeatedGhostRecoveryKeepsSessionIndexesBounded(t *testing.T) {
+	const recoveryWindow = 20 * time.Millisecond
+	cluster := NewClusterManager(94)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	gateway.SetGhostRecoveryWindow(recoveryWindow)
+	revoked := make(chan string, 1)
+	gateway.SetGhostSessionHandlers(nil, func(sessionID, reason string) {
+		select {
+		case revoked <- sessionID + ":" + reason:
+		default:
+		}
+	})
+
+	grant := modernEdgeGhost(11, "flapping", "app-flapping", "55555555-5555-4555-8555-555555555555", 505, 10, 90, []int{10}, []uint64{90})
+	edge := &NodeSession{NodeID: "edge-flapping", SessionID: 500}
+	gateway.OnConnect(edge)
+	if err := gateway.activateDeviceSession(edge, grant); err != nil {
+		t.Fatal(err)
+	}
+
+	for cycle := 1; cycle <= 12; cycle++ {
+		gateway.OnDisconnect(edge, errors.New("test control flap"))
+		gateway.mu.RLock()
+		if len(gateway.deviceSessions) != 0 || len(gateway.activeDevices) != 0 || len(gateway.activeByGhost) != 0 ||
+			len(gateway.sessionCounts) != 0 || len(gateway.ghostRecovery) != 1 {
+			gateway.mu.RUnlock()
+			t.Fatalf("cycle %d disconnected state leaked indexes", cycle)
+		}
+		gateway.mu.RUnlock()
+
+		edge = &NodeSession{NodeID: edge.NodeID, SessionID: uint64(500 + cycle)}
+		gateway.OnConnect(edge)
+		reconfirmed := *grant
+		if err := gateway.activateDeviceSession(edge, &reconfirmed); err != nil {
+			t.Fatalf("cycle %d reconfirmation: %v", cycle, err)
+		}
+		grant = &reconfirmed
+
+		gateway.mu.RLock()
+		owner := gateway.deviceSessions[grant.SessionID]
+		count := gateway.sessionCounts[nodeControlSession{nodeID: edge.NodeID, sessionID: edge.SessionID}]
+		if len(gateway.deviceSessions) != 1 || len(gateway.activeDevices) != 1 || len(gateway.activeByGhost) != 1 ||
+			len(gateway.sessionCounts) != 1 || len(gateway.ghostRecovery) != 0 ||
+			gateway.activeByGhost[grant.GhostSessionID] != grant.SessionID || owner.ControlSessionID != edge.SessionID || count != 1 {
+			gateway.mu.RUnlock()
+			t.Fatalf("cycle %d recovered state did not converge", cycle)
+		}
+		gateway.mu.RUnlock()
+		if projection := cluster.Projection(); len(projection.Devices) != 1 || projection.Devices[grant.SessionID].SessionEpoch != grant.SessionEpoch {
+			t.Fatalf("cycle %d route projection leaked: %#v", cycle, projection.Devices)
+		}
+	}
+
+	time.Sleep(4 * recoveryWindow)
+	select {
+	case got := <-revoked:
+		t.Fatalf("a stale recovery timer revoked the current session: %s", got)
+	default:
+	}
+	gateway.mu.RLock()
+	defer gateway.mu.RUnlock()
+	if len(gateway.deviceSessions) != 1 || len(gateway.activeByGhost) != 1 || len(gateway.sessionCounts) != 1 || len(gateway.ghostRecovery) != 0 {
+		t.Fatalf("state changed after stale recovery timers fired: sessions=%d ghosts=%d counts=%d recovery=%d",
+			len(gateway.deviceSessions), len(gateway.activeByGhost), len(gateway.sessionCounts), len(gateway.ghostRecovery))
+	}
+}

@@ -63,6 +63,22 @@ Reserved 只对幽灵 Session 启用，标准 UDP 实体设备继续填 0：
 
 `session_tag` 只用于在热路径定位已认证 Session。服务端还会联合校验 Username、SSID、DevModel、UDP 端点、账号和 Session 状态；tag 不是凭据，地址变化后必须重新认证。群组 ID 必须可表示为非零 32 位无符号整数。
 
+#### UDP 幽灵 Session 威胁模型
+
+当前 `session_tag` 由密码学随机源生成，值非零且在当前在线 Session 集合中唯一。服务端同时要求来源 IP:Port、Username、SSID、DevModel、Session ID、账号和注册表状态全部匹配，并对 IP 与 IP:Port 做包速率限制。因此随机猜中 tag 仍不能从另一个端点接管 Session；Session 删除或重连后，旧 tag 会从运行时索引移除。
+
+该机制用于运行时绑定，不提供传输加密、消息认证或完整重放防护：
+
+- tag 会出现在认证响应和后续包中，不应视为秘密或 bearer token。
+- Type 1 UDP 认证中的 JWT 以及后续媒体在原始 UDP 链路上均为明文；能观察链路的攻击者可以读取 bearer token、tag 和通信内容。
+- 活跃 Session 内没有媒体包序列号或滑动重放窗口。来自同一已绑定端点、身份和 tag 均匹配的重复心跳、文本或语音包会按普通包处理。
+- 32 位 tag 只保证在线集合内不冲突，Session 结束后理论上可能再次分配相同值。端点和完整身份校验降低旧包误接收概率，但不能提供密码学上的跨 Session 重放隔离。
+- UDP 来源地址可以被伪造；端点绑定能阻止伪造端接收响应，但不能代替链路层或传输层认证。
+
+直接跨不可信网络部署 UDP 幽灵客户端时，应使用 WireGuard、IPsec 等受控加密隧道，并缩短 JWT 有效期、限制入口网络、监控 `ghost_packets` 拒绝计数。WebSocket 幽灵客户端应只通过 HTTPS/WSS 接入。
+
+未来需要安全漫游或不依赖外层隧道时，应版本化引入带认证的传输方案，例如 DTLS/QUIC，或通过受保护握手派生每 Session 密钥并为媒体包增加单调序列号、认证标签和滑动重放窗口。安全重绑定必须使用旧 Session 密钥或重新认证完成挑战应答，不能只凭 tag 或 `client_instance_id` 更换端点。该方案需要新的协议版本；不得重新解释当前 90 字节 DraARLv1 实体设备字段。
+
 ---
 
 ## 数据包类型

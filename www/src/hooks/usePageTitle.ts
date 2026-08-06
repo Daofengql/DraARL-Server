@@ -21,6 +21,7 @@ const routeTitleMap: Record<string, string> = {
   '/admin/approvals': '用户审批',
   '/admin/certificate-approvals': '操作证审批',
   '/admin/devices': '设备管理',
+  '/admin/radio-sessions': '幽灵会话',
   '/admin/relays': '中继台',
   '/admin/servers': '服务器',
   '/admin/groups': '群组管理',

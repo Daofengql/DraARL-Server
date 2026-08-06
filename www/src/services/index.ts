@@ -11,6 +11,8 @@ export type { EdgeNode, EdgeNodeUpdate, EdgeNodeCredentialResult } from './serve
 export { logService } from './log'
 export { platformService } from './platform'
 export { commStatsService } from './commStats'
+export { radioSessionService } from './radioSession'
+export type { AdminRadioSession, GhostTransport } from './radioSession'
 export { groupLinkService } from './groupLink'
 export { listFirmware, uploadFirmware, deleteFirmware, getLatestFirmware } from './firmware'
 export type { FirmwareRelease } from './firmware'

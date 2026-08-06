@@ -33,6 +33,7 @@ const RelaySearchPage = lazy(() => import('./pages/relay-search/RelaySearchPage'
 const ToolsPage = lazy(() => import('./pages/tools/ToolsPage').then(m => ({ default: m.ToolsPage })))
 const AdminDashboardPage = lazy(() => import('./pages/admin/DashboardPage').then(m => ({ default: m.AdminDashboardPage })))
 const AdminDevicePage = lazy(() => import('./pages/admin/DevicePage').then(m => ({ default: m.AdminDevicePage })))
+const RadioSessionsPage = lazy(() => import('./pages/admin/RadioSessionsPage').then(m => ({ default: m.RadioSessionsPage })))
 const AdminGroupPage = lazy(() => import('./pages/admin/GroupPage').then(m => ({ default: m.AdminGroupPage })))
 const GroupLinkPage = lazy(() => import('./pages/admin/GroupLinkPage').then(m => ({ default: m.GroupLinkPage })))
 const AssetPage = lazy(() => import('./pages/admin/AssetPage').then(m => ({ default: m.AssetPage })))
@@ -154,6 +155,7 @@ function App() {
           <Route path="dashboard" element={<PageSuspense><AdminDashboardPage /></PageSuspense>} />
           <Route path="users" element={<PageSuspense><UsersPage /></PageSuspense>} />
           <Route path="devices" element={<PageSuspense><AdminDevicePage /></PageSuspense>} />
+          <Route path="radio-sessions" element={<PageSuspense><RadioSessionsPage /></PageSuspense>} />
           <Route path="groups" element={<PageSuspense><AdminGroupPage /></PageSuspense>} />
           <Route path="group-links" element={<PageSuspense><GroupLinkPage /></PageSuspense>} />
           <Route path="approvals" element={<PageSuspense><ApprovalsPage /></PageSuspense>} />

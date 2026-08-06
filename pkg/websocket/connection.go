@@ -143,11 +143,15 @@ type sharedWritePayload struct {
 }
 
 var (
-	wsFramesCopied  atomic.Int64
-	wsBytesCopied   atomic.Int64
-	wsWritesQueued  atomic.Int64
-	wsWritesDropped atomic.Int64
-	wsWritesDrained atomic.Int64
+	wsFramesCopied       atomic.Int64
+	wsBytesCopied        atomic.Int64
+	wsWritesQueued       atomic.Int64
+	wsWritesDropped      atomic.Int64
+	wsWritesDrained      atomic.Int64
+	wsFanoutCandidates   atomic.Int64
+	wsFanoutDeduplicated atomic.Int64
+	wsFanoutSent         atomic.Int64
+	wsFanoutDropped      atomic.Int64
 )
 
 func newSharedWritePayload(data []byte) *sharedWritePayload {
@@ -413,12 +417,16 @@ func getWSDeliveryStats() map[string]int64 {
 	queued := wsWritesQueued.Load()
 	drained := wsWritesDrained.Load()
 	return map[string]int64{
-		"frames_copied":  wsFramesCopied.Load(),
-		"bytes_copied":   wsBytesCopied.Load(),
-		"writes_queued":  queued,
-		"writes_dropped": wsWritesDropped.Load(),
-		"writes_drained": drained,
-		"writes_pending": queued - drained,
+		"frames_copied":       wsFramesCopied.Load(),
+		"bytes_copied":        wsBytesCopied.Load(),
+		"writes_queued":       queued,
+		"writes_dropped":      wsWritesDropped.Load(),
+		"writes_drained":      drained,
+		"writes_pending":      queued - drained,
+		"fanout_candidates":   wsFanoutCandidates.Load(),
+		"fanout_deduplicated": wsFanoutDeduplicated.Load(),
+		"fanout_sent":         wsFanoutSent.Load(),
+		"fanout_dropped":      wsFanoutDropped.Load(),
 	}
 }
 
@@ -913,7 +921,7 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 	m.globalGroupIndex.mu.Unlock()
 	shard.mu.Unlock()
 
-	log.Printf("[WS] Ghost session registered: session=%s user=%d model=%d tx_group=%d rx_groups=%v", device.SessionID, userID, device.DevModel, device.GetGroupID(), device.GetRxGroupIDs())
+	log.Printf("[WS] Ghost session registered: session=%s user=%d model=%d tx_group=%d rx_groups=%v", ghostsession.ShortID(device.SessionID), userID, device.DevModel, device.GetGroupID(), device.GetRxGroupIDs())
 	return nil
 }
 
@@ -955,7 +963,7 @@ func (m *WSConnectionManager) SetDeviceRouting(device *WSDevice, routing ghostse
 	}
 	m.globalGroupIndex.mu.Unlock()
 	shard.mu.Unlock()
-	log.Printf("[WS] Ghost session routing changed: session=%s tx=%d rx=%v", device.SessionID, routing.TxGroupID, routing.RxGroupIDs)
+	log.Printf("[WS] Ghost session routing changed: session=%s tx=%d rx=%v", ghostsession.ShortID(device.SessionID), routing.TxGroupID, routing.RxGroupIDs)
 	sendRoutingUpdated(device)
 	return nil
 }

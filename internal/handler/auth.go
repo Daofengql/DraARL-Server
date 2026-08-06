@@ -1088,6 +1088,10 @@ func GetTotalStats(c *gin.Context) {
 	devCount, _ := deviceRepo.DeviceCount()
 	groupCount, _ := groupRepo.GroupCount()
 	onlineCount, _ := deviceRepo.OnlineDeviceCount()
+	// Ghost devices are runtime sessions and intentionally do not occupy a
+	// persistent row in devices. Add their live session count to the existing
+	// physical-device database count without changing the entity-device rule.
+	onlineCount += int64(udphub.GetOnlineGhostCount())
 
 	stats := TotalStats{
 		TotalDevices:  devCount,

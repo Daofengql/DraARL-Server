@@ -45,7 +45,7 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 
 	result := AuthenticateJWT(request.Token)
 	if !result.Success || result.User == nil {
-		log.Printf("[UDP-JWT] authentication failed: addr=%v err=%s", realAddr, result.ErrorMsg)
+		log.Printf("[UDP-JWT] authentication failed: model=%d err=%s", packet.DevModel, result.ErrorMsg)
 		sendJWTAuthResponse(packet, conn, false, "", result.ErrorCode, result.ErrorMsg)
 		return
 	}
@@ -169,14 +169,14 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 
 	if _, err := GlobalUDPGhostManager.RegisterSession(device); err != nil {
 		ghostsession.Global.Remove(session.SessionID)
-		log.Printf("[UDP-JWT] publish session failed: session=%s err=%v", session.SessionID, err)
+		log.Printf("[UDP-JWT] publish session failed: session=%s err=%v", ghostsession.ShortID(session.SessionID), err)
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "ghost_session_registration_failed")
 		return
 	}
 	if err := ActivateCenterLocalDevice(device); err != nil {
 		GlobalUDPGhostManager.RemoveSession(session.SessionID)
 		ghostsession.Global.Remove(session.SessionID)
-		log.Printf("[UDP-JWT] center activation failed: session=%s err=%v", session.SessionID, err)
+		log.Printf("[UDP-JWT] center activation failed: session=%s err=%v", ghostsession.ShortID(session.SessionID), err)
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
 		return
 	}
@@ -190,8 +190,8 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 			RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
 		})
 	}
-	log.Printf("[UDP-JWT] authenticated: session=%s user=%s model=%d tx=%d rx=%v legacy=%v addr=%v",
-		session.SessionID, user.Name, packet.DevModel, session.TxGroupID, session.RxGroupIDs, legacy, realAddr)
+	log.Printf("[UDP-JWT] authenticated: session=%s user=%s model=%d tx=%d rx=%v legacy=%v",
+		ghostsession.ShortID(session.SessionID), user.Name, packet.DevModel, session.TxGroupID, session.RxGroupIDs, legacy)
 }
 
 func udpEndpointString(addr *net.UDPAddr) string {

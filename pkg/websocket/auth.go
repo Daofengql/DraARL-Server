@@ -147,7 +147,7 @@ func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnection
 		manager.UnregisterDevice(device)
 		return nil, err
 	}
-	log.Printf("[WS-AUTH] session authenticated: session=%s user=%d tx=%d rx=%v legacy=%v", session.SessionID, session.OwnerID, session.TxGroupID, session.RxGroupIDs, session.Legacy)
+	log.Printf("[WS-AUTH] session authenticated: session=%s user=%d tx=%d rx=%v legacy=%v", ghostsession.ShortID(session.SessionID), session.OwnerID, session.TxGroupID, session.RxGroupIDs, session.Legacy)
 	return device, nil
 }
 

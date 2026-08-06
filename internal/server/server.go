@@ -221,6 +221,8 @@ func (s *Server) setupRoutes() {
 
 				// 管理员群组管理使用独立的全量视角，避免复用普通用户可见性过滤。
 				admin.GET("/admin/groups", handler.GetAdminGroups)
+				admin.GET("/admin/radio/sessions", handler.AdminGetRadioSessions)
+				admin.DELETE("/admin/radio/sessions/:session_id", handler.AdminDeleteRadioSession)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）

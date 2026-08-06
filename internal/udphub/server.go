@@ -557,15 +557,23 @@ func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (
 		return getDeviceFromMemory(packet.Username, packet.SSID, udpAddr)
 	}
 	device := GlobalUDPGhostManager.FindBySessionTag(tag)
-	if device == nil || device.GhostProtocolVersion == 0 || device.GhostSessionTag != tag ||
-		device.Username != packet.Username || device.SSID != packet.SSID || device.DevModel != packet.DevModel ||
-		!sameUDPAddr(device.UDPAddr, udpAddr) {
+	if device == nil || device.GhostProtocolVersion == 0 || device.GhostSessionTag != tag {
+		ghostPacketInvalidTags.Add(1)
+		return nil, false
+	}
+	if device.Username != packet.Username || device.SSID != packet.SSID || device.DevModel != packet.DevModel {
+		ghostPacketIdentityRejects.Add(1)
+		return nil, false
+	}
+	if !sameUDPAddr(device.UDPAddr, udpAddr) {
+		ghostPacketEndpointRejects.Add(1)
 		return nil, false
 	}
 	session, exists := ghostsession.Global.FindByTag(tag)
 	if !exists || !session.Connected || session.Transport != ghostsession.TransportUDP ||
 		session.SessionID != device.GhostSessionID || session.OwnerID != device.OwnerID ||
 		session.Username != device.Username || session.SSID != device.SSID || session.DevModel != device.DevModel {
+		ghostPacketRegistryRejects.Add(1)
 		return nil, false
 	}
 	return device, true

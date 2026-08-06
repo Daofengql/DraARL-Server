@@ -55,6 +55,9 @@ func TestConnectionManagerKeepsMultipleOwnerSessionsAndExactCleanup(t *testing.T
 	if got := len(manager.GetDevicesByGroup(1002)); got != 2 {
 		t.Fatalf("group 1002 sessions=%d, want 2", got)
 	}
+	if got := manager.GetOnlineCount(); got != 2 {
+		t.Fatalf("multi-receive sessions counted as %d online devices, want 2", got)
+	}
 
 	manager.UnregisterDevice(first)
 	if _, exists := manager.GetGhostSession(first.SessionID); exists {
@@ -69,6 +72,7 @@ func TestConnectionManagerKeepsMultipleOwnerSessionsAndExactCleanup(t *testing.T
 }
 
 func TestBroadcastDeduplicatesSubscriptionsExcludesExactSessionAndAddsSourceGroup(t *testing.T) {
+	beforeMetrics := getWSDeliveryStats()
 	manager := NewWSConnectionManager()
 	source := newTestGhostSession("source-session", 7, 1001, []int{1001}, []string{"source_group_v1"})
 	sibling := newTestGhostSession("sibling-session", 7, 1002, []int{1001, 1002}, []string{"source_group_v1"})
@@ -86,6 +90,13 @@ func TestBroadcastDeduplicatesSubscriptionsExcludesExactSessionAndAddsSourceGrou
 	})
 	if sent != 3 || dropped != 0 {
 		t.Fatalf("sent=%d dropped=%d, want 3/0", sent, dropped)
+	}
+	afterMetrics := getWSDeliveryStats()
+	if afterMetrics["fanout_candidates"]-beforeMetrics["fanout_candidates"] != 5 ||
+		afterMetrics["fanout_deduplicated"]-beforeMetrics["fanout_deduplicated"] != 2 ||
+		afterMetrics["fanout_sent"]-beforeMetrics["fanout_sent"] != 3 ||
+		afterMetrics["fanout_dropped"]-beforeMetrics["fanout_dropped"] != 0 {
+		t.Fatalf("unexpected fanout metrics before=%v after=%v", beforeMetrics, afterMetrics)
 	}
 	if len(source.writeCh) != 0 {
 		t.Fatal("source session received its own packet")

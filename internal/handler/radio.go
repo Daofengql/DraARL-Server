@@ -202,7 +202,41 @@ func GetRadioGroupDevices(c *gin.Context) {
 		})
 	}
 
-	// 2. 获取 WebSocket 设备（包括幽灵设备）
+	// 2. 获取 UDP 幽灵设备。幽灵会话不落在 devices 表或普通 UDP
+	// 连接池中，必须从 Session 接收索引读取，否则多端设备不会出现在
+	// 群组在线列表里。
+	for _, dev := range udphub.GlobalUDPGhostManager.GetByGroup(groupID) {
+		if dev == nil || !dev.ISOnline {
+			continue
+		}
+		key := "udp-ghost-" + dev.GhostSessionID
+		if dev.GhostSessionID == "" {
+			key = fmt.Sprintf("udp-ghost-%s-%d", dev.Username, dev.SSID)
+		}
+		if seenDevices[key] {
+			continue
+		}
+		seenDevices[key] = true
+		devices = append(devices, RadioDeviceResponse{
+			ID:           0,
+			Username:     dev.Username,
+			CallSign:     dev.CallSign,
+			SSID:         int(dev.SSID),
+			Nickname:     dev.Nickname,
+			DevModel:     int(dev.DevModel),
+			GroupID:      dev.GroupID,
+			IsGhost:      true,
+			DisableSend:  dev.DisableSend,
+			DisableRecv:  dev.DisableRecv,
+			ConnectTime:  dev.OnlineTime.Format("2006-01-02 15:04:05"),
+			LastActivity: dev.LastPacketTime.Format("2006-01-02 15:04:05"),
+			SessionID:    dev.GhostSessionID,
+			TxGroupID:    dev.GroupID,
+			RxGroupIDs:   append([]int(nil), dev.GhostRxGroupIDs...),
+		})
+	}
+
+	// 3. 获取 WebSocket 设备（包括幽灵设备）
 	wsDevices := ws.GlobalManager.GetDevicesByGroup(groupID)
 	for _, device := range wsDevices {
 		key := "ws-" + device.GetIdentifier()

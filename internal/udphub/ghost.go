@@ -224,7 +224,7 @@ func (m *UDPGhostManager) RegisterSession(device *models.Device) (*models.Device
 	m.mu.Unlock()
 	InvalidateDomainReceiverCache()
 	log.Printf("[UDP-GHOST] session registered: session=%s user=%d tx=%d rx=%v legacy=%v",
-		device.GhostSessionID, device.OwnerID, device.GroupID, device.GhostRxGroupIDs, device.GhostProtocolVersion == 0)
+		ghostsession.ShortID(device.GhostSessionID), device.OwnerID, device.GroupID, device.GhostRxGroupIDs, device.GhostProtocolVersion == 0)
 	return device, nil
 }
 
@@ -329,7 +329,7 @@ func (m *UDPGhostManager) RemoveSession(sessionID string) *models.Device {
 	m.mu.Unlock()
 	if removed != nil {
 		InvalidateDomainReceiverCache()
-		log.Printf("[UDP-GHOST] session removed: session=%s user=%d", sessionID, removed.OwnerID)
+		log.Printf("[UDP-GHOST] session removed: session=%s user=%d", ghostsession.ShortID(sessionID), removed.OwnerID)
 	}
 	return removed
 }
@@ -468,7 +468,7 @@ func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 		if device == nil {
 			continue
 		}
-		log.Printf("[UDP-GHOST] session timed out: session=%s user=%d", device.GhostSessionID, device.OwnerID)
+		log.Printf("[UDP-GHOST] session timed out: session=%s user=%d", ghostsession.ShortID(device.GhostSessionID), device.OwnerID)
 		RevokeCenterLocalDevice(device)
 		if device.GhostSessionID != "" {
 			ghostsession.Global.Remove(device.GhostSessionID)

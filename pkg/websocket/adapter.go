@@ -62,11 +62,13 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 				device.UserID == filter.ExcludeUserID && device.SSID == filter.ExcludeSSID {
 				continue
 			}
+			wsFanoutCandidates.Add(1)
 			sessionKey := device.SessionID
 			if sessionKey == "" {
 				sessionKey = fmt.Sprintf("%p", device)
 			}
 			if _, duplicate := seenSessions[sessionKey]; duplicate {
+				wsFanoutDeduplicated.Add(1)
 				continue
 			}
 			seenSessions[sessionKey] = struct{}{}
@@ -87,8 +89,10 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 			}
 			if device.asyncWriteShared(messageType, payload) {
 				sent++
+				wsFanoutSent.Add(1)
 			} else {
 				dropped++
+				wsFanoutDropped.Add(1)
 			}
 		}
 	}

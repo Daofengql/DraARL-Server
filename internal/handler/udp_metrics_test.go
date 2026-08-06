@@ -33,7 +33,7 @@ func TestGetUDPMetricsReturnsUncachedLayeredSnapshot(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("response code = %d", response.Code)
 	}
-	for _, layer := range []string{"fanout", "ingress", "receiver_cache", "recording", "socket"} {
+	for _, layer := range []string{"fanout", "ingress", "receiver_cache", "recording", "socket", "ghost_sessions", "ghost_packets", "message_api"} {
 		if _, ok := response.Data[layer]; !ok {
 			t.Fatalf("missing metrics layer %q", layer)
 		}

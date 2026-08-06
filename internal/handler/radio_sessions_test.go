@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"draarl/internal/ghostsession"
@@ -74,5 +75,57 @@ func TestRadioSessionListAndDeleteAreOwnerScoped(t *testing.T) {
 	}
 	if _, exists := ghostsession.Global.Get(owned.SessionID); exists {
 		t.Fatal("owned session survived delete")
+	}
+}
+
+func TestAdminRadioSessionListIsRedactedAndCanDisconnectAnyOwner(t *testing.T) {
+	previousGlobal := ghostsession.Global
+	ghostsession.Global = ghostsession.NewRegistry(8, 16)
+	t.Cleanup(func() { ghostsession.Global = previousGlobal })
+	admin := &gormdb.User{ID: 1, Name: "admin", CallSign: "ADMIN", Roles: "admin"}
+	instanceID := uuid.NewString()
+	disconnected := false
+	session, err := ghostsession.Global.Register(ghostsession.Registration{
+		ClientInstanceID: instanceID, OwnerID: 42, Username: "remote-user", CallSign: "BG7TEST",
+		DevModel: protocol.DraARLDevModelAndroid, SSID: protocol.SSIDGhostAndroid,
+		Transport: ghostsession.TransportUDP, Endpoint: "203.0.113.7:60050",
+		Routing: ghostsession.Routing{TxGroupID: 1001, RxGroupIDs: []int{1001, 1002}},
+	}, ghostsession.Controller{Disconnect: func(string) { disconnected = true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("user", admin) })
+	router.GET("/api/admin/radio/sessions", AdminGetRadioSessions)
+	router.DELETE("/api/admin/radio/sessions/:session_id", AdminDeleteRadioSession)
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/admin/radio/sessions", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("admin list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data []AdminRadioSessionResponse `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data) != 1 || envelope.Data[0].SessionID != session.SessionID || envelope.Data[0].OwnerID != 42 {
+		t.Fatalf("admin sessions=%#v", envelope.Data)
+	}
+	if envelope.Data[0].ClientInstanceHint != instanceID[:8] {
+		t.Fatalf("instance hint=%q", envelope.Data[0].ClientInstanceHint)
+	}
+	body := response.Body.String()
+	if strings.Contains(body, instanceID) || strings.Contains(body, "203.0.113.7") || strings.Contains(body, "session_tag") {
+		t.Fatalf("admin session response leaked sensitive fields: %s", body)
+	}
+
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/admin/radio/sessions/"+session.SessionID, nil))
+	if response.Code != http.StatusOK || !disconnected {
+		t.Fatalf("admin delete status=%d disconnected=%v body=%s", response.Code, disconnected, response.Body.String())
 	}
 }

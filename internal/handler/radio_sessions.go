@@ -4,11 +4,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
 	"draarl/internal/groupaccess"
+	oplog "draarl/internal/log"
 	"draarl/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -34,6 +36,24 @@ type RadioSessionResponse struct {
 type UpdateSessionRoutingRequest struct {
 	TxGroupID  int   `json:"tx_group_id" binding:"required"`
 	RxGroupIDs []int `json:"rx_group_ids" binding:"required"`
+}
+
+type AdminRadioSessionResponse struct {
+	SessionID          string                 `json:"session_id"`
+	ClientInstanceHint string                 `json:"client_instance_hint"`
+	OwnerID            int                    `json:"owner_id"`
+	Username           string                 `json:"username"`
+	CallSign           string                 `json:"callsign"`
+	Legacy             bool                   `json:"legacy"`
+	Platform           uint8                  `json:"dev_model"`
+	SSID               uint8                  `json:"ssid"`
+	Transport          ghostsession.Transport `json:"transport"`
+	OnlineSince        string                 `json:"online_since"`
+	LastActivity       string                 `json:"last_activity"`
+	TxGroupID          int                    `json:"tx_group_id"`
+	RxGroupIDs         []int                  `json:"rx_group_ids"`
+	DisableSend        bool                   `json:"disable_send"`
+	DisableRecv        bool                   `json:"disable_recv"`
 }
 
 var (
@@ -66,6 +86,46 @@ func GetRadioSessions(c *gin.Context) {
 		result[i] = toRadioSessionResponse(session)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": result})
+}
+
+func adminRadioSessionResponse(session ghostsession.Session) AdminRadioSessionResponse {
+	hint := "legacy"
+	if !session.Legacy {
+		hint = ghostsession.ShortID(session.ClientInstanceID)
+	}
+	return AdminRadioSessionResponse{
+		SessionID: session.SessionID, ClientInstanceHint: hint, OwnerID: session.OwnerID,
+		Username: session.Username, CallSign: session.CallSign, Legacy: session.Legacy,
+		Platform: session.DevModel, SSID: session.SSID, Transport: session.Transport,
+		OnlineSince:  session.CreatedAt.UTC().Format(time.RFC3339Nano),
+		LastActivity: session.LastActivity.UTC().Format(time.RFC3339Nano),
+		TxGroupID:    session.TxGroupID, RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
+		DisableSend: session.DisableSend, DisableRecv: session.DisableRecv,
+	}
+}
+
+func AdminGetRadioSessions(c *gin.Context) {
+	sessions := ghostsession.Global.List()
+	result := make([]AdminRadioSessionResponse, len(sessions))
+	for i := range sessions {
+		result[i] = adminRadioSessionResponse(sessions[i])
+	}
+	c.Header("Cache-Control", "no-store, max-age=0")
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": result})
+}
+
+func AdminDeleteRadioSession(c *gin.Context) {
+	actor, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if err := ghostsession.Global.Disconnect(sessionID, "admin_disconnected_session"); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "error": "session_not_found", "message": "会话不存在"})
+		return
+	}
+	oplog.AddLog("管理员断开幽灵会话: "+ghostsession.ShortID(sessionID), "ghost_session_disconnect", actor.ID, actor.Name, actor.CallSign, c.ClientIP())
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "会话已断开"})
 }
 
 func ownerPlatformSessions(ownerID int, devModel uint8) []ghostsession.Session {
@@ -180,7 +240,7 @@ func reconcileOwnerGhostSessions(ownerID int) {
 			})
 		}
 		if err != nil {
-			log.Printf("[RADIO] disconnecting session after routing reconciliation failure session=%s err=%v", session.SessionID, err)
+			log.Printf("[RADIO] disconnecting session after routing reconciliation failure session=%s err=%v", ghostsession.ShortID(session.SessionID), err)
 			_ = ghostsession.Global.DisconnectOwned(ownerID, session.SessionID, "routing_permission_revoked")
 		}
 	}
@@ -200,7 +260,7 @@ func updateOwnedSessionRouting(user *gormdb.User, sessionID string, requested gh
 	}
 	return ghostsession.Global.UpdateRoutingPersisted(sessionID, routing, func(current ghostsession.Session, next ghostsession.Routing) error {
 		if err := persistSessionRouting(current, next); err != nil {
-			log.Printf("[RADIO] persist routing failed session=%s err=%v", sessionID, err)
+			log.Printf("[RADIO] persist routing failed session=%s err=%v", ghostsession.ShortID(sessionID), err)
 			return err
 		}
 		return nil

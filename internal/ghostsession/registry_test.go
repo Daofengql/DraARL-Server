@@ -103,6 +103,39 @@ func TestRegistryEnforcesLimitsAndTagLookup(t *testing.T) {
 	if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 1, RxGroupIDs: []int{1, 2, 3}}); !errors.Is(err, ErrSubscriptionLimit) || !strings.Contains(err.Error(), "requested=3 limit=2") {
 		t.Fatalf("subscription limit error=%v", err)
 	}
+	metrics := registry.Metrics()
+	if metrics.OnlineSessions != 1 || metrics.OnlineOwners != 1 || metrics.ModernSessions != 1 || metrics.LegacySessions != 0 {
+		t.Fatalf("unexpected registry metrics: %#v", metrics)
+	}
+	if metrics.SessionLimitRejects != 1 || metrics.SubscriptionLimitRejects != 1 || metrics.Registrations != 1 {
+		t.Fatalf("unexpected registry counters: %#v", metrics)
+	}
+	if metrics.Subscriptions != 2 || metrics.MaxSubscriptionsObserved != 2 || metrics.ByTransport[string(TransportUDP)] != 1 || metrics.ByPlatform[101] != 1 {
+		t.Fatalf("unexpected registry distribution: %#v", metrics)
+	}
+}
+
+func TestRegistryAdminDisconnectIsNotOwnerScoped(t *testing.T) {
+	registry := NewRegistry(4, 4)
+	disconnected := ""
+	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{
+		Disconnect: func(reason string) { disconnected = reason },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Disconnect(session.SessionID, "admin_disconnected_session"); err != nil {
+		t.Fatal(err)
+	}
+	if disconnected != "admin_disconnected_session" {
+		t.Fatalf("disconnect reason=%q", disconnected)
+	}
+	if _, ok := registry.Get(session.SessionID); ok {
+		t.Fatal("admin-disconnected session remained registered")
+	}
+	if metrics := registry.Metrics(); metrics.Removals != 1 || metrics.OnlineSessions != 0 {
+		t.Fatalf("unexpected removal metrics: %#v", metrics)
+	}
 }
 
 func TestGlobalRegistryUsesConfiguredLimits(t *testing.T) {

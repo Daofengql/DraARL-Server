@@ -184,12 +184,17 @@ func toMessageResponse(record *gormdb.MessageRecord, requestedGroupID uint) Mess
 }
 
 func GetGroupMessages(c *gin.Context) {
+	finishMetrics := beginMessageAPIRequest(c, false)
+	defer finishMetrics()
 	requestedGroupID, groupIDs, ok := requireMessageScope(c)
 	if !ok {
+		messageScopeRejects.Add(1)
 		return
 	}
+	messageVisibleGroups.Add(uint64(len(groupIDs)))
 	messageType, err := parseMessageType(c.DefaultQuery("message_type", "all"))
 	if err != nil {
+		messageParameterRejects.Add(1)
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息类型"})
 		return
 	}
@@ -197,6 +202,7 @@ func GetGroupMessages(c *gin.Context) {
 	if rawLimit := c.Query("limit"); rawLimit != "" {
 		parsed, err := strconv.Atoi(rawLimit)
 		if err != nil || parsed <= 0 || parsed > 100 {
+			messageParameterRejects.Add(1)
 			c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "limit必须在1到100之间"})
 			return
 		}
@@ -207,6 +213,7 @@ func GetGroupMessages(c *gin.Context) {
 	if encodedCursor := c.Query("cursor"); encodedCursor != "" {
 		beforeTime, beforeID, err := decodeMessageCursor(encodedCursor)
 		if err != nil {
+			messageCursorRejects.Add(1)
 			c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息游标"})
 			return
 		}
@@ -214,8 +221,11 @@ func GetGroupMessages(c *gin.Context) {
 		query.BeforeID = beforeID
 	}
 
+	queryStarted := time.Now()
 	records, hasMore, err := gormdb.NewMessageRepository().List(query)
+	observeMessageQuery(false, time.Since(queryStarted))
 	if err != nil {
+		messageQueryErrors.Add(1)
 		log.Printf("[MESSAGES] 查询消息列表失败 group=%d err=%v", requestedGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询消息失败"})
 		return
@@ -223,7 +233,15 @@ func GetGroupMessages(c *gin.Context) {
 	messages := make([]MessageResponse, len(records))
 	for i := range records {
 		messages[i] = toMessageResponse(&records[i], requestedGroupID)
+		if records[i].AudioPath != "" && messages[i].MessageType == "voice" {
+			if messages[i].AudioURL != "" {
+				messageAudioURLs.Add(1)
+			} else {
+				messageAudioURLFailures.Add(1)
+			}
+		}
 	}
+	messageRowsReturned.Add(uint64(len(messages)))
 	nextCursor := ""
 	if hasMore && len(records) > 0 {
 		nextCursor, err = encodeMessageCursor(records[len(records)-1].StartTime, records[len(records)-1].ID)
@@ -244,17 +262,25 @@ func GetGroupMessages(c *gin.Context) {
 }
 
 func GetGroupMessage(c *gin.Context) {
+	finishMetrics := beginMessageAPIRequest(c, true)
+	defer finishMetrics()
 	requestedGroupID, groupIDs, ok := requireMessageScope(c)
 	if !ok {
+		messageScopeRejects.Add(1)
 		return
 	}
+	messageVisibleGroups.Add(uint64(len(groupIDs)))
 	messageID, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
 	if err != nil || messageID == 0 {
+		messageParameterRejects.Add(1)
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息ID"})
 		return
 	}
+	queryStarted := time.Now()
 	record, err := gormdb.NewMessageRepository().GetByID(uint(messageID), groupIDs)
+	observeMessageQuery(true, time.Since(queryStarted))
 	if err != nil {
+		messageQueryErrors.Add(1)
 		log.Printf("[MESSAGES] 查询消息详情失败 group=%d message=%d err=%v", requestedGroupID, messageID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询消息失败"})
 		return
@@ -263,5 +289,14 @@ func GetGroupMessage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "消息不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": toMessageResponse(record, requestedGroupID)})
+	response := toMessageResponse(record, requestedGroupID)
+	messageRowsReturned.Add(1)
+	if record.AudioPath != "" && response.MessageType == "voice" {
+		if response.AudioURL != "" {
+			messageAudioURLs.Add(1)
+		} else {
+			messageAudioURLFailures.Add(1)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": response})
 }

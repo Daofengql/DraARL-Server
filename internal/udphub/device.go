@@ -374,7 +374,9 @@ func checkDeviceOnline() {
 		onlineMap := make(map[int]*models.Device, 100)
 		offlineLocal := make(map[int]*models.Device)
 		t := time.Now()
-		onlineCount := 0
+		// Expire UDP ghost sessions before taking the count snapshot. Otherwise a
+		// timed-out session can remain visible in this cycle's total and group stats.
+		GlobalUDPGhostManager.CheckTimeout(offlineTimeout)
 
 		// 检查公共群组设备
 		for _, gp := range GetAllGroupsFromCache() {
@@ -457,18 +459,15 @@ func checkDeviceOnline() {
 				pool.mu.Unlock()
 			}
 
-			// 【修复】更新本群组总设备数 = 实体硬件设备数 + 已审核幽灵设备准入总数
-			// 【修复】从 WS 管理器中获取本群组的 WS 在线设备，并叠加到在线总数中
-			if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-				wsDevices := GlobalMessageRouter.wsManager.GetDevicesByGroup(gp.ID)
-				groupOnlineCount += len(wsDevices)
-			}
+			// A ghost session can subscribe to multiple groups. Count it once in each
+			// subscribed group, while the server-wide total is calculated separately
+			// from transport session counts below.
+			groupOnlineCount += GetOnlineGhostCountByGroup(gp.ID)
 
 			groupRuntimeMu.Lock()
 			gp.OnlineDevNumber = groupOnlineCount
 			gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
 			groupRuntimeMu.Unlock()
-			onlineCount += groupOnlineCount
 		}
 
 		// 检查私有群组设备
@@ -525,18 +524,12 @@ func checkDeviceOnline() {
 					pool.mu.Unlock()
 				}
 
-				// 【修复】更新私有群组总数 = 实体硬件设备数 + 已审核幽灵设备准入总数
-				// 【修复】叠加本群组的 WS 在线设备
-				if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-					wsDevices := GlobalMessageRouter.wsManager.GetDevicesByGroup(gp.ID)
-					groupOnlineCount += len(wsDevices)
-				}
+				groupOnlineCount += GetOnlineGhostCountByGroup(gp.ID)
 
 				groupRuntimeMu.Lock()
 				gp.OnlineDevNumber = groupOnlineCount
 				gp.TotalDevNumber = len(gp.DevMap) + int(approvedUserCount)
 				groupRuntimeMu.Unlock()
-				onlineCount += groupOnlineCount
 			}
 			return true
 		})
@@ -545,23 +538,75 @@ func checkDeviceOnline() {
 			finalizeCenterLocalOffline(dev)
 		}
 		setOnlineDevMap(onlineMap)
-		setOnlineDevNumber(onlineCount)
+		udpGhostOnline, wsNormalOnline, wsGhostOnline := onlineTransportOnlineCounts()
+		physicalOnline := len(onlineMap)
+		totalOnline := totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline)
+		setOnlineDevNumber(totalOnline)
 
-		// 【新增】UDP 幽灵设备超时检测
-		GlobalUDPGhostManager.CheckTimeout(offlineTimeout)
+		log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 服务器总在线=%d",
+			physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline, totalOnline)
+	}
+}
 
-		// 【新增】统计 UDP 幽灵设备在线数
-		udpGhostTotal, udpGhostOnline := GlobalUDPGhostManager.GetStats()
-		_ = udpGhostTotal // 避免未使用警告
-
-		// 【日志】输出在线设备统计信息
-		if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-			wsNormalCount, wsGhostCount := GlobalMessageRouter.wsManager.GetOnlineCount()
-			udpOnlineCount := onlineCount - wsNormalCount - wsGhostCount
-			log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 服务器总在线=%d",
-				udpOnlineCount, udpGhostOnline, wsNormalCount, wsGhostCount, onlineCount+udpGhostOnline)
+func totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline int) int {
+	counts := []int{physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline}
+	total := 0
+	for _, count := range counts {
+		if count > 0 {
+			total += count
 		}
 	}
+	return total
+}
+
+func onlineTransportOnlineCounts() (udpGhostOnline, wsNormalOnline, wsGhostOnline int) {
+	udpGhostOnline = GlobalUDPGhostManager.GetOnlineCount()
+	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+		wsNormalOnline, wsGhostOnline = GlobalMessageRouter.wsManager.GetOnlineCount()
+	}
+	return udpGhostOnline, wsNormalOnline, wsGhostOnline
+}
+
+// GetOnlineGhostCount returns the live number of UDP and WebSocket ghost
+// sessions. Each transport indexes sessions directly, so multi-receive
+// subscriptions cannot inflate this server-wide count.
+func GetOnlineGhostCount() int {
+	udpGhostOnline, _, wsGhostOnline := onlineTransportOnlineCounts()
+	return udpGhostOnline + wsGhostOnline
+}
+
+// GetOnlineGhostCountByGroup returns the number of live ghost sessions
+// receiving a group. The same session is de-duplicated across transport
+// indexes defensively; normal operation keeps a session in exactly one
+// transport, but this also makes reconnect hand-off snapshots stable.
+func GetOnlineGhostCountByGroup(groupID int) int {
+	if groupID <= 0 {
+		return 0
+	}
+	seen := make(map[string]struct{})
+	for _, device := range GlobalUDPGhostManager.GetByGroup(groupID) {
+		if device == nil || !device.ISOnline {
+			continue
+		}
+		key := device.GhostSessionID
+		if key == "" {
+			key = fmt.Sprintf("udp:%s:%d:%p", device.Username, device.SSID, device)
+		}
+		seen[key] = struct{}{}
+	}
+	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+		for _, device := range GlobalMessageRouter.wsManager.GetDevicesByGroup(groupID) {
+			if device == nil || !device.IsGhost() {
+				continue
+			}
+			key := device.GetSessionID()
+			if key == "" {
+				key = "ws:" + device.GetIdentifier()
+			}
+			seen[key] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func finalizeCenterLocalOffline(dev *models.Device) {

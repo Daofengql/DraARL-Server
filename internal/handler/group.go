@@ -179,6 +179,10 @@ func getGroups(c *gin.Context, adminView bool) {
 
 	resultItems := make([]gin.H, 0, len(uniqueRows))
 	for _, row := range uniqueRows {
+		// Ghost devices are session-only runtime entities and are therefore not
+		// represented by the SQL aggregate over devices. Add the de-duplicated
+		// live session count for this group to the physical-device count.
+		onlineCount := row.OnlineCount + udphub.GetOnlineGhostCountByGroup(row.ID)
 		resultItems = append(resultItems, gin.H{
 			"id":            row.ID,
 			"name":          row.Name,
@@ -191,7 +195,7 @@ func getGroups(c *gin.Context, adminView bool) {
 			"note":          row.Note,
 			"is_joined":     row.IsJoined,
 			"is_owner":      row.OwerID == uid,
-			"online_count":  row.OnlineCount,
+			"online_count":  onlineCount,
 			"total_count":   row.TotalCount,
 			"create_time":   row.CreateTime.Format("2006-01-02 15:04:05"),
 			"update_time":   row.UpdateTime.Format("2006-01-02 15:04:05"),

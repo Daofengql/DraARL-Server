@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,14 +49,41 @@ type registryEntry struct {
 }
 
 type Registry struct {
-	mutationMu       sync.Mutex
-	mu               sync.RWMutex
-	sessions         map[string]*registryEntry
-	ownerSessions    map[int]map[string]struct{}
-	instanceSessions map[string]string
-	tagSessions      map[uint32]string
-	maxOwnerSessions int
-	maxSubscriptions int
+	mutationMu               sync.Mutex
+	mu                       sync.RWMutex
+	sessions                 map[string]*registryEntry
+	ownerSessions            map[int]map[string]struct{}
+	instanceSessions         map[string]string
+	tagSessions              map[uint32]string
+	maxOwnerSessions         int
+	maxSubscriptions         int
+	registrations            atomic.Uint64
+	replacements             atomic.Uint64
+	removals                 atomic.Uint64
+	instanceConflictRejects  atomic.Uint64
+	sessionLimitRejects      atomic.Uint64
+	subscriptionLimitRejects atomic.Uint64
+	permissionRevocations    atomic.Uint64
+}
+
+type MetricsSnapshot struct {
+	OnlineSessions             int            `json:"online_sessions"`
+	OnlineOwners               int            `json:"online_owners"`
+	LegacySessions             int            `json:"legacy_sessions"`
+	ModernSessions             int            `json:"modern_sessions"`
+	Subscriptions              int            `json:"subscriptions"`
+	MaxSubscriptionsObserved   int            `json:"max_subscriptions_observed"`
+	ByTransport                map[string]int `json:"by_transport"`
+	ByPlatform                 map[uint8]int  `json:"by_platform"`
+	MaxSessionsPerOwner        int            `json:"max_sessions_per_owner"`
+	MaxSubscriptionsPerSession int            `json:"max_subscriptions_per_session"`
+	Registrations              uint64         `json:"registrations"`
+	Replacements               uint64         `json:"replacements"`
+	Removals                   uint64         `json:"removals"`
+	InstanceConflictRejects    uint64         `json:"instance_conflict_rejects"`
+	SessionLimitRejects        uint64         `json:"session_limit_rejects"`
+	SubscriptionLimitRejects   uint64         `json:"subscription_limit_rejects"`
+	PermissionRevocations      uint64         `json:"permission_revocations"`
 }
 
 func NewRegistry(maxOwnerSessions, maxSubscriptions int) *Registry {
@@ -78,6 +107,14 @@ var Global = NewRegistry(DefaultMaxSessionsPerOwner, DefaultMaxSubscriptions)
 // and edge processes enforce the same deployment limits.
 func ConfigureGlobal(maxOwnerSessions, maxSubscriptions int) {
 	Global = NewRegistry(maxOwnerSessions, maxSubscriptions)
+}
+
+func ShortID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if len(sessionID) <= 8 {
+		return sessionID
+	}
+	return sessionID[:8]
 }
 
 // MaxSubscriptions returns the active registry's receive subscription limit.
@@ -131,7 +168,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	if err != nil {
 		return Session{}, err
 	}
-	routing, err := NormalizeRouting(registration.Routing, r.maxSubscriptions)
+	routing, err := r.normalizeRouting(registration.Routing)
 	if err != nil {
 		return Session{}, err
 	}
@@ -151,6 +188,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	if oldSessionID != "" {
 		old := r.sessions[oldSessionID]
 		if old != nil && legacy && !registration.ReplaceExisting {
+			r.instanceConflictRejects.Add(1)
 			r.mu.Unlock()
 			r.mutationMu.Unlock()
 			return Session{}, ErrInstanceAlreadyOnline
@@ -162,6 +200,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 		ownerCount--
 	}
 	if ownerCount >= r.maxOwnerSessions {
+		r.sessionLimitRejects.Add(1)
 		r.mu.Unlock()
 		r.mutationMu.Unlock()
 		return Session{}, fmt.Errorf("%w: active=%d limit=%d", ErrSessionLimit, ownerCount, r.maxOwnerSessions)
@@ -198,7 +237,20 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	if replaced != nil && replaced.controller.Disconnect != nil {
 		replaced.controller.Disconnect("client_instance_reconnected")
 	}
+	r.registrations.Add(1)
+	if replaced != nil {
+		r.replacements.Add(1)
+		r.removals.Add(1)
+	}
 	return cloneSession(session), nil
+}
+
+func (r *Registry) normalizeRouting(routing Routing) (Routing, error) {
+	normalized, err := NormalizeRouting(routing, r.maxSubscriptions)
+	if errors.Is(err, ErrSubscriptionLimit) {
+		r.subscriptionLimitRejects.Add(1)
+	}
+	return normalized, err
 }
 
 func (r *Registry) removeLocked(sessionID string) *registryEntry {
@@ -227,6 +279,9 @@ func (r *Registry) Remove(sessionID string) bool {
 	removed := r.removeLocked(sessionID)
 	r.mu.Unlock()
 	r.mutationMu.Unlock()
+	if removed != nil {
+		r.removals.Add(1)
+	}
 	return removed != nil
 }
 
@@ -271,6 +326,61 @@ func (r *Registry) ListOwner(ownerID int) []Session {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result
+}
+
+func (r *Registry) List() []Session {
+	r.mu.RLock()
+	result := make([]Session, 0, len(r.sessions))
+	for _, entry := range r.sessions {
+		if entry != nil {
+			result = append(result, cloneSession(entry.session))
+		}
+	}
+	r.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].SessionID < result[j].SessionID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result
+}
+
+func (r *Registry) Metrics() MetricsSnapshot {
+	snapshot := MetricsSnapshot{
+		ByTransport: make(map[string]int), ByPlatform: make(map[uint8]int),
+		MaxSessionsPerOwner: r.maxOwnerSessions, MaxSubscriptionsPerSession: r.maxSubscriptions,
+	}
+	r.mu.RLock()
+	snapshot.OnlineSessions = len(r.sessions)
+	snapshot.OnlineOwners = len(r.ownerSessions)
+	for _, entry := range r.sessions {
+		if entry == nil {
+			continue
+		}
+		session := &entry.session
+		if session.Legacy {
+			snapshot.LegacySessions++
+		} else {
+			snapshot.ModernSessions++
+		}
+		snapshot.ByTransport[string(session.Transport)]++
+		snapshot.ByPlatform[session.DevModel]++
+		subscriptions := len(session.RxGroupIDs)
+		snapshot.Subscriptions += subscriptions
+		if subscriptions > snapshot.MaxSubscriptionsObserved {
+			snapshot.MaxSubscriptionsObserved = subscriptions
+		}
+	}
+	r.mu.RUnlock()
+	snapshot.Registrations = r.registrations.Load()
+	snapshot.Replacements = r.replacements.Load()
+	snapshot.Removals = r.removals.Load()
+	snapshot.InstanceConflictRejects = r.instanceConflictRejects.Load()
+	snapshot.SessionLimitRejects = r.sessionLimitRejects.Load()
+	snapshot.SubscriptionLimitRejects = r.subscriptionLimitRejects.Load()
+	snapshot.PermissionRevocations = r.permissionRevocations.Load()
+	return snapshot
 }
 
 func (r *Registry) ListByGroup(groupID int) []Session {
@@ -320,7 +430,7 @@ func (r *Registry) UpdateRouting(sessionID string, routing Routing) (Session, er
 // The callback is invoked again with the previous routing if runtime
 // projection fails.
 func (r *Registry) UpdateRoutingPersisted(sessionID string, routing Routing, persist func(Session, Routing) error) (Session, error) {
-	routing, err := NormalizeRouting(routing, r.maxSubscriptions)
+	routing, err := r.normalizeRouting(routing)
 	if err != nil {
 		return Session{}, err
 	}
@@ -385,7 +495,7 @@ func (r *Registry) RefreshRouting(sessionID string, resolve func(Session) (Routi
 	if err != nil {
 		return Session{}, err
 	}
-	routing, err = NormalizeRouting(routing, r.maxSubscriptions)
+	routing, err = r.normalizeRouting(routing)
 	if err != nil {
 		return Session{}, err
 	}
@@ -404,10 +514,18 @@ func (r *Registry) RefreshRouting(sessionID string, resolve func(Session) (Routi
 }
 
 func (r *Registry) DisconnectOwned(ownerID int, sessionID, reason string) error {
+	return r.disconnect(ownerID, true, sessionID, reason)
+}
+
+func (r *Registry) Disconnect(sessionID, reason string) error {
+	return r.disconnect(0, false, sessionID, reason)
+}
+
+func (r *Registry) disconnect(ownerID int, enforceOwner bool, sessionID, reason string) error {
 	r.mutationMu.Lock()
 	r.mu.Lock()
 	entry := r.sessions[sessionID]
-	if entry == nil || entry.session.OwnerID != ownerID {
+	if entry == nil || (enforceOwner && entry.session.OwnerID != ownerID) {
 		r.mu.Unlock()
 		r.mutationMu.Unlock()
 		return ErrSessionNotFound
@@ -417,6 +535,12 @@ func (r *Registry) DisconnectOwned(ownerID int, sessionID, reason string) error 
 	r.mutationMu.Unlock()
 	if removed != nil && removed.controller.Disconnect != nil {
 		removed.controller.Disconnect(reason)
+	}
+	if removed != nil {
+		r.removals.Add(1)
+		if strings.Contains(strings.ToLower(reason), "permission") {
+			r.permissionRevocations.Add(1)
+		}
 	}
 	return nil
 }

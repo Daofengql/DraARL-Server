@@ -9,6 +9,7 @@ import (
 )
 
 func TestModernUDPGhostPacketRequiresExactSessionBinding(t *testing.T) {
+	beforeMetrics := GetGhostPacketMetrics()
 	previousManager := GlobalUDPGhostManager
 	previousRegistry := ghostsession.Global
 	GlobalUDPGhostManager = newUDPGhostManager()
@@ -74,12 +75,21 @@ func TestModernUDPGhostPacketRequiresExactSessionBinding(t *testing.T) {
 			}
 		})
 	}
+	afterForged := GetGhostPacketMetrics()
+	if afterForged["invalid_tags"]-beforeMetrics["invalid_tags"] != 1 ||
+		afterForged["identity_rejects"]-beforeMetrics["identity_rejects"] != 3 ||
+		afterForged["endpoint_rejects"]-beforeMetrics["endpoint_rejects"] != 1 {
+		t.Fatalf("unexpected forged packet metrics before=%v after=%v", beforeMetrics, afterForged)
+	}
 
 	ghostsession.Global.Remove(session.SessionID)
 	stale := decode("alice", device.SSID, device.DevModel, session.SessionTag, addr)
 	defer protocol.ReleaseDraARLv1RoutingPacket(stale)
 	if got, _ := getDeviceForPacket(stale, addr); got != nil {
 		t.Fatalf("removed registry session remained authenticated: %#v", got)
+	}
+	if after := GetGhostPacketMetrics(); after["registry_rejects"]-beforeMetrics["registry_rejects"] != 1 {
+		t.Fatalf("registry reject metric before=%v after=%v", beforeMetrics, after)
 	}
 }
 

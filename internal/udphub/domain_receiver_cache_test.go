@@ -142,6 +142,32 @@ func TestDisableRecvInvalidatesDomainReceiverCache(t *testing.T) {
 	}
 }
 
+func TestDomainReceiverMetricsCountCandidatesAndDeduplication(t *testing.T) {
+	const groupID = 42003
+	sharedAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 32001}
+	physical := &models.Device{
+		ID: 11, OwnerID: 12, Username: "physical", SSID: 1, GroupID: groupID,
+		ISOnline: true, UDPAddr: sharedAddr,
+	}
+	setupDomainReceiverTest(t, groupID, physical)
+	ghost := &models.Device{
+		ID: -12, OwnerID: 13, Username: "ghost", SSID: 101, GroupID: groupID,
+		ISOnline: true, UDPAddr: sharedAddr, LastPacketTime: time.Now(),
+	}
+	GlobalUDPGhostManager.Register(ghost)
+	before := GetDomainReceiverCacheStats()
+	entries := getDomainReceiverEntries(groupID)
+	after := GetDomainReceiverCacheStats()
+	if len(entries) != 1 {
+		t.Fatalf("deduplicated receiver count=%d want=1", len(entries))
+	}
+	if after["candidates"]-before["candidates"] != 2 ||
+		after["deduplicated"]-before["deduplicated"] != 1 ||
+		after["entries_built"]-before["entries_built"] != 1 {
+		t.Fatalf("unexpected receiver metrics before=%v after=%v", before, after)
+	}
+}
+
 func TestDomainReceiverCacheCanRestart(t *testing.T) {
 	StopDomainReceiverCache()
 	InitDomainReceiverCache()

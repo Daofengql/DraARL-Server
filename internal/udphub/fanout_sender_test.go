@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 	"runtime"
@@ -142,6 +143,43 @@ func TestFanoutSenderAddsSourceGroupOnlyForCapableSession(t *testing.T) {
 	}
 	if got := readReserved(modernConn); got != 1234 {
 		t.Fatalf("modern source group=%d, want 1234", got)
+	}
+}
+
+func TestFanoutSenderPreservesPhysicalReceiverPacketBytes(t *testing.T) {
+	senderConn, receiverConn, receiverAddr := newUDPTestPair(t)
+	sender := newFanoutSender(senderConn, 1, 8)
+	defer sender.stop()
+
+	addr, ok := udpAddrPort(receiverAddr)
+	if !ok {
+		t.Fatal("physical receiver address is not usable")
+	}
+	entry := domainReceiverEntry{addr: addr}
+	snap := &domainReceiverSnap{
+		entries:    []domainReceiverEntry{entry},
+		partitions: [][]domainReceiverEntry{{entry}},
+		workers:    1,
+		gen:        atomic.LoadUint64(&domainReceiverGen),
+	}
+	wire := protocol.EncodeDraARLv1(
+		"physical-user", "devicepass", 7, protocol.DraARLTypeOpus16K,
+		protocol.DraARLDevModelESP32NoRadio, 0x123456, "BG7TEST", []byte{1, 2, 3, 4},
+	)
+	if !sender.enqueueDomainFrame(wire, snap, 99, "physical-user", 7, "", 1234) {
+		t.Fatal("physical fan-out frame was rejected")
+	}
+
+	if err := receiverConn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, protocol.DraARLv1MaxPacketSize)
+	n, _, err := receiverConn.ReadFromUDP(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buffer[:n], wire) {
+		t.Fatal("multi-subscription fan-out changed the physical receiver packet bytes")
 	}
 }
 

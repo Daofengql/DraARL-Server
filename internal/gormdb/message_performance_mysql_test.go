@@ -32,7 +32,7 @@ func TestMillionRowMessageCursorPlanMySQL(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = Close() })
 	db := Get()
-	if err := db.AutoMigrate(&User{}, &Group{}, &CommRecord{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Group{}, &Device{}, &CommRecord{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,6 +134,34 @@ func TestMillionRowMessageCursorPlanMySQL(t *testing.T) {
 		t.Fatalf("linked message cursor query took %s for four groups", queryElapsed)
 	}
 	t.Logf("four-group cursor fetched 50 rows from 1,000,000 in %s", queryElapsed)
+
+	typePlan := explainMessageTypeCursorPlan(t, tx, groupIDs[0], before, CommMessageTypeText)
+	if !strings.Contains(typePlan, "idx_comm_records_group_status_type_start_id") {
+		t.Fatalf("typed message cursor query did not use the compound index:\n%s", typePlan)
+	}
+	if strings.Contains(strings.ToLower(typePlan), "table scan on cr") {
+		t.Fatalf("typed message cursor query used a table scan:\n%s", typePlan)
+	}
+	t.Logf("typed single-group EXPLAIN ANALYZE:\n%s", typePlan)
+
+	messageType := CommMessageTypeText
+	typedQueryStarted := time.Now()
+	typedRecords, typedHasMore, err := (&MessageRepository{db: tx}).List(MessageQuery{
+		GroupIDs: groupIDs, Type: &messageType, BeforeTime: &before, BeforeID: ^uint(0), Limit: 50,
+	})
+	typedQueryElapsed := time.Since(typedQueryStarted)
+	if err != nil || len(typedRecords) != 50 || !typedHasMore {
+		t.Fatalf("typed linked message cursor result len=%d has_more=%v elapsed=%s err=%v", len(typedRecords), typedHasMore, typedQueryElapsed, err)
+	}
+	for _, record := range typedRecords {
+		if record.MessageType != messageType {
+			t.Fatalf("typed linked message cursor returned message type %d", record.MessageType)
+		}
+	}
+	if typedQueryElapsed > 5*time.Second {
+		t.Fatalf("typed linked message cursor query took %s for four groups", typedQueryElapsed)
+	}
+	t.Logf("typed four-group cursor fetched 50 rows from 1,000,000 in %s", typedQueryElapsed)
 }
 
 func explainMessageCursorPlan(t *testing.T, db *gorm.DB, groupID int, before time.Time) string {
@@ -147,6 +175,35 @@ func explainMessageCursorPlan(t *testing.T, db *gorm.DB, groupID int, before tim
 		ORDER BY cr.start_time DESC, cr.id DESC
 		LIMIT 51
 	`, groupID, before).Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func explainMessageTypeCursorPlan(t *testing.T, db *gorm.DB, groupID int, before time.Time, messageType uint8) string {
+	t.Helper()
+	rows, err := db.Raw(`
+		EXPLAIN ANALYZE
+		SELECT cr.id, cr.start_time, cr.message_type
+		FROM comm_records cr FORCE INDEX (idx_comm_records_group_status_type_start_id)
+		WHERE cr.status = 2 AND cr.group_id = ? AND cr.message_type = ?
+			AND cr.start_time < ?
+		ORDER BY cr.start_time DESC, cr.id DESC
+		LIMIT 51
+	`, groupID, messageType, before).Rows()
 	if err != nil {
 		t.Fatal(err)
 	}

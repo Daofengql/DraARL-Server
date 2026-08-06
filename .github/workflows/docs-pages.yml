@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
       - '.github/workflows/docs-pages.yml'
   workflow_dispatch:
   workflow_run:
@@ -49,7 +50,7 @@ jobs:
           pip install -r docs/requirements.txt
 
       - name: Build MkDocs
-        run: mkdocs build -f docs/mkdocs.yml --strict
+        run: mkdocs build --strict
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

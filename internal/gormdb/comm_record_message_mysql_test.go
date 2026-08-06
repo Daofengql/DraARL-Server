@@ -81,4 +81,7 @@ func TestCommRecordMessageMigrationMySQL(t *testing.T) {
 	if !db.Migrator().HasIndex(&CommRecord{}, "idx_comm_records_group_status_start_id") {
 		t.Fatal("message cursor index was not created")
 	}
+	if !db.Migrator().HasIndex(&CommRecord{}, "idx_comm_records_group_status_type_start_id") {
+		t.Fatal("typed message cursor index was not created")
+	}
 }

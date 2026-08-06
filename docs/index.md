@@ -53,6 +53,7 @@
 | [协议文档](Protocol.md) | DraARLv1 协议规范、报文格式、认证流程 |
 | [Type 0 节点互联协议](节点互联协议.md) | 中心/边缘内部信封、路由同步、安全与时间语义 |
 | [UDP 转发压力测试](UDP单机转发压力测试.md) | 单机与多边缘大规模 fan-out 实测、瓶颈分析和容量建议 |
+| [幽灵多收与消息查询性能验证](幽灵多收与消息查询性能验证.md) | 多收路由、接收放大模型与百万行消息索引对比 |
 
 ### 使用与说明文档
 
@@ -93,7 +94,7 @@
 
 ```bash
 pip install -r docs/requirements.txt
-mkdocs serve -f docs/mkdocs.yml
+mkdocs serve
 ```
 
 启动后访问：`http://127.0.0.1:8000`
@@ -101,7 +102,7 @@ mkdocs serve -f docs/mkdocs.yml
 ## 构建静态站点
 
 ```bash
-mkdocs build -f docs/mkdocs.yml
+mkdocs build
 ```
 
 构建输出目录：`site/`

@@ -69,8 +69,12 @@ func (r *MessageRepository) baseQuery(groupIDs []int) *gorm.DB {
 	return r.messageQuery("comm_records cr", groupIDs)
 }
 
-func (r *MessageRepository) listQuery(groupID int) *gorm.DB {
-	return r.messageQuery("comm_records cr FORCE INDEX (idx_comm_records_group_status_start_id)", []int{groupID})
+func (r *MessageRepository) listQuery(groupID int, messageType *uint8) *gorm.DB {
+	indexName := "idx_comm_records_group_status_start_id"
+	if messageType != nil {
+		indexName = "idx_comm_records_group_status_type_start_id"
+	}
+	return r.messageQuery("comm_records cr FORCE INDEX ("+indexName+")", []int{groupID})
 }
 
 func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB {
@@ -107,7 +111,7 @@ func (r *MessageRepository) List(query MessageQuery) ([]MessageRecord, bool, err
 	pages := make([][]MessageRecord, 0, pageCapacity)
 	for _, groupID := range groupIDs {
 		newPageQuery := func() *gorm.DB {
-			db := r.listQuery(groupID)
+			db := r.listQuery(groupID, query.Type)
 			if query.Type != nil {
 				db = db.Where("cr.message_type = ?", *query.Type)
 			}

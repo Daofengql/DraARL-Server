@@ -279,6 +279,7 @@ func (s *Server) setupRoutes() {
 				{
 					groupOwner.PUT("/groups/:id", handler.UpdateGroup)
 					groupOwner.DELETE("/groups/:id", handler.DeleteGroup)
+					groupOwner.DELETE("/groups/:id/members/:userId", handler.RemoveGroupMember)
 					// 踢出设备
 					groupOwner.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
 					groupOwner.PUT("/groups/:id/devices/:deviceId/comm-control", handler.UpdateGroupDeviceCommControl)

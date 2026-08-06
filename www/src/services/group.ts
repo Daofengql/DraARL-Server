@@ -201,6 +201,19 @@ export const groupService = {
     }
   },
 
+  async removeMember(groupId: number, userId: number): Promise<{
+    group_id: number
+    user_id: number
+    moved_device_count: number
+  }> {
+    const res = await apiClient.delete<BackendResponse<{
+      group_id: number
+      user_id: number
+      moved_device_count: number
+    }>>(`/api/groups/${groupId}/members/${userId}`)
+    return res.data!
+  },
+
   // 踢出设备
   async kickDevice(groupId: number, deviceId: number): Promise<void> {
     await apiClient.delete<BackendResponse<unknown>>(`/api/groups/${groupId}/devices/${deviceId}`)

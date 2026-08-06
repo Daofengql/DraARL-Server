@@ -36,12 +36,13 @@ import Person from '@mui/icons-material/Person'
 import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
+import ManageAccounts from '@mui/icons-material/ManageAccounts'
 import { groupService, userService } from '../../services'
 import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
-import { GroupDeviceManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
+import { GroupDeviceManagementDialog, GroupMemberManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function GroupsPage() {
   // const navigate = useNavigate() // 移除了冗余的路由跳转
@@ -64,6 +65,7 @@ export function GroupsPage() {
   const [joiningGroup, setJoiningGroup] = useState<Group | null>(null)
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
   const [managedGroup, setManagedGroup] = useState<Group | null>(null)
+  const [managedMembersGroup, setManagedMembersGroup] = useState<Group | null>(null)
   const [searchResults, setSearchResults] = useState<Group[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchKeywordInput, setSearchKeywordInput] = useState('')
@@ -361,6 +363,13 @@ export function GroupsPage() {
         )}
         {group.is_owner && (
           <>
+            {group.type === GROUP_TYPE_PRIVATE && (
+              <Tooltip title="管理成员">
+                <IconButton size="small" onClick={() => setManagedMembersGroup(group)}>
+                  <ManageAccounts fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             <Tooltip title="管理设备">
               <IconButton size="small" onClick={() => setManagedGroup(group)}>
                 <SettingsInputAntenna fontSize="small" />
@@ -628,6 +637,13 @@ export function GroupsPage() {
         open={Boolean(managedGroup)}
         group={managedGroup}
         onClose={() => setManagedGroup(null)}
+        onChanged={() => void loadGroups()}
+      />
+
+      <GroupMemberManagementDialog
+        open={Boolean(managedMembersGroup)}
+        group={managedMembersGroup}
+        onClose={() => setManagedMembersGroup(null)}
         onChanged={() => void loadGroups()}
       />
 

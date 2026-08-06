@@ -136,9 +136,9 @@ func (r *GroupRepository) DeleteGroupWithCascade(id int) error {
 	})
 }
 
-// LeaveGroupAndMoveDevices 原子移除用户成员资格，并将其在该群组中的
+// RemoveGroupMemberAndMoveDevices 原子移除用户成员资格，并将其在该群组中的
 // 所有设备迁移到默认公共群组。返回迁移前的设备信息供缓存和运行时同步。
-func (r *GroupRepository) LeaveGroupAndMoveDevices(groupID, userID int) ([]*Device, error) {
+func (r *GroupRepository) RemoveGroupMemberAndMoveDevices(groupID, userID int) ([]*Device, error) {
 	movedDevices := make([]*Device, 0)
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("group_id = ? AND owner_id = ?", groupID, userID).Find(&movedDevices).Error; err != nil {
@@ -157,7 +157,14 @@ func (r *GroupRepository) LeaveGroupAndMoveDevices(groupID, userID int) ([]*Devi
 		if err := clearGhostClientGroupReferences(tx, &userID, []int{groupID}); err != nil {
 			return err
 		}
-		return tx.Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{}).Error
+		result := tx.Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

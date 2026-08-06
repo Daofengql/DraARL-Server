@@ -44,6 +44,19 @@ type GroupInfo struct {
 	Note         string `json:"note"`
 }
 
+type GroupMemberInfo struct {
+	ID          int       `json:"id"`
+	GroupID     int       `json:"group_id"`
+	UserID      int       `json:"user_id"`
+	Username    string    `json:"username"`
+	CallSign    string    `json:"callsign"`
+	Nickname    string    `json:"nickname"`
+	IsVerified  bool      `json:"is_verified"`
+	JoinTime    time.Time `json:"join_time"`
+	LastVerify  time.Time `json:"last_verify"`
+	DeviceCount int64     `json:"device_count"`
+}
+
 // GetGroups 获取当前用户可见的群组列表（公开群组 + 已加入私有群组）。
 func GetGroups(c *gin.Context) {
 	getGroups(c, false)
@@ -1254,14 +1267,116 @@ func GetGroupMembers(c *gin.Context) {
 		})
 		return
 	}
+	userIDs := make([]int, 0, len(members))
+	for _, member := range members {
+		userIDs = append(userIDs, member.UserID)
+	}
+	usersByID := make(map[int]gormdb.User, len(userIDs))
+	deviceCounts := make(map[int]int64, len(userIDs))
+	if len(userIDs) > 0 {
+		var users []gormdb.User
+		if err := gormdb.Get().Select("id", "name", "callsign", "nickname").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询成员用户失败"})
+			return
+		}
+		for _, user := range users {
+			usersByID[user.ID] = user
+		}
+		var counts []struct {
+			OwnerID int
+			Count   int64
+		}
+		if err := gormdb.Get().Model(&gormdb.Device{}).
+			Select("owner_id, COUNT(*) AS count").
+			Where("group_id = ? AND owner_id IN ?", groupID, userIDs).
+			Group("owner_id").Scan(&counts).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询成员设备失败"})
+			return
+		}
+		for _, count := range counts {
+			deviceCounts[count.OwnerID] = count.Count
+		}
+	}
+	items := make([]GroupMemberInfo, 0, len(members))
+	for _, member := range members {
+		user := usersByID[member.UserID]
+		items = append(items, GroupMemberInfo{
+			ID: member.ID, GroupID: member.GroupID, UserID: member.UserID,
+			Username: user.Name, CallSign: user.CallSign, Nickname: user.NickName,
+			IsVerified: member.IsVerified, JoinTime: member.JoinTime, LastVerify: member.LastVerify,
+			DeviceCount: deviceCounts[member.UserID],
+		})
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"items": members,
-			"total": len(members),
+			"items": items,
+			"total": len(items),
 		},
+	})
+}
+
+// RemoveGroupMember removes one private-group membership and immediately
+// reconciles every physical and ghost route owned by that user.
+func RemoveGroupMember(c *gin.Context) {
+	groupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+		return
+	}
+	targetUserID, err := strconv.Atoi(c.Param("userId"))
+	if err != nil || targetUserID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的用户ID"})
+		return
+	}
+
+	repo := gormdb.NewGroupRepository()
+	group, err := repo.GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		return
+	}
+	if group.IsVirtual || group.Type != groupTypePrivate {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "仅私有群组支持移除成员"})
+		return
+	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !canManageGroup(currentUser, group) {
+		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		return
+	}
+	if targetUserID == group.OwerID {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "不能移除群组创建者"})
+		return
+	}
+	targetUser, err := gormdb.NewUserRepository().GetUserByID(targetUserID)
+	if err != nil || targetUser == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "用户不存在"})
+		return
+	}
+	movedDevices, err := repo.RemoveGroupMemberAndMoveDevices(groupID, targetUserID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组成员不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "移除成员失败"})
+		return
+	}
+	syncRemovedGroupMembership(c, groupID, targetUserID, movedDevices)
+
+	oplog.AddLog(
+		fmt.Sprintf("移除群组成员: %s (ID: %d) 从 %s (ID: %d) 移除", targetUser.Name, targetUser.ID, group.Name, group.ID),
+		"group_member_remove", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP(),
+	)
+	c.JSON(http.StatusOK, gin.H{
+		"code": http.StatusOK, "message": "移除成功",
+		"data": gin.H{"group_id": groupID, "user_id": targetUserID, "moved_device_count": len(movedDevices)},
 	})
 }
 
@@ -1410,23 +1525,8 @@ func LeaveGroup(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户
-	username, exists := c.Get("username")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "未授权",
-		})
-		return
-	}
-
-	userRepo := gormdb.NewUserRepository()
-	currentUser, _ := userRepo.GetUserByName(username.(string))
-	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
 		return
 	}
 
@@ -1440,8 +1540,15 @@ func LeaveGroup(c *gin.Context) {
 	}
 
 	// 成员资格删除与本人设备迁移必须处于同一事务。
-	movedDevices, err := repo.LeaveGroupAndMoveDevices(id, currentUser.ID)
+	movedDevices, err := repo.RemoveGroupMemberAndMoveDevices(id, currentUser.ID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    http.StatusNotFound,
+				"message": "尚未加入该群组",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "离开群组失败",
@@ -1449,38 +1556,7 @@ func LeaveGroup(c *gin.Context) {
 		return
 	}
 
-	// 数据库写入完成后同步 UDP 运行时索引，避免设备仍在旧私有群组收发。
-	for _, device := range movedDevices {
-		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
-			log.Printf("[WARN] Failed to update leaving device group in memory: %v", err)
-		}
-	}
-	for _, device := range movedDevices {
-		routesync.PublishDevice(device.ID)
-	}
-	reconcileOwnerGhostSessions(currentUser.ID)
-
-	// 使设备缓存和群组设备列表缓存失效
-	ctx := c.Request.Context()
-	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		// 使移动的设备缓存失效
-		for _, device := range movedDevices {
-			_ = deviceCache.InvalidateDevice(ctx, device.ID, device.OwnerID, uint8(device.SSID))
-		}
-		// 使原群组和默认群组的设备列表缓存失效
-		_ = deviceCache.InvalidateDevicesByGroup(ctx, id)
-		if len(movedDevices) > 0 {
-			_ = deviceCache.InvalidateDevicesByGroup(ctx, models.GroupIDPublicMin)
-		}
-		// 由于设备的 GroupID 发生了改变，必须使全局设备列表也主动失效
-		_ = deviceCache.InvalidateDeviceList(ctx)
-	}
-
-	// 使群组成员缓存和用户群组列表缓存失效
-	if groupCache := cache.GetGroupCache(); groupCache != nil {
-		_ = groupCache.InvalidateGroupMembers(ctx, id)
-		_ = groupCache.InvalidateUserGroups(ctx, currentUser.ID)
-	}
+	syncRemovedGroupMembership(c, id, currentUser.ID, movedDevices)
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -1496,4 +1572,30 @@ func LeaveGroup(c *gin.Context) {
 		"code":    200,
 		"message": "离开成功",
 	})
+}
+
+func syncRemovedGroupMembership(c *gin.Context, groupID, userID int, movedDevices []*gormdb.Device) {
+	for _, device := range movedDevices {
+		if err := udphub.ChangeDeviceGroupByID(device.ID, models.GroupIDPublicMin); err != nil {
+			log.Printf("[WARN] Failed to update removed member device group in memory: %v", err)
+		}
+		routesync.PublishDevice(device.ID)
+	}
+	reconcileOwnerGhostSessions(userID)
+
+	ctx := c.Request.Context()
+	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
+		for _, device := range movedDevices {
+			_ = deviceCache.InvalidateDevice(ctx, device.ID, device.OwnerID, uint8(device.SSID))
+		}
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
+		if len(movedDevices) > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, models.GroupIDPublicMin)
+		}
+		_ = deviceCache.InvalidateDeviceList(ctx)
+	}
+	if groupCache := cache.GetGroupCache(); groupCache != nil {
+		_ = groupCache.InvalidateGroupMembers(ctx, groupID)
+		_ = groupCache.InvalidateUserGroups(ctx, userID)
+	}
 }

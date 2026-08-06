@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"draarl/internal/clientcontract"
 	"draarl/internal/clientversion"
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
@@ -44,15 +45,19 @@ const (
 	clientResourceMaxSignatureLength    = 65535
 	clientResourceMaxSignatureAlgorithm = 64
 	clientResourceMaxMetadataLength     = 64 * 1024
+	clientResourceMaxCapabilities       = 32
 	clientResourceManifestSchemaVersion = 1
 )
 
 var clientResourceDownloadURLExpiry = 15 * time.Minute
 
+var errClientResourceInvalidContractRequirement = errors.New("invalid client resource contract requirement")
+
 var (
 	clientResourceKeySegmentPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	clientResourceSlugPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9._+-]{0,63}$`)
 	clientResourceTargetPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
+	clientResourceCapabilityPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 )
 
 type clientResourceCreateRequest struct {
@@ -74,12 +79,15 @@ type clientResourceUpdateRequest struct {
 }
 
 type clientResourceReleaseCreateRequest struct {
-	Version          string `json:"version" binding:"required"`
-	Channel          string `json:"channel"`
-	Title            string `json:"title"`
-	Changelog        string `json:"changelog"`
-	ForceUpdate      bool   `json:"force_update"`
-	MinClientVersion string `json:"min_client_version"`
+	Version                 string   `json:"version" binding:"required"`
+	Channel                 string   `json:"channel"`
+	Title                   string   `json:"title"`
+	Changelog               string   `json:"changelog"`
+	ForceUpdate             bool     `json:"force_update"`
+	MinClientVersion        string   `json:"min_client_version"`
+	MinServerVersion        string   `json:"min_server_version"`
+	RequiredProtocolVersion int      `json:"required_protocol_version"`
+	RequiredCapabilities    []string `json:"required_capabilities"`
 }
 
 type clientResourceArtifactTargetRequest struct {
@@ -147,21 +155,24 @@ type clientResourceResponse struct {
 }
 
 type clientResourceReleaseResponse struct {
-	ID               int                              `json:"id"`
-	ResourceID       int                              `json:"resource_id"`
-	Resource         clientResourceSummary            `json:"resource"`
-	Version          string                           `json:"version"`
-	Channel          string                           `json:"channel"`
-	Title            string                           `json:"title"`
-	Changelog        string                           `json:"changelog"`
-	Status           string                           `json:"status"`
-	ForceUpdate      bool                             `json:"force_update"`
-	MinClientVersion string                           `json:"min_client_version,omitempty"`
-	PublishedAt      *time.Time                       `json:"published_at,omitempty"`
-	CreatedBy        int                              `json:"created_by"`
-	CreateTime       time.Time                        `json:"create_time"`
-	UpdateTime       time.Time                        `json:"update_time"`
-	Artifacts        []clientResourceArtifactResponse `json:"artifacts"`
+	ID                      int                              `json:"id"`
+	ResourceID              int                              `json:"resource_id"`
+	Resource                clientResourceSummary            `json:"resource"`
+	Version                 string                           `json:"version"`
+	Channel                 string                           `json:"channel"`
+	Title                   string                           `json:"title"`
+	Changelog               string                           `json:"changelog"`
+	Status                  string                           `json:"status"`
+	ForceUpdate             bool                             `json:"force_update"`
+	MinClientVersion        string                           `json:"min_client_version,omitempty"`
+	MinServerVersion        string                           `json:"min_server_version,omitempty"`
+	RequiredProtocolVersion uint16                           `json:"required_protocol_version,omitempty"`
+	RequiredCapabilities    []string                         `json:"required_capabilities,omitempty"`
+	PublishedAt             *time.Time                       `json:"published_at,omitempty"`
+	CreatedBy               int                              `json:"created_by"`
+	CreateTime              time.Time                        `json:"create_time"`
+	UpdateTime              time.Time                        `json:"update_time"`
+	Artifacts               []clientResourceArtifactResponse `json:"artifacts"`
 }
 
 type clientResourceSummary struct {
@@ -198,8 +209,11 @@ type clientResourceArtifactResponse struct {
 }
 
 type clientResourceManifestResponse struct {
-	SchemaVersion int                          `json:"schema_version"`
-	Resources     []clientResourceManifestItem `json:"resources"`
+	SchemaVersion   int                          `json:"schema_version"`
+	ServerVersion   string                       `json:"server_version"`
+	ProtocolVersion uint16                       `json:"protocol_version"`
+	Capabilities    []string                     `json:"capabilities"`
+	Resources       []clientResourceManifestItem `json:"resources"`
 }
 
 type clientResourceManifestItem struct {
@@ -209,14 +223,17 @@ type clientResourceManifestItem struct {
 }
 
 type clientResourceManifestRelease struct {
-	ID               int        `json:"id"`
-	Version          string     `json:"version"`
-	Channel          string     `json:"channel"`
-	Title            string     `json:"title,omitempty"`
-	Changelog        string     `json:"changelog,omitempty"`
-	ForceUpdate      bool       `json:"force_update"`
-	MinClientVersion string     `json:"min_client_version,omitempty"`
-	PublishedAt      *time.Time `json:"published_at,omitempty"`
+	ID                      int        `json:"id"`
+	Version                 string     `json:"version"`
+	Channel                 string     `json:"channel"`
+	Title                   string     `json:"title,omitempty"`
+	Changelog               string     `json:"changelog,omitempty"`
+	ForceUpdate             bool       `json:"force_update"`
+	MinClientVersion        string     `json:"min_client_version,omitempty"`
+	MinServerVersion        string     `json:"min_server_version,omitempty"`
+	RequiredProtocolVersion uint16     `json:"required_protocol_version,omitempty"`
+	RequiredCapabilities    []string   `json:"required_capabilities,omitempty"`
+	PublishedAt             *time.Time `json:"published_at,omitempty"`
 }
 
 type clientResourceManifestRequest struct {
@@ -467,6 +484,15 @@ func CreateClientResourceRelease(c *gin.Context) {
 			return
 		}
 	}
+	minServerVersion, requiredProtocolVersion, requiredCapabilitiesJSON, err := normalizeClientResourceReleaseRequirements(
+		req.MinServerVersion,
+		req.RequiredProtocolVersion,
+		req.RequiredCapabilities,
+	)
+	if err != nil {
+		writeClientResourceError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 	title := strings.TrimSpace(req.Title)
 	changelog := strings.TrimSpace(req.Changelog)
 	if utf8.RuneCountInString(title) > clientResourceMaxTitleLength || len(changelog) > clientResourceMaxChangelogLength {
@@ -476,7 +502,9 @@ func CreateClientResourceRelease(c *gin.Context) {
 	release := &gormdb.ClientResourceRelease{
 		ResourceID: resourceID, Version: version, Channel: channel, Title: title, Changelog: changelog,
 		Status: gormdb.ClientResourceReleaseStatusDraft, ForceUpdate: req.ForceUpdate,
-		MinClientVersion: minClientVersion, CreatedBy: user.ID,
+		MinClientVersion: minClientVersion, MinServerVersion: minServerVersion,
+		RequiredProtocolVersion: requiredProtocolVersion, RequiredCapabilitiesJSON: requiredCapabilitiesJSON,
+		CreatedBy: user.ID,
 	}
 	if err := gormdb.NewClientResourceRepository().CreateRelease(release); err != nil {
 		switch {
@@ -653,8 +681,12 @@ func PublishClientResourceRelease(c *gin.Context) {
 	if !ok {
 		return
 	}
-	published, err := gormdb.NewClientResourceRepository().PublishRelease(release.ID)
+	contract := clientcontract.Current()
+	published, err := gormdb.NewClientResourceRepository().PublishRelease(release.ID, func(locked *gormdb.ClientResourceRelease) error {
+		return validateClientResourceServerContract(locked, contract)
+	})
 	if err != nil {
+		var compatibilityFailure *clientcontract.Failure
 		switch {
 		case errors.Is(err, gormdb.ErrClientResourceHasNoArtifact), errors.Is(err, gormdb.ErrClientResourceTargetRequired):
 			writeClientResourceError(c, http.StatusBadRequest, "发布至少需要一个具有适用目标的完整文件")
@@ -662,6 +694,8 @@ func PublishClientResourceRelease(c *gin.Context) {
 			writeClientResourceError(c, http.StatusConflict, "只有草稿可以发布")
 		case errors.Is(err, gormdb.ErrClientResourceDisabled):
 			writeClientResourceError(c, http.StatusConflict, "资源已停用")
+		case errors.As(err, &compatibilityFailure), errors.Is(err, errClientResourceInvalidContractRequirement):
+			writeClientResourceError(c, http.StatusConflict, clientResourceContractFailureMessage(err))
 		default:
 			writeClientResourceRepositoryError(c, err, "发布客户端资源失败")
 		}
@@ -740,6 +774,10 @@ func GetClientResourceArtifactDownload(c *gin.Context) {
 		default:
 			writeClientResourceError(c, http.StatusInternalServerError, "获取资源文件失败")
 		}
+		return
+	}
+	if err := validateClientResourceServerContract(artifact.Release, clientcontract.Current()); err != nil {
+		writeClientResourceError(c, http.StatusNotFound, "资源文件与当前服务端不兼容")
 		return
 	}
 	c.Header("Cache-Control", "private, no-store")
@@ -918,6 +956,115 @@ func validateClientResourceVersion(value string) (string, error) {
 	return value, nil
 }
 
+func normalizeClientResourceReleaseRequirements(minServerVersion string, requiredProtocolVersion int, capabilities []string) (string, uint16, *string, error) {
+	minServerVersion = strings.TrimSpace(minServerVersion)
+	if minServerVersion != "" {
+		validated, err := validateClientResourceVersion(minServerVersion)
+		if err != nil {
+			return "", 0, nil, fmt.Errorf("min_server_version %s", err)
+		}
+		minServerVersion = validated
+	}
+	if requiredProtocolVersion < 0 || requiredProtocolVersion > 65535 {
+		return "", 0, nil, fmt.Errorf("required_protocol_version 必须在 0 到 65535 之间")
+	}
+	normalizedCapabilities, err := normalizeClientResourceCapabilities(capabilities)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	if len(normalizedCapabilities) > 0 && requiredProtocolVersion == 0 {
+		return "", 0, nil, fmt.Errorf("声明 required_capabilities 时必须同时声明 required_protocol_version")
+	}
+	if len(normalizedCapabilities) == 0 {
+		return minServerVersion, uint16(requiredProtocolVersion), nil, nil
+	}
+	raw, err := json.Marshal(normalizedCapabilities)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("序列化 required_capabilities: %w", err)
+	}
+	encoded := string(raw)
+	return minServerVersion, uint16(requiredProtocolVersion), &encoded, nil
+}
+
+func normalizeClientResourceCapabilities(capabilities []string) ([]string, error) {
+	if len(capabilities) > clientResourceMaxCapabilities {
+		return nil, fmt.Errorf("required_capabilities 最多包含 %d 项", clientResourceMaxCapabilities)
+	}
+	seen := make(map[string]struct{}, len(capabilities))
+	normalized := make([]string, 0, len(capabilities))
+	for _, value := range capabilities {
+		capability := strings.ToLower(strings.TrimSpace(value))
+		if !clientResourceCapabilityPattern.MatchString(capability) {
+			return nil, fmt.Errorf("required_capabilities 包含无效能力名")
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		normalized = append(normalized, capability)
+	}
+	sort.Strings(normalized)
+	return normalized, nil
+}
+
+func clientResourceRequiredCapabilities(release *gormdb.ClientResourceRelease) ([]string, error) {
+	if release == nil || release.RequiredCapabilitiesJSON == nil {
+		return nil, nil
+	}
+	var capabilities []string
+	if err := json.Unmarshal([]byte(*release.RequiredCapabilitiesJSON), &capabilities); err != nil {
+		return nil, fmt.Errorf("%w: required_capabilities is not valid JSON", errClientResourceInvalidContractRequirement)
+	}
+	normalized, err := normalizeClientResourceCapabilities(capabilities)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errClientResourceInvalidContractRequirement, err)
+	}
+	return normalized, nil
+}
+
+func validateClientResourceServerContract(release *gormdb.ClientResourceRelease, contract clientcontract.Contract) error {
+	if release == nil {
+		return fmt.Errorf("%w: release is nil", errClientResourceInvalidContractRequirement)
+	}
+	if release.MinServerVersion != "" && !clientversion.IsValid(release.MinServerVersion) {
+		return fmt.Errorf("%w: min_server_version is invalid", errClientResourceInvalidContractRequirement)
+	}
+	capabilities, err := clientResourceRequiredCapabilities(release)
+	if err != nil {
+		return err
+	}
+	if len(capabilities) > 0 && release.RequiredProtocolVersion == 0 {
+		return fmt.Errorf("%w: capabilities require a protocol version", errClientResourceInvalidContractRequirement)
+	}
+	return clientcontract.Check(contract, clientcontract.Requirement{
+		MinServerVersion:        release.MinServerVersion,
+		RequiredProtocolVersion: release.RequiredProtocolVersion,
+		RequiredCapabilities:    capabilities,
+	})
+}
+
+func clientResourceContractFailureMessage(err error) string {
+	if errors.Is(err, errClientResourceInvalidContractRequirement) {
+		return "发布版本的服务端协议约束无效"
+	}
+	var failure *clientcontract.Failure
+	if !errors.As(err, &failure) {
+		return "当前服务端不满足发布版本的协议约束"
+	}
+	switch failure.Kind {
+	case clientcontract.FailureUnknownServerVersion:
+		return fmt.Sprintf("当前服务端版本 %s 不是可比较的 SemVer，无法满足最低服务端版本 %s", failure.Current, failure.Required)
+	case clientcontract.FailureServerVersionTooLow:
+		return fmt.Sprintf("当前服务端版本 %s 低于发布要求 %s", failure.Current, failure.Required)
+	case clientcontract.FailureProtocolVersionTooLow:
+		return fmt.Sprintf("当前幽灵协议版本 %s 低于发布要求 %s", failure.Current, failure.Required)
+	case clientcontract.FailureMissingCapability:
+		return fmt.Sprintf("当前服务端缺少发布要求的能力 %s", failure.Capability)
+	default:
+		return "当前服务端不满足发布版本的协议约束"
+	}
+}
+
 func normalizeClientResourceChannel(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -1009,9 +1156,13 @@ func parseClientResourceManifestRequest(c *gin.Context) (clientResourceManifestR
 }
 
 func buildClientResourceManifest(artifacts []*gormdb.ClientResourceArtifact, request clientResourceManifestRequest) clientResourceManifestResponse {
+	return buildClientResourceManifestForContract(artifacts, request, clientcontract.Current())
+}
+
+func buildClientResourceManifestForContract(artifacts []*gormdb.ClientResourceArtifact, request clientResourceManifestRequest, contract clientcontract.Contract) clientResourceManifestResponse {
 	compatible := make([]*gormdb.ClientResourceArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		if artifact == nil || artifact.Release == nil || artifact.Release.Resource == nil || !clientResourceReleaseCompatible(artifact.Release, request) || !clientResourceArtifactTargetCompatible(artifact, request) {
+		if artifact == nil || artifact.Release == nil || artifact.Release.Resource == nil || !clientResourceReleaseCompatible(artifact.Release, request, contract) || !clientResourceArtifactTargetCompatible(artifact, request) {
 			continue
 		}
 		compatible = append(compatible, artifact)
@@ -1064,21 +1215,32 @@ func buildClientResourceManifest(artifacts []*gormdb.ClientResourceArtifact, req
 			return left.ID < right.ID
 		})
 		resource := selectedRelease.Resource
+		requiredCapabilities, _ := clientResourceRequiredCapabilities(selectedRelease)
 		items = append(items, clientResourceManifestItem{
-			Resource:  clientResourceSummary{ID: resource.ID, ResourceKey: resource.ResourceKey, Name: resource.Name, Category: resource.Category, Required: resource.Required},
-			Release:   clientResourceManifestRelease{ID: selectedRelease.ID, Version: selectedRelease.Version, Channel: selectedRelease.Channel, Title: selectedRelease.Title, Changelog: selectedRelease.Changelog, ForceUpdate: selectedRelease.ForceUpdate, MinClientVersion: selectedRelease.MinClientVersion, PublishedAt: selectedRelease.PublishedAt},
+			Resource: clientResourceSummary{ID: resource.ID, ResourceKey: resource.ResourceKey, Name: resource.Name, Category: resource.Category, Required: resource.Required},
+			Release: clientResourceManifestRelease{
+				ID: selectedRelease.ID, Version: selectedRelease.Version, Channel: selectedRelease.Channel,
+				Title: selectedRelease.Title, Changelog: selectedRelease.Changelog, ForceUpdate: selectedRelease.ForceUpdate,
+				MinClientVersion: selectedRelease.MinClientVersion, MinServerVersion: selectedRelease.MinServerVersion,
+				RequiredProtocolVersion: selectedRelease.RequiredProtocolVersion, RequiredCapabilities: requiredCapabilities,
+				PublishedAt: selectedRelease.PublishedAt,
+			},
 			Artifacts: selectedArtifacts,
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Resource.ResourceKey < items[j].Resource.ResourceKey })
-	return clientResourceManifestResponse{SchemaVersion: clientResourceManifestSchemaVersion, Resources: items}
+	return clientResourceManifestResponse{
+		SchemaVersion: clientResourceManifestSchemaVersion,
+		ServerVersion: contract.ServerVersion, ProtocolVersion: contract.ProtocolVersion,
+		Capabilities: append([]string(nil), contract.Capabilities...), Resources: items,
+	}
 }
 
-func clientResourceReleaseCompatible(release *gormdb.ClientResourceRelease, request clientResourceManifestRequest) bool {
-	if release.MinClientVersion == "" {
-		return true
+func clientResourceReleaseCompatible(release *gormdb.ClientResourceRelease, request clientResourceManifestRequest, contract clientcontract.Contract) bool {
+	if err := validateClientResourceServerContract(release, contract); err != nil {
+		return false
 	}
-	return request.ClientVersion != "" && clientversion.Compare(request.ClientVersion, release.MinClientVersion) >= 0
+	return release.MinClientVersion == "" || request.ClientVersion != "" && clientversion.Compare(request.ClientVersion, release.MinClientVersion) >= 0
 }
 
 func clientResourceArtifactTargetCompatible(artifact *gormdb.ClientResourceArtifact, request clientResourceManifestRequest) bool {
@@ -1122,7 +1284,15 @@ func clientResourceReleaseToResponse(release *gormdb.ClientResourceRelease) clie
 	if release == nil {
 		return clientResourceReleaseResponse{}
 	}
-	response := clientResourceReleaseResponse{ID: release.ID, ResourceID: release.ResourceID, Version: release.Version, Channel: release.Channel, Title: release.Title, Changelog: release.Changelog, Status: release.Status, ForceUpdate: release.ForceUpdate, MinClientVersion: release.MinClientVersion, PublishedAt: release.PublishedAt, CreatedBy: release.CreatedBy, CreateTime: release.CreateTime, UpdateTime: release.UpdateTime, Artifacts: make([]clientResourceArtifactResponse, 0, len(release.Artifacts))}
+	requiredCapabilities, _ := clientResourceRequiredCapabilities(release)
+	response := clientResourceReleaseResponse{
+		ID: release.ID, ResourceID: release.ResourceID, Version: release.Version, Channel: release.Channel,
+		Title: release.Title, Changelog: release.Changelog, Status: release.Status, ForceUpdate: release.ForceUpdate,
+		MinClientVersion: release.MinClientVersion, MinServerVersion: release.MinServerVersion,
+		RequiredProtocolVersion: release.RequiredProtocolVersion, RequiredCapabilities: requiredCapabilities,
+		PublishedAt: release.PublishedAt, CreatedBy: release.CreatedBy, CreateTime: release.CreateTime, UpdateTime: release.UpdateTime,
+		Artifacts: make([]clientResourceArtifactResponse, 0, len(release.Artifacts)),
+	}
 	if release.Resource != nil {
 		response.Resource = clientResourceSummary{ID: release.Resource.ID, ResourceKey: release.Resource.ResourceKey, Name: release.Resource.Name, Category: release.Resource.Category, Required: release.Resource.Required}
 	}

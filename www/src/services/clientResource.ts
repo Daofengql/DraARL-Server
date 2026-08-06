@@ -63,6 +63,9 @@ export interface ClientResourceRelease {
   status: ClientResourceReleaseStatus
   force_update: boolean
   min_client_version?: string
+  min_server_version?: string
+  required_protocol_version?: number
+  required_capabilities?: string[]
   published_at?: string
   created_by: number
   create_time: string
@@ -251,6 +254,9 @@ export async function createClientResourceRelease(resourceId: number, data: {
   changelog?: string
   force_update?: boolean
   min_client_version?: string
+  min_server_version?: string
+  required_protocol_version?: number
+  required_capabilities?: string[]
 }): Promise<ClientResourceRelease> {
   const response = await apiClient.post<BackendResponse<ClientResourceRelease>>(`/api/client-resources/${resourceId}/releases`, data)
   return requireData(response, '创建资源发布草稿失败')

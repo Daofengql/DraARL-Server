@@ -1,6 +1,7 @@
 package gormdb
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,15 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 	db := openClientResourceMySQLTestDB(t)
 	if err := db.AutoMigrate(&ClientResource{}, &ClientResourceRelease{}, &ClientResourceArtifact{}, &ClientResourceArtifactTarget{}); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	for _, column := range []string{"min_server_version", "required_protocol_version", "required_capabilities"} {
+		if !db.Migrator().HasColumn(&ClientResourceRelease{}, column) {
+			t.Fatalf("migration omitted client_resource_releases.%s", column)
+		}
+	}
+	var capabilityColumn struct{ IsNullable string }
+	if err := db.Raw(`SELECT IS_NULLABLE AS is_nullable FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'client_resource_releases' AND COLUMN_NAME = 'required_capabilities'`).Scan(&capabilityColumn).Error; err != nil || capabilityColumn.IsNullable != "YES" {
+		t.Fatalf("required_capabilities nullable=%q err=%v", capabilityColumn.IsNullable, err)
 	}
 
 	key := fmt.Sprintf("test/model-%x", time.Now().UnixNano())
@@ -41,7 +51,11 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 		_ = db.Delete(&ClientResource{}, resource.ID).Error
 	})
 
-	release := &ClientResourceRelease{ResourceID: resource.ID, Version: "1.0.0", Channel: "stable", Status: ClientResourceReleaseStatusDraft}
+	requiredCapabilities := `["multi_receive_v1","source_group_v1"]`
+	release := &ClientResourceRelease{
+		ResourceID: resource.ID, Version: "1.0.0", Channel: "stable", Status: ClientResourceReleaseStatusDraft,
+		MinServerVersion: "1.1.0", RequiredProtocolVersion: 1, RequiredCapabilitiesJSON: &requiredCapabilities,
+	}
 	if err := repo.CreateRelease(release); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +77,11 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 		t.Fatalf("complete: %v", err)
 	}
 	loaded, err := repo.GetReleaseByID(release.ID)
-	if err != nil || len(loaded.Artifacts) != 1 || len(loaded.Artifacts[0].Targets) != 2 || loaded.Artifacts[0].Metadata != "{}" {
+	var loadedCapabilities []string
+	if err == nil && loaded.RequiredCapabilitiesJSON != nil {
+		err = json.Unmarshal([]byte(*loaded.RequiredCapabilitiesJSON), &loadedCapabilities)
+	}
+	if err != nil || loaded.MinServerVersion != "1.1.0" || loaded.RequiredProtocolVersion != 1 || len(loadedCapabilities) != 2 || loadedCapabilities[0] != "multi_receive_v1" || loadedCapabilities[1] != "source_group_v1" || len(loaded.Artifacts) != 1 || len(loaded.Artifacts[0].Targets) != 2 || loaded.Artifacts[0].Metadata != "{}" {
 		t.Fatalf("loaded=%#v err=%v", loaded, err)
 	}
 
@@ -75,7 +93,7 @@ func TestClientResourceLifecycleMySQL(t *testing.T) {
 		t.Fatalf("conflict err=%v", err)
 	}
 
-	published, err := repo.PublishRelease(release.ID)
+	published, err := repo.PublishRelease(release.ID, nil)
 	if err != nil || published.Status != ClientResourceReleaseStatusPublished || published.PublishedAt == nil {
 		t.Fatalf("published=%#v err=%v", published, err)
 	}

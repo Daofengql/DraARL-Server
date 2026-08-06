@@ -581,21 +581,24 @@ func (ClientResource) TableName() string {
 
 // ClientResourceRelease is one immutable version in a resource channel.
 type ClientResourceRelease struct {
-	ID               int                      `gorm:"primaryKey;autoIncrement" json:"id"`
-	ResourceID       int                      `gorm:"not null;uniqueIndex:uk_client_resource_release,priority:1;index:idx_client_resource_release_lookup,priority:1;column:resource_id" json:"resource_id"`
-	Version          string                   `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_resource_release,priority:3;index:idx_client_resource_release_lookup,priority:3;column:version" json:"version"`
-	Channel          string                   `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_resource_release,priority:2;index:idx_client_resource_release_lookup,priority:2;column:channel" json:"channel"`
-	Title            string                   `gorm:"type:varchar(255);column:title" json:"title"`
-	Changelog        string                   `gorm:"type:mediumtext;column:changelog" json:"changelog"`
-	Status           string                   `gorm:"type:varchar(32);not null;default:draft;index:idx_client_resource_release_lookup,priority:4;column:status" json:"status"`
-	ForceUpdate      bool                     `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
-	MinClientVersion string                   `gorm:"type:varchar(64);column:min_client_version" json:"min_client_version,omitempty"`
-	PublishedAt      *time.Time               `gorm:"column:published_at" json:"published_at,omitempty"`
-	CreatedBy        int                      `gorm:"type:int;index;column:created_by" json:"created_by"`
-	CreateTime       time.Time                `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime       time.Time                `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	Resource         *ClientResource          `gorm:"foreignKey:ResourceID;references:ID" json:"resource,omitempty"`
-	Artifacts        []ClientResourceArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
+	ID                       int                      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ResourceID               int                      `gorm:"not null;uniqueIndex:uk_client_resource_release,priority:1;index:idx_client_resource_release_lookup,priority:1;column:resource_id" json:"resource_id"`
+	Version                  string                   `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_resource_release,priority:3;index:idx_client_resource_release_lookup,priority:3;column:version" json:"version"`
+	Channel                  string                   `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_resource_release,priority:2;index:idx_client_resource_release_lookup,priority:2;column:channel" json:"channel"`
+	Title                    string                   `gorm:"type:varchar(255);column:title" json:"title"`
+	Changelog                string                   `gorm:"type:mediumtext;column:changelog" json:"changelog"`
+	Status                   string                   `gorm:"type:varchar(32);not null;default:draft;index:idx_client_resource_release_lookup,priority:4;column:status" json:"status"`
+	ForceUpdate              bool                     `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
+	MinClientVersion         string                   `gorm:"type:varchar(64);column:min_client_version" json:"min_client_version,omitempty"`
+	MinServerVersion         string                   `gorm:"type:varchar(64);column:min_server_version" json:"min_server_version,omitempty"`
+	RequiredProtocolVersion  uint16                   `gorm:"type:smallint unsigned;not null;default:0;column:required_protocol_version" json:"required_protocol_version,omitempty"`
+	RequiredCapabilitiesJSON *string                  `gorm:"type:json;column:required_capabilities" json:"-"`
+	PublishedAt              *time.Time               `gorm:"column:published_at" json:"published_at,omitempty"`
+	CreatedBy                int                      `gorm:"type:int;index;column:created_by" json:"created_by"`
+	CreateTime               time.Time                `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime               time.Time                `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Resource                 *ClientResource          `gorm:"foreignKey:ResourceID;references:ID" json:"resource,omitempty"`
+	Artifacts                []ClientResourceArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
 }
 
 func (ClientResourceRelease) TableName() string {

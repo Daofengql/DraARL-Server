@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"draarl/internal/clientcontract"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
 	"draarl/pkg/storage"
@@ -124,6 +125,73 @@ func TestBuildClientResourceManifestSelectsChannelVersionAndCompatibility(t *tes
 	}
 	if strings.Contains(string(payload), "download_url") || strings.Contains(string(payload), "storage_key") {
 		t.Fatalf("manifest leaked transport details: %s", payload)
+	}
+}
+
+func TestNormalizeClientResourceReleaseRequirements(t *testing.T) {
+	minServer, protocolVersion, encoded, err := normalizeClientResourceReleaseRequirements(
+		" 1.2.3 ",
+		1,
+		[]string{"source_group_v1", " multi_receive_v1 ", "source_group_v1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minServer != "1.2.3" || protocolVersion != 1 || encoded == nil || *encoded != `["multi_receive_v1","source_group_v1"]` {
+		t.Fatalf("requirements=(%q,%d,%v)", minServer, protocolVersion, encoded)
+	}
+	if _, _, _, err := normalizeClientResourceReleaseRequirements("1.0", 1, nil); err == nil {
+		t.Fatal("invalid minimum server version was accepted")
+	}
+	if _, _, _, err := normalizeClientResourceReleaseRequirements("", 0, []string{"multi_receive_v1"}); err == nil {
+		t.Fatal("capabilities without a protocol version were accepted")
+	}
+	if _, _, _, err := normalizeClientResourceReleaseRequirements("", 1, []string{"Invalid Capability"}); err == nil {
+		t.Fatal("invalid capability name was accepted")
+	}
+}
+
+func TestBuildClientResourceManifestFiltersServerContract(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	resource := &gormdb.ClientResource{ID: 9, ResourceKey: "app/draarl", Name: "DraARL", Category: "application", Enabled: true}
+	requiredCapabilities := `["multi_receive_v1","source_group_v1"]`
+	base := &gormdb.ClientResourceRelease{ID: 31, ResourceID: resource.ID, Resource: resource, Version: "1.0.0", Channel: "stable", Status: gormdb.ClientResourceReleaseStatusPublished, PublishedAt: &now}
+	modern := &gormdb.ClientResourceRelease{
+		ID: 32, ResourceID: resource.ID, Resource: resource, Version: "2.0.0", Channel: "stable", Status: gormdb.ClientResourceReleaseStatusPublished, PublishedAt: &now,
+		MinServerVersion: "2.0.0", RequiredProtocolVersion: 1, RequiredCapabilitiesJSON: &requiredCapabilities,
+	}
+	artifact := func(id int, release *gormdb.ClientResourceRelease) *gormdb.ClientResourceArtifact {
+		return &gormdb.ClientResourceArtifact{
+			ID: id, ReleaseID: release.ID, Release: release, Format: "apk", Runtime: "default", Variant: "default", FileName: release.Version + ".apk",
+			Targets: []gormdb.ClientResourceArtifactTarget{{Platform: "android", Arch: "arm64"}},
+		}
+	}
+	request := clientResourceManifestRequest{Platform: "android", Arch: "arm64", Channel: "stable"}
+	oldContract := clientcontract.Contract{ServerVersion: "1.9.9", ProtocolVersion: 1, Capabilities: []string{"multi_receive_v1", "source_group_v1"}}
+	manifest := buildClientResourceManifestForContract([]*gormdb.ClientResourceArtifact{artifact(1, base), artifact(2, modern)}, request, oldContract)
+	if manifest.ServerVersion != "1.9.9" || manifest.ProtocolVersion != 1 || len(manifest.Capabilities) != 2 {
+		t.Fatalf("manifest contract=%#v", manifest)
+	}
+	if len(manifest.Resources) != 1 || manifest.Resources[0].Release.ID != base.ID {
+		t.Fatalf("old server manifest=%#v", manifest)
+	}
+	compatibleContract := clientcontract.Contract{ServerVersion: "2.0.0", ProtocolVersion: 1, Capabilities: []string{"multi_receive_v1", "source_group_v1"}}
+	manifest = buildClientResourceManifestForContract([]*gormdb.ClientResourceArtifact{artifact(1, base), artifact(2, modern)}, request, compatibleContract)
+	if len(manifest.Resources) != 1 || manifest.Resources[0].Release.ID != modern.ID || len(manifest.Resources[0].Release.RequiredCapabilities) != 2 {
+		t.Fatalf("modern server manifest=%#v", manifest)
+	}
+	missingCapability := clientcontract.Contract{ServerVersion: "2.0.0", ProtocolVersion: 1, Capabilities: []string{"multi_receive_v1"}}
+	manifest = buildClientResourceManifestForContract([]*gormdb.ClientResourceArtifact{artifact(2, modern)}, request, missingCapability)
+	if len(manifest.Resources) != 0 {
+		t.Fatalf("incompatible release remained in manifest=%#v", manifest)
+	}
+}
+
+func TestClientResourceContractFailureMessageForDevelopmentBuild(t *testing.T) {
+	release := &gormdb.ClientResourceRelease{MinServerVersion: "1.0.0"}
+	err := validateClientResourceServerContract(release, clientcontract.Contract{ServerVersion: "dev", ProtocolVersion: 1})
+	if err == nil || !strings.Contains(clientResourceContractFailureMessage(err), "dev") {
+		t.Fatalf("err=%v message=%q", err, clientResourceContractFailureMessage(err))
 	}
 }
 

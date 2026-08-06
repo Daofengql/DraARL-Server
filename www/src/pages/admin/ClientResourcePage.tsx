@@ -30,8 +30,10 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const RESOURCE_KEY_RE = /^[a-z0-9][a-z0-9._-]{0,62}(?:\/[a-z0-9][a-z0-9._-]{0,62})*$/
+const SERVER_CAPABILITY_RE = /^[a-z][a-z0-9._-]{0,63}$/
 
 const CATEGORY_OPTIONS = ['application', 'model', 'font', 'dictionary', 'data']
+const SERVER_CAPABILITY_OPTIONS = ['multi_receive_v1', 'source_group_v1']
 const FORMAT_OPTIONS: Record<string, string[]> = {
   application: ['apk', 'exe', 'msix', 'dmg', 'pkg', 'ipa', 'app_store'],
   model: ['onnx', 'tflite', 'safetensors', 'gguf', 'bin'],
@@ -70,6 +72,9 @@ type ReleaseForm = {
   title: string
   changelog: string
   minClientVersion: string
+  minServerVersion: string
+  requiredProtocolVersion: string
+  requiredCapabilities: string[]
   forceUpdate: boolean
 }
 
@@ -96,7 +101,8 @@ const emptyResourceForm = (): ResourceForm => ({
 })
 
 const emptyReleaseForm = (): ReleaseForm => ({
-  version: '', channel: 'stable', title: '', changelog: '', minClientVersion: '', forceUpdate: false,
+  version: '', channel: 'stable', title: '', changelog: '', minClientVersion: '', minServerVersion: '',
+  requiredProtocolVersion: '', requiredCapabilities: [], forceUpdate: false,
 })
 
 const emptyArtifactForm = (): ArtifactForm => ({
@@ -354,6 +360,24 @@ export function ClientResourcePage() {
       setError('最低客户端版本格式无效')
       return
     }
+    if (releaseForm.minServerVersion && !SEMVER_RE.test(releaseForm.minServerVersion.trim())) {
+      setError('最低服务端版本格式无效')
+      return
+    }
+    const requiredProtocolVersion = releaseForm.requiredProtocolVersion === '' ? 0 : Number(releaseForm.requiredProtocolVersion)
+    if (!Number.isInteger(requiredProtocolVersion) || requiredProtocolVersion < 0 || requiredProtocolVersion > 65535) {
+      setError('所需协议版本必须是 0 到 65535 之间的整数')
+      return
+    }
+    const requiredCapabilities = [...new Set(releaseForm.requiredCapabilities.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort()
+    if (requiredCapabilities.length > 32 || requiredCapabilities.some((value) => !SERVER_CAPABILITY_RE.test(value))) {
+      setError('所需服务端能力格式无效')
+      return
+    }
+    if (requiredCapabilities.length > 0 && requiredProtocolVersion === 0) {
+      setError('声明协议能力时必须同时声明所需协议版本')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -363,6 +387,9 @@ export function ClientResourcePage() {
         title: releaseForm.title.trim(),
         changelog: releaseForm.changelog.trim(),
         min_client_version: releaseForm.minClientVersion.trim() || undefined,
+        min_server_version: releaseForm.minServerVersion.trim() || undefined,
+        required_protocol_version: requiredProtocolVersion || undefined,
+        required_capabilities: requiredCapabilities.length > 0 ? requiredCapabilities : undefined,
         force_update: releaseForm.forceUpdate,
       })
       setReleaseForm(emptyReleaseForm())
@@ -526,13 +553,20 @@ export function ClientResourcePage() {
   const formatOptions = FORMAT_OPTIONS[selectedResource?.category || ''] || []
   const releaseAllowsArtifacts = selectedRelease?.status === 'draft' || selectedRelease?.status === 'published'
   const artifactEditorVisible = selectedRelease?.status === 'draft' || (selectedRelease?.status === 'published' && publishedEditMode)
-  const releasePublishSummary = selectedRelease?.artifacts.map((artifact) => [
+  const releaseContractSummary = selectedRelease ? [
+    `min_client_version=${selectedRelease.min_client_version || '-'}`,
+    `min_server_version=${selectedRelease.min_server_version || '-'}`,
+    `required_protocol_version=${selectedRelease.required_protocol_version || 0}`,
+    `required_capabilities=${selectedRelease.required_capabilities?.join(', ') || '-'}`,
+  ].join('\n') : ''
+  const releaseArtifactSummary = selectedRelease?.artifacts.map((artifact) => [
     `${artifact.format} / ${artifact.runtime} / ${artifact.variant}`,
     `key=${artifact.storage_key || 'external'}`,
     `size=${artifact.file_size} bytes`,
     `sha256=${artifact.sha256 || '-'}`,
     `targets=${artifact.targets.map(targetKey).join(', ')}`,
   ].join('\n')).join('\n\n') || ''
+  const releasePublishSummary = [releaseContractSummary, releaseArtifactSummary].filter(Boolean).join('\n\n')
   const releaseDeleteSummary = selectedRelease?.status === 'published'
     ? '删除后该版本会立即从 manifest 消失，并清理其全部文件；已有下载链接也将失效。'
     : '该版本及其全部文件将被永久删除。'
@@ -603,7 +637,16 @@ export function ClientResourcePage() {
         <DialogContent>
           {!selectedRelease && <Stack spacing={2} sx={{ mt: 1 }}>
             {releaseFormVisible && <Paper variant="outlined" sx={{ p: 2 }}><Stack spacing={1.5}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}><TextField size="small" label="版本" value={releaseForm.version} onChange={(event) => setReleaseForm({ ...releaseForm, version: event.target.value })} error={!!releaseForm.version && !SEMVER_RE.test(releaseForm.version)} required fullWidth /><FormControl size="small" fullWidth><InputLabel>频道</InputLabel><Select value={releaseForm.channel} label="频道" onChange={(event) => setReleaseForm({ ...releaseForm, channel: event.target.value as ClientResourceChannel })}><MenuItem value="stable">stable</MenuItem><MenuItem value="beta">beta</MenuItem></Select></FormControl><TextField size="small" label="最低客户端版本" value={releaseForm.minClientVersion} onChange={(event) => setReleaseForm({ ...releaseForm, minClientVersion: event.target.value })} fullWidth /></Stack>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1.5 }}>
+                <TextField size="small" label="版本" value={releaseForm.version} onChange={(event) => setReleaseForm({ ...releaseForm, version: event.target.value })} error={!!releaseForm.version && !SEMVER_RE.test(releaseForm.version)} required fullWidth />
+                <FormControl size="small" fullWidth><InputLabel>频道</InputLabel><Select value={releaseForm.channel} label="频道" onChange={(event) => setReleaseForm({ ...releaseForm, channel: event.target.value as ClientResourceChannel })}><MenuItem value="stable">stable</MenuItem><MenuItem value="beta">beta</MenuItem></Select></FormControl>
+                <TextField size="small" label="最低客户端版本" value={releaseForm.minClientVersion} onChange={(event) => setReleaseForm({ ...releaseForm, minClientVersion: event.target.value })} error={!!releaseForm.minClientVersion && !SEMVER_RE.test(releaseForm.minClientVersion)} fullWidth />
+                <TextField size="small" label="最低服务端版本" value={releaseForm.minServerVersion} onChange={(event) => setReleaseForm({ ...releaseForm, minServerVersion: event.target.value })} error={!!releaseForm.minServerVersion && !SEMVER_RE.test(releaseForm.minServerVersion)} fullWidth />
+              </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(180px, 1fr) minmax(0, 3fr)' }, gap: 1.5 }}>
+                <TextField size="small" type="number" label="所需协议版本" value={releaseForm.requiredProtocolVersion} onChange={(event) => setReleaseForm({ ...releaseForm, requiredProtocolVersion: event.target.value })} slotProps={{ htmlInput: { min: 0, max: 65535, step: 1 } }} fullWidth />
+                <Autocomplete multiple freeSolo size="small" options={SERVER_CAPABILITY_OPTIONS} value={releaseForm.requiredCapabilities} onChange={(_, values) => setReleaseForm({ ...releaseForm, requiredCapabilities: values })} renderInput={(params) => <TextField {...params} label="所需服务端能力" />} />
+              </Box>
               <TextField size="small" label="标题" value={releaseForm.title} onChange={(event) => setReleaseForm({ ...releaseForm, title: event.target.value })} />
               <TextField size="small" label="更新日志" value={releaseForm.changelog} onChange={(event) => setReleaseForm({ ...releaseForm, changelog: event.target.value })} multiline minRows={3} />
               <Stack direction="row" alignItems="center"><FormControlLabel control={<Checkbox checked={releaseForm.forceUpdate} onChange={(event) => setReleaseForm({ ...releaseForm, forceUpdate: event.target.checked })} />} label="强制更新" /><Box sx={{ flex: 1 }} /><Button onClick={() => setReleaseFormVisible(false)}>取消</Button><Button variant="contained" onClick={() => void createRelease()} disabled={busy || !SEMVER_RE.test(releaseForm.version)}>创建草稿</Button></Stack>
@@ -617,6 +660,12 @@ export function ClientResourcePage() {
 
           {selectedRelease && <Stack spacing={2} sx={{ mt: 1 }}>
             <Stack direction="row" spacing={1} alignItems="center">{statusChip(selectedRelease.status)}<Chip size="small" label={selectedRelease.channel} variant="outlined" /><Typography fontFamily="monospace">{selectedRelease.version}</Typography></Stack>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1 }}>
+              <Typography variant="body2"><Typography component="span" color="text.secondary">最低客户端：</Typography><Typography component="span" fontFamily="monospace">{selectedRelease.min_client_version || '-'}</Typography></Typography>
+              <Typography variant="body2"><Typography component="span" color="text.secondary">最低服务端：</Typography><Typography component="span" fontFamily="monospace">{selectedRelease.min_server_version || '-'}</Typography></Typography>
+              <Typography variant="body2"><Typography component="span" color="text.secondary">协议版本：</Typography><Typography component="span" fontFamily="monospace">{selectedRelease.required_protocol_version || 0}</Typography></Typography>
+            </Box>
+            {selectedRelease.required_capabilities && selectedRelease.required_capabilities.length > 0 && <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap"><Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>所需能力：</Typography>{selectedRelease.required_capabilities.map((capability) => <Chip key={capability} size="small" label={capability} variant="outlined" />)}</Stack>}
             {selectedRelease.changelog && <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{selectedRelease.changelog}</Typography>}
             {selectedRelease.status === 'draft' && selectedRelease.artifacts.length > 0 && <Alert severity="info">发布前请核对每个 artifact 的完整 final key、大小、SHA-256 和适用目标；发布后对象与版本不可覆盖。</Alert>}
             <TableContainer component={Paper} variant="outlined"><Table size="small" sx={{ minWidth: 800 }}><TableHead><TableRow><TableCell>格式</TableCell><TableCell sx={{ whiteSpace: 'nowrap' }}>runtime / variant</TableCell><TableCell sx={{ whiteSpace: 'nowrap' }}>适用目标</TableCell><TableCell>文件</TableCell><TableCell>大小</TableCell><TableCell>SHA-256</TableCell></TableRow></TableHead><TableBody>

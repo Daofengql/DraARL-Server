@@ -51,6 +51,40 @@ func TestRegistryAllowsMultipleInstancesAndReplacesOnlySameInstance(t *testing.T
 	}
 }
 
+func TestRegistryRestorePreservesSessionIdentityAndRejectsCollisions(t *testing.T) {
+	source := NewRegistry(4, 4)
+	session, err := source.Register(testRegistration(uuid.NewString(), time.Now()), Controller{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Transport = TransportEdge
+	session.Endpoint = "edge-a/recovered"
+	session.ProtocolVersion = 1
+
+	restoredRegistry := NewRegistry(4, 4)
+	restored, err := restoredRegistry.Restore(session, Controller{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.SessionID != session.SessionID || restored.SessionTag != session.SessionTag {
+		t.Fatalf("restored identity changed: %#v", restored)
+	}
+	if byTag, ok := restoredRegistry.FindByTag(session.SessionTag); !ok || byTag.SessionID != session.SessionID {
+		t.Fatal("restored tag index is missing")
+	}
+
+	collision := session
+	collision.SessionID = uuid.NewString()
+	if _, err := restoredRegistry.Restore(collision, Controller{}); !errors.Is(err, ErrSessionConflict) {
+		t.Fatalf("same instance/tag collision error=%v", err)
+	}
+	collision = session
+	collision.SessionTag++
+	if _, err := restoredRegistry.Restore(collision, Controller{}); !errors.Is(err, ErrSessionConflict) {
+		t.Fatalf("same session with a different tag error=%v", err)
+	}
+}
+
 func TestRegistryRoutingIsNormalizedAndControllerFailureIsAtomic(t *testing.T) {
 	registry := NewRegistry(4, 3)
 	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{

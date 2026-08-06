@@ -63,11 +63,14 @@ func TestUDPGhostManagerKeepsSameAccountSessionsIndependent(t *testing.T) {
 func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) {
 	previousManager := GlobalUDPGhostManager
 	previousRouter := GlobalMessageRouter
+	previousRegistry := ghostsession.Global
 	GlobalUDPGhostManager = newUDPGhostManager()
 	GlobalMessageRouter = nil
+	ghostsession.Global = ghostsession.NewRegistry(8, 16)
 	t.Cleanup(func() {
 		GlobalUDPGhostManager = previousManager
 		GlobalMessageRouter = previousRouter
+		ghostsession.Global = previousRegistry
 	})
 
 	first := modernUDPGhost("count-session-a", 21, 31101, 1001, []int{1001, 1002, 1003})
@@ -78,15 +81,24 @@ func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) 
 	if _, err := GlobalUDPGhostManager.RegisterSession(second); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ghostsession.Global.Register(ghostsession.Registration{
+		ClientInstanceID: "11111111-1111-4111-8111-111111111111", OwnerID: 7, Username: "edge-user",
+		DevModel: protocol.DraARLDevModelAndroid, SSID: protocol.SSIDGhostAndroid, Transport: ghostsession.TransportEdge,
+		ProtocolVersion: protocol.GhostAuthPayloadVersion,
+		Capabilities:    []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
+		Routing:         ghostsession.Routing{TxGroupID: 1002, RxGroupIDs: []int{1002, 1003}},
+	}, ghostsession.Controller{}); err != nil {
+		t.Fatal(err)
+	}
 
-	if got := GetOnlineGhostCount(); got != 2 {
-		t.Fatalf("server ghost online count=%d, want 2 sessions", got)
+	if got := GetOnlineGhostCount(); got != 3 {
+		t.Fatalf("server ghost online count=%d, want 3 sessions", got)
 	}
-	if got := GetOnlineGhostCountByGroup(1002); got != 2 {
-		t.Fatalf("group ghost online count=%d, want 2 sessions", got)
+	if got := GetOnlineGhostCountByGroup(1002); got != 3 {
+		t.Fatalf("group ghost online count=%d, want 3 sessions", got)
 	}
-	if got := totalOnlineDeviceCount(4, 2, 1, 3); got != 10 {
-		t.Fatalf("combined online count=%d, want 10", got)
+	if got := totalOnlineDeviceCount(4, 2, 1, 3, 2); got != 12 {
+		t.Fatalf("combined online count=%d, want 12", got)
 	}
 }
 

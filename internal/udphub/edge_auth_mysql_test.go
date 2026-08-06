@@ -140,4 +140,21 @@ func TestProxiedModernGhostAuthenticationMySQL(t *testing.T) {
 	if err != nil || confirmed.SessionTag != first.SessionTag {
 		t.Fatalf("proxied ghost confirmation failed: session=%#v err=%v", confirmed, err)
 	}
+
+	ghostsession.Global = ghostsession.NewRegistry(8, ghostsession.DefaultMaxSubscriptions)
+	recoveryRoutingCallbacks := 0
+	recoveryHooks := options.Ghost
+	recoveryHooks.ApplyRouting = func(string, int, byte, string, ghostsession.Routing) error {
+		recoveryRoutingCallbacks++
+		return nil
+	}
+	recovered, err := RecoverProxiedGhostSession(ProxiedGhostRecovery{
+		SessionID: first.GhostSessionID, SessionTag: first.SessionTag, ClientInstanceID: firstInstance,
+		OwnerID: owner.ID, SSID: protocol.SSIDGhostAndroid, DevModel: protocol.DraARLDevModelAndroid,
+		EdgeNodeID: "edge-a", Now: time.Now(),
+	}, recoveryHooks)
+	if err != nil || recovered.SessionID != first.GhostSessionID || recovered.SessionTag != first.SessionTag ||
+		recovered.TxGroupID != firstGroup.ID || len(recovered.RxGroupIDs) != 1 || recoveryRoutingCallbacks != 0 {
+		t.Fatalf("proxied ghost restart recovery failed: session=%#v err=%v", recovered, err)
+	}
 }

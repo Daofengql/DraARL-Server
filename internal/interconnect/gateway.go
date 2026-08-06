@@ -22,6 +22,7 @@ type DeviceActivationHandler func(session *NodeSession, grant *DeviceGrant) erro
 type DeviceSessionConfirmHandler func(session *NodeSession, sessions []DeviceSessionConfirmItem) ([]DeviceSessionConfirmResult, error)
 type DeviceConfigHandler func(deviceID int, kind string, data []byte) ([][]byte, error)
 type AcceptedRelayHandler func(AcceptedRelay)
+type GhostSessionRenewHandler func(sessionID, nodeID string, controlSessionID uint64, now, expiresAt time.Time) (string, error)
 
 type AcceptedRelay struct {
 	SessionID uint64
@@ -62,7 +63,7 @@ type CenterGateway struct {
 	onDeviceRevoke     func(nodeID string, controlSessionID uint64, deviceID int, reason string)
 	onCredentialResult func(*NodeSession, NodeCredentialControl)
 	onAcceptedRelay    AcceptedRelayHandler
-	onGhostActivity    func(string, time.Time)
+	onGhostRenew       GhostSessionRenewHandler
 	onGhostRevoke      func(string, string)
 	configHandler      DeviceConfigHandler
 	configMu           sync.Mutex
@@ -253,9 +254,9 @@ func (g *CenterGateway) SetAcceptedRelayHandler(handler AcceptedRelayHandler) {
 	g.mu.Unlock()
 }
 
-func (g *CenterGateway) SetGhostSessionHandlers(activity func(string, time.Time), revoke func(string, string)) {
+func (g *CenterGateway) SetGhostSessionHandlers(renew GhostSessionRenewHandler, revoke func(string, string)) {
 	g.mu.Lock()
-	g.onGhostActivity = activity
+	g.onGhostRenew = renew
 	g.onGhostRevoke = revoke
 	g.mu.Unlock()
 }
@@ -990,15 +991,27 @@ func (g *CenterGateway) renewDeviceSession(session *NodeSession, request DeviceS
 		response.Error = "session_route_missing"
 		return response
 	}
+	expiresAt := now.Add(defaultDeviceGrantTTL)
 	response.Success = true
-	response.ExpiresAtMillis = now.Add(defaultDeviceGrantTTL).UnixMilli()
+	response.ExpiresAtMillis = expiresAt.UnixMilli()
 	if owner.GhostSessionID != "" {
 		g.mu.RLock()
-		activity := g.onGhostActivity
+		renew := g.onGhostRenew
 		g.mu.RUnlock()
-		if activity != nil {
-			activity(owner.GhostSessionID, now)
+		if renew == nil {
+			response.Success = false
+			response.ExpiresAtMillis = 0
+			response.Error = "ghost_recovery_ticket_unavailable"
+			return response
 		}
+		ticket, err := renew(owner.GhostSessionID, session.NodeID, session.SessionID, now, expiresAt)
+		if err != nil || strings.TrimSpace(ticket) == "" {
+			response.Success = false
+			response.ExpiresAtMillis = 0
+			response.Error = "ghost_recovery_ticket_unavailable"
+			return response
+		}
+		response.RecoveryTicket = ticket
 	}
 	return response
 }
@@ -1068,6 +1081,9 @@ func (g *CenterGateway) activateDeviceSessionLocked(session *NodeSession, grant 
 	identity := deviceGrantIdentity(grant)
 	if identity == "" {
 		return errors.New("device identity is incomplete")
+	}
+	if isSessionGhostGrant(grant) && session.NodeID != CenterLocalNodeID && strings.TrimSpace(grant.RecoveryTicket) == "" {
+		return errors.New("edge ghost recovery ticket is required")
 	}
 	g.mu.RLock()
 	oldSessionID := g.activeDevices[identity]
@@ -2967,7 +2983,8 @@ func (g *EdgeGateway) sessionConfirmSnapshot(now time.Time) []DeviceSessionConfi
 	g.ensureSessionIndexesLocked()
 	items := make([]DeviceSessionConfirmItem, 0, len(g.sessions))
 	for sessionID, session := range g.sessions {
-		validIdentity := session != nil && (session.Grant.DeviceID > 0 || isGhostGrant(&session.Grant))
+		validIdentity := session != nil && (session.Grant.DeviceID > 0 ||
+			(isGhostGrant(&session.Grant) && strings.TrimSpace(session.Grant.RecoveryTicket) != ""))
 		valid := validIdentity && session.ControlSessionID != 0 && session.Grant.OwnerID > 0 && session.Grant.SSID != 0 &&
 			session.Grant.SessionEpoch != 0 && now.Sub(session.LastSeen) <= g.sessionTimeout &&
 			session.Grant.ExpiresAtMillis > now.UnixMilli()
@@ -2979,6 +2996,7 @@ func (g *EdgeGateway) sessionConfirmSnapshot(now time.Time) []DeviceSessionConfi
 			SessionID: sessionID, SessionEpoch: session.Grant.SessionEpoch, ControlSessionID: session.ControlSessionID,
 			DeviceID: session.Grant.DeviceID, OwnerID: session.Grant.OwnerID, SSID: session.Grant.SSID, DevModel: session.Grant.DevModel,
 			GhostSessionID: session.Grant.GhostSessionID, ClientInstanceID: session.Grant.ClientInstanceID,
+			RecoveryTicket: session.Grant.RecoveryTicket,
 		})
 	}
 	return items
@@ -3025,6 +3043,7 @@ func (g *EdgeGateway) applySessionConfirmResponse(link *edgeControlLink, request
 		grant := *result.Grant
 		if grant.DeviceID != item.DeviceID || grant.OwnerID != item.OwnerID || grant.SSID != item.SSID || (item.DeviceID == 0 && grant.DevModel != item.DevModel) ||
 			grant.GhostSessionID != item.GhostSessionID || grant.ClientInstanceID != item.ClientInstanceID ||
+			(item.DeviceID == 0 && strings.TrimSpace(grant.RecoveryTicket) == "") ||
 			grant.SessionID == 0 || grant.SessionEpoch == 0 || grant.ExpiresAtMillis <= now.UnixMilli() {
 			return errors.New("device session confirmation changed the device identity")
 		}
@@ -3316,6 +3335,12 @@ func (g *EdgeGateway) finishSessionRenewal(response DeviceSessionRenewResponse, 
 	if session == nil || session.Grant.SessionEpoch != pending.sessionEpoch {
 		return false
 	}
+	if isSessionGhostGrant(&session.Grant) {
+		if strings.TrimSpace(response.RecoveryTicket) == "" {
+			return false
+		}
+		session.Grant.RecoveryTicket = response.RecoveryTicket
+	}
 	session.Grant.ExpiresAtMillis = response.ExpiresAtMillis
 	return true
 }
@@ -3358,6 +3383,9 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 		return
 	}
 	if grant.GhostSessionID != "" && !isSessionGhostGrant(&grant) {
+		return
+	}
+	if isSessionGhostGrant(&grant) && strings.TrimSpace(grant.RecoveryTicket) == "" {
 		return
 	}
 	controlSessionID := uint64(0)

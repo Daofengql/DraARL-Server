@@ -255,6 +255,92 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	return cloneSession(session), nil
 }
 
+// Restore reinstalls one center-issued Session after a center process restart.
+// The caller must authenticate the recovery proof before calling this method;
+// Restore only enforces registry identity, policy, limit, and collision rules.
+func (r *Registry) Restore(session Session, controller Controller) (Session, error) {
+	sessionID := strings.ToLower(strings.TrimSpace(session.SessionID))
+	parsedSessionID, err := uuid.Parse(sessionID)
+	if err != nil || parsedSessionID == uuid.Nil || parsedSessionID.String() != sessionID || session.SessionTag == 0 {
+		return Session{}, ErrSessionConflict
+	}
+	clientInstanceID, err := NormalizeClientInstanceID(session.ClientInstanceID)
+	if err != nil {
+		return Session{}, err
+	}
+	if err := ValidateCapabilities(session.Capabilities); err != nil {
+		return Session{}, err
+	}
+	if session.OwnerID <= 0 || session.Transport == "" || session.SSID == 0 || session.DevModel == 0 || session.ProtocolVersion == 0 {
+		return Session{}, ErrSessionConflict
+	}
+	routing, _, err := r.normalizeRegistrationRouting(session.OwnerID, session.DevModel, session.Routing())
+	if err != nil {
+		return Session{}, err
+	}
+
+	session.SessionID = sessionID
+	session.ClientInstanceID = clientInstanceID
+	session.Capabilities = normalizeCapabilities(session.Capabilities)
+	session.TxGroupID = routing.TxGroupID
+	session.RxGroupIDs = routing.RxGroupIDs
+	session.Connected = true
+	if session.CreatedAt.IsZero() {
+		session.CreatedAt = time.Now()
+	}
+	if session.LastActivity.IsZero() {
+		session.LastActivity = time.Now()
+	}
+	key := instanceKey(session.OwnerID, session.DevModel, session.ClientInstanceID)
+
+	r.mutationMu.Lock()
+	r.mu.Lock()
+	if existing := r.sessions[session.SessionID]; existing != nil {
+		matches := existing.session.OwnerID == session.OwnerID && existing.session.DevModel == session.DevModel &&
+			existing.session.SSID == session.SSID && existing.session.ClientInstanceID == session.ClientInstanceID &&
+			existing.session.SessionTag == session.SessionTag && existing.session.Transport == session.Transport
+		if !matches {
+			r.mu.Unlock()
+			r.mutationMu.Unlock()
+			return Session{}, ErrSessionConflict
+		}
+		result := cloneSession(existing.session)
+		r.mu.Unlock()
+		r.mutationMu.Unlock()
+		return result, nil
+	}
+	if existingID := r.instanceSessions[key]; existingID != "" || r.tagSessions[session.SessionTag] != "" {
+		r.mu.Unlock()
+		r.mutationMu.Unlock()
+		return Session{}, ErrSessionConflict
+	}
+	ownerSet := r.ownerSessions[session.OwnerID]
+	if len(ownerSet) > 0 && !r.policy.MultiSession.Allows(session.OwnerID, session.DevModel) {
+		r.multiSessionRejects.Add(1)
+		r.mu.Unlock()
+		r.mutationMu.Unlock()
+		return Session{}, ErrMultiSessionDisabled
+	}
+	if len(ownerSet) >= r.maxOwnerSessions {
+		r.sessionLimitRejects.Add(1)
+		r.mu.Unlock()
+		r.mutationMu.Unlock()
+		return Session{}, fmt.Errorf("%w: active=%d limit=%d", ErrSessionLimit, len(ownerSet), r.maxOwnerSessions)
+	}
+	entry := &registryEntry{session: session, controller: controller}
+	r.sessions[session.SessionID] = entry
+	if ownerSet == nil {
+		ownerSet = make(map[string]struct{})
+		r.ownerSessions[session.OwnerID] = ownerSet
+	}
+	ownerSet[session.SessionID] = struct{}{}
+	r.instanceSessions[key] = session.SessionID
+	r.tagSessions[session.SessionTag] = session.SessionID
+	r.mu.Unlock()
+	r.mutationMu.Unlock()
+	return cloneSession(session), nil
+}
+
 func (r *Registry) normalizeRouting(routing Routing) (Routing, error) {
 	normalized, err := NormalizeRouting(routing, r.maxSubscriptions)
 	if errors.Is(err, ErrSubscriptionLimit) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -73,6 +74,7 @@ type DeviceGrant struct {
 	SessionTag           uint32   `json:"session_tag,omitempty"`
 	GhostProtocolVersion uint16   `json:"ghost_protocol_version,omitempty"`
 	SourceGroupV1        bool     `json:"source_group_v1,omitempty"`
+	RecoveryTicket       string   `json:"recovery_ticket,omitempty"`
 	DisableSend          bool     `json:"disable_send"`
 	DisableRecv          bool     `json:"disable_recv"`
 	ExpiresAtMillis      int64    `json:"expires_at_ms"`
@@ -110,6 +112,7 @@ type DeviceSessionRenewResponse struct {
 	Success         bool   `json:"success"`
 	Error           string `json:"error,omitempty"`
 	ExpiresAtMillis int64  `json:"expires_at_ms,omitempty"`
+	RecoveryTicket  string `json:"recovery_ticket,omitempty"`
 }
 
 type DeviceSessionRevoke struct {
@@ -140,6 +143,7 @@ type DeviceSessionConfirmItem struct {
 	DevModel         byte   `json:"dev_model,omitempty"`
 	GhostSessionID   string `json:"ghost_session_id,omitempty"`
 	ClientInstanceID string `json:"client_instance_id,omitempty"`
+	RecoveryTicket   string `json:"recovery_ticket,omitempty"`
 }
 
 type DeviceSessionConfirmRequest struct {
@@ -159,10 +163,10 @@ func (m DeviceSessionConfirmRequest) Validate() error {
 			return errors.New("invalid device session confirmation identity")
 		}
 		ghost := item.GhostSessionID != ""
-		if item.DeviceID == 0 && (!ghost || item.DevModel == 0) {
+		if item.DeviceID == 0 && (!ghost || item.DevModel == 0 || strings.TrimSpace(item.RecoveryTicket) == "" || len(item.RecoveryTicket) > 1024) {
 			return errors.New("invalid ghost session confirmation identity")
 		}
-		if item.DeviceID > 0 && (ghost || item.ClientInstanceID != "") {
+		if item.DeviceID > 0 && (ghost || item.ClientInstanceID != "" || item.RecoveryTicket != "") {
 			return errors.New("physical session confirmation contains ghost identity")
 		}
 		if _, exists := seen[item.SessionID]; exists {
@@ -216,6 +220,9 @@ func (m DeviceSessionConfirmResponse) Validate() error {
 		if result.Success {
 			if result.Grant == nil || result.Error != "" || result.Grant.SessionID == 0 || result.Grant.SessionEpoch == 0 || result.Grant.ExpiresAtMillis <= 0 {
 				return errors.New("invalid successful device session confirmation")
+			}
+			if result.Grant.GhostSessionID != "" && strings.TrimSpace(result.Grant.RecoveryTicket) == "" {
+				return errors.New("ghost session confirmation is missing its recovery ticket")
 			}
 		} else if result.Grant != nil {
 			return errors.New("failed device session confirmation contains a grant")

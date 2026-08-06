@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"draarl/internal/ghostsession"
+	"draarl/internal/gormdb"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
 )
@@ -41,6 +42,17 @@ type ProxiedDeviceAuthResult struct {
 type ProxiedGhostSessionHooks struct {
 	ApplyRouting func(ghostSessionID string, ownerID int, ssid byte, clientInstanceID string, routing ghostsession.Routing) error
 	Disconnect   func(ghostSessionID, reason string)
+}
+
+type ProxiedGhostRecovery struct {
+	SessionID        string
+	SessionTag       uint32
+	ClientInstanceID string
+	OwnerID          int
+	SSID             byte
+	DevModel         byte
+	EdgeNodeID       string
+	Now              time.Time
 }
 
 type ProxiedDeviceAuthOptions struct {
@@ -205,6 +217,69 @@ func ConfirmProxiedGhostSession(itemID, edgeNodeID string, ownerID int, ssid, de
 		return ghostsession.Session{}, ghostsession.ErrSessionNotFound
 	}
 	return session, nil
+}
+
+// RecoverProxiedGhostSession rebuilds a ticket-authenticated edge Session from
+// current user and routing data. Ticket verification stays in the center
+// command layer so this function never accepts an unauthenticated edge claim.
+func RecoverProxiedGhostSession(recovery ProxiedGhostRecovery, hooks ProxiedGhostSessionHooks) (ghostsession.Session, error) {
+	recovery.SessionID = strings.ToLower(strings.TrimSpace(recovery.SessionID))
+	recovery.EdgeNodeID = strings.TrimSpace(recovery.EdgeNodeID)
+	instanceID, err := ghostsession.NormalizeClientInstanceID(recovery.ClientInstanceID)
+	if err != nil || recovery.SessionID == "" || recovery.SessionTag == 0 || recovery.OwnerID <= 0 ||
+		recovery.EdgeNodeID == "" || protocol.GetGhostSSID(recovery.DevModel) != recovery.SSID {
+		return ghostsession.Session{}, ghostsession.ErrSessionNotFound
+	}
+	user, err := gormdb.NewUserRepository().GetUserByID(recovery.OwnerID)
+	if err != nil || user == nil || user.Status != 1 || user.ApprovalStatus != 1 {
+		return ghostsession.Session{}, ghostsession.ErrSessionNotFound
+	}
+	fallbackGroupID := GetGhostDeviceGroupID(user.ID, recovery.DevModel)
+	routing, err := loadUDPGhostRouting(user, recovery.DevModel, instanceID, fallbackGroupID)
+	if err != nil {
+		return ghostsession.Session{}, err
+	}
+	now := recovery.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	controller := ghostsession.Controller{
+		ApplyRouting: func(next ghostsession.Routing) error {
+			if hooks.ApplyRouting == nil {
+				return nil
+			}
+			return hooks.ApplyRouting(recovery.SessionID, user.ID, recovery.SSID, instanceID, next)
+		},
+		Disconnect: func(reason string) {
+			if hooks.Disconnect != nil {
+				hooks.Disconnect(recovery.SessionID, reason)
+			}
+		},
+	}
+	if existing, exists := ghostsession.Global.Get(recovery.SessionID); exists {
+		if !existing.Connected || existing.Transport != ghostsession.TransportEdge || existing.OwnerID != user.ID ||
+			existing.SSID != recovery.SSID || existing.DevModel != recovery.DevModel || existing.ClientInstanceID != instanceID ||
+			existing.SessionTag != recovery.SessionTag || !strings.HasPrefix(existing.Endpoint, recovery.EdgeNodeID+"/") {
+			return ghostsession.Session{}, ghostsession.ErrSessionConflict
+		}
+	} else {
+		_, err = ghostsession.Global.Restore(ghostsession.Session{
+			SessionID: recovery.SessionID, SessionTag: recovery.SessionTag, ClientInstanceID: instanceID,
+			OwnerID: user.ID, Username: user.Name, CallSign: user.CallSign, Nickname: user.NickName,
+			DevModel: recovery.DevModel, SSID: recovery.SSID, Transport: ghostsession.TransportEdge,
+			Endpoint: recovery.EdgeNodeID + "/recovered", ProtocolVersion: protocol.GhostAuthPayloadVersion,
+			Capabilities: []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
+			CreatedAt:    now, LastActivity: now, Connected: true, TxGroupID: routing.TxGroupID, RxGroupIDs: routing.RxGroupIDs,
+		}, controller)
+		if err != nil {
+			return ghostsession.Session{}, err
+		}
+	}
+	restored, exists := ghostsession.Global.Get(recovery.SessionID)
+	if !exists {
+		return ghostsession.Session{}, ghostsession.ErrSessionNotFound
+	}
+	return restored, nil
 }
 
 // DeviceSourceAddr is a small helper for callers that need a valid source IP.

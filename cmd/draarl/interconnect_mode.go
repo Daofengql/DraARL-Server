@@ -102,6 +102,10 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	if recoveryWindow <= 0 {
 		recoveryWindow = 3 * time.Minute
 	}
+	ticketSigner, err := newGhostRecoveryTicketSigner(cfg.JWT.Secret)
+	if err != nil {
+		return nil, err
+	}
 	var tlsCfg *tls.Config
 	if cfg.Interconnect.TLSCertFile != "" || cfg.Interconnect.TLSKeyFile != "" {
 		if cfg.Interconnect.TLSCertFile == "" || cfg.Interconnect.TLSKeyFile == "" {
@@ -153,39 +157,57 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		return authentication, nil
 	}
 	var runtime *interconnect.CenterRuntime
+	ghostHooks := func() udphub.ProxiedGhostSessionHooks {
+		return udphub.ProxiedGhostSessionHooks{
+			ApplyRouting: func(ghostSessionID string, _ int, _ byte, _ string, routing ghostsession.Routing) error {
+				if runtime == nil || runtime.Gateway == nil {
+					return nil
+				}
+				_, err := runtime.Gateway.UpdateActiveGhostRoute(ghostSessionID, routing.TxGroupID, routing.RxGroupIDs, udphub.GetActiveCommunicationDomainID)
+				return err
+			},
+			Disconnect: func(ghostSessionID, reason string) {
+				if runtime != nil && runtime.Gateway != nil {
+					_, _ = runtime.Gateway.RevokeActiveGhost(ghostSessionID, reason)
+				}
+			},
+		}
+	}
 	authHandler := func(session *interconnect.NodeSession, request interconnect.DeviceAuthRequest) (interconnect.DeviceAuthResponse, error) {
-		allowGhostMulti := session != nil && session.Features&interconnect.NodeFeatureGhostMultiSession != 0
+		ghostFeatures := interconnect.NodeFeatureGhostMultiSession | interconnect.NodeFeatureGhostRecoveryTicket
+		allowGhostMulti := session != nil && session.Features&ghostFeatures == ghostFeatures
 		endpoint := request.SourceIP
 		if session != nil {
 			endpoint = session.NodeID + "/" + request.SourceIP
 		}
 		result := udphub.AuthenticateProxiedDevice(request.SourceIP, request.Packet, udphub.ProxiedDeviceAuthOptions{
 			AllowGhostMultiSession: allowGhostMulti, Endpoint: endpoint,
-			Ghost: udphub.ProxiedGhostSessionHooks{
-				ApplyRouting: func(ghostSessionID string, _ int, _ byte, _ string, routing ghostsession.Routing) error {
-					if runtime == nil || runtime.Gateway == nil {
-						return nil
-					}
-					_, err := runtime.Gateway.UpdateActiveGhostRoute(ghostSessionID, routing.TxGroupID, routing.RxGroupIDs, udphub.GetActiveCommunicationDomainID)
-					return err
-				},
-				Disconnect: func(ghostSessionID, reason string) {
-					if runtime != nil && runtime.Gateway != nil {
-						_, _ = runtime.Gateway.RevokeActiveGhost(ghostSessionID, reason)
-					}
-				},
-			},
+			Ghost: ghostHooks(),
 		})
 		if !result.Success {
 			return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: false, Error: result.Error, ResponsePacket: result.ResponsePacket}, nil
 		}
+		expiresAt := time.Now().Add(2 * time.Minute)
 		grant := &interconnect.DeviceGrant{
 			DeviceID: result.DeviceID, OwnerID: result.OwnerID, Username: result.Username, CallSign: result.CallSign, Nickname: result.Nickname,
 			SSID: result.SSID, DevModel: result.DevModel, DMRID: result.DMRID, GroupID: result.GroupID, DomainID: udphub.GetActiveCommunicationDomainID(result.GroupID),
 			RxGroupIDs: append([]int(nil), result.RxGroupIDs...), RxDomainIDs: udphub.GetActiveCommunicationDomainIDs(result.RxGroupIDs),
 			GhostSessionID: result.GhostSessionID, ClientInstanceID: result.ClientInstanceID, SessionTag: result.SessionTag,
 			GhostProtocolVersion: result.GhostProtocolVersion, SourceGroupV1: result.SourceGroupV1,
-			DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli(),
+			DisableSend: result.DisableSend, DisableRecv: result.DisableRecv, ExpiresAtMillis: expiresAt.UnixMilli(),
+		}
+		if result.GhostSessionID != "" {
+			ghost, exists := ghostsession.Global.Get(result.GhostSessionID)
+			if !exists || session == nil {
+				ghostsession.Global.Remove(result.GhostSessionID)
+				return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Error: "ghost_recovery_ticket_unavailable"}, nil
+			}
+			ticket, ticketErr := ticketSigner.Sign(ghost, session.NodeID, session.SessionID, expiresAt)
+			if ticketErr != nil {
+				ghostsession.Global.Remove(result.GhostSessionID)
+				return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Error: "ghost_recovery_ticket_unavailable"}, ticketErr
+			}
+			grant.RecoveryTicket = ticket
 		}
 		return interconnect.DeviceAuthResponse{RequestID: request.RequestID, Success: true, Grant: grant, ResponsePacket: result.ResponsePacket}, nil
 	}
@@ -213,9 +235,25 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		for _, item := range items {
 			result := interconnect.DeviceSessionConfirmResult{SessionID: item.SessionID, SessionEpoch: item.SessionEpoch}
 			if item.DeviceID == 0 {
-				ghost, ghostErr := udphub.ConfirmProxiedGhostSession(item.GhostSessionID, session.NodeID, item.OwnerID, item.SSID, item.DevModel, item.ClientInstanceID)
+				claims, ticketErr := ticketSigner.Verify(item.RecoveryTicket, now)
+				if ticketErr != nil || session == nil || !claims.Matches(session.NodeID, item) {
+					result.Error = "ghost_recovery_ticket_invalid"
+					results = append(results, result)
+					continue
+				}
+				ghost, ghostErr := udphub.RecoverProxiedGhostSession(udphub.ProxiedGhostRecovery{
+					SessionID: claims.GhostSessionID, SessionTag: claims.SessionTag, ClientInstanceID: claims.ClientInstanceID,
+					OwnerID: claims.OwnerID, SSID: claims.SSID, DevModel: claims.DevModel, EdgeNodeID: session.NodeID, Now: now,
+				}, ghostHooks())
 				if ghostErr != nil {
 					result.Error = "persisted_ghost_session_mismatch"
+					results = append(results, result)
+					continue
+				}
+				expiresAt := now.Add(2 * time.Minute)
+				nextTicket, ticketErr := ticketSigner.Sign(ghost, session.NodeID, session.SessionID, expiresAt)
+				if ticketErr != nil {
+					result.Error = "ghost_recovery_ticket_unavailable"
 					results = append(results, result)
 					continue
 				}
@@ -226,7 +264,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 					RxGroupIDs: append([]int(nil), ghost.RxGroupIDs...), RxDomainIDs: udphub.GetActiveCommunicationDomainIDs(ghost.RxGroupIDs),
 					GhostSessionID: ghost.SessionID, ClientInstanceID: ghost.ClientInstanceID, SessionTag: ghost.SessionTag,
 					GhostProtocolVersion: ghost.ProtocolVersion, SourceGroupV1: ghost.HasCapability("source_group_v1"),
-					DisableSend: ghost.DisableSend, DisableRecv: ghost.DisableRecv, ExpiresAtMillis: now.Add(2 * time.Minute).UnixMilli(),
+					RecoveryTicket: nextTicket, DisableSend: ghost.DisableSend, DisableRecv: ghost.DisableRecv, ExpiresAtMillis: expiresAt.UnixMilli(),
 				}
 				results = append(results, result)
 				continue
@@ -409,7 +447,16 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	}
 	runtime.Gateway.SetGhostRecoveryWindow(recoveryWindow)
 	runtime.Gateway.SetGhostSessionHandlers(
-		func(sessionID string, now time.Time) { ghostsession.Global.UpdateActivity(sessionID, "", now) },
+		func(sessionID, nodeID string, controlSessionID uint64, now, expiresAt time.Time) (string, error) {
+			if !ghostsession.Global.UpdateActivity(sessionID, "", now) {
+				return "", ghostsession.ErrSessionNotFound
+			}
+			ghost, exists := ghostsession.Global.Get(sessionID)
+			if !exists {
+				return "", ghostsession.ErrSessionNotFound
+			}
+			return ticketSigner.Sign(ghost, nodeID, controlSessionID, expiresAt)
+		},
 		func(sessionID, _ string) { ghostsession.Global.Remove(sessionID) },
 	)
 	time.AfterFunc(recoveryWindow, func() {

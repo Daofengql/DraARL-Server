@@ -411,7 +411,8 @@ func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testin
 			RxGroupIDs: []int{groupA, groupB}, RxDomainIDs: []uint64{domainA, domainB},
 			GhostSessionID: fixture.sessionID, ClientInstanceID: fixture.instanceID,
 			SessionTag: fixture.sessionTag, GhostProtocolVersion: protocol.GhostAuthPayloadVersion,
-			SourceGroupV1: true, ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli(),
+			SourceGroupV1: true, RecoveryTicket: "test-recovery-ticket",
+			ExpiresAtMillis: time.Now().Add(2 * time.Minute).UnixMilli(),
 		}
 	}
 	auth := func(_ *NodeSession, req DeviceAuthRequest) (DeviceAuthResponse, error) {

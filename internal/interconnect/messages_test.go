@@ -43,6 +43,22 @@ func TestDeviceSessionConfirmValidationRejectsDuplicateIdentity(t *testing.T) {
 	}
 }
 
+func TestDeviceSessionConfirmRequiresModernGhostRecoveryTicket(t *testing.T) {
+	item := DeviceSessionConfirmItem{
+		SessionID: 10, SessionEpoch: 2, ControlSessionID: 30, OwnerID: 50,
+		SSID: 101, DevModel: 101, GhostSessionID: "ghost-session",
+		ClientInstanceID: "11111111-1111-4111-8111-111111111111",
+	}
+	request := DeviceSessionConfirmRequest{RequestID: 1, Sessions: []DeviceSessionConfirmItem{item}}
+	if err := request.Validate(); err == nil {
+		t.Fatal("ghost confirmation without a recovery ticket was accepted")
+	}
+	request.Sessions[0].RecoveryTicket = "signed-ticket"
+	if err := request.Validate(); err != nil {
+		t.Fatalf("modern ghost confirmation rejected: %v", err)
+	}
+}
+
 func TestDeviceConfigControlValidation(t *testing.T) {
 	base := DeviceConfigControl{SessionID: 11, SessionEpoch: 2, DeviceID: 7}
 	tests := []struct {

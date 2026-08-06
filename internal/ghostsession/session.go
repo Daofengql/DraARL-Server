@@ -22,6 +22,7 @@ var (
 	ErrInvalidClientInstance = errors.New("invalid client instance id")
 	ErrInvalidRouting        = errors.New("invalid ghost routing")
 	ErrSessionNotFound       = errors.New("ghost session not found")
+	ErrSessionConflict       = errors.New("ghost session identity conflict")
 	ErrSessionLimit          = errors.New("ghost session limit reached")
 	ErrSubscriptionLimit     = errors.New("ghost subscription limit reached")
 	ErrRequiredCapabilities  = errors.New("required ghost capabilities are missing")
@@ -47,6 +48,8 @@ func StableErrorCode(err error) string {
 		return "invalid_routing"
 	case errors.Is(err, ErrSessionNotFound):
 		return "session_not_found"
+	case errors.Is(err, ErrSessionConflict):
+		return "session_conflict"
 	default:
 		return "ghost_session_registration_failed"
 	}

@@ -18,6 +18,7 @@ func modernEdgeGhost(ownerID int, username, appSessionID, instanceID string, tag
 		RxGroupIDs: append([]int(nil), rxGroups...), RxDomainIDs: append([]uint64(nil), rxDomains...),
 		GhostSessionID: appSessionID, ClientInstanceID: instanceID, SessionTag: tag,
 		GhostProtocolVersion: protocol.GhostAuthPayloadVersion, SourceGroupV1: true,
+		RecoveryTicket:  "test-recovery-ticket",
 		ExpiresAtMillis: time.Now().Add(time.Minute).UnixMilli(),
 	}
 }

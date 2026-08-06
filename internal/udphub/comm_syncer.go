@@ -83,7 +83,7 @@ func (cs *CommSyncer) SyncToDatabase() {
 	log.Printf("[COMM_SYNCER] 开始同步 %d 条通信记录到数据库", len(batch))
 
 	// 批量写入数据库
-	records := make([]gormdb.CommRecord, 0, len(batch))
+	records := make([]*gormdb.CommRecord, 0, len(batch))
 	for _, item := range batch {
 		status := 2 // 已完成
 		if item.Error != nil {
@@ -100,28 +100,29 @@ func (cs *CommSyncer) SyncToDatabase() {
 			deviceID = uint(item.Session.DeviceID)
 		}
 
-		records = append(records, gormdb.CommRecord{
-			DeviceID:       deviceID,
-			DeviceSSID:     item.Session.DeviceSSID,
-			GroupID:        item.Session.GroupID,
-			UserID:         item.Session.UserID,
-			StartTime:      item.Session.StartTime,
-			EndTime:        endTime,
-			DurationMs:     durationMs,
-			AudioPath:      item.AudioPath,
-			AudioSize:      item.AudioSize,
-			Status:         status,
-			MessageType:    gormdb.CommMessageTypeVoice,
-			SenderUsername: item.Session.Sender.Username,
-			SenderCallSign: item.Session.Sender.CallSign,
-			SenderNickname: item.Session.Sender.Nickname,
-			SenderDevModel: item.Session.Sender.DevModel,
+		records = append(records, &gormdb.CommRecord{
+			DeviceID:         deviceID,
+			DeviceSSID:       item.Session.DeviceSSID,
+			GroupID:          item.Session.GroupID,
+			UserID:           item.Session.UserID,
+			StartTime:        item.Session.StartTime,
+			EndTime:          endTime,
+			DurationMs:       durationMs,
+			AudioPath:        item.AudioPath,
+			AudioSize:        item.AudioSize,
+			Status:           status,
+			MessageType:      gormdb.CommMessageTypeVoice,
+			SenderUsername:   item.Session.Sender.Username,
+			SenderCallSign:   item.Session.Sender.CallSign,
+			SenderNickname:   item.Session.Sender.Nickname,
+			SenderDevModel:   item.Session.Sender.DevModel,
+			DeliveryGroupIDs: append([]uint(nil), item.Session.DeliveryGroupIDs...),
 		})
 	}
 
-	// 批量插入
+	// 批量插入通信记录及其发送时投递快照
 	if cs.db != nil && len(records) > 0 {
-		if err := cs.db.CreateInBatches(records, 100).Error; err != nil {
+		if err := gormdb.CreateCommRecordsWithDeliveryGroups(cs.db, records, 100); err != nil {
 			log.Printf("[COMM_SYNCER] 批量写入数据库失败: %v", err)
 		} else {
 			log.Printf("[COMM_SYNCER] 成功写入 %d 条通信记录", len(records))

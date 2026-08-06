@@ -93,7 +93,7 @@ func (tb *TextMessageBuffer) runFlusher() {
 func (tb *TextMessageBuffer) Add(record *gormdb.CommRecord) {
 	if tb == nil || !tb.running {
 		// 缓冲区未启动，直接写入数据库（降级处理）
-		if err := gormdb.Get().Create(record).Error; err != nil {
+		if err := gormdb.CreateCommRecordsWithDeliveryGroups(gormdb.Get(), []*gormdb.CommRecord{record}, 1); err != nil {
 			log.Printf("[TEXT_BUFFER] 直接写入文本消息失败: %v", err)
 		}
 		return
@@ -128,7 +128,7 @@ func (tb *TextMessageBuffer) flush() {
 	tb.mu.Unlock()
 
 	// 批量插入（每批 100 条）
-	if err := gormdb.Get().CreateInBatches(batch, 100).Error; err != nil {
+	if err := gormdb.CreateCommRecordsWithDeliveryGroups(gormdb.Get(), batch, 100); err != nil {
 		log.Printf("[TEXT_BUFFER] 批量写入文本消息失败: %v, 数量: %d", err, len(batch))
 		// 失败时不重试，丢弃消息（可根据需求改为重试逻辑）
 	} else {
@@ -174,7 +174,7 @@ func BufferTextMessage(record *gormdb.CommRecord) {
 		globalTextBuffer.Add(record)
 	} else {
 		// 缓冲区未初始化，直接写入
-		if err := gormdb.Get().Create(record).Error; err != nil {
+		if err := gormdb.CreateCommRecordsWithDeliveryGroups(gormdb.Get(), []*gormdb.CommRecord{record}, 1); err != nil {
 			log.Printf("[TEXT_BUFFER] 直接写入文本消息失败: %v", err)
 		}
 	}

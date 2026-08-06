@@ -49,32 +49,12 @@ func NewMessageRepository() *MessageRepository {
 	return &MessageRepository{db: Get()}
 }
 
-func (r *MessageRepository) VisibleGroupIDs(requestedGroupID int) ([]int, error) {
-	groupIDs := []int{requestedGroupID}
-	var related []int
-	err := r.db.Table("group_links gl1").
-		Distinct("gl2.target_group_id").
-		Joins("INNER JOIN public_groups link_group ON gl1.link_group_id = link_group.id AND link_group.status = 1 AND link_group.is_virtual = 1").
-		Joins("INNER JOIN group_links gl2 ON gl1.link_group_id = gl2.link_group_id").
-		Joins("INNER JOIN public_groups target_group ON gl2.target_group_id = target_group.id AND target_group.status = 1 AND target_group.is_virtual = 0").
-		Where("gl1.target_group_id = ? AND gl2.target_group_id != ?", requestedGroupID, requestedGroupID).
-		Pluck("gl2.target_group_id", &related).Error
-	if err != nil {
-		return nil, err
-	}
-	return append(groupIDs, related...), nil
-}
-
 func (r *MessageRepository) baseQuery(groupIDs []int) *gorm.DB {
-	return r.messageQuery("comm_records cr", groupIDs)
+	return r.messageQuery("comm_record_delivery_groups dg", groupIDs)
 }
 
-func (r *MessageRepository) listQuery(groupID int, messageType *uint8) *gorm.DB {
-	indexName := "idx_comm_records_group_status_start_id"
-	if messageType != nil {
-		indexName = "idx_comm_records_group_status_type_start_id"
-	}
-	return r.messageQuery("comm_records cr FORCE INDEX ("+indexName+")", []int{groupID})
+func (r *MessageRepository) listQuery(groupID int) *gorm.DB {
+	return r.messageQuery("comm_record_delivery_groups dg FORCE INDEX (idx_delivery_group_record)", []int{groupID})
 }
 
 func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB {
@@ -88,10 +68,11 @@ func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB 
 			u.name AS current_username, u.callsign AS current_callsign, u.nickname AS current_nickname,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END AS current_dev_model
 		`).
+		Joins("INNER JOIN comm_records cr ON cr.id = dg.record_id").
 		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
 		Joins("LEFT JOIN users u ON u.id = COALESCE(cr.user_id, d.owner_id)").
 		Joins("LEFT JOIN public_groups g ON cr.group_id = g.id").
-		Where("cr.status = ? AND cr.group_id IN ?", 2, groupIDs)
+		Where("cr.status = ? AND dg.group_id IN ?", 2, groupIDs)
 }
 
 func (r *MessageRepository) List(query MessageQuery) ([]MessageRecord, bool, error) {
@@ -111,7 +92,7 @@ func (r *MessageRepository) List(query MessageQuery) ([]MessageRecord, bool, err
 	pages := make([][]MessageRecord, 0, pageCapacity)
 	for _, groupID := range groupIDs {
 		newPageQuery := func() *gorm.DB {
-			db := r.listQuery(groupID, query.Type)
+			db := r.listQuery(groupID)
 			if query.Type != nil {
 				db = db.Where("cr.message_type = ?", *query.Type)
 			}
@@ -154,8 +135,18 @@ func uniquePositiveGroupIDs(groupIDs []int) []int {
 
 func mergeMessagePages(pages [][]MessageRecord, limit int) ([]MessageRecord, bool, error) {
 	records := make([]MessageRecord, 0, len(pages)*min(limit+1, 101))
+	seen := make(map[uint]struct{}, len(records))
 	for _, page := range pages {
-		records = append(records, page...)
+		for _, record := range page {
+			if record.ID == 0 {
+				continue
+			}
+			if _, exists := seen[record.ID]; exists {
+				continue
+			}
+			seen[record.ID] = struct{}{}
+			records = append(records, record)
+		}
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].StartTime.Equal(records[j].StartTime) {

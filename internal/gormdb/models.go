@@ -339,24 +339,25 @@ func (GroupMember) TableName() string {
 
 // CommRecord 通信记录（精简版，名称通过联表查询获取）
 type CommRecord struct {
-	ID             uint      `gorm:"primaryKey;autoIncrement;index:idx_comm_records_group_status_start_id,priority:4;index:idx_comm_records_group_status_type_start_id,priority:5" json:"id"`
-	DeviceID       uint      `gorm:"index;not null;column:device_id" json:"device_id"`                                                                                                                                                                                         // 发送设备ID（0=幽灵设备，>0=普通设备）
-	DeviceSSID     uint8     `gorm:"column:device_ssid" json:"device_ssid"`                                                                                                                                                                                                    // 设备 SSID（冗余，便于查询）
-	GroupID        *uint     `gorm:"index;index:idx_group_start,priority:1;index:idx_comm_records_group_status_start_id,priority:1;index:idx_comm_records_group_status_type_start_id,priority:1;column:group_id" json:"group_id"`                                              // 性能优化：复合索引用于按群组查询
-	UserID         *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`                                                                                                                                                                      // 性能优化：复合索引用于按用户查询
-	StartTime      time.Time `gorm:"index;index:idx_group_start,priority:2;index:idx_user_start,priority:2;index:idx_comm_records_group_status_start_id,priority:3;index:idx_comm_records_group_status_type_start_id,priority:4;not null;column:start_time" json:"start_time"` // 性能优化：复合索引
-	EndTime        time.Time `gorm:"column:end_time" json:"end_time"`                                                                                                                                                                                                          // 通信结束时间
-	DurationMs     int       `gorm:"column:duration_ms" json:"duration_ms"`                                                                                                                                                                                                    // 通信时长（毫秒）
-	AudioPath      string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`                                                                                                                                                                                    // MinIO 音频文件路径
-	AudioSize      int64     `gorm:"column:audio_size" json:"audio_size"`                                                                                                                                                                                                      // 音频文件大小（字节）
-	Status         int       `gorm:"default:0;index;index:idx_comm_records_group_status_start_id,priority:2;index:idx_comm_records_group_status_type_start_id,priority:2;column:status" json:"status"`                                                                         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
-	MessageType    uint8     `gorm:"type:tinyint unsigned;not null;default:0;index:idx_comm_records_group_status_type_start_id,priority:3;column:message_type" json:"message_type"`                                                                                            // 0=语音, 1=文本
-	TextContent    string    `gorm:"type:text;column:text_content" json:"text_content"`
-	SenderUsername string    `gorm:"type:varchar(255);column:sender_username" json:"sender_username"`
-	SenderCallSign string    `gorm:"type:varchar(32);column:sender_callsign" json:"sender_callsign"`
-	SenderNickname string    `gorm:"type:varchar(255);column:sender_nickname" json:"sender_nickname"`
-	SenderDevModel int       `gorm:"type:int;column:sender_dev_model" json:"sender_dev_model"`
-	CreatedAt      time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	ID               uint      `gorm:"primaryKey;autoIncrement;index:idx_comm_records_group_status_start_id,priority:4;index:idx_comm_records_group_status_type_start_id,priority:5" json:"id"`
+	DeviceID         uint      `gorm:"index;not null;column:device_id" json:"device_id"`                                                                                                                                                                                         // 发送设备ID（0=幽灵设备，>0=普通设备）
+	DeviceSSID       uint8     `gorm:"column:device_ssid" json:"device_ssid"`                                                                                                                                                                                                    // 设备 SSID（冗余，便于查询）
+	GroupID          *uint     `gorm:"index;index:idx_group_start,priority:1;index:idx_comm_records_group_status_start_id,priority:1;index:idx_comm_records_group_status_type_start_id,priority:1;column:group_id" json:"group_id"`                                              // 性能优化：复合索引用于按群组查询
+	UserID           *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`                                                                                                                                                                      // 性能优化：复合索引用于按用户查询
+	StartTime        time.Time `gorm:"index;index:idx_group_start,priority:2;index:idx_user_start,priority:2;index:idx_comm_records_group_status_start_id,priority:3;index:idx_comm_records_group_status_type_start_id,priority:4;not null;column:start_time" json:"start_time"` // 性能优化：复合索引
+	EndTime          time.Time `gorm:"column:end_time" json:"end_time"`                                                                                                                                                                                                          // 通信结束时间
+	DurationMs       int       `gorm:"column:duration_ms" json:"duration_ms"`                                                                                                                                                                                                    // 通信时长（毫秒）
+	AudioPath        string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`                                                                                                                                                                                    // MinIO 音频文件路径
+	AudioSize        int64     `gorm:"column:audio_size" json:"audio_size"`                                                                                                                                                                                                      // 音频文件大小（字节）
+	Status           int       `gorm:"default:0;index;index:idx_comm_records_group_status_start_id,priority:2;index:idx_comm_records_group_status_type_start_id,priority:2;column:status" json:"status"`                                                                         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
+	MessageType      uint8     `gorm:"type:tinyint unsigned;not null;default:0;index:idx_comm_records_group_status_type_start_id,priority:3;column:message_type" json:"message_type"`                                                                                            // 0=语音, 1=文本
+	TextContent      string    `gorm:"type:text;column:text_content" json:"text_content"`
+	SenderUsername   string    `gorm:"type:varchar(255);column:sender_username" json:"sender_username"`
+	SenderCallSign   string    `gorm:"type:varchar(32);column:sender_callsign" json:"sender_callsign"`
+	SenderNickname   string    `gorm:"type:varchar(255);column:sender_nickname" json:"sender_nickname"`
+	SenderDevModel   int       `gorm:"type:int;column:sender_dev_model" json:"sender_dev_model"`
+	CreatedAt        time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	DeliveryGroupIDs []uint    `gorm:"-" json:"-"`
 }
 
 const (
@@ -367,6 +368,21 @@ const (
 // TableName 指定表名
 func (CommRecord) TableName() string {
 	return "comm_records"
+}
+
+// CommRecordDeliveryGroup stores the immutable groups that received a
+// communication record when it was sent. It preserves message visibility after
+// a virtual interconnect topology changes.
+type CommRecordDeliveryGroup struct {
+	RecordID uint `gorm:"primaryKey;column:record_id;index:idx_delivery_group_record,priority:2" json:"record_id"`
+	GroupID  uint `gorm:"primaryKey;column:group_id;index:idx_delivery_group_record,priority:1" json:"group_id"`
+
+	Record *CommRecord `gorm:"foreignKey:RecordID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Group  *Group      `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (CommRecordDeliveryGroup) TableName() string {
+	return "comm_record_delivery_groups"
 }
 
 // Asset 资源管理模型（虚拟文件系统）
@@ -738,6 +754,7 @@ func AutoMigrate() error {
 		&SiteConfig{},
 		&GroupMember{},
 		&CommRecord{},
+		&CommRecordDeliveryGroup{},
 		&Asset{},
 		&UserDevicePreference{},
 		&GhostClientPreference{},
@@ -756,6 +773,9 @@ func AutoMigrate() error {
 		return err
 	}
 	if err := backfillCommRecordMessages(db); err != nil {
+		return err
+	}
+	if err := BackfillCommRecordDeliveryGroups(db); err != nil {
 		return err
 	}
 	if err := backfillServerPublicAccessIDs(db); err != nil {

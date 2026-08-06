@@ -28,7 +28,7 @@ func TestCommRecorderCanEnableAfterDisabledStart(t *testing.T) {
 	recorder.Start()
 	t.Cleanup(recorder.Stop)
 
-	recorder.RecordPacket(PhysicalCommRecordSourceKey(1), 1, 1, nil, nil, CommSenderSnapshot{}, []byte{1, 2, 3})
+	recorder.RecordPacket(PhysicalCommRecordSourceKey(1), 1, 1, nil, nil, CommSenderSnapshot{}, nil, []byte{1, 2, 3})
 	if got := recorder.buffer.GetActiveSessionCount(); got != 0 {
 		t.Fatalf("disabled recorder created %d session(s)", got)
 	}
@@ -36,7 +36,7 @@ func TestCommRecorderCanEnableAfterDisabledStart(t *testing.T) {
 	enabled := *disabled
 	enabled.Enabled = true
 	recorder.UpdateConfig(&enabled)
-	recorder.RecordPacket(PhysicalCommRecordSourceKey(1), 1, 1, nil, nil, CommSenderSnapshot{}, []byte{1, 2, 3})
+	recorder.RecordPacket(PhysicalCommRecordSourceKey(1), 1, 1, nil, nil, CommSenderSnapshot{}, nil, []byte{1, 2, 3})
 	if got := recorder.buffer.GetActiveSessionCount(); got != 1 {
 		t.Fatalf("recorder did not activate after config reload: sessions=%d", got)
 	}
@@ -54,8 +54,8 @@ func TestCommBufferSeparatesGhostRecordingSources(t *testing.T) {
 	sourceA := GhostCommRecordSourceKey("udp", int(userID), 101, "10.0.0.1:20001")
 	sourceB := GhostCommRecordSourceKey("udp", int(userID), 101, "10.0.0.2:20002")
 
-	buffer.AppendPacket(sourceA, 0, 101, &groupID, &userID, CommSenderSnapshot{}, []byte{1, 2, 3})
-	buffer.AppendPacket(sourceB, 0, 101, &groupID, &userID, CommSenderSnapshot{}, []byte{4, 5, 6})
+	buffer.AppendPacket(sourceA, 0, 101, &groupID, &userID, CommSenderSnapshot{}, []uint{groupID}, []byte{1, 2, 3})
+	buffer.AppendPacket(sourceB, 0, 101, &groupID, &userID, CommSenderSnapshot{}, []uint{groupID}, []byte{4, 5, 6})
 
 	buffer.mu.RLock()
 	defer buffer.mu.RUnlock()

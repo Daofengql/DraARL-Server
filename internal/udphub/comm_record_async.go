@@ -9,13 +9,14 @@ import (
 const commRecordQueueSize = 4096
 
 type commRecordJob struct {
-	sourceKey  string
-	deviceID   int
-	deviceSSID uint8
-	groupID    *uint
-	userID     *uint
-	sender     CommSenderSnapshot
-	audioData  []byte
+	sourceKey        string
+	deviceID         int
+	deviceSSID       uint8
+	groupID          *uint
+	userID           *uint
+	sender           CommSenderSnapshot
+	deliveryGroupIDs []uint
+	audioData        []byte
 }
 
 var (
@@ -47,7 +48,7 @@ func commRecordWorker() {
 				select {
 				case job := <-commRecordQueue:
 					if globalCommRecorder != nil {
-						globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.audioData)
+						globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.deliveryGroupIDs, job.audioData)
 					}
 				default:
 					return
@@ -58,13 +59,13 @@ func commRecordWorker() {
 				return
 			}
 			if globalCommRecorder != nil {
-				globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.audioData)
+				globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.deliveryGroupIDs, job.audioData)
 			}
 		}
 	}
 }
 
-func enqueueCommRecord(sourceKey string, deviceID int, deviceSSID uint8, groupID *uint, userID *uint, sender CommSenderSnapshot, audioData []byte) {
+func enqueueCommRecord(sourceKey string, deviceID int, deviceSSID uint8, groupID *uint, userID *uint, sender CommSenderSnapshot, deliveryGroupIDs []uint, audioData []byte) {
 	if globalCommRecorder == nil || !globalCommRecorder.canRecord() {
 		return
 	}
@@ -85,15 +86,17 @@ func enqueueCommRecord(sourceKey string, deviceID int, deviceSSID uint8, groupID
 		u := *userID
 		uidPtr = &u
 	}
+	deliveryGroups := append([]uint(nil), deliveryGroupIDs...)
 
 	job := commRecordJob{
-		sourceKey:  normalizeCommRecordSourceKey(sourceKey, deviceID),
-		deviceID:   deviceID,
-		deviceSSID: deviceSSID,
-		groupID:    gidPtr,
-		userID:     uidPtr,
-		sender:     sender,
-		audioData:  payload,
+		sourceKey:        normalizeCommRecordSourceKey(sourceKey, deviceID),
+		deviceID:         deviceID,
+		deviceSSID:       deviceSSID,
+		groupID:          gidPtr,
+		userID:           uidPtr,
+		sender:           sender,
+		deliveryGroupIDs: deliveryGroups,
+		audioData:        payload,
 	}
 
 	select {

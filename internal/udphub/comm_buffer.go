@@ -27,21 +27,22 @@ func (s CommSenderSnapshot) normalized() CommSenderSnapshot {
 	return s
 }
 
-// AudioSession 单次通信会话（精简版，只保留 ID）
+// AudioSession 单次通信会话及其发送时投递范围快照。
 type AudioSession struct {
-	SessionID      string // 文件安全的会话唯一标识
-	SourceKey      string // 运行时录音来源，不持久化
-	DeviceID       int    // 持久化设备ID（0表示幽灵设备）
-	DeviceSSID     uint8  // 设备 SSID
-	GroupID        *uint  // 群组ID
-	UserID         *uint  // 用户ID
-	Sender         CommSenderSnapshot
-	StartTime      time.Time     // 开始时间
-	LastPacketTime time.Time     // 最后一个包的时间（用于判断会话结束）
-	Buffer         *bytes.Buffer // PCM 音频数据缓冲
-	PacketCount    int           // 收到的包数量
-	TotalBytes     int           // 总字节数
-	mu             sync.Mutex
+	SessionID        string // 文件安全的会话唯一标识
+	SourceKey        string // 运行时录音来源，不持久化
+	DeviceID         int    // 持久化设备ID（0表示幽灵设备）
+	DeviceSSID       uint8  // 设备 SSID
+	GroupID          *uint  // 群组ID
+	UserID           *uint  // 用户ID
+	DeliveryGroupIDs []uint // 发送时实际投递到的群组
+	Sender           CommSenderSnapshot
+	StartTime        time.Time     // 开始时间
+	LastPacketTime   time.Time     // 最后一个包的时间（用于判断会话结束）
+	Buffer           *bytes.Buffer // PCM 音频数据缓冲
+	PacketCount      int           // 收到的包数量
+	TotalBytes       int           // 总字节数
+	mu               sync.Mutex
 }
 
 const (
@@ -129,7 +130,7 @@ func parseMergedFrames(data []byte) [][]byte {
 	return frames
 }
 
-// AppendPacket 追加音频数据包（精简版，只记录 ID）
+// AppendPacket 追加音频数据包。
 // pcmData 可能是合并帧格式（包含多个 Opus 子帧），需要先解析再存储
 // sourceKey: 运行时来源会话键；deviceID: 持久化设备ID，幽灵设备为0
 func (cb *CommBuffer) AppendPacket(
@@ -139,6 +140,7 @@ func (cb *CommBuffer) AppendPacket(
 	groupID *uint,
 	userID *uint,
 	sender CommSenderSnapshot,
+	deliveryGroupIDs []uint,
 	pcmData []byte,
 ) {
 	if cb == nil || !cb.config.Enabled {
@@ -154,7 +156,8 @@ func (cb *CommBuffer) AppendPacket(
 	now := time.Now()
 
 	// 判断是否是新会话。60ms/120ms/240ms 大包模式下，200ms 容错太低，会把一次发言切成很多段。
-	if !exists || now.Sub(session.LastPacketTime) > commSessionGapThreshold {
+	if !exists || now.Sub(session.LastPacketTime) > commSessionGapThreshold ||
+		!sameDeliveryGroupSnapshot(session.DeliveryGroupIDs, deliveryGroupIDs) {
 		// 关闭旧会话
 		if exists {
 			cb.finalizeSession(session)
@@ -162,16 +165,17 @@ func (cb *CommBuffer) AppendPacket(
 		}
 		// 创建新会话
 		session = &AudioSession{
-			SessionID:      generateAudioSessionID(sessionKey, now),
-			SourceKey:      sessionKey,
-			DeviceID:       deviceID,
-			DeviceSSID:     deviceSSID,
-			GroupID:        groupID,
-			UserID:         userID,
-			Sender:         sender,
-			StartTime:      now,
-			LastPacketTime: now,
-			Buffer:         bytes.NewBuffer(nil),
+			SessionID:        generateAudioSessionID(sessionKey, now),
+			SourceKey:        sessionKey,
+			DeviceID:         deviceID,
+			DeviceSSID:       deviceSSID,
+			GroupID:          groupID,
+			UserID:           userID,
+			DeliveryGroupIDs: append([]uint(nil), deliveryGroupIDs...),
+			Sender:           sender,
+			StartTime:        now,
+			LastPacketTime:   now,
+			Buffer:           bytes.NewBuffer(nil),
 		}
 		cb.sessions[sessionKey] = session
 	}
@@ -220,21 +224,34 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 	if cb.onSessionEnd != nil {
 		// 复制会话数据，避免后续修改影响
 		sessionCopy := &AudioSession{
-			SessionID:      session.SessionID,
-			SourceKey:      session.SourceKey,
-			DeviceID:       session.DeviceID,
-			DeviceSSID:     session.DeviceSSID,
-			GroupID:        session.GroupID,
-			UserID:         session.UserID,
-			Sender:         session.Sender,
-			StartTime:      session.StartTime,
-			LastPacketTime: session.LastPacketTime,
-			Buffer:         bytes.NewBuffer(session.Buffer.Bytes()),
-			PacketCount:    session.PacketCount,
-			TotalBytes:     session.TotalBytes,
+			SessionID:        session.SessionID,
+			SourceKey:        session.SourceKey,
+			DeviceID:         session.DeviceID,
+			DeviceSSID:       session.DeviceSSID,
+			GroupID:          session.GroupID,
+			UserID:           session.UserID,
+			DeliveryGroupIDs: append([]uint(nil), session.DeliveryGroupIDs...),
+			Sender:           session.Sender,
+			StartTime:        session.StartTime,
+			LastPacketTime:   session.LastPacketTime,
+			Buffer:           bytes.NewBuffer(session.Buffer.Bytes()),
+			PacketCount:      session.PacketCount,
+			TotalBytes:       session.TotalBytes,
 		}
 		go cb.onSessionEnd(sessionCopy)
 	}
+}
+
+func sameDeliveryGroupSnapshot(left, right []uint) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // CheckTimeout 检查超时会话（由定时器调用）

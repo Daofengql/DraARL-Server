@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"draarl/internal/groupaccess"
 	"draarl/internal/interfaces"
 	"draarl/internal/protocol"
 	"draarl/internal/udphub"
@@ -46,7 +47,14 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 	seenSessions := make(map[string]struct{})
 	for _, groupID := range groupIDs {
 		for _, device := range a.manager.GetDevicesByGroup(groupID) {
-			if device == nil || device.IsDisabledRecv() {
+			if device == nil {
+				continue
+			}
+			rxGroupIDs := device.GetRxGroupIDs()
+			if len(rxGroupIDs) == 0 {
+				rxGroupIDs = []int{device.GetGroupID()}
+			}
+			if !groupaccess.CanReceiveRoute(device.IsDisabledRecv(), rxGroupIDs, groupID) {
 				continue
 			}
 			if udphub.CenterIdentityOwnedByRemote(device.UserID, device.SSID) {
@@ -197,11 +205,11 @@ func handleHeartbeat(device *WSDevice, packet *WSPacket) {
 
 // handleVoice 处理语音包
 func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
-	// 1. 权限检查：如果设备当前被服务器禁发，则直接丢弃语音包
-	if device.IsDisabledSend() {
+	txGroupID := device.GetGroupID()
+	// 1. 发送授权只依赖已投影到内存的 Session 路由。
+	if !groupaccess.CanTransmitRoute(device.IsDisabledSend(), txGroupID, txGroupID) {
 		return
 	}
-	txGroupID := device.GetGroupID()
 	if !udphub.AuthorizeCenterLocalWS(device, txGroupID) {
 		return
 	}
@@ -245,11 +253,10 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 
 // handleTextMessage 处理文本消息
 func handleTextMessage(device *WSDevice, packet *WSPacket) {
-	// 1. 权限检查
-	if device.IsDisabledSend() {
+	txGroupID := device.GetGroupID()
+	if !groupaccess.CanTransmitRoute(device.IsDisabledSend(), txGroupID, txGroupID) {
 		return
 	}
-	txGroupID := device.GetGroupID()
 	if !udphub.AuthorizeCenterLocalWS(device, txGroupID) {
 		return
 	}

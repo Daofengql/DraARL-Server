@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"draarl/internal/groupaccess"
 	"draarl/internal/models"
 )
 
@@ -111,12 +112,16 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 	deduplicated := int64(0)
 
 	addDev := func(dev *models.Device, expectedGroupID int) {
-		if dev == nil || !dev.ISOnline || dev.UDPAddr == nil || dev.DisableRecv {
+		if dev == nil || !dev.ISOnline || dev.UDPAddr == nil {
 			return
 		}
-		// Physical devices are single-channel. UDP ghost sessions are already
-		// selected through their multi-group receive index.
-		if dev.GhostSessionID == "" && dev.GroupID != expectedGroupID {
+		// Physical devices use a one-group receive route; ghost sessions use
+		// their projected multi-group receive route.
+		rxGroupIDs := dev.GhostRxGroupIDs
+		if dev.GhostSessionID == "" {
+			rxGroupIDs = []int{dev.GroupID}
+		}
+		if !groupaccess.CanReceiveRoute(dev.DisableRecv, rxGroupIDs, expectedGroupID) {
 			return
 		}
 		addr, ok := udpAddrPort(dev.UDPAddr)

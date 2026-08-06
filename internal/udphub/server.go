@@ -16,6 +16,7 @@ import (
 	"draarl/internal/config"
 	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
+	"draarl/internal/groupaccess"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
 	"draarl/pkg/cache"
@@ -859,14 +860,14 @@ func buildUDPSpeaker(dev *models.Device, packet *protocol.DraARLv1Packet) halfDu
 	return halfDuplexSpeaker{key: key, labelBase: labelBase, ssid: ssid}
 }
 
-func canSendFromDevice(dev *models.Device) bool {
-	return dev != nil && !dev.DisableSend
+func canSendFromDevice(dev *models.Device, groupID int) bool {
+	return dev != nil && groupaccess.CanTransmitRoute(dev.DisableSend, dev.GroupID, groupID)
 }
 
 // handleDraARLVoice 处理 DraARLv1 语音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
-	if !canSendFromDevice(dev) {
+	if gp == nil || !canSendFromDevice(dev, gp.ID) {
 		return
 	}
 
@@ -1090,7 +1091,7 @@ func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
 
 // handleDraARLTextMessage 处理 DraARLv1 文本消息
 func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
-	if !canSendFromDevice(dev) {
+	if gp == nil || !canSendFromDevice(dev, gp.ID) {
 		return
 	}
 	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool), gp)

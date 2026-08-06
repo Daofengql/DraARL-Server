@@ -164,11 +164,18 @@ func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routin
 	if len(groups) != len(groupIDs) {
 		return ghostsession.Routing{}, errRoutingGroupNotFound
 	}
-	viewable, err := groupaccess.ViewableGroupIDs(gormdb.Get(), user, groupIDs)
+	receivable, err := groupaccess.ReceivableGroupIDs(gormdb.Get(), user, normalized.RxGroupIDs)
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}
-	if len(viewable) != len(groupIDs) {
+	if len(receivable) != len(normalized.RxGroupIDs) {
+		return ghostsession.Routing{}, errRoutingGroupForbidden
+	}
+	transmittable, err := groupaccess.TransmittableGroupIDs(gormdb.Get(), user, []int{normalized.TxGroupID})
+	if err != nil {
+		return ghostsession.Routing{}, err
+	}
+	if _, allowed := transmittable[normalized.TxGroupID]; !allowed {
 		return ghostsession.Routing{}, errRoutingGroupForbidden
 	}
 	return normalized, nil

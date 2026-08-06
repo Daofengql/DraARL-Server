@@ -12,8 +12,6 @@ import {
   Select,
   Slider,
   Stack,
-  Tab,
-  Tabs,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -28,11 +26,9 @@ interface GroupSelectorProps {
   groups: RadioGroup[]
   txGroupId: number
   rxGroupIds: number[]
-  activeGroupId: number
   channelVolumes: Record<string, number>
   onTxChange: (groupId: number) => void
   onRxChange: (groupIds: number[]) => void
-  onActiveGroupChange: (groupId: number) => void
   onChannelVolumeChange: (groupId: number, volume: number) => void
   disabled?: boolean
   updating?: boolean
@@ -44,11 +40,9 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
   groups,
   txGroupId,
   rxGroupIds,
-  activeGroupId,
   channelVolumes,
   onTxChange,
   onRxChange,
-  onActiveGroupChange,
   onChannelVolumeChange,
   disabled = false,
   updating = false,
@@ -69,19 +63,22 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
 
   return (
     <Box sx={{ minWidth: 0, flex: 1 }}>
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={1}
-        sx={{ alignItems: { xs: 'stretch', sm: 'center' } }}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 1,
+          alignItems: 'center',
+        }}
       >
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0, flex: { sm: '0 1 250px' } }}>
-          <SendIcon color="action" fontSize="small" />
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
+          <SendIcon color="action" fontSize="small" sx={{ display: { xs: 'none', sm: 'block' } }} />
           <FormControl size="small" sx={{ minWidth: 0, flex: 1 }}>
-            <InputLabel id="tx-group-label">发送频道</InputLabel>
+            <InputLabel id="tx-group-label">发送/日志</InputLabel>
             <Select
               labelId="tx-group-label"
               value={txGroupId || ''}
-              label="发送频道"
+              label="发送/日志"
               disabled={disabled || updating}
               onChange={event => onTxChange(Number(event.target.value))}
             >
@@ -92,8 +89,8 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
           </FormControl>
         </Stack>
 
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', minWidth: 0, flex: 1 }}>
-          <HeadphonesIcon color="action" fontSize="small" />
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center', minWidth: 0 }}>
+          <HeadphonesIcon color="action" fontSize="small" sx={{ display: { xs: 'none', sm: 'block' } }} />
           <FormControl size="small" sx={{ minWidth: 0, flex: 1 }}>
             <InputLabel id="rx-groups-label">收听频道</InputLabel>
             <Select<number[]>
@@ -136,21 +133,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
             </span>
           </Tooltip>
         </Stack>
-      </Stack>
-
-      <Tabs
-        value={activeGroupId}
-        onChange={(_, value: number) => onActiveGroupChange(value)}
-        variant="scrollable"
-        scrollButtons="auto"
-        allowScrollButtonsMobile
-        sx={{ minHeight: 34, mt: 0.5, '& .MuiTab-root': { minHeight: 34, py: 0, minWidth: 72 } }}
-      >
-        <Tab value={0} label="实时" />
-        {receiveGroups.map(group => (
-          <Tab key={group.id} value={group.id} label={group.name} />
-        ))}
-      </Tabs>
+      </Box>
 
       <Popover
         open={Boolean(mixerAnchor)}

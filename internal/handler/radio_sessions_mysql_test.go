@@ -166,7 +166,8 @@ func TestRadioSessionRoutingMySQL(t *testing.T) {
 	if _, err := ghostsession.Global.Register(ghostsession.Registration{
 		ClientInstanceID: secondInstanceID, OwnerID: owner.ID, DevModel: protocol.DraARLDevModelBrowser,
 		SSID: protocol.SSIDGhostWeb, Transport: ghostsession.TransportWebSocket,
-		Routing: ghostsession.Routing{TxGroupID: publicA.ID, RxGroupIDs: []int{publicA.ID}},
+		Capabilities: []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
+		Routing:      ghostsession.Routing{TxGroupID: publicA.ID, RxGroupIDs: []int{publicA.ID}},
 	}, ghostsession.Controller{}); err != nil {
 		t.Fatal(err)
 	}

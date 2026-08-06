@@ -83,7 +83,7 @@ func centerSourceFromDevice(dev *models.Device) CenterLocalSource {
 		DomainID:   GetActiveCommunicationDomainID(dev.GroupID),
 		RxGroupIDs: append([]int(nil), dev.GhostRxGroupIDs...), RxDomainIDs: GetActiveCommunicationDomainIDs(dev.GhostRxGroupIDs),
 		GhostSessionID: dev.GhostSessionID, ClientInstanceID: dev.ClientInstanceID, SessionTag: dev.GhostSessionTag,
-		GhostProtocolVersion: dev.GhostProtocolVersion, SourceGroupV1: dev.GhostProtocolVersion > 0 && ghostCapability(dev.GhostCapabilities, "source_group_v1"),
+		GhostProtocolVersion: dev.GhostProtocolVersion, SourceGroupV1: dev.GhostSessionID != "",
 		DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv,
 	}
 }
@@ -178,12 +178,8 @@ func RevokeCenterLocalSession(deviceID, ownerID int, ssid byte, sessionID, sessi
 	for _, ghost := range GlobalUDPGhostManager.GetAll() {
 		if ghost != nil && ghost.OwnerID == ownerID && ghost.SSID == ssid && ghost.InterconnectSessionID == sessionID && ghost.InterconnectSessionEpoch == sessionEpoch {
 			ghost.InterconnectSessionID, ghost.InterconnectSessionEpoch = 0, 0
-			if ghost.GhostSessionID != "" {
-				GlobalUDPGhostManager.RemoveSession(ghost.GhostSessionID)
-				ghostsession.Global.Remove(ghost.GhostSessionID)
-			} else {
-				GlobalUDPGhostManager.Remove(ghost.Username, ghost.SSID)
-			}
+			GlobalUDPGhostManager.RemoveSession(ghost.GhostSessionID)
+			ghostsession.Global.Remove(ghost.GhostSessionID)
 			revoked = true
 		}
 	}
@@ -202,7 +198,7 @@ func centerSourceFromWS(source interfaces.WSDeviceInterface, groupID int) Center
 		GroupID: groupID, DomainID: GetActiveCommunicationDomainID(groupID),
 		RxGroupIDs: source.GetRxGroupIDs(), RxDomainIDs: GetActiveCommunicationDomainIDs(source.GetRxGroupIDs()),
 		GhostSessionID: source.GetSessionID(), ClientInstanceID: source.GetClientInstanceID(),
-		GhostProtocolVersion: source.GetProtocolVersion(), SourceGroupV1: source.HasCapability("source_group_v1"),
+		GhostProtocolVersion: source.GetProtocolVersion(), SourceGroupV1: true,
 		DisableSend: source.IsDisabledSend(), DisableRecv: source.IsDisabledRecv(),
 	}
 }
@@ -341,14 +337,14 @@ func DeliverInterconnectPacket(domainID uint64, data []byte) bool {
 	if groupID == 0 {
 		return false
 	}
-	legacyData := data
+	physicalData := data
 	if cleared, ok := protocol.WithReservedUint32(data, 0); ok {
-		legacyData = cleared
+		physicalData = cleared
 	}
-	writeUDPDomain(legacyData, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
+	writeUDPDomain(physicalData, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		GlobalMessageRouter.wsManager.BroadcastToGroups(
-			activeDomainGroupIDs(groupID), legacyData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
+			activeDomainGroupIDs(groupID), physicalData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
 		)
 	}
 	return true

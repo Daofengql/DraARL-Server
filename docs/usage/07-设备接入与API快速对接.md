@@ -160,8 +160,8 @@ WebSocket 入口：
 - 需要先通过 `/api/auth/ws-token/sync` 同步 Cookie。
 - 不支持 URL query 传 token。
 - 消息体为 DraARLv1 二进制帧。
-- 现代客户端通过 query 或 `X-DraARL-*` 请求头提交随机 UUID `client_instance_id`、`protocol_version=1` 和能力列表。
-- 同账号现代幽灵客户端可多端在线；缺少实例 ID 的 legacy 客户端仍占用 Web 单实例槽位。
+- 客户端通过 query 或 `X-DraARL-*` 请求头提交随机 UUID `client_instance_id`、`protocol_version=1` 和能力列表。
+- 同账号幽灵客户端可多端在线；缺少实例 ID 或必需能力的客户端握手失败。
 
 示例：
 

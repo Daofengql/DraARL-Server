@@ -30,7 +30,6 @@ import { radioSessionService } from '../../services'
 import type { AdminRadioSession, GhostTransport } from '../../services'
 import { getDevModelName } from '../../utils/deviceModel'
 
-type ModeFilter = 'all' | 'modern' | 'legacy'
 type TransportFilter = 'all' | GhostTransport
 
 const transportNames: Record<GhostTransport, string> = {
@@ -58,8 +57,7 @@ export function RadioSessionsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [keyword, setKeyword] = useState('')
-  const [modeFilter, setModeFilter] = useState<ModeFilter>('all')
-  const [transportFilter, setTransportFilter] = useState<TransportFilter>('all')
+	const [transportFilter, setTransportFilter] = useState<TransportFilter>('all')
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
   const [autoRefresh, setAutoRefresh] = useState(10)
@@ -83,11 +81,9 @@ export function RadioSessionsPage() {
   }, [loadSessions])
 
   const filteredSessions = useMemo(() => {
-    const normalized = keyword.trim().toLowerCase()
-    return sessions.filter((session) => {
-      if (modeFilter === 'modern' && session.legacy) return false
-      if (modeFilter === 'legacy' && !session.legacy) return false
-      if (transportFilter !== 'all' && session.transport !== transportFilter) return false
+		const normalized = keyword.trim().toLowerCase()
+		return sessions.filter((session) => {
+			if (transportFilter !== 'all' && session.transport !== transportFilter) return false
       if (!normalized) return true
       return [
         session.username,
@@ -97,7 +93,7 @@ export function RadioSessionsPage() {
         String(session.owner_id),
       ].some((value) => value.toLowerCase().includes(normalized))
     })
-  }, [keyword, modeFilter, sessions, transportFilter])
+	}, [keyword, sessions, transportFilter])
 
   const visibleSessions = useMemo(
     () => filteredSessions.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage),
@@ -125,10 +121,7 @@ export function RadioSessionsPage() {
     }
   }
 
-  const modernCount = sessions.filter((session) => !session.legacy).length
-  const legacyCount = sessions.length - modernCount
-
-  return (
+	return (
     <Box>
       <PageHeader
         title="幽灵会话"
@@ -144,11 +137,9 @@ export function RadioSessionsPage() {
 
       {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
-        <Typography variant="body2">在线 {sessions.length}</Typography>
-        <Typography variant="body2" color="text.secondary">现代 {modernCount}</Typography>
-        <Typography variant="body2" color="text.secondary">兼容 {legacyCount}</Typography>
-      </Stack>
+		<Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
+			<Typography variant="body2">在线 {sessions.length}</Typography>
+		</Stack>
 
       <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
         <Stack
@@ -163,19 +154,7 @@ export function RadioSessionsPage() {
             placeholder="账号、呼号或会话 ID"
             sx={{ flex: 1, minWidth: { md: 280 } }}
           />
-          <FormControl size="small" sx={{ minWidth: 130 }}>
-            <InputLabel>会话类型</InputLabel>
-            <Select
-              value={modeFilter}
-              label="会话类型"
-              onChange={(event) => { setModeFilter(event.target.value as ModeFilter); setPage(0) }}
-            >
-              <MenuItem value="all">全部</MenuItem>
-              <MenuItem value="modern">现代</MenuItem>
-              <MenuItem value="legacy">兼容</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 140 }}>
+			<FormControl size="small" sx={{ minWidth: 140 }}>
             <InputLabel>连接方式</InputLabel>
             <Select
               value={transportFilter}
@@ -218,12 +197,9 @@ export function RadioSessionsPage() {
                       {session.client_instance_hint} · {shortSessionID(session.session_id)}
                     </Typography>
                   </TableCell>
-                  <TableCell>
-                    <Stack direction="row" spacing={0.75} alignItems="center">
-                      <Chip size="small" label={transportNames[session.transport] || session.transport} variant="outlined" />
-                      <Chip size="small" label={session.legacy ? '兼容' : '现代'} color={session.legacy ? 'default' : 'success'} />
-                    </Stack>
-                  </TableCell>
+					<TableCell>
+						<Chip size="small" label={transportNames[session.transport] || session.transport} variant="outlined" />
+					</TableCell>
                   <TableCell>
                     <Stack spacing={0.75}>
                       <Chip size="small" color="primary" variant="outlined" label={`发送 ${session.tx_group_id}`} sx={{ width: 'fit-content' }} />

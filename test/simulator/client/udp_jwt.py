@@ -6,6 +6,9 @@ import socket
 import struct
 import time
 import threading
+import json
+import uuid
+import base64
 from typing import Callable, Optional
 
 try:
@@ -42,12 +45,19 @@ class UDPJWTClient(BaseClient):
         jwt_token: str,
         dev_model: int = DevModel.WINDOWS,
         log_callback: Optional[Callable[[str], None]] = None,
-        enable_audio: bool = True
+        enable_audio: bool = True,
+        client_instance_id: Optional[str] = None,
     ):
         super().__init__(log_callback)
 
         self.server_addr = (server_ip, server_port)
         self.jwt_token = jwt_token
+        self.client_instance_id = client_instance_id or str(uuid.uuid4())
+        self.session_id = ""
+        self.session_tag = 0
+        self.tx_group_id = 0
+        self.rx_group_ids = []
+        self.username = self._username_from_token(jwt_token) or ""
         self.dev_model = dev_model
         self.enable_audio = enable_audio and PYAUDIO_AVAILABLE and OPUS_AVAILABLE
 
@@ -155,15 +165,20 @@ class UDPJWTClient(BaseClient):
         if not self.sock:
             return
 
-        # JWT 认证包：Type=1，DATA 区域放 Token
+        payload = {
+            "version": 1,
+            "token": self.jwt_token,
+            "client_instance_id": self.client_instance_id,
+            "capabilities": ["multi_receive_v1", "source_group_v1"],
+        }
         packet = encode_packet(
-            username="",  # 用户名从 Token 解析
+            username=self.username,
             device_password="",
             ssid=0,  # SSID 由服务器根据 DevModel 分配
             packet_type=PacketType.JWT_AUTH,
             dev_model=self.dev_model,
             dmrid=0,
-            data=self.jwt_token.encode('utf-8')
+            data=json.dumps(payload, separators=(",", ":")).encode('utf-8')
         )
 
         self.sock.sendto(packet, self.server_addr)
@@ -181,7 +196,18 @@ class UDPJWTClient(BaseClient):
         status = packet.data[0] if packet.data else JWTAuthStatus.INVALID_TOKEN
 
         if status == JWTAuthStatus.SUCCESS:
+            try:
+                success = json.loads(packet.data[1:].decode('utf-8'))
+                self.session_id = success["session_id"]
+                self.session_tag = int(success["session_tag"])
+                self.tx_group_id = int(success["tx_group_id"])
+                self.rx_group_ids = [int(group_id) for group_id in success["rx_group_ids"]]
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+                self.log(f"[认证失败] 服务端 Session 响应无效: {error}")
+                self._set_state(ClientState.ERROR)
+                return True
             self.callsign = packet.callsign
+            self.username = packet.username or self.username
             self.ssid = packet.ssid
             self.authenticated = True
             self._set_state(ClientState.CONNECTED)
@@ -194,7 +220,6 @@ class UDPJWTClient(BaseClient):
                 JWTAuthStatus.USER_DISABLED: "用户已禁用",
                 JWTAuthStatus.USER_NOT_APPROVED: "用户未审核",
                 JWTAuthStatus.INVALID_DEV_MODEL: "无效的设备型号",
-                JWTAuthStatus.GHOST_DEVICE_CONFLICT: "同平台已有在线幽灵设备",
             }
             error_msg = error_msgs.get(status, "未知错误")
             extra_msg = packet.data[1:].decode('utf-8', errors='replace') if len(packet.data) > 1 else ""
@@ -225,13 +250,14 @@ class UDPJWTClient(BaseClient):
         gps_data = struct.pack('>ddd', self.gps_lat, self.gps_lon, self.gps_alt)
 
         packet = encode_packet(
-            username="",  # JWT 认证后服务器已知道用户
+            username=self.username,
             device_password="",
             ssid=self.ssid,
             packet_type=PacketType.HEARTBEAT,
             dev_model=self.dev_model,
             dmrid=0,
-            data=gps_data
+            data=gps_data,
+            reserved=self.session_tag,
         )
 
         self.sock.sendto(packet, self.server_addr)
@@ -350,13 +376,14 @@ class UDPJWTClient(BaseClient):
         merged = build_merged_opus_frames(frames)
 
         packet = encode_packet(
-            username="",
+            username=self.username,
             device_password="",
             ssid=self.ssid,
             packet_type=PacketType.OPUS_16K,
             dev_model=self.dev_model,
             dmrid=0,
-            data=merged
+            data=merged,
+            reserved=self.session_tag,
         )
 
         self.sock.sendto(packet, self.server_addr)
@@ -372,17 +399,28 @@ class UDPJWTClient(BaseClient):
             return
 
         packet = encode_packet(
-            username="",
+            username=self.username,
             device_password="",
             ssid=self.ssid,
             packet_type=PacketType.TEXT_MESSAGE,
             dev_model=self.dev_model,
             dmrid=0,
-            data=text.encode('utf-8')
+            data=text.encode('utf-8'),
+            reserved=self.session_tag,
         )
 
         self.sock.sendto(packet, self.server_addr)
         self.log(f"[文字发出] {text}")
+
+    @staticmethod
+    def _username_from_token(token: str) -> str:
+        try:
+            payload = token.split('.')[1]
+            payload += '=' * (-len(payload) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload).decode('utf-8'))
+            return str(claims.get('username') or '')
+        except (IndexError, ValueError, TypeError, json.JSONDecodeError):
+            return ''
 
     def set_gps(self, lat: float, lon: float, alt: float = 0.0):
         """设置 GPS 位置"""

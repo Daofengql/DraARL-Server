@@ -93,14 +93,14 @@ func TestEdgeMultiReceiveFanoutUsesExactSessionAndTargetCapability(t *testing.T)
 		t.Cleanup(func() { _ = conn.Close() })
 		return conn
 	}
-	sourceConn, siblingConn, legacyConn, otherConn := listen(), listen(), listen(), listen()
+	sourceConn, siblingConn, physicalConn, otherPhysicalConn := listen(), listen(), listen(), listen()
 	now := time.Now()
 	gateway := &EdgeGateway{
 		endpoint: endpoint, sessions: map[uint64]*edgeDeviceSession{
 			1: {Grant: *modernEdgeGhost(7, "alice", "app-a", "11111111-1111-4111-8111-111111111111", 101, 1001, 7, []int{1001}, []uint64{7}), Addr: sourceConn.LocalAddr().(*net.UDPAddr), LastSeen: now},
 			2: {Grant: *modernEdgeGhost(7, "alice", "app-b", "22222222-2222-4222-8222-222222222222", 202, 1001, 7, []int{1001, 1002}, []uint64{7, 8}), Addr: siblingConn.LocalAddr().(*net.UDPAddr), LastSeen: now},
-			3: {Grant: DeviceGrant{SessionID: 3, SessionEpoch: 1, DeviceID: 30, Username: "legacy", SSID: 3, GroupID: 1001, DomainID: 7}, Addr: legacyConn.LocalAddr().(*net.UDPAddr), LastSeen: now},
-			4: {Grant: DeviceGrant{SessionID: 4, SessionEpoch: 1, DeviceID: 40, Username: "other", SSID: 4, GroupID: 1002, DomainID: 8}, Addr: otherConn.LocalAddr().(*net.UDPAddr), LastSeen: now},
+			3: {Grant: DeviceGrant{SessionID: 3, SessionEpoch: 1, DeviceID: 30, Username: "physical", SSID: 3, GroupID: 1001, DomainID: 7}, Addr: physicalConn.LocalAddr().(*net.UDPAddr), LastSeen: now},
+			4: {Grant: DeviceGrant{SessionID: 4, SessionEpoch: 1, DeviceID: 40, Username: "other-physical", SSID: 4, GroupID: 1002, DomainID: 8}, Addr: otherPhysicalConn.LocalAddr().(*net.UDPAddr), LastSeen: now},
 		},
 		byIdentity: make(map[string]uint64), bySessionTag: make(map[uint32]uint64),
 	}
@@ -123,15 +123,15 @@ func TestEdgeMultiReceiveFanoutUsesExactSessionAndTargetCapability(t *testing.T)
 	if got := protocol.ReservedUint32(read(siblingConn)[protocol.DraARLv1ReservedOffset:]); got != 1001 {
 		t.Fatalf("capable sibling source group=%d want=1001", got)
 	}
-	if got := protocol.ReservedUint32(read(legacyConn)[protocol.DraARLv1ReservedOffset:]); got != 0 {
-		t.Fatalf("legacy edge receiver Reserved=%d want=0", got)
+	if got := protocol.ReservedUint32(read(physicalConn)[protocol.DraARLv1ReservedOffset:]); got != 0 {
+		t.Fatalf("physical edge receiver Reserved=%d want=0", got)
 	}
 	_ = sourceConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, _, readErr := sourceConn.ReadFromUDP(make([]byte, 128)); readErr == nil {
 		t.Fatal("source session received its own edge fan-out")
 	}
-	_ = otherConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	if _, _, readErr := otherConn.ReadFromUDP(make([]byte, 128)); readErr == nil {
+	_ = otherPhysicalConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, _, readErr := otherPhysicalConn.ReadFromUDP(make([]byte, 128)); readErr == nil {
 		t.Fatal("unsubscribed domain receiver received the frame")
 	}
 
@@ -139,8 +139,8 @@ func TestEdgeMultiReceiveFanoutUsesExactSessionAndTargetCapability(t *testing.T)
 	if got := protocol.ReservedUint32(read(siblingConn)[protocol.DraARLv1ReservedOffset:]); got != 1002 {
 		t.Fatalf("second receive domain source group=%d want=1002", got)
 	}
-	if got := protocol.ReservedUint32(read(otherConn)[protocol.DraARLv1ReservedOffset:]); got != 0 {
-		t.Fatalf("legacy second-domain receiver Reserved=%d want=0", got)
+	if got := protocol.ReservedUint32(read(otherPhysicalConn)[protocol.DraARLv1ReservedOffset:]); got != 0 {
+		t.Fatalf("physical second-domain receiver Reserved=%d want=0", got)
 	}
 }
 

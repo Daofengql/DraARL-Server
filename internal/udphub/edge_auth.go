@@ -101,19 +101,20 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte, optionList ...Proxi
 }
 
 func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, options ProxiedDeviceAuthOptions) ProxiedDeviceAuthResult {
-	request, legacy, err := protocol.DecodeGhostAuthRequest(packet.DATA)
+	request, err := protocol.DecodeGhostAuthRequest(packet.DATA)
 	if err != nil {
-		return ProxiedDeviceAuthResult{Error: "invalid_authentication_payload"}
+		return ProxiedDeviceAuthResult{Error: "ghost_protocol_upgrade_required"}
 	}
-	if !legacy {
-		if !options.AllowGhostMultiSession {
-			return ProxiedDeviceAuthResult{Error: "node_ghost_multi_session_unsupported"}
-		}
-		instanceID, normalizedLegacy, normalizeErr := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
-		if normalizeErr != nil || normalizedLegacy {
-			return ProxiedDeviceAuthResult{Error: "invalid_client_instance_id"}
-		}
-		request.ClientInstanceID = instanceID
+	if !options.AllowGhostMultiSession {
+		return ProxiedDeviceAuthResult{Error: "node_ghost_multi_session_unsupported"}
+	}
+	instanceID, normalizeErr := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
+	if normalizeErr != nil {
+		return ProxiedDeviceAuthResult{Error: "invalid_client_instance_id"}
+	}
+	request.ClientInstanceID = instanceID
+	if err := ghostsession.ValidateCapabilities(request.Capabilities); err != nil {
+		return ProxiedDeviceAuthResult{Error: "ghost_capabilities_required"}
 	}
 	result := AuthenticateJWT(request.Token)
 	if !result.Success || result.User == nil {
@@ -124,7 +125,7 @@ func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, op
 	}
 	ssid := protocol.GetGhostSSID(packet.DevModel)
 	fallbackGroupID := GetGhostDeviceGroupID(result.User.ID, packet.DevModel)
-	routing, err := loadUDPGhostRouting(result.User, packet.DevModel, request.ClientInstanceID, legacy, request.Capabilities, fallbackGroupID)
+	routing, err := loadUDPGhostRouting(result.User, packet.DevModel, request.ClientInstanceID, fallbackGroupID)
 	if err != nil {
 		return ProxiedDeviceAuthResult{Error: "client_preference_unavailable"}
 	}
@@ -148,8 +149,8 @@ func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, op
 		},
 	}
 	session, err := ghostsession.Global.Register(ghostsession.Registration{
-		ClientInstanceID: request.ClientInstanceID, ReplaceExisting: false,
-		OwnerID: result.User.ID, Username: result.User.Name, CallSign: result.CallSign, Nickname: result.User.NickName,
+		ClientInstanceID: request.ClientInstanceID,
+		OwnerID:          result.User.ID, Username: result.User.Name, CallSign: result.CallSign, Nickname: result.User.NickName,
 		DevModel: packet.DevModel, SSID: ssid, Transport: ghostsession.TransportEdge,
 		Endpoint: endpoint, ProtocolVersion: request.Version, Capabilities: request.Capabilities,
 		Routing: routing, Now: now,
@@ -157,48 +158,39 @@ func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, op
 	if err != nil {
 		code := "ghost_session_registration_failed"
 		switch {
-		case errors.Is(err, ghostsession.ErrInstanceAlreadyOnline):
-			code = "ghost_device_already_online"
 		case errors.Is(err, ghostsession.ErrSessionLimit):
 			code = fmt.Sprintf("ghost_session_limit active=%d limit=%d", len(ghostsession.Global.ListOwner(result.User.ID)), ghostsession.MaxSessionsPerOwner())
 		}
 		return ProxiedDeviceAuthResult{Error: code}
 	}
 	registeredSessionID = session.SessionID
-	if !legacy {
-		refreshed, refreshErr := ghostsession.Global.RefreshRouting(session.SessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
-			return loadUDPGhostRouting(result.User, packet.DevModel, session.ClientInstanceID, false, session.Capabilities, fallbackGroupID)
-		})
-		if refreshErr != nil {
-			ghostsession.Global.Remove(session.SessionID)
-			return ProxiedDeviceAuthResult{Error: "client_preference_unavailable"}
-		}
-		session = refreshed
+	refreshed, refreshErr := ghostsession.Global.RefreshRouting(session.SessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
+		return loadUDPGhostRouting(result.User, packet.DevModel, session.ClientInstanceID, fallbackGroupID)
+	})
+	if refreshErr != nil {
+		ghostsession.Global.Remove(session.SessionID)
+		return ProxiedDeviceAuthResult{Error: "client_preference_unavailable"}
 	}
+	session = refreshed
 
-	responseData := []byte{protocol.JWTAuthSuccess}
-	if !legacy {
-		responseData, err = protocol.EncodeGhostAuthSuccessData(protocol.GhostAuthSuccess{
-			Version: protocol.GhostAuthPayloadVersion, SessionID: session.SessionID, SessionTag: session.SessionTag,
-			ClientInstanceID: session.ClientInstanceID, TxGroupID: session.TxGroupID, RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
-		})
-		if err != nil {
-			ghostsession.Global.Remove(session.SessionID)
-			return ProxiedDeviceAuthResult{Error: "authentication_response_failed"}
-		}
+	responseData, err := protocol.EncodeGhostAuthSuccessData(protocol.GhostAuthSuccess{
+		Version: protocol.GhostAuthPayloadVersion, SessionID: session.SessionID, SessionTag: session.SessionTag,
+		ClientInstanceID: session.ClientInstanceID, TxGroupID: session.TxGroupID, RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
+	})
+	if err != nil {
+		ghostsession.Global.Remove(session.SessionID)
+		return ProxiedDeviceAuthResult{Error: "authentication_response_failed"}
 	}
-	response := encodeJWTAuthResponse(packet, result.CallSign, responseData)
-	if !legacy {
-		if tagged, ok := protocol.WithReservedUint32(response, session.SessionTag); ok {
-			response = tagged
-		}
+	response := encodeJWTAuthResponse(packet, session.Username, result.CallSign, responseData)
+	if tagged, ok := protocol.WithReservedUint32(response, session.SessionTag); ok {
+		response = tagged
 	}
 	return ProxiedDeviceAuthResult{
 		Success: true, ResponsePacket: response, OwnerID: session.OwnerID, Username: session.Username,
 		CallSign: session.CallSign, Nickname: session.Nickname, SSID: session.SSID, DevModel: session.DevModel,
 		GroupID: session.TxGroupID, RxGroupIDs: append([]int(nil), session.RxGroupIDs...), GhostSessionID: session.SessionID,
 		ClientInstanceID: session.ClientInstanceID, SessionTag: session.SessionTag, GhostProtocolVersion: session.ProtocolVersion,
-		SourceGroupV1: session.HasCapability("source_group_v1"), DisableSend: session.DisableSend, DisableRecv: session.DisableRecv,
+		SourceGroupV1: true, DisableSend: session.DisableSend, DisableRecv: session.DisableRecv,
 	}
 }
 

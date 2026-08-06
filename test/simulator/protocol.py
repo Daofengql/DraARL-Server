@@ -40,7 +40,6 @@ class JWTAuthStatus:
     USER_DISABLED = 3        # 用户已禁用
     USER_NOT_APPROVED = 4    # 用户未审核
     INVALID_DEV_MODEL = 5    # 无效的设备型号
-    GHOST_DEVICE_CONFLICT = 6  # 同平台已有在线幽灵设备
 
 
 class HeartbeatStatus:
@@ -167,7 +166,8 @@ def encode_packet(
     dev_model: int = 0,
     dmrid: int = 0,
     callsign: str = "",
-    data: bytes = b''
+    data: bytes = b'',
+    reserved: int = 0
 ) -> bytes:
     """便捷函数：编码协议包"""
     packet = DraARLv1Packet()
@@ -178,6 +178,7 @@ def encode_packet(
     packet.dev_model = dev_model
     packet.dmrid = dmrid
     packet.callsign = callsign
+    packet.reserved = struct.pack('>I', reserved & 0xFFFFFFFF)
     packet.data = data
     return packet.encode()
 

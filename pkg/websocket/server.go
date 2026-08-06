@@ -95,10 +95,6 @@ func init() {
 
 // HandleWebSocket WebSocket 处理器
 func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// ==========================================
-	// 【互斥检查】在 WebSocket 升级之前进行
-	// 防止同一用户开多个页面导致多个幽灵设备连接
-	// ==========================================
 	preAuth := ParsePreAuthData(r)
 
 	// 必须提供 JWT Token
@@ -113,17 +109,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Legacy clients retain one Web slot. Clients with a stable installation
-	// UUID are isolated by their server session and may coexist.
-	if authResult.LegacySession && GlobalManager.IsLegacyGhostDeviceOnline(authResult.UserID) {
-		log.Printf("[WS] Ghost device conflict: user-%d already has an online connection", authResult.UserID)
-		http.Error(w, "ghost_device_conflict", http.StatusConflict)
-		return
-	}
-
-	// ==========================================
-	// 互斥检查通过，进行 WebSocket 升级
-	// ==========================================
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] Upgrade failed: %v", err)
@@ -202,7 +187,7 @@ func handleAuthenticatedConnection(device *WSDevice) {
 }
 
 func sendAuthenticationSuccess(device *WSDevice) {
-	if device == nil || device.LegacySession {
+	if device == nil {
 		return
 	}
 	payload, err := json.Marshal(map[string]interface{}{
@@ -219,7 +204,7 @@ func sendAuthenticationSuccess(device *WSDevice) {
 }
 
 func sendRoutingUpdated(device *WSDevice) {
-	if device == nil || device.LegacySession || !device.isOnline() {
+	if device == nil || !device.isOnline() {
 		return
 	}
 	payload, err := json.Marshal(map[string]interface{}{

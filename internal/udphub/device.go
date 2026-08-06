@@ -591,6 +591,8 @@ func GetOnlineGhostCountByGroup(groupID int) int {
 		key := device.GhostSessionID
 		if key == "" {
 			key = fmt.Sprintf("udp:%s:%d:%p", device.Username, device.SSID, device)
+		} else {
+			key = "udp:" + key
 		}
 		seen[key] = struct{}{}
 	}
@@ -602,6 +604,8 @@ func GetOnlineGhostCountByGroup(groupID int) int {
 			key := device.GetSessionID()
 			if key == "" {
 				key = "ws:" + device.GetIdentifier()
+			} else {
+				key = "ws:" + key
 			}
 			seen[key] = struct{}{}
 		}

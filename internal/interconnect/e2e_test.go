@@ -420,9 +420,9 @@ func TestModernGhostMultiSessionAcrossEdgesRoutingMigrationAndRecovery(t *testin
 			return DeviceAuthResponse{RequestID: req.RequestID, Error: "invalid_packet"}, nil
 		}
 		defer protocol.ReleaseDraARLv1RoutingPacket(packet)
-		request, legacy, decodeErr := protocol.DecodeGhostAuthRequest(packet.DATA)
+		request, decodeErr := protocol.DecodeGhostAuthRequest(packet.DATA)
 		fixture, ok := fixtures[request.Token]
-		if decodeErr != nil || legacy || !ok || request.ClientInstanceID != fixture.instanceID ||
+		if decodeErr != nil || !ok || request.ClientInstanceID != fixture.instanceID ||
 			!slices.Contains(request.Capabilities, "multi_receive_v1") ||
 			!slices.Contains(request.Capabilities, "source_group_v1") {
 			return DeviceAuthResponse{RequestID: req.RequestID, Error: "invalid_ghost_auth"}, nil

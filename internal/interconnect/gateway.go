@@ -1007,7 +1007,7 @@ func deviceGrantIdentity(grant *DeviceGrant) string {
 	if grant == nil {
 		return ""
 	}
-	if isModernGhostGrant(grant) {
+	if isSessionGhostGrant(grant) {
 		return fmt.Sprintf("owner:%d:ssid:%d:instance:%s", grant.OwnerID, grant.SSID, strings.ToLower(strings.TrimSpace(grant.ClientInstanceID)))
 	}
 	if grant.OwnerID > 0 {
@@ -1022,7 +1022,7 @@ func deviceGrantIdentity(grant *DeviceGrant) string {
 	return ""
 }
 
-func isModernGhostGrant(grant *DeviceGrant) bool {
+func isSessionGhostGrant(grant *DeviceGrant) bool {
 	return grant != nil && grant.OwnerID > 0 && grant.GhostProtocolVersion > 0 && grant.GhostSessionID != "" &&
 		grant.ClientInstanceID != "" && grant.SessionTag != 0 && protocol.IsGhostSSID(grant.SSID) && protocol.IsGhostDevModel(grant.DevModel)
 }
@@ -2158,7 +2158,7 @@ func (g *EdgeGateway) identity(packet *protocol.DraARLv1Packet) string {
 }
 
 func edgeSessionIdentity(grant DeviceGrant) string {
-	if isModernGhostGrant(&grant) {
+	if isSessionGhostGrant(&grant) {
 		return deviceGrantIdentity(&grant)
 	}
 	return fmt.Sprintf("%s-%d", grant.Username, grant.SSID)
@@ -2171,12 +2171,12 @@ func edgeAuthIdentity(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr) (s
 	if packet.Type != protocol.DraARLTypeJWTAuth || !protocol.IsGhostDevModel(packet.DevModel) {
 		return fmt.Sprintf("%s-%d", packet.Username, packet.SSID), false, nil
 	}
-	request, legacy, err := protocol.DecodeGhostAuthRequest(packet.DATA)
-	if err != nil || legacy {
+	request, err := protocol.DecodeGhostAuthRequest(packet.DATA)
+	if err != nil {
 		return fmt.Sprintf("%s-%d", packet.Username, packet.SSID), false, err
 	}
-	instanceID, normalizedLegacy, err := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
-	if err != nil || normalizedLegacy {
+	instanceID, err := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
+	if err != nil {
 		return "", true, ghostsession.ErrInvalidClientInstance
 	}
 	endpoint := ""
@@ -2194,13 +2194,19 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	defer protocol.ReleaseDraARLv1RoutingPacket(packet)
 	key := g.identity(packet)
 	tag := protocol.ReservedUint32(packet.Reserved)
+	if protocol.IsGhostSSID(packet.SSID) && tag == 0 {
+		if packet.Type == protocol.DraARLTypeJWTAuth {
+			g.requestAuth(data, packet, remoteAddr, realAddr)
+		}
+		return
+	}
 	g.mu.RLock()
 	sessionID, exists := g.byIdentity[key]
 	if tag != 0 && protocol.IsGhostSSID(packet.SSID) {
 		sessionID, exists = g.bySessionTag[tag]
 	}
 	session := g.sessions[sessionID]
-	if tag == 0 && (!exists || session == nil) && packet.Username == "" {
+	if tag == 0 && (!exists || session == nil) && packet.Username == "" && !protocol.IsGhostSSID(packet.SSID) {
 		for id, candidate := range g.sessions {
 			if candidate.Grant.SSID == packet.SSID && udpAddrEqual(candidate.RealAddr, realAddr) {
 				sessionID, session, exists = id, candidate, true
@@ -2209,7 +2215,7 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 		}
 	}
 	realAddrMatches := exists && session != nil && udpAddrEqual(session.RealAddr, realAddr)
-	identityMatches := exists && session != nil && (!isModernGhostGrant(&session.Grant) ||
+	identityMatches := exists && session != nil && (!isSessionGhostGrant(&session.Grant) ||
 		(session.Grant.SessionTag == tag && session.Grant.Username == packet.Username && session.Grant.SSID == packet.SSID && session.Grant.DevModel == packet.DevModel))
 	g.mu.RUnlock()
 	if !exists || session == nil || !identityMatches {
@@ -2238,7 +2244,7 @@ func (g *EdgeGateway) handleDevicePacket(data []byte, remoteAddr, realAddr *net.
 	g.mu.Lock()
 	current := g.sessions[sessionID]
 	if current == nil || !udpAddrEqual(current.RealAddr, realAddr) ||
-		(isModernGhostGrant(&current.Grant) && (current.Grant.SessionTag != tag || current.Grant.Username != packet.Username || current.Grant.SSID != packet.SSID || current.Grant.DevModel != packet.DevModel)) {
+		(isSessionGhostGrant(&current.Grant) && (current.Grant.SessionTag != tag || current.Grant.Username != packet.Username || current.Grant.SSID != packet.SSID || current.Grant.DevModel != packet.DevModel)) {
 		g.mu.Unlock()
 		if packet.Type == protocol.DraARLTypeHeartbeat || packet.Type == protocol.DraARLTypeJWTAuth {
 			g.requestAuth(data, packet, remoteAddr, realAddr)
@@ -3060,11 +3066,19 @@ func (g *EdgeGateway) requestAuth(data []byte, packet *protocol.DraARLv1Packet, 
 	if link == nil {
 		return
 	}
-	identity, modernGhost, identityErr := edgeAuthIdentity(packet, realAddr)
-	if identityErr != nil || identity == "" {
+	identity, sessionGhost, identityErr := edgeAuthIdentity(packet, realAddr)
+	if identityErr != nil {
+		if packet != nil && packet.Type == protocol.DraARLTypeJWTAuth && protocol.IsGhostDevModel(packet.DevModel) {
+			ssid := protocol.GetGhostSSID(packet.DevModel)
+			response := protocol.EncodeDraARLv1(packet.Username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, "", append([]byte{protocol.JWTAuthInvalidToken}, []byte("ghost_protocol_upgrade_required")...))
+			g.writeDevice(response, remoteAddr)
+		}
 		return
 	}
-	if modernGhost && (link.client == nil || link.client.Session == nil || link.client.Session.Features&NodeFeatureGhostMultiSession == 0) {
+	if identity == "" {
+		return
+	}
+	if sessionGhost && (link.client == nil || link.client.Session == nil || link.client.Session.Features&NodeFeatureGhostMultiSession == 0) {
 		ssid := protocol.GetGhostSSID(packet.DevModel)
 		response := protocol.EncodeDraARLv1(packet.Username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, "", append([]byte{protocol.JWTAuthInvalidToken}, []byte("node_ghost_multi_session_unsupported")...))
 		g.writeDevice(response, remoteAddr)
@@ -3343,7 +3357,7 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	if grant.SessionID == 0 {
 		return
 	}
-	if grant.GhostProtocolVersion > 0 && !isModernGhostGrant(&grant) {
+	if grant.GhostSessionID != "" && !isSessionGhostGrant(&grant) {
 		return
 	}
 	controlSessionID := uint64(0)
@@ -3498,16 +3512,16 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, s
 	} else if len(data) >= protocol.DraARLv1HeaderSize {
 		sourceGroupID = int(protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]))
 	}
-	legacyData := data
+	physicalData := data
 	if len(data) >= protocol.DraARLv1HeaderSize && protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]) != 0 {
 		if cleared, ok := protocol.WithReservedUint32(data, 0); ok {
-			legacyData = cleared
+			physicalData = cleared
 		}
 	}
 	if g.endpoint != nil {
 		onComplete := func(result udphub.EdgeFanoutResult) {
 			if result.Sent > 0 {
-				g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(legacyData)))
+				g.metrics.AddOutBulk(uint64(result.Sent), uint64(result.Sent)*uint64(len(physicalData)))
 			}
 			if result.Errors > 0 {
 				g.metrics.AddErrorBulk(uint64(result.Errors))
@@ -3530,10 +3544,10 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, s
 				g.mu.RUnlock()
 			}
 			if sourceSession != 0 || sourceGroupID != 0 {
-				if g.endpoint.FanoutSessionPlan(legacyData, plan, sourceSession, sourceGroupID, onComplete) {
+				if g.endpoint.FanoutSessionPlan(physicalData, plan, sourceSession, sourceGroupID, onComplete) {
 					return
 				}
-			} else if g.endpoint.FanoutPlan(legacyData, plan, sourceID, sourceUser, sourceSSID, onComplete) {
+			} else if g.endpoint.FanoutPlan(physicalData, plan, sourceID, sourceUser, sourceSSID, onComplete) {
 				return
 			}
 		}
@@ -3549,9 +3563,9 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, s
 	}
 	g.mu.RUnlock()
 	for _, target := range targets {
-		payload := legacyData
+		payload := physicalData
 		if target.SourceGroupV1 && sourceGroupID > 0 {
-			if tagged, ok := protocol.WithSourceGroupID(legacyData, sourceGroupID); ok {
+			if tagged, ok := protocol.WithSourceGroupID(physicalData, sourceGroupID); ok {
 				payload = tagged
 			}
 		}

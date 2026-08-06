@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 )
 
 func newTestGhostSession(sessionID string, ownerID, txGroupID int, rxGroupIDs []int, capabilities []string) *WSDevice {
+	capabilities = []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1}
 	return &WSDevice{
 		SessionID: sessionID, UserID: ownerID, Username: "owner", CallSign: "BG7AAA",
 		SSID: protocol.SSIDGhostWeb, DevModel: protocol.DraARLDevModelBrowser,
@@ -74,11 +74,11 @@ func TestConnectionManagerKeepsMultipleOwnerSessionsAndExactCleanup(t *testing.T
 func TestBroadcastDeduplicatesSubscriptionsExcludesExactSessionAndAddsSourceGroup(t *testing.T) {
 	beforeMetrics := getWSDeliveryStats()
 	manager := NewWSConnectionManager()
-	source := newTestGhostSession("source-session", 7, 1001, []int{1001}, []string{"source_group_v1"})
-	sibling := newTestGhostSession("sibling-session", 7, 1002, []int{1001, 1002}, []string{"source_group_v1"})
-	target := newTestGhostSession("target-session", 8, 1001, []int{1001, 1002}, []string{"source_group_v1"})
-	legacy := newTestGhostSession("legacy-session", 9, 1001, []int{1001}, nil)
-	for _, device := range []*WSDevice{source, sibling, target, legacy} {
+	source := newTestGhostSession("source-session", 7, 1001, []int{1001}, nil)
+	sibling := newTestGhostSession("sibling-session", 7, 1002, []int{1001, 1002}, nil)
+	target := newTestGhostSession("target-session", 8, 1001, []int{1001, 1002}, nil)
+	third := newTestGhostSession("third-session", 9, 1001, []int{1001}, nil)
+	for _, device := range []*WSDevice{source, sibling, target, third} {
 		if err := manager.RegisterGhostDevice(device, device.UserID, device.Username, device.CallSign, "", device.SSID); err != nil {
 			t.Fatal(err)
 		}
@@ -106,17 +106,14 @@ func TestBroadcastDeduplicatesSubscriptionsExcludesExactSessionAndAddsSourceGrou
 	}
 	siblingRequest := dequeueWriteRequest(t, sibling)
 	targetRequest := dequeueWriteRequest(t, target)
-	legacyRequest := dequeueWriteRequest(t, legacy)
+	thirdRequest := dequeueWriteRequest(t, third)
 	defer siblingRequest.payload.release()
 	defer targetRequest.payload.release()
-	defer legacyRequest.payload.release()
-	for _, request := range []*writeRequest{siblingRequest, targetRequest} {
+	defer thirdRequest.payload.release()
+	for _, request := range []*writeRequest{siblingRequest, targetRequest, thirdRequest} {
 		if got := binary.BigEndian.Uint32(request.payload.data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]); got != 1001 {
 			t.Fatalf("source group=%d, want 1001", got)
 		}
-	}
-	if !bytes.Equal(legacyRequest.payload.data, packet) {
-		t.Fatal("legacy client packet was modified")
 	}
 }
 
@@ -172,31 +169,12 @@ func TestAuthenticatedRoutingRollsBackIndexesWhenCenterProjectionFails(t *testin
 	}
 }
 
-func TestLegacyConflictCheckIgnoresModernSessions(t *testing.T) {
-	manager := NewWSConnectionManager()
-	modern := newTestGhostSession("modern-session", 21, 1001, []int{1001}, nil)
-	if err := manager.RegisterGhostDevice(modern, modern.UserID, modern.Username, modern.CallSign, "", modern.SSID); err != nil {
-		t.Fatal(err)
-	}
-	if manager.IsLegacyGhostDeviceOnline(modern.UserID) {
-		t.Fatal("modern session occupied the legacy conflict slot")
-	}
-	legacy := newTestGhostSession("legacy-session-21", 21, 1001, []int{1001}, nil)
-	legacy.LegacySession = true
-	if err := manager.RegisterGhostDevice(legacy, legacy.UserID, legacy.Username, legacy.CallSign, "", legacy.SSID); err != nil {
-		t.Fatal(err)
-	}
-	if !manager.IsLegacyGhostDeviceOnline(legacy.UserID) {
-		t.Fatal("legacy session did not occupy its conflict slot")
-	}
-}
-
-func TestAuthenticationSuccessAdvertisesModernSessionOnly(t *testing.T) {
-	modern := newTestGhostSession("auth-session", 31, 1001, []int{1001, 1002}, nil)
-	modern.ClientInstanceID = "11111111-1111-4111-8111-111111111111"
-	modern.ProtocolVersion = 1
-	sendAuthenticationSuccess(modern)
-	request := dequeueWriteRequest(t, modern)
+func TestAuthenticationSuccessAdvertisesSessionRouting(t *testing.T) {
+	device := newTestGhostSession("auth-session", 31, 1001, []int{1001, 1002}, nil)
+	device.ClientInstanceID = "11111111-1111-4111-8111-111111111111"
+	device.ProtocolVersion = 1
+	sendAuthenticationSuccess(device)
+	request := dequeueWriteRequest(t, device)
 	defer request.payload.release()
 	var envelope struct {
 		Type string `json:"type"`
@@ -209,20 +187,14 @@ func TestAuthenticationSuccessAdvertisesModernSessionOnly(t *testing.T) {
 	if err := json.Unmarshal(request.payload.data, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Type != "auth_success" || envelope.Data.SessionID != modern.SessionID || envelope.Data.TxGroupID != 1001 || len(envelope.Data.RxGroupIDs) != 2 {
+	if envelope.Type != "auth_success" || envelope.Data.SessionID != device.SessionID || envelope.Data.TxGroupID != 1001 || len(envelope.Data.RxGroupIDs) != 2 {
 		t.Fatalf("auth success=%s", request.payload.data)
-	}
-	legacy := newTestGhostSession("legacy-auth-session", 31, 1001, []int{1001}, nil)
-	legacy.LegacySession = true
-	sendAuthenticationSuccess(legacy)
-	if len(legacy.writeCh) != 0 {
-		t.Fatal("legacy client received an unsupported auth event")
 	}
 }
 
 func TestConcurrentRoutingBroadcastAndDisconnect(t *testing.T) {
 	manager := NewWSConnectionManager()
-	device := newTestGhostSession("concurrent-session", 41, 1001, []int{1001, 1002}, []string{"source_group_v1"})
+	device := newTestGhostSession("concurrent-session", 41, 1001, []int{1001, 1002}, nil)
 	device.writeCh = make(chan *writeRequest, 4096)
 	if err := manager.RegisterGhostDevice(device, device.UserID, device.Username, device.CallSign, "", device.SSID); err != nil {
 		t.Fatal(err)

@@ -4,9 +4,9 @@
 
 浏览器幽灵设备通过 `/ws` 建立 WebSocket，生产环境使用 `wss://`。JWT 不放在 URL，也不再由客户端发送 Type 1 帧；客户端先调用 `POST /api/auth/ws-token/sync`，服务端从 HttpOnly `ws_token` Cookie 完成握手认证。
 
-服务端执行 Origin 校验。认证失败返回 HTTP `401`，legacy 同账号 Web 槽位冲突返回 `409 ghost_device_conflict`，这些错误发生在协议升级之前。
+服务端执行 Origin 校验。认证失败在协议升级前返回 HTTP `401` 和稳定错误文本。
 
-### 1.1 现代客户端参数
+### 1.1 客户端参数
 
 ```text
 wss://server.example/ws
@@ -24,7 +24,7 @@ wss://server.example/ws
 
 浏览器 API 无法设置握手自定义 Header，因此使用 query。非浏览器实现也可以提交 `X-DraARL-Client-Instance-ID`、`X-DraARL-Protocol-Version` 和 `X-DraARL-Capabilities`。
 
-缺少 `client_instance_id` 时进入 legacy 单实例槽位，并强制单频道。现代实例在同一账号下可以多端共存；同一个安装实例重连时只替换自己的旧 Session。
+`client_instance_id`、协议版本和两项能力均为必需参数。缺少或无效时握手失败；不同安装实例在同一账号下可以多端共存，同一个安装实例重连时只替换自己的旧 Session。
 
 ## 2. 帧与控制事件
 
@@ -37,7 +37,7 @@ wss://server.example/ws
 
 ### 2.1 `auth_success`
 
-现代 Session 升级成功后，服务端首先发送：
+Session 升级成功后，服务端首先发送：
 
 ```json
 {
@@ -81,7 +81,7 @@ API 更新、权限清理或服务端路由规范化后发送：
 | `4` | TextMessage | 双向 |
 | `5` | Opus16K | 双向 |
 
-上行目标频道不从帧中读取，始终取当前 Session 的 `tx_group_id`。下行 Type 4/5 的偏移 `86..89`（Reserved）对现代客户端为大端 `uint32 source_group_id`。服务端发给 legacy 客户端前会清零该字段。
+上行目标频道不从帧中读取，始终取当前 Session 的 `tx_group_id`。下行 Type 4/5 的偏移 `86..89`（Reserved）为大端 `uint32 source_group_id`。
 
 ```javascript
 const sourceGroupId = new DataView(buffer).getUint32(86, false)
@@ -104,7 +104,7 @@ Content-Type: application/json
 }
 ```
 
-`tx_group_id` 必须包含在最终 `rx_group_ids` 中。服务端会验证所有群组和权限，并以 `routing_updated` 同步最终状态。旧 `/api/radio/group` 只用于兼容；同平台多个 Session 未指定 `session_id` 时返回 `409 ambiguous_session`。
+`tx_group_id` 必须包含在最终 `rx_group_ids` 中。服务端会验证所有群组和权限，并以 `routing_updated` 同步最终状态。旧 `/api/radio/group` 已移除。
 
 ## 5. 语音与混音
 

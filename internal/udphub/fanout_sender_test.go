@@ -85,35 +85,35 @@ func TestFanoutSenderPreservesOrderPerAddress(t *testing.T) {
 	}
 }
 
-func TestFanoutSenderAddsSourceGroupOnlyForCapableSession(t *testing.T) {
+func TestFanoutSenderAddsSourceGroupOnlyForGhostSession(t *testing.T) {
 	senderConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	physicalConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		senderConn.Close()
 		t.Fatal(err)
 	}
-	modernConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	ghostConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		senderConn.Close()
-		legacyConn.Close()
+		physicalConn.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		senderConn.Close()
-		legacyConn.Close()
-		modernConn.Close()
+		physicalConn.Close()
+		ghostConn.Close()
 	})
 
 	sender := newFanoutSender(senderConn, 2, 8)
 	defer sender.stop()
-	legacyAddr, _ := udpAddrPort(legacyConn.LocalAddr().(*net.UDPAddr))
-	modernAddr, _ := udpAddrPort(modernConn.LocalAddr().(*net.UDPAddr))
+	physicalAddr, _ := udpAddrPort(physicalConn.LocalAddr().(*net.UDPAddr))
+	ghostAddr, _ := udpAddrPort(ghostConn.LocalAddr().(*net.UDPAddr))
 	entries := []domainReceiverEntry{
-		{addr: legacyAddr},
-		{addr: modernAddr, sessionID: "modern", sourceGroupV1: true},
+		{addr: physicalAddr},
+		{addr: ghostAddr, sessionID: "ghost-session", sourceGroupV1: true},
 	}
 	partitions := make([][]domainReceiverEntry, len(sender.writers))
 	for _, entry := range entries {
@@ -138,11 +138,11 @@ func TestFanoutSenderAddsSourceGroupOnlyForCapableSession(t *testing.T) {
 		}
 		return protocol.ReservedUint32(buffer[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize])
 	}
-	if got := readReserved(legacyConn); got != 0 {
-		t.Fatalf("legacy Reserved=%d, want 0", got)
+	if got := readReserved(physicalConn); got != 0 {
+		t.Fatalf("physical Reserved=%d, want 0", got)
 	}
-	if got := readReserved(modernConn); got != 1234 {
-		t.Fatalf("modern source group=%d, want 1234", got)
+	if got := readReserved(ghostConn); got != 1234 {
+		t.Fatalf("ghost source group=%d, want 1234", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import os
 import random
 import sys
 import threading
+import uuid
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
@@ -38,6 +39,7 @@ class ClientPanel(ttk.LabelFrame):
         super().__init__(parent, text=panel_name, **kwargs)
         self.panel_name = panel_name
         self.client_type = client_type
+        self.client_instance_id = str(uuid.uuid4())
         self.app = app
         self.client = None
         self.is_connected = False
@@ -260,7 +262,8 @@ class ClientPanel(ttk.LabelFrame):
                     jwt_token=token,
                     dev_model=int(self.devmodel_var.get()),
                     log_callback=self.log,
-                    enable_audio=True
+                    enable_audio=True,
+                    client_instance_id=self.client_instance_id,
                 )
 
             elif self.client_type == "serial_device":
@@ -359,15 +362,16 @@ class ClientPanel(ttk.LabelFrame):
 
         http.set_token(token)
 
-        # 调用切换群组 API
-        dev_model = 103  # Windows
-        if hasattr(self, 'devmodel_var'):
-            try:
-                dev_model = int(self.devmodel_var.get())
-            except:
-                pass
-
-        http.update_radio_group(group_id, dev_model)
+        session_id = getattr(self.client, "session_id", "") if self.client else ""
+        if not session_id:
+            self.log("[错误] 当前客户端没有可更新的 Ghost Session")
+            return
+        rx_group_ids = list(getattr(self.client, "rx_group_ids", []))
+        if group_id not in rx_group_ids:
+            rx_group_ids.append(group_id)
+        if http.update_radio_session_routing(session_id, group_id, rx_group_ids):
+            self.client.tx_group_id = group_id
+            self.client.rx_group_ids = rx_group_ids
 
     def show_config(self):
         """显示 Config 配置窗口"""

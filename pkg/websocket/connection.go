@@ -90,7 +90,6 @@ type WSDevice struct {
 	SessionID        string
 	SessionTag       uint32
 	ClientInstanceID string
-	LegacySession    bool
 	ProtocolVersion  uint16
 	Capabilities     []string
 
@@ -794,18 +793,6 @@ func (m *WSConnectionManager) IsGhostDeviceOnline(userID int) bool {
 	return false
 }
 
-func (m *WSConnectionManager) IsLegacyGhostDeviceOnline(userID int) bool {
-	shard := m.getShardByUserID(userID)
-	shard.mu.RLock()
-	defer shard.mu.RUnlock()
-	for _, device := range shard.ownerDevices[userID] {
-		if device != nil && device.LegacySession && device.isOnlineState(StateOnline) {
-			return true
-		}
-	}
-	return false
-}
-
 // GetAllOnlineDevices 获取所有在线设备
 func (m *WSConnectionManager) GetAllOnlineDevices() []*WSDevice {
 	devices := make([]*WSDevice, 0)
@@ -966,11 +953,6 @@ func (m *WSConnectionManager) SetDeviceRouting(device *WSDevice, routing ghostse
 	log.Printf("[WS] Ghost session routing changed: session=%s tx=%d rx=%v", ghostsession.ShortID(device.SessionID), routing.TxGroupID, routing.RxGroupIDs)
 	sendRoutingUpdated(device)
 	return nil
-}
-
-// SetDeviceGroup keeps the legacy single-channel projection.
-func (m *WSConnectionManager) SetDeviceGroup(device *WSDevice, newGroupID int) {
-	_ = m.SetDeviceRouting(device, ghostsession.Routing{TxGroupID: newGroupID, RxGroupIDs: []int{newGroupID}})
 }
 
 // ErrDeviceNotFound 设备未找到错误

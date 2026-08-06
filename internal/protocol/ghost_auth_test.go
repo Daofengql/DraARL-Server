@@ -5,12 +5,13 @@ import (
 	"testing"
 )
 
-func TestDecodeGhostAuthRequestSupportsLegacyAndVersionedPayloads(t *testing.T) {
-	legacy, isLegacy, err := DecodeGhostAuthRequest([]byte("legacy.jwt.token"))
-	if err != nil || !isLegacy || legacy.Token != "legacy.jwt.token" {
-		t.Fatalf("legacy=%#v isLegacy=%v err=%v", legacy, isLegacy, err)
+func TestDecodeGhostAuthRequestRejectsRawJWT(t *testing.T) {
+	if _, err := DecodeGhostAuthRequest([]byte("legacy.jwt.token")); err == nil {
+		t.Fatal("raw JWT ghost authentication was accepted")
 	}
+}
 
+func TestDecodeGhostAuthRequestAcceptsVersionedPayload(t *testing.T) {
 	wire, err := json.Marshal(GhostAuthRequest{
 		Version: GhostAuthPayloadVersion, Token: "new.jwt.token",
 		ClientInstanceID: "11111111-1111-4111-8111-111111111111",
@@ -19,9 +20,9 @@ func TestDecodeGhostAuthRequestSupportsLegacyAndVersionedPayloads(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, isLegacy, err := DecodeGhostAuthRequest(wire)
-	if err != nil || isLegacy || request.ClientInstanceID == "" || len(request.Capabilities) != 2 {
-		t.Fatalf("request=%#v isLegacy=%v err=%v", request, isLegacy, err)
+	request, err := DecodeGhostAuthRequest(wire)
+	if err != nil || request.ClientInstanceID == "" || len(request.Capabilities) != 2 {
+		t.Fatalf("request=%#v err=%v", request, err)
 	}
 }
 
@@ -30,19 +31,19 @@ func TestDecodeGhostAuthRequestRejectsVersionedPayloadWithoutInstanceID(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := DecodeGhostAuthRequest(wire); err == nil {
+	if _, err := DecodeGhostAuthRequest(wire); err == nil {
 		t.Fatal("versioned authentication without client_instance_id was accepted")
 	}
 }
 
 func TestDecodeGhostAuthRequestRejectsTrailingJSON(t *testing.T) {
 	wire := []byte(`{"version":1,"token":"token","client_instance_id":"11111111-1111-4111-8111-111111111111"}{}`)
-	if _, _, err := DecodeGhostAuthRequest(wire); err == nil {
+	if _, err := DecodeGhostAuthRequest(wire); err == nil {
 		t.Fatal("authentication payload with trailing JSON was accepted")
 	}
 }
 
-func TestGhostAuthSuccessKeepsLegacyStatusByte(t *testing.T) {
+func TestGhostAuthSuccessKeepsStatusPrefix(t *testing.T) {
 	wire, err := EncodeGhostAuthSuccessData(GhostAuthSuccess{
 		SessionID: "session-1", SessionTag: 42,
 		ClientInstanceID: "11111111-1111-4111-8111-111111111111",
@@ -52,7 +53,7 @@ func TestGhostAuthSuccessKeepsLegacyStatusByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	if wire[0] != JWTAuthSuccess {
-		t.Fatalf("legacy status=%d", wire[0])
+		t.Fatalf("status=%d", wire[0])
 	}
 	decoded, err := DecodeGhostAuthSuccessData(wire)
 	if err != nil || decoded.SessionTag != 42 || len(decoded.RxGroupIDs) != 2 {

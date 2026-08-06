@@ -114,8 +114,8 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 		if dev == nil || !dev.ISOnline || dev.UDPAddr == nil || dev.DisableRecv {
 			return
 		}
-		// Physical and legacy devices are single-channel. Modern UDP ghost
-		// sessions are already selected through their multi-group RX index.
+		// Physical devices are single-channel. UDP ghost sessions are already
+		// selected through their multi-group receive index.
 		if dev.GhostSessionID == "" && dev.GroupID != expectedGroupID {
 			return
 		}
@@ -132,7 +132,7 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 		entries = append(entries, domainReceiverEntry{
 			addr: addr, deviceID: dev.ID, username: dev.Username, ssid: dev.SSID,
 			sessionID:     dev.GhostSessionID,
-			sourceGroupV1: dev.GhostProtocolVersion > 0 && ghostCapability(dev.GhostCapabilities, "source_group_v1"),
+			sourceGroupV1: dev.GhostSessionID != "",
 		})
 	}
 

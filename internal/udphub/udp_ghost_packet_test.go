@@ -60,6 +60,7 @@ func TestModernUDPGhostPacketRequiresExactSessionBinding(t *testing.T) {
 		tag      uint32
 		addr     *net.UDPAddr
 	}{
+		{name: "missing tag", username: "alice", ssid: device.SSID, model: device.DevModel, tag: 0, addr: addr},
 		{name: "tag", username: "alice", ssid: device.SSID, model: device.DevModel, tag: session.SessionTag + 1, addr: addr},
 		{name: "username", username: "mallory", ssid: device.SSID, model: device.DevModel, tag: session.SessionTag, addr: addr},
 		{name: "ssid", username: "alice", ssid: protocol.SSIDGhostIOS, model: device.DevModel, tag: session.SessionTag, addr: addr},
@@ -76,7 +77,7 @@ func TestModernUDPGhostPacketRequiresExactSessionBinding(t *testing.T) {
 		})
 	}
 	afterForged := GetGhostPacketMetrics()
-	if afterForged["invalid_tags"]-beforeMetrics["invalid_tags"] != 1 ||
+	if afterForged["invalid_tags"]-beforeMetrics["invalid_tags"] != 2 ||
 		afterForged["identity_rejects"]-beforeMetrics["identity_rejects"] != 3 ||
 		afterForged["endpoint_rejects"]-beforeMetrics["endpoint_rejects"] != 1 {
 		t.Fatalf("unexpected forged packet metrics before=%v after=%v", beforeMetrics, afterForged)
@@ -102,7 +103,8 @@ func TestSourceExclusionUsesExactGhostSession(t *testing.T) {
 	if isSourceTarget(&sibling, 0, "alice", protocol.SSIDGhostAndroid, "session-a") {
 		t.Fatal("same-account sibling session was incorrectly excluded")
 	}
-	if !isSourceTarget(&sibling, 0, "alice", protocol.SSIDGhostAndroid, "") {
-		t.Fatal("legacy source identity no longer excludes its single platform slot")
+	physical := domainReceiverEntry{deviceID: 7, username: "physical", ssid: 3}
+	if !isSourceTarget(&physical, 7, "physical", 3, "") {
+		t.Fatal("physical source identity was not excluded")
 	}
 }

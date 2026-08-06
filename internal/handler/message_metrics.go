@@ -52,7 +52,7 @@ func beginMessageAPIRequest(c *gin.Context, detail bool) func() {
 	}
 	started := time.Now()
 	return func() {
-		elapsed := uint64(time.Since(started).Nanoseconds())
+		elapsed := nonZeroDurationNanos(time.Since(started))
 		messageRequestNanos.Add(elapsed)
 		updateMaxUint64(&messageMaxRequestNanos, elapsed)
 		observeMessageLatency(&messageRequestBuckets, time.Duration(elapsed))
@@ -69,14 +69,21 @@ func beginMessageAPIRequest(c *gin.Context, detail bool) func() {
 }
 
 func observeMessageQuery(detail bool, elapsed time.Duration) {
-	nanos := uint64(elapsed.Nanoseconds())
+	nanos := nonZeroDurationNanos(elapsed)
 	if detail {
 		messageDetailQueryNanos.Add(nanos)
 	} else {
 		messageListQueryNanos.Add(nanos)
 	}
 	updateMaxUint64(&messageMaxQueryNanos, nanos)
-	observeMessageLatency(&messageQueryBuckets, elapsed)
+	observeMessageLatency(&messageQueryBuckets, time.Duration(nanos))
+}
+
+func nonZeroDurationNanos(elapsed time.Duration) uint64 {
+	if elapsed <= 0 {
+		return 1
+	}
+	return uint64(elapsed.Nanoseconds())
 }
 
 func observeMessageLatency(buckets *[10]atomic.Uint64, elapsed time.Duration) {

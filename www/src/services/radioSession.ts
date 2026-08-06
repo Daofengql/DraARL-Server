@@ -12,10 +12,9 @@ export interface AdminRadioSession {
   session_id: string
   client_instance_hint: string
   owner_id: number
-  username: string
-  callsign: string
-  legacy: boolean
-  dev_model: number
+	username: string
+	callsign: string
+	dev_model: number
   ssid: number
   transport: GhostTransport
   online_since: string

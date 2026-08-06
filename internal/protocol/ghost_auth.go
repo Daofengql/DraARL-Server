@@ -29,13 +29,10 @@ type GhostAuthSuccess struct {
 	RxGroupIDs       []int  `json:"rx_group_ids"`
 }
 
-func DecodeGhostAuthRequest(data []byte) (GhostAuthRequest, bool, error) {
+func DecodeGhostAuthRequest(data []byte) (GhostAuthRequest, error) {
 	data = bytes.TrimSpace(data)
-	if len(data) == 0 {
-		return GhostAuthRequest{}, false, ErrInvalidGhostAuthPayload
-	}
-	if data[0] != '{' {
-		return GhostAuthRequest{Token: string(data)}, true, nil
+	if len(data) == 0 || data[0] != '{' {
+		return GhostAuthRequest{}, ErrInvalidGhostAuthPayload
 	}
 
 	var request GhostAuthRequest
@@ -43,14 +40,14 @@ func DecodeGhostAuthRequest(data []byte) (GhostAuthRequest, bool, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil || request.Version != GhostAuthPayloadVersion ||
 		strings.TrimSpace(request.Token) == "" || strings.TrimSpace(request.ClientInstanceID) == "" {
-		return GhostAuthRequest{}, false, ErrInvalidGhostAuthPayload
+		return GhostAuthRequest{}, ErrInvalidGhostAuthPayload
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return GhostAuthRequest{}, false, ErrInvalidGhostAuthPayload
+		return GhostAuthRequest{}, ErrInvalidGhostAuthPayload
 	}
 	request.Token = strings.TrimSpace(request.Token)
 	request.ClientInstanceID = strings.TrimSpace(request.ClientInstanceID)
-	return request, false, nil
+	return request, nil
 }
 
 func EncodeGhostAuthSuccessData(success GhostAuthSuccess) ([]byte, error) {

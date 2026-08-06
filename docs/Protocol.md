@@ -52,14 +52,14 @@ DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 DraARL 平台的�
 
 ### Reserved 字段语义
 
-Reserved 只对幽灵设备的现代会话启用，标准 UDP 实体设备和 legacy 幽灵设备继续填 0：
+Reserved 只对幽灵 Session 启用，标准 UDP 实体设备继续填 0：
 
 | 场景 | 值 |
 |---|---|
-| 现代 UDP 幽灵上行心跳、文本、语音 | 认证成功响应中的 `session_tag` |
-| 现代 UDP 幽灵认证成功响应 | 服务端签发的 `session_tag` |
-| 声明 `source_group_v1` 的现代幽灵下行 Type 4/5 | 消息真实 `source_group_id` |
-| legacy 幽灵或标准实体设备 | `0` |
+| UDP 幽灵上行心跳、文本、语音 | 认证成功响应中的 `session_tag` |
+| UDP 幽灵认证成功响应 | 服务端签发的 `session_tag` |
+| 幽灵设备下行 Type 4/5 | 消息真实 `source_group_id` |
+| 标准实体设备 | `0` |
 
 `session_tag` 只用于在热路径定位已认证 Session。服务端还会联合校验 Username、SSID、DevModel、UDP 端点、账号和 Session 状态；tag 不是凭据，地址变化后必须重新认证。群组 ID 必须可表示为非零 32 位无符号整数。
 
@@ -350,7 +350,7 @@ DATA = [0x03, 0x00, ts(8 bytes)]
 
 #### 认证请求
 
-legacy 客户端把 JWT Token 原文放入 DATA。该格式保留兼容，但同账号同平台只能有一个 legacy Session，且只能收听发送频道：
+幽灵客户端必须把版本化 UTF-8 JSON 放入 DATA。直接把 JWT Token 原文放入 DATA 的旧格式不再接受：
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -364,14 +364,12 @@ legacy 客户端把 JWT Token 原文放入 DATA。该格式保留兼容，但同
 │    SSID: 0 (服务器会用 DevModel 作为 SSID)                    │
 │    DMRID: 0                                                  │
 │    CallSign: 空 (服务器填充)                                  │
-│    Reserved: legacy 填 0；现代客户端认证请求也填 0            │
+│    Reserved: 认证请求填 0                                     │
 ├─────────────────────────────────────────────────────────—────┤
 │  DATA 区域                                                    │
-│    JWT Token 字符串 (UTF-8 编码，直到包尾)                    │
+│    版本化认证 JSON                                             │
 └──────────────────────────────────────────────────────────────┘
 ```
-
-现代客户端把 UTF-8 JSON 放入 DATA：
 
 ```json
 {
@@ -383,8 +381,8 @@ legacy 客户端把 JWT Token 原文放入 DATA。该格式保留兼容，但同
 ```
 
 - `client_instance_id` 是安装范围持久化的随机 UUID，不得使用 IMEI、MAC 或 Android ID。
-- `multi_receive_v1` 与 `source_group_v1` 必须同时声明才启用多收。
-- 现代客户端允许同账号多端在线；同一安装实例重连只替换自己的旧 Session。
+- `multi_receive_v1` 与 `source_group_v1` 必须同时声明，缺少任一能力时认证失败。
+- 客户端允许同账号多端在线；同一安装实例重连只替换自己的旧 Session。
 - Type 1 只用于 UDP 幽灵型号 `101-104`。Web `105` 在 WebSocket HTTP 握手中通过 HttpOnly Cookie 认证。
 
 #### 认证响应
@@ -403,7 +401,7 @@ legacy 客户端把 JWT Token 原文放入 DATA。该格式保留兼容，但同
 │    SSID: 服务器分配 (等于 DevModel)                           │
 │    DMRID: 0                                                  │
 │    CallSign: 成功时填充用户呼号，失败时为空                    │
-│    Reserved: legacy 填 0；现代成功响应为 session_tag           │
+│    Reserved: 成功响应为 session_tag                            │
 ├──────────────────────────────────────────────────────────────┤
 │  DATA 区域                                                    │
 │    [0]: 状态码                                                │
@@ -413,7 +411,6 @@ legacy 客户端把 JWT Token 原文放入 DATA。该格式保留兼容，但同
 │         3 = 用户已禁用                                        │
 │         4 = 用户未审核                                        │
 │         5 = 无效的设备型号 (非 101-104)                       │
-│         6 = 同平台已有在线幽灵设备                            │
 │    [1:]: 成功时为空，失败时为错误消息文本                      │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -556,9 +553,9 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 - **普通 UDP 在线冲突**：同一用户同一 SSID 只允许一台在线，新地址冲突时新设备收到拒绝响应，旧设备保持在线
 - **普通 UDP 同 MAC 快速重连**：如果新心跳携带的 MAC 与当前在线实例记录的 MAC 一致，则视为同一物理设备短暂断线后的重连，允许直接接管新地址
 - **普通 UDP MAC 映射生命周期**：设备在线时记录 `owner_id + ssid -> mac`；设备被彻底判定离线后删除该映射
-- **现代幽灵设备多端**：携带稳定 `client_instance_id` 和版本化能力的幽灵客户端按 Session 隔离，同一账号同平台可以多端在线
-- **legacy 幽灵设备冲突**：未携带实例 ID 的旧客户端仍占用同平台单实例槽位，冲突时新连接失败，旧连接保持在线
-- **多收单发**：每个现代 Session 有一个 `tx_group_id` 和多个 `rx_group_ids`；发送频道必须包含在接收集合中
+- **幽灵设备多端**：携带稳定 `client_instance_id` 和版本化能力的幽灵客户端按 Session 隔离，同一账号同平台可以多端在线
+- **旧幽灵协议不兼容**：raw-JWT、缺少实例 ID 或缺少现代能力的客户端认证失败，不再进入单端降级路径
+- **多收单发**：每个 Session 有一个 `tx_group_id` 和多个 `rx_group_ids`；发送频道必须包含在接收集合中
 
 ### 1. 普通设备上线认证（设备密码）
 

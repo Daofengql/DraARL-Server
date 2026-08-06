@@ -2,18 +2,13 @@ package handler
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
-	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
-	"draarl/internal/routesync"
 	"draarl/internal/udphub"
-	"draarl/pkg/cache"
 	ws "draarl/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -210,9 +205,6 @@ func GetRadioGroupDevices(c *gin.Context) {
 			continue
 		}
 		key := "udp-ghost-" + dev.GhostSessionID
-		if dev.GhostSessionID == "" {
-			key = fmt.Sprintf("udp-ghost-%s-%d", dev.Username, dev.SSID)
-		}
 		if seenDevices[key] {
 			continue
 		}
@@ -271,150 +263,6 @@ func GetRadioGroupDevices(c *gin.Context) {
 	})
 }
 
-// UpdateRadioGroupRequest 更新幽灵设备群组请求
-type UpdateRadioGroupRequest struct {
-	GroupID    int    `json:"group_id" binding:"required"`
-	DevModel   int    `json:"dev_model"` // 设备型号（101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web）
-	SessionID  string `json:"session_id"`
-	RxGroupIDs *[]int `json:"rx_group_ids"`
-}
-
-// UpdateRadioGroup 更新幽灵设备群组 (API-005)
-// 【核心修复】支持分平台群组偏好，同时更新 WSDevice 和 GhostDevice 的 GroupID
-func UpdateRadioGroup(c *gin.Context) {
-	var req UpdateRadioGroupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
-		return
-	}
-
-	currentUser, ok := requireCurrentUser(c)
-	if !ok {
-		return
-	}
-	userID := currentUser.ID
-
-	// 群组必须存在于数据库、处于启用状态且不是虚拟互联组。
-	group, err := gormdb.NewGroupRepository().GetGroupByID(req.GroupID)
-	if err != nil || group == nil || group.Status != 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "目标群组不存在或未激活"})
-		return
-	}
-	if _, ok := requireGroupViewAccess(c, group); !ok {
-		return
-	}
-
-	// 如果未指定 dev_model，默认为 Web (105)
-	devModel := byte(req.DevModel)
-	if devModel == 0 {
-		devModel = 105 // 默认 Web 端
-	}
-	if !protocol.IsGhostDevModelOrWeb(devModel) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的幽灵设备型号"})
-		return
-	}
-
-	oldGroupID := 0
-	username, _ := c.Get("username")
-	usernameStr, _ := username.(string)
-	var udpGhostUsername string
-	session, hasSession, sessionErr := resolveOwnedPlatformSession(userID, devModel, strings.TrimSpace(req.SessionID))
-	if sessionErr != nil {
-		writeSessionRoutingError(c, sessionErr)
-		return
-	}
-
-	// Capture the current runtime location for the response and audit log, but
-	// do not mutate it until the authoritative preference write succeeds.
-	if hasSession {
-		oldGroupID = session.TxGroupID
-	} else if usernameStr != "" {
-		if ghostDevice := udphub.GlobalUDPGhostManager.Get(usernameStr, devModel); ghostDevice != nil {
-			udpGhostUsername = usernameStr
-			oldGroupID = ghostDevice.GroupID
-		}
-	}
-
-	if hasSession {
-		requestedRouting := routingForLegacyGroupUpdate(session, req.GroupID)
-		if req.RxGroupIDs != nil {
-			requestedRouting.RxGroupIDs = append([]int(nil), (*req.RxGroupIDs)...)
-		}
-		updated, err := updateOwnedSessionRouting(currentUser, session.SessionID, requestedRouting)
-		if err != nil {
-			writeSessionRoutingError(c, err)
-			return
-		}
-		session = updated
-	} else {
-		if req.RxGroupIDs != nil && (len(*req.RxGroupIDs) != 1 || (*req.RxGroupIDs)[0] != req.GroupID) {
-			c.JSON(http.StatusConflict, gin.H{"code": http.StatusConflict, "error": "session_required_for_multi_receive", "message": "多频道收听需要指定在线会话"})
-			return
-		}
-		// Offline and pre-session clients retain the platform-level legacy
-		// preference until they authenticate through the new instance model.
-		userRepo := gormdb.NewUserRepository()
-		if err := userRepo.UpsertUserDevicePreference(userID, devModel, req.GroupID); err != nil {
-			log.Printf("[RADIO] 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存群组偏好失败"})
-			return
-		}
-	}
-
-	if !hasSession && devModel != protocol.DraARLDevModelBrowser && udpGhostUsername != "" {
-		// UDP 幽灵设备 (101-104)
-		// SSID 等于 DevModel（幽灵设备的 SSID 规则）
-		if err := udphub.GlobalUDPGhostManager.SetDeviceGroup(udpGhostUsername, devModel, req.GroupID); err != nil {
-			log.Printf("[RADIO] 警告: 更新 UDP 幽灵设备群组失败: %v", err)
-		}
-	}
-
-	if !hasSession && devModel != protocol.DraARLDevModelBrowser {
-		routesync.PublishIdentity(userID, devModel, req.GroupID, false, false)
-	}
-
-	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 设备 %d 从群组 %d 切换到群组 %d", userID, devModel, oldGroupID, req.GroupID)
-
-	// 获取用户名用于缓存失效
-	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新的群组设置
-	// 必须传入 username，否则 GetUserByName 使用的 userByNameKey 缓存不会被清除
-	if userCache := cache.GetUserCache(); userCache != nil && usernameStr != "" {
-		if err := userCache.InvalidateUser(c.Request.Context(), userID, usernameStr); err != nil {
-			log.Printf("[RADIO] 警告: 失效用户 %d 缓存失败: %v", userID, err)
-		}
-	}
-
-	operatorName := ""
-	operatorCallSign := ""
-	if usernameStr != "" {
-		if user, err := gormdb.NewUserRepository().GetUserByName(usernameStr); err == nil && user != nil {
-			operatorName = user.Name
-			operatorCallSign = user.CallSign
-		} else {
-			operatorName = usernameStr
-		}
-	}
-	oplog.AddLog(
-		fmt.Sprintf("切换在线收发群组: user_id=%d, dev_model=%d, group_id=%d->%d", userID, devModel, oldGroupID, req.GroupID),
-		"radio_group_update",
-		userID,
-		operatorName,
-		operatorCallSign,
-		c.ClientIP(),
-	)
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "群组切换成功",
-		"data": gin.H{
-			"group_id":     req.GroupID,
-			"old_group_id": oldGroupID,
-			"session_id":   session.SessionID,
-			"rx_group_ids": session.RxGroupIDs,
-		},
-	})
-}
-
 // GetRadioGroupStats 获取用户有权限访问的群组实时统计信息
 // 此接口专门为 Radio 页面设计，返回包含 WS 设备的实时统计
 // 只返回用户有权限访问的群组（公开群组 + 用户已验证的私有群组）
@@ -463,48 +311,5 @@ func GetRadioGroupStats(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data":    result,
-	})
-}
-
-// CheckGhostDeviceConflict 检查幽灵设备连接冲突 (API-007)
-// 用于前端在建立 WebSocket 连接前预检查
-// 返回 200 表示可以连接，返回 409 表示存在冲突（该用户已有在线的幽灵设备）
-func CheckGhostDeviceConflict(c *gin.Context) {
-	// 获取当前用户 ID
-	userID, ok := getUserIDFromContext(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
-		return
-	}
-
-	instanceID := strings.TrimSpace(c.GetHeader("X-DraARL-Client-Instance-ID"))
-	if instanceID == "" {
-		instanceID = strings.TrimSpace(c.Query("client_instance_id"))
-	}
-	_, legacy, err := ghostsession.NormalizeClientInstanceID(instanceID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "error": "invalid_client_instance_id", "message": "客户端实例 ID 无效"})
-		return
-	}
-	// Stable random installation IDs use independent sessions. Only clients
-	// without one remain in the legacy single-Web-slot conflict model.
-	if legacy && ws.GlobalManager.IsLegacyGhostDeviceOnline(userID) {
-		c.JSON(http.StatusConflict, gin.H{
-			"code":    409,
-			"message": "您的账号已在其他页面建立了电台连接，请先断开其他页面的连接",
-			"data": gin.H{
-				"conflict": true,
-			},
-		})
-		return
-	}
-
-	// 没有冲突，可以建立连接
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "可以建立连接",
-		"data": gin.H{
-			"conflict": false,
-		},
 	})
 }

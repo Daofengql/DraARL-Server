@@ -379,8 +379,9 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 
 	// 只有当设备不存在（未认证的新设备）且 SSID 为保留范围时才拒绝
 	if dev == nil && protocol.IsReservedSSID(packet.SSID) {
-		// A non-zero tag means this was an attempted modern ghost packet. Do
-		// not answer an unauthenticated or forged endpoint with legacy status.
+		// A non-zero tag means this was an attempted Session-bound ghost packet.
+		// Do not answer an unauthenticated or forged endpoint with a generic
+		// physical-device heartbeat status.
 		if protocol.ReservedUint32(packet.Reserved) != 0 {
 			return
 		}
@@ -513,39 +514,18 @@ func handleNonForwardingDevicePacket(
 	}
 }
 
-// getDeviceFromMemory 获取设备 (先查普通设备，再查 UDP 幽灵设备)
-// 返回: device, isGhost (是否为 UDP 幽灵设备)
-// 参数: username - 用户名（可能为空，幽灵设备发送时不带用户名）
-// 参数: ssid - 设备 SSID
-// 参数: udpAddr - UDP 地址（用于在 username 为空时查找幽灵设备）
+// getDeviceFromMemory resolves standard physical devices. UDP ghosts are
+// always resolved through their authenticated session tag.
 func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*models.Device, bool) {
-	// 1. 如果 username 不为空，直接按 username-ssid 查找
 	if username != "" {
 		if dev := lookupDeviceByUsernameSSID(username, ssid); dev != nil {
 			return dev, false
 		}
-
-		// 查 UDP 幽灵设备
-		if ghost := GlobalUDPGhostManager.Get(username, ssid); ghost != nil {
-			return ghost, true
-		}
-
-		return nil, false
 	}
-
-	// 2. username 为空时，通过 SSID + UDP 地址查找幽灵设备
-	// 幽灵设备发送数据包时 username 为空，需要通过地址匹配
-	if protocol.IsGhostSSID(ssid) && udpAddr != nil {
-		ghost := GlobalUDPGhostManager.FindLegacyBySSIDAndAddr(ssid, udpAddr)
-		if ghost != nil {
-			return ghost, true
-		}
-	}
-
 	return nil, false
 }
 
-// getDeviceForPacket enforces the modern UDP ghost session binding. The tag
+// getDeviceForPacket enforces the UDP ghost session binding. The tag
 // is only interpreted for reserved ghost SSIDs, so physical devices retain
 // their existing lookup and single-endpoint behavior even if Reserved is set.
 func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (*models.Device, bool) {
@@ -553,11 +533,15 @@ func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (
 		return nil, false
 	}
 	tag := protocol.ReservedUint32(packet.Reserved)
-	if tag == 0 || !protocol.IsGhostSSID(packet.SSID) {
+	if !protocol.IsGhostSSID(packet.SSID) {
 		return getDeviceFromMemory(packet.Username, packet.SSID, udpAddr)
 	}
+	if tag == 0 {
+		ghostPacketInvalidTags.Add(1)
+		return nil, false
+	}
 	device := GlobalUDPGhostManager.FindBySessionTag(tag)
-	if device == nil || device.GhostProtocolVersion == 0 || device.GhostSessionTag != tag {
+	if device == nil || device.GhostSessionTag != tag {
 		ghostPacketInvalidTags.Add(1)
 		return nil, false
 	}

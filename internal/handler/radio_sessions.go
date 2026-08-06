@@ -19,7 +19,6 @@ import (
 type RadioSessionResponse struct {
 	SessionID        string                 `json:"session_id"`
 	ClientInstanceID string                 `json:"client_instance_id,omitempty"`
-	Legacy           bool                   `json:"legacy"`
 	Platform         uint8                  `json:"dev_model"`
 	SSID             uint8                  `json:"ssid"`
 	Transport        ghostsession.Transport `json:"transport"`
@@ -44,7 +43,6 @@ type AdminRadioSessionResponse struct {
 	OwnerID            int                    `json:"owner_id"`
 	Username           string                 `json:"username"`
 	CallSign           string                 `json:"callsign"`
-	Legacy             bool                   `json:"legacy"`
 	Platform           uint8                  `json:"dev_model"`
 	SSID               uint8                  `json:"ssid"`
 	Transport          ghostsession.Transport `json:"transport"`
@@ -57,16 +55,14 @@ type AdminRadioSessionResponse struct {
 }
 
 var (
-	errRoutingGroupNotFound    = errors.New("one or more groups do not exist")
-	errRoutingGroupForbidden   = errors.New("one or more groups are not accessible")
-	errAmbiguousSession        = errors.New("multiple matching ghost sessions are online")
-	errLegacyMultiReceive      = errors.New("legacy sessions support one channel")
-	errMultiReceiveUnsupported = errors.New("client does not support multi-channel receive")
+	errRoutingGroupNotFound  = errors.New("one or more groups do not exist")
+	errRoutingGroupForbidden = errors.New("one or more groups are not accessible")
+	errAmbiguousSession      = errors.New("multiple matching ghost sessions are online")
 )
 
 func toRadioSessionResponse(session ghostsession.Session) RadioSessionResponse {
 	return RadioSessionResponse{
-		SessionID: session.SessionID, ClientInstanceID: session.ClientInstanceID, Legacy: session.Legacy,
+		SessionID: session.SessionID, ClientInstanceID: session.ClientInstanceID,
 		Platform: session.DevModel, SSID: session.SSID, Transport: session.Transport,
 		ProtocolVersion: session.ProtocolVersion, Capabilities: append([]string(nil), session.Capabilities...),
 		OnlineSince: session.CreatedAt.UTC().Format(time.RFC3339Nano), LastActivity: session.LastActivity.UTC().Format(time.RFC3339Nano),
@@ -89,13 +85,10 @@ func GetRadioSessions(c *gin.Context) {
 }
 
 func adminRadioSessionResponse(session ghostsession.Session) AdminRadioSessionResponse {
-	hint := "legacy"
-	if !session.Legacy {
-		hint = ghostsession.ShortID(session.ClientInstanceID)
-	}
+	hint := ghostsession.ShortID(session.ClientInstanceID)
 	return AdminRadioSessionResponse{
 		SessionID: session.SessionID, ClientInstanceHint: hint, OwnerID: session.OwnerID,
-		Username: session.Username, CallSign: session.CallSign, Legacy: session.Legacy,
+		Username: session.Username, CallSign: session.CallSign,
 		Platform: session.DevModel, SSID: session.SSID, Transport: session.Transport,
 		OnlineSince:  session.CreatedAt.UTC().Format(time.RFC3339Nano),
 		LastActivity: session.LastActivity.UTC().Format(time.RFC3339Nano),
@@ -158,18 +151,6 @@ func resolveOwnedPlatformSession(ownerID int, devModel uint8, sessionID string) 
 	}
 }
 
-func routingForLegacyGroupUpdate(session ghostsession.Session, txGroupID int) ghostsession.Routing {
-	rxGroupIDs := []int{txGroupID}
-	if sessionSupportsMultiReceive(session) {
-		rxGroupIDs = append([]int(nil), session.RxGroupIDs...)
-	}
-	return ghostsession.Routing{TxGroupID: txGroupID, RxGroupIDs: rxGroupIDs}
-}
-
-func sessionSupportsMultiReceive(session ghostsession.Session) bool {
-	return !session.Legacy && session.HasCapability("multi_receive_v1") && session.HasCapability("source_group_v1")
-}
-
 func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routing) (ghostsession.Routing, error) {
 	normalized, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
 	if err != nil {
@@ -194,12 +175,6 @@ func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routin
 }
 
 func persistSessionRouting(session ghostsession.Session, routing ghostsession.Routing) error {
-	if session.Legacy {
-		if len(routing.RxGroupIDs) != 1 || routing.RxGroupIDs[0] != routing.TxGroupID {
-			return errLegacyMultiReceive
-		}
-		return gormdb.NewUserRepository().UpsertUserDevicePreference(session.OwnerID, session.DevModel, routing.TxGroupID)
-	}
 	return gormdb.NewGhostClientPreferenceRepository().ReplaceRouting(
 		session.OwnerID, session.DevModel, session.ClientInstanceID, routing.TxGroupID, routing.RxGroupIDs,
 	)
@@ -227,10 +202,6 @@ func reconcileOwnerGhostSessions(ownerID int) {
 		routing, changed, err := groupaccess.SanitizeRouting(
 			gormdb.Get(), user, session.Routing(), models.GroupIDPublicMin, ghostsession.MaxSubscriptions(),
 		)
-		if err == nil && !sessionSupportsMultiReceive(session) {
-			routing.RxGroupIDs = []int{routing.TxGroupID}
-			changed = changed || len(session.RxGroupIDs) != 1 || session.RxGroupIDs[0] != routing.TxGroupID
-		}
 		if err == nil && !changed {
 			continue
 		}
@@ -254,9 +225,6 @@ func updateOwnedSessionRouting(user *gormdb.User, sessionID string, requested gh
 	routing, err := validateSessionRoutingAccess(user, requested)
 	if err != nil {
 		return ghostsession.Session{}, err
-	}
-	if !sessionSupportsMultiReceive(session) && (len(routing.RxGroupIDs) != 1 || routing.RxGroupIDs[0] != routing.TxGroupID) {
-		return ghostsession.Session{}, errMultiReceiveUnsupported
 	}
 	return ghostsession.Global.UpdateRoutingPersisted(sessionID, routing, func(current ghostsession.Session, next ghostsession.Routing) error {
 		if err := persistSessionRouting(current, next); err != nil {
@@ -303,10 +271,6 @@ func writeSessionRoutingError(c *gin.Context, err error) {
 		status, code = http.StatusNotFound, "group_not_found"
 	case errors.Is(err, errRoutingGroupForbidden):
 		status, code = http.StatusForbidden, "group_forbidden"
-	case errors.Is(err, errLegacyMultiReceive):
-		status, code = http.StatusBadRequest, "legacy_single_channel"
-	case errors.Is(err, errMultiReceiveUnsupported):
-		status, code = http.StatusBadRequest, "multi_receive_unsupported"
 	}
 	message := err.Error()
 	if status == http.StatusInternalServerError {

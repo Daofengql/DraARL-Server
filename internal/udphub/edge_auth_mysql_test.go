@@ -125,7 +125,7 @@ func TestProxiedModernGhostAuthenticationMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	response, err := protocol.DecodeGhostAuthSuccessData(responsePacket.DATA)
-	if err != nil || response.SessionID != first.GhostSessionID || response.SessionTag != first.SessionTag || protocol.ReservedUint32(responsePacket.Reserved) != first.SessionTag {
+	if err != nil || string(responsePacket.Username) != owner.Name || response.SessionID != first.GhostSessionID || response.SessionTag != first.SessionTag || protocol.ReservedUint32(responsePacket.Reserved) != first.SessionTag {
 		t.Fatalf("invalid modern proxied auth response: response=%#v err=%v", response, err)
 	}
 

@@ -38,7 +38,6 @@ type AuthResult struct {
 	Nickname         string
 	GroupID          int // 设备所属群组ID（从数据库读取）
 	ClientInstanceID string
-	LegacySession    bool
 	ProtocolVersion  uint16
 	Capabilities     []string
 	Routing          ghostsession.Routing
@@ -122,22 +121,19 @@ func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnection
 	device.SessionID = session.SessionID
 	device.SessionTag = session.SessionTag
 	device.ClientInstanceID = session.ClientInstanceID
-	device.LegacySession = session.Legacy
 	device.ProtocolVersion = session.ProtocolVersion
 	device.Capabilities = append([]string(nil), session.Capabilities...)
-	if !session.Legacy {
-		registeredSessionID := session.SessionID
-		clientInstanceID := session.ClientInstanceID
-		refreshed, refreshErr := ghostsession.Global.RefreshRouting(registeredSessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
-			return loadWebSocketInstanceRouting(authResult.User, clientInstanceID, authResult.GroupID, authResult.Capabilities)
-		})
-		if refreshErr != nil {
-			ghostsession.Global.Remove(registeredSessionID)
-			manager.UnregisterDevice(device)
-			return nil, refreshErr
-		}
-		session = refreshed
+	registeredSessionID := session.SessionID
+	clientInstanceID := session.ClientInstanceID
+	refreshed, refreshErr := ghostsession.Global.RefreshRouting(registeredSessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
+		return loadWebSocketInstanceRouting(authResult.User, clientInstanceID, authResult.GroupID)
+	})
+	if refreshErr != nil {
+		ghostsession.Global.Remove(registeredSessionID)
+		manager.UnregisterDevice(device)
+		return nil, refreshErr
 	}
+	session = refreshed
 	device.SSID = session.SSID
 	device.DevModel = session.DevModel
 	device.GroupID = session.TxGroupID
@@ -147,7 +143,7 @@ func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnection
 		manager.UnregisterDevice(device)
 		return nil, err
 	}
-	log.Printf("[WS-AUTH] session authenticated: session=%s user=%d tx=%d rx=%v legacy=%v", ghostsession.ShortID(session.SessionID), session.OwnerID, session.TxGroupID, session.RxGroupIDs, session.Legacy)
+	log.Printf("[WS-AUTH] session authenticated: session=%s user=%d tx=%d rx=%v", ghostsession.ShortID(session.SessionID), session.OwnerID, session.TxGroupID, session.RxGroupIDs)
 	return device, nil
 }
 
@@ -173,25 +169,19 @@ func AuthenticateWebSocketRequest(r *http.Request) *AuthResult {
 	if preAuth.Token == "" {
 		return &AuthResult{Error: "token_required"}
 	}
+	instanceID, protocolError := validateGhostPreAuth(preAuth)
+	if protocolError != "" {
+		return &AuthResult{Error: protocolError}
+	}
 	result := AuthenticateJWT(preAuth.Token)
 	if !result.Success {
 		return result
 	}
-	instanceID, legacy, err := ghostsession.NormalizeClientInstanceID(preAuth.ClientInstanceID)
-	if err != nil {
-		result.Success = false
-		result.Error = "invalid_client_instance_id"
-		return result
-	}
 	result.ClientInstanceID = instanceID
-	result.LegacySession = legacy
 	result.ProtocolVersion = preAuth.ProtocolVersion
 	result.Capabilities = preAuth.Capabilities
 	result.Routing = ghostsession.Routing{TxGroupID: result.GroupID, RxGroupIDs: []int{result.GroupID}}
-	if legacy {
-		return result
-	}
-	routing, err := loadWebSocketInstanceRouting(result.User, instanceID, result.GroupID, preAuth.Capabilities)
+	routing, err := loadWebSocketInstanceRouting(result.User, instanceID, result.GroupID)
 	if err != nil {
 		result.Success = false
 		result.Error = "client_preference_unavailable"
@@ -201,7 +191,21 @@ func AuthenticateWebSocketRequest(r *http.Request) *AuthResult {
 	return result
 }
 
-func loadWebSocketInstanceRouting(user *gormdb.User, instanceID string, fallbackGroupID int, capabilities []string) (ghostsession.Routing, error) {
+func validateGhostPreAuth(preAuth *WSPreAuthData) (string, string) {
+	if preAuth == nil || preAuth.ProtocolVersion != protocol.GhostAuthPayloadVersion || strings.TrimSpace(preAuth.ClientInstanceID) == "" {
+		return "", "ghost_protocol_upgrade_required"
+	}
+	instanceID, err := ghostsession.NormalizeClientInstanceID(preAuth.ClientInstanceID)
+	if err != nil {
+		return "", "invalid_client_instance_id"
+	}
+	if err := ghostsession.ValidateCapabilities(preAuth.Capabilities); err != nil {
+		return "", "ghost_capabilities_required"
+	}
+	return instanceID, ""
+}
+
+func loadWebSocketInstanceRouting(user *gormdb.User, instanceID string, fallbackGroupID int) (ghostsession.Routing, error) {
 	if user == nil {
 		return ghostsession.Routing{}, errors.New("authenticated user is required")
 	}
@@ -221,23 +225,11 @@ func loadWebSocketInstanceRouting(user *gormdb.User, instanceID string, fallback
 			return ghostsession.Routing{}, err
 		}
 	}
-	if !hasCapability(capabilities, "multi_receive_v1") || !hasCapability(capabilities, "source_group_v1") {
-		routing.RxGroupIDs = []int{routing.TxGroupID}
-	}
 	return routing, nil
 }
 
 func sanitizePersistedRouting(user *gormdb.User, routing ghostsession.Routing, fallbackGroupID int) (ghostsession.Routing, bool, error) {
 	return groupaccess.SanitizeRouting(gormdb.Get(), user, routing, fallbackGroupID, ghostsession.MaxSubscriptions())
-}
-
-func hasCapability(capabilities []string, wanted string) bool {
-	for _, capability := range capabilities {
-		if strings.EqualFold(strings.TrimSpace(capability), wanted) {
-			return true
-		}
-	}
-	return false
 }
 
 // AuthenticateJWT 进行 JWT 认证（幽灵设备）

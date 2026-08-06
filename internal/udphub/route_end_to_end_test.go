@@ -312,9 +312,7 @@ func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked
 	InvalidateDomainReceiverCache()
 
 	oldGhostManager := GlobalUDPGhostManager
-	GlobalUDPGhostManager = &UDPGhostManager{
-		devices: make(map[string]*models.Device), groupDevices: make(map[int]map[string]*models.Device),
-	}
+	GlobalUDPGhostManager = newUDPGhostManager()
 	oldTextBuffer := globalTextBuffer
 	globalTextBuffer = NewTextMessageBuffer(100, time.Hour)
 	globalTextBuffer.running = true
@@ -846,7 +844,7 @@ func TestLargeRuntimeDeviceChurnKeepsReceiverSnapshotsConsistent(t *testing.T) {
 	second := newRouteTestGroup(groupB)
 	globalGroupCacheAtomic.Store(map[int]*models.Group{groupA: first, groupB: second})
 	oldGhostManager := GlobalUDPGhostManager
-	GlobalUDPGhostManager = &UDPGhostManager{devices: make(map[string]*models.Device), groupDevices: make(map[int]map[string]*models.Device)}
+	GlobalUDPGhostManager = newUDPGhostManager()
 	t.Cleanup(func() {
 		StopDomainReceiverCache()
 		clearDomainReceiverCacheForTest()

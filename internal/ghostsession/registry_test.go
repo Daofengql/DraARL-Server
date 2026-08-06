@@ -14,7 +14,8 @@ func testRegistration(instanceID string, now time.Time) Registration {
 	return Registration{
 		ClientInstanceID: instanceID, OwnerID: 7, Username: "alice", CallSign: "BG7AAA",
 		DevModel: 101, SSID: 101, Transport: TransportUDP, Now: now,
-		Routing: Routing{TxGroupID: 1, RxGroupIDs: []int{3, 1, 3}},
+		Capabilities: []string{CapabilityMultiReceiveV1, CapabilitySourceGroupV1},
+		Routing:      Routing{TxGroupID: 1, RxGroupIDs: []int{3, 1, 3}},
 	}
 }
 
@@ -46,16 +47,6 @@ func TestRegistryAllowsMultipleInstancesAndReplacesOnlySameInstance(t *testing.T
 	}
 	if _, ok := registry.Get(replacement.SessionID); !ok {
 		t.Fatal("replacement session was lost")
-	}
-}
-
-func TestRegistryPreservesLegacySingleInstanceSlot(t *testing.T) {
-	registry := NewRegistry(4, 4)
-	if _, err := registry.Register(testRegistration("", time.Now()), Controller{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registry.Register(testRegistration("", time.Now()), Controller{}); !errors.Is(err, ErrInstanceAlreadyOnline) {
-		t.Fatalf("legacy duplicate error=%v", err)
 	}
 }
 
@@ -104,7 +95,7 @@ func TestRegistryEnforcesLimitsAndTagLookup(t *testing.T) {
 		t.Fatalf("subscription limit error=%v", err)
 	}
 	metrics := registry.Metrics()
-	if metrics.OnlineSessions != 1 || metrics.OnlineOwners != 1 || metrics.ModernSessions != 1 || metrics.LegacySessions != 0 {
+	if metrics.OnlineSessions != 1 || metrics.OnlineOwners != 1 {
 		t.Fatalf("unexpected registry metrics: %#v", metrics)
 	}
 	if metrics.SessionLimitRejects != 1 || metrics.SubscriptionLimitRejects != 1 || metrics.Registrations != 1 {
@@ -151,15 +142,23 @@ func TestGlobalRegistryUsesConfiguredLimits(t *testing.T) {
 }
 
 func TestNormalizeClientInstanceID(t *testing.T) {
-	if id, legacy, err := NormalizeClientInstanceID(""); err != nil || id != "" || !legacy {
-		t.Fatalf("legacy normalization=(%q,%v,%v)", id, legacy, err)
+	if _, err := NormalizeClientInstanceID(""); !errors.Is(err, ErrInvalidClientInstance) {
+		t.Fatalf("empty instance error=%v", err)
 	}
 	want := uuid.New()
-	if id, legacy, err := NormalizeClientInstanceID(want.String()); err != nil || legacy || id != want.String() {
-		t.Fatalf("uuid normalization=(%q,%v,%v)", id, legacy, err)
+	if id, err := NormalizeClientInstanceID(want.String()); err != nil || id != want.String() {
+		t.Fatalf("uuid normalization=(%q,%v)", id, err)
 	}
-	if _, _, err := NormalizeClientInstanceID("hardware-id"); !errors.Is(err, ErrInvalidClientInstance) {
+	if _, err := NormalizeClientInstanceID("hardware-id"); !errors.Is(err, ErrInvalidClientInstance) {
 		t.Fatalf("invalid instance error=%v", err)
+	}
+}
+
+func TestRegistryRequiresModernRoutingCapabilities(t *testing.T) {
+	registration := testRegistration(uuid.NewString(), time.Now())
+	registration.Capabilities = []string{CapabilitySourceGroupV1}
+	if _, err := NewRegistry(4, 4).Register(registration, Controller{}); !errors.Is(err, ErrRequiredCapabilities) {
+		t.Fatalf("missing capability error=%v", err)
 	}
 }
 

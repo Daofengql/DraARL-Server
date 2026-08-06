@@ -94,10 +94,7 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 	onlineDevMapDraARL = make(map[int]*models.Device)
 	publicGroupMap = make(map[int]*models.Group)
 	userList = sync.Map{}
-	GlobalUDPGhostManager = &UDPGhostManager{
-		devices:      make(map[string]*models.Device),
-		groupDevices: make(map[int]map[string]*models.Device),
-	}
+	GlobalUDPGhostManager = newUDPGhostManager()
 
 	dev := &models.Device{
 		ID:         7,
@@ -136,16 +133,23 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 		CallSign: "BG7OLD",
 	})
 
-	GlobalUDPGhostManager.Register(&models.Device{
-		OwnerID:        42,
-		Username:       "alice",
-		CallSign:       "BG7OLD",
-		SSID:           protocol.SSIDGhostAndroid,
-		CallSignSSID:   protocol.GetCallSignSSID("BG7OLD", protocol.SSIDGhostAndroid),
-		GroupID:        models.GroupIDPublicMin,
-		ISOnline:       true,
-		LastPacketTime: time.Now(),
-	})
+	ghostSessionID := "callsign-session"
+	if _, err := GlobalUDPGhostManager.RegisterSession(&models.Device{
+		OwnerID:         42,
+		Username:        "alice",
+		CallSign:        "BG7OLD",
+		SSID:            protocol.SSIDGhostAndroid,
+		CallSignSSID:    protocol.GetCallSignSSID("BG7OLD", protocol.SSIDGhostAndroid),
+		GroupID:         models.GroupIDPublicMin,
+		GhostSessionID:  ghostSessionID,
+		GhostSessionTag: 43001,
+		GhostRxGroupIDs: []int{models.GroupIDPublicMin},
+		ISOnline:        true,
+		UDPAddr:         &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 33001},
+		LastPacketTime:  time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	SyncUserCallSignChange(42, "alice", "BG7OLD", "BG7NEW")
 
@@ -170,7 +174,7 @@ func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 		t.Fatal("expected old userList callsign key removed")
 	}
 
-	ghost := GlobalUDPGhostManager.Get("alice", protocol.SSIDGhostAndroid)
+	ghost := GlobalUDPGhostManager.GetSession(ghostSessionID)
 	if ghost == nil || ghost.CallSign != "BG7NEW" {
 		t.Fatalf("expected udp ghost callsign updated, got %#v", ghost)
 	}

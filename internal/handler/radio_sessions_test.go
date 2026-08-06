@@ -27,8 +27,9 @@ func TestRadioSessionListAndDeleteAreOwnerScoped(t *testing.T) {
 		session, err := ghostsession.Global.Register(ghostsession.Registration{
 			ClientInstanceID: uuid.NewString(), OwnerID: user.ID, Username: user.Name,
 			DevModel: protocol.DraARLDevModelBrowser, SSID: protocol.SSIDGhostWeb,
-			Transport: ghostsession.TransportWebSocket,
-			Routing:   ghostsession.Routing{TxGroupID: 1001, RxGroupIDs: []int{1001}},
+			Transport:    ghostsession.TransportWebSocket,
+			Capabilities: []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
+			Routing:      ghostsession.Routing{TxGroupID: 1001, RxGroupIDs: []int{1001}},
 		}, controller)
 		if err != nil {
 			t.Fatal(err)
@@ -89,7 +90,8 @@ func TestAdminRadioSessionListIsRedactedAndCanDisconnectAnyOwner(t *testing.T) {
 		ClientInstanceID: instanceID, OwnerID: 42, Username: "remote-user", CallSign: "BG7TEST",
 		DevModel: protocol.DraARLDevModelAndroid, SSID: protocol.SSIDGhostAndroid,
 		Transport: ghostsession.TransportUDP, Endpoint: "203.0.113.7:60050",
-		Routing: ghostsession.Routing{TxGroupID: 1001, RxGroupIDs: []int{1001, 1002}},
+		Capabilities: []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1},
+		Routing:      ghostsession.Routing{TxGroupID: 1001, RxGroupIDs: []int{1001, 1002}},
 	}, ghostsession.Controller{Disconnect: func(string) { disconnected = true }})
 	if err != nil {
 		t.Fatal(err)

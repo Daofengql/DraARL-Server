@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"time"
 
 	"draarl/internal/ghostsession"
@@ -25,22 +24,22 @@ type JWTAuthResult struct {
 	ErrorMsg  string
 }
 
-// HandleJWTAuthPacket accepts both the historical raw-JWT payload and the
-// versioned session payload. Only the latter enables independent multi-device
-// sessions and session-tag packet authentication.
+// HandleJWTAuthPacket accepts only versioned, instance-bound ghost sessions.
 func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn) {
-	request, legacy, err := protocol.DecodeGhostAuthRequest(packet.DATA)
+	request, err := protocol.DecodeGhostAuthRequest(packet.DATA)
 	if err != nil {
-		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Invalid authentication payload")
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "ghost_protocol_upgrade_required")
 		return
 	}
-	if !legacy {
-		instanceID, normalizedLegacy, normalizeErr := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
-		if normalizeErr != nil || normalizedLegacy {
-			sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "Invalid client instance id")
-			return
-		}
-		request.ClientInstanceID = instanceID
+	instanceID, normalizeErr := ghostsession.NormalizeClientInstanceID(request.ClientInstanceID)
+	if normalizeErr != nil {
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "invalid_client_instance_id")
+		return
+	}
+	request.ClientInstanceID = instanceID
+	if err := ghostsession.ValidateCapabilities(request.Capabilities); err != nil {
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "ghost_capabilities_required")
+		return
 	}
 
 	result := AuthenticateJWT(request.Token)
@@ -56,37 +55,9 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 
 	user := result.User
 	ssid := protocol.GetGhostSSID(packet.DevModel)
-	if legacy {
-		if existing := GlobalUDPGhostManager.Get(user.Name, ssid); existing != nil {
-			if isRecentlyActiveDevice(existing) && !sameUDPAddr(existing.UDPAddr, packet.UDPAddr) {
-				log.Printf("[UDP-JWT] legacy ghost conflict: user=%s model=%d old=%v new=%v", user.Name, packet.DevModel, existing.UDPAddr, packet.UDPAddr)
-				sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthGhostDeviceConflict, "Ghost device already online")
-				return
-			}
-			if isRecentlyActiveDevice(existing) && existing.GhostSessionID != "" {
-				if session, exists := ghostsession.Global.Get(existing.GhostSessionID); exists && session.Transport == ghostsession.TransportUDP {
-					refreshAuthenticatedGhost(existing, user, packet.UDPAddr)
-					GlobalUDPGhostManager.UpdateSessionActivity(existing.GhostSessionID, time.Now())
-					if err := ActivateCenterLocalDevice(existing); err != nil {
-						sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "center_session_activation_failed")
-						return
-					}
-					sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
-					return
-				}
-			}
-			if existing.GhostSessionID != "" {
-				GlobalUDPGhostManager.RemoveSession(existing.GhostSessionID)
-				ghostsession.Global.Remove(existing.GhostSessionID)
-			} else {
-				GlobalUDPGhostManager.Remove(existing.Username, existing.SSID)
-			}
-			RevokeCenterLocalDevice(existing)
-		}
-	}
 
 	fallbackGroupID := GetGhostDeviceGroupID(user.ID, packet.DevModel)
-	routing, err := loadUDPGhostRouting(user, packet.DevModel, request.ClientInstanceID, legacy, request.Capabilities, fallbackGroupID)
+	routing, err := loadUDPGhostRouting(user, packet.DevModel, request.ClientInstanceID, fallbackGroupID)
 	if err != nil {
 		log.Printf("[UDP-JWT] load routing failed: user=%d model=%d err=%v", user.ID, packet.DevModel, err)
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "client_preference_unavailable")
@@ -100,10 +71,7 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		DevModel: packet.DevModel, GroupID: routing.TxGroupID, Priority: 100, Status: 0,
 		ISOnline: true, UDPAddr: packet.UDPAddr, LastPacketTime: now, OnlineTime: now,
 		ClientInstanceID: request.ClientInstanceID, GhostRxGroupIDs: append([]int(nil), routing.RxGroupIDs...),
-		GhostCapabilities: append([]string(nil), request.Capabilities...),
-	}
-	if !legacy {
-		device.GhostProtocolVersion = request.Version
+		GhostProtocolVersion: request.Version, GhostCapabilities: append([]string(nil), request.Capabilities...),
 	}
 
 	controller := ghostsession.Controller{
@@ -126,8 +94,8 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		},
 	}
 	session, err := ghostsession.Global.Register(ghostsession.Registration{
-		ClientInstanceID: request.ClientInstanceID, ReplaceExisting: legacy,
-		OwnerID: user.ID, Username: user.Name, CallSign: user.CallSign, Nickname: user.NickName,
+		ClientInstanceID: request.ClientInstanceID,
+		OwnerID:          user.ID, Username: user.Name, CallSign: user.CallSign, Nickname: user.NickName,
 		DevModel: packet.DevModel, SSID: ssid, Transport: ghostsession.TransportUDP,
 		Endpoint: udpEndpointString(packet.UDPAddr), ProtocolVersion: device.GhostProtocolVersion,
 		Capabilities: request.Capabilities, Routing: routing, Now: now,
@@ -136,8 +104,6 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		code := protocol.JWTAuthInvalidToken
 		message := "ghost_session_registration_failed"
 		switch {
-		case errors.Is(err, ghostsession.ErrInstanceAlreadyOnline):
-			code, message = protocol.JWTAuthGhostDeviceConflict, "Ghost device already online"
 		case errors.Is(err, ghostsession.ErrSessionLimit):
 			message = fmt.Sprintf("ghost_session_limit active=%d limit=%d", len(ghostsession.Global.ListOwner(user.ID)), ghostsession.MaxSessionsPerOwner())
 		}
@@ -153,19 +119,17 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 
 	// Reload after registration so an API update racing with authentication
 	// cannot be overwritten by a stale pre-auth preference snapshot.
-	if !legacy {
-		refreshed, refreshErr := ghostsession.Global.RefreshRouting(session.SessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
-			return loadUDPGhostRouting(user, packet.DevModel, session.ClientInstanceID, false, session.Capabilities, fallbackGroupID)
-		})
-		if refreshErr != nil {
-			ghostsession.Global.Remove(session.SessionID)
-			sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "client_preference_unavailable")
-			return
-		}
-		session = refreshed
-		device.GroupID = session.TxGroupID
-		device.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	refreshed, refreshErr := ghostsession.Global.RefreshRouting(session.SessionID, func(ghostsession.Session) (ghostsession.Routing, error) {
+		return loadUDPGhostRouting(user, packet.DevModel, session.ClientInstanceID, fallbackGroupID)
+	})
+	if refreshErr != nil {
+		ghostsession.Global.Remove(session.SessionID)
+		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "client_preference_unavailable")
+		return
 	}
+	session = refreshed
+	device.GroupID = session.TxGroupID
+	device.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
 
 	if _, err := GlobalUDPGhostManager.RegisterSession(device); err != nil {
 		ghostsession.Global.Remove(session.SessionID)
@@ -181,17 +145,13 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		return
 	}
 
-	if legacy {
-		sendJWTAuthResponse(packet, conn, true, user.CallSign, protocol.JWTAuthSuccess, "")
-	} else {
-		sendJWTAuthSessionResponse(packet, conn, user.CallSign, protocol.GhostAuthSuccess{
-			Version: protocol.GhostAuthPayloadVersion, SessionID: session.SessionID, SessionTag: session.SessionTag,
-			ClientInstanceID: session.ClientInstanceID, TxGroupID: session.TxGroupID,
-			RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
-		})
-	}
-	log.Printf("[UDP-JWT] authenticated: session=%s user=%s model=%d tx=%d rx=%v legacy=%v",
-		ghostsession.ShortID(session.SessionID), user.Name, packet.DevModel, session.TxGroupID, session.RxGroupIDs, legacy)
+	sendJWTAuthSessionResponse(packet, conn, user.Name, user.CallSign, protocol.GhostAuthSuccess{
+		Version: protocol.GhostAuthPayloadVersion, SessionID: session.SessionID, SessionTag: session.SessionTag,
+		ClientInstanceID: session.ClientInstanceID, TxGroupID: session.TxGroupID,
+		RxGroupIDs: append([]int(nil), session.RxGroupIDs...),
+	})
+	log.Printf("[UDP-JWT] authenticated: session=%s user=%s model=%d tx=%d rx=%v",
+		ghostsession.ShortID(session.SessionID), user.Name, packet.DevModel, session.TxGroupID, session.RxGroupIDs)
 }
 
 func udpEndpointString(addr *net.UDPAddr) string {
@@ -201,34 +161,11 @@ func udpEndpointString(addr *net.UDPAddr) string {
 	return addr.String()
 }
 
-func refreshAuthenticatedGhost(device *models.Device, user *gormdb.User, addr *net.UDPAddr) {
-	if device == nil || user == nil {
-		return
-	}
-	device.Username = user.Name
-	device.CallSign = user.CallSign
-	device.Nickname = user.NickName
-	device.OwnerID = user.ID
-	device.CallSignSSID = protocol.GetCallSignSSID(user.CallSign, device.SSID)
-	device.UDPAddr = addr
-	device.LastPacketTime = time.Now()
-	device.ISOnline = true
-}
-
-func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, legacy bool, capabilities []string, fallbackGroupID int) (ghostsession.Routing, error) {
+func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, fallbackGroupID int) (ghostsession.Routing, error) {
 	if user == nil {
 		return ghostsession.Routing{}, errors.New("authenticated user is required")
 	}
 	routing := ghostsession.Routing{TxGroupID: fallbackGroupID, RxGroupIDs: []int{fallbackGroupID}}
-	if legacy {
-		sanitized, _, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.MaxSubscriptions())
-		if err != nil {
-			return ghostsession.Routing{}, err
-		}
-		sanitized.RxGroupIDs = []int{sanitized.TxGroupID}
-		return sanitized, nil
-	}
-
 	repository := gormdb.NewGhostClientPreferenceRepository()
 	preference, err := repository.GetOrCreate(user.ID, devModel, instanceID, fallbackGroupID)
 	if err != nil || preference == nil {
@@ -244,19 +181,7 @@ func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, le
 			return ghostsession.Routing{}, err
 		}
 	}
-	if !ghostCapability(capabilities, "multi_receive_v1") || !ghostCapability(capabilities, "source_group_v1") {
-		routing.RxGroupIDs = []int{routing.TxGroupID}
-	}
 	return routing, nil
-}
-
-func ghostCapability(capabilities []string, wanted string) bool {
-	for _, capability := range capabilities {
-		if strings.EqualFold(strings.TrimSpace(capability), wanted) {
-			return true
-		}
-	}
-	return false
 }
 
 func sendJWTAuthResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn, success bool, callSign string, errorCode byte, errorMsg string) {
@@ -266,19 +191,19 @@ func sendJWTAuthResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn, suc
 		data = append([]byte{errorCode}, []byte(errorMsg)...)
 		responseCallSign = ""
 	}
-	response := encodeJWTAuthResponse(packet, responseCallSign, data)
+	response := encodeJWTAuthResponse(packet, packet.Username, responseCallSign, data)
 	if conn != nil && packet != nil && packet.UDPAddr != nil {
 		_, _ = conn.WriteToUDP(response, packet.UDPAddr)
 	}
 }
 
-func sendJWTAuthSessionResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn, callSign string, success protocol.GhostAuthSuccess) {
+func sendJWTAuthSessionResponse(packet *protocol.DraARLv1Packet, conn *net.UDPConn, username, callSign string, success protocol.GhostAuthSuccess) {
 	data, err := protocol.EncodeGhostAuthSuccessData(success)
 	if err != nil {
 		sendJWTAuthResponse(packet, conn, false, "", protocol.JWTAuthInvalidToken, "authentication_response_failed")
 		return
 	}
-	response := encodeJWTAuthResponse(packet, callSign, data)
+	response := encodeJWTAuthResponse(packet, username, callSign, data)
 	if tagged, ok := protocol.WithReservedUint32(response, success.SessionTag); ok {
 		response = tagged
 	}
@@ -287,12 +212,12 @@ func sendJWTAuthSessionResponse(packet *protocol.DraARLv1Packet, conn *net.UDPCo
 	}
 }
 
-func encodeJWTAuthResponse(packet *protocol.DraARLv1Packet, callSign string, data []byte) []byte {
+func encodeJWTAuthResponse(packet *protocol.DraARLv1Packet, username, callSign string, data []byte) []byte {
 	ssid := protocol.GetGhostSSID(packet.DevModel)
 	if ssid == 0 {
 		ssid = packet.DevModel
 	}
-	return protocol.EncodeDraARLv1(packet.Username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, callSign, data)
+	return protocol.EncodeDraARLv1(username, "", ssid, protocol.DraARLTypeJWTAuth, packet.DevModel, 0, callSign, data)
 }
 
 func AuthenticateJWT(token string) *JWTAuthResult {

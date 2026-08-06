@@ -120,13 +120,12 @@ const (
 
 // JWT 认证响应状态码
 const (
-	JWTAuthSuccess             byte = 0 // 认证成功
-	JWTAuthInvalidToken        byte = 1 // Token 无效或过期
-	JWTAuthUserNotFound        byte = 2 // 用户不存在
-	JWTAuthUserDisabled        byte = 3 // 用户已禁用
-	JWTAuthUserNotApproved     byte = 4 // 用户未审核
-	JWTAuthInvalidDevModel     byte = 5 // 无效的设备型号 (非 101-104)
-	JWTAuthGhostDeviceConflict byte = 6 // 同平台已有在线幽灵设备
+	JWTAuthSuccess         byte = 0 // 认证成功
+	JWTAuthInvalidToken    byte = 1 // Token 无效或过期
+	JWTAuthUserNotFound    byte = 2 // 用户不存在
+	JWTAuthUserDisabled    byte = 3 // 用户已禁用
+	JWTAuthUserNotApproved byte = 4 // 用户未审核
+	JWTAuthInvalidDevModel byte = 5 // 无效的设备型号 (非 101-104)
 )
 
 // Heartbeat 响应状态码
@@ -359,8 +358,9 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	}
 	copy(out[54:86], callsignBytes)
 
-	// Reserved contains hop-local authentication metadata on modern UDP
-	// uplinks. Never relay a sender's session tag to legacy recipients.
+	// Reserved contains hop-local authentication metadata on UDP ghost
+	// uplinks. Never relay a sender's session tag; fan-out adds source-group
+	// metadata only for Session-aware ghost recipients.
 	for i := DraARLv1ReservedOffset; i < DraARLv1HeaderSize; i++ {
 		out[i] = 0
 	}

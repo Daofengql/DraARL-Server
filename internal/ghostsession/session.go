@@ -24,7 +24,12 @@ var (
 	ErrSessionNotFound       = errors.New("ghost session not found")
 	ErrSessionLimit          = errors.New("ghost session limit reached")
 	ErrSubscriptionLimit     = errors.New("ghost subscription limit reached")
-	ErrInstanceAlreadyOnline = errors.New("ghost client instance already online")
+	ErrRequiredCapabilities  = errors.New("required ghost capabilities are missing")
+)
+
+const (
+	CapabilityMultiReceiveV1 = "multi_receive_v1"
+	CapabilitySourceGroupV1  = "source_group_v1"
 )
 
 type Routing struct {
@@ -57,23 +62,33 @@ func NormalizeRouting(routing Routing, maxSubscriptions int) (Routing, error) {
 	return normalized, nil
 }
 
-func NormalizeClientInstanceID(raw string) (string, bool, error) {
+func NormalizeClientInstanceID(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", true, nil
+		return "", ErrInvalidClientInstance
 	}
 	parsed, err := uuid.Parse(raw)
 	if err != nil || parsed == uuid.Nil {
-		return "", false, ErrInvalidClientInstance
+		return "", ErrInvalidClientInstance
 	}
-	return strings.ToLower(parsed.String()), false, nil
+	return strings.ToLower(parsed.String()), nil
+}
+
+func ValidateCapabilities(capabilities []string) error {
+	normalized := normalizeCapabilities(capabilities)
+	for _, required := range []string{CapabilityMultiReceiveV1, CapabilitySourceGroupV1} {
+		index := sort.SearchStrings(normalized, required)
+		if index >= len(normalized) || normalized[index] != required {
+			return fmt.Errorf("%w: %s", ErrRequiredCapabilities, required)
+		}
+	}
+	return nil
 }
 
 type Session struct {
 	SessionID        string    `json:"session_id"`
 	SessionTag       uint32    `json:"session_tag,omitempty"`
-	ClientInstanceID string    `json:"client_instance_id,omitempty"`
-	Legacy           bool      `json:"legacy"`
+	ClientInstanceID string    `json:"client_instance_id"`
 	OwnerID          int       `json:"owner_id"`
 	Username         string    `json:"username"`
 	CallSign         string    `json:"callsign"`

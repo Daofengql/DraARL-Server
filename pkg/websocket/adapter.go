@@ -33,11 +33,11 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 	if a == nil || a.manager == nil || len(groupIDs) == 0 || len(data) == 0 {
 		return 0, 0
 	}
-	var legacyPayload *sharedWritePayload
+	var basePayload *sharedWritePayload
 	var sourcePayload *sharedWritePayload
 	defer func() {
-		if legacyPayload != nil {
-			legacyPayload.release()
+		if basePayload != nil {
+			basePayload.release()
 		}
 		if sourcePayload != nil {
 			sourcePayload.release()
@@ -72,8 +72,8 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 				continue
 			}
 			seenSessions[sessionKey] = struct{}{}
-			payload := legacyPayload
-			if filter.SourceGroupID > 0 && device.HasCapability("source_group_v1") {
+			var payload *sharedWritePayload
+			if filter.SourceGroupID > 0 {
 				if sourcePayload == nil {
 					if enriched, ok := protocol.WithSourceGroupID(data, filter.SourceGroupID); ok {
 						sourcePayload = newSharedWritePayload(enriched)
@@ -84,8 +84,10 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 				}
 			}
 			if payload == nil {
-				legacyPayload = newSharedWritePayload(data)
-				payload = legacyPayload
+				if basePayload == nil {
+					basePayload = newSharedWritePayload(data)
+				}
+				payload = basePayload
 			}
 			if device.asyncWriteShared(messageType, payload) {
 				sent++

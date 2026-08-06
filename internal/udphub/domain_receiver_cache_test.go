@@ -42,20 +42,14 @@ func setupDomainReceiverTest(t *testing.T, groupID int, devices ...*models.Devic
 			DevMap:   make(map[int]*models.Device),
 		},
 	})
-	GlobalUDPGhostManager = &UDPGhostManager{
-		devices:      make(map[string]*models.Device),
-		groupDevices: make(map[int]map[string]*models.Device),
-	}
+	GlobalUDPGhostManager = newUDPGhostManager()
 
 	t.Cleanup(func() {
 		StopDomainReceiverCache()
 		clearDomainReceiverCacheForTest()
 		resetHalfDuplexDomainCache()
 		globalGroupCacheAtomic.Store(map[int]*models.Group{})
-		GlobalUDPGhostManager = &UDPGhostManager{
-			devices:      make(map[string]*models.Device),
-			groupDevices: make(map[int]map[string]*models.Device),
-		}
+		GlobalUDPGhostManager = newUDPGhostManager()
 		runtimeIndexMu.Lock()
 		devOwnerSSIDMap = make(map[string]*models.Device)
 		devUsernameSSIDMap = make(map[string]*models.Device)
@@ -78,16 +72,21 @@ func TestGhostChangesInvalidateDomainReceiverCache(t *testing.T) {
 
 	oldAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 30001}
 	ghost := &models.Device{
-		ID:             -1,
-		OwnerID:        1,
-		Username:       "ghost-user",
-		SSID:           101,
-		GroupID:        groupID,
-		ISOnline:       true,
-		UDPAddr:        oldAddr,
-		LastPacketTime: time.Now(),
+		ID:              -1,
+		OwnerID:         1,
+		Username:        "ghost-user",
+		SSID:            101,
+		GroupID:         groupID,
+		GhostSessionID:  "cache-session-1",
+		GhostSessionTag: 42001,
+		GhostRxGroupIDs: []int{groupID},
+		ISOnline:        true,
+		UDPAddr:         oldAddr,
+		LastPacketTime:  time.Now(),
 	}
-	GlobalUDPGhostManager.Register(ghost)
+	if _, err := GlobalUDPGhostManager.RegisterSession(ghost); err != nil {
+		t.Fatal(err)
+	}
 
 	entries := getDomainReceiverEntries(groupID)
 	if len(entries) != 1 || entries[0].addr != oldAddr.AddrPort() {
@@ -95,13 +94,16 @@ func TestGhostChangesInvalidateDomainReceiverCache(t *testing.T) {
 	}
 
 	newAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 30002}
-	GlobalUDPGhostManager.UpdateActivity(ghost.Username, ghost.SSID, newAddr)
+	ghost.UDPAddr = newAddr
+	if _, err := GlobalUDPGhostManager.RegisterSession(ghost); err != nil {
+		t.Fatal(err)
+	}
 	entries = getDomainReceiverEntries(groupID)
 	if len(entries) != 1 || entries[0].addr != newAddr.AddrPort() {
 		t.Fatalf("updated ghost address not visible immediately: %#v", entries)
 	}
 
-	GlobalUDPGhostManager.Remove(ghost.Username, ghost.SSID)
+	GlobalUDPGhostManager.RemoveSession(ghost.GhostSessionID)
 	if entries = getDomainReceiverEntries(groupID); len(entries) != 0 {
 		t.Fatalf("removed ghost remained cached: %#v", entries)
 	}
@@ -152,9 +154,12 @@ func TestDomainReceiverMetricsCountCandidatesAndDeduplication(t *testing.T) {
 	setupDomainReceiverTest(t, groupID, physical)
 	ghost := &models.Device{
 		ID: -12, OwnerID: 13, Username: "ghost", SSID: 101, GroupID: groupID,
+		GhostSessionID: "cache-session-2", GhostSessionTag: 42002, GhostRxGroupIDs: []int{groupID},
 		ISOnline: true, UDPAddr: sharedAddr, LastPacketTime: time.Now(),
 	}
-	GlobalUDPGhostManager.Register(ghost)
+	if _, err := GlobalUDPGhostManager.RegisterSession(ghost); err != nil {
+		t.Fatal(err)
+	}
 	before := GetDomainReceiverCacheStats()
 	entries := getDomainReceiverEntries(groupID)
 	after := GetDomainReceiverCacheStats()

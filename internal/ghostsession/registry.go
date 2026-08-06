@@ -26,7 +26,6 @@ type Controller struct {
 
 type Registration struct {
 	ClientInstanceID string
-	ReplaceExisting  bool
 	OwnerID          int
 	Username         string
 	CallSign         string
@@ -60,7 +59,6 @@ type Registry struct {
 	registrations            atomic.Uint64
 	replacements             atomic.Uint64
 	removals                 atomic.Uint64
-	instanceConflictRejects  atomic.Uint64
 	sessionLimitRejects      atomic.Uint64
 	subscriptionLimitRejects atomic.Uint64
 	permissionRevocations    atomic.Uint64
@@ -69,8 +67,6 @@ type Registry struct {
 type MetricsSnapshot struct {
 	OnlineSessions             int            `json:"online_sessions"`
 	OnlineOwners               int            `json:"online_owners"`
-	LegacySessions             int            `json:"legacy_sessions"`
-	ModernSessions             int            `json:"modern_sessions"`
 	Subscriptions              int            `json:"subscriptions"`
 	MaxSubscriptionsObserved   int            `json:"max_subscriptions_observed"`
 	ByTransport                map[string]int `json:"by_transport"`
@@ -80,7 +76,6 @@ type MetricsSnapshot struct {
 	Registrations              uint64         `json:"registrations"`
 	Replacements               uint64         `json:"replacements"`
 	Removals                   uint64         `json:"removals"`
-	InstanceConflictRejects    uint64         `json:"instance_conflict_rejects"`
 	SessionLimitRejects        uint64         `json:"session_limit_rejects"`
 	SubscriptionLimitRejects   uint64         `json:"subscription_limit_rejects"`
 	PermissionRevocations      uint64         `json:"permission_revocations"`
@@ -135,10 +130,7 @@ func MaxSessionsPerOwner() int {
 	return Global.maxOwnerSessions
 }
 
-func instanceKey(ownerID int, devModel uint8, clientInstanceID string, legacy bool) string {
-	if legacy {
-		return fmt.Sprintf("%d:%d:legacy", ownerID, devModel)
-	}
+func instanceKey(ownerID int, devModel uint8, clientInstanceID string) string {
 	return fmt.Sprintf("%d:%d:%s", ownerID, devModel, clientInstanceID)
 }
 
@@ -164,8 +156,11 @@ func errorsNewSessionTagCollision() error {
 }
 
 func (r *Registry) Register(registration Registration, controller Controller) (Session, error) {
-	clientInstanceID, legacy, err := NormalizeClientInstanceID(registration.ClientInstanceID)
+	clientInstanceID, err := NormalizeClientInstanceID(registration.ClientInstanceID)
 	if err != nil {
+		return Session{}, err
+	}
+	if err := ValidateCapabilities(registration.Capabilities); err != nil {
 		return Session{}, err
 	}
 	routing, err := r.normalizeRouting(registration.Routing)
@@ -180,20 +175,11 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 		now = time.Now()
 	}
 
-	key := instanceKey(registration.OwnerID, registration.DevModel, clientInstanceID, legacy)
+	key := instanceKey(registration.OwnerID, registration.DevModel, clientInstanceID)
 	var replaced *registryEntry
 	r.mutationMu.Lock()
 	r.mu.Lock()
 	oldSessionID := r.instanceSessions[key]
-	if oldSessionID != "" {
-		old := r.sessions[oldSessionID]
-		if old != nil && legacy && !registration.ReplaceExisting {
-			r.instanceConflictRejects.Add(1)
-			r.mu.Unlock()
-			r.mutationMu.Unlock()
-			return Session{}, ErrInstanceAlreadyOnline
-		}
-	}
 	ownerSet := r.ownerSessions[registration.OwnerID]
 	ownerCount := len(ownerSet)
 	if oldSessionID != "" {
@@ -215,7 +201,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 		replaced = r.removeLocked(oldSessionID)
 	}
 	session := Session{
-		SessionID: uuid.NewString(), SessionTag: tag, ClientInstanceID: clientInstanceID, Legacy: legacy,
+		SessionID: uuid.NewString(), SessionTag: tag, ClientInstanceID: clientInstanceID,
 		OwnerID: registration.OwnerID, Username: registration.Username, CallSign: registration.CallSign,
 		Nickname: registration.Nickname, DevModel: registration.DevModel, SSID: registration.SSID,
 		Transport: registration.Transport, Endpoint: registration.Endpoint, ProtocolVersion: registration.ProtocolVersion,
@@ -260,7 +246,7 @@ func (r *Registry) removeLocked(sessionID string) *registryEntry {
 	}
 	delete(r.sessions, sessionID)
 	delete(r.tagSessions, entry.session.SessionTag)
-	key := instanceKey(entry.session.OwnerID, entry.session.DevModel, entry.session.ClientInstanceID, entry.session.Legacy)
+	key := instanceKey(entry.session.OwnerID, entry.session.DevModel, entry.session.ClientInstanceID)
 	if r.instanceSessions[key] == sessionID {
 		delete(r.instanceSessions, key)
 	}
@@ -359,11 +345,6 @@ func (r *Registry) Metrics() MetricsSnapshot {
 			continue
 		}
 		session := &entry.session
-		if session.Legacy {
-			snapshot.LegacySessions++
-		} else {
-			snapshot.ModernSessions++
-		}
 		snapshot.ByTransport[string(session.Transport)]++
 		snapshot.ByPlatform[session.DevModel]++
 		subscriptions := len(session.RxGroupIDs)
@@ -376,7 +357,6 @@ func (r *Registry) Metrics() MetricsSnapshot {
 	snapshot.Registrations = r.registrations.Load()
 	snapshot.Replacements = r.replacements.Load()
 	snapshot.Removals = r.removals.Load()
-	snapshot.InstanceConflictRejects = r.instanceConflictRejects.Load()
 	snapshot.SessionLimitRejects = r.sessionLimitRejects.Load()
 	snapshot.SubscriptionLimitRejects = r.subscriptionLimitRejects.Load()
 	snapshot.PermissionRevocations = r.permissionRevocations.Load()

@@ -105,6 +105,154 @@ type UDPConfig struct {
 	WriteBufferBytes int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
 }
 
+// GhostSessionConfig controls the per-owner and per-session bounds for the
+// multi-device ghost routing model. The defaults preserve the original
+// in-process limits while allowing deployments to choose stricter limits.
+type GhostSessionConfig struct {
+	MaxSessionsPerOwner        int                    `yaml:"MaxSessionsPerOwner" json:"max_sessions_per_owner"`
+	MaxSubscriptionsPerSession int                    `yaml:"MaxSubscriptionsPerSession" json:"max_subscriptions_per_session"`
+	MultiSession               GhostFeatureGateConfig `yaml:"MultiSession" json:"multi_session"`
+	MultiReceive               GhostFeatureGateConfig `yaml:"MultiReceive" json:"multi_receive"`
+}
+
+// GhostFeatureGateConfig supports an emergency global switch while retaining
+// account and client-platform allowlists for staged rollout. A missing Enabled
+// value defaults to true.
+type GhostFeatureGateConfig struct {
+	Enabled        *bool   `yaml:"Enabled" json:"enabled"`
+	AllowOwnerIDs  []int   `yaml:"AllowOwnerIDs" json:"allow_owner_ids"`
+	AllowDevModels []uint8 `yaml:"AllowDevModels" json:"allow_dev_models"`
+}
+
+func boolPointer(value bool) *bool {
+	return &value
+}
+
+func (c *GhostFeatureGateConfig) SetDefaults(field string) error {
+	if c.Enabled == nil {
+		c.Enabled = boolPointer(true)
+	}
+	ownerSet := make(map[int]struct{}, len(c.AllowOwnerIDs))
+	owners := make([]int, 0, len(c.AllowOwnerIDs))
+	for _, ownerID := range c.AllowOwnerIDs {
+		if ownerID <= 0 {
+			return fmt.Errorf("GhostSessions.%s.AllowOwnerIDs must contain positive IDs", field)
+		}
+		if _, exists := ownerSet[ownerID]; exists {
+			continue
+		}
+		ownerSet[ownerID] = struct{}{}
+		owners = append(owners, ownerID)
+	}
+	modelSet := make(map[uint8]struct{}, len(c.AllowDevModels))
+	models := make([]uint8, 0, len(c.AllowDevModels))
+	for _, devModel := range c.AllowDevModels {
+		if devModel == 0 {
+			return fmt.Errorf("GhostSessions.%s.AllowDevModels must contain non-zero models", field)
+		}
+		if _, exists := modelSet[devModel]; exists {
+			continue
+		}
+		modelSet[devModel] = struct{}{}
+		models = append(models, devModel)
+	}
+	c.AllowOwnerIDs = owners
+	c.AllowDevModels = models
+	return nil
+}
+
+func (c GhostFeatureGateConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+const (
+	DefaultGhostSessionsPerOwner        = 8
+	DefaultGhostSubscriptionsPerSession = 16
+	MaxGhostSessionsPerOwner            = 64
+	MaxGhostSubscriptionsPerSession     = 256
+)
+
+// SetDefaults applies and validates the bounds shared by centre and edge
+// processes. Zero means the compatibility default; negative or excessive
+// values are configuration errors rather than silently weakened limits.
+func (c *GhostSessionConfig) SetDefaults() error {
+	if c.MaxSessionsPerOwner == 0 {
+		c.MaxSessionsPerOwner = DefaultGhostSessionsPerOwner
+	}
+	if c.MaxSubscriptionsPerSession == 0 {
+		c.MaxSubscriptionsPerSession = DefaultGhostSubscriptionsPerSession
+	}
+	if c.MaxSessionsPerOwner < 1 || c.MaxSessionsPerOwner > MaxGhostSessionsPerOwner {
+		return fmt.Errorf("GhostSessions.MaxSessionsPerOwner must be between 1 and %d", MaxGhostSessionsPerOwner)
+	}
+	if c.MaxSubscriptionsPerSession < 1 || c.MaxSubscriptionsPerSession > MaxGhostSubscriptionsPerSession {
+		return fmt.Errorf("GhostSessions.MaxSubscriptionsPerSession must be between 1 and %d", MaxGhostSubscriptionsPerSession)
+	}
+	if err := c.MultiSession.SetDefaults("MultiSession"); err != nil {
+		return err
+	}
+	if err := c.MultiReceive.SetDefaults("MultiReceive"); err != nil {
+		return err
+	}
+	return nil
+}
+
+type MessageAPIConfig struct {
+	DefaultPageSize          int `yaml:"DefaultPageSize" json:"default_page_size"`
+	MaxPageSize              int `yaml:"MaxPageSize" json:"max_page_size"`
+	RequestsPerMinutePerUser int `yaml:"RequestsPerMinutePerUser" json:"requests_per_minute_per_user"`
+	RequestsPerMinutePerIP   int `yaml:"RequestsPerMinutePerIP" json:"requests_per_minute_per_ip"`
+	MaxConcurrentQueries     int `yaml:"MaxConcurrentQueries" json:"max_concurrent_queries"`
+}
+
+const (
+	DefaultMessageAPIPageSize        = 50
+	DefaultMessageAPIMaxPageSize     = 100
+	DefaultMessageAPIRequestsPerUser = 120
+	DefaultMessageAPIRequestsPerIP   = 300
+	DefaultMessageAPIMaxConcurrent   = 32
+	MaxMessageAPIPageSize            = 1000
+	MaxMessageAPIRequestsPerMinute   = 1_000_000
+	MaxMessageAPIConcurrentQueries   = 4096
+)
+
+func (c *MessageAPIConfig) SetDefaults() error {
+	if c.MaxPageSize == 0 {
+		c.MaxPageSize = DefaultMessageAPIMaxPageSize
+	}
+	if c.DefaultPageSize == 0 {
+		c.DefaultPageSize = DefaultMessageAPIPageSize
+		if c.DefaultPageSize > c.MaxPageSize {
+			c.DefaultPageSize = c.MaxPageSize
+		}
+	}
+	if c.RequestsPerMinutePerUser == 0 {
+		c.RequestsPerMinutePerUser = DefaultMessageAPIRequestsPerUser
+	}
+	if c.RequestsPerMinutePerIP == 0 {
+		c.RequestsPerMinutePerIP = DefaultMessageAPIRequestsPerIP
+	}
+	if c.MaxConcurrentQueries == 0 {
+		c.MaxConcurrentQueries = DefaultMessageAPIMaxConcurrent
+	}
+	if c.MaxPageSize < 1 || c.MaxPageSize > MaxMessageAPIPageSize {
+		return fmt.Errorf("MessageAPI.MaxPageSize must be between 1 and %d", MaxMessageAPIPageSize)
+	}
+	if c.DefaultPageSize < 1 || c.DefaultPageSize > c.MaxPageSize {
+		return fmt.Errorf("MessageAPI.DefaultPageSize must be between 1 and MessageAPI.MaxPageSize")
+	}
+	if c.RequestsPerMinutePerUser < 1 || c.RequestsPerMinutePerUser > MaxMessageAPIRequestsPerMinute {
+		return fmt.Errorf("MessageAPI.RequestsPerMinutePerUser must be between 1 and %d", MaxMessageAPIRequestsPerMinute)
+	}
+	if c.RequestsPerMinutePerIP < 1 || c.RequestsPerMinutePerIP > MaxMessageAPIRequestsPerMinute {
+		return fmt.Errorf("MessageAPI.RequestsPerMinutePerIP must be between 1 and %d", MaxMessageAPIRequestsPerMinute)
+	}
+	if c.MaxConcurrentQueries < 1 || c.MaxConcurrentQueries > MaxMessageAPIConcurrentQueries {
+		return fmt.Errorf("MessageAPI.MaxConcurrentQueries must be between 1 and %d", MaxMessageAPIConcurrentQueries)
+	}
+	return nil
+}
+
 // InterconnectConfig controls the optional centre-side Type 0 node services.
 // It is ignored unless Enabled is true, preserving existing single-node startup.
 type InterconnectConfig struct {
@@ -161,8 +309,10 @@ type Configuration struct {
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
 	} `yaml:"System" json:"system"`
 
-	UDP          UDPConfig          `yaml:"UDP" json:"udp"`
-	Interconnect InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
+	UDP           UDPConfig          `yaml:"UDP" json:"udp"`
+	GhostSessions GhostSessionConfig `yaml:"GhostSessions" json:"ghost_sessions"`
+	MessageAPI    MessageAPIConfig   `yaml:"MessageAPI" json:"message_api"`
+	Interconnect  InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -289,6 +439,12 @@ func Load(configPath string) (*Configuration, error) {
 // SetDefaults 设置默认配置值
 func (c *Configuration) SetDefaults() error {
 	c.migrateLegacyStorageConfig()
+	if err := c.GhostSessions.SetDefaults(); err != nil {
+		return err
+	}
+	if err := c.MessageAPI.SetDefaults(); err != nil {
+		return err
+	}
 
 	if c.UDP.SendWorkers < 0 {
 		c.UDP.SendWorkers = 0

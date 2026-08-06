@@ -339,19 +339,30 @@ func (GroupMember) TableName() string {
 
 // CommRecord 通信记录（精简版，名称通过联表查询获取）
 type CommRecord struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	DeviceID   uint      `gorm:"index;not null;column:device_id" json:"device_id"`                                                                    // 发送设备ID（0=幽灵设备，>0=普通设备）
-	DeviceSSID uint8     `gorm:"column:device_ssid" json:"device_ssid"`                                                                               // 设备 SSID（冗余，便于查询）
-	GroupID    *uint     `gorm:"index;index:idx_group_start,priority:1;column:group_id" json:"group_id"`                                              // 性能优化：复合索引用于按群组查询
-	UserID     *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`                                                 // 性能优化：复合索引用于按用户查询
-	StartTime  time.Time `gorm:"index;index:idx_group_start,priority:2;index:idx_user_start,priority:2;not null;column:start_time" json:"start_time"` // 性能优化：复合索引
-	EndTime    time.Time `gorm:"column:end_time" json:"end_time"`                                                                                     // 通信结束时间
-	DurationMs int       `gorm:"column:duration_ms" json:"duration_ms"`                                                                               // 通信时长（毫秒）
-	AudioPath  string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`                                                               // MinIO 音频文件路径
-	AudioSize  int64     `gorm:"column:audio_size" json:"audio_size"`                                                                                 // 音频文件大小（字节）
-	Status     int       `gorm:"default:0;index;column:status" json:"status"`                                                                         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
-	CreatedAt  time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	ID             uint      `gorm:"primaryKey;autoIncrement;index:idx_comm_records_group_status_start_id,priority:4;index:idx_comm_records_group_status_type_start_id,priority:5" json:"id"`
+	DeviceID       uint      `gorm:"index;not null;column:device_id" json:"device_id"`                                                                                                                                                                                         // 发送设备ID（0=幽灵设备，>0=普通设备）
+	DeviceSSID     uint8     `gorm:"column:device_ssid" json:"device_ssid"`                                                                                                                                                                                                    // 设备 SSID（冗余，便于查询）
+	GroupID        *uint     `gorm:"index;index:idx_group_start,priority:1;index:idx_comm_records_group_status_start_id,priority:1;index:idx_comm_records_group_status_type_start_id,priority:1;column:group_id" json:"group_id"`                                              // 性能优化：复合索引用于按群组查询
+	UserID         *uint     `gorm:"index;index:idx_user_start,priority:1;column:user_id" json:"user_id"`                                                                                                                                                                      // 性能优化：复合索引用于按用户查询
+	StartTime      time.Time `gorm:"index;index:idx_group_start,priority:2;index:idx_user_start,priority:2;index:idx_comm_records_group_status_start_id,priority:3;index:idx_comm_records_group_status_type_start_id,priority:4;not null;column:start_time" json:"start_time"` // 性能优化：复合索引
+	EndTime        time.Time `gorm:"column:end_time" json:"end_time"`                                                                                                                                                                                                          // 通信结束时间
+	DurationMs     int       `gorm:"column:duration_ms" json:"duration_ms"`                                                                                                                                                                                                    // 通信时长（毫秒）
+	AudioPath      string    `gorm:"type:varchar(255);column:audio_path" json:"audio_path"`                                                                                                                                                                                    // MinIO 音频文件路径
+	AudioSize      int64     `gorm:"column:audio_size" json:"audio_size"`                                                                                                                                                                                                      // 音频文件大小（字节）
+	Status         int       `gorm:"default:0;index;index:idx_comm_records_group_status_start_id,priority:2;index:idx_comm_records_group_status_type_start_id,priority:2;column:status" json:"status"`                                                                         // 状态：0=录制中,1=待上传,2=已完成,3=上传失败
+	MessageType    uint8     `gorm:"type:tinyint unsigned;not null;default:0;index:idx_comm_records_group_status_type_start_id,priority:3;column:message_type" json:"message_type"`                                                                                            // 0=语音, 1=文本
+	TextContent    string    `gorm:"type:text;column:text_content" json:"text_content"`
+	SenderUsername string    `gorm:"type:varchar(255);column:sender_username" json:"sender_username"`
+	SenderCallSign string    `gorm:"type:varchar(32);column:sender_callsign" json:"sender_callsign"`
+	SenderNickname string    `gorm:"type:varchar(255);column:sender_nickname" json:"sender_nickname"`
+	SenderDevModel int       `gorm:"type:int;column:sender_dev_model" json:"sender_dev_model"`
+	CreatedAt      time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 }
+
+const (
+	CommMessageTypeVoice uint8 = iota
+	CommMessageTypeText
+)
 
 // TableName 指定表名
 func (CommRecord) TableName() string {
@@ -408,6 +419,43 @@ type UserDevicePreference struct {
 // TableName 指定表名
 func (UserDevicePreference) TableName() string {
 	return "user_device_preferences"
+}
+
+// GhostClientPreference stores routing defaults for one installed ghost
+// client. Online state remains runtime-only and is never inferred from this
+// table.
+type GhostClientPreference struct {
+	ID               uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID           int       `gorm:"not null;uniqueIndex:uk_ghost_client_instance,priority:1;index;column:user_id" json:"user_id"`
+	DevModel         uint8     `gorm:"not null;uniqueIndex:uk_ghost_client_instance,priority:2;column:dev_model" json:"dev_model"`
+	ClientInstanceID string    `gorm:"type:char(36);not null;uniqueIndex:uk_ghost_client_instance,priority:3;column:client_instance_id" json:"client_instance_id"`
+	TxGroupID        *int      `gorm:"index;column:tx_group_id" json:"tx_group_id,omitempty"`
+	CreatedAt        time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt        time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+
+	User          *User                     `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	TxGroup       *Group                    `gorm:"foreignKey:TxGroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	Subscriptions []GhostClientSubscription `gorm:"foreignKey:PreferenceID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"subscriptions,omitempty"`
+}
+
+func (GhostClientPreference) TableName() string {
+	return "ghost_client_preferences"
+}
+
+// GhostClientSubscription keeps receive groups queryable and independently
+// constrained instead of encoding them in a comma-separated preference.
+type GhostClientSubscription struct {
+	ID           uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	PreferenceID uint      `gorm:"not null;uniqueIndex:uk_ghost_client_subscription,priority:1;index;column:preference_id" json:"preference_id"`
+	GroupID      int       `gorm:"not null;uniqueIndex:uk_ghost_client_subscription,priority:2;index;column:group_id" json:"group_id"`
+	CreatedAt    time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+
+	Preference *GhostClientPreference `gorm:"foreignKey:PreferenceID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Group      *Group                 `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (GhostClientSubscription) TableName() string {
+	return "ghost_client_subscriptions"
 }
 
 // DeviceConfig 设备配置模型
@@ -533,21 +581,24 @@ func (ClientResource) TableName() string {
 
 // ClientResourceRelease is one immutable version in a resource channel.
 type ClientResourceRelease struct {
-	ID               int                      `gorm:"primaryKey;autoIncrement" json:"id"`
-	ResourceID       int                      `gorm:"not null;uniqueIndex:uk_client_resource_release,priority:1;index:idx_client_resource_release_lookup,priority:1;column:resource_id" json:"resource_id"`
-	Version          string                   `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_resource_release,priority:3;index:idx_client_resource_release_lookup,priority:3;column:version" json:"version"`
-	Channel          string                   `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_resource_release,priority:2;index:idx_client_resource_release_lookup,priority:2;column:channel" json:"channel"`
-	Title            string                   `gorm:"type:varchar(255);column:title" json:"title"`
-	Changelog        string                   `gorm:"type:mediumtext;column:changelog" json:"changelog"`
-	Status           string                   `gorm:"type:varchar(32);not null;default:draft;index:idx_client_resource_release_lookup,priority:4;column:status" json:"status"`
-	ForceUpdate      bool                     `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
-	MinClientVersion string                   `gorm:"type:varchar(64);column:min_client_version" json:"min_client_version,omitempty"`
-	PublishedAt      *time.Time               `gorm:"column:published_at" json:"published_at,omitempty"`
-	CreatedBy        int                      `gorm:"type:int;index;column:created_by" json:"created_by"`
-	CreateTime       time.Time                `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime       time.Time                `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	Resource         *ClientResource          `gorm:"foreignKey:ResourceID;references:ID" json:"resource,omitempty"`
-	Artifacts        []ClientResourceArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
+	ID                       int                      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ResourceID               int                      `gorm:"not null;uniqueIndex:uk_client_resource_release,priority:1;index:idx_client_resource_release_lookup,priority:1;column:resource_id" json:"resource_id"`
+	Version                  string                   `gorm:"type:varchar(64);not null;uniqueIndex:uk_client_resource_release,priority:3;index:idx_client_resource_release_lookup,priority:3;column:version" json:"version"`
+	Channel                  string                   `gorm:"type:varchar(32);not null;default:stable;uniqueIndex:uk_client_resource_release,priority:2;index:idx_client_resource_release_lookup,priority:2;column:channel" json:"channel"`
+	Title                    string                   `gorm:"type:varchar(255);column:title" json:"title"`
+	Changelog                string                   `gorm:"type:mediumtext;column:changelog" json:"changelog"`
+	Status                   string                   `gorm:"type:varchar(32);not null;default:draft;index:idx_client_resource_release_lookup,priority:4;column:status" json:"status"`
+	ForceUpdate              bool                     `gorm:"type:tinyint(1);not null;default:0;column:force_update" json:"force_update"`
+	MinClientVersion         string                   `gorm:"type:varchar(64);column:min_client_version" json:"min_client_version,omitempty"`
+	MinServerVersion         string                   `gorm:"type:varchar(64);column:min_server_version" json:"min_server_version,omitempty"`
+	RequiredProtocolVersion  uint16                   `gorm:"type:smallint unsigned;not null;default:0;column:required_protocol_version" json:"required_protocol_version,omitempty"`
+	RequiredCapabilitiesJSON *string                  `gorm:"type:json;column:required_capabilities" json:"-"`
+	PublishedAt              *time.Time               `gorm:"column:published_at" json:"published_at,omitempty"`
+	CreatedBy                int                      `gorm:"type:int;index;column:created_by" json:"created_by"`
+	CreateTime               time.Time                `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime               time.Time                `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Resource                 *ClientResource          `gorm:"foreignKey:ResourceID;references:ID" json:"resource,omitempty"`
+	Artifacts                []ClientResourceArtifact `gorm:"foreignKey:ReleaseID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"artifacts,omitempty"`
 }
 
 func (ClientResourceRelease) TableName() string {
@@ -689,6 +740,8 @@ func AutoMigrate() error {
 		&CommRecord{},
 		&Asset{},
 		&UserDevicePreference{},
+		&GhostClientPreference{},
+		&GhostClientSubscription{},
 		&DeviceConfig{},
 		&Logbook{},
 		&UserRadioPreset{},
@@ -700,6 +753,9 @@ func AutoMigrate() error {
 	)
 
 	if err != nil {
+		return err
+	}
+	if err := backfillCommRecordMessages(db); err != nil {
 		return err
 	}
 	if err := backfillServerPublicAccessIDs(db); err != nil {
@@ -721,6 +777,62 @@ func AutoMigrate() error {
 	}
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
+	return nil
+}
+
+func backfillCommRecordMessages(db *gorm.DB) error {
+	const batchSize = 1000
+
+	var afterID uint
+	for {
+		var ids []uint
+		if err := db.Model(&CommRecord{}).
+			Where("id > ? AND message_type = ? AND audio_path LIKE ? AND (text_content = '' OR text_content IS NULL)", afterID, CommMessageTypeVoice, "text:%").
+			Order("id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+			return fmt.Errorf("list legacy text communication records: %w", err)
+		}
+		if len(ids) == 0 {
+			break
+		}
+		if err := db.Exec(
+			"UPDATE comm_records SET message_type = ?, text_content = SUBSTRING(audio_path, 6), audio_path = '' WHERE id IN ?",
+			CommMessageTypeText,
+			ids,
+		).Error; err != nil {
+			return fmt.Errorf("backfill legacy text communication records: %w", err)
+		}
+		afterID = ids[len(ids)-1]
+	}
+
+	afterID = 0
+	for {
+		var ids []uint
+		if err := db.Model(&CommRecord{}).
+			Where("id > ? AND (sender_username = '' OR sender_callsign = '' OR sender_nickname = '' OR sender_dev_model = 0)", afterID).
+			Order("id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+			return fmt.Errorf("list communication records missing sender snapshots: %w", err)
+		}
+		if len(ids) == 0 {
+			break
+		}
+		if err := db.Exec(`
+			UPDATE comm_records cr
+			LEFT JOIN devices d ON cr.device_id = d.id
+			LEFT JOIN users u ON u.id = COALESCE(cr.user_id, d.owner_id)
+			SET cr.sender_username = COALESCE(NULLIF(cr.sender_username, ''), u.name, ''),
+				cr.sender_callsign = COALESCE(NULLIF(cr.sender_callsign, ''), u.callsign, ''),
+				cr.sender_nickname = COALESCE(NULLIF(cr.sender_nickname, ''), NULLIF(u.nickname, ''), u.callsign, ''),
+				cr.sender_dev_model = CASE
+					WHEN cr.sender_dev_model != 0 THEN cr.sender_dev_model
+					WHEN cr.device_id = 0 THEN cr.device_ssid
+					ELSE COALESCE(d.dev_model, 0)
+				END
+			WHERE cr.id IN ?
+		`, ids).Error; err != nil {
+			return fmt.Errorf("backfill communication record sender snapshots: %w", err)
+		}
+		afterID = ids[len(ids)-1]
+	}
 	return nil
 }
 

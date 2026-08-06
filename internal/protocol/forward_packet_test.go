@@ -2,12 +2,14 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
 func TestPrepareForwardPacketRewritesHeader(t *testing.T) {
 	payload := []byte{0x01, 0x02, 0x03, 0x04}
 	src := EncodeDraARLv1("user1", "secretpwd", 7, DraARLTypeOpus16K, 1, 12345, "", payload)
+	binary.BigEndian.PutUint32(src[DraARLv1ReservedOffset:DraARLv1HeaderSize], 42)
 
 	out := PrepareForwardPacket(src, "user1", "BG7ABC", 7, DraARLTypeOpus16K, 1, 12345, payload)
 	if out == nil {
@@ -26,6 +28,9 @@ func TestPrepareForwardPacketRewritesHeader(t *testing.T) {
 	}
 	if !bytes.Equal(out[DraARLv1HeaderSize:], payload) {
 		t.Fatalf("payload mismatch")
+	}
+	if !bytes.Equal(out[DraARLv1ReservedOffset:DraARLv1HeaderSize], make([]byte, 4)) {
+		t.Fatalf("expected hop-local Reserved field cleared, got %v", out[DraARLv1ReservedOffset:DraARLv1HeaderSize])
 	}
 	username := string(bytes.TrimRight(out[6:38], "\x00"))
 	if username != "user1" {

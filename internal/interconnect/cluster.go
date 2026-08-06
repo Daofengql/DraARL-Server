@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 // ClusterManager is the centre's in-memory authoritative node/session index.
@@ -288,15 +290,20 @@ func (m *ClusterManager) rebuildDomainNodesLocked() {
 			continue
 		}
 		for _, route := range projection.Devices {
-			if route.DisableRecv || route.DomainID == 0 {
+			if route.DisableRecv {
 				continue
 			}
-			set := next[route.DomainID]
-			if set == nil {
-				set = make(map[string]struct{})
-				next[route.DomainID] = set
+			for _, domainID := range routeReceiveDomains(route) {
+				if domainID == 0 {
+					continue
+				}
+				set := next[domainID]
+				if set == nil {
+					set = make(map[string]struct{})
+					next[domainID] = set
+				}
+				set[nodeID] = struct{}{}
 			}
-			set[nodeID] = struct{}{}
 		}
 	}
 	m.domainNodes = next
@@ -617,15 +624,24 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 	for nodeID, projectionVersion := range targets {
 		targetFrame := frame
 		targetFrame.RequiredProjectionVersion = projectionVersion
+		var targetSession *NodeSession
+		if server != nil {
+			targetSession, _ = server.Session(nodeID)
+		}
+		if targetSession == nil || targetSession.Features&NodeFeatureGhostMultiSession == 0 {
+			if cleared, ok := protocol.WithReservedUint32(targetFrame.InnerPacket, 0); ok {
+				targetFrame.InnerPacket = cleared
+			}
+		}
 		payload, err := targetFrame.MarshalBinary()
 		if err != nil {
 			return err
 		}
-		if dataBridge != nil && server != nil {
-			if session, ok := server.Session(nodeID); ok && session.DataAddr() != nil {
-				env := NewEnvelope(SubtypeRelayDownstream, "center", session.SessionID, m.NextMessageID(), payload)
-				env.ClusterEpoch, env.ProjectionVersion, env.HopCount, env.KeyEpoch = epoch, projectionVersion, 1, session.KeyEpoch
-				if err := dataBridge.Send(session, env); err == nil {
+		if dataBridge != nil && targetSession != nil {
+			if targetSession.DataAddr() != nil {
+				env := NewEnvelope(SubtypeRelayDownstream, "center", targetSession.SessionID, m.NextMessageID(), payload)
+				env.ClusterEpoch, env.ProjectionVersion, env.HopCount, env.KeyEpoch = epoch, projectionVersion, 1, targetSession.KeyEpoch
+				if err := dataBridge.Send(targetSession, env); err == nil {
 					continue
 				}
 			}

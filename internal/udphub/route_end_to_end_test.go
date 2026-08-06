@@ -20,6 +20,7 @@ type routeTestWSDevice struct {
 	userID       int
 	deviceID     int
 	username     string
+	nickname     string
 	callsign     string
 	ssid         byte
 	devModel     byte
@@ -36,7 +37,13 @@ func (d *routeTestWSDevice) GetGroupID() int              { return d.groupID }
 func (d *routeTestWSDevice) IsGhost() bool                { return d.ghost }
 func (d *routeTestWSDevice) GetUserID() int               { return d.userID }
 func (d *routeTestWSDevice) GetDeviceID() int             { return d.deviceID }
+func (d *routeTestWSDevice) GetSessionID() string         { return d.identifier }
+func (d *routeTestWSDevice) GetClientInstanceID() string  { return "" }
+func (d *routeTestWSDevice) GetProtocolVersion() uint16   { return 0 }
+func (d *routeTestWSDevice) GetRxGroupIDs() []int         { return []int{d.groupID} }
+func (d *routeTestWSDevice) HasCapability(string) bool    { return false }
 func (d *routeTestWSDevice) GetUsername() string          { return d.username }
+func (d *routeTestWSDevice) GetNickname() string          { return d.nickname }
 func (d *routeTestWSDevice) GetCallSign() string          { return d.callsign }
 func (d *routeTestWSDevice) GetSSID() byte                { return d.ssid }
 func (d *routeTestWSDevice) GetDevModel() byte            { return d.devModel }
@@ -107,6 +114,9 @@ func (m *routeTestWSManager) BroadcastToGroups(groupIDs []int, data []byte, mess
 		if filter.ExcludeDeviceID != 0 && !device.ghost && device.deviceID == filter.ExcludeDeviceID {
 			continue
 		}
+		if filter.ExcludeSessionID != "" && device.GetSessionID() == filter.ExcludeSessionID {
+			continue
+		}
 		if filter.ExcludeUserID != 0 && device.ghost &&
 			device.userID == filter.ExcludeUserID && device.ssid == filter.ExcludeSSID {
 			continue
@@ -155,6 +165,17 @@ var (
 	_ interfaces.WSDeviceInterface  = (*routeTestWSDevice)(nil)
 	_ interfaces.WSManagerInterface = (*routeTestWSManager)(nil)
 )
+
+func TestBuildWSSpeakerUsesGhostSessionIdentity(t *testing.T) {
+	first := &routeTestWSDevice{identifier: "session-a", userID: 7, ssid: 105, ghost: true}
+	second := &routeTestWSDevice{identifier: "session-b", userID: 7, ssid: 105, ghost: true}
+	if buildWSSpeaker(first).key == buildWSSpeaker(second).key {
+		t.Fatal("same-account ghost sessions share a half-duplex speaker key")
+	}
+	if buildWSSpeaker(first).key != buildWSSpeaker(first).key {
+		t.Fatal("ghost session speaker key is unstable")
+	}
+}
 
 type routeTestEndpoint struct {
 	conn   *net.UDPConn
@@ -291,9 +312,7 @@ func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked
 	InvalidateDomainReceiverCache()
 
 	oldGhostManager := GlobalUDPGhostManager
-	GlobalUDPGhostManager = &UDPGhostManager{
-		devices: make(map[string]*models.Device), groupDevices: make(map[int]map[string]*models.Device),
-	}
+	GlobalUDPGhostManager = newUDPGhostManager()
 	oldTextBuffer := globalTextBuffer
 	globalTextBuffer = NewTextMessageBuffer(100, time.Hour)
 	globalTextBuffer.running = true
@@ -825,7 +844,7 @@ func TestLargeRuntimeDeviceChurnKeepsReceiverSnapshotsConsistent(t *testing.T) {
 	second := newRouteTestGroup(groupB)
 	globalGroupCacheAtomic.Store(map[int]*models.Group{groupA: first, groupB: second})
 	oldGhostManager := GlobalUDPGhostManager
-	GlobalUDPGhostManager = &UDPGhostManager{devices: make(map[string]*models.Device), groupDevices: make(map[int]map[string]*models.Device)}
+	GlobalUDPGhostManager = newUDPGhostManager()
 	t.Cleanup(func() {
 		StopDomainReceiverCache()
 		clearDomainReceiverCacheForTest()

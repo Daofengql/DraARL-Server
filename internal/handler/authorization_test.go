@@ -18,11 +18,12 @@ import (
 func TestCanViewGroup(t *testing.T) {
 	user := &gormdb.User{ID: 10, Roles: "user"}
 	admin := &gormdb.User{ID: 20, Roles: "admin"}
-	publicGroup := &gormdb.Group{ID: 100, Type: groupTypePublic, OwerID: 30}
-	privateGroup := &gormdb.Group{ID: 101, Type: groupTypePrivate, OwerID: 30}
-	ownedPrivateGroup := &gormdb.Group{ID: 102, Type: groupTypePrivate, OwerID: user.ID}
-	virtualGroup := &gormdb.Group{ID: 103, Type: groupTypePublic, IsVirtual: true}
-	unsupportedGroup := &gormdb.Group{ID: 104, Type: 99}
+	publicGroup := &gormdb.Group{ID: 100, Type: groupTypePublic, OwerID: 30, Status: 1}
+	privateGroup := &gormdb.Group{ID: 101, Type: groupTypePrivate, OwerID: 30, Status: 1}
+	ownedPrivateGroup := &gormdb.Group{ID: 102, Type: groupTypePrivate, OwerID: user.ID, Status: 1}
+	virtualGroup := &gormdb.Group{ID: 103, Type: groupTypePublic, IsVirtual: true, Status: 1}
+	unsupportedGroup := &gormdb.Group{ID: 104, Type: 99, Status: 1}
+	disabledGroup := &gormdb.Group{ID: 105, Type: groupTypePublic, Status: 0}
 
 	tests := []struct {
 		name             string
@@ -39,6 +40,8 @@ func TestCanViewGroup(t *testing.T) {
 		{name: "virtual group is hidden from user", actor: user, group: virtualGroup, isVerifiedMember: true, want: false},
 		{name: "virtual group is hidden from admin ordinary group access", actor: admin, group: virtualGroup, want: false},
 		{name: "unsupported group type is hidden", actor: user, group: unsupportedGroup, isVerifiedMember: true, want: false},
+		{name: "disabled group is hidden from user", actor: user, group: disabledGroup, want: false},
+		{name: "disabled group is hidden from admin ordinary group access", actor: admin, group: disabledGroup, want: false},
 		{name: "missing user is denied", actor: nil, group: publicGroup, want: false},
 		{name: "missing group is denied", actor: user, group: nil, want: false},
 	}
@@ -49,6 +52,48 @@ func TestCanViewGroup(t *testing.T) {
 				t.Fatalf("canViewGroup() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCanViewOwnCommRecord(t *testing.T) {
+	user := &gormdb.User{ID: 10, Roles: "user"}
+	other := &gormdb.User{ID: 11, Roles: "user"}
+	admin := &gormdb.User{ID: 20, Roles: "admin"}
+	userID := uint(user.ID)
+	otherUserID := uint(other.ID)
+
+	tests := []struct {
+		name   string
+		actor  *gormdb.User
+		record *CommRecordWithDetails
+		want   bool
+	}{
+		{name: "sender snapshot owns ghost record", actor: user, record: &CommRecordWithDetails{DeviceID: 0, UserID: &userID}, want: true},
+		{name: "other sender snapshot is denied", actor: user, record: &CommRecordWithDetails{DeviceID: 0, UserID: &otherUserID}, want: false},
+		{name: "legacy physical record falls back to current owner", actor: user, record: &CommRecordWithDetails{DeviceID: 7, DeviceOwnerID: user.ID}, want: true},
+		{name: "legacy physical record denies another owner", actor: other, record: &CommRecordWithDetails{DeviceID: 7, DeviceOwnerID: user.ID}, want: false},
+		{name: "sender snapshot takes precedence over current device owner", actor: user, record: &CommRecordWithDetails{DeviceID: 7, DeviceOwnerID: user.ID, UserID: &otherUserID}, want: false},
+		{name: "legacy ghost record without sender is denied", actor: user, record: &CommRecordWithDetails{DeviceID: 0}, want: false},
+		{name: "admin may inspect any record", actor: admin, record: &CommRecordWithDetails{DeviceID: 0, UserID: &otherUserID}, want: true},
+		{name: "missing actor is denied", actor: nil, record: &CommRecordWithDetails{DeviceID: 7, DeviceOwnerID: user.ID}, want: false},
+		{name: "missing record is denied", actor: user, record: nil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := canViewOwnCommRecord(tt.actor, tt.record); got != tt.want {
+				t.Fatalf("canViewOwnCommRecord() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCommRecordResponsePreservesUnknownSnapshotDeviceModel(t *testing.T) {
+	response := toCommRecordResponse(CommRecordWithDetails{
+		DeviceID: 7, SenderUsername: "sender-at-send-time", SenderDevModel: 0, CurrentDevModel: 105,
+	})
+	if response.DevModel != 0 {
+		t.Fatalf("unknown sender device model changed to current model: %#v", response)
 	}
 }
 

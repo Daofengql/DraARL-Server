@@ -18,6 +18,7 @@ import LinkIcon from '@mui/icons-material/Link'
 import SystemUpdate from '@mui/icons-material/SystemUpdate'
 import Folder from '@mui/icons-material/Folder'
 import Book from '@mui/icons-material/Book'
+import Hub from '@mui/icons-material/Hub'
 import { useState, useEffect } from 'react'
 import { authService } from '../../services'
 import { PublicHeader } from './PublicHeader'
@@ -52,6 +53,7 @@ const adminMenuItems: MenuItem[] = [
     icon: <Devices />,
     children: [
       { path: '/admin/devices', label: '客户端', icon: <Devices /> },
+      { path: '/admin/radio-sessions', label: '幽灵会话', icon: <Hub /> },
       { path: '/admin/relays', label: '中继台', icon: <Radio /> },
       { path: '/admin/servers', label: '服务器', icon: <Dns /> },
     ]
@@ -114,7 +116,7 @@ export function AdminLayout() {
   // 当路由变化时，如果焦点不在子菜单上，自动折叠
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
-    const devicePaths = ['/admin/devices', '/admin/relays', '/admin/servers']
+    const devicePaths = ['/admin/devices', '/admin/radio-sessions', '/admin/relays', '/admin/servers']
     const resourcePaths = ['/admin/client-resources', '/admin/firmware']
     const groupPaths = ['/admin/groups', '/admin/group-links']
     const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']

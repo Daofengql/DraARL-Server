@@ -160,14 +160,22 @@ WebSocket 入口：
 - 需要先通过 `/api/auth/ws-token/sync` 同步 Cookie。
 - 不支持 URL query 传 token。
 - 消息体为 DraARLv1 二进制帧。
-- 同账号同平台幽灵设备只允许一个在线连接。
+- 客户端通过 query 或 `X-DraARL-*` 请求头提交随机 UUID `client_instance_id`、`protocol_version=1` 和能力列表。
+- 同账号幽灵客户端可多端在线；缺少实例 ID 或必需能力的客户端握手失败。
 
 示例：
 
 ```javascript
-const ws = new WebSocket('wss://server.example.com/ws');
+const params = new URLSearchParams({
+  client_instance_id: crypto.randomUUID(),
+  protocol_version: '1',
+  capabilities: 'multi_receive_v1,source_group_v1',
+});
+const ws = new WebSocket(`wss://server.example.com/ws?${params}`);
 ws.binaryType = 'arraybuffer';
 ```
+
+`client_instance_id` 应在安装范围持久化，不能每次重连都重新生成。认证成功后先处理 `auth_success` 文本控制消息，再发送 DraARLv1 二进制媒体帧。切组和多收订阅通过 `/api/radio/sessions/:session_id/routing` 更新。
 
 ## 9. 限流
 

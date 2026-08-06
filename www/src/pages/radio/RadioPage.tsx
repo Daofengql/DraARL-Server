@@ -16,7 +16,6 @@ import MicIcon from '@mui/icons-material/Mic'
 import VolumeUpIcon from '@mui/icons-material/VolumeUp'
 import VolumeOffIcon from '@mui/icons-material/VolumeOff'
 import SendIcon from '@mui/icons-material/Send'
-import HeadsetIcon from '@mui/icons-material/Headset'
 import KeyboardIcon from '@mui/icons-material/Keyboard'
 import RecordIcon from '@mui/icons-material/FiberManualRecord'
 
@@ -31,6 +30,8 @@ import type {
   RadioMessage,
   RadioGroup,
   RadioUserConfig,
+  RadioSessionRouting,
+  RadioSpeaker,
 } from '../../types/radio'
 
 // 子组件
@@ -53,9 +54,10 @@ const useStyles = () => ({
   header: {
     flexShrink: 0, // 固定高度，不压缩
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    p: 1.5,
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    gap: 0.75,
+    p: 1,
     borderBottom: 1,
     borderColor: 'divider',
     bgcolor: 'background.paper',
@@ -64,6 +66,8 @@ const useStyles = () => ({
     display: 'flex',
     alignItems: 'center',
     gap: 1,
+    minWidth: 0,
+    flex: 1,
   },
   headerRight: {
     display: 'flex',
@@ -162,11 +166,12 @@ export const RadioPage: React.FC = () => {
   // 状态
   const [connectionState, setConnectionState] = useState<WSConnectionState>('disconnected')
   const [voiceState, setVoiceState] = useState<VoiceState>('idle')
-  const [currentSpeaker, setCurrentSpeaker] = useState<{ callsign: string; ssid: number } | null>(null)
+  const [activeSpeakers, setActiveSpeakers] = useState<RadioSpeaker[]>([])
 
   // 数据
   const [groups, setGroups] = useState<RadioGroup[]>([])
-  const [currentGroupId, setCurrentGroupId] = useState<number>(999)
+  const [routing, setRouting] = useState<RadioSessionRouting>(() => radioService.getRouting())
+  const [activeGroupId, setActiveGroupId] = useState(0)
   const [messages, setMessages] = useState<RadioMessage[]>([])
 
   // UI 状态
@@ -175,30 +180,32 @@ export const RadioPage: React.FC = () => {
   const [deviceListOpen, setDeviceListOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isPTTDown, setIsPTTDown] = useState(false)
-  const [connectionConflict, setConnectionConflict] = useState(false) // 【新增】连接冲突状态
   const [audioPermissionNeeded, setAudioPermissionNeeded] = useState(false) // 音频权限提示
   const [isLoadingMore, setIsLoadingMore] = useState(false) // 加载更多状态
+  const [routingUpdating, setRoutingUpdating] = useState(false)
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
 
   // Refs
   const messageListRef = useRef<HTMLDivElement>(null)
-  const messagesRef = useRef<RadioMessage[]>(messages)
+  const activeGroupIdRef = useRef(activeGroupId)
+  const messagesByViewRef = useRef<Map<number, RadioMessage[]>>(new Map([[0, []]]))
   const isPlayingVoiceRef = useRef(false)
-  const pendingSyncMessagesRef = useRef<RadioMessage[] | null>(null)
+  const pendingSyncMessagesRef = useRef<{ groupId: number; messages: RadioMessage[] } | null>(null)
 
-  // 保持 messagesRef 与 messages 同步
   useEffect(() => {
-    messagesRef.current = messages
-  }, [messages])
+    activeGroupIdRef.current = activeGroupId
+  }, [activeGroupId])
 
   // 供 MessageList 回调 - 播放状态变化
   const handleVoicePlayStateChange = useCallback((playing: boolean) => {
     isPlayingVoiceRef.current = playing
     // 播放结束后，应用挂起的同步结果
     if (!playing && pendingSyncMessagesRef.current) {
-      setMessages(pendingSyncMessagesRef.current)
+      const pending = pendingSyncMessagesRef.current
+      messagesByViewRef.current.set(pending.groupId, pending.messages)
+      if (activeGroupIdRef.current === pending.groupId) setMessages(pending.messages)
       pendingSyncMessagesRef.current = null
     }
   }, [])
@@ -219,26 +226,31 @@ export const RadioPage: React.FC = () => {
         })
 
         radioService.on('message', (message) => {
-          setMessages(prev => [...prev, message])
+          const targetViews = new Set([0, message.groupId])
+          for (const viewId of targetViews) {
+            const current = messagesByViewRef.current.get(viewId) || []
+            if (current.some(existing => existing.id === message.id)) continue
+            const updated = [...current, message].sort((left, right) => left.timestamp - right.timestamp)
+            messagesByViewRef.current.set(viewId, updated)
+            if (activeGroupIdRef.current === viewId) setMessages(updated)
+          }
         })
 
-        radioService.on('speaking', (callsign, ssid) => {
-          setCurrentSpeaker({ callsign, ssid })
-        })
+        radioService.on('speakersChange', setActiveSpeakers)
 
-        radioService.on('speakingEnd', () => {
-          setCurrentSpeaker(null)
+        radioService.on('routingChange', nextRouting => {
+          setRouting(nextRouting)
+          setConfig(radioService.getConfig())
+          if (activeGroupIdRef.current !== 0 && !nextRouting.rxGroupIds.includes(activeGroupIdRef.current)) {
+            activeGroupIdRef.current = 0
+            setActiveGroupId(0)
+            setMessages(messagesByViewRef.current.get(0) || [])
+          }
         })
 
         radioService.on('error', (errorMsg) => {
           setError(errorMsg)
           setTimeout(() => setError(null), 5000)
-        })
-
-        // 【新增】处理连接冲突事件
-        radioService.on('conflict', () => {
-          setConnectionConflict(true)
-          setError('您的账号已在其他页面建立了电台连接，请先断开其他页面的连接')
         })
 
         // 初始化服务（传入用户上次选中的群组 ID，确保跨设备同步）
@@ -247,10 +259,10 @@ export const RadioPage: React.FC = () => {
         // 加载群组
         const groupList = await radioService.getGroups()
         setGroups(groupList)
-        setCurrentGroupId(radioService.getCurrentGroupId())
 
         // 连接
         await radioService.connect()
+        setRouting(radioService.getRouting())
 
       } catch (error) {
         console.error('Failed to init radio:', error)
@@ -280,14 +292,13 @@ export const RadioPage: React.FC = () => {
   // 激活音频权限
   const handleActivateAudio = useCallback(async () => {
     try {
-      // 请求麦克风权限并激活 AudioContext
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      await radioService.activateAudio()
       setAudioPermissionNeeded(false)
     } catch (error) {
       console.error('Failed to activate audio:', error)
       setError('无法获取音频权限，请检查浏览器设置')
     }
-  }, [])
+  }, [radioService])
 
   // 【自动刷新】定时刷新群组统计（每 5 秒）
   useEffect(() => {
@@ -315,7 +326,7 @@ export const RadioPage: React.FC = () => {
 
   // 【消息同步】每 15 秒从后端同步消息（斩杀线策略）
   useEffect(() => {
-    if (connectionState !== 'online') return
+    if (connectionState !== 'online' || activeGroupId === 0) return
 
     const syncMessages = async () => {
       try {
@@ -323,12 +334,12 @@ export const RadioPage: React.FC = () => {
         const currentUser = user?.callsign ? {
           username: user.username,
           callsign: user.callsign,
-          ssid: 105  // 网页设备固定 SSID=105
+          ssid: 105,
+          id: user.id,
         } : undefined
 
-        // 使用 ref 获取最新的消息列表（避免闭包捕获过期值）
-        const currentMessages = messagesRef.current
-        const merged = await messageSyncService.syncMessages(currentGroupId, currentMessages, currentUser)
+        const currentMessages = messagesByViewRef.current.get(activeGroupId) || []
+        const merged = await messageSyncService.syncMessages(activeGroupId, currentMessages, currentUser)
 
         // 用 ID 集合比较，避免 Blob 序列化问题
         const hasChanges = (() => {
@@ -341,9 +352,10 @@ export const RadioPage: React.FC = () => {
 
         if (isPlayingVoiceRef.current) {
           // 正在播放：挂起同步结果，等播放结束后再应用
-          pendingSyncMessagesRef.current = merged
+          pendingSyncMessagesRef.current = { groupId: activeGroupId, messages: merged }
         } else {
-          setMessages(merged)
+          messagesByViewRef.current.set(activeGroupId, merged)
+          if (activeGroupIdRef.current === activeGroupId) setMessages(merged)
         }
       } catch (error) {
         console.error('[RadioPage] Failed to sync messages:', error)
@@ -359,31 +371,35 @@ export const RadioPage: React.FC = () => {
     return () => {
       clearInterval(interval)
     }
-  }, [connectionState, currentGroupId, radioService, user])
+  }, [connectionState, activeGroupId, user])
 
   // 【加载更多历史消息】
   const handleLoadMore = useCallback(async () => {
-    if (isLoadingMore || !messageSyncService.hasMore(currentGroupId)) return
+    if (activeGroupId === 0 || isLoadingMore || !messageSyncService.hasMore(activeGroupId)) return
 
     setIsLoadingMore(true)
     try {
       const currentUser = user?.callsign ? {
         username: user.username,
         callsign: user.callsign,
-        ssid: 105
+        ssid: 105,
+        id: user.id,
       } : undefined
 
-      const olderMessages = await messageSyncService.loadMoreMessages(currentGroupId, currentUser)
+      const olderMessages = await messageSyncService.loadMoreMessages(activeGroupId, currentUser)
       if (olderMessages.length > 0) {
-        // 将旧消息插入到前面
-        setMessages(prev => [...olderMessages, ...prev])
+        const current = messagesByViewRef.current.get(activeGroupId) || []
+        const existingIds = new Set(current.map(message => message.id))
+        const merged = [...olderMessages.filter(message => !existingIds.has(message.id)), ...current]
+        messagesByViewRef.current.set(activeGroupId, merged)
+        if (activeGroupIdRef.current === activeGroupId) setMessages(merged)
       }
     } catch (error) {
       console.error('[RadioPage] Failed to load more messages:', error)
     } finally {
       setIsLoadingMore(false)
     }
-  }, [currentGroupId, isLoadingMore, user])
+  }, [activeGroupId, isLoadingMore, user])
 
   // PTT 按下
   const handlePTTDown = useCallback(() => {
@@ -427,31 +443,43 @@ export const RadioPage: React.FC = () => {
     }
   }, [handlePTTDown, handlePTTUp, inputMode])
 
-  // 切换群组
-  const handleGroupChange = async (groupId: number) => {
-    const success = await radioService.switchGroup(groupId)
-    if (success) {
-      setCurrentGroupId(groupId)
-      setMessages([])
-      // 重置新群组的分页状态
-      messageSyncService.resetGroupState(groupId)
+  const handleTxGroupChange = async (groupId: number) => {
+    setRoutingUpdating(true)
+    try {
+      await radioService.switchGroup(groupId)
+    } finally {
+      setRoutingUpdating(false)
     }
+  }
+
+  const handleReceiveGroupsChange = async (groupIds: number[]) => {
+    setRoutingUpdating(true)
+    try {
+      await radioService.setReceiveGroups(groupIds)
+    } finally {
+      setRoutingUpdating(false)
+    }
+  }
+
+  const handleActiveGroupChange = (groupId: number) => {
+    activeGroupIdRef.current = groupId
+    setActiveGroupId(groupId)
+    setMessages(messagesByViewRef.current.get(groupId) || [])
+  }
+
+  const handleChannelVolumeChange = (groupId: number, volume: number) => {
+    radioService.setChannelVolume(groupId, volume)
+    setConfig(radioService.getConfig())
   }
 
   // 发送文本消息
   const handleSendText = () => {
     if (!textInput.trim()) return
 
-    // 限制文本长度（后端 audio_path 是 varchar(255)，按字节限制 250）
-    // 中文字符占 3 字节，这里限制 80 个字符确保不超过后端限制
-    const maxLen = 80
-    let text = textInput.trim()
-    if (text.length > maxLen) {
-      text = text.slice(0, maxLen)
+    const text = textInput.trim()
+    if (radioService.sendTextMessage(text)) {
+      setTextInput('')
     }
-
-    radioService.sendTextMessage(text)
-    setTextInput('')
   }
 
   // 切换输入模式
@@ -483,14 +511,19 @@ export const RadioPage: React.FC = () => {
 
   // 渲染说话指示器
   const renderSpeakingIndicator = () => {
-    if (!currentSpeaker) return null
+    if (activeSpeakers.length === 0) return null
 
     return (
-      <Box sx={styles.speakingIndicator}>
-        <RecordIcon sx={{ fontSize: 12 }} />
-        <Typography variant="body2">
-          {currentSpeaker.callsign}-{currentSpeaker.ssid} 正在说话
-        </Typography>
+      <Box sx={{ display: 'flex', gap: 0.75, overflowX: 'auto', pb: 0.25 }}>
+        {activeSpeakers.map(speaker => (
+          <Box key={speaker.key} sx={{ ...styles.speakingIndicator, flexShrink: 0 }}>
+            <RecordIcon sx={{ fontSize: 12 }} />
+            <Typography variant="body2">
+              {groups.find(group => group.id === speaker.groupId)?.name || `#${speaker.groupId}`}
+              {' · '}{speaker.callsign}-{speaker.ssid}
+            </Typography>
+          </Box>
+        ))}
       </Box>
     )
   }
@@ -499,19 +532,28 @@ export const RadioPage: React.FC = () => {
     <Box sx={styles.root}>
       {/* 头部 */}
       <Box sx={styles.header}>
-        <Box sx={styles.headerLeft}>
-          <GroupSelector
-            groups={groups}
-            currentGroupId={currentGroupId}
-            onChange={handleGroupChange}
-            disabled={connectionState !== 'online'}
-          />
-          {renderSpeakingIndicator()}
-        </Box>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: 'stretch', gap: 0.5, minWidth: 0 }}>
+          <Box sx={styles.headerLeft}>
+            <GroupSelector
+              groups={groups}
+              txGroupId={routing.txGroupId}
+              rxGroupIds={routing.rxGroupIds}
+              activeGroupId={activeGroupId}
+              channelVolumes={config.channelVolumes}
+              onTxChange={handleTxGroupChange}
+              onRxChange={handleReceiveGroupsChange}
+              onActiveGroupChange={handleActiveGroupChange}
+              onChannelVolumeChange={handleChannelVolumeChange}
+              disabled={connectionState !== 'online'}
+              updating={routingUpdating}
+            />
+          </Box>
 
-        <Box sx={styles.headerRight}>
-          {renderConnectionStatus()}
+          <Box sx={{ ...styles.headerRight, justifyContent: 'flex-end', flexShrink: 0 }}>
+            {renderConnectionStatus()}
+          </Box>
         </Box>
+        {renderSpeakingIndicator()}
       </Box>
 
       {/* 音频权限提示 */}
@@ -538,21 +580,6 @@ export const RadioPage: React.FC = () => {
         </Alert>
       )}
 
-      {/* 【新增】连接冲突警告 */}
-      {connectionConflict && (
-        <Alert
-          severity="warning"
-          icon={<HeadsetIcon />}
-          sx={{ alignItems: 'center' }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-            <Typography variant="body2">
-              您的账号已在其他页面建立了电台连接，请先断开其他页面的连接
-            </Typography>
-          </Box>
-        </Alert>
-      )}
-
       {/* 消息列表 */}
       <Box sx={styles.messageArea}>
         <MessageList
@@ -561,7 +588,7 @@ export const RadioPage: React.FC = () => {
           currentCallsign={user?.callsign || ''}
           currentSSID={105}
           currentUser={user}
-          hasMore={messageSyncService.hasMore(currentGroupId)}
+          hasMore={activeGroupId > 0 && messageSyncService.hasMore(activeGroupId)}
           isLoadingMore={isLoadingMore}
           onLoadMore={handleLoadMore}
           onVoicePlayStateChange={handleVoicePlayStateChange}
@@ -569,10 +596,10 @@ export const RadioPage: React.FC = () => {
       </Box>
 
       {/* 接收状态显示 */}
-      {voiceState === 'receiving' && currentSpeaker && (
+      {voiceState === 'receiving' && activeSpeakers.length > 0 && (
         <Box sx={styles.visualizer}>
           <Typography variant="body2" color="primary">
-            🔴 {currentSpeaker.callsign}-{currentSpeaker.ssid}
+            {activeSpeakers.length} 路语音正在混音
           </Typography>
         </Box>
       )}
@@ -593,16 +620,11 @@ export const RadioPage: React.FC = () => {
                 size="small"
                 placeholder="输入消息..."
                 value={textInput}
-                onChange={(e) => {
-                  // 限制输入长度（80个字符，对应后端 250 字节限制）
-                  const value = e.target.value
-                  if (value.length <= 80) {
-                    setTextInput(value)
-                  }
+                onChange={(e) => setTextInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendText()
                 }}
-                onKeyPress={(e) => e.key === 'Enter' && handleSendText()}
                 disabled={connectionState !== 'online'}
-                inputProps={{ maxLength: 80 }}
               />
               <IconButton
                 color="primary"
@@ -650,7 +672,7 @@ export const RadioPage: React.FC = () => {
       >
         <Box sx={styles.settingsDrawer}>
           <DeviceList
-            groupId={currentGroupId}
+            groupId={activeGroupId || routing.txGroupId}
             onClose={() => setDeviceListOpen(false)}
           />
         </Box>

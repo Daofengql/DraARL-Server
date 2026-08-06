@@ -332,6 +332,9 @@ func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult
 				Update("last_group_id", 0).Error; err != nil {
 				return err
 			}
+			if err := clearGhostClientGroupReferences(tx, nil, result.OwnedGroupIDs); err != nil {
+				return err
+			}
 			// 批量删除群组
 			if err := tx.Where("ower_id = ?", id).Delete(&Group{}).Error; err != nil {
 				return err
@@ -350,6 +353,9 @@ func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult
 
 		// 7. 删除用户的设备偏好设置
 		if err := tx.Where("user_id = ?", id).Delete(&UserDevicePreference{}).Error; err != nil {
+			return err
+		}
+		if err := deleteGhostClientPreferencesByUser(tx, id); err != nil {
 			return err
 		}
 

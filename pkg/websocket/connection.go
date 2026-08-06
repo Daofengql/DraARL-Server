@@ -4,14 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/models"
+	"draarl/internal/protocol"
 )
+
+const fixedWebGhostSSID byte = protocol.SSIDGhostWeb
 
 // ConnectionState 连接状态
 type ConnectionState int
@@ -64,6 +70,8 @@ func (t DeviceType) String() string {
 
 // WSDevice WebSocket 设备信息
 type WSDevice struct {
+	stateMu sync.RWMutex
+
 	// 连接信息
 	Conn           *websocket.Conn
 	ConnState      ConnectionState
@@ -74,13 +82,20 @@ type WSDevice struct {
 	DeviceType DeviceType
 
 	// 幽灵设备信息（JWT 认证）
-	UserID   int    // 用户 ID
-	Username string // 用户名
-	CallSign string // 呼号
-	Nickname string // 昵称
-	SSID     byte   // 设备子号
+	UserID           int    // 用户 ID
+	Username         string // 用户名
+	CallSign         string // 呼号
+	Nickname         string // 昵称
+	SSID             byte   // 设备子号
+	SessionID        string
+	SessionTag       uint32
+	ClientInstanceID string
+	ProtocolVersion  uint16
+	Capabilities     []string
 
-	GroupID     int  // 当前群组
+	routingMu   sync.RWMutex
+	GroupID     int // 当前发送群组
+	RxGroupIDs  []int
 	DevModel    byte // 设备型号
 	IsOnline    bool
 	DisableSend bool // 禁发
@@ -98,11 +113,12 @@ type WSDevice struct {
 	// 异步写入优化：带缓冲的写通道
 	// 解决跨组转发时同步阻塞导致的延迟累积问题
 	// ==========================================
-	writeCh      chan *writeRequest // 异步写缓冲通道
-	closeCh      chan struct{}      // 关闭信号
-	writeMu      sync.Mutex         // 保护 writeCh 的访问
-	writeOnce    sync.Once          // 确保 writer 只启动一次
-	unregistered atomic.Bool
+	writeCh              chan *writeRequest // 异步写缓冲通道
+	closeCh              chan struct{}      // 关闭信号
+	writeMu              sync.Mutex         // 保护 writeCh 的访问
+	writeOnce            sync.Once          // 确保 writer 只启动一次
+	unregistered         atomic.Bool
+	connectionRegistered bool
 }
 
 func (d *WSDevice) GetInterconnectSession() (uint64, uint64) {
@@ -126,11 +142,15 @@ type sharedWritePayload struct {
 }
 
 var (
-	wsFramesCopied  atomic.Int64
-	wsBytesCopied   atomic.Int64
-	wsWritesQueued  atomic.Int64
-	wsWritesDropped atomic.Int64
-	wsWritesDrained atomic.Int64
+	wsFramesCopied       atomic.Int64
+	wsBytesCopied        atomic.Int64
+	wsWritesQueued       atomic.Int64
+	wsWritesDropped      atomic.Int64
+	wsWritesDrained      atomic.Int64
+	wsFanoutCandidates   atomic.Int64
+	wsFanoutDeduplicated atomic.Int64
+	wsFanoutSent         atomic.Int64
+	wsFanoutDropped      atomic.Int64
 )
 
 func newSharedWritePayload(data []byte) *sharedWritePayload {
@@ -158,19 +178,36 @@ const writeChSize = 64 // 写通道缓冲大小，约 4 秒的音频帧 (63ms * 
 // GetIdentifier 获取设备唯一标识
 func (d *WSDevice) GetIdentifier() string {
 	if d.DeviceType == DeviceTypeGhost {
-		return fmt.Sprintf("ghost-%d", d.UserID)
+		return "ghost-session-" + d.SessionID
 	}
-	return fmt.Sprintf("%s-%d", d.CallSign, d.SSID)
+	return fmt.Sprintf("%s-%d", d.GetCallSign(), d.SSID)
 }
 
 // GetCallSignSSID 获取呼号-SSID
 func (d *WSDevice) GetCallSignSSID() string {
-	return fmt.Sprintf("%s-%d", d.CallSign, d.SSID)
+	return fmt.Sprintf("%s-%d", d.GetCallSign(), d.SSID)
 }
 
 // GetGroupID 获取当前群组 ID
 func (d *WSDevice) GetGroupID() int {
-	return d.GroupID
+	d.routingMu.RLock()
+	groupID := d.GroupID
+	d.routingMu.RUnlock()
+	return groupID
+}
+
+func (d *WSDevice) GetRxGroupIDs() []int {
+	d.routingMu.RLock()
+	groupIDs := append([]int(nil), d.RxGroupIDs...)
+	d.routingMu.RUnlock()
+	return groupIDs
+}
+
+func (d *WSDevice) setRouting(routing ghostsession.Routing) {
+	d.routingMu.Lock()
+	d.GroupID = routing.TxGroupID
+	d.RxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	d.routingMu.Unlock()
 }
 
 // IsGhost 检查是否是幽灵设备
@@ -183,14 +220,42 @@ func (d *WSDevice) GetUserID() int {
 	return d.UserID
 }
 
+func (d *WSDevice) GetSessionID() string {
+	return d.SessionID
+}
+
+func (d *WSDevice) GetClientInstanceID() string { return d.ClientInstanceID }
+
+func (d *WSDevice) GetProtocolVersion() uint16 { return d.ProtocolVersion }
+
+func (d *WSDevice) HasCapability(capability string) bool {
+	capability = strings.ToLower(strings.TrimSpace(capability))
+	index := sort.SearchStrings(d.Capabilities, capability)
+	return index < len(d.Capabilities) && d.Capabilities[index] == capability
+}
+
 // GetUsername 获取用户名
 func (d *WSDevice) GetUsername() string {
-	return d.Username
+	d.stateMu.RLock()
+	value := d.Username
+	d.stateMu.RUnlock()
+	return value
+}
+
+// GetNickname 获取用户昵称
+func (d *WSDevice) GetNickname() string {
+	d.stateMu.RLock()
+	value := d.Nickname
+	d.stateMu.RUnlock()
+	return value
 }
 
 // GetCallSign 获取呼号
 func (d *WSDevice) GetCallSign() string {
-	return d.CallSign
+	d.stateMu.RLock()
+	value := d.CallSign
+	d.stateMu.RUnlock()
+	return value
 }
 
 // GetSSID 获取 SSID
@@ -205,22 +270,48 @@ func (d *WSDevice) GetDevModel() byte {
 
 // IsDisabledRecv 检查是否禁收
 func (d *WSDevice) IsDisabledRecv() bool {
-	return d.DisableRecv
+	d.stateMu.RLock()
+	value := d.DisableRecv
+	d.stateMu.RUnlock()
+	return value
 }
 
 // IsDisabledSend 检查是否禁发
 func (d *WSDevice) IsDisabledSend() bool {
-	return d.DisableSend
+	d.stateMu.RLock()
+	value := d.DisableSend
+	d.stateMu.RUnlock()
+	return value
 }
 
 // GetConnectTime 获取连接时间
 func (d *WSDevice) GetConnectTime() time.Time {
-	return d.ConnectTime
+	d.stateMu.RLock()
+	value := d.ConnectTime
+	d.stateMu.RUnlock()
+	return value
 }
 
 // GetLastPacketTime 获取最后数据包时间
 func (d *WSDevice) GetLastPacketTime() time.Time {
-	return d.LastPacketTime
+	d.stateMu.RLock()
+	value := d.LastPacketTime
+	d.stateMu.RUnlock()
+	return value
+}
+
+func (d *WSDevice) isOnline() bool {
+	d.stateMu.RLock()
+	value := d.IsOnline
+	d.stateMu.RUnlock()
+	return value
+}
+
+func (d *WSDevice) isOnlineState(state ConnectionState) bool {
+	d.stateMu.RLock()
+	matched := d.IsOnline && d.ConnState == state
+	d.stateMu.RUnlock()
+	return matched
 }
 
 // ==========================================
@@ -325,12 +416,16 @@ func getWSDeliveryStats() map[string]int64 {
 	queued := wsWritesQueued.Load()
 	drained := wsWritesDrained.Load()
 	return map[string]int64{
-		"frames_copied":  wsFramesCopied.Load(),
-		"bytes_copied":   wsBytesCopied.Load(),
-		"writes_queued":  queued,
-		"writes_dropped": wsWritesDropped.Load(),
-		"writes_drained": drained,
-		"writes_pending": queued - drained,
+		"frames_copied":       wsFramesCopied.Load(),
+		"bytes_copied":        wsBytesCopied.Load(),
+		"writes_queued":       queued,
+		"writes_dropped":      wsWritesDropped.Load(),
+		"writes_drained":      drained,
+		"writes_pending":      queued - drained,
+		"fanout_candidates":   wsFanoutCandidates.Load(),
+		"fanout_deduplicated": wsFanoutDeduplicated.Load(),
+		"fanout_sent":         wsFanoutSent.Load(),
+		"fanout_dropped":      wsFanoutDropped.Load(),
 	}
 }
 
@@ -363,7 +458,8 @@ const shardCount = 32 // 分片数量，应为 2 的幂次方
 // connShard 连接分片，每个分片有独立的锁
 type connShard struct {
 	mu           sync.RWMutex
-	ghostDevices map[int]*WSDevice            // 幽灵设备 (key: userID)
+	ghostDevices map[string]*WSDevice         // 幽灵设备 (key: sessionID)
+	ownerDevices map[int]map[string]*WSDevice // 用户在线幽灵会话
 	connMap      map[string]*WSDevice         // 连接索引 (key: conn.RemoteAddr().String())
 	groupDevices map[int]map[string]*WSDevice // 群组索引
 }
@@ -431,7 +527,8 @@ func NewWSConnectionManager() *WSConnectionManager {
 	// 初始化所有分片
 	for i := 0; i < shardCount; i++ {
 		m.shards[i] = &connShard{
-			ghostDevices: make(map[int]*WSDevice),
+			ghostDevices: make(map[string]*WSDevice),
+			ownerDevices: make(map[int]map[string]*WSDevice),
 			connMap:      make(map[string]*WSDevice),
 			groupDevices: make(map[int]map[string]*WSDevice),
 		}
@@ -466,9 +563,9 @@ func (s *connShard) removeFromGroupIndexInShard(groupID int, key string) {
 // getDeviceKey 获取设备的唯一键
 func getDeviceKey(device *WSDevice) string {
 	if device.DeviceType == DeviceTypeGhost {
-		return fmt.Sprintf("ghost-%d", device.UserID)
+		return "ghost-session-" + device.SessionID
 	}
-	return fmt.Sprintf("%s-%d", device.CallSign, device.SSID)
+	return fmt.Sprintf("%s-%d", device.GetCallSign(), device.SSID)
 }
 
 // ==========================================
@@ -479,7 +576,10 @@ func getDeviceKey(device *WSDevice) string {
 func (m *WSConnectionManager) addToGlobalGroupIndex(groupID int, key string, device *WSDevice) {
 	m.globalGroupIndex.mu.Lock()
 	defer m.globalGroupIndex.mu.Unlock()
+	m.addToGlobalGroupIndexLocked(groupID, key, device)
+}
 
+func (m *WSConnectionManager) addToGlobalGroupIndexLocked(groupID int, key string, device *WSDevice) {
 	if m.globalGroupIndex.devices[groupID] == nil {
 		m.globalGroupIndex.devices[groupID] = make(map[string]*WSDevice)
 	}
@@ -490,7 +590,10 @@ func (m *WSConnectionManager) addToGlobalGroupIndex(groupID int, key string, dev
 func (m *WSConnectionManager) removeFromGlobalGroupIndex(groupID int, key string) {
 	m.globalGroupIndex.mu.Lock()
 	defer m.globalGroupIndex.mu.Unlock()
+	m.removeFromGlobalGroupIndexLocked(groupID, key)
+}
 
+func (m *WSConnectionManager) removeFromGlobalGroupIndexLocked(groupID int, key string) {
 	if devices, ok := m.globalGroupIndex.devices[groupID]; ok {
 		delete(devices, key)
 		// 如果群组为空，清理 map
@@ -513,11 +616,12 @@ func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice
 	defer shard.mu.Unlock()
 
 	device := &WSDevice{
-		Conn:           conn,
-		ConnState:      StateConnecting,
-		ConnectTime:    time.Now(),
-		LastPacketTime: time.Now(),
-		GroupID:        models.GroupIDPublicMin, // 默认群组
+		Conn:                 conn,
+		ConnState:            StateConnecting,
+		ConnectTime:          time.Now(),
+		LastPacketTime:       time.Now(),
+		GroupID:              models.GroupIDPublicMin, // 默认群组
+		connectionRegistered: true,
 	}
 	shard.connMap[addr] = device
 
@@ -528,39 +632,72 @@ func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice
 
 // UnregisterDevice 注销设备
 func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
-	if device == nil || device.Conn == nil || !device.unregistered.CompareAndSwap(false, true) {
+	if device == nil || !device.unregistered.CompareAndSwap(false, true) {
 		return
 	}
 
-	addr := device.Conn.RemoteAddr().String()
-	addrShard := m.getShardByAddr(addr)
-	addrShard.mu.Lock()
-	if addrShard.connMap[addr] == device {
-		delete(addrShard.connMap, addr)
+	var addrShard *connShard
+	if device.Conn != nil {
+		addr := device.Conn.RemoteAddr().String()
+		addrShard = m.getShardByAddr(addr)
+		addrShard.mu.Lock()
+		if addrShard.connMap[addr] == device {
+			delete(addrShard.connMap, addr)
+		}
+		addrShard.mu.Unlock()
 	}
-	addrShard.mu.Unlock()
+	device.stateMu.Lock()
 	device.IsOnline = false
 	device.ConnState = StateDisconnected
+	device.stateMu.Unlock()
 
 	key := getDeviceKey(device)
 	if device.DeviceType == DeviceTypeGhost {
 		userShard := m.getShardByUserID(device.UserID)
+		rxGroupIDs := device.GetRxGroupIDs()
 		userShard.mu.Lock()
-		if userShard.ghostDevices[device.UserID] == device {
-			delete(userShard.ghostDevices, device.UserID)
-			userShard.removeFromGroupIndexInShard(device.GroupID, key)
-			m.removeFromGlobalGroupIndex(device.GroupID, key)
+		if userShard.ghostDevices[device.SessionID] == device {
+			delete(userShard.ghostDevices, device.SessionID)
+			if ownerSet := userShard.ownerDevices[device.UserID]; ownerSet != nil {
+				delete(ownerSet, device.SessionID)
+				if len(ownerSet) == 0 {
+					delete(userShard.ownerDevices, device.UserID)
+				}
+			}
+			m.globalGroupIndex.mu.Lock()
+			for _, groupID := range rxGroupIDs {
+				userShard.removeFromGroupIndexInShard(groupID, key)
+				m.removeFromGlobalGroupIndexLocked(groupID, key)
+			}
+			m.globalGroupIndex.mu.Unlock()
 		}
 		userShard.mu.Unlock()
-	} else {
+		ghostsession.Global.Remove(device.SessionID)
+	} else if addrShard != nil {
 		addrShard.mu.Lock()
 		addrShard.removeFromGroupIndexInShard(device.GroupID, key)
 		m.removeFromGlobalGroupIndex(device.GroupID, key)
 		addrShard.mu.Unlock()
 	}
 
-	atomic.AddInt64(&m.totalConnections, -1)
+	if device.connectionRegistered {
+		atomic.AddInt64(&m.totalConnections, -1)
+	}
 	log.Printf("[WS] Device unregistered: %s", key)
+}
+
+// DisconnectDevice removes one exact session before closing its transport.
+// Deferred cleanup from the reader loop is idempotent and cannot remove a
+// replacement session.
+func (m *WSConnectionManager) DisconnectDevice(device *WSDevice) {
+	if device == nil {
+		return
+	}
+	m.UnregisterDevice(device)
+	device.StopWriter()
+	if device.Conn != nil {
+		_ = device.Conn.Close()
+	}
 }
 
 // GetDeviceByConn 通过连接获取设备
@@ -581,9 +718,64 @@ func (m *WSConnectionManager) GetGhostDevice(userID int) (*WSDevice, bool) {
 
 	shard.mu.RLock()
 	defer shard.mu.RUnlock()
+	devices := shard.ownerDevices[userID]
+	if len(devices) != 1 {
+		return nil, false
+	}
+	for _, device := range devices {
+		return device, device != nil
+	}
+	return nil, false
+}
 
-	device, exists := shard.ghostDevices[userID]
-	return device, exists
+func (m *WSConnectionManager) GetGhostDevicesByUser(userID int) []*WSDevice {
+	shard := m.getShardByUserID(userID)
+	shard.mu.RLock()
+	devices := shard.ownerDevices[userID]
+	result := make([]*WSDevice, 0, len(devices))
+	for _, device := range devices {
+		if device != nil && device.isOnline() {
+			result = append(result, device)
+		}
+	}
+	shard.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ConnectTime.Equal(result[j].ConnectTime) {
+			return result[i].SessionID < result[j].SessionID
+		}
+		return result[i].ConnectTime.Before(result[j].ConnectTime)
+	})
+	return result
+}
+
+func (m *WSConnectionManager) GetGhostSession(sessionID string) (*WSDevice, bool) {
+	if sessionID == "" {
+		return nil, false
+	}
+	for i := 0; i < shardCount; i++ {
+		shard := m.shards[i]
+		shard.mu.RLock()
+		device := shard.ghostDevices[sessionID]
+		shard.mu.RUnlock()
+		if device != nil {
+			return device, true
+		}
+	}
+	return nil, false
+}
+
+func (m *WSConnectionManager) UpdateUserCallSign(userID int, callSign string) {
+	shard := m.getShardByUserID(userID)
+	shard.mu.Lock()
+	for _, device := range shard.ownerDevices[userID] {
+		if device != nil {
+			device.stateMu.Lock()
+			device.CallSign = callSign
+			device.stateMu.Unlock()
+		}
+	}
+	shard.mu.Unlock()
+	ghostsession.Global.UpdateOwnerCallSign(userID, callSign)
 }
 
 // IsGhostDeviceOnline 检查幽灵设备是否在线
@@ -593,8 +785,12 @@ func (m *WSConnectionManager) IsGhostDeviceOnline(userID int) bool {
 	shard.mu.RLock()
 	defer shard.mu.RUnlock()
 
-	device, exists := shard.ghostDevices[userID]
-	return exists && device != nil && device.IsOnline && device.ConnState == StateOnline
+	for _, device := range shard.ownerDevices[userID] {
+		if device != nil && device.isOnlineState(StateOnline) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetAllOnlineDevices 获取所有在线设备
@@ -606,7 +802,7 @@ func (m *WSConnectionManager) GetAllOnlineDevices() []*WSDevice {
 		shard := m.shards[i]
 		shard.mu.RLock()
 		for _, device := range shard.ghostDevices {
-			if device.IsOnline {
+			if device.isOnline() {
 				devices = append(devices, device)
 			}
 		}
@@ -630,7 +826,7 @@ func (m *WSConnectionManager) GetDevicesByGroup(groupID int) []*WSDevice {
 	// 预分配切片容量
 	devices := make([]*WSDevice, 0, len(groupDevs))
 	for _, device := range groupDevs {
-		if device.IsOnline {
+		if device.isOnline() {
 			devices = append(devices, device)
 		}
 	}
@@ -647,7 +843,7 @@ func (m *WSConnectionManager) GetOnlineCount() int {
 		shard := m.shards[i]
 		shard.mu.RLock()
 		for _, device := range shard.ghostDevices {
-			if device.IsOnline {
+			if device.isOnline() {
 				count++
 			}
 		}
@@ -665,25 +861,28 @@ func (m *WSConnectionManager) GetTotalCount() int {
 // UpdateDeviceActivity 更新设备活动时间
 // 注意：此方法不需要锁，因为 LastPacketTime 是单个 goroutine 访问
 func (m *WSConnectionManager) UpdateDeviceActivity(device *WSDevice) {
-	device.LastPacketTime = time.Now()
+	now := time.Now()
+	device.stateMu.Lock()
+	device.LastPacketTime = now
+	device.stateMu.Unlock()
+	ghostsession.Global.UpdateActivity(device.SessionID, "", now)
 }
 
 // RegisterGhostDevice 注册幽灵设备
-func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, username, callsign, nickname string, ssid byte) {
+func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, username, callsign, nickname string, ssid byte) error {
+	if device == nil || device.SessionID == "" {
+		return errors.New("ghost session id is required")
+	}
 	shard := m.getShardByUserID(userID)
 
 	shard.mu.Lock()
-	old := shard.ghostDevices[userID]
-	if old != nil && old != device {
-		oldKey := getDeviceKey(old)
-		shard.removeFromGroupIndexInShard(old.GroupID, oldKey)
-		m.removeFromGlobalGroupIndex(old.GroupID, oldKey)
-		old.IsOnline = false
-		old.ConnState = StateDisconnected
+	if existing := shard.ghostDevices[device.SessionID]; existing != nil && existing != device {
+		shard.mu.Unlock()
+		return errors.New("ghost session id is already registered")
 	}
-
 	ssid = fixedWebGhostSSID
 
+	device.stateMu.Lock()
 	device.DeviceType = DeviceTypeGhost
 	device.UserID = userID
 	device.Username = username
@@ -692,25 +891,35 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 	device.SSID = ssid
 	device.IsOnline = true
 	device.ConnState = StateOnline
+	device.stateMu.Unlock()
 
-	shard.ghostDevices[userID] = device
-
-	// 添加到分片群组索引
-	key := getDeviceKey(device)
-	shard.addToGroupIndexInShard(device.GroupID, key, device)
-
-	// 【优化】添加到全局群组索引
-	m.addToGlobalGroupIndex(device.GroupID, key, device)
-	shard.mu.Unlock()
-	if old != nil && old != device && old.Conn != nil {
-		_ = old.Conn.Close()
+	shard.ghostDevices[device.SessionID] = device
+	if shard.ownerDevices[userID] == nil {
+		shard.ownerDevices[userID] = make(map[string]*WSDevice)
 	}
+	shard.ownerDevices[userID][device.SessionID] = device
 
-	log.Printf("[WS] Ghost device registered: user-%d (%s-%d) group-%d", userID, callsign, ssid, device.GroupID)
+	key := getDeviceKey(device)
+	m.globalGroupIndex.mu.Lock()
+	for _, groupID := range device.GetRxGroupIDs() {
+		shard.addToGroupIndexInShard(groupID, key, device)
+		m.addToGlobalGroupIndexLocked(groupID, key, device)
+	}
+	m.globalGroupIndex.mu.Unlock()
+	shard.mu.Unlock()
+
+	log.Printf("[WS] Ghost session registered: session=%s user=%d model=%d tx_group=%d rx_groups=%v", ghostsession.ShortID(device.SessionID), userID, device.DevModel, device.GetGroupID(), device.GetRxGroupIDs())
+	return nil
 }
 
-// SetDeviceGroup 设置设备群组
-func (m *WSConnectionManager) SetDeviceGroup(device *WSDevice, newGroupID int) {
+func (m *WSConnectionManager) SetDeviceRouting(device *WSDevice, routing ghostsession.Routing) error {
+	if device == nil {
+		return ErrDeviceNotFound
+	}
+	routing, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
+	if err != nil {
+		return err
+	}
 	// 使用 userID 确定分片（幽灵设备）
 	var shard *connShard
 	if device.DeviceType == DeviceTypeGhost {
@@ -718,34 +927,32 @@ func (m *WSConnectionManager) SetDeviceGroup(device *WSDevice, newGroupID int) {
 	} else if device.Conn != nil {
 		shard = m.getShardByAddr(device.Conn.RemoteAddr().String())
 	} else {
-		return
+		return ErrDeviceNotFound
 	}
 
 	shard.mu.Lock()
-	defer shard.mu.Unlock()
-
-	oldGroupID := device.GroupID
-	if oldGroupID == newGroupID {
-		return
+	if device.DeviceType == DeviceTypeGhost && shard.ghostDevices[device.SessionID] != device {
+		shard.mu.Unlock()
+		return ErrDeviceNotFound
 	}
 
-	// 从旧群组索引移除
 	key := getDeviceKey(device)
-	shard.removeFromGroupIndexInShard(oldGroupID, key)
-
-	// 【优化】从全局群组索引中移除
-	m.removeFromGlobalGroupIndex(oldGroupID, key)
-
-	// 更新群组
-	device.GroupID = newGroupID
-
-	// 添加到新群组索引
-	shard.addToGroupIndexInShard(newGroupID, key, device)
-
-	// 【优化】添加到全局群组索引
-	m.addToGlobalGroupIndex(newGroupID, key, device)
-
-	log.Printf("[WS] Device group changed: %s from group %d to %d", device.GetIdentifier(), oldGroupID, newGroupID)
+	oldRxGroupIDs := device.GetRxGroupIDs()
+	m.globalGroupIndex.mu.Lock()
+	for _, groupID := range oldRxGroupIDs {
+		shard.removeFromGroupIndexInShard(groupID, key)
+		m.removeFromGlobalGroupIndexLocked(groupID, key)
+	}
+	device.setRouting(routing)
+	for _, groupID := range routing.RxGroupIDs {
+		shard.addToGroupIndexInShard(groupID, key, device)
+		m.addToGlobalGroupIndexLocked(groupID, key, device)
+	}
+	m.globalGroupIndex.mu.Unlock()
+	shard.mu.Unlock()
+	log.Printf("[WS] Ghost session routing changed: session=%s tx=%d rx=%v", ghostsession.ShortID(device.SessionID), routing.TxGroupID, routing.RxGroupIDs)
+	sendRoutingUpdated(device)
+	return nil
 }
 
 // ErrDeviceNotFound 设备未找到错误

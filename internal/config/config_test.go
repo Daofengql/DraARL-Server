@@ -142,6 +142,83 @@ func TestInterconnectResourceDefaults(t *testing.T) {
 	}
 }
 
+func TestGhostSessionLimitDefaults(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GhostSessions.MaxSessionsPerOwner != DefaultGhostSessionsPerOwner {
+		t.Fatalf("ghost session default=%d want=%d", cfg.GhostSessions.MaxSessionsPerOwner, DefaultGhostSessionsPerOwner)
+	}
+	if cfg.GhostSessions.MaxSubscriptionsPerSession != DefaultGhostSubscriptionsPerSession {
+		t.Fatalf("ghost subscription default=%d want=%d", cfg.GhostSessions.MaxSubscriptionsPerSession, DefaultGhostSubscriptionsPerSession)
+	}
+	if !cfg.GhostSessions.MultiSession.IsEnabled() || !cfg.GhostSessions.MultiReceive.IsEnabled() {
+		t.Fatalf("ghost feature gates must default on: %+v", cfg.GhostSessions)
+	}
+	if cfg.MessageAPI.DefaultPageSize != DefaultMessageAPIPageSize ||
+		cfg.MessageAPI.MaxPageSize != DefaultMessageAPIMaxPageSize ||
+		cfg.MessageAPI.RequestsPerMinutePerUser != DefaultMessageAPIRequestsPerUser ||
+		cfg.MessageAPI.RequestsPerMinutePerIP != DefaultMessageAPIRequestsPerIP ||
+		cfg.MessageAPI.MaxConcurrentQueries != DefaultMessageAPIMaxConcurrent {
+		t.Fatalf("unexpected message API defaults: %+v", cfg.MessageAPI)
+	}
+}
+
+func TestGhostFeatureGateValidationAndNormalization(t *testing.T) {
+	disabled := false
+	cfg := GhostSessionConfig{
+		MaxSessionsPerOwner: 1, MaxSubscriptionsPerSession: 1,
+		MultiSession: GhostFeatureGateConfig{Enabled: &disabled, AllowOwnerIDs: []int{7, 7}, AllowDevModels: []uint8{101, 101}},
+	}
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MultiSession.IsEnabled() || len(cfg.MultiSession.AllowOwnerIDs) != 1 || len(cfg.MultiSession.AllowDevModels) != 1 {
+		t.Fatalf("feature gate was not normalized: %+v", cfg.MultiSession)
+	}
+	invalid := GhostFeatureGateConfig{AllowOwnerIDs: []int{0}}
+	if err := invalid.SetDefaults("MultiSession"); err == nil {
+		t.Fatal("invalid owner allowlist was accepted")
+	}
+}
+
+func TestMessageAPIConfigValidation(t *testing.T) {
+	for _, test := range []MessageAPIConfig{
+		{DefaultPageSize: 101, MaxPageSize: 100, RequestsPerMinutePerUser: 1, RequestsPerMinutePerIP: 1, MaxConcurrentQueries: 1},
+		{DefaultPageSize: 1, MaxPageSize: MaxMessageAPIPageSize + 1, RequestsPerMinutePerUser: 1, RequestsPerMinutePerIP: 1, MaxConcurrentQueries: 1},
+		{DefaultPageSize: 1, MaxPageSize: 1, RequestsPerMinutePerUser: -1, RequestsPerMinutePerIP: 1, MaxConcurrentQueries: 1},
+		{DefaultPageSize: 1, MaxPageSize: 1, RequestsPerMinutePerUser: 1, RequestsPerMinutePerIP: 1, MaxConcurrentQueries: -1},
+	} {
+		if err := test.SetDefaults(); err == nil {
+			t.Fatalf("invalid message API config was accepted: %+v", test)
+		}
+	}
+	cfg := MessageAPIConfig{MaxPageSize: 20}
+	if err := cfg.SetDefaults(); err != nil || cfg.DefaultPageSize != 20 {
+		t.Fatalf("configured maximum did not bound default: cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestGhostSessionLimitValidation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		cfg  GhostSessionConfig
+	}{
+		{name: "zero sessions", cfg: GhostSessionConfig{MaxSessionsPerOwner: -1, MaxSubscriptionsPerSession: 1}},
+		{name: "too many sessions", cfg: GhostSessionConfig{MaxSessionsPerOwner: MaxGhostSessionsPerOwner + 1, MaxSubscriptionsPerSession: 1}},
+		{name: "zero subscriptions", cfg: GhostSessionConfig{MaxSessionsPerOwner: 1, MaxSubscriptionsPerSession: -1}},
+		{name: "too many subscriptions", cfg: GhostSessionConfig{MaxSessionsPerOwner: 1, MaxSubscriptionsPerSession: MaxGhostSubscriptionsPerSession + 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.cfg.SetDefaults(); err == nil {
+				t.Fatal("expected invalid ghost session limits to be rejected")
+			}
+		})
+	}
+}
+
 func TestClientResourceUploadLimitDefault(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"

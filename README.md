@@ -328,7 +328,7 @@ README 不再维护大段接口清单，避免与实际路由漂移。请以文�
 
 ```bash
 pip install -r docs/requirements.txt
-mkdocs serve -f docs/mkdocs.yml
+mkdocs serve
 ```
 
 访问 `http://127.0.0.1:8000` 预览文档站。
@@ -336,7 +336,7 @@ mkdocs serve -f docs/mkdocs.yml
 静态构建：
 
 ```bash
-mkdocs build -f docs/mkdocs.yml --strict
+mkdocs build --strict
 ```
 
 ## 分支与提交

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"draarl/internal/buildinfo"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
 	"draarl/internal/middleware"
@@ -93,6 +94,9 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 		t.Fatalf("refusing non-test database %q", parsed.DBName)
 	}
 	parsed.ParseTime = true
+	previousBuildVersion := buildinfo.Version
+	buildinfo.Version = "v1.1.5"
+	t.Cleanup(func() { buildinfo.Version = previousBuildVersion })
 	if err := gormdb.Init(&gormdb.Config{DSN: parsed.FormatDSN(), MaxOpenConns: 10, MaxIdleConns: 2, MaxLifetime: 60, LogLevel: "silent"}); err != nil {
 		t.Fatalf("initialize MySQL: %v", err)
 	}
@@ -198,10 +202,17 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 			resource := clientResourceE2EDecode[clientResourceResponse](t, createdResult).Data
 			resourceID = resource.ID
 
-			releaseResult := clientResourceE2EJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/client-resources/%d/releases", server.URL, resourceID), adminToken, map[string]any{"version": "1.0.0", "channel": "stable", "title": "E2E model", "min_client_version": "1.0.0"}, nil)
+			releaseResult := clientResourceE2EJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/client-resources/%d/releases", server.URL, resourceID), adminToken, map[string]any{
+				"version": "1.0.0", "channel": "stable", "title": "E2E model", "min_client_version": "1.0.0",
+				"min_server_version": "1.1.0", "required_protocol_version": 1,
+				"required_capabilities": []string{"source_group_v1", "multi_receive_v1"},
+			}, nil)
 			clientResourceE2ERequireStatus(t, releaseResult, http.StatusOK)
 			release := clientResourceE2EDecode[clientResourceReleaseResponse](t, releaseResult).Data
 			releaseID = release.ID
+			if release.MinServerVersion != "1.1.0" || release.RequiredProtocolVersion != 1 || len(release.RequiredCapabilities) != 2 || release.RequiredCapabilities[0] != "multi_receive_v1" {
+				t.Fatalf("release contract=%#v", release)
+			}
 
 			payload := []byte("client-resource-multi-target-e2e-" + variant.name)
 			presign := clientResourceE2EPresignAndUpload(t, client, server.URL, adminToken, "client_resource", "denoise.onnx", "application/octet-stream", payload)
@@ -247,14 +258,36 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 			}, nil)
 			clientResourceE2ERequireStatus(t, duplicate, http.StatusConflict)
 
+			if err := db.Model(&gormdb.ClientResourceRelease{}).Where("id = ?", releaseID).Update("min_server_version", "9.0.0").Error; err != nil {
+				t.Fatal(err)
+			}
+			incompatiblePublish := clientResourceE2EJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/client-resources/%d/releases/%d/publish", server.URL, resourceID, releaseID), adminToken, nil, nil)
+			clientResourceE2ERequireStatus(t, incompatiblePublish, http.StatusConflict)
+			if err := db.Model(&gormdb.ClientResourceRelease{}).Where("id = ?", releaseID).Update("min_server_version", "1.1.0").Error; err != nil {
+				t.Fatal(err)
+			}
 			publish := clientResourceE2EJSON(t, client, http.MethodPost, fmt.Sprintf("%s/api/client-resources/%d/releases/%d/publish", server.URL, resourceID, releaseID), adminToken, nil, nil)
 			clientResourceE2ERequireStatus(t, publish, http.StatusOK)
 
 			manifestURL := server.URL + "/api/public/client-resources/manifest?platform=windows&arch=x86_64&channel=beta&client_version=1.0.0"
+			if err := db.Model(&gormdb.ClientResourceRelease{}).Where("id = ?", releaseID).Update("min_server_version", "9.0.0").Error; err != nil {
+				t.Fatal(err)
+			}
+			incompatibleManifestResult := clientResourceE2EJSON(t, client, http.MethodGet, manifestURL, "", nil, nil)
+			clientResourceE2ERequireStatus(t, incompatibleManifestResult, http.StatusOK)
+			incompatibleManifest := clientResourceE2EDecode[clientResourceManifestResponse](t, incompatibleManifestResult).Data
+			if incompatibleManifest.ServerVersion != "1.1.5" || incompatibleManifest.ProtocolVersion != 1 || len(incompatibleManifest.Capabilities) != 2 || len(incompatibleManifest.Resources) != 0 {
+				t.Fatalf("incompatible manifest=%#v", incompatibleManifest)
+			}
+			incompatibleDownload := clientResourceE2EJSON(t, client, http.MethodGet, fmt.Sprintf("%s/api/public/client-resources/artifacts/%d/download", server.URL, artifactID), "", nil, nil)
+			clientResourceE2ERequireStatus(t, incompatibleDownload, http.StatusNotFound)
+			if err := db.Model(&gormdb.ClientResourceRelease{}).Where("id = ?", releaseID).Update("min_server_version", "1.1.0").Error; err != nil {
+				t.Fatal(err)
+			}
 			manifestResult := clientResourceE2EJSON(t, client, http.MethodGet, manifestURL, "", nil, nil)
 			clientResourceE2ERequireStatus(t, manifestResult, http.StatusOK)
 			manifest := clientResourceE2EDecode[clientResourceManifestResponse](t, manifestResult).Data
-			if manifest.SchemaVersion != 1 || len(manifest.Resources) != 1 || manifest.Resources[0].Release.Channel != "stable" || len(manifest.Resources[0].Artifacts) != 1 {
+			if manifest.SchemaVersion != 1 || manifest.ServerVersion != "1.1.5" || manifest.ProtocolVersion != 1 || len(manifest.Capabilities) != 2 || len(manifest.Resources) != 1 || manifest.Resources[0].Release.Channel != "stable" || manifest.Resources[0].Release.MinServerVersion != "1.1.0" || len(manifest.Resources[0].Release.RequiredCapabilities) != 2 || len(manifest.Resources[0].Artifacts) != 1 {
 				t.Fatalf("manifest=%#v", manifest)
 			}
 			if bytes.Contains(manifestResult.Body, []byte("download_url")) || bytes.Contains(manifestResult.Body, []byte("storage_key")) {

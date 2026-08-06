@@ -13,10 +13,12 @@ import (
 const domainReceiverTTL = 30 * time.Second
 
 type domainReceiverEntry struct {
-	addr     netip.AddrPort
-	deviceID int
-	username string
-	ssid     byte
+	addr          netip.AddrPort
+	deviceID      int
+	username      string
+	ssid          byte
+	sessionID     string
+	sourceGroupV1 bool
 }
 
 type domainReceiverSnap struct {
@@ -39,6 +41,9 @@ var (
 	domainReceiverRebuilds    int64
 	domainReceiverBuildNanos  int64
 	domainReceiverMaxEntries  int64
+	domainReceiverCandidates  int64
+	domainReceiverDeduped     int64
+	domainReceiverEntries     int64
 	domainReceiverGen         uint64
 )
 
@@ -102,21 +107,32 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 	}
 	entries := make([]domainReceiverEntry, 0, 64)
 	seen := make(map[netip.AddrPort]struct{}, 64)
+	candidates := int64(0)
+	deduplicated := int64(0)
 
 	addDev := func(dev *models.Device, expectedGroupID int) {
-		if dev == nil || dev.GroupID != expectedGroupID || !dev.ISOnline || dev.UDPAddr == nil || dev.DisableRecv {
+		if dev == nil || !dev.ISOnline || dev.UDPAddr == nil || dev.DisableRecv {
+			return
+		}
+		// Physical devices are single-channel. UDP ghost sessions are already
+		// selected through their multi-group receive index.
+		if dev.GhostSessionID == "" && dev.GroupID != expectedGroupID {
 			return
 		}
 		addr, ok := udpAddrPort(dev.UDPAddr)
 		if !ok {
 			return
 		}
+		candidates++
 		if _, ok := seen[addr]; ok {
+			deduplicated++
 			return
 		}
 		seen[addr] = struct{}{}
 		entries = append(entries, domainReceiverEntry{
 			addr: addr, deviceID: dev.ID, username: dev.Username, ssid: dev.SSID,
+			sessionID:     dev.GhostSessionID,
+			sourceGroupV1: dev.GhostSessionID != "",
 		})
 	}
 
@@ -147,6 +163,9 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 	atomic.AddInt64(&domainReceiverRebuilds, 1)
 	atomic.AddInt64(&domainReceiverBuildNanos, time.Since(started).Nanoseconds())
 	updateMaxInt64(&domainReceiverMaxEntries, int64(len(entries)))
+	atomic.AddInt64(&domainReceiverCandidates, candidates)
+	atomic.AddInt64(&domainReceiverDeduped, deduplicated)
+	atomic.AddInt64(&domainReceiverEntries, int64(len(entries)))
 	return &domainReceiverSnap{
 		entries: entries, partitions: partitions, workers: workers,
 		updatedAt: time.Now(), gen: gen,
@@ -196,16 +215,19 @@ func forwardVoiceDomain(source *models.Device, data []byte, sourceGroupID int) {
 	if source == nil || len(data) == 0 {
 		return
 	}
-	writeUDPDomain(data, getDomainReceiverSnap(sourceGroupID), source.ID, source.Username, source.SSID)
+	writeUDPDomain(data, getDomainReceiverSnap(sourceGroupID), source.ID, source.Username, source.SSID, source.GhostSessionID, sourceGroupID)
 }
 
 func GetDomainReceiverCacheStats() map[string]int64 {
 	return map[string]int64{
-		"hits":        atomic.LoadInt64(&domainReceiverHits),
-		"misses":      atomic.LoadInt64(&domainReceiverMisses),
-		"rebuilds":    atomic.LoadInt64(&domainReceiverRebuilds),
-		"build_ns":    atomic.LoadInt64(&domainReceiverBuildNanos),
-		"max_entries": atomic.LoadInt64(&domainReceiverMaxEntries),
-		"gen":         int64(atomic.LoadUint64(&domainReceiverGen)),
+		"hits":          atomic.LoadInt64(&domainReceiverHits),
+		"misses":        atomic.LoadInt64(&domainReceiverMisses),
+		"rebuilds":      atomic.LoadInt64(&domainReceiverRebuilds),
+		"build_ns":      atomic.LoadInt64(&domainReceiverBuildNanos),
+		"max_entries":   atomic.LoadInt64(&domainReceiverMaxEntries),
+		"candidates":    atomic.LoadInt64(&domainReceiverCandidates),
+		"deduplicated":  atomic.LoadInt64(&domainReceiverDeduped),
+		"entries_built": atomic.LoadInt64(&domainReceiverEntries),
+		"gen":           int64(atomic.LoadUint64(&domainReceiverGen)),
 	}
 }

@@ -59,7 +59,8 @@ export interface OnlineDevice {
 export interface RadioMessage {
   id: string
   type: MessageType
-  groupId: number
+  groupId: number // 实际来源频道
+  requestedGroupId?: number // 历史查询时选择的频道
   groupName?: string // 群组名称（用于跨组消息显示）
 
   // 发送者信息
@@ -90,6 +91,21 @@ export interface RadioGroup {
   status: number
   onlineCount: number // 在线设备数
   isDefault?: boolean
+}
+
+export interface RadioSessionRouting {
+  sessionId: string
+  clientInstanceId: string
+  txGroupId: number
+  rxGroupIds: number[]
+}
+
+export interface RadioSpeaker {
+  key: string
+  groupId: number
+  callsign: string
+  ssid: number
+  username?: string
 }
 
 // WebSocket 配置
@@ -171,6 +187,7 @@ export interface DraARLPacket {
   dmrid: number
   callsign: string
   reserved: Uint8Array
+  sourceGroupId: number
   data: Uint8Array
 }
 
@@ -192,6 +209,7 @@ export interface RadioUserConfig {
   outputDeviceId?: string
   volume: number // 0-1
   muted: boolean
+  channelVolumes: Record<string, number>
 }
 
 // 默认用户配置
@@ -199,4 +217,5 @@ export const defaultRadioUserConfig: RadioUserConfig = {
   defaultGroupId: 999, // 公共群组
   volume: 0.8,
   muted: false,
+  channelVolumes: {},
 }

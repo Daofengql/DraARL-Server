@@ -1,424 +1,382 @@
 package udphub
 
 import (
+	"errors"
 	"fmt"
 	"log"
-	"net"
+	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
 )
 
-// ==========================================
-// UDP 幽灵设备管理器
-// 用于管理通过 UDP + JWT 认证的幽灵设备 (DevModel 101-104)
-// 这些设备不存储在数据库中，仅存在于内存
-// ==========================================
+var (
+	errUDPGhostSessionRequired = errors.New("udp ghost session id is required")
+	errUDPGhostSessionTag      = errors.New("udp ghost session tag is required")
+	errUDPGhostEndpointInUse   = errors.New("udp ghost endpoint is already registered")
+)
 
-// UDPGhostManager UDP 幽灵设备管理器
+// UDPGhostManager indexes every UDP ghost by its exact authenticated session.
 type UDPGhostManager struct {
-	// 主索引：通过 key (username-ssid) 查找设备，用于快速单播、心跳更新和在线状态判断
-	devices map[string]*models.Device
+	sessions        map[string]*models.Device
+	sessionTags     map[uint32]string
+	addressSessions map[netip.AddrPort]string
 
-	// 二级索引：按群组划分设备，用于 O(1) 复杂度的群组广播
-	// 外层 Key: groupID, 内层 Key: username-ssid, Value: 设备指针
+	// Receive index. One session can be present in many groups.
 	groupDevices map[int]map[string]*models.Device
 
 	mu sync.RWMutex
 }
 
-// GlobalUDPGhostManager 全局 UDP 幽灵设备管理器实例
-var GlobalUDPGhostManager = &UDPGhostManager{
-	devices:      make(map[string]*models.Device),
-	groupDevices: make(map[int]map[string]*models.Device),
+var GlobalUDPGhostManager = newUDPGhostManager()
+
+func newUDPGhostManager() *UDPGhostManager {
+	return &UDPGhostManager{
+		sessions:    make(map[string]*models.Device),
+		sessionTags: make(map[uint32]string), addressSessions: make(map[netip.AddrPort]string),
+		groupDevices: make(map[int]map[string]*models.Device),
+	}
 }
 
-// getDeviceKey 生成设备唯一键
-func getDeviceKey(username string, ssid byte) string {
-	return fmt.Sprintf("%s-%d", username, ssid)
+func sessionDeviceKey(sessionID string) string {
+	return "session:" + sessionID
 }
 
-// Register 注册或刷新 UDP 幽灵设备。
-// 当前策略是不再踢旧设备；调用方在入参前负责完成冲突判断。
-func (m *UDPGhostManager) Register(device *models.Device) *models.Device {
-	key := getDeviceKey(device.Username, device.SSID)
+func (m *UDPGhostManager) ensureMapsLocked() {
+	if m.sessions == nil {
+		m.sessions = make(map[string]*models.Device)
+	}
+	if m.sessionTags == nil {
+		m.sessionTags = make(map[uint32]string)
+	}
+	if m.addressSessions == nil {
+		m.addressSessions = make(map[netip.AddrPort]string)
+	}
+	if m.groupDevices == nil {
+		m.groupDevices = make(map[int]map[string]*models.Device)
+	}
+}
+
+func addGhostToGroupIndex(index map[int]map[string]*models.Device, groupID int, key string, device *models.Device) {
+	if groupID <= 0 || device == nil {
+		return
+	}
+	if index[groupID] == nil {
+		index[groupID] = make(map[string]*models.Device)
+	}
+	index[groupID][key] = device
+}
+
+func removeGhostFromGroupIndex(index map[int]map[string]*models.Device, groupID int, key string) {
+	if group := index[groupID]; group != nil {
+		delete(group, key)
+		if len(group) == 0 {
+			delete(index, groupID)
+		}
+	}
+}
+
+func ghostReceiveGroups(device *models.Device) []int {
+	if device == nil {
+		return nil
+	}
+	if len(device.GhostRxGroupIDs) > 0 {
+		return device.GhostRxGroupIDs
+	}
+	if device.GroupID > 0 {
+		return []int{device.GroupID}
+	}
+	return nil
+}
+
+func validateUDPGhostRouting(routing ghostsession.Routing) error {
+	for _, groupID := range routing.RxGroupIDs {
+		if groupID <= 0 || uint64(groupID) > uint64(^uint32(0)) {
+			return fmt.Errorf("%w: UDP group id is outside uint32 range", ghostsession.ErrInvalidRouting)
+		}
+	}
+	return nil
+}
+
+// RegisterSession publishes one exact authenticated UDP ghost session.
+func (m *UDPGhostManager) RegisterSession(device *models.Device) (*models.Device, error) {
+	if device == nil || strings.TrimSpace(device.GhostSessionID) == "" {
+		return nil, errUDPGhostSessionRequired
+	}
+	if device.GhostSessionTag == 0 {
+		return nil, errUDPGhostSessionTag
+	}
+	routing, err := ghostsession.NormalizeRouting(ghostsession.Routing{
+		TxGroupID: device.GroupID, RxGroupIDs: device.GhostRxGroupIDs,
+	}, ghostsession.MaxSubscriptions())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateUDPGhostRouting(routing); err != nil {
+		return nil, err
+	}
+	addr, addrOK := udpAddrPort(device.UDPAddr)
+	if !addrOK {
+		return nil, errors.New("udp ghost endpoint is required")
+	}
+	device.GroupID = routing.TxGroupID
+	device.GhostRxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	key := sessionDeviceKey(device.GhostSessionID)
 
 	m.mu.Lock()
-	cacheChanged := false
-
-	if existing, exists := m.devices[key]; exists {
-		oldGroupID := existing.GroupID
-		cacheChanged = oldGroupID != device.GroupID ||
-			!sameUDPAddr(existing.UDPAddr, device.UDPAddr) ||
-			existing.ISOnline != device.ISOnline ||
-			existing.DisableRecv != device.DisableRecv
-		if oldGroupID != device.GroupID {
-			if groupMap, ok := m.groupDevices[oldGroupID]; ok {
-				delete(groupMap, key)
-				if len(groupMap) == 0 {
-					delete(m.groupDevices, oldGroupID)
-				}
-			}
-		}
-
-		existing.Username = device.Username
-		existing.CallSign = device.CallSign
-		existing.OwnerID = device.OwnerID
-		existing.SSID = device.SSID
-		existing.CallSignSSID = device.CallSignSSID
-		existing.DevModel = device.DevModel
-		existing.GroupID = device.GroupID
-		existing.Priority = device.Priority
-		existing.Status = device.Status
-		existing.ISOnline = device.ISOnline
-		existing.DisableSend = device.DisableSend
-		existing.DisableRecv = device.DisableRecv
-		existing.UDPAddr = device.UDPAddr
-		existing.LastPacketTime = device.LastPacketTime
-		existing.OnlineTime = device.OnlineTime
-		device = existing
-	} else {
-		m.devices[key] = device
-		cacheChanged = true
+	m.ensureMapsLocked()
+	if otherSessionID := m.sessionTags[device.GhostSessionTag]; otherSessionID != "" && otherSessionID != device.GhostSessionID {
+		m.mu.Unlock()
+		return nil, errUDPGhostSessionTag
 	}
-
-	if m.groupDevices[device.GroupID] == nil {
-		m.groupDevices[device.GroupID] = make(map[string]*models.Device)
+	if otherSessionID := m.addressSessions[addr]; otherSessionID != "" && otherSessionID != device.GhostSessionID {
+		m.mu.Unlock()
+		return nil, errUDPGhostEndpointInUse
 	}
-	m.groupDevices[device.GroupID][key] = device
-
-	log.Printf("[UDP-GHOST] 设备注册: %s (用户: %s, 呼号: %s, 群组: %d)",
-		key, device.Username, device.CallSign, device.GroupID)
+	if existing := m.sessions[device.GhostSessionID]; existing != nil {
+		m.removeSessionLocked(device.GhostSessionID)
+	}
+	m.sessions[device.GhostSessionID] = device
+	m.sessionTags[device.GhostSessionTag] = device.GhostSessionID
+	m.addressSessions[addr] = device.GhostSessionID
+	for _, groupID := range device.GhostRxGroupIDs {
+		addGhostToGroupIndex(m.groupDevices, groupID, key, device)
+	}
 	m.mu.Unlock()
-	if cacheChanged {
-		InvalidateDomainReceiverCache()
-	}
+	InvalidateDomainReceiverCache()
+	log.Printf("[UDP-GHOST] session registered: session=%s user=%d tx=%d rx=%v",
+		ghostsession.ShortID(device.GhostSessionID), device.OwnerID, device.GroupID, device.GhostRxGroupIDs)
+	return device, nil
+}
 
+func (m *UDPGhostManager) GetSession(sessionID string) *models.Device {
+	m.mu.RLock()
+	device := m.sessions[sessionID]
+	m.mu.RUnlock()
 	return device
 }
 
-// Get 获取指定的 UDP 幽灵设备
-func (m *UDPGhostManager) Get(username string, ssid byte) *models.Device {
-	key := getDeviceKey(username, ssid)
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return m.devices[key]
-}
-
-// GetByUsername 获取用户的所有 UDP 幽灵设备
-func (m *UDPGhostManager) GetByUsername(username string) []*models.Device {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var devices []*models.Device
-	for key, dev := range m.devices {
-		// 检查 key 是否以 username- 开头
-		prefix := fmt.Sprintf("%s-", username)
-		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
-			devices = append(devices, dev)
-		}
-	}
-	return devices
-}
-
-// GetByGroup 获取指定群组的 UDP 幽灵设备 (优化为 O(1) 复杂度)
-// 注意：返回新切片；热路径优先使用 ForEachOnlineByGroup 避免分配。
-func (m *UDPGhostManager) GetByGroup(groupID int) []*models.Device {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// 查不到群组直接返回空切片，避免遍历整个设备表
-	groupMap, exists := m.groupDevices[groupID]
-	if !exists || len(groupMap) == 0 {
+func (m *UDPGhostManager) FindBySessionTag(tag uint32) *models.Device {
+	if tag == 0 {
 		return nil
 	}
-
-	// 预分配切片容量，避免 append 时的内存重分配
-	devices := make([]*models.Device, 0, len(groupMap))
-	for _, dev := range groupMap {
-		if dev.ISOnline {
-			devices = append(devices, dev)
-		}
-	}
-	return devices
+	m.mu.RLock()
+	device := m.sessions[m.sessionTags[tag]]
+	m.mu.RUnlock()
+	return device
 }
 
-// ForEachOnlineByGroup 无分配遍历群组内在线幽灵设备。
+func (m *UDPGhostManager) GetByUsername(username string) []*models.Device {
+	m.mu.RLock()
+	result := make([]*models.Device, 0)
+	for _, device := range m.sessions {
+		if device != nil && device.Username == username {
+			result = append(result, device)
+		}
+	}
+	m.mu.RUnlock()
+	return result
+}
+
+func (m *UDPGhostManager) GetByGroup(groupID int) []*models.Device {
+	m.mu.RLock()
+	group := m.groupDevices[groupID]
+	result := make([]*models.Device, 0, len(group))
+	for _, device := range group {
+		if device != nil && device.ISOnline {
+			result = append(result, device)
+		}
+	}
+	m.mu.RUnlock()
+	return result
+}
+
 func (m *UDPGhostManager) ForEachOnlineByGroup(groupID int, fn func(*models.Device)) {
 	if fn == nil {
 		return
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	groupMap, exists := m.groupDevices[groupID]
-	if !exists || len(groupMap) == 0 {
-		return
-	}
-	for _, dev := range groupMap {
-		if dev != nil && dev.ISOnline {
-			fn(dev)
+	for _, device := range m.groupDevices[groupID] {
+		if device != nil && device.ISOnline {
+			fn(device)
 		}
 	}
+	m.mu.RUnlock()
 }
 
-// Remove 移除指定的 UDP 幽灵设备
-func (m *UDPGhostManager) Remove(username string, ssid byte) {
-	key := getDeviceKey(username, ssid)
-
-	m.mu.Lock()
-	removed := false
-
-	if dev, exists := m.devices[key]; exists {
-		removed = true
-		// 从主索引中移除
-		delete(m.devices, key)
-
-		// 从群组二级索引中移除
-		if groupMap, ok := m.groupDevices[dev.GroupID]; ok {
-			delete(groupMap, key)
-			// 如果群组为空，清理 map 防止内存泄漏
-			if len(groupMap) == 0 {
-				delete(m.groupDevices, dev.GroupID)
-			}
-		}
-
-		log.Printf("[UDP-GHOST] 设备移除: %s (用户: %s, 呼号: %s)",
-			key, dev.Username, dev.CallSign)
-	}
-	m.mu.Unlock()
-	if removed {
-		InvalidateDomainReceiverCache()
-	}
-}
-
-// RemoveByUDPAddr 通过 UDP 地址移除设备（用于断开连接时清理）
-func (m *UDPGhostManager) RemoveByUDPAddr(addr string) {
-	m.mu.Lock()
-	removed := false
-
-	for key, dev := range m.devices {
-		if dev.UDPAddr != nil && dev.UDPAddr.String() == addr {
-			removed = true
-			// 从主索引中移除
-			delete(m.devices, key)
-
-			// 从群组二级索引中移除
-			if groupMap, ok := m.groupDevices[dev.GroupID]; ok {
-				delete(groupMap, key)
-				if len(groupMap) == 0 {
-					delete(m.groupDevices, dev.GroupID)
-				}
-			}
-
-			log.Printf("[UDP-GHOST] 设备断开: %s (地址: %s)", key, addr)
-		}
-	}
-	m.mu.Unlock()
-	if removed {
-		InvalidateDomainReceiverCache()
-	}
-}
-
-// GetAll 获取所有 UDP 幽灵设备
-func (m *UDPGhostManager) GetAll() []*models.Device {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	devices := make([]*models.Device, 0, len(m.devices))
-	for _, dev := range m.devices {
-		devices = append(devices, dev)
-	}
-	return devices
-}
-
-// FindBySSIDAndAddr 通过 SSID + UDP 地址查找幽灵设备
-// 性能优化：避免通过 GetAll 先构建切片再遍历
-func (m *UDPGhostManager) FindBySSIDAndAddr(ssid byte, addr *net.UDPAddr) *models.Device {
-	if addr == nil {
+func (m *UDPGhostManager) removeSessionLocked(sessionID string) *models.Device {
+	device := m.sessions[sessionID]
+	if device == nil {
 		return nil
 	}
+	delete(m.sessions, sessionID)
+	if m.sessionTags[device.GhostSessionTag] == sessionID {
+		delete(m.sessionTags, device.GhostSessionTag)
+	}
+	if addr, ok := udpAddrPort(device.UDPAddr); ok && m.addressSessions[addr] == sessionID {
+		delete(m.addressSessions, addr)
+	}
+	key := sessionDeviceKey(sessionID)
+	for _, groupID := range ghostReceiveGroups(device) {
+		removeGhostFromGroupIndex(m.groupDevices, groupID, key)
+	}
+	return device
+}
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (m *UDPGhostManager) RemoveSession(sessionID string) *models.Device {
+	m.mu.Lock()
+	m.ensureMapsLocked()
+	removed := m.removeSessionLocked(sessionID)
+	m.mu.Unlock()
+	if removed != nil {
+		InvalidateDomainReceiverCache()
+		log.Printf("[UDP-GHOST] session removed: session=%s user=%d", ghostsession.ShortID(sessionID), removed.OwnerID)
+	}
+	return removed
+}
 
-	for _, dev := range m.devices {
-		if dev.SSID != ssid || dev.UDPAddr == nil {
+func (m *UDPGhostManager) RemoveByUDPAddr(addr string) {
+	removed := make([]*models.Device, 0)
+	m.mu.Lock()
+	m.ensureMapsLocked()
+	for sessionID, device := range m.sessions {
+		if device != nil && device.UDPAddr != nil && device.UDPAddr.String() == addr {
+			removed = append(removed, m.removeSessionLocked(sessionID))
+		}
+	}
+	m.mu.Unlock()
+	for _, device := range removed {
+		if device == nil {
 			continue
 		}
-		if dev.UDPAddr.Port == addr.Port && dev.UDPAddr.IP.Equal(addr.IP) {
-			return dev
-		}
+		RevokeCenterLocalDevice(device)
+		ghostsession.Global.Remove(device.GhostSessionID)
 	}
-	return nil
+	if len(removed) > 0 {
+		InvalidateDomainReceiverCache()
+	}
 }
 
-// GetOnlineCount 获取在线的 UDP 幽灵设备数量
-func (m *UDPGhostManager) GetOnlineCount() int {
+func (m *UDPGhostManager) GetAll() []*models.Device {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	count := 0
-	for _, dev := range m.devices {
-		if dev.ISOnline {
-			count++
+	result := make([]*models.Device, 0, len(m.sessions))
+	for _, device := range m.sessions {
+		if device != nil {
+			result = append(result, device)
 		}
 	}
-	return count
+	m.mu.RUnlock()
+	return result
 }
 
-// CheckTimeout 检查并移除超时的 UDP 幽灵设备
-// timeout: 超时时间（建议 20-30 秒）
+func (m *UDPGhostManager) GetOnlineCount() int {
+	_, online := m.GetStats()
+	return online
+}
+
 func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
-	m.mu.Lock()
-	removed := false
-	expired := make([]*models.Device, 0)
-
 	now := time.Now()
-	for key, dev := range m.devices {
-		if now.Sub(dev.LastPacketTime) > timeout {
-			removed = true
-			expired = append(expired, dev)
-			log.Printf("[UDP-GHOST] 设备超时下线: %s (用户: %s, 超时: %v)",
-				key, dev.Username, now.Sub(dev.LastPacketTime))
-
-			// 从主索引中移除
-			delete(m.devices, key)
-
-			// 从群组二级索引中移除
-			if groupMap, ok := m.groupDevices[dev.GroupID]; ok {
-				delete(groupMap, key)
-				if len(groupMap) == 0 {
-					delete(m.groupDevices, dev.GroupID)
-				}
-			}
+	expired := make([]*models.Device, 0)
+	m.mu.Lock()
+	m.ensureMapsLocked()
+	for sessionID, device := range m.sessions {
+		if device != nil && now.Sub(device.LastPacketTime) > timeout {
+			expired = append(expired, m.removeSessionLocked(sessionID))
 		}
 	}
 	m.mu.Unlock()
-	for _, dev := range expired {
-		RevokeCenterLocalDevice(dev)
+	for _, device := range expired {
+		if device == nil {
+			continue
+		}
+		log.Printf("[UDP-GHOST] session timed out: session=%s user=%d", ghostsession.ShortID(device.GhostSessionID), device.OwnerID)
+		RevokeCenterLocalDevice(device)
+		ghostsession.Global.Remove(device.GhostSessionID)
 	}
-	if removed {
+	if len(expired) > 0 {
 		InvalidateDomainReceiverCache()
 	}
 }
 
-// UpdateActivity 更新设备活动时间
-func (m *UDPGhostManager) UpdateActivity(username string, ssid byte, addr *net.UDPAddr) {
-	key := getDeviceKey(username, ssid)
-
+func (m *UDPGhostManager) UpdateSessionActivity(sessionID string, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now()
+	}
 	m.mu.Lock()
-	cacheChanged := false
-
-	if dev, exists := m.devices[key]; exists {
-		dev.LastPacketTime = time.Now()
-		if addr != nil {
-			cacheChanged = !sameUDPAddr(dev.UDPAddr, addr)
-			dev.UDPAddr = addr
-		}
+	device := m.sessions[sessionID]
+	if device != nil {
+		device.LastPacketTime = now
 	}
 	m.mu.Unlock()
-	if cacheChanged {
-		InvalidateDomainReceiverCache()
+	if device != nil {
+		ghostsession.Global.UpdateActivity(sessionID, "", now)
+		return true
 	}
+	return false
 }
 
-// SetDeviceGroup 设置设备群组（在跨组时非常重要，必须同步维护二级索引）
-func (m *UDPGhostManager) SetDeviceGroup(username string, ssid byte, groupID int) error {
-	key := getDeviceKey(username, ssid)
-
+func (m *UDPGhostManager) SetSessionRouting(sessionID string, routing ghostsession.Routing) error {
+	routing, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
+	if err != nil {
+		return err
+	}
+	if err := validateUDPGhostRouting(routing); err != nil {
+		return err
+	}
 	m.mu.Lock()
-
-	dev, exists := m.devices[key]
-	if !exists {
+	device := m.sessions[sessionID]
+	if device == nil {
 		m.mu.Unlock()
-		return fmt.Errorf("device not found: %s", key)
+		return ghostsession.ErrSessionNotFound
 	}
-
-	oldGroupID := dev.GroupID
-	if oldGroupID == groupID {
-		m.mu.Unlock()
-		return nil // 群组未变，直接返回
+	key := sessionDeviceKey(sessionID)
+	for _, groupID := range ghostReceiveGroups(device) {
+		removeGhostFromGroupIndex(m.groupDevices, groupID, key)
 	}
-
-	// 1. 从旧群组索引中剔除
-	if groupMap, ok := m.groupDevices[oldGroupID]; ok {
-		delete(groupMap, key)
-		if len(groupMap) == 0 {
-			delete(m.groupDevices, oldGroupID)
-		}
+	device.GroupID = routing.TxGroupID
+	device.GhostRxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	for _, groupID := range routing.RxGroupIDs {
+		addGhostToGroupIndex(m.groupDevices, groupID, key, device)
 	}
-
-	// 2. 更新设备的群组属性
-	dev.GroupID = groupID
-
-	// 3. 加入新群组索引
-	if m.groupDevices[groupID] == nil {
-		m.groupDevices[groupID] = make(map[string]*models.Device)
-	}
-	m.groupDevices[groupID][key] = dev
-
-	log.Printf("[UDP-GHOST] 设备群组变更: %s (%d -> %d)", key, oldGroupID, groupID)
 	m.mu.Unlock()
 	InvalidateDomainReceiverCache()
 	return nil
 }
 
-// IsGhostDevice 判断是否为 UDP 幽灵设备
-// 通过 DevModel 判断
-func IsGhostDevice(dev *models.Device) bool {
-	if dev == nil {
-		return false
-	}
-	return protocol.IsGhostDevModel(dev.DevModel)
+func IsGhostDevice(device *models.Device) bool {
+	return device != nil && protocol.IsGhostDevModel(device.DevModel)
 }
 
-// GetDeviceByKey 通过 key 获取设备（用于内部快速查找）
-func (m *UDPGhostManager) GetDeviceByKey(key string) *models.Device {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return m.devices[key]
-}
-
-// GetStats 获取管理器统计信息
 func (m *UDPGhostManager) GetStats() (total int, online int) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	total = len(m.devices)
-	for _, dev := range m.devices {
-		if dev.ISOnline {
+	for _, device := range m.sessions {
+		if device == nil {
+			continue
+		}
+		total++
+		if device.ISOnline {
 			online++
 		}
 	}
-	return
+	m.mu.RUnlock()
+	return total, online
 }
 
-// UpdateUserCallSign 在管理员审批通过后同步在线 UDP 幽灵设备的呼号。
 func (m *UDPGhostManager) UpdateUserCallSign(ownerID int, username, newCallSign string) {
 	if ownerID <= 0 && username == "" {
 		return
 	}
-
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, dev := range m.devices {
-		if dev == nil {
+	for _, device := range m.sessions {
+		if device == nil || (ownerID > 0 && device.OwnerID != ownerID) || (ownerID <= 0 && device.Username != username) {
 			continue
 		}
-		if ownerID > 0 && dev.OwnerID == ownerID {
-			dev.CallSign = newCallSign
-			dev.CallSignSSID = protocol.GetCallSignSSID(newCallSign, dev.SSID)
-			continue
-		}
-		if ownerID <= 0 && username != "" && dev.Username == username {
-			dev.CallSign = newCallSign
-			dev.CallSignSSID = protocol.GetCallSignSSID(newCallSign, dev.SSID)
-		}
+		device.CallSign = newCallSign
+		device.CallSignSSID = protocol.GetCallSignSSID(newCallSign, device.SSID)
 	}
+	m.mu.Unlock()
 }

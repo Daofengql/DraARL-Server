@@ -232,27 +232,20 @@ class HTTPClient:
             self.log(f"[群组切换失败] {result.get('message', '未知错误')}")
             return False
 
-    def update_radio_group(self, group_id: int, dev_model: int = 105) -> bool:
+    def update_radio_session_routing(self, session_id: str, tx_group_id: int, rx_group_ids: list[int]) -> bool:
         """
-        切换幽灵设备群组（JWT 认证的 App/Web 客户端）
-
-        Args:
-            group_id: 目标群组 ID
-            dev_model: 设备型号 (101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web)
-
-        Returns:
-            是否切换成功
+        更新指定幽灵 Session 的单发/多收路由。
         """
-        result = self._request('PUT', '/api/radio/group', json={
-            'group_id': group_id,
-            'dev_model': dev_model
+        result = self._request('PUT', f'/api/radio/sessions/{session_id}/routing', json={
+            'tx_group_id': tx_group_id,
+            'rx_group_ids': rx_group_ids,
         })
 
         if result.get('code') == 200:
-            self.log(f"[群组切换成功] -> 群组 {group_id}")
+            self.log(f"[会话路由更新成功] tx={tx_group_id} rx={rx_group_ids}")
             return True
         else:
-            self.log(f"[群组切换失败] {result.get('message', '未知错误')}")
+            self.log(f"[会话路由更新失败] {result.get('message', '未知错误')}")
             return False
 
     def join_group(self, group_id: int, password: str = "") -> bool:

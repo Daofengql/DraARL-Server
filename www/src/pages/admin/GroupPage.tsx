@@ -30,6 +30,7 @@ import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import Person from '@mui/icons-material/Person'
 import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
+import ManageAccounts from '@mui/icons-material/ManageAccounts'
 import { groupService } from '../../services/group'
 import { userService } from '../../services'
 import type { Group, User } from '../../types'
@@ -37,7 +38,7 @@ import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SearchBar } from '../../components/common/SearchBar'
-import { GroupDeviceManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
+import { GroupDeviceManagementDialog, GroupMemberManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function AdminGroupPage() {
   const [groups, setGroups] = useState<Group[]>([])
@@ -52,6 +53,7 @@ export function AdminGroupPage() {
   const [editingGroup, setEditingGroup] = useState<Group | null>(null)
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
   const [managedGroup, setManagedGroup] = useState<Group | null>(null)
+  const [managedMembersGroup, setManagedMembersGroup] = useState<Group | null>(null)
 
   // 用户详情弹窗状态
   const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
@@ -293,6 +295,11 @@ export function AdminGroupPage() {
           </Typography>
         </TableCell>
         <TableCell align="right" width={120}>
+          {group.type === GROUP_TYPE_PRIVATE && (
+            <Tooltip title="管理成员">
+              <IconButton size="small" onClick={() => setManagedMembersGroup(group)}><ManageAccounts fontSize="small" /></IconButton>
+            </Tooltip>
+          )}
           <Tooltip title="编辑">
             <IconButton size="small" onClick={() => handleOpenEdit(group)}><Edit fontSize="small" /></IconButton>
           </Tooltip>
@@ -495,6 +502,13 @@ export function AdminGroupPage() {
         open={Boolean(managedGroup)}
         group={managedGroup}
         onClose={() => setManagedGroup(null)}
+        onChanged={() => void fetchGroups()}
+      />
+
+      <GroupMemberManagementDialog
+        open={Boolean(managedMembersGroup)}
+        group={managedMembersGroup}
+        onClose={() => setManagedMembersGroup(null)}
         onChanged={() => void fetchGroups()}
       />
 

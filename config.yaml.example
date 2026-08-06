@@ -18,6 +18,27 @@ UDP:
     ReadBufferBytes: 4194304   # 请求的 UDP 接收缓冲（实际值以启动日志/指标为准）
     WriteBufferBytes: 4194304  # 请求的 UDP 发送缓冲（实际值以启动日志/指标为准）
 
+# 幽灵设备多端与多收上限。零值使用兼容默认值；范围由服务端校验。
+GhostSessions:
+    MaxSessionsPerOwner: 8             # 同一账号最多同时在线的幽灵 Session 数
+    MaxSubscriptionsPerSession: 16     # 每个幽灵 Session 最多接收的频道数
+    MultiSession:
+        Enabled: true                  # false 时仅 AllowOwnerIDs/AllowDevModels 可多端
+        AllowOwnerIDs: []              # 灰度账号 ID；同实例重连始终允许
+        AllowDevModels: []             # 灰度客户端平台，例如 101(Android)、105(Web)
+    MultiReceive:
+        Enabled: true                  # false 时认证退化为仅接收发送频道
+        AllowOwnerIDs: []              # 灰度账号 ID；主动请求多收会返回稳定错误码
+        AllowDevModels: []             # 灰度客户端平台
+
+# 频道消息历史 API 的分页和查询保护。列表与详情共享账号/IP 窗口和并发槽。
+MessageAPI:
+    DefaultPageSize: 50
+    MaxPageSize: 100
+    RequestsPerMinutePerUser: 120
+    RequestsPerMinutePerIP: 300
+    MaxConcurrentQueries: 32
+
 # 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
 Interconnect:
     Enabled: false

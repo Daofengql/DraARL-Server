@@ -94,23 +94,28 @@ func (cs *CommSyncer) SyncToDatabase() {
 		durationMs := estimateSessionDurationMs(item.Session)
 		endTime := item.Session.StartTime.Add(time.Duration(durationMs) * time.Millisecond)
 
-		// 处理设备ID（幽灵设备使用负数ID，存储为0）
+		// 处理设备ID（幽灵设备持久化为0）
 		deviceID := uint(0)
 		if item.Session.DeviceID > 0 {
 			deviceID = uint(item.Session.DeviceID)
 		}
 
 		records = append(records, gormdb.CommRecord{
-			DeviceID:   deviceID,
-			DeviceSSID: item.Session.DeviceSSID,
-			GroupID:    item.Session.GroupID,
-			UserID:     item.Session.UserID,
-			StartTime:  item.Session.StartTime,
-			EndTime:    endTime,
-			DurationMs: durationMs,
-			AudioPath:  item.AudioPath,
-			AudioSize:  item.AudioSize,
-			Status:     status,
+			DeviceID:       deviceID,
+			DeviceSSID:     item.Session.DeviceSSID,
+			GroupID:        item.Session.GroupID,
+			UserID:         item.Session.UserID,
+			StartTime:      item.Session.StartTime,
+			EndTime:        endTime,
+			DurationMs:     durationMs,
+			AudioPath:      item.AudioPath,
+			AudioSize:      item.AudioSize,
+			Status:         status,
+			MessageType:    gormdb.CommMessageTypeVoice,
+			SenderUsername: item.Session.Sender.Username,
+			SenderCallSign: item.Session.Sender.CallSign,
+			SenderNickname: item.Session.Sender.Nickname,
+			SenderDevModel: item.Session.Sender.DevModel,
 		})
 	}
 

@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -32,15 +33,20 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 	if a == nil || a.manager == nil || len(groupIDs) == 0 || len(data) == 0 {
 		return 0, 0
 	}
-	var payload *sharedWritePayload
+	var basePayload *sharedWritePayload
+	var sourcePayload *sharedWritePayload
 	defer func() {
-		if payload != nil {
-			payload.release()
+		if basePayload != nil {
+			basePayload.release()
+		}
+		if sourcePayload != nil {
+			sourcePayload.release()
 		}
 	}()
+	seenSessions := make(map[string]struct{})
 	for _, groupID := range groupIDs {
 		for _, device := range a.manager.GetDevicesByGroup(groupID) {
-			if device == nil || device.DisableRecv {
+			if device == nil || device.IsDisabledRecv() {
 				continue
 			}
 			if udphub.CenterIdentityOwnedByRemote(device.UserID, device.SSID) {
@@ -49,17 +55,46 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 			if filter.ExcludeDeviceID != 0 && !device.IsGhost() && device.GetDeviceID() == filter.ExcludeDeviceID {
 				continue
 			}
+			if filter.ExcludeSessionID != "" && device.SessionID == filter.ExcludeSessionID {
+				continue
+			}
 			if filter.ExcludeUserID != 0 && device.IsGhost() &&
 				device.UserID == filter.ExcludeUserID && device.SSID == filter.ExcludeSSID {
 				continue
 			}
+			wsFanoutCandidates.Add(1)
+			sessionKey := device.SessionID
+			if sessionKey == "" {
+				sessionKey = fmt.Sprintf("%p", device)
+			}
+			if _, duplicate := seenSessions[sessionKey]; duplicate {
+				wsFanoutDeduplicated.Add(1)
+				continue
+			}
+			seenSessions[sessionKey] = struct{}{}
+			var payload *sharedWritePayload
+			if filter.SourceGroupID > 0 {
+				if sourcePayload == nil {
+					if enriched, ok := protocol.WithSourceGroupID(data, filter.SourceGroupID); ok {
+						sourcePayload = newSharedWritePayload(enriched)
+					}
+				}
+				if sourcePayload != nil {
+					payload = sourcePayload
+				}
+			}
 			if payload == nil {
-				payload = newSharedWritePayload(data)
+				if basePayload == nil {
+					basePayload = newSharedWritePayload(data)
+				}
+				payload = basePayload
 			}
 			if device.asyncWriteShared(messageType, payload) {
 				sent++
+				wsFanoutSent.Add(1)
 			} else {
 				dropped++
+				wsFanoutDropped.Add(1)
 			}
 		}
 	}
@@ -117,7 +152,7 @@ func startHeartbeatChecker() {
 		// 检查所有幽灵设备的心跳超时
 		devices := GlobalManager.GetAllOnlineDevices()
 		for _, device := range devices {
-			if time.Since(device.LastPacketTime) > GlobalManager.HeartbeatTimeout {
+			if time.Since(device.GetLastPacketTime()) > GlobalManager.HeartbeatTimeout {
 				log.Printf("[WS] Ghost device heartbeat timeout: %s", device.GetIdentifier())
 				device.Conn.Close()
 			}
@@ -153,18 +188,8 @@ func handlePacket(device *WSDevice, packet *WSPacket, rawData []byte) {
 
 // handleHeartbeat 处理心跳包
 func handleHeartbeat(device *WSDevice, packet *WSPacket) {
-	// 更新设备型号（100-104 为各平台客户端，105 为 Web 浏览器）
-	// 客户端通过心跳包告知服务器自己的设备类型
-	if packet.DevModel >= 100 && packet.DevModel <= 105 {
-		if device.DevModel != packet.DevModel {
-			log.Printf("[WS] Device model updated: %s %d -> %d", device.GetIdentifier(), device.DevModel, packet.DevModel)
-			device.DevModel = packet.DevModel
-			device.SSID = packet.DevModel // 幽灵设备的 SSID 与 DevModel 一致
-		}
-	}
-
 	// 回填呼号（通过异步通道发送，避免写锁竞争）
-	response := EncodeHeartbeatResponse(packet, device.CallSign)
+	response := EncodeHeartbeatResponse(packet, device.GetCallSign())
 	if !device.AsyncWrite(websocket.BinaryMessage, response) {
 		log.Printf("[WS] Heartbeat response failed for %s: write channel full or closed", device.GetIdentifier())
 	}
@@ -173,13 +198,14 @@ func handleHeartbeat(device *WSDevice, packet *WSPacket) {
 // handleVoice 处理语音包
 func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 	// 1. 权限检查：如果设备当前被服务器禁发，则直接丢弃语音包
-	if device.DisableSend {
+	if device.IsDisabledSend() {
 		return
 	}
-	if !udphub.AuthorizeCenterLocalWS(device, device.GroupID) {
+	txGroupID := device.GetGroupID()
+	if !udphub.AuthorizeCenterLocalWS(device, txGroupID) {
 		return
 	}
-	if !udphub.AcquireCenterLocalWSVoice(device, device.GroupID) {
+	if !udphub.AcquireCenterLocalWSVoice(device, txGroupID) {
 		return
 	}
 
@@ -189,8 +215,8 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 		var userID *uint
 
 		// 安全提取群组 ID
-		if device.GroupID > 0 {
-			gid := uint(device.GroupID)
+		if txGroupID > 0 {
+			gid := uint(txGroupID)
 			groupID = &gid
 		}
 
@@ -200,16 +226,18 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 			userID = &uid
 		}
 
-		// 幽灵设备：使用负数 UserID 作为录制缓冲池的 Session Key
-		recordDevID := -device.UserID
 		// 使用实际的设备型号（100-105）作为 SSID
 		recordSSID := device.DevModel
+		sourceKey := udphub.GhostCommRecordSourceKey("ws", device.UserID, recordSSID, device.SessionID)
+		sender := udphub.CommSenderSnapshot{
+			Username: device.GetUsername(), CallSign: device.GetCallSign(), Nickname: device.GetNickname(), DevModel: int(device.DevModel),
+		}
 
-		udphub.RecordCommPacket(recordDevID, recordSSID, groupID, userID, packet.DATA)
+		udphub.RecordCommPacket(sourceKey, 0, recordSSID, groupID, userID, sender, packet.DATA)
 	}
 
 	// 3. 路由语音到 UDP 设备
-	udphub.BroadcastVoiceToUDP(device, packet.DATA, device.GroupID)
+	udphub.BroadcastVoiceToUDP(device, packet.DATA, txGroupID)
 
 	// 4. 统计信息更新：每一帧标准的 Opus 16K 数据视为 63ms 的理论时长
 	device.VoiceTime += 63
@@ -218,10 +246,11 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 // handleTextMessage 处理文本消息
 func handleTextMessage(device *WSDevice, packet *WSPacket) {
 	// 1. 权限检查
-	if device.DisableSend {
+	if device.IsDisabledSend() {
 		return
 	}
-	if !udphub.AuthorizeCenterLocalWS(device, device.GroupID) {
+	txGroupID := device.GetGroupID()
+	if !udphub.AuthorizeCenterLocalWS(device, txGroupID) {
 		return
 	}
 
@@ -230,8 +259,8 @@ func handleTextMessage(device *WSDevice, packet *WSPacket) {
 		var groupID *uint
 		var userID *uint
 
-		if device.GroupID > 0 {
-			gid := uint(device.GroupID)
+		if txGroupID > 0 {
+			gid := uint(txGroupID)
 			groupID = &gid
 		}
 		if device.UserID > 0 {
@@ -239,14 +268,15 @@ func handleTextMessage(device *WSDevice, packet *WSPacket) {
 			userID = &uid
 		}
 
-		// 幽灵设备是使用负数 UserID
-		recordDevID := -device.UserID
 		// 使用实际的设备型号（100-105）作为 SSID
 		recordSSID := device.DevModel
+		sender := udphub.CommSenderSnapshot{
+			Username: device.GetUsername(), CallSign: device.GetCallSign(), Nickname: device.GetNickname(), DevModel: int(device.DevModel),
+		}
 
-		udphub.RecordTextMessage(recordDevID, recordSSID, groupID, userID, string(packet.DATA))
+		udphub.RecordTextMessage(0, recordSSID, groupID, userID, sender, string(packet.DATA))
 	}
 
 	// 3. 路由文本消息到 UDP 设备
-	udphub.BroadcastTextToUDP(device, packet.DATA, device.GroupID)
+	udphub.BroadcastTextToUDP(device, packet.DATA, txGroupID)
 }

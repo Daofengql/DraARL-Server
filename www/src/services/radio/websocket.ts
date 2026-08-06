@@ -11,6 +11,42 @@ import { apiClient } from '../api'
 // 协议常量
 const DRAARL_VERSION = 'DraA'
 const HEADER_SIZE = 90
+export const MAX_TEXT_MESSAGE_BYTES = 800 - HEADER_SIZE
+const CLIENT_INSTANCE_STORAGE_KEY = 'draarl-radio-client-instance-id'
+const PROTOCOL_VERSION = 1
+const CAPABILITIES = ['multi_receive_v1', 'source_group_v1']
+
+export interface WebSocketRoutingState {
+  sessionId: string
+  clientInstanceId: string
+  txGroupId: number
+  rxGroupIds: number[]
+}
+
+interface ServerControlEvent {
+  type: 'auth_success' | 'routing_updated'
+  data?: {
+    session_id?: string
+    client_instance_id?: string
+    tx_group_id?: number
+    rx_group_ids?: number[]
+  }
+}
+
+function getClientInstanceId(): string {
+  const existing = localStorage.getItem(CLIENT_INSTANCE_STORAGE_KEY)?.trim()
+  if (existing) return existing
+
+  const generated = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+        const random = crypto.getRandomValues(new Uint8Array(1))[0] & 0x0f
+        const value = character === 'x' ? random : (random & 0x03) | 0x08
+        return value.toString(16)
+      })
+  localStorage.setItem(CLIENT_INSTANCE_STORAGE_KEY, generated)
+  return generated
+}
 
 export class RadioWebSocket {
   private ws: WebSocket | null = null
@@ -29,6 +65,7 @@ export class RadioWebSocket {
   private isSending = false
   private voiceEndTimer: ReturnType<typeof setTimeout> | null = null
   private isConnecting = false // 防止 StrictMode 双重连接
+  private explicitlyDisconnected = false
 
   // 回调函数
   private onStateChange: ((state: WSConnectionState) => void) | null = null
@@ -36,7 +73,7 @@ export class RadioWebSocket {
   private onError: ((error: string) => void) | null = null
   private onVoiceStart: ((callsign: string, ssid: number, username: string) => void) | null = null
   private onVoiceEnd: (() => void) | null = null
-  private onConflict: (() => void) | null = null // 【新增】连接冲突回调
+  private onRoutingChange: ((routing: WebSocketRoutingState) => void) | null = null
 
   // 用户信息
   private token: string = ''
@@ -44,6 +81,9 @@ export class RadioWebSocket {
   private readonly ssid: number = 105
   private username: string = ''
   private callsign: string = ''
+  private readonly clientInstanceId = getClientInstanceId()
+  private sessionId = ''
+  private routing: WebSocketRoutingState | null = null
 
   constructor(config: Partial<WSConfig> = {}) {
     this.config = { ...defaultWSConfig, ...config }
@@ -70,9 +110,8 @@ export class RadioWebSocket {
     this.onVoiceEnd = callback
   }
 
-  // 【新增】设置连接冲突回调
-  setOnConflict(callback: () => void) {
-    this.onConflict = callback
+  setOnRoutingChange(callback: (routing: WebSocketRoutingState) => void) {
+    this.onRoutingChange = callback
   }
 
   // 设置用户信息
@@ -88,24 +127,9 @@ export class RadioWebSocket {
     return this.state
   }
 
-  // Check ghost device connection conflict (call backend API)
-  async checkConflict(): Promise<boolean> {
-    if (!this.token) {
-      return false
-    }
-
-    try {
-      // Use apiClient to request directly to backend (no proxy)
-      await apiClient.get('/api/radio/conflict')
-      return false // 200 response, no conflict
-    } catch (error: any) {
-      // 409 indicates conflict
-      if (error?.response?.status === 409) {
-        return true
-      }
-      console.warn('[WS] Conflict check failed:', error)
-      return false
-    }
+  getRouting(): WebSocketRoutingState | null {
+    if (!this.routing) return null
+    return { ...this.routing, rxGroupIds: [...this.routing.rxGroupIds] }
   }
 
 
@@ -115,28 +139,15 @@ export class RadioWebSocket {
     if (this.isConnecting) {
       return
     }
-    if (this.ws && (this.state === 'connecting' || this.state === 'online')) {
+    if (this.ws && (this.state === 'connecting' || this.state === 'authenticating' || this.state === 'online')) {
       return
     }
 
     this.isConnecting = true
+    this.explicitlyDisconnected = false
     this.setState('connecting')
     this.connectionStartTime = Date.now()
     this.pendingReconnect = false
-
-    // 【新增】如果有 token，先进行冲突预检查
-    if (this.token) {
-      const hasConflict = await this.checkConflict()
-      if (hasConflict) {
-        console.warn('[WS] Connection conflict detected')
-        this.isConnecting = false
-        this.setState('disconnected')
-        if (this.onConflict) {
-          this.onConflict()
-        }
-        throw new Error('connection_conflict')
-      }
-    }
 
     if (this.token) {
       try {
@@ -151,10 +162,31 @@ export class RadioWebSocket {
     }
 
     return new Promise((resolve, reject) => {
-      try {
-        const url = this.config.url
+      let settled = false
+      const authenticationTimeout = setTimeout(() => {
+        rejectOnce(new Error('WebSocket 认证超时'))
+        this.ws?.close(1000, 'authentication_timeout')
+      }, 10_000)
+      const resolveOnce = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(authenticationTimeout)
+        resolve()
+      }
+      const rejectOnce = (error: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(authenticationTimeout)
+        reject(error)
+      }
 
-        this.ws = new WebSocket(url)
+      try {
+        const url = new URL(this.config.url)
+        url.searchParams.set('client_instance_id', this.clientInstanceId)
+        url.searchParams.set('protocol_version', String(PROTOCOL_VERSION))
+        url.searchParams.set('capabilities', CAPABILITIES.join(','))
+
+        this.ws = new WebSocket(url.toString())
         this.ws.binaryType = 'arraybuffer'
 
         this.ws.onopen = () => {
@@ -162,22 +194,14 @@ export class RadioWebSocket {
           this.isConnecting = false
           this.reconnectAttempts = 0
           this.setState('authenticating')
-
-          // 如果有 token，等待服务器确认
-          // 如果没有 token，等待心跳包进行设备认证
-          if (this.token) {
-            // JWT 认证，服务器会自动处理
-            this.setState('online')
-            this.startHeartbeat()
-            resolve()
-          }
-          // 没有 token 的情况下，需要发送心跳包进行设备认证
-          // 这种情况下由调用方处理
         }
 
         this.ws.onmessage = (event) => {
           if (event.data instanceof ArrayBuffer) {
             this.handleBinaryMessage(event.data)
+          } else if (typeof event.data === 'string') {
+            const authenticated = this.handleControlMessage(event.data)
+            if (authenticated) resolveOnce()
           }
         }
 
@@ -186,7 +210,7 @@ export class RadioWebSocket {
           this.isConnecting = false
           const errorMsg = 'WebSocket 连接错误'
           if (this.onError) this.onError(errorMsg)
-          reject(new Error(errorMsg))
+          rejectOnce(new Error(errorMsg))
         }
 
         this.ws.onclose = (event) => {
@@ -195,17 +219,18 @@ export class RadioWebSocket {
           this.stopHeartbeat()
           this.setState('disconnected')
 
-          // 【新增】如果是冲突导致的关闭（1008 Policy Violation 或 1013 Try Again Later），不重连
-          if (event.code === 1008 || event.code === 1013 || event.reason === 'ghost_device_conflict') {
-            console.warn('[WS] Connection rejected due to conflict')
-            if (this.onConflict) {
-              this.onConflict()
-            }
+          if (!settled) {
+            rejectOnce(new Error(event.reason || 'WebSocket 认证失败'))
+          }
+
+          // 策略拒绝通常表示认证、会话上限或能力协商失败，自动重试没有意义。
+          if (event.code === 1008 || event.code === 1013) {
+            if (this.onError) this.onError(event.reason || '连接被服务器拒绝')
             return
           }
 
           // 如果不是正常关闭，尝试重连
-          if (event.code !== 1000 && event.code !== 1001) {
+          if (!this.explicitlyDisconnected && event.code !== 1000 && event.code !== 1001) {
             this.scheduleReconnect()
           }
         }
@@ -213,13 +238,14 @@ export class RadioWebSocket {
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : '连接失败'
         if (this.onError) this.onError(errorMsg)
-        reject(new Error(errorMsg))
+        rejectOnce(new Error(errorMsg))
       }
     })
   }
 
   // 断开连接
   disconnect() {
+    this.explicitlyDisconnected = true
     this.stopHeartbeat()
     this.clearReconnectTimer()
     this.clearVoiceEndTimer()
@@ -265,6 +291,15 @@ export class RadioWebSocket {
 
   // 发送文本消息
   sendTextMessage(message: string): boolean {
+    const byteLength = new TextEncoder().encode(message).byteLength
+    if (byteLength === 0) {
+      if (this.onError) this.onError('消息不能为空')
+      return false
+    }
+    if (byteLength > MAX_TEXT_MESSAGE_BYTES) {
+      if (this.onError) this.onError(`消息不能超过 ${MAX_TEXT_MESSAGE_BYTES} 字节`)
+      return false
+    }
     const packet = this.buildTextPacket(message)
     return this.send(packet)
   }
@@ -288,6 +323,43 @@ export class RadioWebSocket {
   private async syncWSTokenCookie() {
     if (!this.token) return
     await apiClient.post('/api/auth/ws-token/sync')
+  }
+
+  private handleControlMessage(raw: string): boolean {
+    try {
+      const event = JSON.parse(raw) as ServerControlEvent
+      if ((event.type !== 'auth_success' && event.type !== 'routing_updated') || !event.data) {
+        return false
+      }
+
+      const sessionId = event.data.session_id?.trim() || this.sessionId
+      const txGroupId = Number(event.data.tx_group_id)
+      const rxGroupIds = Array.isArray(event.data.rx_group_ids)
+        ? event.data.rx_group_ids.map(Number).filter(groupId => Number.isInteger(groupId) && groupId > 0)
+        : []
+      if (!sessionId || !Number.isInteger(txGroupId) || txGroupId <= 0 || rxGroupIds.length === 0) {
+        console.warn('[WS] Ignoring invalid routing event:', event)
+        return false
+      }
+
+      this.sessionId = sessionId
+      this.routing = {
+        sessionId,
+        clientInstanceId: event.data.client_instance_id?.trim() || this.clientInstanceId,
+        txGroupId,
+        rxGroupIds: Array.from(new Set(rxGroupIds)),
+      }
+      this.onRoutingChange?.(this.getRouting()!)
+
+      if (event.type === 'auth_success') {
+        this.setState('online')
+        this.startHeartbeat()
+        return true
+      }
+    } catch (error) {
+      console.warn('[WS] Failed to parse control event:', error)
+    }
+    return false
   }
 
   // 处理二进制消息
@@ -363,6 +435,7 @@ export class RadioWebSocket {
     const dmrid = (bytes[51] << 16) | (bytes[52] << 8) | bytes[53]
     const callsign = this.decodeString(bytes, 54, 32)
     const reserved = bytes.slice(86, 90)
+    const sourceGroupId = view.getUint32(86, false)
     const packetData = bytes.slice(HEADER_SIZE)
 
     return {
@@ -376,6 +449,7 @@ export class RadioWebSocket {
       dmrid,
       callsign,
       reserved,
+      sourceGroupId,
       data: packetData,
     }
   }

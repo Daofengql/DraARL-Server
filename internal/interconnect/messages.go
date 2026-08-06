@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -54,24 +55,40 @@ type DeviceAuthRequest struct {
 }
 
 type DeviceGrant struct {
-	SessionID       uint64 `json:"session_id"`
-	SessionEpoch    uint64 `json:"session_epoch"`
-	DeviceID        int    `json:"device_id"`
-	OwnerID         int    `json:"owner_id"`
-	Username        string `json:"username"`
-	CallSign        string `json:"callsign"`
-	SSID            byte   `json:"ssid"`
-	DevModel        byte   `json:"dev_model"`
-	DMRID           uint32 `json:"dmrid"`
-	GroupID         int    `json:"group_id"`
-	DomainID        uint64 `json:"domain_id"`
-	DisableSend     bool   `json:"disable_send"`
-	DisableRecv     bool   `json:"disable_recv"`
-	ExpiresAtMillis int64  `json:"expires_at_ms"`
+	SessionID            uint64   `json:"session_id"`
+	SessionEpoch         uint64   `json:"session_epoch"`
+	DeviceID             int      `json:"device_id"`
+	OwnerID              int      `json:"owner_id"`
+	Username             string   `json:"username"`
+	CallSign             string   `json:"callsign"`
+	Nickname             string   `json:"nickname"`
+	SSID                 byte     `json:"ssid"`
+	DevModel             byte     `json:"dev_model"`
+	DMRID                uint32   `json:"dmrid"`
+	GroupID              int      `json:"group_id"`
+	DomainID             uint64   `json:"domain_id"`
+	RxGroupIDs           []int    `json:"rx_group_ids,omitempty"`
+	RxDomainIDs          []uint64 `json:"rx_domain_ids,omitempty"`
+	GhostSessionID       string   `json:"ghost_session_id,omitempty"`
+	ClientInstanceID     string   `json:"client_instance_id,omitempty"`
+	SessionTag           uint32   `json:"session_tag,omitempty"`
+	GhostProtocolVersion uint16   `json:"ghost_protocol_version,omitempty"`
+	SourceGroupV1        bool     `json:"source_group_v1,omitempty"`
+	RecoveryTicket       string   `json:"recovery_ticket,omitempty"`
+	DisableSend          bool     `json:"disable_send"`
+	DisableRecv          bool     `json:"disable_recv"`
+	ExpiresAtMillis      int64    `json:"expires_at_ms"`
 }
 
 func (g DeviceGrant) Route() DeviceRoute {
-	return DeviceRoute{SessionID: g.SessionID, DeviceID: g.DeviceID, Username: g.Username, CallSign: g.CallSign, SSID: g.SSID, GroupID: g.GroupID, DomainID: g.DomainID, SessionEpoch: g.SessionEpoch, DisableSend: g.DisableSend, DisableRecv: g.DisableRecv}
+	return DeviceRoute{
+		SessionID: g.SessionID, DeviceID: g.DeviceID, Username: g.Username, CallSign: g.CallSign, Nickname: g.Nickname,
+		SSID: g.SSID, DevModel: g.DevModel, GroupID: g.GroupID, DomainID: g.DomainID,
+		RxGroupIDs: append([]int(nil), g.RxGroupIDs...), RxDomainIDs: append([]uint64(nil), g.RxDomainIDs...),
+		GhostSessionID: g.GhostSessionID, ClientInstanceID: g.ClientInstanceID, SessionTag: g.SessionTag,
+		GhostProtocolVersion: g.GhostProtocolVersion, SourceGroupV1: g.SourceGroupV1,
+		SessionEpoch: g.SessionEpoch, DisableSend: g.DisableSend, DisableRecv: g.DisableRecv,
+	}
 }
 
 type DeviceAuthResponse struct {
@@ -95,6 +112,7 @@ type DeviceSessionRenewResponse struct {
 	Success         bool   `json:"success"`
 	Error           string `json:"error,omitempty"`
 	ExpiresAtMillis int64  `json:"expires_at_ms,omitempty"`
+	RecoveryTicket  string `json:"recovery_ticket,omitempty"`
 }
 
 type DeviceSessionRevoke struct {
@@ -122,6 +140,10 @@ type DeviceSessionConfirmItem struct {
 	DeviceID         int    `json:"device_id"`
 	OwnerID          int    `json:"owner_id"`
 	SSID             byte   `json:"ssid"`
+	DevModel         byte   `json:"dev_model,omitempty"`
+	GhostSessionID   string `json:"ghost_session_id,omitempty"`
+	ClientInstanceID string `json:"client_instance_id,omitempty"`
+	RecoveryTicket   string `json:"recovery_ticket,omitempty"`
 }
 
 type DeviceSessionConfirmRequest struct {
@@ -137,21 +159,33 @@ func (m DeviceSessionConfirmRequest) Validate() error {
 	seenDevices := make(map[int]struct{}, len(m.Sessions))
 	seenOwners := make(map[string]struct{}, len(m.Sessions))
 	for _, item := range m.Sessions {
-		if item.SessionID == 0 || item.SessionEpoch == 0 || item.ControlSessionID == 0 || item.DeviceID <= 0 || item.OwnerID <= 0 || item.SSID == 0 {
+		if item.SessionID == 0 || item.SessionEpoch == 0 || item.ControlSessionID == 0 || item.DeviceID < 0 || item.OwnerID <= 0 || item.SSID == 0 {
 			return errors.New("invalid device session confirmation identity")
+		}
+		ghost := item.GhostSessionID != ""
+		if item.DeviceID == 0 && (!ghost || item.DevModel == 0 || strings.TrimSpace(item.RecoveryTicket) == "" || len(item.RecoveryTicket) > 1024) {
+			return errors.New("invalid ghost session confirmation identity")
+		}
+		if item.DeviceID > 0 && (ghost || item.ClientInstanceID != "" || item.RecoveryTicket != "") {
+			return errors.New("physical session confirmation contains ghost identity")
 		}
 		if _, exists := seen[item.SessionID]; exists {
 			return errors.New("duplicate device session confirmation identity")
 		}
 		seen[item.SessionID] = struct{}{}
 		ownerKey := fmt.Sprintf("%d:%d", item.OwnerID, item.SSID)
-		if _, exists := seenDevices[item.DeviceID]; exists {
-			return errors.New("duplicate device in session confirmation batch")
+		if item.ClientInstanceID != "" {
+			ownerKey += ":" + item.ClientInstanceID
+		}
+		if item.DeviceID > 0 {
+			if _, exists := seenDevices[item.DeviceID]; exists {
+				return errors.New("duplicate device in session confirmation batch")
+			}
+			seenDevices[item.DeviceID] = struct{}{}
 		}
 		if _, exists := seenOwners[ownerKey]; exists {
 			return errors.New("duplicate owner identity in session confirmation batch")
 		}
-		seenDevices[item.DeviceID] = struct{}{}
 		seenOwners[ownerKey] = struct{}{}
 	}
 	return nil
@@ -186,6 +220,9 @@ func (m DeviceSessionConfirmResponse) Validate() error {
 		if result.Success {
 			if result.Grant == nil || result.Error != "" || result.Grant.SessionID == 0 || result.Grant.SessionEpoch == 0 || result.Grant.ExpiresAtMillis <= 0 {
 				return errors.New("invalid successful device session confirmation")
+			}
+			if result.Grant.GhostSessionID != "" && strings.TrimSpace(result.Grant.RecoveryTicket) == "" {
+				return errors.New("ghost session confirmation is missing its recovery ticket")
 			}
 		} else if result.Grant != nil {
 			return errors.New("failed device session confirmation contains a grant")

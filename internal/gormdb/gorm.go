@@ -191,7 +191,6 @@ func Close() error {
 
 	if dbManager.stopHealth != nil {
 		close(dbManager.stopHealth)
-		dbManager.stopHealth = nil
 	}
 
 	if dbManager.db != nil {

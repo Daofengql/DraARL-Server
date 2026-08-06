@@ -79,6 +79,7 @@ func (s *Server) setupRoutes() {
 
 	// API 路由
 	api := s.engine.Group("/api")
+	messageAPIGuard := middleware.NewMessageAPIGuard(s.config.MessageAPI)
 	{
 		// 本地存储直传（token 鉴权，无需 JWT）
 		api.PUT("/storage/put", handler.StorageDirectPut)
@@ -221,6 +222,8 @@ func (s *Server) setupRoutes() {
 
 				// 管理员群组管理使用独立的全量视角，避免复用普通用户可见性过滤。
 				admin.GET("/admin/groups", handler.GetAdminGroups)
+				admin.GET("/admin/radio/sessions", handler.AdminGetRadioSessions)
+				admin.DELETE("/admin/radio/sessions/:session_id", handler.AdminDeleteRadioSession)
 			}
 
 			// 修改用户密码（用户本人或管理员可访问）
@@ -258,6 +261,8 @@ func (s *Server) setupRoutes() {
 				approved.GET("/group/list", handler.GetGroups) // 兼容旧接口
 				approved.GET("/groups/:id", handler.GetGroup)
 				approved.GET("/groups/:id/devices", handler.GetGroupDevices)
+				approved.GET("/groups/:id/messages", messageAPIGuard.Middleware(), handler.GetGroupMessages)
+				approved.GET("/groups/:id/messages/:message_id", messageAPIGuard.Middleware(), handler.GetGroupMessage)
 				approved.POST("/groups", handler.CreateGroup)
 				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
 				approved.POST("/groups/search", handler.SearchGroups)
@@ -274,6 +279,7 @@ func (s *Server) setupRoutes() {
 				{
 					groupOwner.PUT("/groups/:id", handler.UpdateGroup)
 					groupOwner.DELETE("/groups/:id", handler.DeleteGroup)
+					groupOwner.DELETE("/groups/:id/members/:userId", handler.RemoveGroupMember)
 					// 踢出设备
 					groupOwner.DELETE("/groups/:id/devices/:deviceId", handler.KickDevice)
 					groupOwner.PUT("/groups/:id/devices/:deviceId/comm-control", handler.UpdateGroupDeviceCommControl)
@@ -409,13 +415,14 @@ func (s *Server) setupRoutes() {
 			// 在线收发 API（需要审核通过）
 			radio := approved.Group("/radio")
 			{
-				radio.GET("/config", handler.GetRadioConfig)                   // 获取在线收发配置
-				radio.PUT("/ssid", handler.UpdateRadioSSID)                    // 已废弃：Web 幽灵设备 SSID 固定为 105
-				radio.GET("/status", handler.GetRadioStatus)                   // 获取幽灵设备状态
+				radio.GET("/config", handler.GetRadioConfig) // 获取在线收发配置
+				radio.PUT("/ssid", handler.UpdateRadioSSID)  // 已废弃：Web 幽灵设备 SSID 固定为 105
+				radio.GET("/status", handler.GetRadioStatus) // 获取幽灵设备状态
+				radio.GET("/sessions", handler.GetRadioSessions)
+				radio.PUT("/sessions/:session_id/routing", handler.UpdateRadioSessionRouting)
+				radio.DELETE("/sessions/:session_id", handler.DeleteRadioSession)
 				radio.GET("/groups/stats", handler.GetRadioGroupStats)         // 获取所有群组实时统计（含 WS 设备）
 				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices) // 获取群组在线设备
-				radio.PUT("/group", handler.UpdateRadioGroup)                  // 【新增】切换幽灵设备群组
-				radio.GET("/conflict", handler.CheckGhostDeviceConflict)       // 【新增】检查幽灵设备连接冲突
 			}
 		}
 	}

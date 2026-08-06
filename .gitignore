@@ -43,7 +43,7 @@ vendor/
 !*.example.yaml
 !*.example.yml
 !deploy/docker/*.yaml
-!docs/mkdocs.yml
+!/mkdocs.yml
 !.github/workflows/*.yml
 
 # Database files

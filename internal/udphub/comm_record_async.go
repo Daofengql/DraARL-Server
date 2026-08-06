@@ -9,10 +9,12 @@ import (
 const commRecordQueueSize = 4096
 
 type commRecordJob struct {
+	sourceKey  string
 	deviceID   int
 	deviceSSID uint8
 	groupID    *uint
 	userID     *uint
+	sender     CommSenderSnapshot
 	audioData  []byte
 }
 
@@ -45,7 +47,7 @@ func commRecordWorker() {
 				select {
 				case job := <-commRecordQueue:
 					if globalCommRecorder != nil {
-						globalCommRecorder.RecordPacket(job.deviceID, job.deviceSSID, job.groupID, job.userID, job.audioData)
+						globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.audioData)
 					}
 				default:
 					return
@@ -56,13 +58,13 @@ func commRecordWorker() {
 				return
 			}
 			if globalCommRecorder != nil {
-				globalCommRecorder.RecordPacket(job.deviceID, job.deviceSSID, job.groupID, job.userID, job.audioData)
+				globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.audioData)
 			}
 		}
 	}
 }
 
-func enqueueCommRecord(deviceID int, deviceSSID uint8, groupID *uint, userID *uint, audioData []byte) {
+func enqueueCommRecord(sourceKey string, deviceID int, deviceSSID uint8, groupID *uint, userID *uint, sender CommSenderSnapshot, audioData []byte) {
 	if globalCommRecorder == nil || !globalCommRecorder.canRecord() {
 		return
 	}
@@ -85,10 +87,12 @@ func enqueueCommRecord(deviceID int, deviceSSID uint8, groupID *uint, userID *ui
 	}
 
 	job := commRecordJob{
+		sourceKey:  normalizeCommRecordSourceKey(sourceKey, deviceID),
 		deviceID:   deviceID,
 		deviceSSID: deviceSSID,
 		groupID:    gidPtr,
 		userID:     uidPtr,
+		sender:     sender,
 		audioData:  payload,
 	}
 

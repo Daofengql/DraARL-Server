@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"draarl/internal/config"
+	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
@@ -374,10 +375,16 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	// 普通设备不能使用保留 SSID 范围 (100-105 和 255)
 	// ==========================================
 	// 先查找设备（包括幽灵设备），避免误拦截已认证的幽灵设备
-	dev, isGhost := getDeviceFromMemory(packet.Username, packet.SSID, packet.UDPAddr)
+	dev, isGhost := getDeviceForPacket(packet, packet.UDPAddr)
 
 	// 只有当设备不存在（未认证的新设备）且 SSID 为保留范围时才拒绝
 	if dev == nil && protocol.IsReservedSSID(packet.SSID) {
+		// A non-zero tag means this was an attempted Session-bound ghost packet.
+		// Do not answer an unauthenticated or forged endpoint with a generic
+		// physical-device heartbeat status.
+		if protocol.ReservedUint32(packet.Reserved) != 0 {
+			return
+		}
 		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusReservedSSID, "reserved_ssid")
 		return
 	}
@@ -434,6 +441,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 				dev.CallSign = authResult.CallSign
 				if authResult.User != nil {
 					dev.Username = authResult.User.Name
+					dev.Nickname = authResult.User.NickName
 				}
 				log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
 			}
@@ -451,6 +459,9 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	}
 	if (packet.Type == protocol.DraARLTypeTextMessage || packet.Type == protocol.DraARLTypeOpus16K) && !CenterLocalDeviceAuthoritative(dev) {
 		return
+	}
+	if isGhost && dev.GhostSessionID != "" {
+		GlobalUDPGhostManager.UpdateSessionActivity(dev.GhostSessionID, packet.TimeStamp)
 	}
 
 	// 已存在的设备，更新状态
@@ -503,36 +514,53 @@ func handleNonForwardingDevicePacket(
 	}
 }
 
-// getDeviceFromMemory 获取设备 (先查普通设备，再查 UDP 幽灵设备)
-// 返回: device, isGhost (是否为 UDP 幽灵设备)
-// 参数: username - 用户名（可能为空，幽灵设备发送时不带用户名）
-// 参数: ssid - 设备 SSID
-// 参数: udpAddr - UDP 地址（用于在 username 为空时查找幽灵设备）
+// getDeviceFromMemory resolves standard physical devices. UDP ghosts are
+// always resolved through their authenticated session tag.
 func getDeviceFromMemory(username string, ssid byte, udpAddr *net.UDPAddr) (*models.Device, bool) {
-	// 1. 如果 username 不为空，直接按 username-ssid 查找
 	if username != "" {
 		if dev := lookupDeviceByUsernameSSID(username, ssid); dev != nil {
 			return dev, false
 		}
+	}
+	return nil, false
+}
 
-		// 查 UDP 幽灵设备
-		if ghost := GlobalUDPGhostManager.Get(username, ssid); ghost != nil {
-			return ghost, true
-		}
-
+// getDeviceForPacket enforces the UDP ghost session binding. The tag
+// is only interpreted for reserved ghost SSIDs, so physical devices retain
+// their existing lookup and single-endpoint behavior even if Reserved is set.
+func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (*models.Device, bool) {
+	if packet == nil {
 		return nil, false
 	}
-
-	// 2. username 为空时，通过 SSID + UDP 地址查找幽灵设备
-	// 幽灵设备发送数据包时 username 为空，需要通过地址匹配
-	if protocol.IsGhostSSID(ssid) && udpAddr != nil {
-		ghost := GlobalUDPGhostManager.FindBySSIDAndAddr(ssid, udpAddr)
-		if ghost != nil {
-			return ghost, true
-		}
+	tag := protocol.ReservedUint32(packet.Reserved)
+	if !protocol.IsGhostSSID(packet.SSID) {
+		return getDeviceFromMemory(packet.Username, packet.SSID, udpAddr)
 	}
-
-	return nil, false
+	if tag == 0 {
+		ghostPacketInvalidTags.Add(1)
+		return nil, false
+	}
+	device := GlobalUDPGhostManager.FindBySessionTag(tag)
+	if device == nil || device.GhostSessionTag != tag {
+		ghostPacketInvalidTags.Add(1)
+		return nil, false
+	}
+	if device.Username != packet.Username || device.SSID != packet.SSID || device.DevModel != packet.DevModel {
+		ghostPacketIdentityRejects.Add(1)
+		return nil, false
+	}
+	if !sameUDPAddr(device.UDPAddr, udpAddr) {
+		ghostPacketEndpointRejects.Add(1)
+		return nil, false
+	}
+	session, exists := ghostsession.Global.FindByTag(tag)
+	if !exists || !session.Connected || session.Transport != ghostsession.TransportUDP ||
+		session.SessionID != device.GhostSessionID || session.OwnerID != device.OwnerID ||
+		session.Username != device.Username || session.SSID != device.SSID || session.DevModel != device.DevModel {
+		ghostPacketRegistryRejects.Add(1)
+		return nil, false
+	}
+	return device, true
 }
 
 // applyClientReportedDevModel 处理客户端上报的 DevModel：
@@ -628,6 +656,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 	newDevice := &models.Device{
 		Username: packet.Username,
 		CallSign: authResult.CallSign,
+		Nickname: authResult.User.NickName,
 		SSID:     packet.SSID,
 		OwnerID:  authResult.User.ID, // 设置所有者ID
 		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
@@ -658,6 +687,9 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		}
 		if dev.Username == "" && authResult.User != nil {
 			dev.Username = authResult.User.Name
+		}
+		if authResult.User != nil {
+			dev.Nickname = authResult.User.NickName
 		}
 		if incomingMAC != "" {
 			dev.MAC = incomingMAC
@@ -809,18 +841,20 @@ func buildUDPSpeaker(dev *models.Device, packet *protocol.DraARLv1Packet) halfDu
 	switch {
 	case dev.ID > 0:
 		key = 0x4000000000000000 | uint64(uint32(dev.ID))
+	case dev.GhostSessionID != "":
+		key = 0x5000000000000000 | (fnv64String(dev.GhostSessionID) & 0x0fffffffffffffff)
 	case dev.OwnerID > 0:
-		key = 0x5000000000000000 | uint64(uint32(dev.OwnerID))<<8 | uint64(ssid)
+		key = 0x6000000000000000 | uint64(uint32(dev.OwnerID))<<8 | uint64(ssid)
 	case dev.Username != "":
-		key = 0x6000000000000000 | uint64(fnv32String(dev.Username))<<8 | uint64(ssid)
+		key = 0x7000000000000000 | uint64(fnv32String(dev.Username))<<8 | uint64(ssid)
 	case packet != nil && packet.Username != "":
-		key = 0x6000000000000000 | uint64(fnv32String(packet.Username))<<8 | uint64(ssid)
+		key = 0x7000000000000000 | uint64(fnv32String(packet.Username))<<8 | uint64(ssid)
 	case dev.UDPAddr != nil:
 		if addr, ok := udpAddrPort(dev.UDPAddr); ok {
-			key = 0x7000000000000000 | (hashAddrPort(addr) & 0x0fffffffffffffff)
+			key = 0x8000000000000000 | (hashAddrPort(addr) & 0x0fffffffffffffff)
 		}
 	default:
-		key = 0x7000000000000000 | uint64(ssid)
+		key = 0x8000000000000000 | uint64(ssid)
 	}
 	return halfDuplexSpeaker{key: key, labelBase: labelBase, ssid: ssid}
 }
@@ -892,8 +926,21 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 			uid := uint(dev.OwnerID)
 			userID = &uid
 		}
-		// 使用正数 ID 表示普通设备
-		RecordCommPacket(int(dev.ID), uint8(dev.SSID), groupID, userID, packet.DATA)
+		recordDeviceID := dev.ID
+		sourceKey := PhysicalCommRecordSourceKey(recordDeviceID)
+		if protocol.IsGhostSSID(dev.SSID) {
+			recordDeviceID = 0
+			connectionIdentity := dev.GhostSessionID
+			if connectionIdentity == "" {
+				connectionIdentity = "unknown"
+				if dev.UDPAddr != nil {
+					connectionIdentity = dev.UDPAddr.String()
+				}
+			}
+			sourceKey = GhostCommRecordSourceKey("udp", dev.OwnerID, uint8(dev.SSID), connectionIdentity)
+		}
+		sender := CommSenderSnapshot{Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, DevModel: int(dev.DevModel)}
+		RecordCommPacket(sourceKey, recordDeviceID, uint8(dev.SSID), groupID, userID, sender, packet.DATA)
 	}
 
 	forwardDraARLVoice(packet, dev, data, gp)
@@ -1057,8 +1104,12 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 			uid := uint(dev.OwnerID)
 			userID = &uid
 		}
-		// 使用正数 ID 表示普通设备
-		RecordTextMessage(int(dev.ID), uint8(dev.SSID), groupID, userID, string(packet.DATA))
+		recordDeviceID := dev.ID
+		if protocol.IsGhostSSID(dev.SSID) {
+			recordDeviceID = 0
+		}
+		sender := CommSenderSnapshot{Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, DevModel: int(dev.DevModel)}
+		RecordTextMessage(recordDeviceID, uint8(dev.SSID), groupID, userID, sender, string(packet.DATA))
 	}
 }
 
@@ -1345,6 +1396,7 @@ func refreshDeviceCache() {
 					memDev.CallSign = owner.CallSign
 					indexRuntimeDevice(memDev)
 				}
+				memDev.Nickname = owner.NickName
 			}
 		}
 

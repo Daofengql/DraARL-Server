@@ -9,13 +9,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"draarl/internal/config"
+
 	"gopkg.in/yaml.v3"
 )
 
 // EdgeConfig is intentionally independent from the centre's database-backed
 // configuration.  An edge can therefore boot with only this small YAML file.
 type EdgeConfig struct {
-	Edge            EdgeSettings `yaml:"Edge" json:"edge"`
+	Edge            EdgeSettings              `yaml:"Edge" json:"edge"`
+	GhostSessions   config.GhostSessionConfig `yaml:"GhostSessions" json:"ghost_sessions"`
 	sourcePath      string
 	bootstrapToken  string
 	bootstrapNodeID string
@@ -68,6 +71,9 @@ func (c *EdgeConfig) SetDefaults() {
 }
 func (c *EdgeConfig) Validate() error {
 	c.SetDefaults()
+	if err := c.GhostSessions.SetDefaults(); err != nil {
+		return err
+	}
 	c.Edge.ProxyProtocol = strings.ToLower(strings.TrimSpace(c.Edge.ProxyProtocol))
 	if c.Edge.ProxyProtocol != "" && c.Edge.ProxyProtocol != "v2" {
 		return errors.New("Edge.ProxyProtocol must be empty or v2")

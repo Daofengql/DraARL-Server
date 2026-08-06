@@ -1258,7 +1258,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 		}
 		if targetUserName != "" && newCallSign != "" && newCallSign != oldCallSign {
 			udphub.SyncUserCallSignChange(cert.UserID, targetUserName, oldCallSign, newCallSign)
-			ws.GlobalGhostManager.UpdateUserCallSign(cert.UserID, newCallSign)
+			ws.GlobalManager.UpdateUserCallSign(cert.UserID, newCallSign)
 		}
 
 		if groupCache := cache.GetGroupCache(); groupCache != nil {

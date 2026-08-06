@@ -11,19 +11,22 @@ import (
 	"time"
 
 	"draarl/internal/config"
+	"draarl/internal/protocol"
 )
 
 type fanoutFrameJob struct {
-	data        []byte
-	partitions  [][]domainReceiverEntry
-	sourceID    int
-	sourceUser  string
-	sourceSSID  byte
-	enqueuedAt  time.Time
-	snapshotGen uint64
-	validateGen bool
-	generation  *atomic.Uint64
-	onComplete  func(fanoutWriteResult)
+	data            []byte
+	sourceGroupData []byte
+	partitions      [][]domainReceiverEntry
+	sourceID        int
+	sourceUser      string
+	sourceSSID      byte
+	sourceSessionID string
+	enqueuedAt      time.Time
+	snapshotGen     uint64
+	validateGen     bool
+	generation      *atomic.Uint64
+	onComplete      func(fanoutWriteResult)
 }
 
 type fanoutWorkerJob struct {
@@ -287,7 +290,7 @@ func countFrameTargets(frame fanoutFrameJob) int64 {
 	var count int64
 	for i := range frame.partitions {
 		for target := range frame.partitions[i] {
-			if !isSourceTarget(&frame.partitions[i][target], frame.sourceID, frame.sourceUser, frame.sourceSSID) {
+			if !isSourceTarget(&frame.partitions[i][target], frame.sourceID, frame.sourceUser, frame.sourceSSID, frame.sourceSessionID) {
 				count++
 			}
 		}
@@ -303,7 +306,7 @@ func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) fanoutWriteResult {
 	resultCh := make(chan fanoutWriteResult, len(s.writers))
 	jobs := 0
 	for index, targets := range frame.partitions {
-		if index >= len(s.writers) || !partitionHasTarget(targets, frame.sourceID, frame.sourceUser, frame.sourceSSID) {
+		if index >= len(s.writers) || !partitionHasTarget(targets, frame.sourceID, frame.sourceUser, frame.sourceSSID, frame.sourceSessionID) {
 			continue
 		}
 		jobs++
@@ -330,18 +333,21 @@ func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) fanoutWriteResult {
 	return total
 }
 
-func partitionHasTarget(targets []domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte) bool {
+func partitionHasTarget(targets []domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string) bool {
 	for i := range targets {
-		if !isSourceTarget(&targets[i], sourceID, sourceUser, sourceSSID) {
+		if !isSourceTarget(&targets[i], sourceID, sourceUser, sourceSSID, sourceSessionID) {
 			return true
 		}
 	}
 	return false
 }
 
-func isSourceTarget(target *domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte) bool {
+func isSourceTarget(target *domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string) bool {
 	if target == nil {
 		return true
+	}
+	if sourceSessionID != "" {
+		return target.sessionID == sourceSessionID
 	}
 	if sourceID > 0 && target.deviceID == sourceID {
 		return true
@@ -361,11 +367,15 @@ func (s *FanoutSender) worker(writer *fanoutWriter) {
 		result := fanoutWriteResult{}
 		for i := range job.targets {
 			target := &job.targets[i]
-			if isSourceTarget(target, job.frame.sourceID, job.frame.sourceUser, job.frame.sourceSSID) {
+			if isSourceTarget(target, job.frame.sourceID, job.frame.sourceUser, job.frame.sourceSSID, job.frame.sourceSessionID) {
 				continue
 			}
 			result.attempted++
-			if _, err := writer.conn.WriteToUDPAddrPort(job.frame.data, target.addr); err == nil {
+			payload := job.frame.data
+			if target.sourceGroupV1 && len(job.frame.sourceGroupData) > 0 {
+				payload = job.frame.sourceGroupData
+			}
+			if _, err := writer.conn.WriteToUDPAddrPort(payload, target.addr); err == nil {
 				result.sent++
 			} else {
 				result.errors++
@@ -439,35 +449,54 @@ func enqueueLatestFrame(queue chan fanoutFrameJob, job fanoutFrameJob) (accepted
 	}
 }
 
-func (s *FanoutSender) enqueueDomainFrame(data []byte, snap *domainReceiverSnap, sourceID int, sourceUser string, sourceSSID byte) bool {
+func (s *FanoutSender) enqueueDomainFrame(data []byte, snap *domainReceiverSnap, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string, sourceGroupID int) bool {
 	if s == nil || snap == nil || len(data) == 0 || len(snap.entries) == 0 || snap.workers != len(s.writers) {
 		return false
 	}
+	var sourceGroupData []byte
+	for i := range snap.entries {
+		if snap.entries[i].sourceGroupV1 {
+			sourceGroupData, _ = protocol.WithSourceGroupID(data, sourceGroupID)
+			break
+		}
+	}
 	return s.enqueue(fanoutFrameJob{
-		data:        append([]byte(nil), data...),
-		partitions:  snap.partitions,
-		sourceID:    sourceID,
-		sourceUser:  sourceUser,
-		sourceSSID:  sourceSSID,
-		enqueuedAt:  time.Now(),
-		snapshotGen: snap.gen,
-		validateGen: true,
+		data:            append([]byte(nil), data...),
+		sourceGroupData: sourceGroupData,
+		partitions:      snap.partitions,
+		sourceID:        sourceID,
+		sourceUser:      sourceUser,
+		sourceSSID:      sourceSSID,
+		sourceSessionID: sourceSessionID,
+		enqueuedAt:      time.Now(),
+		snapshotGen:     snap.gen,
+		validateGen:     true,
 	})
 }
 
-func writeUDPDomain(data []byte, snap *domainReceiverSnap, sourceID int, sourceUser string, sourceSSID byte) {
+func writeUDPDomain(data []byte, snap *domainReceiverSnap, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string, sourceGroupID int) {
 	if len(data) == 0 || snap == nil || len(snap.entries) == 0 {
 		return
 	}
-	if s := getFanoutSender(); s != nil && s.enqueueDomainFrame(data, snap, sourceID, sourceUser, sourceSSID) {
+	if s := getFanoutSender(); s != nil && s.enqueueDomainFrame(data, snap, sourceID, sourceUser, sourceSSID, sourceSessionID, sourceGroupID) {
 		return
 	}
+	var sourceGroupData []byte
 	for i := range snap.entries {
 		target := &snap.entries[i]
-		if isSourceTarget(target, sourceID, sourceUser, sourceSSID) {
+		if isSourceTarget(target, sourceID, sourceUser, sourceSSID, sourceSessionID) {
 			continue
 		}
-		_, _ = globalConn.WriteToUDPAddrPort(data, target.addr)
+		payload := data
+		if target.sourceGroupV1 {
+			if sourceGroupData == nil {
+				sourceGroupData, _ = protocol.WithSourceGroupID(data, sourceGroupID)
+			}
+			if len(sourceGroupData) > 0 {
+				payload = sourceGroupData
+			}
+		}
+		_, _ = globalConn.WriteToUDPAddrPort(payload, target.addr)
 	}
 }
 

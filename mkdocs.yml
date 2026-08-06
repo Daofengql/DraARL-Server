@@ -1,8 +1,8 @@
-﻿site_name: DraARL Server Docs
+site_name: DraARL Server Docs
 site_description: DraARL Server 完整文档 - 数字无线电高级应用实时链路平台
 site_url: "https://daofengql.github.io/DraARL-Server/"
-docs_dir: .
-site_dir: ../site
+docs_dir: docs
+site_dir: site
 
 theme:
   name: material
@@ -35,6 +35,7 @@ nav:
   - 架构设计: 架构设计.md
   - Type 0 节点互联协议: 节点互联协议.md
   - UDP 转发压力测试: UDP单机转发压力测试.md
+  - 幽灵多收与消息查询性能验证: 幽灵多收与消息查询性能验证.md
   - 数据字典: 数据字典.md
   - 使用与说明文档:
       - 总览: usage/README.md
@@ -49,6 +50,7 @@ nav:
       - 09. 固件与OTA升级: usage/09-固件与OTA升级.md
       - 10. APRS与位置服务: usage/10-APRS与位置服务.md
       - 11. v1.1.5-alpha1升级说明: usage/11-v1.1.5-alpha1升级说明.md
+      - 12. 幽灵多端与频道消息升级说明: usage/12-幽灵多端与频道消息升级说明.md
   - 协议文档: Protocol.md
   - API 文档:
       - 总览: api/README.md

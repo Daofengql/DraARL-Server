@@ -15,11 +15,11 @@ func TestOriginGuardRejectsDisallowedReferer(t *testing.T) {
 	engine.Use(originGuardMiddleware(map[string]struct{}{
 		"http://localhost:9001": {},
 	}))
-	engine.GET("/api/radio/conflict", func(c *gin.Context) {
+	engine.GET("/api/test/origin", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 200})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/radio/conflict", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/test/origin", nil)
 	req.Header.Set("Referer", "http://localhost:5173/radio")
 
 	recorder := httptest.NewRecorder()
@@ -37,11 +37,11 @@ func TestOriginGuardAllowsAllowedReferer(t *testing.T) {
 	engine.Use(originGuardMiddleware(map[string]struct{}{
 		"http://localhost:9001": {},
 	}))
-	engine.GET("/api/radio/conflict", func(c *gin.Context) {
+	engine.GET("/api/test/origin", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 200})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/radio/conflict", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/test/origin", nil)
 	req.Header.Set("Referer", "http://localhost:9001/radio")
 
 	recorder := httptest.NewRecorder()

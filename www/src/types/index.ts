@@ -165,6 +165,7 @@ export interface GroupMember {
   user_id: number
   username?: string
   callsign?: string
+  nickname?: string
   is_verified: boolean
   join_time: string
   last_verify: string

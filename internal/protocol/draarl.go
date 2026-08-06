@@ -36,6 +36,8 @@ const DraARLv1HeaderSize = 90
 // 计算：90B 头部 + 3帧×(2B长度+~200B Opus) ≈ 700B，取整 800B
 const DraARLv1MaxPacketSize = 800
 
+const DraARLv1ReservedOffset = 86
+
 const (
 	HeartbeatGPSPayloadSize = 24
 )
@@ -52,6 +54,17 @@ const (
 // IsSupportedDraARLType 报告类型是否属于当前 DraARLv1 核心协议。
 func IsSupportedDraARLType(packetType byte) bool {
 	return packetType >= DraARLTypeJWTAuth && packetType <= DraARLTypeOpus16K
+}
+
+// WithSourceGroupID returns an isolated packet copy whose Reserved field
+// carries the source group for clients that negotiated source_group_v1.
+func WithSourceGroupID(data []byte, groupID int) ([]byte, bool) {
+	if len(data) < DraARLv1HeaderSize || groupID <= 0 || uint64(groupID) > uint64(^uint32(0)) {
+		return nil, false
+	}
+	result := append([]byte(nil), data...)
+	binary.BigEndian.PutUint32(result[DraARLv1ReservedOffset:DraARLv1ReservedOffset+4], uint32(groupID))
+	return result, true
 }
 
 // DraARLv1 设备型号常量
@@ -107,13 +120,12 @@ const (
 
 // JWT 认证响应状态码
 const (
-	JWTAuthSuccess             byte = 0 // 认证成功
-	JWTAuthInvalidToken        byte = 1 // Token 无效或过期
-	JWTAuthUserNotFound        byte = 2 // 用户不存在
-	JWTAuthUserDisabled        byte = 3 // 用户已禁用
-	JWTAuthUserNotApproved     byte = 4 // 用户未审核
-	JWTAuthInvalidDevModel     byte = 5 // 无效的设备型号 (非 101-104)
-	JWTAuthGhostDeviceConflict byte = 6 // 同平台已有在线幽灵设备
+	JWTAuthSuccess         byte = 0 // 认证成功
+	JWTAuthInvalidToken    byte = 1 // Token 无效或过期
+	JWTAuthUserNotFound    byte = 2 // 用户不存在
+	JWTAuthUserDisabled    byte = 3 // 用户已禁用
+	JWTAuthUserNotApproved byte = 4 // 用户未审核
+	JWTAuthInvalidDevModel byte = 5 // 无效的设备型号 (非 101-104)
 )
 
 // Heartbeat 响应状态码
@@ -345,6 +357,13 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 		callsignBytes = callsignBytes[:32]
 	}
 	copy(out[54:86], callsignBytes)
+
+	// Reserved contains hop-local authentication metadata on UDP ghost
+	// uplinks. Never relay a sender's session tag; fan-out adds source-group
+	// metadata only for Session-aware ghost recipients.
+	for i := DraARLv1ReservedOffset; i < DraARLv1HeaderSize; i++ {
+		out[i] = 0
+	}
 
 	// 长度字段保持与实际一致
 	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))

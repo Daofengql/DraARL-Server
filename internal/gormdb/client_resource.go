@@ -325,7 +325,7 @@ func ensureNoClientResourceTargetConflict(tx *gorm.DB, artifact *ClientResourceA
 	return nil
 }
 
-func (r *ClientResourceRepository) PublishRelease(id int) (*ClientResourceRelease, error) {
+func (r *ClientResourceRepository) PublishRelease(id int, validate func(*ClientResourceRelease) error) (*ClientResourceRelease, error) {
 	var release ClientResourceRelease
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clauseForUpdate()).Preload("Resource").First(&release, id).Error; err != nil {
@@ -336,6 +336,11 @@ func (r *ClientResourceRepository) PublishRelease(id int) (*ClientResourceReleas
 		}
 		if release.Resource == nil || !release.Resource.Enabled {
 			return ErrClientResourceDisabled
+		}
+		if validate != nil {
+			if err := validate(&release); err != nil {
+				return err
+			}
 		}
 		var artifactCount int64
 		if err := tx.Model(&ClientResourceArtifact{}).Where("release_id = ? AND (storage_key <> '' OR external_url <> '')", id).Count(&artifactCount).Error; err != nil {

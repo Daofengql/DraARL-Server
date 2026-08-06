@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/udphub"
 
 	"github.com/gorilla/websocket"
@@ -94,10 +96,6 @@ func init() {
 
 // HandleWebSocket WebSocket 处理器
 func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// ==========================================
-	// 【互斥检查】在 WebSocket 升级之前进行
-	// 防止同一用户开多个页面导致多个幽灵设备连接
-	// ==========================================
 	preAuth := ParsePreAuthData(r)
 
 	// 必须提供 JWT Token
@@ -106,22 +104,12 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authResult := AuthenticateJWT(preAuth.Token)
+	authResult := AuthenticateWebSocketRequest(r)
 	if !authResult.Success {
 		http.Error(w, authResult.Error, http.StatusUnauthorized)
 		return
 	}
 
-	// 【核心】互斥检查：该用户是否已有在线的幽灵设备
-	if GlobalManager.IsGhostDeviceOnline(authResult.UserID) {
-		log.Printf("[WS] Ghost device conflict: user-%d already has an online connection", authResult.UserID)
-		http.Error(w, "ghost_device_conflict", http.StatusConflict)
-		return
-	}
-
-	// ==========================================
-	// 互斥检查通过，进行 WebSocket 升级
-	// ==========================================
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] Upgrade failed: %v", err)
@@ -130,13 +118,16 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	remoteAddr := conn.RemoteAddr().String()
 	log.Printf("[WS] New connection from %s", remoteAddr)
 	// 处理认证
-	device, authResult := HandleAuthentication(conn, r, GlobalManager)
-	if device == nil {
-		log.Printf("[WS] Authentication failed from %s: %s", remoteAddr, authResult.Error)
+	device, err := RegisterAuthenticatedConnection(conn, GlobalManager, authResult)
+	if err != nil {
+		log.Printf("[WS] Session registration failed from %s: %v", remoteAddr, err)
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ghostsession.StableErrorCode(err)))
+		_ = conn.Close()
 		return
 	}
 	// 认证成功，启动异步 writer 和 Ping/Pong
 	device.StartWriter()
+	sendAuthenticationSuccess(device)
 	go startPingPong(device)
 	// 处理消息
 	handleAuthenticatedConnection(device)
@@ -163,7 +154,6 @@ func handleAuthenticatedConnection(device *WSDevice) {
 		device.StopWriter() // 先停止 writer goroutine
 		device.Conn.Close()
 		GlobalManager.UnregisterDevice(device)
-		GlobalGhostManager.RemoveGhostDevice(device.UserID, device)
 		log.Printf("[WS] Ghost device disconnected: %s", device.GetIdentifier())
 	}()
 
@@ -194,5 +184,38 @@ func handleAuthenticatedConnection(device *WSDevice) {
 		device.Traffic += int64(len(data))
 		// 处理数据包
 		handlePacket(device, packet, data)
+	}
+}
+
+func sendAuthenticationSuccess(device *WSDevice) {
+	if device == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"type": "auth_success",
+		"data": map[string]interface{}{
+			"session_id": device.SessionID, "client_instance_id": device.ClientInstanceID,
+			"protocol_version": device.ProtocolVersion,
+			"tx_group_id":      device.GetGroupID(), "rx_group_ids": device.GetRxGroupIDs(),
+		},
+	})
+	if err != nil || !device.AsyncWrite(websocket.TextMessage, payload) {
+		log.Printf("[WS] Failed to queue authentication success for %s", device.GetIdentifier())
+	}
+}
+
+func sendRoutingUpdated(device *WSDevice) {
+	if device == nil || !device.isOnline() {
+		return
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"type": "routing_updated",
+		"data": map[string]interface{}{
+			"session_id":  device.SessionID,
+			"tx_group_id": device.GetGroupID(), "rx_group_ids": device.GetRxGroupIDs(),
+		},
+	})
+	if err != nil || !device.AsyncWrite(websocket.TextMessage, payload) {
+		log.Printf("[WS] Failed to queue routing update for %s", device.GetIdentifier())
 	}
 }

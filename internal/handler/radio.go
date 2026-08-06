@@ -102,17 +102,6 @@ func GetRadioConfig(c *gin.Context) {
 	})
 }
 
-// UpdateRadioSSID 已废弃，保留旧路由用于提示 Web 幽灵设备 SSID 固定为 105。
-func UpdateRadioSSID(c *gin.Context) {
-	c.JSON(http.StatusGone, gin.H{
-		"code":    410,
-		"message": "Web 幽灵设备 SSID 固定为 105，不再支持修改",
-		"data": gin.H{
-			"ssid": int(protocol.SSIDGhostWeb),
-		},
-	})
-}
-
 // GetRadioStatus 获取幽灵设备状态 (API-003)
 func GetRadioStatus(c *gin.Context) {
 	// 获取当前用户 ID

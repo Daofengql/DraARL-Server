@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"draarl/internal/gormdb"
+	"draarl/internal/middleware"
 	minio_local "draarl/pkg/minio"
 
 	"github.com/gin-gonic/gin"
@@ -198,12 +199,16 @@ func GetGroupMessages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息类型"})
 		return
 	}
-	limit := 50
+	defaultLimit, maxLimit := middleware.MessageAPIPageLimits(c)
+	limit := defaultLimit
 	if rawLimit := c.Query("limit"); rawLimit != "" {
 		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed <= 0 || parsed > 100 {
+		if err != nil || parsed <= 0 || parsed > maxLimit {
 			messageParameterRejects.Add(1)
-			c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "limit必须在1到100之间"})
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code": http.StatusBadRequest, "error": "invalid_message_limit",
+				"message": fmt.Sprintf("limit必须在1到%d之间", maxLimit),
+			})
 			return
 		}
 		limit = parsed

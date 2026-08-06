@@ -5,6 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"draarl/internal/middleware"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -127,6 +129,9 @@ func GetMessageAPIMetrics() map[string]uint64 {
 	for index, label := range labels {
 		metrics["query_le_"+label] = messageQueryBuckets[index].Load()
 		metrics["request_le_"+label] = messageRequestBuckets[index].Load()
+	}
+	for key, value := range middleware.GetMessageAPIGuardMetrics() {
+		metrics[key] = value
 	}
 	return metrics
 }

@@ -86,7 +86,11 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("加载配置文件失败: %v", err)
 	}
-	ghostsession.ConfigureGlobal(cfg.GhostSessions.MaxSessionsPerOwner, cfg.GhostSessions.MaxSubscriptionsPerSession)
+	ghostsession.ConfigureGlobal(
+		cfg.GhostSessions.MaxSessionsPerOwner,
+		cfg.GhostSessions.MaxSubscriptionsPerSession,
+		ghostSessionPolicy(cfg.GhostSessions),
+	)
 
 	// 初始化 JWT 密钥
 	if err := initJWTSecret(cfg); err != nil {

@@ -104,6 +104,8 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		code := protocol.JWTAuthInvalidToken
 		message := "ghost_session_registration_failed"
 		switch {
+		case errors.Is(err, ghostsession.ErrMultiSessionDisabled):
+			message = ghostsession.StableErrorCode(err)
 		case errors.Is(err, ghostsession.ErrSessionLimit):
 			message = fmt.Sprintf("ghost_session_limit active=%d limit=%d", len(ghostsession.Global.ListOwner(user.ID)), ghostsession.MaxSessionsPerOwner())
 		}

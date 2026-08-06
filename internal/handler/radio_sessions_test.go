@@ -131,3 +131,13 @@ func TestAdminRadioSessionListIsRedactedAndCanDisconnectAnyOwner(t *testing.T) {
 		t.Fatalf("admin delete status=%d disconnected=%v body=%s", response.Code, disconnected, response.Body.String())
 	}
 }
+
+func TestSessionRoutingErrorUsesStableMultiReceiveCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	writeSessionRoutingError(context, ghostsession.ErrMultiReceiveDisabled)
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), `"error":"ghost_multi_receive_disabled"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

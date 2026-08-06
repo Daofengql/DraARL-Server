@@ -25,6 +25,9 @@ func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 		cfg.GhostSessions.MaxSubscriptionsPerSession != config.DefaultGhostSubscriptionsPerSession {
 		t.Fatalf("edge ghost session defaults changed: %+v", cfg.GhostSessions)
 	}
+	if !cfg.GhostSessions.MultiSession.IsEnabled() || !cfg.GhostSessions.MultiReceive.IsEnabled() {
+		t.Fatalf("edge ghost feature gates must default on: %+v", cfg.GhostSessions)
+	}
 }
 
 func TestEdgeRejectsInvalidSessionLeaseSettings(t *testing.T) {

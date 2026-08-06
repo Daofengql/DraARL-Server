@@ -79,6 +79,7 @@ func (s *Server) setupRoutes() {
 
 	// API 路由
 	api := s.engine.Group("/api")
+	messageAPIGuard := middleware.NewMessageAPIGuard(s.config.MessageAPI)
 	{
 		// 本地存储直传（token 鉴权，无需 JWT）
 		api.PUT("/storage/put", handler.StorageDirectPut)
@@ -260,8 +261,8 @@ func (s *Server) setupRoutes() {
 				approved.GET("/group/list", handler.GetGroups) // 兼容旧接口
 				approved.GET("/groups/:id", handler.GetGroup)
 				approved.GET("/groups/:id/devices", handler.GetGroupDevices)
-				approved.GET("/groups/:id/messages", handler.GetGroupMessages)
-				approved.GET("/groups/:id/messages/:message_id", handler.GetGroupMessage)
+				approved.GET("/groups/:id/messages", messageAPIGuard.Middleware(), handler.GetGroupMessages)
+				approved.GET("/groups/:id/messages/:message_id", messageAPIGuard.Middleware(), handler.GetGroupMessage)
 				approved.POST("/groups", handler.CreateGroup)
 				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
 				approved.POST("/groups/search", handler.SearchGroups)

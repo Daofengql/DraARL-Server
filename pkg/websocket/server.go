@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/udphub"
 
 	"github.com/gorilla/websocket"
@@ -120,7 +121,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	device, err := RegisterAuthenticatedConnection(conn, GlobalManager, authResult)
 	if err != nil {
 		log.Printf("[WS] Session registration failed from %s: %v", remoteAddr, err)
-		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, err.Error()))
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ghostsession.StableErrorCode(err)))
 		_ = conn.Close()
 		return
 	}

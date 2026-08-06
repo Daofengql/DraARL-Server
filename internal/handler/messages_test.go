@@ -2,10 +2,15 @@ package handler
 
 import (
 	"encoding/base64"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"draarl/internal/config"
 	"draarl/internal/gormdb"
+	"draarl/internal/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestMessageCursorRoundTrip(t *testing.T) {
@@ -21,6 +26,31 @@ func TestMessageCursorRoundTrip(t *testing.T) {
 	}
 	if !gotTime.Equal(wantTime) || gotID != wantID {
 		t.Fatalf("cursor boundary=(%s,%d) want=(%s,%d)", gotTime, gotID, wantTime, wantID)
+	}
+}
+
+func TestMessagePageLimitsUseMiddlewareConfiguration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	guard := middleware.NewMessageAPIGuard(configuredMessageAPITestConfig())
+	router := gin.New()
+	router.GET("/", func(c *gin.Context) { c.Set("user_id", 1); c.Next() }, guard.Middleware(), func(c *gin.Context) {
+		defaultPageSize, maxPageSize := middleware.MessageAPIPageLimits(c)
+		if defaultPageSize != 7 || maxPageSize != 11 {
+			t.Fatalf("page limits=(%d,%d)", defaultPageSize, maxPageSize)
+		}
+		c.Status(204)
+	})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
+	if recorder.Code != 204 {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
+func configuredMessageAPITestConfig() config.MessageAPIConfig {
+	return config.MessageAPIConfig{
+		DefaultPageSize: 7, MaxPageSize: 11, RequestsPerMinutePerUser: 10,
+		RequestsPerMinutePerIP: 10, MaxConcurrentQueries: 1,
 	}
 }
 

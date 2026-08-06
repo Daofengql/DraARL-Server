@@ -56,12 +56,16 @@ type Registry struct {
 	tagSessions              map[uint32]string
 	maxOwnerSessions         int
 	maxSubscriptions         int
+	policy                   Policy
 	registrations            atomic.Uint64
 	replacements             atomic.Uint64
 	removals                 atomic.Uint64
 	sessionLimitRejects      atomic.Uint64
 	subscriptionLimitRejects atomic.Uint64
 	permissionRevocations    atomic.Uint64
+	multiSessionRejects      atomic.Uint64
+	multiReceiveRejects      atomic.Uint64
+	multiReceiveDowngrades   atomic.Uint64
 }
 
 type MetricsSnapshot struct {
@@ -79,9 +83,16 @@ type MetricsSnapshot struct {
 	SessionLimitRejects        uint64         `json:"session_limit_rejects"`
 	SubscriptionLimitRejects   uint64         `json:"subscription_limit_rejects"`
 	PermissionRevocations      uint64         `json:"permission_revocations"`
+	MultiSessionRejects        uint64         `json:"multi_session_rejects"`
+	MultiReceiveRejects        uint64         `json:"multi_receive_rejects"`
+	MultiReceiveDowngrades     uint64         `json:"multi_receive_downgrades"`
 }
 
 func NewRegistry(maxOwnerSessions, maxSubscriptions int) *Registry {
+	return NewRegistryWithPolicy(maxOwnerSessions, maxSubscriptions, AllowAllPolicy())
+}
+
+func NewRegistryWithPolicy(maxOwnerSessions, maxSubscriptions int, policy Policy) *Registry {
 	if maxOwnerSessions <= 0 {
 		maxOwnerSessions = DefaultMaxSessionsPerOwner
 	}
@@ -91,7 +102,7 @@ func NewRegistry(maxOwnerSessions, maxSubscriptions int) *Registry {
 	return &Registry{
 		sessions: make(map[string]*registryEntry), ownerSessions: make(map[int]map[string]struct{}),
 		instanceSessions: make(map[string]string), tagSessions: make(map[uint32]string),
-		maxOwnerSessions: maxOwnerSessions, maxSubscriptions: maxSubscriptions,
+		maxOwnerSessions: maxOwnerSessions, maxSubscriptions: maxSubscriptions, policy: policy,
 	}
 }
 
@@ -100,8 +111,12 @@ var Global = NewRegistry(DefaultMaxSessionsPerOwner, DefaultMaxSubscriptions)
 // ConfigureGlobal replaces the process-wide registry during startup. It is
 // intentionally called before any transport accepts a client, so both centre
 // and edge processes enforce the same deployment limits.
-func ConfigureGlobal(maxOwnerSessions, maxSubscriptions int) {
-	Global = NewRegistry(maxOwnerSessions, maxSubscriptions)
+func ConfigureGlobal(maxOwnerSessions, maxSubscriptions int, policies ...Policy) {
+	policy := AllowAllPolicy()
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	Global = NewRegistryWithPolicy(maxOwnerSessions, maxSubscriptions, policy)
 }
 
 func ShortID(sessionID string) string {
@@ -163,7 +178,7 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	if err := ValidateCapabilities(registration.Capabilities); err != nil {
 		return Session{}, err
 	}
-	routing, err := r.normalizeRouting(registration.Routing)
+	routing, downgraded, err := r.normalizeRegistrationRouting(registration.OwnerID, registration.DevModel, registration.Routing)
 	if err != nil {
 		return Session{}, err
 	}
@@ -181,6 +196,12 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 	r.mu.Lock()
 	oldSessionID := r.instanceSessions[key]
 	ownerSet := r.ownerSessions[registration.OwnerID]
+	if oldSessionID == "" && len(ownerSet) > 0 && !r.policy.MultiSession.Allows(registration.OwnerID, registration.DevModel) {
+		r.multiSessionRejects.Add(1)
+		r.mu.Unlock()
+		r.mutationMu.Unlock()
+		return Session{}, ErrMultiSessionDisabled
+	}
 	ownerCount := len(ownerSet)
 	if oldSessionID != "" {
 		ownerCount--
@@ -224,6 +245,9 @@ func (r *Registry) Register(registration Registration, controller Controller) (S
 		replaced.controller.Disconnect("client_instance_reconnected")
 	}
 	r.registrations.Add(1)
+	if downgraded {
+		r.multiReceiveDowngrades.Add(1)
+	}
 	if replaced != nil {
 		r.replacements.Add(1)
 		r.removals.Add(1)
@@ -237,6 +261,53 @@ func (r *Registry) normalizeRouting(routing Routing) (Routing, error) {
 		r.subscriptionLimitRejects.Add(1)
 	}
 	return normalized, err
+}
+
+func (r *Registry) normalizeRegistrationRouting(ownerID int, devModel uint8, routing Routing) (Routing, bool, error) {
+	if r.policy.MultiReceive.Allows(ownerID, devModel) {
+		normalized, err := r.normalizeRouting(routing)
+		return normalized, false, err
+	}
+	if routing.TxGroupID <= 0 {
+		return Routing{}, false, fmt.Errorf("%w: transmit group is required", ErrInvalidRouting)
+	}
+	downgraded := len(routing.RxGroupIDs) != 1 || routing.RxGroupIDs[0] != routing.TxGroupID
+	normalized, err := r.normalizeRouting(Routing{TxGroupID: routing.TxGroupID, RxGroupIDs: []int{routing.TxGroupID}})
+	return normalized, downgraded && err == nil, err
+}
+
+func (r *Registry) normalizeSessionRouting(session Session, routing Routing, degrade bool) (Routing, error) {
+	if r.policy.MultiReceive.Allows(session.OwnerID, session.DevModel) {
+		return r.normalizeRouting(routing)
+	}
+	if degrade {
+		normalized, _, err := r.normalizeRegistrationRouting(session.OwnerID, session.DevModel, routing)
+		return normalized, err
+	}
+	normalized, err := NormalizeRouting(routing, 0)
+	if err != nil {
+		return Routing{}, err
+	}
+	if len(normalized.RxGroupIDs) != 1 || normalized.RxGroupIDs[0] != normalized.TxGroupID {
+		r.multiReceiveRejects.Add(1)
+		return Routing{}, ErrMultiReceiveDisabled
+	}
+	return normalized, nil
+}
+
+// ValidateRoutingForSession applies the active feature policy before handlers
+// perform database permission checks. UpdateRoutingPersisted repeats the same
+// validation while holding the mutation lock.
+func (r *Registry) ValidateRoutingForSession(sessionID string, routing Routing) (Routing, error) {
+	r.mu.RLock()
+	entry := r.sessions[sessionID]
+	if entry == nil {
+		r.mu.RUnlock()
+		return Routing{}, ErrSessionNotFound
+	}
+	session := cloneSession(entry.session)
+	r.mu.RUnlock()
+	return r.normalizeSessionRouting(session, routing, false)
 }
 
 func (r *Registry) removeLocked(sessionID string) *registryEntry {
@@ -360,6 +431,9 @@ func (r *Registry) Metrics() MetricsSnapshot {
 	snapshot.SessionLimitRejects = r.sessionLimitRejects.Load()
 	snapshot.SubscriptionLimitRejects = r.subscriptionLimitRejects.Load()
 	snapshot.PermissionRevocations = r.permissionRevocations.Load()
+	snapshot.MultiSessionRejects = r.multiSessionRejects.Load()
+	snapshot.MultiReceiveRejects = r.multiReceiveRejects.Load()
+	snapshot.MultiReceiveDowngrades = r.multiReceiveDowngrades.Load()
 	return snapshot
 }
 
@@ -410,10 +484,6 @@ func (r *Registry) UpdateRouting(sessionID string, routing Routing) (Session, er
 // The callback is invoked again with the previous routing if runtime
 // projection fails.
 func (r *Registry) UpdateRoutingPersisted(sessionID string, routing Routing, persist func(Session, Routing) error) (Session, error) {
-	routing, err := r.normalizeRouting(routing)
-	if err != nil {
-		return Session{}, err
-	}
 	r.mutationMu.Lock()
 	defer r.mutationMu.Unlock()
 	r.mu.RLock()
@@ -423,6 +493,12 @@ func (r *Registry) UpdateRoutingPersisted(sessionID string, routing Routing, per
 		return Session{}, ErrSessionNotFound
 	}
 	current := cloneSession(entry.session)
+	normalized, err := r.normalizeSessionRouting(current, routing, false)
+	if err != nil {
+		r.mu.RUnlock()
+		return Session{}, err
+	}
+	routing = normalized
 	previous := current.Routing()
 	controller := entry.controller
 	r.mu.RUnlock()
@@ -475,9 +551,12 @@ func (r *Registry) RefreshRouting(sessionID string, resolve func(Session) (Routi
 	if err != nil {
 		return Session{}, err
 	}
-	routing, err = r.normalizeRouting(routing)
+	routing, err = r.normalizeSessionRouting(current, routing, true)
 	if err != nil {
 		return Session{}, err
+	}
+	if len(routing.RxGroupIDs) == 1 && len(current.RxGroupIDs) > 1 && !r.policy.MultiReceive.Allows(current.OwnerID, current.DevModel) {
+		r.multiReceiveDowngrades.Add(1)
 	}
 	if controller.ApplyRouting != nil {
 		if err := controller.ApplyRouting(routing); err != nil {

@@ -54,6 +54,7 @@ type Registry struct {
 	ownerSessions            map[int]map[string]struct{}
 	instanceSessions         map[string]string
 	tagSessions              map[uint32]string
+	lastTransmitAt           map[string]time.Time
 	maxOwnerSessions         int
 	maxSubscriptions         int
 	registrations            atomic.Uint64
@@ -90,7 +91,7 @@ func NewRegistry(maxOwnerSessions, maxSubscriptions int) *Registry {
 	}
 	return &Registry{
 		sessions: make(map[string]*registryEntry), ownerSessions: make(map[int]map[string]struct{}),
-		instanceSessions: make(map[string]string), tagSessions: make(map[uint32]string),
+		instanceSessions: make(map[string]string), tagSessions: make(map[uint32]string), lastTransmitAt: make(map[string]time.Time),
 		maxOwnerSessions: maxOwnerSessions, maxSubscriptions: maxSubscriptions,
 	}
 }
@@ -339,6 +340,7 @@ func (r *Registry) removeLocked(sessionID string) *registryEntry {
 		return nil
 	}
 	delete(r.sessions, sessionID)
+	delete(r.lastTransmitAt, sessionID)
 	delete(r.tagSessions, entry.session.SessionTag)
 	key := instanceKey(entry.session.OwnerID, entry.session.DevModel, entry.session.ClientInstanceID)
 	if r.instanceSessions[key] == sessionID {
@@ -493,6 +495,47 @@ func (r *Registry) UpdateActivity(sessionID, endpoint string, now time.Time) boo
 	}
 	r.mu.Unlock()
 	return entry != nil
+}
+
+// MarkPTTActive records the most recent voice frame for a Session. It is a
+// short-lived transport hint used only to prevent changing tx_group_id while
+// the half-duplex lease is still active.
+func (r *Registry) MarkPTTActive(sessionID string, now time.Time) bool {
+	if r == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sessions[sessionID] == nil {
+		return false
+	}
+	r.lastTransmitAt[sessionID] = now
+	return true
+}
+
+// IsPTTActive reports whether a Session sent a voice frame within the
+// half-duplex hold window. The timestamp is deliberately not persisted.
+func (r *Registry) IsPTTActive(sessionID string, now time.Time) bool {
+	if r == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last, ok := r.lastTransmitAt[sessionID]
+	if !ok {
+		return false
+	}
+	if now.Sub(last) > PTTHoldTimeout {
+		delete(r.lastTransmitAt, sessionID)
+		return false
+	}
+	return true
 }
 
 func (r *Registry) UpdateRouting(sessionID string, routing Routing) (Session, error) {

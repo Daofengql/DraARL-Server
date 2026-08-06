@@ -877,6 +877,9 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 	} else if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
 		return
 	}
+	if dev.GhostSessionID != "" {
+		ghostsession.Global.MarkPTTActive(dev.GhostSessionID, packet.TimeStamp)
+	}
 
 	// 【前置逻辑说明】
 	// 针对 60ms/帧 (动态1-3帧) 架构的优化：

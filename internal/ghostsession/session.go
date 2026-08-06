@@ -26,6 +26,7 @@ var (
 	ErrSessionLimit          = errors.New("ghost session limit reached")
 	ErrSubscriptionLimit     = errors.New("ghost subscription limit reached")
 	ErrRequiredCapabilities  = errors.New("required ghost capabilities are missing")
+	ErrPTTActive             = errors.New("ghost session PTT is active")
 )
 
 func StableErrorCode(err error) string {
@@ -44,6 +45,8 @@ func StableErrorCode(err error) string {
 		return "session_not_found"
 	case errors.Is(err, ErrSessionConflict):
 		return "session_conflict"
+	case errors.Is(err, ErrPTTActive):
+		return "ptt_active"
 	default:
 		return "ghost_session_registration_failed"
 	}
@@ -52,6 +55,7 @@ func StableErrorCode(err error) string {
 const (
 	CapabilityMultiReceiveV1 = "multi_receive_v1"
 	CapabilitySourceGroupV1  = "source_group_v1"
+	PTTHoldTimeout           = 900 * time.Millisecond
 )
 
 type Routing struct {

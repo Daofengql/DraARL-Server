@@ -226,6 +226,9 @@ func updateOwnedSessionRouting(user *gormdb.User, sessionID string, requested gh
 	if err != nil {
 		return ghostsession.Session{}, err
 	}
+	if policyRouting.TxGroupID != session.TxGroupID && ghostsession.Global.IsPTTActive(sessionID, time.Now()) {
+		return ghostsession.Session{}, ghostsession.ErrPTTActive
+	}
 	routing, err := validateSessionRoutingAccess(user, policyRouting)
 	if err != nil {
 		return ghostsession.Session{}, err
@@ -271,6 +274,8 @@ func writeSessionRoutingError(c *gin.Context, err error) {
 		status, code = http.StatusConflict, "ambiguous_session"
 	case errors.Is(err, ghostsession.ErrSubscriptionLimit):
 		status, code = http.StatusUnprocessableEntity, "subscription_limit"
+	case errors.Is(err, ghostsession.ErrPTTActive):
+		status, code = http.StatusConflict, "ptt_active"
 	case errors.Is(err, errRoutingGroupNotFound):
 		status, code = http.StatusNotFound, "group_not_found"
 	case errors.Is(err, errRoutingGroupForbidden):

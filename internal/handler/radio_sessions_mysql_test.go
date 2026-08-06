@@ -104,6 +104,11 @@ func TestRadioSessionRoutingMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ghostsession.Global.MarkPTTActive(session.SessionID, time.Now())
+	if _, err := updateOwnedSessionRouting(owner, session.SessionID, ghostsession.Routing{TxGroupID: publicB.ID, RxGroupIDs: []int{publicB.ID}}); !errors.Is(err, ghostsession.ErrPTTActive) {
+		t.Fatalf("active PTT routing update error=%v, want %v", err, ghostsession.ErrPTTActive)
+	}
+	ghostsession.Global.MarkPTTActive(session.SessionID, time.Now().Add(-time.Second))
 
 	updated, err := updateOwnedSessionRouting(owner, session.SessionID, ghostsession.Routing{TxGroupID: publicB.ID, RxGroupIDs: []int{privateAllowed.ID}})
 	if err != nil {

@@ -131,3 +131,16 @@ func TestAdminRadioSessionListIsRedactedAndCanDisconnectAnyOwner(t *testing.T) {
 		t.Fatalf("admin delete status=%d disconnected=%v body=%s", response.Code, disconnected, response.Body.String())
 	}
 }
+
+func TestWriteSessionRoutingErrorReportsActivePTTConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	writeSessionRoutingError(ctx, ghostsession.ErrPTTActive)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("PTT routing status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"error":"ptt_active"`) {
+		t.Fatalf("PTT routing error body=%s", recorder.Body.String())
+	}
+}

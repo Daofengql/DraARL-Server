@@ -114,6 +114,27 @@ func TestRegistryRoutingIsNormalizedAndControllerFailureIsAtomic(t *testing.T) {
 	}
 }
 
+func TestRegistryPTTActivityExpiresWithoutAccountLevelLock(t *testing.T) {
+	registry := NewRegistry(4, 4)
+	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if !registry.MarkPTTActive(session.SessionID, now) || !registry.IsPTTActive(session.SessionID, now.Add(100*time.Millisecond)) {
+		t.Fatal("recent PTT activity was not reported")
+	}
+	if registry.IsPTTActive(session.SessionID, now.Add(PTTHoldTimeout+time.Millisecond)) {
+		t.Fatal("expired PTT activity remained active")
+	}
+	if !registry.MarkPTTActive(session.SessionID, now) {
+		t.Fatal("PTT activity could not be refreshed")
+	}
+	if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 2, RxGroupIDs: []int{2}}); err != nil {
+		t.Fatalf("registry itself applied routing despite no account-level PTT lock: %v", err)
+	}
+}
+
 func TestRegistryEnforcesLimitsAndTagLookup(t *testing.T) {
 	registry := NewRegistry(1, 2)
 	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{})
@@ -201,6 +222,7 @@ func TestStableErrorCode(t *testing.T) {
 	for err, want := range map[error]string{
 		ErrSessionLimit:      "ghost_session_limit",
 		ErrSubscriptionLimit: "subscription_limit",
+		ErrPTTActive:         "ptt_active",
 	} {
 		if got := StableErrorCode(fmt.Errorf("wrapped: %w", err)); got != want {
 			t.Fatalf("StableErrorCode(%v)=%q want=%q", err, got, want)

@@ -24,6 +24,7 @@ import {
   getRadioService,
 } from '../../services/radioService'
 import { messageSyncService } from '../../services/radio/messageSync'
+import { RadioTabCoordinator } from '../../services/radio/tabCoordinator'
 import type {
   WSConnectionState,
   VoiceState,
@@ -183,6 +184,7 @@ export const RadioPage: React.FC = () => {
   const [audioPermissionNeeded, setAudioPermissionNeeded] = useState(false) // 音频权限提示
   const [isLoadingMore, setIsLoadingMore] = useState(false) // 加载更多状态
   const [routingUpdating, setRoutingUpdating] = useState(false)
+  const [takenOver, setTakenOver] = useState(false)
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -193,6 +195,7 @@ export const RadioPage: React.FC = () => {
   const messagesByViewRef = useRef<Map<number, RadioMessage[]>>(new Map())
   const isPlayingVoiceRef = useRef(false)
   const pendingSyncMessagesRef = useRef<{ groupId: number; messages: RadioMessage[] } | null>(null)
+  const ownsRadioTabRef = useRef(true)
 
   useEffect(() => {
     activeGroupIdRef.current = activeGroupId
@@ -213,6 +216,18 @@ export const RadioPage: React.FC = () => {
   // 初始化
   useEffect(() => {
     if (!user || !token) return
+
+    const coordinator = new RadioTabCoordinator()
+    ownsRadioTabRef.current = true
+    coordinator.start(() => {
+      ownsRadioTabRef.current = false
+      setTakenOver(true)
+      setIsPTTDown(false)
+      radioService.destroy()
+      setConnectionState('disconnected')
+      setVoiceState('idle')
+      setActiveSpeakers([])
+    })
 
     const initRadio = async () => {
       try {
@@ -250,6 +265,7 @@ export const RadioPage: React.FC = () => {
 
         // 初始化服务（传入用户上次选中的群组 ID，确保跨设备同步）
         await radioService.init(token, user!.username, user!.callsign || '', user!.last_group_id)
+        if (!ownsRadioTabRef.current) return
 
         // 加载群组
         const groupList = await radioService.getGroups()
@@ -257,6 +273,7 @@ export const RadioPage: React.FC = () => {
 
         // 连接
         await radioService.connect()
+        if (!ownsRadioTabRef.current) return
         const connectedRouting = radioService.getRouting()
         setRouting(connectedRouting)
         activeGroupIdRef.current = connectedRouting.txGroupId
@@ -264,6 +281,7 @@ export const RadioPage: React.FC = () => {
         setMessages(messagesByViewRef.current.get(connectedRouting.txGroupId) || [])
 
       } catch (error) {
+        if (!ownsRadioTabRef.current) return
         console.error('Failed to init radio:', error)
         setError('初始化失败')
       }
@@ -284,6 +302,8 @@ export const RadioPage: React.FC = () => {
 
     return () => {
       // 清理
+      ownsRadioTabRef.current = false
+      coordinator.stop()
       radioService.disconnect()
     }
   }, [user, token, radioService])
@@ -402,12 +422,13 @@ export const RadioPage: React.FC = () => {
 
   // PTT 按下
   const handlePTTDown = useCallback(() => {
+    if (!ownsRadioTabRef.current || takenOver) return
     if (connectionState !== 'online') return
     if (voiceState !== 'idle') return
 
     setIsPTTDown(true)
     radioService.startVoice()
-  }, [connectionState, voiceState, radioService])
+  }, [connectionState, voiceState, radioService, takenOver])
 
   // PTT 松开
   const handlePTTUp = useCallback(() => {
@@ -443,6 +464,7 @@ export const RadioPage: React.FC = () => {
   }, [handlePTTDown, handlePTTUp, inputMode])
 
   const handleTxGroupChange = async (groupId: number) => {
+    if (!ownsRadioTabRef.current || takenOver) return
     setRoutingUpdating(true)
     try {
       await radioService.switchGroup(groupId)
@@ -452,6 +474,7 @@ export const RadioPage: React.FC = () => {
   }
 
   const handleReceiveGroupsChange = async (groupIds: number[]) => {
+    if (!ownsRadioTabRef.current || takenOver) return
     setRoutingUpdating(true)
     try {
       await radioService.setReceiveGroups(groupIds)
@@ -467,6 +490,7 @@ export const RadioPage: React.FC = () => {
 
   // 发送文本消息
   const handleSendText = () => {
+    if (!ownsRadioTabRef.current || takenOver) return
     if (!textInput.trim()) return
 
     const text = textInput.trim()
@@ -535,6 +559,11 @@ export const RadioPage: React.FC = () => {
           updating={routingUpdating}
         />
         {renderSpeakingIndicator()}
+        {takenOver && (
+          <Alert severity="warning" sx={{ mt: 0.5 }}>
+            已在其他页面接管
+          </Alert>
+        )}
       </Box>
 
       {/* 音频权限提示 */}

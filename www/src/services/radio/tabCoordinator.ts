@@ -39,7 +39,12 @@ export class RadioTabCoordinator {
 
   start(onTakenOver: () => void): void {
     this.onTakenOver = onTakenOver
-    this.claim = { tabId: this.tabId, claimedAt: Date.now() }
+    const previousClaim = parseClaim(localStorage.getItem(RADIO_TAB_LEASE_KEY))
+    // 单调递增，避免两个标签恰好在同一毫秒启动时旧标签赢得仲裁。
+    this.claim = {
+      tabId: this.tabId,
+      claimedAt: Math.max(Date.now(), (previousClaim?.claimedAt || 0) + 1),
+    }
     this.active = true
 
     window.addEventListener('storage', this.handleStorage)

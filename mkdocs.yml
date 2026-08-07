@@ -49,8 +49,8 @@ nav:
       - 08. 运维与排障: usage/08-运维与排障.md
       - 09. 固件与OTA升级: usage/09-固件与OTA升级.md
       - 10. APRS与位置服务: usage/10-APRS与位置服务.md
-      - 11. v1.1.5-alpha1升级说明: usage/11-v1.1.5-alpha1升级说明.md
-      - 12. 幽灵多端与频道消息升级说明: usage/12-幽灵多端与频道消息升级说明.md
+      - 11. v1.1.5-alpha1升级说明（历史）: usage/11-v1.1.5-alpha1升级说明.md
+      - 12. v2.0.0-alpha3 幽灵多端与频道消息升级: usage/12-幽灵多端与频道消息升级说明.md
   - 协议文档: Protocol.md
   - API 文档:
       - 总览: api/README.md

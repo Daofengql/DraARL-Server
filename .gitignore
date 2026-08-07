@@ -60,6 +60,9 @@ uploads/
 tmp/
 temp/
 
+# Copyright registration materials (keep local, never commit)
+/output/
+
 # Local storage root (Storage.Local.RootPath 默认 ./data/storage)
 /data/
 

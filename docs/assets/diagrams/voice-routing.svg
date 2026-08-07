@@ -69,7 +69,7 @@
   <!-- 通信录制 -->
   <rect x="310" y="335" width="380" height="50" fill="white" rx="8" stroke="#4caf50" stroke-width="2"/>
   <text x="500" y="360" text-anchor="middle" fill="#2e7d32" font-size="13" font-weight="bold">通信录制</text>
-  <text x="500" y="378" text-anchor="middle" fill="#666" font-size="10">缓冲 → MinIO上传 → 数据库同步</text>
+  <text x="500" y="378" text-anchor="middle" fill="#666" font-size="10">缓冲 → Storage上传 → 数据库同步</text>
 
   <!-- 接收端 -->
   <rect x="770" y="80" width="150" height="120" fill="white" rx="10" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>

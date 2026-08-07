@@ -2,6 +2,8 @@
 
 # UDP fan-out benchmark
 
+本文档对应 DraARL Server `v2.0.0-alpha3` 的 benchmark 参数和 Type 0 路由模型。
+
 `udp_fanout` 使用真实 DraARLv1 心跳认证和 UDP socket，测量单机或中心/多边缘拓扑在大量在线设备下的语音 fan-out 能力。工具支持一个或多个独立群组，并为每个群组安排一个同时发言的设备。
 
 历史实测结果和瓶颈分析见[UDP 单机转发压力测试](../../../docs/UDP单机转发压力测试.md)。
@@ -25,6 +27,13 @@
 2. 当前目录存在与服务端一致的 `config.yaml`。
 3. 已取得 DraARL Server 进程 PID。
 4. Windows 或 Linux 环境；进程 CPU/RSS 指标分别通过系统 API 和 `/proc` 读取。
+
+先确认工具仍可构建并查看当前参数：
+
+```bash
+go test ./test/bench/udp_fanout
+go run ./test/bench/udp_fanout -h
+```
 
 ## 运行
 

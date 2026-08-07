@@ -1,44 +1,86 @@
-# 幽灵设备多端、多收与频道消息改造待办
+# 大文件拆分与模块边界重构 TODO
 
-> 状态快照：2026-08-07。
+> 状态快照：2026-08-08。
 >
-> 服务端协议、接口模拟、Web 收发逻辑、投递快照、权限拆分、PTT 边界、计数修复和 Web 标签接管已完成并从本文件移除。当前仓库不包含 Android 客户端源码，因此 Android 音频和真机项目保留为外部验收项；本文件只保留尚未完成或需要生产环境执行的事项。
+> 固件 OTA 服务端兼容、`auth.go`、`group.go`、Logbook 和 SiteConfig 拆分已经完成并从本文件移除。剩余工作继续只降低单文件复杂度、明确职责边界，不改变 HTTP API、UDP/互联协议、数据库结构、权限规则、路由行为或页面交互。
 
-## 1. Android 客户端与真机验收
+## P0. 固件 OTA 真机验收
 
-- [ ] 在 Android 客户端仓库实现接收 Web 信号时的去重、队列释放、音频播放状态和来源频道过滤，消除卡顿与循环播放。
-- [ ] Android 发送组与日志组保持一致，日志只显示当前发送组；收听组作为本地偏好保存。
-- [ ] Android 验证单收切发送组同步，多收切发送组保留原列表并加入新发送组。
-- [ ] 两台 Android 使用同一账号、同一幽灵 SSID 同时在线，验证上线、重连、切组和下线互不覆盖。
-- [ ] Web 与两台 Android 同账号同时在线，任一端下线、切组或重连不影响其他端。
-- [ ] Android 在 Wi-Fi/蜂窝网络切换后重新认证时，另一端持续在线。
-- [ ] Android A 发 A、Web 只收 B 时不能收到；Web 发 A、Android 只收 B 时不能收到。
-- [ ] Android 取消订阅 A 后不再收到 A 的实时消息，并在同时订阅 A/B/C 时正确区分文本、语音和历史来源频道。
-- [ ] 多频道同时出现真实语音时，完成 Web 混音和 Android 队列策略的真机验收。
-- [ ] Android release 包只作为本地或手动发布产物处理，不创建 GitHub Release。
+- [ ] 覆盖旧设备已有截断 OTA 缓存的迁移验收：切换代理模式后，设备重新检查能覆盖旧缓存，并验证 `dev_model=2` 从 `0.0.2` 升级到当前发布版本成功。
 
-## 2. 生产迁移与发布
+## 1. `internal/udphub/server.go`
 
-- [ ] 在生产数据副本演练投递快照表迁移和来源组补录，记录 DDL 持锁时间、磁盘增量、补录耗时与回滚窗口。
-- [ ] 按数据库迁移、中心、边缘、Web、Android 的顺序执行生产发布，并保留每阶段健康检查记录。
-- [ ] 使用真实版本差异执行滚动升级和回滚演练，确认无 Session 覆盖、重复投递、串音或越权。
-- [ ] 发布后观察 Session 上限拒绝、包拒绝、消息 5xx、延迟分位、在线计数和频道串音告警。
-- [ ] 建立生产监控面板并确定上述指标的告警阈值。
+该文件处于 UDP 热路径，必须保持 package `udphub`、锁类型、锁顺序和数据包生命周期不变。
 
-## 3. 运维与审计
+- [ ] 将 UDP 生命周期、监听、关闭和 socket 错误判断移动到 `server_runtime.go`。
+- [ ] 将包入口、协议解析和消息类型分发移动到 `server_packet.go`。
+- [ ] 将新设备接入、设备查找、默认群组解析和客户端设备型号更新移动到 `server_device_session.go`。
+- [ ] 将语音授权、半双工仲裁和语音转发移动到 `server_voice.go`。
+- [ ] 将文本消息和普通数据转发移动到 `server_message.go`。
+- [ ] 将群组/设备缓存刷新和快照读取移动到 `server_cache_sync.go`。
+- [ ] 将全局统计访问与原子更新移动到 `server_stats.go`。
+- [ ] 增加包类型分发表驱动测试，覆盖认证、心跳、语音、文本、配置、未知类型和畸形数据。
+- [ ] 对标准 UDP 单端、Ghost 多端、来源频道过滤、半双工争用、缓存刷新并发运行 `-race`。
+- [ ] 用现有 fanout benchmark 对比拆分前后分配次数、吞吐和 P95，不接受可重复的性能退化。
 
-- [ ] 为 Ghost Session 管理、强制断开、上限拒绝和路由拒绝增加审计查询与留存策略。
-- [ ] 对慢 WebSocket 客户端、后台标签页节流和长时间休眠恢复补浏览器实测。
-- [ ] 明确生产迁移失败时的回滚操作手册：保留新表、新字段、偏好和索引，不删除已写入快照。
+完成标准：`server.go` 删除或仅保留极薄入口；热路径锁顺序、原子统计和数据包生命周期保持不变。
 
-## 4. 远期客户端路线
+## 2. `internal/interconnect/gateway.go`
 
-- [ ] iOS 按 Android 的实例 ID、Session、routing、来源频道和本地收听偏好契约适配。
-- [ ] Windows/macOS 客户端按相同契约适配。
-- [ ] 明确 PC 客户端多窗口、多进程是共享安装实例还是独立实例。
-- [ ] 如未来引入多租户，再设计租户级容量、审计和运维策略；不恢复幽灵功能灰度开关。
+这是最高风险项，必须按职责域逐次移动并在每一步运行对应测试，禁止一次性重写。
 
-## 5. 本轮剩余完成条件
+### 2.1 CenterGateway
 
-- [ ] Android 真机音频、双端在线、来源频道和多收历史验收通过。
-- [ ] 生产副本迁移、滚动升级、回滚和发布后监控演练通过。
+- [ ] 将中心端结构、构造和连接生命周期移动到 `center_gateway.go`。
+- [ ] 将设备 Session 激活、续期、确认、恢复和撤销移动到 `center_gateway_session.go`。
+- [ ] 将设备配置请求、缓存、重试和完成处理移动到 `center_gateway_config.go`。
+- [ ] 将设备/身份/Ghost 路由更新和域刷新移动到 `center_gateway_routing.go`。
+- [ ] 将中心端 Relay 与 SpeakerLease 处理移动到 `center_gateway_relay.go`。
+
+### 2.2 EdgeGateway
+
+- [ ] 将边缘端结构、构造、控制链路和连接生命周期移动到 `edge_gateway.go`。
+- [ ] 将认证、Session 续期、确认、过期和撤销移动到 `edge_gateway_session.go`。
+- [ ] 将本地语音、SpeakerLease、fallback 和本地 fanout 移动到 `edge_gateway_voice.go`。
+- [ ] 将设备配置上行/下行、缓存和结果处理移动到 `edge_gateway_config.go`。
+- [ ] 将投影应用、接收计划缓存和路由确认/重同步移动到 `edge_gateway_routing.go`。
+- [ ] 将下行写入、屏障队列、排空和地址辅助函数移动到 `edge_gateway_downstream.go`。
+
+### 2.3 共同约束
+
+- [ ] 共享类型只放入 `gateway_types.go`；不要创建同时操纵 Center 和 Edge 内部状态的万能工具文件。
+- [ ] 保持所有互斥锁的获取顺序、channel 关闭顺序、goroutine 退出条件和原子变量语义不变。
+- [ ] 覆盖控制链路中断恢复、Ghost Session 恢复窗口、Session owner 冲突、路由投影回滚、配置重试、SpeakerLease 和下行屏障。
+- [ ] 对 `internal/interconnect` 运行完整测试、`-race`、fuzz smoke test 和 edge receiver benchmark。
+- [ ] 执行中心/边缘接口模拟：断链、重连、重复控制包、乱序确认、过期 Session、虚拟互联变更和多收路由更新。
+
+完成标准：Center 与 Edge 的状态机可分别阅读和测试，`gateway.go` 删除或只留下少量真正共享的入口代码。
+
+## 3. 统一验收矩阵
+
+- [ ] `gofmt` 不产生额外差异。
+- [ ] `go test ./...` 通过。
+- [ ] `go vet ./...` 通过。
+- [ ] `go test -race ./internal/interconnect ./internal/udphub ./internal/handler` 通过；依赖 MySQL 的用例按现有环境策略执行或明确记录跳过原因。
+- [ ] `go build ./cmd/draarl` 通过。
+- [ ] `npm run lint`、`npm run build` 和 `npm test` 通过。
+- [ ] `mkdocs build --strict` 通过。
+- [ ] HTTP 路由总数、方法、路径和中间件顺序与拆分前基线一致。
+- [ ] 数据库迁移结果与拆分前一致，不新增或删除表、列、索引和外键。
+- [ ] Web 回归通联日志与系统设置页面，覆盖桌面和移动视口。
+- [ ] 接口模拟回归标准设备单端、Ghost 多端、多收单发、中心/边缘切换和在线计数。
+
+## 4. 剩余提交顺序
+
+- [ ] 提交 6：拆分 `internal/udphub/server.go`。
+- [ ] 提交 7-N：按 CenterGateway、EdgeGateway 的职责域逐次拆分 `internal/interconnect/gateway.go`。
+- [ ] 最终提交：只做无用 import、重复辅助函数、测试基线和文档路径清理，不再改变模块边界。
+
+## 5. 本轮不做
+
+- 不修改公开或内部协议版本。
+- 不调整数据库模型或迁移。
+- 不改变 Ghost/标准设备在线策略、PTT 仲裁或频道权限。
+- 不引入新的全局状态管理框架、依赖注入框架或 Go package 分层。
+- 不借拆分机会重做页面设计、API 命名、错误码或响应结构。
+- 不以删除注释、压缩 JSX 或合并语句的方式追求行数指标。

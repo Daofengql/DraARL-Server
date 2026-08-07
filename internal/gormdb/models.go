@@ -374,8 +374,10 @@ func (CommRecord) TableName() string {
 // communication record when it was sent. It preserves message visibility after
 // a virtual interconnect topology changes.
 type CommRecordDeliveryGroup struct {
-	RecordID uint `gorm:"primaryKey;column:record_id;index:idx_delivery_group_record,priority:2" json:"record_id"`
-	GroupID  uint `gorm:"primaryKey;column:group_id;index:idx_delivery_group_record,priority:1" json:"group_id"`
+	RecordID    uint      `gorm:"primaryKey;column:record_id;index:idx_delivery_group_record,priority:2;index:idx_delivery_group_cursor,priority:3;index:idx_delivery_group_type_cursor,priority:4" json:"record_id"`
+	GroupID     uint      `gorm:"primaryKey;column:group_id;index:idx_delivery_group_record,priority:1;index:idx_delivery_group_cursor,priority:1;index:idx_delivery_group_type_cursor,priority:1" json:"group_id"`
+	StartTime   time.Time `gorm:"column:start_time;index:idx_delivery_group_cursor,priority:2;index:idx_delivery_group_type_cursor,priority:3" json:"start_time"`
+	MessageType *uint8    `gorm:"type:tinyint unsigned;column:message_type;index:idx_delivery_group_type_cursor,priority:2" json:"message_type"`
 
 	Record *CommRecord `gorm:"foreignKey:RecordID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	Group  *Group      `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`

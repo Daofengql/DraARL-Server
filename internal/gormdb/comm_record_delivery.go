@@ -2,6 +2,7 @@ package gormdb
 
 import (
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -29,10 +30,11 @@ func CreateCommRecordsWithDeliveryGroups(db *gorm.DB, records []*CommRecord, bat
 			if record == nil || record.ID == 0 {
 				continue
 			}
+			messageType := record.MessageType
 			for _, groupID := range normalizeDeliveryGroupIDs(record.DeliveryGroupIDs, record.GroupID) {
 				deliveryGroups = append(deliveryGroups, CommRecordDeliveryGroup{
-					RecordID: record.ID,
-					GroupID:  groupID,
+					RecordID: record.ID, GroupID: groupID, StartTime: record.StartTime,
+					MessageType: &messageType,
 				})
 			}
 		}
@@ -76,11 +78,13 @@ func BackfillCommRecordDeliveryGroups(db *gorm.DB) error {
 	var afterID uint
 	for {
 		var rows []struct {
-			ID      uint
-			GroupID uint
+			ID          uint
+			GroupID     uint
+			StartTime   time.Time
+			MessageType uint8
 		}
 		err := db.Table("comm_records cr").
-			Select("cr.id, cr.group_id").
+			Select("cr.id, cr.group_id, cr.start_time, cr.message_type").
 			Joins("LEFT JOIN comm_record_delivery_groups dg ON dg.record_id = cr.id AND dg.group_id = cr.group_id").
 			Where("cr.id > ? AND cr.group_id IS NOT NULL AND dg.record_id IS NULL", afterID).
 			Order("cr.id ASC").
@@ -90,13 +94,17 @@ func BackfillCommRecordDeliveryGroups(db *gorm.DB) error {
 			return fmt.Errorf("list communication records missing delivery snapshots: %w", err)
 		}
 		if len(rows) == 0 {
-			return nil
+			break
 		}
 
 		snapshots := make([]CommRecordDeliveryGroup, 0, len(rows))
 		for _, row := range rows {
 			if row.ID != 0 && row.GroupID != 0 {
-				snapshots = append(snapshots, CommRecordDeliveryGroup{RecordID: row.ID, GroupID: row.GroupID})
+				messageType := row.MessageType
+				snapshots = append(snapshots, CommRecordDeliveryGroup{
+					RecordID: row.ID, GroupID: row.GroupID, StartTime: row.StartTime,
+					MessageType: &messageType,
+				})
 			}
 		}
 		if len(snapshots) > 0 {
@@ -105,5 +113,49 @@ func BackfillCommRecordDeliveryGroups(db *gorm.DB) error {
 			}
 		}
 		afterID = rows[len(rows)-1].ID
+	}
+	return backfillCommRecordDeliveryGroupTimes(db, batchSize)
+}
+
+func backfillCommRecordDeliveryGroupTimes(db *gorm.DB, batchSize int) error {
+	var afterRecordID, afterGroupID uint
+	for {
+		var rows []struct {
+			RecordID    uint
+			GroupID     uint
+			StartTime   time.Time
+			MessageType uint8
+		}
+		err := db.Table("comm_record_delivery_groups dg").
+			Select("dg.record_id, dg.group_id, cr.start_time, cr.message_type").
+			Joins("INNER JOIN comm_records cr ON cr.id = dg.record_id").
+			Where("dg.start_time IS NULL OR dg.message_type IS NULL").
+			Where("dg.record_id > ? OR (dg.record_id = ? AND dg.group_id > ?)", afterRecordID, afterRecordID, afterGroupID).
+			Order("dg.record_id ASC, dg.group_id ASC").
+			Limit(batchSize).
+			Scan(&rows).Error
+		if err != nil {
+			return fmt.Errorf("list communication delivery snapshots missing start time: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+
+		snapshots := make([]CommRecordDeliveryGroup, 0, len(rows))
+		for _, row := range rows {
+			messageType := row.MessageType
+			snapshots = append(snapshots, CommRecordDeliveryGroup{
+				RecordID: row.RecordID, GroupID: row.GroupID, StartTime: row.StartTime,
+				MessageType: &messageType,
+			})
+		}
+		if err := db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "record_id"}, {Name: "group_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"start_time", "message_type"}),
+		}).CreateInBatches(snapshots, batchSize).Error; err != nil {
+			return fmt.Errorf("backfill communication delivery snapshot start times: %w", err)
+		}
+		last := rows[len(rows)-1]
+		afterRecordID, afterGroupID = last.RecordID, last.GroupID
 	}
 }

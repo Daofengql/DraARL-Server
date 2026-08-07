@@ -53,8 +53,12 @@ func (r *MessageRepository) baseQuery(groupIDs []int) *gorm.DB {
 	return r.messageQuery("comm_record_delivery_groups dg", groupIDs)
 }
 
-func (r *MessageRepository) listQuery(groupID int) *gorm.DB {
-	return r.messageQuery("comm_record_delivery_groups dg FORCE INDEX (idx_delivery_group_record)", []int{groupID})
+func (r *MessageRepository) listQuery(groupID int, messageType *uint8) *gorm.DB {
+	indexName := "idx_delivery_group_cursor"
+	if messageType != nil {
+		indexName = "idx_delivery_group_type_cursor"
+	}
+	return r.messageQuery("comm_record_delivery_groups dg FORCE INDEX ("+indexName+")", []int{groupID})
 }
 
 func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB {
@@ -92,23 +96,23 @@ func (r *MessageRepository) List(query MessageQuery) ([]MessageRecord, bool, err
 	pages := make([][]MessageRecord, 0, pageCapacity)
 	for _, groupID := range groupIDs {
 		newPageQuery := func() *gorm.DB {
-			db := r.listQuery(groupID)
+			db := r.listQuery(groupID, query.Type)
 			if query.Type != nil {
-				db = db.Where("cr.message_type = ?", *query.Type)
+				db = db.Where("dg.message_type = ? AND cr.message_type = ?", *query.Type, *query.Type)
 			}
 			return db
 		}
 		queries := []*gorm.DB{newPageQuery()}
 		if query.BeforeTime != nil {
 			queries = []*gorm.DB{
-				newPageQuery().Where("cr.start_time = ? AND cr.id < ?", *query.BeforeTime, query.BeforeID),
-				newPageQuery().Where("cr.start_time < ?", *query.BeforeTime),
+				newPageQuery().Where("dg.start_time = ? AND dg.record_id < ?", *query.BeforeTime, query.BeforeID),
+				newPageQuery().Where("dg.start_time < ?", *query.BeforeTime),
 			}
 		}
 
 		for _, pageQuery := range queries {
 			var records []MessageRecord
-			if err := pageQuery.Order("cr.start_time DESC").Order("cr.id DESC").Limit(limit + 1).Scan(&records).Error; err != nil {
+			if err := pageQuery.Order("dg.start_time DESC").Order("dg.record_id DESC").Limit(limit + 1).Scan(&records).Error; err != nil {
 				return nil, false, err
 			}
 			pages = append(pages, records)

@@ -97,6 +97,12 @@ func TestCommRecordMessageMigrationMySQL(t *testing.T) {
 	if len(snapshots) != 2 || snapshots[0].GroupID != groupID || snapshots[1].GroupID != groupID {
 		t.Fatalf("source-group delivery snapshots=%#v want two rows for group %d", snapshots, groupID)
 	}
+	if !snapshots[0].StartTime.Equal(legacyText.StartTime) || !snapshots[1].StartTime.Equal(legacyGhost.StartTime) {
+		t.Fatalf("delivery snapshot start times=%v,%v want=%v,%v", snapshots[0].StartTime, snapshots[1].StartTime, legacyText.StartTime, legacyGhost.StartTime)
+	}
+	if snapshots[0].MessageType == nil || *snapshots[0].MessageType != CommMessageTypeText || snapshots[1].MessageType == nil || *snapshots[1].MessageType != CommMessageTypeVoice {
+		t.Fatalf("delivery snapshot message types=%v,%v", snapshots[0].MessageType, snapshots[1].MessageType)
+	}
 	currentDB := ""
 	if err := db.Raw("SELECT DATABASE()").Scan(&currentDB).Error; err != nil {
 		t.Fatal(err)
@@ -113,6 +119,32 @@ func TestCommRecordMessageMigrationMySQL(t *testing.T) {
 	}
 	if len(indexColumns) != 2 || indexColumns[0] != "group_id" || indexColumns[1] != "record_id" {
 		t.Fatalf("delivery snapshot index columns=%v want=[group_id record_id]", indexColumns)
+	}
+	indexColumns = nil
+	if err := db.Raw(`
+		SELECT column_name
+		FROM information_schema.statistics
+		WHERE table_schema = ? AND table_name = 'comm_record_delivery_groups'
+			AND index_name = 'idx_delivery_group_cursor'
+		ORDER BY seq_in_index
+	`, currentDB).Scan(&indexColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(indexColumns) != 3 || indexColumns[0] != "group_id" || indexColumns[1] != "start_time" || indexColumns[2] != "record_id" {
+		t.Fatalf("delivery cursor index columns=%v want=[group_id start_time record_id]", indexColumns)
+	}
+	indexColumns = nil
+	if err := db.Raw(`
+		SELECT column_name
+		FROM information_schema.statistics
+		WHERE table_schema = ? AND table_name = 'comm_record_delivery_groups'
+			AND index_name = 'idx_delivery_group_type_cursor'
+		ORDER BY seq_in_index
+	`, currentDB).Scan(&indexColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(indexColumns) != 4 || indexColumns[0] != "group_id" || indexColumns[1] != "message_type" || indexColumns[2] != "start_time" || indexColumns[3] != "record_id" {
+		t.Fatalf("delivery type cursor index columns=%v want=[group_id message_type start_time record_id]", indexColumns)
 	}
 	if err := db.Delete(&CommRecord{}, legacyGhost.ID).Error; err != nil {
 		t.Fatal(err)

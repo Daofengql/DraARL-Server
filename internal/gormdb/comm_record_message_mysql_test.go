@@ -53,14 +53,26 @@ func TestCommRecordMessageMigrationMySQL(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	legacyText := &CommRecord{DeviceID: uint(device.ID), DeviceSSID: device.SSID, GroupID: &groupID, UserID: &userID, StartTime: now, EndTime: now, AudioPath: "text:legacy migration text", Status: 2}
 	legacyGhost := &CommRecord{DeviceID: 0, DeviceSSID: 101, GroupID: &groupID, UserID: &userID, StartTime: now.Add(time.Millisecond), EndTime: now.Add(time.Millisecond), Status: 2}
+	orphanGroup := &Group{Name: "message-migration-orphan-" + suffix, Type: 1, OwerID: user.ID, Status: 1}
+	if err := db.Create(orphanGroup).Error; err != nil {
+		t.Fatal(err)
+	}
+	orphanGroupID := uint(orphanGroup.ID)
+	orphanRecord := &CommRecord{DeviceID: 0, DeviceSSID: 101, GroupID: &orphanGroupID, UserID: &userID, StartTime: now.Add(2 * time.Millisecond), EndTime: now.Add(2 * time.Millisecond), Status: 2}
 	if err := db.Create(legacyText).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(legacyGhost).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(orphanRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&Group{}, orphanGroup.ID).Error; err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		_ = db.Delete(&CommRecord{}, []uint{legacyText.ID, legacyGhost.ID}).Error
+		_ = db.Delete(&CommRecord{}, []uint{legacyText.ID, legacyGhost.ID, orphanRecord.ID}).Error
 		_ = db.Delete(&Group{}, group.ID).Error
 		_ = db.Delete(&Device{}, device.ID).Error
 		_ = db.Delete(&User{}, user.ID).Error
@@ -102,6 +114,16 @@ func TestCommRecordMessageMigrationMySQL(t *testing.T) {
 	}
 	if snapshots[0].MessageType == nil || *snapshots[0].MessageType != CommMessageTypeText || snapshots[1].MessageType == nil || *snapshots[1].MessageType != CommMessageTypeVoice {
 		t.Fatalf("delivery snapshot message types=%v,%v", snapshots[0].MessageType, snapshots[1].MessageType)
+	}
+	var orphanSnapshotCount int64
+	if err := db.Model(&CommRecordDeliveryGroup{}).Where("record_id = ?", orphanRecord.ID).Count(&orphanSnapshotCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if orphanSnapshotCount != 0 {
+		t.Fatalf("orphan communication record received %d delivery snapshots", orphanSnapshotCount)
+	}
+	if err := db.First(&CommRecord{}, orphanRecord.ID).Error; err != nil {
+		t.Fatalf("orphan communication record was not preserved: %v", err)
 	}
 	currentDB := ""
 	if err := db.Raw("SELECT DATABASE()").Scan(&currentDB).Error; err != nil {

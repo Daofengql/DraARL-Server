@@ -2,6 +2,7 @@ package gormdb
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"gorm.io/gorm"
@@ -75,6 +76,17 @@ func BackfillCommRecordDeliveryGroups(db *gorm.DB) error {
 		return nil
 	}
 	const batchSize = 1000
+	var orphanCount int64
+	if err := db.Table("comm_records cr").
+		Joins("LEFT JOIN public_groups source_group ON source_group.id = cr.group_id").
+		Where("cr.group_id IS NOT NULL AND source_group.id IS NULL").
+		Count(&orphanCount).Error; err != nil {
+		return fmt.Errorf("count communication records with missing source groups: %w", err)
+	}
+	if orphanCount > 0 {
+		log.Printf("[Migration Warning] 跳过 %d 条来源群组已不存在的通信记录投递快照", orphanCount)
+	}
+
 	var afterID uint
 	for {
 		var rows []struct {
@@ -85,6 +97,7 @@ func BackfillCommRecordDeliveryGroups(db *gorm.DB) error {
 		}
 		err := db.Table("comm_records cr").
 			Select("cr.id, cr.group_id, cr.start_time, cr.message_type").
+			Joins("INNER JOIN public_groups source_group ON source_group.id = cr.group_id").
 			Joins("LEFT JOIN comm_record_delivery_groups dg ON dg.record_id = cr.id AND dg.group_id = cr.group_id").
 			Where("cr.id > ? AND cr.group_id IS NOT NULL AND dg.record_id IS NULL", afterID).
 			Order("cr.id ASC").

@@ -135,24 +135,27 @@ func TestCommRecordsAuthorizationHTTPE2E(t *testing.T) {
 		t.Fatalf("own record total=%d want=2 body=%s", listEnvelope.Data.Total, body)
 	}
 
-	body = assertStatus("public group history", owner, listPattern, fmt.Sprintf("/api/comm-records?group_id=%d", publicGroup.ID), GetCommRecords, http.StatusOK)
+	body = assertStatus("own public group records", owner, listPattern, fmt.Sprintf("/api/comm-records?group_id=%d", publicGroup.ID), GetCommRecords, http.StatusOK)
 	if err := json.Unmarshal(body, &listEnvelope); err != nil {
 		t.Fatalf("decode public group response: %v", err)
 	}
+	if listEnvelope.Data.Total != 2 {
+		t.Fatalf("own public group total=%d want=2 body=%s", listEnvelope.Data.Total, body)
+	}
+	body = assertStatus("own private group records", owner, listPattern, fmt.Sprintf("/api/comm-records?group_id=%d", privateGroup.ID), GetCommRecords, http.StatusOK)
+	if err := json.Unmarshal(body, &listEnvelope); err != nil {
+		t.Fatalf("decode private group response: %v", err)
+	}
+	if listEnvelope.Data.Total != 0 {
+		t.Fatalf("own private group total=%d want=0 body=%s", listEnvelope.Data.Total, body)
+	}
+	body = assertStatus("admin public group audit", admin, listPattern, fmt.Sprintf("/api/comm-records?admin_mode=true&group_id=%d", publicGroup.ID), GetCommRecords, http.StatusOK)
+	if err := json.Unmarshal(body, &listEnvelope); err != nil {
+		t.Fatalf("decode admin public group response: %v", err)
+	}
 	if listEnvelope.Data.Total != 3 {
-		t.Fatalf("public group total=%d want=3 body=%s", listEnvelope.Data.Total, body)
+		t.Fatalf("admin public group total=%d want=3 body=%s", listEnvelope.Data.Total, body)
 	}
-	assertStatus("private group non-member", owner, listPattern, fmt.Sprintf("/api/comm-records?group_id=%d", privateGroup.ID), GetCommRecords, http.StatusForbidden)
-
-	membership := &gormdb.GroupMember{GroupID: privateGroup.ID, UserID: owner.ID, IsVerified: true}
-	if err := db.Create(membership).Error; err != nil {
-		t.Fatal(err)
-	}
-	assertStatus("private group member", owner, listPattern, fmt.Sprintf("/api/comm-records?group_id=%d", privateGroup.ID), GetCommRecords, http.StatusOK)
-	if err := db.Delete(membership).Error; err != nil {
-		t.Fatal(err)
-	}
-	assertStatus("private group removed member", owner, listPattern, fmt.Sprintf("/api/comm-records?group_id=%d", privateGroup.ID), GetCommRecords, http.StatusForbidden)
 	assertStatus("invalid group id", owner, listPattern, "/api/comm-records?group_id=invalid", GetCommRecords, http.StatusBadRequest)
 	assertStatus("missing group", owner, listPattern, "/api/comm-records?group_id=2147483647", GetCommRecords, http.StatusNotFound)
 }

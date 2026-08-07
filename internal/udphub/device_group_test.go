@@ -66,13 +66,13 @@ func TestChangeDeviceGroupUsesGlobalCacheAndSupportsUngrouped(t *testing.T) {
 }
 
 func TestCanSendFromDevice(t *testing.T) {
-	if canSendFromDevice(nil) {
+	if canSendFromDevice(nil, 1) {
 		t.Fatal("nil device must not be allowed to send")
 	}
-	if canSendFromDevice(&models.Device{DisableSend: true}) {
+	if canSendFromDevice(&models.Device{GroupID: 1, DisableSend: true}, 1) {
 		t.Fatal("disabled device must not be allowed to send")
 	}
-	if !canSendFromDevice(&models.Device{}) {
+	if !canSendFromDevice(&models.Device{GroupID: 1}, 1) {
 		t.Fatal("enabled device should be allowed to send")
 	}
 }

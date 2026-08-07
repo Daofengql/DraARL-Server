@@ -316,5 +316,5 @@ func canUseGroupForWebGhost(user *gormdb.User, groupID int, group *gormdb.Group,
 	if group == nil || group.ID != groupID {
 		return false
 	}
-	return groupaccess.CanView(user, group, isVerifiedMember)
+	return groupaccess.CanTransmitGroup(user, group, isVerifiedMember)
 }

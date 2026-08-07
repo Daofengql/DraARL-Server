@@ -232,7 +232,7 @@ class HTTPClient:
             self.log(f"[群组切换失败] {result.get('message', '未知错误')}")
             return False
 
-    def update_radio_session_routing(self, session_id: str, tx_group_id: int, rx_group_ids: list[int]) -> bool:
+    def update_radio_session_routing(self, session_id: str, tx_group_id: int, rx_group_ids: list[int]) -> Optional[Dict[str, Any]]:
         """
         更新指定幽灵 Session 的单发/多收路由。
         """
@@ -242,11 +242,17 @@ class HTTPClient:
         })
 
         if result.get('code') == 200:
-            self.log(f"[会话路由更新成功] tx={tx_group_id} rx={rx_group_ids}")
-            return True
+            routing = result.get('data', {})
+            self.log(
+                f"[会话路由更新成功] tx={routing.get('tx_group_id', tx_group_id)} "
+                f"rx={routing.get('rx_group_ids', rx_group_ids)}"
+            )
+            return routing
         else:
-            self.log(f"[会话路由更新失败] {result.get('message', '未知错误')}")
-            return False
+            error_code = result.get('error') or result.get('data', {}).get('error')
+            suffix = f" ({error_code})" if error_code else ""
+            self.log(f"[会话路由更新失败{suffix}] {result.get('message', '未知错误')}")
+            return None
 
     def join_group(self, group_id: int, password: str = "") -> bool:
         """

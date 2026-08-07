@@ -524,6 +524,7 @@ func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) 
 		if g.speaker == nil || !g.speaker.AcceptFrame(session.NodeID, session.SessionID, frame, time.Now()) {
 			return false
 		}
+		ghostsession.Global.MarkPTTActive(owner.GhostSessionID, time.Now())
 	} else if frame.SpeakerLeaseID != 0 {
 		return false
 	}
@@ -1382,7 +1383,11 @@ func (g *CenterGateway) AcquireLocalVoice(grant DeviceGrant) bool {
 	if !ok || route.SessionEpoch != grant.SessionEpoch || route.DomainID == 0 || route.DisableSend {
 		return false
 	}
-	_, allowed := g.speaker.AcquireLocal(route.SessionID, route.SessionEpoch, route.DomainID, time.Now())
+	now := time.Now()
+	_, allowed := g.speaker.AcquireLocal(route.SessionID, route.SessionEpoch, route.DomainID, now)
+	if allowed {
+		ghostsession.Global.MarkPTTActive(grant.GhostSessionID, now)
+	}
 	return allowed
 }
 
@@ -2370,6 +2375,7 @@ func (g *EdgeGateway) handleEdgeVoice(grant DeviceGrant, inner []byte, now time.
 		g.mu.Unlock()
 		return
 	}
+	ghostsession.Global.MarkPTTActive(session.Grant.GhostSessionID, now)
 	state := g.speakerDomains[grant.DomainID]
 	if state != nil && state.leaseID != 0 {
 		active := !state.fallback && now.Before(state.expiresAt) && now.Sub(state.lastVoiceAt) <= SpeakerLeaseIdleTimeout

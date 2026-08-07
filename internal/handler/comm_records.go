@@ -194,10 +194,53 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 }
 
-// getRelatedGroupIDs 获取与指定群组相关的所有群组ID（包括互联组）
-// 只有互联组状态开启(status=1)时才包含互联组内的其他群组
-func getRelatedGroupIDs(groupID int) ([]int, error) {
-	return gormdb.NewMessageRepository().VisibleGroupIDs(groupID)
+type commRecordScopeFilter struct {
+	CanViewGlobal bool
+	ActorUserID   uint
+	DeviceID      *uint
+	GroupID       *uint
+	UserID        *uint
+}
+
+func newCommRecordListScope(db *gorm.DB, filter commRecordScopeFilter) *gorm.DB {
+	scope := db.Table("comm_records cr").Where("cr.status = ?", 2)
+	if !filter.CanViewGlobal {
+		scope = scope.
+			Joins("LEFT JOIN devices scope_device ON cr.device_id = scope_device.id").
+			Where(
+				"cr.user_id = ? OR (cr.user_id IS NULL AND cr.device_id > 0 AND scope_device.owner_id = ?)",
+				filter.ActorUserID,
+				filter.ActorUserID,
+			)
+	}
+	if filter.DeviceID != nil {
+		scope = scope.Where("cr.device_id = ?", *filter.DeviceID)
+	}
+	if filter.GroupID != nil {
+		scope = scope.Where("cr.group_id = ?", *filter.GroupID)
+	}
+	if filter.CanViewGlobal && filter.UserID != nil {
+		scope = scope.Where("cr.user_id = ?", *filter.UserID)
+	}
+	return scope
+}
+
+func newCommRecordDetailsQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("comm_records cr").
+		Select(`
+			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
+			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
+			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
+			d.owner_id as device_owner_id,
+			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
+			g.name as group_name,
+			u.name as user_name, u.callsign as user_call_sign, u.nickname as user_nick_name
+		`).
+		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
+		Joins("LEFT JOIN users d_owner ON d.owner_id = d_owner.id").
+		Joins("LEFT JOIN public_groups g ON cr.group_id = g.id").
+		Joins("LEFT JOIN users u ON cr.user_id = u.id")
 }
 
 // GetCommRecords 获取通信记录列表（使用联表查询）
@@ -209,6 +252,9 @@ func GetCommRecords(c *gin.Context) {
 	// 获取分页参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page <= 0 {
+		page = 1
+	}
 	if pageSize <= 0 || pageSize > 100 {
 		pageSize = 20
 	}
@@ -252,80 +298,28 @@ func GetCommRecords(c *gin.Context) {
 			})
 			return
 		}
-		if !canViewGlobal {
-			if _, allowed := requireGroupViewAccess(c, group); !allowed {
-				return
-			}
-		}
-
 		value := uint(parsedGroupID)
 		requestedGroupID = &value
 	}
 
-	db := gormdb.Get().Table("comm_records cr").
-		Select(`
-			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
-			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
-			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
-			d.owner_id as device_owner_id,
-			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
-			g.name as group_name,
-			u.name as user_name, u.callsign as user_call_sign, u.nickname as user_nick_name
-		`).
-		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
-		Joins("LEFT JOIN users d_owner ON d.owner_id = d_owner.id").
-		Joins("LEFT JOIN public_groups g ON cr.group_id = g.id").
-		Joins("LEFT JOIN users u ON cr.user_id = u.id").
-		Where("cr.status = ?", 2) // 只返回已完成的记录
-
-	// 权限过滤逻辑：
-	// 1. 管理员后台模式：可查看所有记录
-	// 2. 指定了群组筛选：可查看该群组（及互联组）内的所有记录
-	// 3. 其他情况：按发送者快照查看自己的记录；旧物理记录才回退到当前设备所有者
-	if !canViewGlobal && requestedGroupID == nil {
-		db = db.Where(
-			"cr.user_id = ? OR (cr.user_id IS NULL AND cr.device_id > 0 AND d.owner_id = ?)",
-			currentUser.ID,
-			currentUser.ID,
-		)
-	}
-
-	// 筛选条件
+	filter := commRecordScopeFilter{CanViewGlobal: canViewGlobal, ActorUserID: uint(currentUser.ID), GroupID: requestedGroupID}
 	if deviceIDStr != "" {
 		deviceID, err := strconv.ParseUint(deviceIDStr, 10, 32)
 		if err == nil {
-			db = db.Where("cr.device_id = ?", deviceID)
+			value := uint(deviceID)
+			filter.DeviceID = &value
 		}
 	}
-	if requestedGroupID != nil {
-		// 兼容旧客户端：群组筛选仍包含当前启用互联域中的消息。
-		relatedGroupIDs, relatedErr := getRelatedGroupIDs(int(*requestedGroupID))
-		if relatedErr != nil {
-			log.Printf("[COMM_RECORDS] 获取互联群组失败 group=%d err=%v", *requestedGroupID, relatedErr)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"code":    http.StatusInternalServerError,
-				"message": "查询互联群组失败",
-			})
-			return
-		}
-		if len(relatedGroupIDs) > 1 {
-			db = db.Where("cr.group_id IN ?", relatedGroupIDs)
-		} else {
-			db = db.Where("cr.group_id = ?", *requestedGroupID)
-		}
-	}
-	// 全局模式下可以按 user_id 筛选
 	if canViewGlobal && userIDStr != "" {
 		userIDFilter, err := strconv.ParseUint(userIDStr, 10, 32)
 		if err == nil {
-			db = db.Where("cr.user_id = ?", userIDFilter)
+			value := uint(userIDFilter)
+			filter.UserID = &value
 		}
 	}
 
-	// 统计总数
 	var total int64
-	if err := db.Count(&total).Error; err != nil {
+	if err := newCommRecordListScope(gormdb.Get(), filter).Count(&total).Error; err != nil {
 		log.Printf("[COMM_RECORDS] 统计通信记录总数失败 err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -334,19 +328,33 @@ func GetCommRecords(c *gin.Context) {
 		return
 	}
 
-	// 查询列表
-	var results []CommRecordWithDetails
 	offset := (page - 1) * pageSize
-	if err := db.Order("cr.start_time DESC").
+	var recordIDs []uint
+	if err := newCommRecordListScope(gormdb.Get(), filter).
+		Order("cr.start_time DESC").Order("cr.id DESC").
 		Offset(offset).
 		Limit(pageSize).
-		Scan(&results).Error; err != nil {
+		Pluck("cr.id", &recordIDs).Error; err != nil {
 		log.Printf("[COMM_RECORDS] 查询通信记录列表失败 err=%v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询通信记录失败",
 		})
 		return
+	}
+	var results []CommRecordWithDetails
+	if len(recordIDs) > 0 {
+		if err := newCommRecordDetailsQuery(gormdb.Get()).
+			Where("cr.id IN ?", recordIDs).
+			Order("cr.start_time DESC").Order("cr.id DESC").
+			Scan(&results).Error; err != nil {
+			log.Printf("[COMM_RECORDS] 查询通信记录详情失败 err=%v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "查询通信记录失败",
+			})
+			return
+		}
 	}
 
 	// 转换为响应格式

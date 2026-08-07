@@ -114,6 +114,27 @@ func TestRegistryRoutingIsNormalizedAndControllerFailureIsAtomic(t *testing.T) {
 	}
 }
 
+func TestRegistryPTTActivityExpiresWithoutAccountLevelLock(t *testing.T) {
+	registry := NewRegistry(4, 4)
+	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if !registry.MarkPTTActive(session.SessionID, now) || !registry.IsPTTActive(session.SessionID, now.Add(100*time.Millisecond)) {
+		t.Fatal("recent PTT activity was not reported")
+	}
+	if registry.IsPTTActive(session.SessionID, now.Add(PTTHoldTimeout+time.Millisecond)) {
+		t.Fatal("expired PTT activity remained active")
+	}
+	if !registry.MarkPTTActive(session.SessionID, now) {
+		t.Fatal("PTT activity could not be refreshed")
+	}
+	if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 2, RxGroupIDs: []int{2}}); err != nil {
+		t.Fatalf("registry itself applied routing despite no account-level PTT lock: %v", err)
+	}
+}
+
 func TestRegistryEnforcesLimitsAndTagLookup(t *testing.T) {
 	registry := NewRegistry(1, 2)
 	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{})
@@ -199,86 +220,13 @@ func TestRegistryRequiresModernRoutingCapabilities(t *testing.T) {
 
 func TestStableErrorCode(t *testing.T) {
 	for err, want := range map[error]string{
-		ErrMultiSessionDisabled: "ghost_multi_session_disabled",
-		ErrMultiReceiveDisabled: "ghost_multi_receive_disabled",
-		ErrSessionLimit:         "ghost_session_limit",
-		ErrSubscriptionLimit:    "subscription_limit",
+		ErrSessionLimit:      "ghost_session_limit",
+		ErrSubscriptionLimit: "subscription_limit",
+		ErrPTTActive:         "ptt_active",
 	} {
 		if got := StableErrorCode(fmt.Errorf("wrapped: %w", err)); got != want {
 			t.Fatalf("StableErrorCode(%v)=%q want=%q", err, got, want)
 		}
-	}
-}
-
-func TestRegistryFeaturePolicyAllowsSameInstanceAndRejectsSecondInstance(t *testing.T) {
-	policy := Policy{
-		MultiSession: NewFeatureGate(false, nil, nil),
-		MultiReceive: NewFeatureGate(true, nil, nil),
-	}
-	registry := NewRegistryWithPolicy(4, 4, policy)
-	instanceID := uuid.NewString()
-	first, err := registry.Register(testRegistration(instanceID, time.Unix(1, 0)), Controller{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := registry.Register(testRegistration(instanceID, time.Unix(2, 0)), Controller{})
-	if err != nil || replacement.SessionID == first.SessionID {
-		t.Fatalf("same-instance reconnect failed: session=%+v err=%v", replacement, err)
-	}
-	if _, err := registry.Register(testRegistration(uuid.NewString(), time.Unix(3, 0)), Controller{}); !errors.Is(err, ErrMultiSessionDisabled) {
-		t.Fatalf("second instance error=%v", err)
-	}
-	if metrics := registry.Metrics(); metrics.MultiSessionRejects != 1 || metrics.OnlineSessions != 1 {
-		t.Fatalf("unexpected feature metrics: %+v", metrics)
-	}
-}
-
-func TestRegistryFeaturePolicyAllowlistsOwnerOrPlatform(t *testing.T) {
-	policy := Policy{
-		MultiSession: NewFeatureGate(false, []int{7}, []uint8{105}),
-		MultiReceive: NewFeatureGate(true, nil, nil),
-	}
-	ownerRegistry := NewRegistryWithPolicy(4, 4, policy)
-	if _, err := ownerRegistry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerRegistry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{}); err != nil {
-		t.Fatalf("owner allowlist rejected second instance: %v", err)
-	}
-	platformRegistry := NewRegistryWithPolicy(4, 4, policy)
-	registration := testRegistration(uuid.NewString(), time.Now())
-	registration.OwnerID, registration.DevModel = 99, 105
-	if _, err := platformRegistry.Register(registration, Controller{}); err != nil {
-		t.Fatal(err)
-	}
-	registration.ClientInstanceID = uuid.NewString()
-	if _, err := platformRegistry.Register(registration, Controller{}); err != nil {
-		t.Fatalf("platform allowlist rejected second instance: %v", err)
-	}
-}
-
-func TestRegistryMultiReceiveDisabledDowngradesAuthenticationAndRejectsUpdate(t *testing.T) {
-	policy := Policy{
-		MultiSession: NewFeatureGate(true, nil, nil),
-		MultiReceive: NewFeatureGate(false, nil, nil),
-	}
-	registry := NewRegistryWithPolicy(4, 4, policy)
-	session, err := registry.Register(testRegistration(uuid.NewString(), time.Now()), Controller{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(session.RxGroupIDs) != 1 || session.RxGroupIDs[0] != session.TxGroupID {
-		t.Fatalf("registration did not downgrade routing: %+v", session.Routing())
-	}
-	if _, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 2, RxGroupIDs: []int{2, 3, 4, 5, 6}}); !errors.Is(err, ErrMultiReceiveDisabled) {
-		t.Fatalf("multi-receive update error=%v", err)
-	}
-	updated, err := registry.UpdateRouting(session.SessionID, Routing{TxGroupID: 2, RxGroupIDs: []int{2}})
-	if err != nil || len(updated.RxGroupIDs) != 1 || updated.RxGroupIDs[0] != 2 {
-		t.Fatalf("single-channel update failed: session=%+v err=%v", updated, err)
-	}
-	if metrics := registry.Metrics(); metrics.MultiReceiveDowngrades != 1 || metrics.MultiReceiveRejects != 1 {
-		t.Fatalf("unexpected multi-receive metrics: %+v", metrics)
 	}
 }
 

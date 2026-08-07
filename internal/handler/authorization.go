@@ -44,7 +44,7 @@ func canAdminSwitchLogin(actor, target *gormdb.User) bool {
 }
 
 func canViewGroup(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool) bool {
-	return groupaccess.CanView(user, group, isVerifiedMember)
+	return groupaccess.CanReceiveGroup(user, group, isVerifiedMember)
 }
 
 func requireCurrentUser(c *gin.Context) (*gormdb.User, bool) {

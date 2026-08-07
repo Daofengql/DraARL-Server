@@ -276,8 +276,12 @@ export class RadioService {
     // 这样可以确保跨设备/跨会话的群组偏好一致
     if (lastGroupId && lastGroupId > 0) {
       this.routing.txGroupId = lastGroupId
-      this.routing.rxGroupIds = [lastGroupId]
+      const savedReceiveGroups = this.getSavedReceiveGroups()
+      this.routing.rxGroupIds = savedReceiveGroups.length <= 1
+        ? [lastGroupId]
+        : Array.from(new Set([...savedReceiveGroups, lastGroupId]))
       this.config.defaultGroupId = lastGroupId
+      this.config.receiveGroupIds = [...this.routing.rxGroupIds]
     }
 
     // 初始化 WebSocket
@@ -353,6 +357,7 @@ export class RadioService {
    * 断开连接
    */
   disconnect(): void {
+    this.audioCapture?.stop()
     if (this.ws) {
       this.ws.disconnect()
     }
@@ -560,7 +565,12 @@ export class RadioService {
   }
 
   async switchGroup(groupId: number): Promise<boolean> {
-    return this.updateRouting(groupId, this.routing.rxGroupIds)
+    const currentRx = Array.from(new Set(this.routing.rxGroupIds.filter(id => id > 0)))
+    // 单收切发送组时同步收听组；多收时保留原偏好并加入新的发送组。
+    const nextRx = currentRx.length <= 1
+      ? [groupId]
+      : Array.from(new Set([...currentRx, groupId]))
+    return this.updateRouting(groupId, nextRx)
   }
 
   async setReceiveGroups(groupIds: number[]): Promise<boolean> {
@@ -714,6 +724,7 @@ export class RadioService {
 
     this.routing = { ...routing, rxGroupIds }
     this.config.defaultGroupId = routing.txGroupId
+    this.config.receiveGroupIds = [...rxGroupIds]
     this.saveConfig()
     this.emit('routingChange', this.getRouting())
   }
@@ -757,7 +768,10 @@ export class RadioService {
    */
   private handleVoicePacket(packet: DraARLPacket, _rawData: ArrayBuffer): void {
     if (!packet.data?.length) return
-    const groupId = packet.sourceGroupId || this.routing.txGroupId
+    const groupId = packet.sourceGroupId
+    if (!Number.isInteger(groupId) || groupId <= 0 || !this.routing.rxGroupIds.includes(groupId)) {
+      return
+    }
     const streamKey = `${groupId}:${packet.username || packet.callsign}:${packet.ssid}`
     let stream = this.incomingVoiceStreams.get(streamKey)
     if (!stream) {
@@ -797,7 +811,10 @@ export class RadioService {
 
     const message = new TextDecoder().decode(packet.data)
 
-    const groupId = packet.sourceGroupId || this.routing.txGroupId
+    const groupId = packet.sourceGroupId
+    if (!Number.isInteger(groupId) || groupId <= 0 || !this.routing.rxGroupIds.includes(groupId)) {
+      return
+    }
     const radioMessage: RadioMessage = {
       id: generateMessageId(groupId, Date.now(), packet.callsign),
       type: 'text',
@@ -921,6 +938,7 @@ export class RadioService {
             ? { ...parsed.channelVolumes }
             : {},
         }
+        this.config.receiveGroupIds = this.normalizeGroupIds(parsed.receiveGroupIds)
       }
     } catch (error) {
       console.error('[RadioService] Failed to load config:', error)
@@ -949,8 +967,13 @@ export class RadioService {
       if (this.config.defaultGroupId) {
         const defaultGroup = groups.find(g => g.id === this.config.defaultGroupId)
         if (defaultGroup) {
+          const availableGroupIds = new Set(groups.map(group => group.id))
           this.routing.txGroupId = defaultGroup.id
-          this.routing.rxGroupIds = [defaultGroup.id]
+          const savedReceiveGroups = this.getSavedReceiveGroups()
+            .filter(groupId => availableGroupIds.has(groupId))
+          this.routing.rxGroupIds = savedReceiveGroups.length <= 1
+            ? [defaultGroup.id]
+            : Array.from(new Set([...savedReceiveGroups, defaultGroup.id]))
         }
       }
 
@@ -959,9 +982,19 @@ export class RadioService {
         this.routing.txGroupId = groups[0].id
         this.routing.rxGroupIds = [groups[0].id]
       }
+      this.config.receiveGroupIds = [...this.routing.rxGroupIds]
     } catch (error) {
       console.error('[RadioService] Failed to load groups:', error)
     }
+  }
+
+  private normalizeGroupIds(groupIds: unknown): number[] {
+    if (!Array.isArray(groupIds)) return []
+    return Array.from(new Set(groupIds.map(Number).filter(groupId => Number.isInteger(groupId) && groupId > 0)))
+  }
+
+  private getSavedReceiveGroups(): number[] {
+    return this.normalizeGroupIds(this.config.receiveGroupIds)
   }
 
   /**

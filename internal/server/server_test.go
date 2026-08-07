@@ -3,10 +3,31 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestLegacyGhostRoutesAreNotRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	registerRadioRoutes(engine.Group("/api/radio"))
+
+	routes := make([]string, 0, len(engine.Routes()))
+	for _, route := range engine.Routes() {
+		routes = append(routes, route.Method+" "+route.Path)
+	}
+	for _, legacy := range []string{
+		"PUT /api/radio/ssid",
+		"PUT /api/radio/group",
+		"GET /api/radio/conflict",
+	} {
+		if slices.Contains(routes, legacy) {
+			t.Fatalf("legacy ghost route remains registered: %s", legacy)
+		}
+	}
+}
 
 func TestOriginGuardRejectsDisallowedReferer(t *testing.T) {
 	gin.SetMode(gin.TestMode)

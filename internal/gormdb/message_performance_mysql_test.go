@@ -32,7 +32,7 @@ func TestMillionRowMessageCursorPlanMySQL(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = Close() })
 	db := Get()
-	if err := db.AutoMigrate(&User{}, &Group{}, &Device{}, &CommRecord{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Group{}, &Device{}, &CommRecord{}, &CommRecordDeliveryGroup{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,6 +100,12 @@ func TestMillionRowMessageCursorPlanMySQL(t *testing.T) {
 	if err := tx.Exec(insertSQL, groupIDs[0], groupIDs[1], groupIDs[2], groupIDs[3], user.ID).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := tx.Exec(
+		"INSERT INTO comm_record_delivery_groups (record_id, group_id, start_time, message_type) SELECT id, group_id, start_time, message_type FROM comm_records WHERE user_id = ?",
+		user.ID,
+	).Error; err != nil {
+		t.Fatal(err)
+	}
 	var rowCount int64
 	if err := tx.Model(&CommRecord{}).Where("user_id = ?", user.ID).Count(&rowCount).Error; err != nil || rowCount != 1_000_000 {
 		t.Fatalf("performance fixture rows=%d err=%v", rowCount, err)
@@ -108,11 +114,11 @@ func TestMillionRowMessageCursorPlanMySQL(t *testing.T) {
 
 	before := time.Date(2026, time.January, 1, 0, 15, 0, 0, time.UTC)
 	plan := explainMessageCursorPlan(t, tx, groupIDs[0], before)
-	if !strings.Contains(plan, "idx_comm_records_group_status_start_id") {
+	if !strings.Contains(plan, "idx_delivery_group_cursor") {
 		t.Fatalf("message cursor query did not use the compound index:\n%s", plan)
 	}
-	if strings.Contains(strings.ToLower(plan), "table scan on cr") {
-		t.Fatalf("message cursor query used a table scan:\n%s", plan)
+	if strings.Contains(strings.ToLower(plan), "index scan on cr") || strings.Contains(strings.ToLower(plan), "table scan on cr") {
+		t.Fatalf("message cursor query started with a communication-record scan:\n%s", plan)
 	}
 	t.Logf("single-group EXPLAIN ANALYZE:\n%s", plan)
 
@@ -136,11 +142,11 @@ func TestMillionRowMessageCursorPlanMySQL(t *testing.T) {
 	t.Logf("four-group cursor fetched 50 rows from 1,000,000 in %s", queryElapsed)
 
 	typePlan := explainMessageTypeCursorPlan(t, tx, groupIDs[0], before, CommMessageTypeText)
-	if !strings.Contains(typePlan, "idx_comm_records_group_status_type_start_id") {
+	if !strings.Contains(typePlan, "idx_delivery_group_type_cursor") {
 		t.Fatalf("typed message cursor query did not use the compound index:\n%s", typePlan)
 	}
-	if strings.Contains(strings.ToLower(typePlan), "table scan on cr") {
-		t.Fatalf("typed message cursor query used a table scan:\n%s", typePlan)
+	if strings.Contains(strings.ToLower(typePlan), "index scan on cr") || strings.Contains(strings.ToLower(typePlan), "table scan on cr") {
+		t.Fatalf("typed message cursor query started with a communication-record scan:\n%s", typePlan)
 	}
 	t.Logf("typed single-group EXPLAIN ANALYZE:\n%s", typePlan)
 
@@ -169,10 +175,11 @@ func explainMessageCursorPlan(t *testing.T, db *gorm.DB, groupID int, before tim
 	rows, err := db.Raw(`
 		EXPLAIN ANALYZE
 		SELECT cr.id, cr.start_time
-		FROM comm_records cr FORCE INDEX (idx_comm_records_group_status_start_id)
-		WHERE cr.status = 2 AND cr.group_id = ?
-			AND cr.start_time < ?
-		ORDER BY cr.start_time DESC, cr.id DESC
+		FROM comm_record_delivery_groups dg FORCE INDEX (idx_delivery_group_cursor)
+		INNER JOIN comm_records cr ON cr.id = dg.record_id
+		WHERE cr.status = 2 AND dg.group_id = ?
+			AND dg.start_time < ?
+		ORDER BY dg.start_time DESC, dg.record_id DESC
 		LIMIT 51
 	`, groupID, before).Rows()
 	if err != nil {
@@ -198,12 +205,13 @@ func explainMessageTypeCursorPlan(t *testing.T, db *gorm.DB, groupID int, before
 	rows, err := db.Raw(`
 		EXPLAIN ANALYZE
 		SELECT cr.id, cr.start_time, cr.message_type
-		FROM comm_records cr FORCE INDEX (idx_comm_records_group_status_type_start_id)
-		WHERE cr.status = 2 AND cr.group_id = ? AND cr.message_type = ?
-			AND cr.start_time < ?
-		ORDER BY cr.start_time DESC, cr.id DESC
+		FROM comm_record_delivery_groups dg FORCE INDEX (idx_delivery_group_type_cursor)
+		INNER JOIN comm_records cr ON cr.id = dg.record_id
+		WHERE cr.status = 2 AND dg.group_id = ? AND dg.message_type = ? AND cr.message_type = ?
+			AND dg.start_time < ?
+		ORDER BY dg.start_time DESC, dg.record_id DESC
 		LIMIT 51
-	`, groupID, messageType, before).Rows()
+	`, groupID, messageType, messageType, before).Rows()
 	if err != nil {
 		t.Fatal(err)
 	}

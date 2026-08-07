@@ -18,6 +18,37 @@ func IsSupportedType(groupType int) bool {
 	return groupType == TypePublic || groupType == TypePrivate
 }
 
+func canAccessGroup(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool) bool {
+	if user == nil || group == nil || group.Status != 1 || group.IsVirtual || !IsSupportedType(group.Type) {
+		return false
+	}
+	if user.HasRole("admin") || group.Type == TypePublic || group.OwerID == user.ID {
+		return true
+	}
+	return group.Type == TypePrivate && isVerifiedMember
+}
+
+// CanReceiveGroup is the account/group rule for subscriptions and history.
+func CanReceiveGroup(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool) bool {
+	return canAccessGroup(user, group, isVerifiedMember)
+}
+
+// CanTransmitGroup is the account/group rule for selecting a transmit group.
+// Half-duplex arbitration remains a separate runtime decision.
+func CanTransmitGroup(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool) bool {
+	return canAccessGroup(user, group, isVerifiedMember)
+}
+
+// CanReceiveRoute is the database-free check used by realtime fan-out.
+func CanReceiveRoute(disableRecv bool, rxGroupIDs []int, groupID int) bool {
+	return !disableRecv && groupID > 0 && slices.Contains(rxGroupIDs, groupID)
+}
+
+// CanTransmitRoute is the database-free check used by realtime ingress.
+func CanTransmitRoute(disableSend bool, txGroupID, groupID int) bool {
+	return !disableSend && groupID > 0 && txGroupID == groupID
+}
+
 // SanitizeRouting removes inaccessible subscriptions, falls back from an
 // inaccessible transmit channel, and restores the transmit-in-receive
 // invariant. The caller is responsible for supplying an already trusted
@@ -28,19 +59,24 @@ func SanitizeRouting(db *gorm.DB, user *gormdb.User, routing ghostsession.Routin
 	candidates := make([]int, 0, len(routing.RxGroupIDs)+2)
 	candidates = append(candidates, routing.TxGroupID, fallbackGroupID)
 	candidates = append(candidates, routing.RxGroupIDs...)
-	viewable, err := ViewableGroupIDs(db, user, candidates)
+	receivable, err := ReceivableGroupIDs(db, user, candidates)
+	if err != nil {
+		return ghostsession.Routing{}, false, err
+	}
+	transmittable, err := TransmittableGroupIDs(db, user, []int{routing.TxGroupID, fallbackGroupID})
 	if err != nil {
 		return ghostsession.Routing{}, false, err
 	}
 	if fallbackGroupID > 0 {
-		viewable[fallbackGroupID] = struct{}{}
+		receivable[fallbackGroupID] = struct{}{}
+		transmittable[fallbackGroupID] = struct{}{}
 	}
-	if _, ok := viewable[routing.TxGroupID]; !ok {
+	if _, ok := transmittable[routing.TxGroupID]; !ok {
 		routing.TxGroupID = fallbackGroupID
 	}
 	filtered := make([]int, 0, len(routing.RxGroupIDs)+1)
 	for _, groupID := range routing.RxGroupIDs {
-		if _, ok := viewable[groupID]; ok {
+		if _, ok := receivable[groupID]; ok {
 			filtered = append(filtered, groupID)
 		}
 	}
@@ -68,24 +104,9 @@ func normalizePositiveGroupIDs(groupIDs []int) []int {
 	return result
 }
 
-// CanView is the shared authorization rule for channel history, live
-// subscriptions, and routing changes.
-func CanView(user *gormdb.User, group *gormdb.Group, isVerifiedMember bool) bool {
-	if user == nil || group == nil || group.Status != 1 || group.IsVirtual || !IsSupportedType(group.Type) {
-		return false
-	}
-	if user.HasRole("admin") || group.Type == TypePublic || group.OwerID == user.ID {
-		return true
-	}
-	return group.Type == TypePrivate && isVerifiedMember
-}
-
-// ViewableGroupIDs resolves a batch with one group query and one membership
-// query. Missing, disabled, virtual, unsupported, and unauthorized groups are
-// intentionally omitted from the result.
-func ViewableGroupIDs(db *gorm.DB, user *gormdb.User, groupIDs []int) (map[int]struct{}, error) {
+func accessibleGroupIDs(db *gorm.DB, user *gormdb.User, groupIDs []int, authorize func(*gormdb.User, *gormdb.Group, bool) bool) (map[int]struct{}, error) {
 	result := make(map[int]struct{})
-	if db == nil || user == nil || len(groupIDs) == 0 {
+	if db == nil || user == nil || len(groupIDs) == 0 || authorize == nil {
 		return result, nil
 	}
 	unique := make(map[int]struct{}, len(groupIDs))
@@ -116,9 +137,20 @@ func ViewableGroupIDs(db *gorm.DB, user *gormdb.User, groupIDs []int) (map[int]s
 		}
 	}
 	for _, group := range groups {
-		if CanView(user, group, verified[group.ID]) {
+		if authorize(user, group, verified[group.ID]) {
 			result[group.ID] = struct{}{}
 		}
 	}
 	return result, nil
+}
+
+// ReceivableGroupIDs resolves receive authorization in a bounded batch.
+func ReceivableGroupIDs(db *gorm.DB, user *gormdb.User, groupIDs []int) (map[int]struct{}, error) {
+	return accessibleGroupIDs(db, user, groupIDs, CanReceiveGroup)
+}
+
+// TransmittableGroupIDs resolves transmit authorization independently from
+// receive subscriptions.
+func TransmittableGroupIDs(db *gorm.DB, user *gormdb.User, groupIDs []int) (map[int]struct{}, error) {
+	return accessibleGroupIDs(db, user, groupIDs, CanTransmitGroup)
 }

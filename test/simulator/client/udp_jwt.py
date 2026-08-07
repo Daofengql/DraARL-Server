@@ -293,12 +293,15 @@ class UDPJWTClient(BaseClient):
 
                 # 语音数据
                 if packet.packet_type == PacketType.OPUS_16K and packet.data:
+                    if packet.source_group_id <= 0 or packet.source_group_id not in self.rx_group_ids:
+                        self.log(f"[丢弃] 未订阅来源频道语音: {packet.source_group_id}")
+                        continue
                     if self.is_transmitting:
                         continue
 
                     sender_info = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
                     if last_sender != sender_info:
-                        self.log(f"[接收] {sender_info} 正在发言...")
+                        self.log(f"[接收][频道 {packet.source_group_id}] {sender_info} 正在发言...")
                         last_sender = sender_info
 
                     if stream_out and self.opus_decoder:
@@ -312,9 +315,12 @@ class UDPJWTClient(BaseClient):
 
                 # 文本消息
                 elif packet.packet_type == PacketType.TEXT_MESSAGE and packet.data:
+                    if packet.source_group_id <= 0 or packet.source_group_id not in self.rx_group_ids:
+                        self.log(f"[丢弃] 未订阅来源频道文本: {packet.source_group_id}")
+                        continue
                     msg = packet.data.decode('utf-8', errors='replace')
                     sender = f"{packet.callsign}-{packet.ssid}" if packet.callsign else f"SSID-{packet.ssid}"
-                    self.log(f"[文字] {sender}: {msg}")
+                    self.log(f"[文字][频道 {packet.source_group_id}] {sender}: {msg}")
 
                 elif packet.packet_type == PacketType.HEARTBEAT:
                     last_sender = None

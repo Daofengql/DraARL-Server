@@ -111,13 +111,7 @@ func requireMessageScope(c *gin.Context) (uint, []int, bool) {
 	if _, allowed := requireGroupViewAccess(c, group); !allowed {
 		return 0, nil, false
 	}
-	groupIDs, err := gormdb.NewMessageRepository().VisibleGroupIDs(int(groupID))
-	if err != nil {
-		log.Printf("[MESSAGES] 查询互联群组失败 group=%d err=%v", groupID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询互联群组失败"})
-		return 0, nil, false
-	}
-	return uint(groupID), groupIDs, true
+	return uint(groupID), []int{int(groupID)}, true
 }
 
 func effectiveMessageType(record *gormdb.MessageRecord) uint8 {

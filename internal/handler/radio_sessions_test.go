@@ -132,12 +132,15 @@ func TestAdminRadioSessionListIsRedactedAndCanDisconnectAnyOwner(t *testing.T) {
 	}
 }
 
-func TestSessionRoutingErrorUsesStableMultiReceiveCode(t *testing.T) {
+func TestWriteSessionRoutingErrorReportsActivePTTConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	writeSessionRoutingError(context, ghostsession.ErrMultiReceiveDisabled)
-	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), `"error":"ghost_multi_receive_disabled"`) {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	ctx, _ := gin.CreateTestContext(recorder)
+	writeSessionRoutingError(ctx, ghostsession.ErrPTTActive)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("PTT routing status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"error":"ptt_active"`) {
+		t.Fatalf("PTT routing error body=%s", recorder.Body.String())
 	}
 }

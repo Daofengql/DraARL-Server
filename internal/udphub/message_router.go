@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"draarl/internal/ghostsession"
 	"draarl/internal/interfaces"
 	"draarl/internal/models"
 	"draarl/internal/protocol"
@@ -116,6 +117,9 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		}
 	} else if !tryAcquireHalfDuplex(groupID, buildWSSpeaker(source), time.Now()) {
 		return
+	}
+	if sessionID := source.GetSessionID(); sessionID != "" {
+		ghostsession.Global.MarkPTTActive(sessionID, time.Now())
 	}
 
 	// WebSocket 与 UDP 共用 Type 5 标准 Opus 16K 语音包。

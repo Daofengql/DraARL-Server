@@ -138,6 +138,7 @@ func (cr *CommRecorder) RecordPacket(
 	groupID *uint,
 	userID *uint,
 	sender CommSenderSnapshot,
+	deliveryGroupIDs []uint,
 	audioData []byte,
 ) {
 	if !cr.canRecord() {
@@ -145,7 +146,7 @@ func (cr *CommRecorder) RecordPacket(
 	}
 
 	// 直接存储 Opus 数据（标记为 Opus 格式）
-	cr.buffer.AppendPacket(sourceKey, deviceID, deviceSSID, groupID, userID, sender.normalized(), audioData)
+	cr.buffer.AppendPacket(sourceKey, deviceID, deviceSSID, groupID, userID, sender.normalized(), deliveryGroupIDs, audioData)
 }
 
 // Stop 停止录制管理器
@@ -270,6 +271,33 @@ func InterconnectCommRecordSourceKey(sessionID uint64) string {
 	return fmt.Sprintf("relay-session:%d", sessionID)
 }
 
+// SnapshotDeliveryGroupIDs captures the active communication-domain groups at
+// send time. The snapshot is later persisted with the communication record so
+// history does not depend on the current interconnect topology.
+func SnapshotDeliveryGroupIDs(groupID *uint) []uint {
+	if groupID == nil || *groupID == 0 {
+		return nil
+	}
+	activeGroups := activeDomainGroupIDs(int(*groupID))
+	result := make([]uint, 0, len(activeGroups))
+	seen := make(map[uint]struct{}, len(activeGroups))
+	for _, activeGroupID := range activeGroups {
+		if activeGroupID <= 0 {
+			continue
+		}
+		normalized := uint(activeGroupID)
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	if len(result) == 0 {
+		result = append(result, *groupID)
+	}
+	return result
+}
+
 // RecordCommPacket 录制通信数据包（全局接口，异步入队，不阻塞转发热路径）
 // 传入的 audioData 是 Opus 编码数据，直接存储为 .opus 文件
 // sourceKey: 运行时来源会话键；deviceID 仅用于最终持久化，幽灵设备为 0
@@ -286,7 +314,7 @@ func RecordCommPacket(
 		return
 	}
 	// 异步录制：拷贝 payload 后投递有界队列，满则丢弃录制不堵转发
-	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, sender, audioData)
+	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, sender, SnapshotDeliveryGroupIDs(groupID), audioData)
 }
 
 // ReloadCommSettings 重新加载通信设置
@@ -332,21 +360,22 @@ func RecordTextMessage(
 	}
 
 	record := &gormdb.CommRecord{
-		DeviceID:       actualDeviceID,
-		DeviceSSID:     deviceSSID,
-		GroupID:        groupID,
-		UserID:         userID,
-		StartTime:      now,
-		EndTime:        now,
-		DurationMs:     0,
-		MessageType:    gormdb.CommMessageTypeText,
-		TextContent:    textContent,
-		AudioSize:      int64(len(textContent)),
-		Status:         2, // 已完成（不需要上传）
-		SenderUsername: sender.Username,
-		SenderCallSign: sender.CallSign,
-		SenderNickname: sender.Nickname,
-		SenderDevModel: sender.DevModel,
+		DeviceID:         actualDeviceID,
+		DeviceSSID:       deviceSSID,
+		GroupID:          groupID,
+		UserID:           userID,
+		StartTime:        now,
+		EndTime:          now,
+		DurationMs:       0,
+		MessageType:      gormdb.CommMessageTypeText,
+		TextContent:      textContent,
+		AudioSize:        int64(len(textContent)),
+		Status:           2, // 已完成（不需要上传）
+		SenderUsername:   sender.Username,
+		SenderCallSign:   sender.CallSign,
+		SenderNickname:   sender.Nickname,
+		SenderDevModel:   sender.DevModel,
+		DeliveryGroupIDs: SnapshotDeliveryGroupIDs(groupID),
 	}
 
 	// 性能优化：使用批量写入缓冲区，减少数据库压力

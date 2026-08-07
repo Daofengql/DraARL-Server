@@ -414,16 +414,7 @@ func (s *Server) setupRoutes() {
 
 			// 在线收发 API（需要审核通过）
 			radio := approved.Group("/radio")
-			{
-				radio.GET("/config", handler.GetRadioConfig) // 获取在线收发配置
-				radio.PUT("/ssid", handler.UpdateRadioSSID)  // 已废弃：Web 幽灵设备 SSID 固定为 105
-				radio.GET("/status", handler.GetRadioStatus) // 获取幽灵设备状态
-				radio.GET("/sessions", handler.GetRadioSessions)
-				radio.PUT("/sessions/:session_id/routing", handler.UpdateRadioSessionRouting)
-				radio.DELETE("/sessions/:session_id", handler.DeleteRadioSession)
-				radio.GET("/groups/stats", handler.GetRadioGroupStats)         // 获取所有群组实时统计（含 WS 设备）
-				radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices) // 获取群组在线设备
-			}
+			registerRadioRoutes(radio)
 		}
 	}
 
@@ -431,6 +422,16 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/ws", func(c *gin.Context) {
 		ws.HandleWebSocket(c.Writer, c.Request)
 	})
+}
+
+func registerRadioRoutes(radio *gin.RouterGroup) {
+	radio.GET("/config", handler.GetRadioConfig)
+	radio.GET("/status", handler.GetRadioStatus)
+	radio.GET("/sessions", handler.GetRadioSessions)
+	radio.PUT("/sessions/:session_id/routing", handler.UpdateRadioSessionRouting)
+	radio.DELETE("/sessions/:session_id", handler.DeleteRadioSession)
+	radio.GET("/groups/stats", handler.GetRadioGroupStats)
+	radio.GET("/groups/:id/devices", handler.GetRadioGroupDevices)
 }
 
 // initSiteConfigs 初始化站点配置（如果数据库为空则创建默认值）

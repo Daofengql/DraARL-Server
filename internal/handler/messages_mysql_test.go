@@ -49,7 +49,7 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = gormdb.Close() })
 	db := gormdb.Get()
-	if err := db.AutoMigrate(&gormdb.User{}, &gormdb.Group{}, &gormdb.Device{}, &gormdb.GroupMember{}, &gormdb.GroupLink{}, &gormdb.CommRecord{}); err != nil {
+	if err := db.AutoMigrate(&gormdb.User{}, &gormdb.Group{}, &gormdb.Device{}, &gormdb.GroupMember{}, &gormdb.GroupLink{}, &gormdb.CommRecord{}, &gormdb.CommRecordDeliveryGroup{}); err != nil {
 		t.Fatalf("migrate messages E2E tables: %v", err)
 	}
 
@@ -94,10 +94,9 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 	incomplete := newRecord(&publicID, gormdb.CommMessageTypeText, "incomplete", baseTime.Add(time.Second), 0)
 	privateMessage := newRecord(&privateID, gormdb.CommMessageTypeText, "private", baseTime, 2)
 	unrelatedMessage := newRecord(&unrelatedID, gormdb.CommMessageTypeText, "unrelated", baseTime, 2)
-	for _, record := range []*gormdb.CommRecord{oldest, sameTimeText, sameTimeVoice, incomplete, privateMessage, unrelatedMessage} {
-		if err := db.Create(record).Error; err != nil {
-			t.Fatal(err)
-		}
+	initialRecords := []*gormdb.CommRecord{oldest, sameTimeText, sameTimeVoice, incomplete, privateMessage, unrelatedMessage}
+	if err := gormdb.CreateCommRecordsWithDeliveryGroups(db, initialRecords, 100); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		groupIDs := []int{publicGroup.ID, privateGroup.ID, relatedGroup.ID, unrelatedGroup.ID}
@@ -144,7 +143,7 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 	}
 
 	newer := newRecord(&publicID, gormdb.CommMessageTypeText, "inserted-after-page-one", baseTime.Add(2*time.Second), 2)
-	if err := db.Create(newer).Error; err != nil {
+	if err := gormdb.CreateCommRecordsWithDeliveryGroups(db, []*gormdb.CommRecord{newer}, 1); err != nil {
 		t.Fatal(err)
 	}
 	body = request("second cursor page", listPattern, listPath+"?limit=1&cursor="+firstPage.Data.NextCursor, GetGroupMessages, http.StatusOK)
@@ -203,7 +202,8 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	relatedMessage := newRecord(&relatedID, gormdb.CommMessageTypeText, "related", baseTime.Add(3*time.Second), 2)
-	if err := db.Create(relatedMessage).Error; err != nil {
+	relatedMessage.DeliveryGroupIDs = []uint{publicID, relatedID}
+	if err := gormdb.CreateCommRecordsWithDeliveryGroups(db, []*gormdb.CommRecord{relatedMessage}, 1); err != nil {
 		t.Fatal(err)
 	}
 	body = request("linked group history", listPattern, listPath, GetGroupMessages, http.StatusOK)
@@ -223,8 +223,8 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 	if err := db.Model(linkGroup).Update("status", 0).Error; err != nil {
 		t.Fatal(err)
 	}
-	body = request("disabled link history", listPattern, listPath, GetGroupMessages, http.StatusOK)
-	if strings.Contains(string(body), fmt.Sprintf(`"id":%d`, relatedMessage.ID)) {
-		t.Fatalf("disabled link still exposed related history: %s", body)
+	body = request("disabled link historical snapshot", listPattern, listPath, GetGroupMessages, http.StatusOK)
+	if !strings.Contains(string(body), fmt.Sprintf(`"id":%d`, relatedMessage.ID)) {
+		t.Fatalf("delivery snapshot did not preserve related history: %s", body)
 	}
 }

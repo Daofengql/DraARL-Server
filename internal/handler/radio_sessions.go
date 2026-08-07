@@ -164,11 +164,18 @@ func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routin
 	if len(groups) != len(groupIDs) {
 		return ghostsession.Routing{}, errRoutingGroupNotFound
 	}
-	viewable, err := groupaccess.ViewableGroupIDs(gormdb.Get(), user, groupIDs)
+	receivable, err := groupaccess.ReceivableGroupIDs(gormdb.Get(), user, normalized.RxGroupIDs)
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}
-	if len(viewable) != len(groupIDs) {
+	if len(receivable) != len(normalized.RxGroupIDs) {
+		return ghostsession.Routing{}, errRoutingGroupForbidden
+	}
+	transmittable, err := groupaccess.TransmittableGroupIDs(gormdb.Get(), user, []int{normalized.TxGroupID})
+	if err != nil {
+		return ghostsession.Routing{}, err
+	}
+	if _, allowed := transmittable[normalized.TxGroupID]; !allowed {
 		return ghostsession.Routing{}, errRoutingGroupForbidden
 	}
 	return normalized, nil
@@ -226,6 +233,9 @@ func updateOwnedSessionRouting(user *gormdb.User, sessionID string, requested gh
 	if err != nil {
 		return ghostsession.Session{}, err
 	}
+	if policyRouting.TxGroupID != session.TxGroupID && ghostsession.Global.IsPTTActive(sessionID, time.Now()) {
+		return ghostsession.Session{}, ghostsession.ErrPTTActive
+	}
 	routing, err := validateSessionRoutingAccess(user, policyRouting)
 	if err != nil {
 		return ghostsession.Session{}, err
@@ -271,8 +281,8 @@ func writeSessionRoutingError(c *gin.Context, err error) {
 		status, code = http.StatusConflict, "ambiguous_session"
 	case errors.Is(err, ghostsession.ErrSubscriptionLimit):
 		status, code = http.StatusUnprocessableEntity, "subscription_limit"
-	case errors.Is(err, ghostsession.ErrMultiReceiveDisabled):
-		status, code = http.StatusForbidden, ghostsession.StableErrorCode(err)
+	case errors.Is(err, ghostsession.ErrPTTActive):
+		status, code = http.StatusConflict, "ptt_active"
 	case errors.Is(err, errRoutingGroupNotFound):
 		status, code = http.StatusNotFound, "group_not_found"
 	case errors.Is(err, errRoutingGroupForbidden):

@@ -205,6 +205,8 @@ export interface RadioStats {
 // 用户配置
 export interface RadioUserConfig {
   defaultGroupId: number
+  /** 本地收听偏好；发送组始终由服务端路由补入。 */
+  receiveGroupIds?: number[]
   inputDeviceId?: string
   outputDeviceId?: string
   volume: number // 0-1
@@ -215,6 +217,7 @@ export interface RadioUserConfig {
 // 默认用户配置
 export const defaultRadioUserConfig: RadioUserConfig = {
   defaultGroupId: 999, // 公共群组
+  receiveGroupIds: [999],
   volume: 0.8,
   muted: false,
   channelVolumes: {},

@@ -26,16 +26,11 @@ var (
 	ErrSessionLimit          = errors.New("ghost session limit reached")
 	ErrSubscriptionLimit     = errors.New("ghost subscription limit reached")
 	ErrRequiredCapabilities  = errors.New("required ghost capabilities are missing")
-	ErrMultiSessionDisabled  = errors.New("ghost multi-session is disabled")
-	ErrMultiReceiveDisabled  = errors.New("ghost multi-receive is disabled")
+	ErrPTTActive             = errors.New("ghost session PTT is active")
 )
 
 func StableErrorCode(err error) string {
 	switch {
-	case errors.Is(err, ErrMultiSessionDisabled):
-		return "ghost_multi_session_disabled"
-	case errors.Is(err, ErrMultiReceiveDisabled):
-		return "ghost_multi_receive_disabled"
 	case errors.Is(err, ErrSessionLimit):
 		return "ghost_session_limit"
 	case errors.Is(err, ErrSubscriptionLimit):
@@ -50,57 +45,17 @@ func StableErrorCode(err error) string {
 		return "session_not_found"
 	case errors.Is(err, ErrSessionConflict):
 		return "session_conflict"
+	case errors.Is(err, ErrPTTActive):
+		return "ptt_active"
 	default:
 		return "ghost_session_registration_failed"
-	}
-}
-
-type FeatureGate struct {
-	Enabled        bool
-	allowOwnerIDs  map[int]struct{}
-	allowDevModels map[uint8]struct{}
-}
-
-func NewFeatureGate(enabled bool, ownerIDs []int, devModels []uint8) FeatureGate {
-	gate := FeatureGate{
-		Enabled: enabled, allowOwnerIDs: make(map[int]struct{}, len(ownerIDs)),
-		allowDevModels: make(map[uint8]struct{}, len(devModels)),
-	}
-	for _, ownerID := range ownerIDs {
-		gate.allowOwnerIDs[ownerID] = struct{}{}
-	}
-	for _, devModel := range devModels {
-		gate.allowDevModels[devModel] = struct{}{}
-	}
-	return gate
-}
-
-func (g FeatureGate) Allows(ownerID int, devModel uint8) bool {
-	if g.Enabled {
-		return true
-	}
-	if _, allowed := g.allowOwnerIDs[ownerID]; allowed {
-		return true
-	}
-	_, allowed := g.allowDevModels[devModel]
-	return allowed
-}
-
-type Policy struct {
-	MultiSession FeatureGate
-	MultiReceive FeatureGate
-}
-
-func AllowAllPolicy() Policy {
-	return Policy{
-		MultiSession: NewFeatureGate(true, nil, nil),
-		MultiReceive: NewFeatureGate(true, nil, nil),
 	}
 }
 
 const (
 	CapabilityMultiReceiveV1 = "multi_receive_v1"
 	CapabilitySourceGroupV1  = "source_group_v1"
+	PTTHoldTimeout           = 900 * time.Millisecond
 )
 
 type Routing struct {

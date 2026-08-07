@@ -106,6 +106,8 @@ Content-Type: application/json
 
 `tx_group_id` 必须包含在最终 `rx_group_ids` 中。服务端会验证所有群组和权限，并以 `routing_updated` 同步最终状态。旧 `/api/radio/group` 已移除。
 
+如果 Session 最近 900ms 内仍有语音帧，切换 `tx_group_id` 会返回 `409 ptt_active`；仅调整 `rx_group_ids` 不受该限制。客户端应等待租约自然过期后重试，不发送额外的 PTT 结束包。
+
 ## 5. 语音与混音
 
 Opus 参数为 16 kHz、单声道、60 ms 帧。Web 发送端可以把两个帧按 `uint16 length + frame` 格式合并，每约 120 ms 发送一次。

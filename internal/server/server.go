@@ -112,6 +112,7 @@ func (s *Server) setupRoutes() {
 		// 公开接口（无需认证）
 		api.GET("/public/relays", middleware.PublicRelaySearchRateLimit(), handler.PublicSearchRelays)
 		api.GET("/public/firmware/latest", handler.GetLatestFirmware)
+		api.GET("/public/firmware/:id/download", middleware.PublicClientResourceRateLimit(), handler.DownloadFirmwareProxy)
 		api.GET("/public/client-resources/manifest", middleware.PublicClientResourceRateLimit(), handler.GetClientResourceManifest)
 		api.GET("/public/client-resources/artifacts/:artifact_id/download", middleware.PublicClientResourceRateLimit(), handler.GetClientResourceArtifactDownload)
 

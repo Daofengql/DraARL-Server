@@ -9,6 +9,7 @@ export interface FirmwareRelease {
   file_name: string
   file_size: number
   file_hash: string
+  download_mode: 'presigned' | 'proxy'
   is_latest: boolean
   created_by: number
   create_time: string
@@ -48,6 +49,7 @@ export async function uploadFirmware(data: {
   dev_model: number
   version: string
   changelog?: string
+  download_mode?: 'presigned' | 'proxy'
   onProgress?: (percent: number) => void
 }): Promise<FirmwareRelease> {
   const uploaded = await directUpload(data.file, 'firmware', data.onProgress)
@@ -58,6 +60,7 @@ export async function uploadFirmware(data: {
     object_key: uploaded.object_key,
     file_name: data.file.name,
     upload_token: uploaded.upload_token,
+    download_mode: data.download_mode || 'presigned',
   })
   if (res.code !== 200) throw new Error(res.message || '上传固件失败')
   data.onProgress?.(100)

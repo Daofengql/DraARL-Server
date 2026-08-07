@@ -43,6 +43,7 @@ export function FirmwarePage() {
   const [formModel, setFormModel] = useState<number>(1)
   const [formVersion, setFormVersion] = useState('')
   const [formChangelog, setFormChangelog] = useState('')
+  const [formDownloadMode, setFormDownloadMode] = useState<'presigned' | 'proxy'>('presigned')
   const [formFile, setFormFile] = useState<File | null>(null)
   const [versionError, setVersionError] = useState<string | null>(null)
 
@@ -83,6 +84,7 @@ export function FirmwarePage() {
         dev_model: formModel,
         version: formVersion,
         changelog: formChangelog || undefined,
+        download_mode: formDownloadMode,
         onProgress: setUploadProgress,
       })
       setSuccess('固件上传成功')
@@ -113,6 +115,7 @@ export function FirmwarePage() {
     setFormModel(1)
     setFormVersion('')
     setFormChangelog('')
+    setFormDownloadMode('presigned')
     setFormFile(null)
     setVersionError(null)
   }
@@ -255,6 +258,18 @@ export function FirmwarePage() {
                 required
                 disabled={uploading}
               />
+
+              <FormControl size="small" fullWidth disabled={uploading}>
+                <InputLabel>设备下载方式</InputLabel>
+                <Select
+                  value={formDownloadMode}
+                  label="设备下载方式"
+                  onChange={(e) => setFormDownloadMode(e.target.value as 'presigned' | 'proxy')}
+                >
+                  <MenuItem value="presigned">预签名地址（默认）</MenuItem>
+                  <MenuItem value="proxy">服务端代理（兼容旧设备）</MenuItem>
+                </Select>
+              </FormControl>
 
               <TextField
                 label="更新日志"

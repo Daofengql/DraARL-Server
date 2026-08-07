@@ -96,6 +96,16 @@ type StorageConfig struct {
 	Profiles      map[string]StorageProfile `yaml:"Profiles" json:"profiles"`
 }
 
+// FirmwareDownloadConfig controls the compatibility path used by legacy
+// devices whose firmware clients cannot consume long S3 signatures.
+type FirmwareDownloadConfig struct {
+	// AutoProxy falls back to the server proxy when a generated signed URL is
+	// longer than MaxPresignedURLLength. Set it to false for an emergency
+	// rollback or a controlled presigned-only rollout.
+	AutoProxy             *bool `yaml:"AutoProxy" json:"auto_proxy"`
+	MaxPresignedURLLength int   `yaml:"MaxPresignedURLLength" json:"max_presigned_url_length"`
+}
+
 type UDPConfig struct {
 	SendWorkers      int `yaml:"SendWorkers" json:"send_workers"`
 	IngressWorkers   int `yaml:"IngressWorkers" json:"ingress_workers"`
@@ -305,7 +315,8 @@ type Configuration struct {
 
 	// Storage 存储主配置（Driver 为空时按 Storage.MinIO.Endpoint 推断）。
 	// 新部署推荐配置 ActiveProfile + Profiles，旧字段继续兼容。
-	Storage StorageConfig `yaml:"Storage" json:"storage"`
+	Storage  StorageConfig          `yaml:"Storage" json:"storage"`
+	Firmware FirmwareDownloadConfig `yaml:"Firmware" json:"firmware"`
 	// LegacyMinIO is read only for upgrading configurations created before Storage was introduced.
 	LegacyMinIO MinIOConfig `yaml:"MinIO,omitempty" json:"-"`
 
@@ -386,6 +397,9 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if err := c.MessageAPI.SetDefaults(); err != nil {
 		return err
+	}
+	if c.Firmware.MaxPresignedURLLength <= 0 {
+		c.Firmware.MaxPresignedURLLength = 255
 	}
 
 	if c.UDP.SendWorkers < 0 {

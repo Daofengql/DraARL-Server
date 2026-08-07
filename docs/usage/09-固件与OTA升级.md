@@ -7,6 +7,7 @@
 - 使用独立 `firmware_releases` 表、管理 API 和 `/api/public/firmware/latest` 设备查询接口。
 - 按 `dev_model` 和固件版本选择，不创建 `ClientResource`、artifact 或通用平台 target，也不出现在客户端资源 manifest。
 - 与通用客户端资源共享私有 S3、预签名 PUT/GET、用户隔离 staging、不可变 final 提升和流式 SHA-256。
+- 每条发布记录可选择 `presigned` 或 `proxy` 下载模式；`proxy` 为旧版 RFBox 提供固定短地址，服务端隐藏 S3 签名并流式转发。
 
 当前支持的设备型号由服务端白名单决定：
 
@@ -47,6 +48,7 @@ Content-Type: application/json
   "version": "1.2.3",
   "changelog": "修复音频卡顿并优化功耗",
   "file_name": "firmware.bin",
+  "download_mode": "proxy",
   "object_key": "staging/firmware/7/2026/07/uuid.bin",
   "upload_token": "signed-upload-grant"
 }
@@ -72,6 +74,7 @@ firmware/<dev-model>/<version>/<sha256>/<file-name>
 | POST | `/api/firmware` | Admin | multipart 代理上传。 |
 | POST | `/api/firmware/complete` | Admin | 完成预签名直传。 |
 | DELETE | `/api/firmware/:id` | Admin | 删除记录和对象，并重新计算该型号的 latest。 |
+| GET | `/api/public/firmware/:id/download` | Public | 代理模式下载，固定返回 `200`、准确 `Content-Length` 和 `application/octet-stream`。 |
 
 列表响应的 `data` 包含 `items`、`total`、`page` 和 `page_size`。每个 item 包含型号、版本、更新日志、文件名、字节数、纯十六进制 SHA-256、`is_latest`、创建时间和一小时有效的 `download_url`。
 
@@ -103,7 +106,7 @@ GET /api/public/firmware/latest?dev_model=1&current_version=1.2.2
 }
 ```
 
-当前版本已不低于服务端 latest 时返回 200 且 `data: null`；型号没有固件时返回 404。下载 URL 有效期一小时，过期后重新查询。local 驱动同样返回受签名保护的 `/api/storage/get` URL。
+当前版本已不低于服务端 latest 时返回 200 且 `data: null`；型号没有固件时返回 404。`download_mode=presigned` 返回有效期一小时的签名地址，`download_mode=proxy` 返回 `/api/public/firmware/:id/download`。当 `Firmware.AutoProxy=true` 且预签名地址超过 `Firmware.MaxPresignedURLLength`（默认 255）时自动使用代理地址；设置为 `false` 可紧急回滚为仅预签名模式。代理会在响应前核对对象大小和 SHA-256，S3 错误转换为 502。
 
 ## 5. 设备端 OTA 约定
 

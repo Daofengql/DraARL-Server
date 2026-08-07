@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	gormdb "draarl/internal/gormdb"
+	"github.com/gin-gonic/gin"
 )
 
 func TestFirmwareVersionValidationRetainsLegacyCompatibility(t *testing.T) {
@@ -42,5 +46,29 @@ func TestFirmwareInputNormalizationRejectsIntegerWrapAndInvalidNames(t *testing.
 	}
 	if _, err := normalizeFirmwareFileName(strings.Repeat("a", 256) + ".bin"); err == nil {
 		t.Fatal("overlong firmware file name must be rejected")
+	}
+}
+
+func TestFirmwareDownloadModeValidationAndProxyURL(t *testing.T) {
+	for _, mode := range []string{gormdb.FirmwareDownloadModePresigned, gormdb.FirmwareDownloadModeProxy} {
+		if !isValidFirmwareDownloadMode(mode) {
+			t.Fatalf("download mode %q should be accepted", mode)
+		}
+	}
+	for _, mode := range []string{"redirect", "presigned?sig=bad"} {
+		if isValidFirmwareDownloadMode(normalizeFirmwareDownloadMode(mode)) {
+			t.Fatalf("download mode %q should be rejected", mode)
+		}
+	}
+	if normalizeFirmwareDownloadMode("PROXY ") != gormdb.FirmwareDownloadModeProxy {
+		t.Fatal("download mode normalization should trim and lowercase")
+	}
+	request := httptest.NewRequest("GET", "/api/public/firmware/latest", nil)
+	request.Host = "fw.example.test"
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = request
+	url := firmwareProxyURL(context, 42)
+	if len(url) >= 255 || url != "http://fw.example.test/api/public/firmware/42/download" {
+		t.Fatalf("unexpected proxy URL %q (len=%d)", url, len(url))
 	}
 }

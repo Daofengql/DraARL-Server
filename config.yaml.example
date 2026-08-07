@@ -31,6 +31,12 @@ MessageAPI:
     RequestsPerMinutePerIP: 300
     MaxConcurrentQueries: 32
 
+# 固件 OTA 下载兼容。设备发布记录可单独选择 presigned 或 proxy。
+# AutoProxy 在预签名地址超过旧版设备 255 字符限制时自动改用服务端代理。
+Firmware:
+    AutoProxy: true
+    MaxPresignedURLLength: 255
+
 # 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
 Interconnect:
     Enabled: false

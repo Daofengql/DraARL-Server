@@ -69,7 +69,7 @@
   <text class="small" x="1078" y="333">音频 / 时长 / 统计</text>
   <rect class="purple" x="1050" y="432" width="170" height="88"/>
   <text class="label" x="1078" y="466">外部存储</text>
-  <text class="small" x="1078" y="490">MySQL / MinIO</text>
+  <text class="small" x="1078" y="490">MySQL / Storage</text>
 
   <path class="arrow-green" d="M290 162 L390 162"/>
   <path class="arrow-blue" d="M290 319 L390 319"/>
@@ -86,5 +86,5 @@
   <path class="arrow dash" d="M1135 363 L1135 432"/>
 
   <rect x="70" y="585" width="1150" height="42" rx="12" fill="#e2e8f0"/>
-  <text class="small" x="96" y="611">语音与文本进入同一群组路由；通信记录可按站点配置保存音频到 MinIO，并在 MySQL 中记录索引、时长和状态。</text>
+  <text class="small" x="96" y="611">语音与文本进入同一群组路由；通信记录可按站点配置保存音频到当前 Storage 驱动，并在 MySQL 中记录索引、时长和状态。</text>
 </svg>

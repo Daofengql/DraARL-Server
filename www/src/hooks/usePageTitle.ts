@@ -21,13 +21,15 @@ const routeTitleMap: Record<string, string> = {
   '/admin/approvals': '用户审批',
   '/admin/certificate-approvals': '操作证审批',
   '/admin/devices': '设备管理',
-  '/admin/radio-sessions': '幽灵会话',
+  '/admin/radio-sessions': '移动端',
   '/admin/relays': '中继台',
   '/admin/servers': '服务器',
+  '/admin/client-resources': '资源分发',
+  '/admin/firmware': '设备固件',
   '/admin/groups': '群组管理',
   '/admin/group-links': '互联管理',
   '/admin/comm-records': '通信记录',
-  '/admin/assets': '资源管理',
+  '/admin/assets': '公开资源',
   '/admin/settings': '站点配置',
 }
 

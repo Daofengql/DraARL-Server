@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -16,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"draarl/internal/config"
 	"draarl/internal/firmwareversion"
 	gormdb "draarl/internal/gormdb"
 	"draarl/internal/protocol"
@@ -25,6 +28,11 @@ import (
 )
 
 const maxFirmwareSize = 16 * 1024 * 1024 // 16MB
+
+const (
+	firmwareProxyPath       = "/api/public/firmware/%d/download"
+	firmwareProxyURLMaxSize = 255
+)
 
 // Preserve the historical firmware-version contract. Client resources use a
 // separate strict SemVer 2.0.0 validator in internal/clientversion.
@@ -36,6 +44,14 @@ func UploadFirmware(c *gin.Context) {
 	devModelStr := c.PostForm("dev_model")
 	version := c.PostForm("version")
 	changelog := c.PostForm("changelog")
+	downloadMode := normalizeFirmwareDownloadMode(c.PostForm("download_mode"))
+	if downloadMode == "" {
+		downloadMode = gormdb.FirmwareDownloadModePresigned
+	}
+	if !isValidFirmwareDownloadMode(downloadMode) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "download_mode 只支持 presigned 或 proxy"})
+		return
+	}
 
 	if devModelStr == "" || version == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 和 version 为必填字段"})
@@ -155,14 +171,15 @@ func UploadFirmware(c *gin.Context) {
 
 	// 创建数据库记录
 	fw := &gormdb.FirmwareRelease{
-		DevModel:  devModel,
-		Version:   version,
-		Changelog: changelog,
-		FileName:  fileName,
-		MinioPath: finalKey,
-		FileSize:  fileSize,
-		FileHash:  fileHash,
-		CreatedBy: userID,
+		DevModel:     devModel,
+		Version:      version,
+		Changelog:    changelog,
+		FileName:     fileName,
+		MinioPath:    finalKey,
+		FileSize:     fileSize,
+		FileHash:     fileHash,
+		DownloadMode: downloadMode,
+		CreatedBy:    userID,
 	}
 
 	if err := repo.Create(fw); err != nil {
@@ -209,7 +226,8 @@ func ListFirmware(c *gin.Context) {
 
 	items := make([]firmwareItem, 0, len(list))
 	for _, fw := range list {
-		downloadURL, err := firmwareDownloadURL(c, fw.MinioPath)
+		fw.DownloadMode = effectiveFirmwareDownloadMode(fw.DownloadMode)
+		downloadURL, err := firmwareDownloadURL(c, fw)
 		if err != nil {
 			log.Printf("生成固件下载链接失败 (id=%d): %v", fw.ID, err)
 			downloadURL = ""
@@ -236,12 +254,13 @@ func ListFirmware(c *gin.Context) {
 // POST /api/firmware/complete
 func CompleteFirmwareUpload(c *gin.Context) {
 	var req struct {
-		DevModel    int    `json:"dev_model" binding:"required"`
-		Version     string `json:"version" binding:"required"`
-		Changelog   string `json:"changelog"`
-		ObjectKey   string `json:"object_key" binding:"required"`
-		FileName    string `json:"file_name" binding:"required"`
-		UploadToken string `json:"upload_token" binding:"required"`
+		DevModel     int    `json:"dev_model" binding:"required"`
+		Version      string `json:"version" binding:"required"`
+		Changelog    string `json:"changelog"`
+		ObjectKey    string `json:"object_key" binding:"required"`
+		FileName     string `json:"file_name" binding:"required"`
+		UploadToken  string `json:"upload_token" binding:"required"`
+		DownloadMode string `json:"download_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
@@ -249,6 +268,14 @@ func CompleteFirmwareUpload(c *gin.Context) {
 	}
 	if !isSupportedFirmwareDevModel(req.DevModel) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": fmt.Sprintf("设备型号 %d 不支持固件升级", req.DevModel)})
+		return
+	}
+	downloadMode := normalizeFirmwareDownloadMode(req.DownloadMode)
+	if downloadMode == "" {
+		downloadMode = gormdb.FirmwareDownloadModePresigned
+	}
+	if !isValidFirmwareDownloadMode(downloadMode) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "download_mode 只支持 presigned 或 proxy"})
 		return
 	}
 	if !firmwareSemverRegex.MatchString(req.Version) {
@@ -318,14 +345,15 @@ func CompleteFirmwareUpload(c *gin.Context) {
 	}
 
 	fw := &gormdb.FirmwareRelease{
-		DevModel:  req.DevModel,
-		Version:   req.Version,
-		Changelog: req.Changelog,
-		FileName:  fileName,
-		MinioPath: finalKey,
-		FileSize:  written,
-		FileHash:  fileHash,
-		CreatedBy: user.ID,
+		DevModel:     req.DevModel,
+		Version:      req.Version,
+		Changelog:    req.Changelog,
+		FileName:     fileName,
+		MinioPath:    finalKey,
+		FileSize:     written,
+		FileHash:     fileHash,
+		DownloadMode: downloadMode,
+		CreatedBy:    user.ID,
 	}
 	if err := repo.Create(fw); err != nil {
 		_ = storage.Delete(c.Request.Context(), finalKey)
@@ -401,7 +429,7 @@ func GetLatestFirmware(c *gin.Context) {
 	}
 
 	// 所有驱动统一生成短期下载 URL；local 也使用签名 GET。
-	downloadURL, err := firmwareDownloadURL(c, fw.MinioPath)
+	downloadURL, err := firmwareDownloadURL(c, fw)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成下载链接失败"})
 		return
@@ -411,31 +439,161 @@ func GetLatestFirmware(c *gin.Context) {
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"id":           fw.ID,
-			"dev_model":    fw.DevModel,
-			"version":      fw.Version,
-			"changelog":    fw.Changelog,
-			"file_name":    fw.FileName,
-			"file_size":    fw.FileSize,
-			"file_hash":    fw.FileHash,
-			"hash_algo":    "sha256",
-			"has_update":   true,
-			"download_url": downloadURL,
-			"create_time":  fw.CreateTime,
+			"id":            fw.ID,
+			"dev_model":     fw.DevModel,
+			"version":       fw.Version,
+			"changelog":     fw.Changelog,
+			"file_name":     fw.FileName,
+			"file_size":     fw.FileSize,
+			"file_hash":     fw.FileHash,
+			"download_mode": effectiveFirmwareDownloadMode(fw.DownloadMode),
+			"hash_algo":     "sha256",
+			"has_update":    true,
+			"download_url":  downloadURL,
+			"create_time":   fw.CreateTime,
 		},
 	})
 }
 
-func firmwareDownloadURL(c *gin.Context, objectKey string) (string, error) {
-	downloadURL, err := storage.PresignGet(c.Request.Context(), objectKey, time.Hour)
+func firmwareDownloadURL(c *gin.Context, fw *gormdb.FirmwareRelease) (string, error) {
+	if fw == nil {
+		return "", fmt.Errorf("固件记录为空")
+	}
+	if effectiveFirmwareDownloadMode(fw.DownloadMode) == gormdb.FirmwareDownloadModeProxy {
+		return firmwareProxyURL(c, fw.ID), nil
+	}
+	downloadURL, err := storage.PresignGet(c.Request.Context(), fw.MinioPath, time.Hour)
 	if err != nil {
 		return "", err
 	}
 	if strings.HasPrefix(downloadURL, "/") {
 		downloadURL = publicAPIBase(c) + downloadURL
 	}
+	if firmwareAutoProxyEnabled() && len(downloadURL) > firmwareMaxPresignedURLLength() {
+		return firmwareProxyURL(c, fw.ID), nil
+	}
 	return downloadURL, nil
 }
+
+func firmwareProxyURL(c *gin.Context, id int) string {
+	return publicAPIBase(c) + fmt.Sprintf(firmwareProxyPath, id)
+}
+
+func normalizeFirmwareDownloadMode(mode string) string {
+	return strings.ToLower(strings.TrimSpace(mode))
+}
+
+func effectiveFirmwareDownloadMode(mode string) string {
+	mode = normalizeFirmwareDownloadMode(mode)
+	if mode == "" {
+		return gormdb.FirmwareDownloadModePresigned
+	}
+	return mode
+}
+
+func isValidFirmwareDownloadMode(mode string) bool {
+	return mode == gormdb.FirmwareDownloadModePresigned || mode == gormdb.FirmwareDownloadModeProxy
+}
+
+func firmwareAutoProxyEnabled() bool {
+	cfg := config.TryGet()
+	return cfg == nil || cfg.Firmware.AutoProxy == nil || *cfg.Firmware.AutoProxy
+}
+
+func firmwareMaxPresignedURLLength() int {
+	if cfg := config.TryGet(); cfg != nil && cfg.Firmware.MaxPresignedURLLength > 0 {
+		return cfg.Firmware.MaxPresignedURLLength
+	}
+	return firmwareProxyURLMaxSize
+}
+
+// DownloadFirmwareProxy streams a firmware object without exposing its
+// presigned URL to legacy clients. The object is verified before headers are
+// written so Content-Length and SHA-256 match the release record.
+func DownloadFirmwareProxy(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	fw, err := gormdb.GetFirmwareRepo().GetByID(id)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	if fw.FileSize <= 0 || strings.TrimSpace(fw.FileHash) == "" {
+		c.Status(http.StatusBadGateway)
+		return
+	}
+	actualSize, actualHash, err := storage.HashObjectSHA256(c.Request.Context(), fw.MinioPath, maxFirmwareSize)
+	if err != nil {
+		log.Printf("校验固件对象失败 (id=%d, key=%s): %v", fw.ID, fw.MinioPath, err)
+		c.Status(http.StatusBadGateway)
+		return
+	}
+	if actualSize != fw.FileSize || !strings.EqualFold(actualHash, fw.FileHash) {
+		log.Printf("固件对象完整性不匹配 (id=%d): size=%d/%d hash=%s/%s", fw.ID, actualSize, fw.FileSize, actualHash, fw.FileHash)
+		c.Status(http.StatusBadGateway)
+		return
+	}
+
+	// Generate the signed URL inside the server. It is never included in the
+	// response; proxying keeps it hidden from old devices.
+	signedURL, err := storage.PresignGet(c.Request.Context(), fw.MinioPath, time.Hour)
+	if err != nil {
+		c.Status(http.StatusBadGateway)
+		return
+	}
+	reader, closeReader, status, err := openFirmwareProxyReader(c, signedURL, fw.MinioPath)
+	if err != nil {
+		if status == 0 {
+			status = http.StatusBadGateway
+		}
+		c.Status(status)
+		return
+	}
+	defer closeReader()
+
+	c.Header("Content-Length", strconv.FormatInt(fw.FileSize, 10))
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": fw.FileName}))
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Status(http.StatusOK)
+	written, copyErr := io.CopyN(c.Writer, reader, fw.FileSize)
+	if copyErr != nil || written != fw.FileSize {
+		log.Printf("代理传输固件失败 (id=%d): written=%d err=%v", fw.ID, written, copyErr)
+	}
+}
+
+func openFirmwareProxyReader(c *gin.Context, signedURL, objectKey string) (io.Reader, func(), int, error) {
+	parsed, err := url.Parse(signedURL)
+	if err != nil {
+		return nil, func() {}, 0, fmt.Errorf("解析固件下载地址失败: %w", err)
+	}
+	if parsed.IsAbs() {
+		req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, signedURL, nil)
+		if err != nil {
+			return nil, func() {}, 0, err
+		}
+		resp, err := firmwareProxyHTTPClient.Do(req)
+		if err != nil {
+			return nil, func() {}, 0, err
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			resp.Body.Close()
+			return nil, func() {}, http.StatusBadGateway, fmt.Errorf("对象存储返回 HTTP %d", resp.StatusCode)
+		}
+		return resp.Body, func() { _ = resp.Body.Close() }, 0, nil
+	}
+	reader, err := storage.Open(c.Request.Context(), objectKey)
+	if err != nil {
+		return nil, func() {}, 0, err
+	}
+	return reader, func() { _ = reader.Close() }, 0, nil
+}
+
+var firmwareProxyHTTPClient = &http.Client{Timeout: 10 * time.Minute}
 
 func hashFirmwareReader(reader io.Reader) (int64, string, error) {
 	hasher := sha256.New()

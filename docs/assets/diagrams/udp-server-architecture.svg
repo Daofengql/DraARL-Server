@@ -144,7 +144,7 @@
   <text x="670" y="577" text-anchor="middle" fill="#666" font-size="10">超时检测</text>
 
   <rect x="760" y="525" width="140" height="70" fill="white" rx="4" stroke="#81c784"/>
-  <text x="830" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">MinIO上传</text>
+  <text x="830" y="545" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">Storage上传</text>
   <text x="830" y="562" text-anchor="middle" fill="#666" font-size="10">批量上传</text>
   <text x="830" y="577" text-anchor="middle" fill="#666" font-size="10">SHA-256校验</text>
 
@@ -173,7 +173,7 @@
 
   <rect x="580" y="640" width="470" height="80" fill="white" rx="8" filter="url(#shadow)" stroke="#e0e0e0"/>
   <text x="815" y="665" text-anchor="middle" fill="#333" font-size="14" font-weight="bold">音频文件存储</text>
-  <text x="815" y="685" text-anchor="middle" fill="#666" font-size="11">MinIO Bucket | comm_records 表</text>
+  <text x="815" y="685" text-anchor="middle" fill="#666" font-size="11">Storage 驱动 | comm_records 表</text>
   <text x="815" y="705" text-anchor="middle" fill="#666" font-size="11">音频路径、时长、状态、设备/群组关联</text>
 
   <!-- 图例 -->

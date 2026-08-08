@@ -102,8 +102,8 @@
 
   <rect x="370" y="495" width="260" height="60" fill="#e3f2fd" rx="6"/>
   <text x="500" y="520" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">幽灵设备 (App/PC)</text>
-  <text x="500" y="540" text-anchor="middle" fill="#666" font-size="10">同一用户同一平台只允许一个在线</text>
-  <text x="500" y="545" text-anchor="middle" fill="#666" font-size="10">新连接踢掉旧连接</text>
+  <text x="500" y="540" text-anchor="middle" fill="#666" font-size="10">同账号多实例并存；同安装实例恢复旧 Session</text>
+  <text x="500" y="545" text-anchor="middle" fill="#666" font-size="10">由 session_id / client_instance_id 精确管理</text>
 
   <rect x="670" y="495" width="260" height="60" fill="#fff3e0" rx="6"/>
   <text x="800" y="520" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">WebSocket (Web)</text>

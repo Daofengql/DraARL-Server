@@ -25,12 +25,12 @@ type MigrateOptions struct {
 
 // MigrateResult 迁移结果统计。
 type MigrateResult struct {
-	Scanned      int
-	Copied       int
-	Skipped      int   // 目标端已存在且大小一致（断点续传）
-	Deleted      int   // DeleteSource 时删除的源端对象数
-	Failed       int
-	BytesCopied  int64
+	Scanned     int
+	Copied      int
+	Skipped     int // 目标端已存在且大小一致（断点续传）
+	Deleted     int // DeleteSource 时删除的源端对象数
+	Failed      int
+	BytesCopied int64
 }
 
 // Migrate 将对象从 from 驱动迁移到 to 驱动。

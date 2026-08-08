@@ -92,11 +92,11 @@
     </marker>
   </defs>
 
-  <!-- L3 MinIO -->
+  <!-- L4 Storage -->
   <rect x="50" y="430" width="900" height="100" fill="white" rx="12" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
   <rect x="50" y="430" width="900" height="35" fill="#4caf50" rx="12"/>
   <rect x="50" y="450" width="900" height="15" fill="#4caf50"/>
-  <text x="500" y="453" text-anchor="middle" fill="white" font-size="14" font-weight="bold">L4: MinIO 对象存储 (可选)</text>
+  <text x="500" y="453" text-anchor="middle" fill="white" font-size="14" font-weight="bold">L4: Storage 文件/对象存储 (可选)</text>
   
   <rect x="80" y="475" width="130" height="35" fill="#e8f5e9" rx="4"/>
   <text x="145" y="497" text-anchor="middle" fill="#333" font-size="10">用户头像</text>

@@ -39,7 +39,7 @@ func Init(apiKey, baseURL, engine string) {
 		cfg.AzureModelMapperFunc = func(model string) string {
 			azureModelMapping := map[string]string{
 				"gpt-3.5-turbo": engine,
-				"gpt-4":        engine,
+				"gpt-4":         engine,
 			}
 			if m, ok := azureModelMapping[model]; ok {
 				return m

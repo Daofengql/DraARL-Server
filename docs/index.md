@@ -1,5 +1,9 @@
 ﻿# DraARL 文档站
 
+当前文档对应 DraARL Server `v2.0.0-alpha4`。版本事实以仓库根目录
+`VERSION` 为准；API 路由以 `internal/server/server.go` 为准，配置默认值以
+`config.yaml.example` 和 `internal/config/config.go` 为准。
+
 这是 DraARL Server 的文档入口，包含：
 
 - 架构设计与数据字典
@@ -70,7 +74,8 @@
 | [运维与排障](usage/08-运维与排障.md) | 常见问题、检查清单、运维建议 |
 | [固件与OTA升级](usage/09-固件与OTA升级.md) | 固件管理、OTA流程、版本规范 |
 | [APRS与位置服务](usage/10-APRS与位置服务.md) | APRS配置、位置上报、地图展示 |
-| [v1.1.5-alpha1升级说明](usage/11-v1.1.5-alpha1升级说明.md) | 升级前检查、数据库迁移、中心/边缘上线和快速回滚 |
+| [v1.1.5-alpha1升级说明](usage/11-v1.1.5-alpha1升级说明.md) | 历史升级资料：Type 0 中心/边缘首次上线 |
+| [v2.0.0-alpha3 幽灵多端与频道消息升级说明](usage/12-幽灵多端与频道消息升级说明.md) | 历史升级资料：数据库迁移、客户端门槛、验收与回滚 |
 
 ### API 文档
 

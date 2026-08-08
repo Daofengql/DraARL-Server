@@ -574,7 +574,7 @@ export function ClientResourcePage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 3 }}>
-        <Typography variant="h5" sx={{ fontWeight: 600, flex: 1, minWidth: 220 }}>客户端资源分发</Typography>
+        <Typography variant="h5" sx={{ fontWeight: 600, flex: 1, minWidth: 220 }}>资源分发</Typography>
         <Button variant="outlined" startIcon={<CloudUpload />} onClick={() => { setStagingDialogOpen(true); void fetchStaging(true) }}><Badge badgeContent={stagingItems.length} color="warning" max={99}>待完成上传</Badge></Button>
         <Tooltip title="只读扫描 immutable final 对象"><Button variant="outlined" startIcon={<FactCheck />} onClick={() => void openAudit()}>对象审计</Button></Tooltip>
         <Tooltip title="刷新"><IconButton onClick={() => void fetchResources()} disabled={loading}><Refresh /></IconButton></Tooltip>

@@ -12,35 +12,35 @@ import (
 type Purpose string
 
 const (
-	PurposeRegister     Purpose = "register"      // 注册
-	PurposeLogin        Purpose = "login"         // 登录
+	PurposeRegister      Purpose = "register"       // 注册
+	PurposeLogin         Purpose = "login"          // 登录
 	PurposeResetPassword Purpose = "reset_password" // 重置密码
-	PurposeChangeEmail  Purpose = "change_email"  // 修改邮箱
+	PurposeChangeEmail   Purpose = "change_email"   // 修改邮箱
 )
 
 // VerificationSession 验证会话
 type VerificationSession struct {
-	SessionID   string    `json:"session_id"`
-	Email       string    `json:"email"`
-	Code        string    `json:"code"`
-	Purpose     Purpose   `json:"purpose"`
-	Attempts    int       `json:"attempts"`     // 尝试次数
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	VerifiedAt  *time.Time `json:"verified_at,omitempty"` // 验证成功时间
+	SessionID  string     `json:"session_id"`
+	Email      string     `json:"email"`
+	Code       string     `json:"code"`
+	Purpose    Purpose    `json:"purpose"`
+	Attempts   int        `json:"attempts"` // 尝试次数
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	VerifiedAt *time.Time `json:"verified_at,omitempty"` // 验证成功时间
 }
 
 // VerificationManager 验证码会话管理器
 type VerificationManager struct {
-	sessions sync.Map // session_id -> *VerificationSession
+	sessions      sync.Map // session_id -> *VerificationSession
 	emailCooldown sync.Map // email -> lastSendTime
-	ipRateLimit  sync.Map // ip -> []sendTime (IP 发送记录)
+	ipRateLimit   sync.Map // ip -> []sendTime (IP 发送记录)
 
-	codeLength    int
-	codeExpiry    time.Duration
+	codeLength     int
+	codeExpiry     time.Duration
 	cooldownPeriod time.Duration
-	maxAttempts   int
-	maxIPPerMin   int       // 同一 IP 每分钟最大发送次数
+	maxAttempts    int
+	maxIPPerMin    int // 同一 IP 每分钟最大发送次数
 }
 
 var (

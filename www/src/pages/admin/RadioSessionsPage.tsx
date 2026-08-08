@@ -70,7 +70,7 @@ export function RadioSessionsPage() {
       setSessions(await radioSessionService.listAdmin())
       setError('')
     } catch (err) {
-      setError(getErrorMessage(err, '获取幽灵会话失败'))
+      setError(getErrorMessage(err, '获取移动端会话失败'))
     } finally {
       setLoading(false)
     }
@@ -111,11 +111,11 @@ export function RadioSessionsPage() {
     setDisconnectBusy(true)
     try {
       await radioSessionService.disconnectAdmin(disconnecting.session_id)
-      toast.success('幽灵会话已断开')
+      toast.success('移动端会话已断开')
       setDisconnecting(null)
       await loadSessions()
     } catch (err) {
-      setError(getErrorMessage(err, '断开幽灵会话失败'))
+      setError(getErrorMessage(err, '断开移动端会话失败'))
     } finally {
       setDisconnectBusy(false)
     }
@@ -124,7 +124,7 @@ export function RadioSessionsPage() {
 	return (
     <Box>
       <PageHeader
-        title="幽灵会话"
+        title="移动端"
         actions={
           <AutoRefresh
             value={autoRefresh}
@@ -260,7 +260,7 @@ export function RadioSessionsPage() {
 
       <ConfirmDialog
         isOpen={disconnecting !== null}
-        title="断开幽灵会话"
+        title="断开移动端会话"
         message={disconnecting ? `确认断开 ${disconnecting.callsign || disconnecting.username} 的会话 ${shortSessionID(disconnecting.session_id)}？` : ''}
         confirmText={disconnectBusy ? '处理中' : '断开'}
         onConfirm={() => { if (!disconnectBusy) void confirmDisconnect() }}

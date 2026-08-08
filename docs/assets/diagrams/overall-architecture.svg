@@ -126,7 +126,7 @@
 
   <rect x="790" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
   <text x="870" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">通信录制</text>
-  <text x="870" y="462" text-anchor="middle" fill="#666" font-size="10">缓冲 | MinIO上传</text>
+  <text x="870" y="462" text-anchor="middle" fill="#666" font-size="10">缓冲 | Storage上传</text>
   <text x="870" y="477" text-anchor="middle" fill="#666" font-size="10">数据库同步</text>
 
   <rect x="970" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
@@ -167,7 +167,7 @@
   <text x="450" y="695" text-anchor="middle" fill="#666" font-size="11">Token存储 | 会话</text>
 
   <rect x="600" y="650" width="200" height="65" fill="white" rx="6" stroke="#f57c00" stroke-width="2"/>
-  <text x="700" y="675" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">MinIO (可选)</text>
+  <text x="700" y="675" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">Storage (可选)</text>
   <text x="700" y="695" text-anchor="middle" fill="#666" font-size="11">对象存储 | 音频/固件</text>
 
   <rect x="850" y="650" width="250" height="65" fill="white" rx="6" stroke="#f57c00" stroke-width="2"/>

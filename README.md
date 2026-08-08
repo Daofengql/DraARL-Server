@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 最新版本 | `v1.1.5-alpha1` |
+| 当前版本 | `v2.0.0-alpha4`（以根目录 `VERSION` 和 Release 页面为准） |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
@@ -41,20 +41,20 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 
 ## 核心能力
 
-- **实时语音与文本通信**：支持 UDP DraARLv1 设备、WebSocket 浏览器幽灵设备、PTT 控制、Opus 语音、半双工群组通信和通信记录。
+- **实时语音与文本通信**：支持 UDP DraARLv1 设备、UDP/WebSocket 幽灵 Session、单发多收、来源频道、PTT 控制、Opus 语音、半双工群组通信和频道消息历史。
 - **设备接入与管理**：支持设备密码、JWT、动态码绑定、设备 SSID、设备型号上报、远程参数配置、设备禁发/禁收、AT 控制和 SA818 频率配置。
-- **群组与互联**：支持公开群组、私有群组、群组成员管理、设备切组、虚拟互联组和跨群组语音转发。
+- **群组与互联**：支持公开/私有群组、成员即时撤销、设备切组、虚拟互联组，以及 Type 0 中心/边缘节点的跨入口路由。
 - **账号与审核**：支持账号密码、邮箱验证码、Keycloak SSO、JWT/refresh token、注册审核、操作证上传与审核。
 - **管理后台**：提供用户、设备、群组、中继台、服务器、资源中心、固件发布、站点配置、SMTP、APRS、OpenAI、缓存指标和操作日志管理。
 - **通联与记录**：支持平台发信记录、个人通联日志、统计趋势、音频存储和管理员侧全局查询。
-- **资源与发布**：支持 MinIO 对象存储、前端资源嵌入或 CDN 托管、GitHub Actions 多平台 Release，以及 MkDocs 文档自动发布到 GitHub Pages。
+- **资源与发布**：支持本地磁盘、MinIO、R2、COS、OSS 等 S3 兼容存储，提供客户端资源 manifest、设备固件 OTA、存储迁移/审计、前端资源嵌入和多平台 Release。
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | 后端 | Go 1.25、Gin、GORM、Gorilla WebSocket |
-| 数据 | MySQL/MariaDB、Redis、MinIO |
+| 数据 | MySQL/MariaDB、Redis（可选）、local 或 S3 兼容对象存储（可选） |
 | 前端 | React 19、TypeScript 5.9、Vite 7、Material UI 7、React Router 7 |
 | 通信 | UDP DraARLv1、WebSocket、Opus、APRS |
 | 文档 | MkDocs、MkDocs Material |
@@ -67,17 +67,21 @@ DraARL-Server/
 ├── cmd/draarl/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
 ├── internal/
 │   ├── aprs/                # APRS 连接、配置和日志
+│   ├── accesspoint/         # 中心/边缘公开接入点发现与短期凭证
 │   ├── auth/                # refresh token 存储，支持 Redis 与内存降级
 │   ├── captcha/             # 图形验证码
 │   ├── config/              # YAML 配置、默认值、Origin 校验
 │   ├── db/                  # 兼容旧逻辑的原生 SQL 数据访问
 │   ├── gormdb/              # GORM 模型、仓储和自动迁移
+│   ├── ghostsession/        # 幽灵安装实例、在线 Session 与多收路由
 │   ├── handler/             # HTTP API 处理器
+│   ├── interconnect/        # Type 0 中心/边缘控制面、数据面与恢复
 │   ├── middleware/          # 登录、审核、管理员、群组权限和限流中间件
 │   ├── protocol/            # DraARLv1 协议编解码和设备字段校验
+│   ├── routesync/           # 数据库变更到运行态/边缘投影同步
 │   ├── server/              # Gin 路由、WebSocket、前端静态资源服务
 │   └── udphub/              # UDP 设备运行态、语音转发、群组互联和通信记录
-├── pkg/                     # JWT、缓存、MinIO、WebSocket、加密、GeoIP 等公共包
+├── pkg/                     # JWT、缓存、存储、WebSocket、加密、GeoIP 等公共包
 ├── www/                     # React 前端项目
 ├── docs/                    # MkDocs 文档站、API 文档、协议文档和图表资源
 ├── test/                    # Python 设备/协议测试工具和 Go 压测命令
@@ -93,7 +97,7 @@ DraARL-Server/
 - Node.js 20+
 - MySQL 5.7+ 或 MariaDB 10.3+
 - Redis 6.0+（推荐；不可用时 refresh token 会降级到内存存储）
-- MinIO（可选，用于资源、头像、通信录音和固件）
+- local 或 S3 兼容对象存储（可选；用于资源、头像、通信录音和固件）
 - Keycloak（可选，用于 SSO）
 - Python 3.11+（仅本地预览/构建 MkDocs 文档时需要）
 
@@ -146,7 +150,10 @@ cp config.yaml.example config.yaml
 - `Web.FrontendURL` 与 `Web.AllowedOrigins`：登录回调、CORS 和 WebSocket Origin 白名单。
 - `JWT.Secret`：至少 32 字符；不符合要求时程序会自动生成并写回配置。
 - `DeviceAuth.AESKey`：16、24 或 32 字节；留空时程序会自动生成并写回配置。
-- `MinIO`：如需资源中心、头像、固件或通信录音，需要配置。
+- `Storage`：选择 `local`、`minio`、`s3`、`r2`、`cos` 或 `oss`；可通过命名 profile 切换和迁移。
+- `GhostSessions`：设置每账号在线幽灵 Session 数与每 Session 接收频道数上限。
+- `MessageAPI`：设置频道消息分页、账号/IP 限流和数据库查询并发上限。
+- `Interconnect` / `Edge`：仅在启用 Type 0 中心/边缘部署时配置。
 
 ### 4. 安装依赖并构建前端
 
@@ -267,11 +274,12 @@ make run
 2. [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) 构建 Linux、Windows、macOS 的 amd64/arm64 产物并创建 GitHub Release。
 3. Release 成功后，[Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) 自动构建 MkDocs 并发布到 GitHub Pages。
 
-示例：
+示例（发布新版本时将变量替换为目标版本；当前仓库版本来自 `VERSION`）：
 
 ```bash
-git tag -a v1.1.5-alpha1 -m "release: v1.1.5-alpha1"
-git push origin v1.1.5-alpha1
+VERSION=$(tr -d '\r\n' < VERSION)
+git tag -a "$VERSION" -m "release: $VERSION"
+git push origin "$VERSION"
 ```
 
 ## 服务端口与入口
@@ -308,7 +316,8 @@ git push origin v1.1.5-alpha1
 - 固定并备份 `config.yaml` 中的 `JWT.Secret` 和 `DeviceAuth.AESKey`。
 - 配置真实的 `Web.FrontendURL` 和 `Web.AllowedOrigins`，避免 Release 模式下 Origin 校验失败。
 - 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
-- 使用 MinIO 保存头像、操作证、资源文件、通信录音和固件。
+- 根据部署规模选择 local 或私有 S3 兼容存储；生产环境使用预签名读写，不要开放 bucket 匿名访问。
+- 从更早版本升级到 `v2.0.0-alpha3` 前先执行备份，并在维护窗口显式运行 `-auto-migrate`；频道消息迁移会回填消息类型、发送者快照和投递群组快照。
 - 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；中心直连接入使用 `System.ProxyProtocol: v2`，边缘接入使用 `Edge.ProxyProtocol: v2`。启用后必须限制 UDP 入口只允许受信代理访问。
 - 首次上线后立即修改默认管理员密码，并检查注册审核、操作证审核和设备绑定策略。
 

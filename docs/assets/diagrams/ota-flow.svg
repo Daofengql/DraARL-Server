@@ -39,9 +39,9 @@
   <path d="M 170 215 L 200 215" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
   <path d="M 500 215 L 530 215" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
 
-  <!-- MinIO -->
+  <!-- Storage -->
   <rect x="530" y="195" width="120" height="40" fill="#f1f3f8" rx="4" stroke="#9e9e9e" stroke-width="1" stroke-dasharray="5,5"/>
-  <text x="590" y="220" text-anchor="middle" fill="#666" font-size="10">MinIO</text>
+  <text x="590" y="220" text-anchor="middle" fill="#666" font-size="10">Storage</text>
 
   <!-- 步骤4 -->
   <rect x="200" y="250" width="300" height="30" fill="#fce4ec" rx="4"/>

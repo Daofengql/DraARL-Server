@@ -1,5 +1,8 @@
 # DraARLv1 协议规范
 
+本文对应 DraARL Server `v2.0.0-alpha4`。报文线格式仍以固定字符串 `DraA` 标识；
+文末协议修订号描述功能演进，不等同于服务端发布版本。
+
 ## 协议概述
 
 DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 DraARL 平台的设备通信协议，用于设备与服务器之间的实时通信。
@@ -40,8 +43,8 @@ DraARLv1 (Digital Radio Advanced Application Protocol v1) 是 DraARL 平台的�
 | 4 | 2B | Length | uint16 BE | 报文总长度（包含头部和数据） |
 | 6 | 32B | Username | string | 用户名，UTF-8 编码，不足部分用 `\0` 填充 |
 | 38 | 10B | DevicePassword | string | 设备准入密码，ASCII 字母数字，不足部分用 `\0` 填充 |
-| 48 | 1B | Type | byte | 数据包类型，见 [数据包类型](#数据包类型) |
-| 49 | 1B | DevModel | byte | 设备型号，见 [设备型号](#设备型号) |
+| 48 | 1B | Type | byte | 数据包类型，见下方“数据包类型”章节 |
+| 49 | 1B | DevModel | byte | 设备型号，见下方“设备型号”章节 |
 | 50 | 1B | SSID | byte | 设备子号 (0-255) |
 | 51 | 3B | DMRID | uint24 BE | DMR ID |
 | 54 | 32B | CallSign | string | 业余电台呼号，服务器填充，设备发送时留空 |
@@ -85,10 +88,10 @@ Reserved 只对幽灵 Session 启用，标准 UDP 实体设备继续填 0：
 
 | 值 | 常量名 | 说明 | DATA 内容 |
 |----|--------|------|-----------|
-| 1 | TypeJWTAuth | JWT 认证 | JWT Token 字符串（见 [JWT 认证包格式](#jwt-认证包格式)）|
+| 1 | TypeJWTAuth | JWT 认证 | JWT Token 字符串（见下方“JWT 认证包格式”章节）|
 | 2 | TypeHeartbeat | 心跳包 | 可选携带 GPS 位置信息，并可在 DATA 末尾追加 MAC |
-| 3 | TypeConfig | 设备配置 | TLV 格式配置数据（见 [Config 包协议](#config-包协议)）|
-| 4 | TypeTextMessage | 文本消息 | UTF-8 编码文本（见 [文本消息格式](#文本消息格式-typetextmessage)）|
+| 3 | TypeConfig | 设备配置 | TLV 格式配置数据（见下方“Config 包协议”章节）|
+| 4 | TypeTextMessage | 文本消息 | UTF-8 编码文本（见下方“文本消息格式”章节）|
 | 5 | TypeOpus16K | Opus 16K 语音 | Opus 16kHz 编码语音帧 |
 
 ---
@@ -579,7 +582,7 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 
 ### 2. 幽灵设备认证（JWT Token）
 
-幽灵设备（App/PC 客户端）使用 JWT Token 进行认证，详见 [JWT 认证包格式](#jwt-认证包格式-typejwtauth)。
+幽灵设备（App/PC 客户端）使用 JWT Token 进行认证，详见下方“JWT 认证包格式 (TypeJWTAuth)”章节。
 
 ### 3. 新设备动态码绑定流程
 
@@ -698,10 +701,10 @@ UDP 服务端实施以下安全策略，超出限制的数据包将被静默丢�
 | v1.2 | 2026-03 | 简化协议头，移除 Status 和 SeqNum 字段，头部从 93 字节简化为 90 字节 |
 | v1.3 | 2026-03 | 优化弱网性能：Opus 帧时长从 20ms 改为 60ms，WebSocket 客户端采用 2 帧合并发送（120ms 间隔）|
 | v1.4 | 2026-03 | 新增 JWT 认证方式（Type=1），支持幽灵设备（App/PC 客户端）接入；新增设备型号 104 (macOS)、107 (ESP32)；定义 SSID 分配规则 |
-| v1.5 | 2026-08 | 新增版本化幽灵认证、客户端实例与 Session、UDP session tag、多收单发及下行来源频道；标准实体设备保持原单端语义 |
-| v1.5 | 2026-03 | 性能优化：PTT 会话阈值从 200ms 提升到 600ms（适配 60-180ms 大包架构）；限速器从 25 PPS 放宽到 150 PPS；放弃批量发送缓冲，改用直接发送；补全 WS→UDP Ghost 路由；修复时长统计 |
+| v1.5 | 2026-03 | 性能优化：PTT 会话阈值、限速器和直接发送路径；补全 WS→UDP Ghost 路由与时长统计 |
 | v1.6 | 2026-03 | 新增 Config 包协议 (Type=3)，支持 UDP 普通设备配置同步（TLV 格式），包含查询、下发、上报、时间同步四种操作 |
 | v1.7 | 2026-03 | 新增动态码绑定流程，支持无输入能力的普通设备通过 Web 端完成账号绑定 |
 | v1.8 | 2026-04 | 新增设备型号 236/237/238/239，分别对应南山、涛涛、本视对讲（HT）、NRL2 系统软件桥接器 |
 | v1.9 | 2026-04 | 重构 DevModel 分段与动态绑定 SSID 规则；新增 `rx_tone_* / tx_tone_*` 数字亚音表达；SQL 收敛为 0-8；功率统一为高/低两档并兼容历史中档 |
 | v1.10 | 2026-04 | Config 包新增 `rf_guard_*` 四项射频保护配置，支持单次发射上限、统计窗口与窗口内累计发射上限 |
+| v1.11 | 2026-08 | 新增版本化幽灵认证、客户端实例与 Session、UDP session tag、多收单发及下行来源频道；标准实体设备保持原单端语义 |

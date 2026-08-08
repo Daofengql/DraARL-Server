@@ -1,5 +1,8 @@
 # 快速开始
 
+本文对应 DraARL Server `v2.0.0-alpha4`，面向设备/客户端开发者提供精简接入说明；
+完整字段、安全边界和幽灵 Session 协议以服务端文档站的 DraARLv1 规范为准。
+
 本文档介绍如何将设备接入 DraARL 平台。接入前请确保您已完成以下准备工作：
 
 - 已完成注册并审核通过
@@ -89,7 +92,7 @@
 | 50 | 1B | SSID | byte | 设备子号 (0-255) |
 | 51 | 3B | DMRID | uint24 BE | DMR ID |
 | 54 | 32B | CallSign | string | 业余电台呼号，服务器填充 |
-| 86 | 4B | Reserved | - | 保留字段，填 0 |
+| 86 | 4B | Reserved | uint32 BE | 实体设备填 0；现代幽灵按方向携带 `session_tag` 或 `source_group_id` |
 | 90 | 变长 | DATA | []byte | 负载数据 |
 
 ---
@@ -437,7 +440,9 @@ DevModel 字段用于标识设备类型，服务器可根据设备型号进行�
 - **普通 UDP 在线冲突**：同一用户同一 SSID 只允许一台在线，新地址冲突时新设备收到拒绝响应，旧设备保持在线
 - **普通 UDP 同 MAC 快速重连**：如果新心跳携带的 MAC 与当前在线实例记录的 MAC 一致，则视为同一物理设备短暂断线后的重连，允许直接接管新地址
 - **普通 UDP MAC 映射生命周期**：设备在线时记录 `owner_id + ssid -> mac`；设备被彻底判定离线后删除该映射
-- **幽灵设备在线冲突**：同一用户同一平台只允许一个在线实例，冲突时新设备认证失败，旧设备保持在线
+- **幽灵设备在线模型**：同一用户同一平台可有多个安装实例同时在线；每个实例使用稳定的
+  `client_instance_id` 和临时 `session_id` 隔离，同一安装实例重连只替换自己的旧 Session。
+  每个 Session 一个发送频道、多个接收频道；缺少版本化认证和多收能力的旧客户端拒绝接入。
 
 ### 1. 普通设备认证（设备密码）
 
@@ -457,6 +462,13 @@ DevModel 字段用于标识设备类型，服务器可根据设备型号进行�
 ### 2. 幽灵设备认证（JWT Token）
 
 幽灵设备（App/PC 客户端）为平台官方提供的标准客户端，通过 JWT Token 进行认证。
+
+UDP 幽灵的 Type 1 DATA 不再接受裸 JWT，必须提交版本化 JSON：`version=1`、
+`token`、稳定随机 UUID `client_instance_id`，以及 `multi_receive_v1`、
+`source_group_v1` 两项能力。成功响应签发临时 `session_id` 和非零 `session_tag`；
+后续 UDP 上行心跳、文本和语音必须在 Reserved 回传 tag。下行 Type 4/5 的
+Reserved 是真实来源频道 `source_group_id`。Web 型号 105 在 `/ws` HTTP 握手中通过
+HttpOnly Cookie 和同等实例/能力参数认证，不发送 Type 1。
 
 ### 3. 动态码绑定流程（无输入设备）
 
@@ -614,3 +626,4 @@ POST /api/device/confirm-bind
 | v1.8 | 2026-04 | 新增设备型号 236/237/238/239，分别对应南山、涛涛、本视对讲（HT）、NRL2 系统软件桥接器 |
 | v1.9 | 2026-04 | 重构 DevModel 分段与动态绑定 SSID 规则；新增 `rx_tone_* / tx_tone_*` 数字亚音表达；SQL 收敛为 0-8；功率统一为高/低两档并兼容历史中档 |
 | v1.10 | 2026-04 | Config 包新增 `rf_guard_*` 四项射频保护配置，支持单次发射上限、统计窗口与窗口内累计发射上限 |
+| v1.11 | 2026-08 | 幽灵认证改为实例/Session 模型，加入 UDP session tag、单发多收和下行来源频道；旧 raw-JWT 客户端不再兼容 |

@@ -36,7 +36,7 @@ func GetCaptcha(c *gin.Context) {
 
 // VerifyCaptchaRequest 验证图片验证码请求
 type VerifyCaptchaRequest struct {
-	CaptchaID  string `json:"captcha_id" binding:"required"`
+	CaptchaID   string `json:"captcha_id" binding:"required"`
 	CaptchaCode string `json:"captcha_code" binding:"required"`
 }
 

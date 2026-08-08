@@ -375,7 +375,7 @@ export function AssetPage() {
       {/* 标题栏 */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
-          资源管理
+          公开资源
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button

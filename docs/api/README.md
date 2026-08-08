@@ -1,6 +1,7 @@
 ﻿# DraARL Server API 文档（客户端对接版）
 
-> 基于当前代码实现整理（`internal/server/server.go` + `internal/handler/*` + `pkg/websocket/*`）。
+> 对应 DraARL Server `v2.0.0-alpha4`，基于当前代码实现整理
+> （`internal/server/server.go` + `internal/handler/*` + `pkg/websocket/*`）。
 
 ## 文档目录
 
@@ -25,3 +26,5 @@
 - WebSocket 鉴权使用 `HttpOnly Cookie(ws_token)`，不支持 URL 透传 token。
 - 收发控制（`disable_send`/`disable_recv`）是设备级状态，由 `devices` 表统一维护；设备所有者/管理员使用 `PUT /api/devices/:id`，当前群主/管理员可使用群组设备收发控制接口。
 - 群组不提供设备准入白名单或永久封禁；群主的临时收发控制在设备切换群组后仍然生效，设备所有者可自行恢复。
+- 频道历史使用 `/api/groups/:id/messages` 的不透明游标；`/api/comm-records` 是本人发信/审计视图，不能替代频道历史。
+- 完整路由索引按当前 `setupRoutes()` 登记，公开、JWT、Approved、Admin 和群主权限不会因路径前缀相似而互相替代。

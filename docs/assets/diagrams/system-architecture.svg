@@ -79,7 +79,7 @@
   <text class="label" x="996" y="318">Redis</text>
   <text class="small" x="996" y="341">refresh token，失败降级内存</text>
   <rect class="panel" x="970" y="388" width="232" height="72"/>
-  <text class="label" x="996" y="420">MinIO</text>
+  <text class="label" x="996" y="420">Storage</text>
   <text class="small" x="996" y="443">头像、资源、固件、音频文件</text>
   <rect class="panel" x="970" y="490" width="232" height="72"/>
   <text class="label" x="996" y="522">Keycloak</text>

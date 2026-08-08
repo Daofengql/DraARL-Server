@@ -23,11 +23,6 @@ type deviceConfigCacheKey struct {
 	messageID        uint64
 }
 
-type cachedDeviceConfigResult struct {
-	message  DeviceConfigControl
-	storedAt time.Time
-}
-
 const (
 	maxPendingDeviceConfigs = 1024
 	deviceConfigRetryAfter  = 750 * time.Millisecond

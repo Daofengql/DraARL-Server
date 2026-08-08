@@ -31,3 +31,8 @@ type AcceptedRelay struct {
 }
 
 const defaultDeviceGrantTTL = 2 * time.Minute
+
+type cachedDeviceConfigResult struct {
+	message  DeviceConfigControl
+	storedAt time.Time
+}

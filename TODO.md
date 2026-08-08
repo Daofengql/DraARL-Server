@@ -14,7 +14,6 @@
 
 ### 1.1 CenterGateway
 
-- [ ] 将中心端结构、构造和连接生命周期移动到 `center_gateway.go`。
 - [ ] 将设备 Session 激活、续期、确认、恢复和撤销移动到 `center_gateway_session.go`。
 - [ ] 将设备配置请求、缓存、重试和完成处理移动到 `center_gateway_config.go`。
 - [ ] 将设备/身份/Ghost 路由更新和域刷新移动到 `center_gateway_routing.go`。

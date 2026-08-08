@@ -14,7 +14,6 @@
 
 ### 1.1 EdgeGateway
 
-- [ ] 将认证、Session 续期、确认、过期和撤销移动到 `edge_gateway_session.go`。
 - [ ] 将本地语音、SpeakerLease、fallback 和本地 fanout 移动到 `edge_gateway_voice.go`。
 - [ ] 将设备配置上行/下行、缓存和结果处理移动到 `edge_gateway_config.go`。
 - [ ] 将投影应用、接收计划缓存和路由确认/重同步移动到 `edge_gateway_routing.go`。

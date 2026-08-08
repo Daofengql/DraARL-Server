@@ -12,11 +12,7 @@
 
 这是最高风险项，必须按职责域逐次移动并在每一步运行对应测试，禁止一次性重写。
 
-### 1.1 CenterGateway
-
-- [ ] 将中心端 Relay 与 SpeakerLease 处理移动到 `center_gateway_relay.go`。
-
-### 1.2 EdgeGateway
+### 1.1 EdgeGateway
 
 - [ ] 将边缘端结构、构造、控制链路和连接生命周期移动到 `edge_gateway.go`。
 - [ ] 将认证、Session 续期、确认、过期和撤销移动到 `edge_gateway_session.go`。
@@ -25,7 +21,7 @@
 - [ ] 将投影应用、接收计划缓存和路由确认/重同步移动到 `edge_gateway_routing.go`。
 - [ ] 将下行写入、屏障队列、排空和地址辅助函数移动到 `edge_gateway_downstream.go`。
 
-### 1.3 共同约束
+### 1.2 共同约束
 
 - [ ] 共享类型只放入 `gateway_types.go`；不要创建同时操纵 Center 和 Edge 内部状态的万能工具文件。
 - [ ] 保持所有互斥锁的获取顺序、channel 关闭顺序、goroutine 退出条件和原子变量语义不变。

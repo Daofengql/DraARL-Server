@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"draarl/internal/ghostsession"
 	"draarl/internal/protocol"
 )
 
@@ -422,80 +421,6 @@ func (g *CenterGateway) ActivateLocalDevice(grant *DeviceGrant) error {
 		}
 	}
 	return g.cluster.SetNodeRoute(CenterLocalNodeID, grant.Route())
-}
-
-func (g *CenterGateway) RelayLocalDevice(grant DeviceGrant, inner []byte) error {
-	if g.cluster == nil || grant.SessionID == 0 || grant.SessionEpoch == 0 {
-		return errors.New("local relay session is incomplete")
-	}
-	if err := protocol.ValidateRelayInnerPacket(inner); err != nil {
-		return err
-	}
-	g.mu.RLock()
-	owner, ok := g.deviceSessions[grant.SessionID]
-	g.mu.RUnlock()
-	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != grant.SessionEpoch {
-		return errors.New("local relay session is not authoritative")
-	}
-	route, ok := g.cluster.ResolveRoute(grant.SessionID)
-	if !ok || route.SessionEpoch != grant.SessionEpoch || route.DisableSend || route.DomainID == 0 {
-		return errors.New("local relay route is not eligible")
-	}
-	if !protocol.RelayInnerIdentityMatches(inner, route.Username, route.CallSign, route.SSID) {
-		return errors.New("local relay identity mismatch")
-	}
-	leaseID := uint64(0)
-	if inner[48] == protocol.DraARLTypeOpus16K {
-		var allowed bool
-		leaseID, allowed = g.speaker.CurrentLocal(route.SessionID, route.SessionEpoch, route.DomainID, time.Now())
-		if !allowed {
-			return errors.New("local speaker lease is not active")
-		}
-	}
-	relayInner := inner
-	if tagged, ok := protocol.WithSourceGroupID(inner, route.GroupID); ok {
-		relayInner = tagged
-	}
-	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
-		SessionID: route.SessionID, SessionEpoch: route.SessionEpoch, DomainID: route.DomainID,
-		SpeakerLeaseID: leaseID, InnerPacket: relayInner,
-	})
-}
-
-func (g *CenterGateway) AcquireLocalVoice(grant DeviceGrant) bool {
-	if g.cluster == nil || g.speaker == nil || grant.SessionID == 0 || grant.SessionEpoch == 0 {
-		return false
-	}
-	g.mu.RLock()
-	owner, ok := g.deviceSessions[grant.SessionID]
-	g.mu.RUnlock()
-	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != grant.SessionEpoch {
-		return false
-	}
-	route, ok := g.cluster.ResolveRoute(grant.SessionID)
-	if !ok || route.SessionEpoch != grant.SessionEpoch || route.DomainID == 0 || route.DisableSend {
-		return false
-	}
-	now := time.Now()
-	_, allowed := g.speaker.AcquireLocal(route.SessionID, route.SessionEpoch, route.DomainID, now)
-	if allowed {
-		ghostsession.Global.MarkPTTActive(grant.GhostSessionID, now)
-	}
-	return allowed
-}
-
-func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {
-	if grant.SessionID == 0 || grant.SessionEpoch == 0 || g.cluster == nil {
-		return false
-	}
-	g.mu.RLock()
-	owner, ok := g.deviceSessions[grant.SessionID]
-	g.mu.RUnlock()
-	if !ok || owner.NodeID != CenterLocalNodeID || owner.SessionEpoch != grant.SessionEpoch {
-		return false
-	}
-	route, ok := g.cluster.ResolveRoute(grant.SessionID)
-	return ok && route.SessionEpoch == grant.SessionEpoch
 }
 
 func (g *CenterGateway) RevokeLocalDevice(sessionID, sessionEpoch uint64) bool {

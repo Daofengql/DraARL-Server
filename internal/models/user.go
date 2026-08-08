@@ -36,35 +36,35 @@ func (a StringArray) Value() (driver.Value, error) {
 
 // User 用户信息
 type User struct {
-	ID            int          `json:"id"`
-	Name          string       `json:"name"`
-	CallSign      string       `json:"callsign"`
-	Phone         string       `json:"phone"`
-	Password      string       `json:"-"`
-	Birthday      string       `json:"birthday"`
-	Sex           int          `json:"sex"`
-	Avatar        string       `json:"avatar"`
-	Address       string       `json:"address"`
-	Roles         []string     `json:"roles"`
-	Introduction  string       `json:"introduction"`
-	AlarmMsg      bool         `json:"alarm_msg"`
-	Status        int          `json:"status"`
-	UpdateTime    string       `json:"update_time"`
-	LastLoginTime string       `json:"last_login_time"`
-	LoginErrTimes int          `json:"login_err_times"`
-	CreateTime    string       `json:"create_time"`
-	OpenID        string       `json:"openid"`
-	NickName      string       `json:"nickname"`
-	HeadImgURL    string       `json:"headimgurl"`
-	LastLoginIP   string       `json:"last_login_ip"`
+	ID            int      `json:"id"`
+	Name          string   `json:"name"`
+	CallSign      string   `json:"callsign"`
+	Phone         string   `json:"phone"`
+	Password      string   `json:"-"`
+	Birthday      string   `json:"birthday"`
+	Sex           int      `json:"sex"`
+	Avatar        string   `json:"avatar"`
+	Address       string   `json:"address"`
+	Roles         []string `json:"roles"`
+	Introduction  string   `json:"introduction"`
+	AlarmMsg      bool     `json:"alarm_msg"`
+	Status        int      `json:"status"`
+	UpdateTime    string   `json:"update_time"`
+	LastLoginTime string   `json:"last_login_time"`
+	LoginErrTimes int      `json:"login_err_times"`
+	CreateTime    string   `json:"create_time"`
+	OpenID        string   `json:"openid"`
+	NickName      string   `json:"nickname"`
+	HeadImgURL    string   `json:"headimgurl"`
+	LastLoginIP   string   `json:"last_login_ip"`
 
 	// Runtime fields
-	Groups      map[int]*Group `json:"groups,omitempty"`
-	DevList     []DeviceInfo  `json:"dev_list,omitempty"`
-	TalkDuration int64        `json:"talk_duration"`
-	TalkTimes   int           `json:"talk_times"`
-	DMRID       uint32        `json:"dmrid"`
-	MDCID       string        `json:"mdcid"`
+	Groups       map[int]*Group `json:"groups,omitempty"`
+	DevList      []DeviceInfo   `json:"dev_list,omitempty"`
+	TalkDuration int64          `json:"talk_duration"`
+	TalkTimes    int            `json:"talk_times"`
+	DMRID        uint32         `json:"dmrid"`
+	MDCID        string         `json:"mdcid"`
 }
 
 // GetRoles 实现 UserWithRoles 接口，返回用户角色列表

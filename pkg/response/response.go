@@ -35,10 +35,10 @@ var (
 	ResParamErr        = mustMarshal(Response{CodeParamError, "参数错误", nil})
 	ResUserAlreadyExit = mustMarshal(Response{CodeUserExists, "用户已经存在", nil})
 
-	ResTokenErr       = mustMarshal(Response{CodeTokenError, "令牌错误，可能是登录超时，请重新登录", nil})
-	ResTokenFormatErr = mustMarshal(Response{CodeTokenFormatErr, "格式错误", nil})
-	ResTokenSignErr   = mustMarshal(Response{CodeTokenSignErr, "签名错误", nil})
-	ResTokenDecodeErr = mustMarshal(Response{CodeTokenDecodeErr, "解码错误", nil})
+	ResTokenErr        = mustMarshal(Response{CodeTokenError, "令牌错误，可能是登录超时，请重新登录", nil})
+	ResTokenFormatErr  = mustMarshal(Response{CodeTokenFormatErr, "格式错误", nil})
+	ResTokenSignErr    = mustMarshal(Response{CodeTokenSignErr, "签名错误", nil})
+	ResTokenDecodeErr  = mustMarshal(Response{CodeTokenDecodeErr, "解码错误", nil})
 	ResTokenTimeoutErr = mustMarshal(Response{CodeTokenTimeoutErr, "登录超时", nil})
 	ResTokenExpireErr  = mustMarshal(Response{CodeTokenExpireErr, "登录过期", nil})
 )
@@ -50,8 +50,8 @@ func mustMarshal(v interface{}) []byte {
 
 // ItemsData 带总数的列表数据
 type ItemsData struct {
-	Total int    `json:"total"`
-	Items any    `json:"items"`
+	Total int `json:"total"`
+	Items any `json:"items"`
 }
 
 // JSON 写入 JSON 响应

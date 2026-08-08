@@ -77,4 +77,3 @@ func TestDecodeMsgFromAPRS(t *testing.T) {
 		}
 	})
 }
-

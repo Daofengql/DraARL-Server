@@ -146,10 +146,16 @@ func frontendTitleSuffix(requestPath string) string {
 		return " - 操作证审批"
 	case "/admin/devices":
 		return " - 设备管理"
+	case "/admin/radio-sessions":
+		return " - 移动端"
 	case "/admin/relays":
 		return " - 中继台"
 	case "/admin/servers":
 		return " - 服务器"
+	case "/admin/client-resources":
+		return " - 资源分发"
+	case "/admin/firmware":
+		return " - 设备固件"
 	case "/admin/groups":
 		return " - 群组管理"
 	case "/admin/group-links":
@@ -157,7 +163,7 @@ func frontendTitleSuffix(requestPath string) string {
 	case "/admin/comm-records":
 		return " - 通信记录"
 	case "/admin/assets":
-		return " - 资源管理"
+		return " - 公开资源"
 	case "/admin/settings":
 		return " - 站点配置"
 	default:

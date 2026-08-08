@@ -53,18 +53,19 @@ const adminMenuItems: MenuItem[] = [
     icon: <Devices />,
     children: [
       { path: '/admin/devices', label: '客户端', icon: <Devices /> },
-      { path: '/admin/radio-sessions', label: '幽灵会话', icon: <Hub /> },
+      { path: '/admin/radio-sessions', label: '移动端', icon: <Hub /> },
       { path: '/admin/relays', label: '中继台', icon: <Radio /> },
       { path: '/admin/servers', label: '服务器', icon: <Dns /> },
     ]
   },
   {
     path: '/admin/client-resources',
-    label: '客户端资源分发',
+    label: '资源分发',
     icon: <SystemUpdate />,
     children: [
       { path: '/admin/client-resources', label: '通用资源', icon: <SystemUpdate /> },
       { path: '/admin/firmware', label: '设备固件', icon: <Devices /> },
+      { path: '/admin/assets', label: '公开资源', icon: <Folder /> },
     ]
   },
   {
@@ -85,7 +86,6 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/comm-records/logbook', label: '通联日志', icon: <Book /> },
     ]
   },
-  { path: '/admin/assets', label: '资源管理', icon: <Folder /> },
   { path: '/admin/settings', label: '站点配置', icon: <Settings /> },
 ]
 
@@ -117,7 +117,7 @@ export function AdminLayout() {
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
     const devicePaths = ['/admin/devices', '/admin/radio-sessions', '/admin/relays', '/admin/servers']
-    const resourcePaths = ['/admin/client-resources', '/admin/firmware']
+    const resourcePaths = ['/admin/client-resources', '/admin/firmware', '/admin/assets']
     const groupPaths = ['/admin/groups', '/admin/group-links']
     const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']
 

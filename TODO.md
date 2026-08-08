@@ -2,11 +2,7 @@
 
 > 状态快照：2026-08-08。
 >
-> 固件 OTA 服务端兼容、`auth.go`、`group.go`、UDP Server、Interconnect Gateway、Logbook 和 SiteConfig 拆分，以及不依赖实体 RFBox 的统一验收均已完成并从本文件移除。
-
-## P0. 固件 OTA 真机验收
-
-- [ ] 覆盖旧设备已有截断 OTA 缓存的迁移验收：切换代理模式后，设备重新检查能覆盖旧缓存，并验证 `dev_model=2` 从 `0.0.2` 升级到当前发布版本成功。
+> 固件 OTA 服务端兼容、`dev_model=2` 从 `0.0.2` 通过代理覆盖截断缓存的拉取模拟、`auth.go`、`group.go`、UDP Server、Interconnect Gateway、Logbook 和 SiteConfig 拆分，以及统一验收均已完成并从本文件移除。
 
 ## 1. 本轮不做
 

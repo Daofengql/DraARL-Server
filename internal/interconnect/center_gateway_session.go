@@ -599,3 +599,115 @@ func (g *CenterGateway) sendDeviceSessionRevoke(owner deviceSessionOwner, reason
 	env.ClusterEpoch, env.Flags = g.cluster.Epoch(), FlagControl
 	_ = g.server.SendEnvelope(owner.NodeID, env)
 }
+
+type nodeControlSession struct {
+	nodeID    string
+	sessionID uint64
+}
+
+type deviceSessionOwner struct {
+	NodeID           string
+	ControlSessionID uint64
+	SessionID        uint64
+	SessionEpoch     uint64
+	DeviceID         int
+	OwnerID          int
+	SSID             byte
+	Identity         string
+	GhostSessionID   string
+	ClientInstanceID string
+}
+
+type ghostRecoveryTask struct {
+	sessionID string
+	token     uint64
+	after     time.Duration
+}
+
+func (g *CenterGateway) rejectGhostGrant(grant *DeviceGrant, reason string) {
+	if grant == nil || grant.GhostSessionID == "" {
+		return
+	}
+	g.mu.RLock()
+	handler := g.onGhostRevoke
+	g.mu.RUnlock()
+	if handler != nil {
+		handler(grant.GhostSessionID, reason)
+	}
+}
+
+// RevokeActiveDevice makes the old session non-authoritative before sending
+// any network message. Late upstream packets are therefore rejected even if
+// the edge has not received the best-effort immediate revoke yet.
+func (g *CenterGateway) RevokeActiveDevice(deviceID int, reason string) (bool, error) {
+	if deviceID <= 0 || g.cluster == nil {
+		return false, nil
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.Lock()
+	sessionID := g.activeByID[deviceID]
+	owner, ok := g.deviceSessions[sessionID]
+	if ok {
+		g.removeOwnerMapsLocked(sessionID, owner)
+	}
+	g.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	g.notifyOwnerRevoke(owner, reason)
+	g.sendDeviceSessionRevoke(owner, reason)
+	err := g.cluster.RemoveNodeRoute(owner.NodeID, sessionID)
+	return true, err
+}
+
+func (g *CenterGateway) RevokeActiveGhost(ghostSessionID, reason string) (bool, error) {
+	ghostSessionID = strings.TrimSpace(ghostSessionID)
+	if ghostSessionID == "" || g.cluster == nil {
+		return false, nil
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.Lock()
+	sessionID := g.activeByGhost[ghostSessionID]
+	owner, ok := g.deviceSessions[sessionID]
+	if ok && owner.GhostSessionID == ghostSessionID {
+		g.removeOwnerMapsLocked(sessionID, owner)
+	} else {
+		ok = false
+	}
+	g.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	g.notifyOwnerRevoke(owner, reason)
+	g.sendDeviceSessionRevoke(owner, reason)
+	return true, g.cluster.RemoveNodeRoute(owner.NodeID, owner.SessionID)
+}
+
+func (g *CenterGateway) RevokeActiveOwner(ownerID int, reason string) (int, error) {
+	if ownerID <= 0 || g.cluster == nil {
+		return 0, nil
+	}
+	g.ownershipMu.Lock()
+	defer g.ownershipMu.Unlock()
+	g.mu.Lock()
+	owners := make([]deviceSessionOwner, 0)
+	for sessionID, owner := range g.deviceSessions {
+		if owner.OwnerID != ownerID {
+			continue
+		}
+		owners = append(owners, owner)
+		g.removeOwnerMapsLocked(sessionID, owner)
+	}
+	g.mu.Unlock()
+	var firstErr error
+	for _, owner := range owners {
+		g.notifyOwnerRevoke(owner, reason)
+		g.sendDeviceSessionRevoke(owner, reason)
+		if err := g.cluster.RemoveNodeRoute(owner.NodeID, owner.SessionID); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return len(owners), firstErr
+}

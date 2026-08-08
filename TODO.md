@@ -2,34 +2,17 @@
 
 > 状态快照：2026-08-08。
 >
-> 固件 OTA 服务端兼容、`auth.go`、`group.go`、Logbook 和 SiteConfig 拆分已经完成并从本文件移除。剩余工作继续只降低单文件复杂度、明确职责边界，不改变 HTTP API、UDP/互联协议、数据库结构、权限规则、路由行为或页面交互。
+> 固件 OTA 服务端兼容、`auth.go`、`group.go`、UDP Server、Logbook 和 SiteConfig 拆分已经完成并从本文件移除。剩余工作继续只降低单文件复杂度、明确职责边界，不改变 HTTP API、UDP/互联协议、数据库结构、权限规则、路由行为或页面交互。
 
 ## P0. 固件 OTA 真机验收
 
 - [ ] 覆盖旧设备已有截断 OTA 缓存的迁移验收：切换代理模式后，设备重新检查能覆盖旧缓存，并验证 `dev_model=2` 从 `0.0.2` 升级到当前发布版本成功。
 
-## 1. `internal/udphub/server.go`
-
-该文件处于 UDP 热路径，必须保持 package `udphub`、锁类型、锁顺序和数据包生命周期不变。
-
-- [ ] 将 UDP 生命周期、监听、关闭和 socket 错误判断移动到 `server_runtime.go`。
-- [ ] 将包入口、协议解析和消息类型分发移动到 `server_packet.go`。
-- [ ] 将新设备接入、设备查找、默认群组解析和客户端设备型号更新移动到 `server_device_session.go`。
-- [ ] 将语音授权、半双工仲裁和语音转发移动到 `server_voice.go`。
-- [ ] 将文本消息和普通数据转发移动到 `server_message.go`。
-- [ ] 将群组/设备缓存刷新和快照读取移动到 `server_cache_sync.go`。
-- [ ] 将全局统计访问与原子更新移动到 `server_stats.go`。
-- [ ] 增加包类型分发表驱动测试，覆盖认证、心跳、语音、文本、配置、未知类型和畸形数据。
-- [ ] 对标准 UDP 单端、Ghost 多端、来源频道过滤、半双工争用、缓存刷新并发运行 `-race`。
-- [ ] 用现有 fanout benchmark 对比拆分前后分配次数、吞吐和 P95，不接受可重复的性能退化。
-
-完成标准：`server.go` 删除或仅保留极薄入口；热路径锁顺序、原子统计和数据包生命周期保持不变。
-
-## 2. `internal/interconnect/gateway.go`
+## 1. `internal/interconnect/gateway.go`
 
 这是最高风险项，必须按职责域逐次移动并在每一步运行对应测试，禁止一次性重写。
 
-### 2.1 CenterGateway
+### 1.1 CenterGateway
 
 - [ ] 将中心端结构、构造和连接生命周期移动到 `center_gateway.go`。
 - [ ] 将设备 Session 激活、续期、确认、恢复和撤销移动到 `center_gateway_session.go`。
@@ -37,7 +20,7 @@
 - [ ] 将设备/身份/Ghost 路由更新和域刷新移动到 `center_gateway_routing.go`。
 - [ ] 将中心端 Relay 与 SpeakerLease 处理移动到 `center_gateway_relay.go`。
 
-### 2.2 EdgeGateway
+### 1.2 EdgeGateway
 
 - [ ] 将边缘端结构、构造、控制链路和连接生命周期移动到 `edge_gateway.go`。
 - [ ] 将认证、Session 续期、确认、过期和撤销移动到 `edge_gateway_session.go`。
@@ -46,7 +29,7 @@
 - [ ] 将投影应用、接收计划缓存和路由确认/重同步移动到 `edge_gateway_routing.go`。
 - [ ] 将下行写入、屏障队列、排空和地址辅助函数移动到 `edge_gateway_downstream.go`。
 
-### 2.3 共同约束
+### 1.3 共同约束
 
 - [ ] 共享类型只放入 `gateway_types.go`；不要创建同时操纵 Center 和 Edge 内部状态的万能工具文件。
 - [ ] 保持所有互斥锁的获取顺序、channel 关闭顺序、goroutine 退出条件和原子变量语义不变。
@@ -56,7 +39,7 @@
 
 完成标准：Center 与 Edge 的状态机可分别阅读和测试，`gateway.go` 删除或只留下少量真正共享的入口代码。
 
-## 3. 统一验收矩阵
+## 2. 统一验收矩阵
 
 - [ ] `gofmt` 不产生额外差异。
 - [ ] `go test ./...` 通过。
@@ -70,13 +53,12 @@
 - [ ] Web 回归通联日志与系统设置页面，覆盖桌面和移动视口。
 - [ ] 接口模拟回归标准设备单端、Ghost 多端、多收单发、中心/边缘切换和在线计数。
 
-## 4. 剩余提交顺序
+## 3. 剩余提交顺序
 
-- [ ] 提交 6：拆分 `internal/udphub/server.go`。
 - [ ] 提交 7-N：按 CenterGateway、EdgeGateway 的职责域逐次拆分 `internal/interconnect/gateway.go`。
 - [ ] 最终提交：只做无用 import、重复辅助函数、测试基线和文档路径清理，不再改变模块边界。
 
-## 5. 本轮不做
+## 4. 本轮不做
 
 - 不修改公开或内部协议版本。
 - 不调整数据库模型或迁移。

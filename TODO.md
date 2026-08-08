@@ -14,7 +14,6 @@
 
 ### 1.1 CenterGateway
 
-- [ ] 将设备配置请求、缓存、重试和完成处理移动到 `center_gateway_config.go`。
 - [ ] 将设备/身份/Ghost 路由更新和域刷新移动到 `center_gateway_routing.go`。
 - [ ] 将中心端 Relay 与 SpeakerLease 处理移动到 `center_gateway_relay.go`。
 

@@ -26,6 +26,7 @@ func udpAddrEqual(a, b *net.UDPAddr) bool {
 	}
 	return a.IP.Equal(b.IP)
 }
+
 func (g *EdgeGateway) deliverDownstream(env Envelope, frame RelayFrame) {
 	now := time.Now()
 	if env.locallyExpired(now, g.downstreamMaxAge) {
@@ -113,6 +114,7 @@ func (g *EdgeGateway) clearPendingDownstream() {
 		g.metrics.AddDropBulk(uint64(dropped))
 	}
 }
+
 func (g *EdgeGateway) writeDevice(data []byte, addr *net.UDPAddr) {
 	_ = g.writeDeviceResult(data, addr)
 }

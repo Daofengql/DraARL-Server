@@ -12,8 +12,6 @@ import (
 
 	"draarl/internal/broadcast/model"
 	"draarl/internal/gormdb"
-
-	"gorm.io/gorm"
 )
 
 func TestRepositorySchedulePolicyMySQL(t *testing.T) {
@@ -166,7 +164,7 @@ func TestRepositoryClaimsAndAdvancesIndependentSchedulesMySQL(t *testing.T) {
 	ctx := context.Background()
 	audioA := createReadyAudio(t, repo, owner.ID, groups.a.ID, "claim-shared")
 	audioB := createReadyAudio(t, repo, owner.ID, groups.a.ID, "claim-alternate")
-	now := time.Date(2026, 8, 9, 5, 0, 0, 0, time.UTC)
+	now := time.Date(2000, 8, 9, 5, 0, 0, 0, time.UTC)
 	schedules := make([]*model.BroadcastSchedule, 0, 12)
 	for index := 0; index < 12; index++ {
 		audioID := audioA.ID
@@ -244,7 +242,7 @@ func TestRepositoryRecoveryWindowAndRunLeaseMySQL(t *testing.T) {
 	repo, owner, groups := setupRepositoryMySQL(t)
 	ctx := context.Background()
 	audio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "recovery-audio")
-	now := time.Date(2026, 8, 9, 6, 0, 0, 0, time.UTC)
+	now := time.Date(2001, 8, 9, 6, 0, 0, 0, time.UTC)
 
 	onceAt := now.Add(time.Hour)
 	once := &model.BroadcastSchedule{
@@ -337,6 +335,74 @@ func TestRepositoryRecoveryWindowAndRunLeaseMySQL(t *testing.T) {
 	}
 }
 
+func TestRepositoryManualClaimsAreIndependentAndDoNotAdvanceScheduleMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	audio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "manual-audio")
+	now := time.Date(2002, 8, 9, 7, 0, 0, 0, time.UTC)
+	schedule := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audio.ID, Name: "manual-daily", ScheduleType: model.ScheduleTypeDaily,
+		Timezone: "Asia/Shanghai", LocalTime: "18:00:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	if err := repo.SaveSchedule(ctx, schedule, now); err != nil {
+		t.Fatal(err)
+	}
+	originalNext := *schedule.NextRunAt
+
+	var wg sync.WaitGroup
+	runs := make(chan *model.BroadcastRun, 10)
+	errs := make(chan error, 10)
+	for index := 0; index < 10; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			run, code, err := repo.ClaimManualRun(ctx, groups.a.ID, schedule.ID, now, fmt.Sprintf("manual-%d", index), 5*time.Second)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if code != "" {
+				errs <- fmt.Errorf("manual code %s", code)
+				return
+			}
+			runs <- run
+		}(index)
+	}
+	wg.Wait()
+	close(runs)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	occurrences := make(map[int64]struct{})
+	for run := range runs {
+		occurrences[run.ScheduledFor.UnixMilli()] = struct{}{}
+	}
+	if len(occurrences) != 10 {
+		t.Fatalf("manual occurrence keys=%d want=10", len(occurrences))
+	}
+	var stored model.BroadcastSchedule
+	if err := repo.DB().First(&stored, schedule.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.NextRunAt == nil || !stored.NextRunAt.Equal(originalNext) {
+		t.Fatalf("manual trigger advanced schedule: before=%v after=%v", originalNext, stored.NextRunAt)
+	}
+
+	if err := repo.DB().Create(&gormdb.GroupLink{LinkGroupID: groups.virtual.ID, TargetGroupID: groups.a.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SavePolicy(ctx, &model.VirtualGroupBroadcastPolicy{VirtualGroupID: groups.virtual.ID, Mode: model.PolicySuspendAll, UpdatedBy: owner.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DB().Model(&gormdb.Group{}).Where("id = ?", groups.virtual.ID).Update("status", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run, code, err := repo.ClaimManualRun(ctx, groups.a.ID, schedule.ID, now.Add(time.Second), "manual-blocked", 5*time.Second); err != nil || run != nil || code != "virtual_group_broadcast_suspended" {
+		t.Fatalf("suspended manual run=%#v code=%q err=%v", run, code, err)
+	}
+}
+
 type repositoryGroups struct {
 	a       *gormdb.Group
 	b       *gormdb.Group
@@ -360,14 +426,6 @@ func setupRepositoryMySQL(t *testing.T) (*Repository, *gormdb.User, repositoryGr
 	if err := gormdb.AutoMigrate(); err != nil {
 		t.Fatal(err)
 	}
-	// ClaimDue intentionally scans the whole site. Isolate each E2E scenario
-	// from due schedules left by earlier tests in the shared test database.
-	for _, value := range []any{&model.BroadcastRun{}, &model.BroadcastSchedule{}, &model.BroadcastAudio{}} {
-		if err := gormdb.Get().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	stamp := time.Now().UnixNano()
 	owner := &gormdb.User{Name: fmt.Sprintf("broadcast-owner-%d", stamp), Email: fmt.Sprintf("broadcast-%d@example.invalid", stamp), CallSign: fmt.Sprintf("B%07d", stamp%10_000_000), Roles: "admin", Status: 1}
 	if err := gormdb.Get().Create(owner).Error; err != nil {
@@ -385,6 +443,16 @@ func setupRepositoryMySQL(t *testing.T) (*Repository, *gormdb.User, repositoryGr
 		return group
 	}
 	groups := repositoryGroups{a: newGroup("A", false), b: newGroup("B", false), outside: newGroup("outside", false), virtual: newGroup("virtual", true)}
+	t.Cleanup(func() {
+		groupIDs := []int{groups.a.ID, groups.b.ID, groups.outside.ID, groups.virtual.ID}
+		_ = gormdb.Get().Where("source_group_id IN ?", groupIDs).Delete(&model.BroadcastRun{}).Error
+		_ = gormdb.Get().Where("group_id IN ?", groupIDs).Delete(&model.BroadcastSchedule{}).Error
+		_ = gormdb.Get().Where("group_id IN ?", groupIDs).Delete(&model.BroadcastAudio{}).Error
+		_ = gormdb.Get().Where("virtual_group_id = ?", groups.virtual.ID).Delete(&model.VirtualGroupBroadcastPolicy{}).Error
+		_ = gormdb.Get().Where("link_group_id = ? OR target_group_id IN ?", groups.virtual.ID, groupIDs).Delete(&gormdb.GroupLink{}).Error
+		_ = gormdb.Get().Delete(&gormdb.Group{}, groupIDs).Error
+		_ = gormdb.Get().Delete(&gormdb.User{}, owner.ID).Error
+	})
 	return New(gormdb.Get()), owner, groups
 }
 

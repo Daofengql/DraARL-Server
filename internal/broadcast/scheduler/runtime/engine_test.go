@@ -38,6 +38,8 @@ type fakeRuntimeRepository struct {
 	validated    int
 	finished     []finishedRun
 	finishedCh   chan struct{}
+	loadStarted  chan struct{}
+	blockLoad    bool
 }
 
 func (r *fakeRuntimeRepository) ClaimDue(context.Context, time.Time, string, time.Duration, time.Duration, int) ([]model.BroadcastRun, error) {
@@ -54,7 +56,23 @@ func (r *fakeRuntimeRepository) RecoverExpiredRuns(context.Context, time.Time, s
 	return nil, nil
 }
 
-func (r *fakeRuntimeRepository) LoadClaimedExecution(context.Context, uint, string, time.Time) (*core.RunExecution, string, error) {
+func (r *fakeRuntimeRepository) ClaimManualRun(context.Context, int, uint, time.Time, string, time.Duration) (*model.BroadcastRun, string, error) {
+	r.mu.Lock()
+	r.claimed = true
+	r.mu.Unlock()
+	run := r.run
+	return &run, "", nil
+}
+
+func (r *fakeRuntimeRepository) LoadClaimedExecution(ctx context.Context, _ uint, _ string, _ time.Time) (*core.RunExecution, string, error) {
+	if r.blockLoad {
+		select {
+		case r.loadStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, "", ctx.Err()
+	}
 	return r.execution, "", nil
 }
 
@@ -243,4 +261,58 @@ func TestEngineMapsQuietGateAndManualCancellation(t *testing.T) {
 			t.Fatalf("finished=%#v", finished)
 		}
 	})
+}
+
+func TestEngineManualTriggerUsesTheSameExecutionPath(t *testing.T) {
+	engine, repo, container := engineFixture(t)
+	repo.claimed = true
+	engine.broadcaster = broadcasterFunc(func(ctx context.Context, request BroadcastRequest) (BroadcastOutcome, error) {
+		snapshot := LeaseSnapshot{DomainKey: "101", DomainGroupIDs: []int{101}}
+		if err := request.OnAcquired(snapshot); err != nil {
+			return BroadcastOutcome{AcquireResult: udphub.ScheduledBroadcastAcquired, Snapshot: snapshot}, err
+		}
+		return BroadcastOutcome{
+			AcquireResult: udphub.ScheduledBroadcastAcquired, Snapshot: snapshot,
+			Playback: player.Result{PlayedDuration: time.Duration(container.Metadata.DurationMS) * time.Millisecond, SentPackets: len(container.Packets), EndedAt: time.Now()},
+		}, nil
+	})
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	run, code, err := engine.TriggerManual(context.Background(), repo.run.SourceGroupID, repo.run.ScheduleID)
+	if err != nil || code != "" || run == nil || run.ID != repo.run.ID {
+		t.Fatalf("manual run=%#v code=%q err=%v", run, code, err)
+	}
+	finished := waitFinished(t, repo)
+	stopEngine(t, engine)
+	if finished.status != model.RunStatusSucceeded || finished.sentPackets != len(container.Packets) {
+		t.Fatalf("finished=%#v", finished)
+	}
+}
+
+func TestEngineManualStopBeforeExecutionLoadIsStillCancelled(t *testing.T) {
+	engine, repo, _ := engineFixture(t)
+	repo.claimed = true
+	repo.blockLoad = true
+	repo.loadStarted = make(chan struct{}, 1)
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	run, code, err := engine.TriggerManual(context.Background(), repo.run.SourceGroupID, repo.run.ScheduleID)
+	if err != nil || code != "" || run == nil {
+		t.Fatalf("manual run=%#v code=%q err=%v", run, code, err)
+	}
+	select {
+	case <-repo.loadStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not enter execution load")
+	}
+	if !engine.CancelRun(run.ID, ErrManualStop) {
+		t.Fatal("run was not active")
+	}
+	finished := waitFinished(t, repo)
+	stopEngine(t, engine)
+	if finished.status != model.RunStatusCancelled || finished.errorCode != "manual_stop" || finished.sentPackets != 0 {
+		t.Fatalf("finished=%#v", finished)
+	}
 }

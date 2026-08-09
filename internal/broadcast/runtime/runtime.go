@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"sync"
 
+	"draarl/internal/broadcast/model"
 	"draarl/internal/broadcast/repository"
 	schedruntime "draarl/internal/broadcast/scheduler/runtime"
 	"draarl/internal/config"
 	"draarl/pkg/storage"
 )
+
+var ErrUnavailable = errors.New("broadcast scheduler is unavailable")
 
 var global struct {
 	sync.RWMutex
@@ -45,6 +48,16 @@ func CancelRun(runID uint, cause error) bool {
 	engine := global.engine
 	global.RUnlock()
 	return engine != nil && engine.CancelRun(runID, cause)
+}
+
+func TriggerManual(ctx context.Context, groupID int, scheduleID uint) (*model.BroadcastRun, string, error) {
+	global.RLock()
+	engine := global.engine
+	global.RUnlock()
+	if engine == nil {
+		return nil, "", ErrUnavailable
+	}
+	return engine.TriggerManual(ctx, groupID, scheduleID)
 }
 
 func CancelGroups(groupIDs []int, cause error) int {

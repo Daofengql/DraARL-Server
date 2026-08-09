@@ -283,7 +283,9 @@ func (s *Server) setupRoutes() {
 				approved.POST("/groups/:id/broadcast-schedules", handler.CreateBroadcastSchedule)
 				approved.PATCH("/groups/:id/broadcast-schedules/:scheduleId", handler.UpdateBroadcastSchedule)
 				approved.DELETE("/groups/:id/broadcast-schedules/:scheduleId", handler.DeleteBroadcastSchedule)
+				approved.POST("/groups/:id/broadcast-schedules/:scheduleId/run", handler.RunBroadcastSchedule)
 				approved.GET("/groups/:id/broadcast-runs", handler.ListBroadcastRuns)
+				approved.POST("/groups/:id/broadcast-runs/:runId/cancel", handler.CancelBroadcastRun)
 
 				// 群组管理操作（需要群组所有者或管理员权限）
 				groupOwner := approved.Group("")

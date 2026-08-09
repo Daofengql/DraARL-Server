@@ -25,6 +25,7 @@ const (
 var (
 	ErrSchedulerDisabled  = errors.New("broadcast scheduler is disabled")
 	ErrSchedulerStopped   = errors.New("broadcast scheduler is stopped")
+	ErrSchedulerBusy      = errors.New("broadcast scheduler is at capacity")
 	ErrManualStop         = errors.New("broadcast manually stopped")
 	ErrInterconnectChange = errors.New("broadcast stopped by interconnect change")
 	ErrServiceShutdown    = errors.New("broadcast stopped by service shutdown")
@@ -153,6 +154,10 @@ func (e *Engine) launch(run model.BroadcastRun) {
 	default:
 		return
 	}
+	e.launchReserved(run)
+}
+
+func (e *Engine) launchReserved(run model.BroadcastRun) {
 	runCtx, cancel := context.WithCancelCause(e.ctx)
 	e.activeMu.Lock()
 	if _, exists := e.active[run.ID]; exists {
@@ -177,9 +182,38 @@ func (e *Engine) launch(run model.BroadcastRun) {
 	}()
 }
 
+func (e *Engine) TriggerManual(ctx context.Context, groupID int, scheduleID uint) (*model.BroadcastRun, string, error) {
+	if e == nil {
+		return nil, "", ErrSchedulerStopped
+	}
+	e.lifecycleMu.Lock()
+	started, stopped := e.started, e.stopped
+	e.lifecycleMu.Unlock()
+	if !started || stopped {
+		return nil, "", ErrSchedulerStopped
+	}
+	select {
+	case e.slots <- struct{}{}:
+	default:
+		return nil, "", ErrSchedulerBusy
+	}
+	run, code, err := e.repository.ClaimManualRun(ctx, groupID, scheduleID, e.now().UTC(), e.instanceID, RunLeaseDuration)
+	if err != nil || code != "" {
+		<-e.slots
+		return nil, code, err
+	}
+	e.launchReserved(*run)
+	return run, "", nil
+}
+
 func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
 	execution, code, err := e.repository.LoadClaimedExecution(ctx, run.ID, e.instanceID, e.now().UTC())
 	if err != nil {
+		if contextError(ctx) != nil {
+			status, errorCode := playbackTerminal(ctx, ctx.Err())
+			e.finish(run, status, playerSummary{}, nil, LeaseSnapshot{}, errorCode, "broadcast execution was cancelled before playback")
+			return
+		}
 		e.finish(run, model.RunStatusFailed, playerSummary{}, nil, LeaseSnapshot{}, "execution_load_failed", "broadcast execution could not be loaded")
 		return
 	}

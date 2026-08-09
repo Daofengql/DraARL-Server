@@ -387,6 +387,86 @@ func (r *Repository) RecoverExpiredRuns(ctx context.Context, now time.Time, clai
 	return recovered, err
 }
 
+// ClaimManualRun creates an immediate execution without advancing or otherwise
+// changing the schedule's future occurrence. The schedule row serializes
+// simultaneous manual requests so their millisecond occurrence keys remain
+// unique even when they arrive together.
+func (r *Repository) ClaimManualRun(ctx context.Context, groupID int, scheduleID uint, now time.Time, claimedBy string, leaseDuration time.Duration) (*model.BroadcastRun, string, error) {
+	claimedBy = strings.TrimSpace(claimedBy)
+	if groupID <= 0 || scheduleID == 0 || claimedBy == "" || leaseDuration <= 0 {
+		return nil, "", ErrInvalidSchedule
+	}
+	now = now.UTC().Truncate(time.Millisecond)
+	leaseUntil := now.Add(leaseDuration)
+	var claimed model.BroadcastRun
+	code := ""
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var group gormdb.Group
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&group, groupID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if group.Status != 1 || group.IsVirtual || (group.Type != 1 && group.Type != 2) {
+			code = "group_unavailable"
+			return nil
+		}
+		var schedule model.BroadcastSchedule
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND group_id = ?", scheduleID, groupID).First(&schedule).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if !schedule.Enabled {
+			code = "schedule_disabled"
+			return nil
+		}
+		if schedule.SuspendedReason != "" {
+			code = "virtual_group_broadcast_suspended"
+			return nil
+		}
+		if err := validateAudioForSchedule(tx, groupID, schedule.AudioID); err != nil {
+			if errors.Is(err, ErrAudioNotReady) || errors.Is(err, ErrAudioGroupMismatch) {
+				code = "audio_unavailable"
+				return nil
+			}
+			return err
+		}
+		policy, err := activePolicyForEntityGroup(tx, groupID)
+		if err != nil {
+			return err
+		}
+		if policy != nil && (policy.Mode != model.PolicyAllowSingleSource || policy.AllowedSourceGroupID == nil || *policy.AllowedSourceGroupID != groupID) {
+			code = "virtual_group_broadcast_suspended"
+			return nil
+		}
+
+		candidate := now
+		for attempt := 0; attempt < 1000; attempt++ {
+			var count int64
+			if err := tx.Model(&model.BroadcastRun{}).Where("schedule_id = ? AND scheduled_for = ?", schedule.ID, candidate).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				claimed = model.BroadcastRun{
+					ScheduleID: schedule.ID, AudioID: schedule.AudioID, SourceGroupID: groupID,
+					ScheduledFor: candidate, Status: model.RunStatusClaimed,
+					ClaimedBy: claimedBy, LeaseUntil: &leaseUntil,
+				}
+				return tx.Create(&claimed).Error
+			}
+			candidate = candidate.Add(time.Millisecond)
+		}
+		return errors.New("manual broadcast occurrence key exhausted")
+	})
+	if err != nil || code != "" {
+		return nil, code, err
+	}
+	return &claimed, "", nil
+}
+
 func (r *Repository) LoadClaimedExecution(ctx context.Context, runID uint, claimedBy string, now time.Time) (*scheduler.RunExecution, string, error) {
 	var execution scheduler.RunExecution
 	code := ""

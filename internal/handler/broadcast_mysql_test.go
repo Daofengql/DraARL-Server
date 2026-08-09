@@ -19,8 +19,10 @@ import (
 	"draarl/internal/broadcast/media"
 	"draarl/internal/broadcast/model"
 	"draarl/internal/broadcast/repository"
+	broadcastruntime "draarl/internal/broadcast/runtime"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
+	"draarl/internal/udphub"
 	jwtutil "draarl/pkg/jwt"
 	"draarl/pkg/storage"
 
@@ -232,6 +234,55 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		t.Fatalf("audio schedule counts=%v want A=2 B=1", counts)
 	}
 
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	if err := broadcastruntime.Init(cfg); err != nil {
+		t.Fatalf("start broadcast scheduler: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := broadcastruntime.Stop(ctx); err != nil {
+			t.Errorf("stop broadcast scheduler: %v", err)
+		}
+	}()
+
+	trigger := func(scheduleID uint) model.BroadcastRun {
+		t.Helper()
+		result := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules/:scheduleId/run", fmt.Sprintf("/groups/%d/broadcast-schedules/%d/run", groupA.ID, scheduleID), nil, "", RunBroadcastSchedule)
+		requireBroadcastStatus(t, result, http.StatusAccepted)
+		var envelope struct {
+			Data model.BroadcastRun `json:"data"`
+		}
+		if err := json.Unmarshal(result.Body, &envelope); err != nil || envelope.Data.ID == 0 {
+			t.Fatalf("decode manual run: err=%v body=%s", err, result.Body)
+		}
+		return envelope.Data
+	}
+	cancelledRun := trigger(scheduleA1.ID)
+	cancelResult := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-runs/:runId/cancel", fmt.Sprintf("/groups/%d/broadcast-runs/%d/cancel", groupA.ID, cancelledRun.ID), nil, "", CancelBroadcastRun)
+	requireBroadcastStatus(t, cancelResult, http.StatusAccepted)
+	cancelledRun = waitBroadcastRunTerminal(t, repo, groupA.ID, cancelledRun.ID)
+	if cancelledRun.Status != model.RunStatusCancelled || cancelledRun.ErrorCode != "manual_stop" || cancelledRun.SentPackets > 1 {
+		t.Fatalf("cancelled manual run=%#v", cancelledRun)
+	}
+	crossCancel := performBroadcastHandlerRequest(t, other, http.MethodPost, "/groups/:id/broadcast-runs/:runId/cancel", fmt.Sprintf("/groups/%d/broadcast-runs/%d/cancel", groupB.ID, cancelledRun.ID), nil, "", CancelBroadcastRun)
+	requireBroadcastStatus(t, crossCancel, http.StatusNotFound)
+
+	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	succeededRun := trigger(scheduleA2.ID)
+	succeededRun = waitBroadcastRunTerminal(t, repo, groupA.ID, succeededRun.ID)
+	if succeededRun.Status != model.RunStatusSucceeded || succeededRun.SentPackets != audioA.PacketCount || succeededRun.PlayedDurationMS != audioA.DurationMS {
+		t.Fatalf("successful manual run=%#v audio=%#v", succeededRun, audioA)
+	}
+	afterManual, err := repo.GetSchedule(context.Background(), groupA.ID, scheduleA2.ID)
+	if err != nil || afterManual.NextRunAt == nil || persistedA2.NextRunAt == nil || !afterManual.NextRunAt.Equal(*persistedA2.NextRunAt) {
+		t.Fatalf("manual run changed future schedule: before=%v after=%#v err=%v", persistedA2.NextRunAt, afterManual, err)
+	}
+	forbiddenRun := performBroadcastHandlerRequest(t, other, http.MethodPost, "/groups/:id/broadcast-schedules/:scheduleId/run", fmt.Sprintf("/groups/%d/broadcast-schedules/%d/run", groupA.ID, scheduleA1.ID), nil, "", RunBroadcastSchedule)
+	requireBroadcastStatus(t, forbiddenRun, http.StatusForbidden)
+
 	deleteInUse := performBroadcastHandlerRequest(t, owner, http.MethodDelete, "/groups/:id/broadcast-audios/:audioId", fmt.Sprintf("/groups/%d/broadcast-audios/%d", groupA.ID, audioA.ID), nil, "", DeleteBroadcastAudio)
 	requireBroadcastStatus(t, deleteInUse, http.StatusConflict)
 
@@ -259,8 +310,18 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			Items []model.BroadcastRun `json:"items"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(runList.Body, &runEnvelope); err != nil || runEnvelope.Data.Total != 1 || len(runEnvelope.Data.Items) != 1 || runEnvelope.Data.Items[0].ID != run.ID {
+	if err := json.Unmarshal(runList.Body, &runEnvelope); err != nil || runEnvelope.Data.Total < 3 || len(runEnvelope.Data.Items) < 3 {
 		t.Fatalf("run history mismatch: err=%v body=%s", err, runList.Body)
+	}
+	foundStatic := false
+	for _, item := range runEnvelope.Data.Items {
+		if item.ID == run.ID {
+			foundStatic = true
+			break
+		}
+	}
+	if !foundStatic {
+		t.Fatalf("run history omitted inserted run %d: %s", run.ID, runList.Body)
 	}
 
 	references, err := gormdb.ManagedStorageReferences()
@@ -339,6 +400,23 @@ func waitBroadcastAudioReady(t *testing.T, repo *repository.Repository, groupID 
 	}
 	t.Fatalf("audio %d did not become ready", audioID)
 	return nil
+}
+
+func waitBroadcastRunTerminal(t *testing.T, repo *repository.Repository, groupID int, runID uint) model.BroadcastRun {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := repo.GetRun(context.Background(), groupID, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status != model.RunStatusClaimed && run.Status != model.RunStatusPlaying {
+			return *run
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("broadcast run %d did not finish", runID)
+	return model.BroadcastRun{}
 }
 
 func makeBroadcastTestWAV(duration time.Duration) []byte {

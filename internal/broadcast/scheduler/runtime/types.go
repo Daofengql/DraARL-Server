@@ -15,6 +15,7 @@ import (
 type RuntimeRepository interface {
 	ClaimDue(context.Context, time.Time, string, time.Duration, time.Duration, int) ([]model.BroadcastRun, error)
 	RecoverExpiredRuns(context.Context, time.Time, string, time.Duration, time.Duration, int) ([]model.BroadcastRun, error)
+	ClaimManualRun(context.Context, int, uint, time.Time, string, time.Duration) (*model.BroadcastRun, string, error)
 	LoadClaimedExecution(context.Context, uint, string, time.Time) (*core.RunExecution, string, error)
 	MarkRunPlaying(context.Context, uint, string, string, []int, time.Time, time.Duration) (string, error)
 	ValidateAndRenewRun(context.Context, uint, string, time.Time, time.Duration) (string, error)

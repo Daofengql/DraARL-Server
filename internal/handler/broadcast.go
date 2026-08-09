@@ -18,6 +18,8 @@ import (
 	"draarl/internal/broadcast/media"
 	"draarl/internal/broadcast/model"
 	"draarl/internal/broadcast/repository"
+	broadcastruntime "draarl/internal/broadcast/runtime"
+	schedruntime "draarl/internal/broadcast/scheduler/runtime"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
@@ -344,6 +346,79 @@ func ListBroadcastRuns(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": gin.H{"items": runs, "total": total, "page": max(page, 1), "page_size": normalizeBroadcastPageSize(pageSize)}})
+}
+
+func RunBroadcastSchedule(c *gin.Context) {
+	user, group, groupID, ok := requireManagedBroadcastGroup(c)
+	if !ok {
+		return
+	}
+	scheduleID, ok := parseBroadcastUintParam(c, "scheduleId")
+	if !ok {
+		return
+	}
+	if cfg := config.TryGet(); cfg == nil || !cfg.Broadcast.Enabled {
+		writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_disabled", "站点未启用自动播报")
+		return
+	}
+	run, code, err := broadcastruntime.TriggerManual(c.Request.Context(), groupID, scheduleID)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrNotFound):
+			writeBroadcastError(c, http.StatusNotFound, "broadcast_resource_not_found", "播报计划不存在")
+		case errors.Is(err, broadcastruntime.ErrUnavailable), errors.Is(err, schedruntime.ErrSchedulerStopped):
+			writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_scheduler_unavailable", "自动播报调度器暂不可用")
+		case errors.Is(err, schedruntime.ErrSchedulerBusy):
+			writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_scheduler_busy", "自动播报任务已达到并发上限")
+		default:
+			log.Printf("[BROADCAST] manual trigger failed: group_id=%d schedule_id=%d", groupID, scheduleID)
+			writeBroadcastError(c, http.StatusInternalServerError, "broadcast_manual_run_failed", "手动触发自动播报失败")
+		}
+		return
+	}
+	if code != "" {
+		switch code {
+		case "virtual_group_broadcast_suspended":
+			writeBroadcastError(c, http.StatusConflict, "virtual_group_broadcast_suspended", "当前互联策略已挂起该实体组的自动播报")
+		case "schedule_disabled":
+			writeBroadcastError(c, http.StatusConflict, "broadcast_schedule_disabled", "播报计划当前已停用")
+		case "group_unavailable":
+			writeBroadcastError(c, http.StatusConflict, "broadcast_group_unavailable", "播报实体组当前不可用")
+		case "audio_unavailable":
+			writeBroadcastError(c, http.StatusConflict, "broadcast_audio_not_ready", "播报音频当前不可用")
+		default:
+			writeBroadcastError(c, http.StatusConflict, "broadcast_run_not_eligible", "播报计划当前不可执行")
+		}
+		return
+	}
+	oplog.AddLog(fmt.Sprintf("手动触发自动播报: 计划ID=%d (群组: %s, 执行ID: %d)", scheduleID, group.Name, run.ID), "broadcast_schedule_run", user.ID, user.Name, user.CallSign, c.ClientIP())
+	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "自动播报已触发", "data": run})
+}
+
+func CancelBroadcastRun(c *gin.Context) {
+	user, group, groupID, ok := requireManagedBroadcastGroup(c)
+	if !ok {
+		return
+	}
+	runID, ok := parseBroadcastUintParam(c, "runId")
+	if !ok {
+		return
+	}
+	run, err := repository.Default().GetRun(c.Request.Context(), groupID, runID)
+	if err != nil {
+		writeBroadcastRepositoryError(c, err)
+		return
+	}
+	if run.Status != model.RunStatusClaimed && run.Status != model.RunStatusPlaying {
+		writeBroadcastError(c, http.StatusConflict, "broadcast_run_not_playing", "该自动播报当前未在执行")
+		return
+	}
+	if !broadcastruntime.CancelRun(run.ID, nil) {
+		writeBroadcastError(c, http.StatusConflict, "broadcast_run_not_playing", "该自动播报当前未在本节点执行")
+		return
+	}
+	oplog.AddLog(fmt.Sprintf("停止自动播报: 执行ID=%d (群组: %s)", run.ID, group.Name), "broadcast_run_cancel", user.ID, user.Name, user.CallSign, c.ClientIP())
+	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "停止请求已提交", "data": gin.H{"run_id": run.ID}})
 }
 
 func requireManagedBroadcastGroup(c *gin.Context) (*gormdb.User, *gormdb.Group, int, bool) {

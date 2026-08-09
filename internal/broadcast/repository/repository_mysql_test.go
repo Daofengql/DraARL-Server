@@ -87,6 +87,92 @@ func TestRepositorySchedulePolicyMySQL(t *testing.T) {
 	}
 }
 
+func TestRepositoryOperationalSwitchBlocksRunsAndSkipsMissedSchedulesMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	repo.operationalKey = fmt.Sprintf("broadcast.test_runtime_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = repo.DB().Where("config_key IN ?", []string{repo.operationalKey, repo.emergencyFenceKey()}).Delete(&gormdb.SiteConfig{}).Error
+	})
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if enabled, err := repo.EnsureOperationalEnabled(ctx); err != nil || !enabled {
+		t.Fatalf("ensure operational state enabled=%v err=%v", enabled, err)
+	}
+
+	audio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "runtime-switch")
+	onceAt := now.Add(time.Hour)
+	once := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audio.ID, Name: "once", ScheduleType: model.ScheduleTypeOnce,
+		Timezone: "UTC", ScheduledAt: &onceAt, Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	daily := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audio.ID, Name: "daily", ScheduleType: model.ScheduleTypeDaily,
+		Timezone: "UTC", LocalTime: now.Add(time.Hour).Format("15:04:05"), Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	for _, scheduleModel := range []*model.BroadcastSchedule{once, daily} {
+		if err := repo.SaveSchedule(ctx, scheduleModel, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, code, err := repo.ClaimManualRun(ctx, groups.a.ID, daily.ID, now, "runtime-test", 5*time.Second)
+	if err != nil || code != "" || claimed == nil {
+		t.Fatalf("claim before disable run=%#v code=%q err=%v", claimed, code, err)
+	}
+	if err := repo.SetOperationalEnabled(ctx, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if run, code, err := repo.ClaimManualRun(ctx, groups.a.ID, daily.ID, now.Add(time.Second), "runtime-disabled", 5*time.Second); err != nil || run != nil || code != "site_broadcast_disabled" {
+		t.Fatalf("disabled manual run=%#v code=%q err=%v", run, code, err)
+	}
+	if execution, code, err := repo.LoadClaimedExecution(ctx, claimed.ID, "runtime-test", now.Add(time.Second)); err != nil || execution != nil || code != "site_broadcast_disabled" {
+		t.Fatalf("disabled claimed execution=%#v code=%q err=%v", execution, code, err)
+	}
+
+	missedAt := now.Add(-time.Minute)
+	if err := repo.DB().Model(&model.BroadcastSchedule{}).Where("id IN ?", []uint{once.ID, daily.ID}).Update("next_run_at", missedAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetOperationalEnabled(ctx, true, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var storedOnce, storedDaily model.BroadcastSchedule
+	if err := repo.DB().First(&storedOnce, once.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DB().First(&storedDaily, daily.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOnce.Enabled || storedOnce.NextRunAt != nil {
+		t.Fatalf("missed once schedule=%#v", storedOnce)
+	}
+	if !storedDaily.Enabled || storedDaily.NextRunAt == nil || !storedDaily.NextRunAt.After(now) {
+		t.Fatalf("missed daily schedule=%#v", storedDaily)
+	}
+	var skipped int64
+	if err := repo.DB().Model(&model.BroadcastRun{}).
+		Where("schedule_id IN ? AND status = ?", []uint{once.ID, daily.ID}, model.RunStatusSkippedSiteDisabled).Count(&skipped).Error; err != nil || skipped != 2 {
+		t.Fatalf("site-disabled skipped runs=%d err=%v", skipped, err)
+	}
+	if enabled, err := repo.OperationalEnabled(ctx); err != nil || !enabled {
+		t.Fatalf("restored operational state enabled=%v err=%v", enabled, err)
+	}
+	// A stale caller clock must not exclude a run that committed before the
+	// operational-row fence was acquired.
+	if err := repo.FenceEmergencyStop(ctx, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if execution, code, err := repo.LoadClaimedExecution(ctx, claimed.ID, "runtime-test", now.Add(3*time.Second)); err != nil || execution != nil || code != "emergency_stop" {
+		t.Fatalf("emergency-fenced execution=%#v code=%q err=%v", execution, code, err)
+	}
+	newRun, code, err := repo.ClaimManualRun(ctx, groups.a.ID, daily.ID, now.Add(3*time.Second), "after-emergency", 5*time.Second)
+	if err != nil || code != "" || newRun == nil || newRun.ID <= claimed.ID {
+		t.Fatalf("post-emergency run=%#v code=%q err=%v", newRun, code, err)
+	}
+	if execution, code, err := repo.LoadClaimedExecution(ctx, newRun.ID, "after-emergency", now.Add(4*time.Second)); err != nil || code != "" || execution == nil {
+		t.Fatalf("post-emergency execution=%#v code=%q err=%v", execution, code, err)
+	}
+}
+
 func TestVirtualGroupCoordinationMySQL(t *testing.T) {
 	repo, owner, groups := setupRepositoryMySQL(t)
 	ctx := context.Background()

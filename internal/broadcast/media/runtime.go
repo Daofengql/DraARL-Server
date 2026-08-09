@@ -42,6 +42,16 @@ func Enqueue(audioID uint) error {
 	return processor.Enqueue(audioID)
 }
 
+func GetMetrics() MetricsSnapshot {
+	processorMu.RLock()
+	processor := globalProcessor
+	processorMu.RUnlock()
+	if processor == nil {
+		return MetricsSnapshot{}
+	}
+	return processor.Metrics()
+}
+
 func StopProcessor(ctx context.Context) error {
 	processorMu.Lock()
 	processor := globalProcessor

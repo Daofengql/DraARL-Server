@@ -368,6 +368,8 @@ func RunBroadcastSchedule(c *gin.Context) {
 			writeBroadcastError(c, http.StatusNotFound, "broadcast_resource_not_found", "播报计划不存在")
 		case errors.Is(err, broadcastruntime.ErrUnavailable), errors.Is(err, schedruntime.ErrSchedulerStopped):
 			writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_scheduler_unavailable", "自动播报调度器暂不可用")
+		case errors.Is(err, schedruntime.ErrOperationalDisabled):
+			writeBroadcastError(c, http.StatusConflict, "site_broadcast_disabled", "站点自动播报运行开关当前已关闭")
 		case errors.Is(err, schedruntime.ErrSchedulerBusy):
 			writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_scheduler_busy", "自动播报任务已达到并发上限")
 		default:
@@ -386,6 +388,8 @@ func RunBroadcastSchedule(c *gin.Context) {
 			writeBroadcastError(c, http.StatusConflict, "broadcast_group_unavailable", "播报实体组当前不可用")
 		case "audio_unavailable":
 			writeBroadcastError(c, http.StatusConflict, "broadcast_audio_not_ready", "播报音频当前不可用")
+		case "site_broadcast_disabled":
+			writeBroadcastError(c, http.StatusConflict, "site_broadcast_disabled", "站点自动播报运行开关当前已关闭")
 		default:
 			writeBroadcastError(c, http.StatusConflict, "broadcast_run_not_eligible", "播报计划当前不可执行")
 		}

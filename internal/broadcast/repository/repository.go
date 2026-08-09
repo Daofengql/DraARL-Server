@@ -36,11 +36,12 @@ var (
 )
 
 type Repository struct {
-	db *gorm.DB
+	db             *gorm.DB
+	operationalKey string
 }
 
 func New(db *gorm.DB) *Repository {
-	return &Repository{db: db}
+	return &Repository{db: db, operationalKey: OperationalEnabledKey}
 }
 
 func Default() *Repository {
@@ -281,6 +282,10 @@ func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy stri
 	leaseUntil := now.Add(leaseDuration)
 	claimed := make([]model.BroadcastRun, 0, limit)
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		enabled, err := r.operationalEnabled(tx, true)
+		if err != nil || !enabled {
+			return err
+		}
 		// Discover candidates without locks, then take the shared coordination
 		// locks in entity-group order before locking schedules. A candidate that
 		// changes meanwhile is filtered by the second query and retried next scan.
@@ -378,6 +383,10 @@ func (r *Repository) RecoverExpiredRuns(ctx context.Context, now time.Time, clai
 	leaseUntil := now.Add(leaseDuration)
 	recovered := make([]model.BroadcastRun, 0, limit)
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		enabled, err := r.operationalEnabled(tx, true)
+		if err != nil || !enabled {
+			return err
+		}
 		if err := tx.Model(&model.BroadcastRun{}).
 			Where("status = ? AND (lease_until IS NULL OR lease_until <= ?)", model.RunStatusPlaying, now).
 			Updates(map[string]any{
@@ -428,6 +437,14 @@ func (r *Repository) ClaimManualRun(ctx context.Context, groupID int, scheduleID
 	var claimed model.BroadcastRun
 	code := ""
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		enabled, stateErr := r.operationalEnabled(tx, true)
+		if stateErr != nil {
+			return stateErr
+		}
+		if !enabled {
+			code = "site_broadcast_disabled"
+			return nil
+		}
 		var group gormdb.Group
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&group, groupID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -503,7 +520,7 @@ func (r *Repository) LoadClaimedExecution(ctx context.Context, runID uint, claim
 		if err != nil {
 			return err
 		}
-		code, err = validateExecutionEligibility(tx, &execution, claimedBy, now.UTC())
+		code, err = r.validateExecutionEligibility(tx, &execution, claimedBy, now.UTC())
 		return err
 	})
 	if err != nil {
@@ -532,10 +549,24 @@ func loadRunExecution(tx *gorm.DB, runID uint) (scheduler.RunExecution, error) {
 	return execution, nil
 }
 
-func validateExecutionEligibility(tx *gorm.DB, execution *scheduler.RunExecution, claimedBy string, now time.Time) (string, error) {
+func (r *Repository) validateExecutionEligibility(tx *gorm.DB, execution *scheduler.RunExecution, claimedBy string, now time.Time) (string, error) {
 	if execution == nil || execution.Run.ClaimedBy != claimedBy || execution.Run.LeaseUntil == nil || !execution.Run.LeaseUntil.After(now) ||
 		(execution.Run.Status != model.RunStatusClaimed && execution.Run.Status != model.RunStatusPlaying) {
 		return "run_lease_lost", nil
+	}
+	enabled, err := r.operationalEnabled(tx, false)
+	if err != nil {
+		return "", err
+	}
+	if !enabled {
+		return "site_broadcast_disabled", nil
+	}
+	emergencyStopped, err := r.emergencyStopsRun(tx, &execution.Run)
+	if err != nil {
+		return "", err
+	}
+	if emergencyStopped {
+		return "emergency_stop", nil
 	}
 	schedule, audio := &execution.Schedule, &execution.Audio
 	if !schedule.Enabled {
@@ -580,7 +611,7 @@ func (r *Repository) MarkRunPlaying(ctx context.Context, runID uint, claimedBy, 
 		if loadErr != nil {
 			return loadErr
 		}
-		code, loadErr = validateExecutionEligibility(tx, &execution, claimedBy, now)
+		code, loadErr = r.validateExecutionEligibility(tx, &execution, claimedBy, now)
 		if loadErr != nil || code != "" {
 			return loadErr
 		}
@@ -615,7 +646,7 @@ func (r *Repository) ValidateAndRenewRun(ctx context.Context, runID uint, claime
 		if err != nil {
 			return err
 		}
-		code, err = validateExecutionEligibility(tx, &execution, claimedBy, now)
+		code, err = r.validateExecutionEligibility(tx, &execution, claimedBy, now)
 		if err != nil || code != "" {
 			return err
 		}

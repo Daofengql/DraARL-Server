@@ -28,18 +28,55 @@ type finishedRun struct {
 }
 
 type fakeRuntimeRepository struct {
-	mu           sync.Mutex
-	run          model.BroadcastRun
-	execution    *core.RunExecution
-	claimed      bool
-	markCode     string
-	validateCode string
-	marked       int
-	validated    int
-	finished     []finishedRun
-	finishedCh   chan struct{}
-	loadStarted  chan struct{}
-	blockLoad    bool
+	mu                  sync.Mutex
+	run                 model.BroadcastRun
+	execution           *core.RunExecution
+	claimed             bool
+	markCode            string
+	validateCode        string
+	marked              int
+	validated           int
+	finished            []finishedRun
+	finishedCh          chan struct{}
+	loadStarted         chan struct{}
+	blockLoad           bool
+	operationalEnabled  bool
+	setOperationalCalls int
+	backlog             int64
+	emergencyFences     int
+}
+
+func (r *fakeRuntimeRepository) EnsureOperationalEnabled(context.Context) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.operationalEnabled, nil
+}
+
+func (r *fakeRuntimeRepository) OperationalEnabled(context.Context) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.operationalEnabled, nil
+}
+
+func (r *fakeRuntimeRepository) SetOperationalEnabled(_ context.Context, enabled bool, _ time.Time) error {
+	r.mu.Lock()
+	r.operationalEnabled = enabled
+	r.setOperationalCalls++
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *fakeRuntimeRepository) DueBacklog(context.Context, time.Time) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.backlog, nil
+}
+
+func (r *fakeRuntimeRepository) FenceEmergencyStop(context.Context, time.Time) error {
+	r.mu.Lock()
+	r.emergencyFences++
+	r.mu.Unlock()
+	return nil
 }
 
 func (r *fakeRuntimeRepository) ClaimDue(context.Context, time.Time, string, time.Duration, time.Duration, int) ([]model.BroadcastRun, error) {
@@ -136,7 +173,7 @@ func engineFixture(t *testing.T) (*Engine, *fakeRuntimeRepository, *media.Contai
 	now := time.Now().UTC()
 	run := model.BroadcastRun{ID: 71, ScheduleID: 81, AudioID: 91, SourceGroupID: 101, ScheduledFor: now, Status: model.RunStatusClaimed}
 	repo := &fakeRuntimeRepository{
-		run: run, finishedCh: make(chan struct{}, 2),
+		run: run, finishedCh: make(chan struct{}, 2), operationalEnabled: true,
 		execution: &core.RunExecution{
 			Run:      run,
 			Schedule: model.BroadcastSchedule{ID: run.ScheduleID, GroupID: run.SourceGroupID, AudioID: run.AudioID, Enabled: true},
@@ -344,4 +381,92 @@ func TestEngineCancelRunsWaitsForExecutionRelease(t *testing.T) {
 	if finished.status != model.RunStatusCancelledInterconnectEnabled || finished.errorCode != "interconnect_changed" {
 		t.Fatalf("finished=%#v", finished)
 	}
+}
+
+func TestEngineOperationalDisablePersistsCancelsAndReportsMetrics(t *testing.T) {
+	engine, repo, _ := engineFixture(t)
+	playing := make(chan struct{})
+	engine.broadcaster = broadcasterFunc(func(ctx context.Context, request BroadcastRequest) (BroadcastOutcome, error) {
+		snapshot := LeaseSnapshot{DomainKey: "101", DomainGroupIDs: []int{101}}
+		if err := request.OnAcquired(snapshot); err != nil {
+			return BroadcastOutcome{AcquireResult: udphub.ScheduledBroadcastAcquired, Snapshot: snapshot}, err
+		}
+		close(playing)
+		<-ctx.Done()
+		return BroadcastOutcome{
+			AcquireResult: udphub.ScheduledBroadcastAcquired, Snapshot: snapshot,
+			Playback: player.Result{PlayedDuration: 120 * time.Millisecond, SentPackets: 1, DroppedPackets: 2, EndedAt: time.Now()},
+		}, ctx.Err()
+	})
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-playing:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not enter playback")
+	}
+	health, err := engine.SetOperationalEnabled(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitFinished(t, repo)
+	if finished.status != model.RunStatusCancelledSiteDisabled || finished.errorCode != "site_broadcast_disabled" {
+		t.Fatalf("finished=%#v", finished)
+	}
+	if health.OperationalEnabled || health.ActiveRuns != 0 || !health.Healthy {
+		t.Fatalf("health=%#v", health)
+	}
+	metrics := engine.Metrics()
+	if metrics.CurrentPlaying != 0 || metrics.RunsByStatus[model.RunStatusCancelledSiteDisabled] != 1 || metrics.SentPackets != 1 || metrics.DroppedPackets != 2 {
+		t.Fatalf("metrics=%#v", metrics)
+	}
+	repo.mu.Lock()
+	setCalls := repo.setOperationalCalls
+	repo.mu.Unlock()
+	if setCalls != 1 {
+		t.Fatalf("set operational calls=%d", setCalls)
+	}
+	stopEngine(t, engine)
+}
+
+func TestEngineEmergencyStopDoesNotDisableFutureScheduling(t *testing.T) {
+	engine, repo, _ := engineFixture(t)
+	playing := make(chan struct{})
+	engine.broadcaster = broadcasterFunc(func(ctx context.Context, request BroadcastRequest) (BroadcastOutcome, error) {
+		snapshot := LeaseSnapshot{DomainKey: "101", DomainGroupIDs: []int{101}}
+		if err := request.OnAcquired(snapshot); err != nil {
+			return BroadcastOutcome{AcquireResult: udphub.ScheduledBroadcastAcquired, Snapshot: snapshot}, err
+		}
+		close(playing)
+		<-ctx.Done()
+		return BroadcastOutcome{AcquireResult: udphub.ScheduledBroadcastAcquired, Snapshot: snapshot}, ctx.Err()
+	})
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-playing:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not enter playback")
+	}
+	stopped, err := engine.EmergencyStop(context.Background())
+	if err != nil || stopped != 1 {
+		t.Fatalf("emergency stop count=%d err=%v", stopped, err)
+	}
+	finished := waitFinished(t, repo)
+	if finished.status != model.RunStatusCancelled || finished.errorCode != "emergency_stop" {
+		t.Fatalf("finished=%#v", finished)
+	}
+	health, err := engine.Health(context.Background())
+	if err != nil || !health.OperationalEnabled {
+		t.Fatalf("health=%#v err=%v", health, err)
+	}
+	repo.mu.Lock()
+	fences := repo.emergencyFences
+	repo.mu.Unlock()
+	if fences != 1 {
+		t.Fatalf("emergency fences=%d", fences)
+	}
+	stopEngine(t, engine)
 }

@@ -13,6 +13,11 @@ import (
 )
 
 type RuntimeRepository interface {
+	EnsureOperationalEnabled(context.Context) (bool, error)
+	OperationalEnabled(context.Context) (bool, error)
+	SetOperationalEnabled(context.Context, bool, time.Time) error
+	FenceEmergencyStop(context.Context, time.Time) error
+	DueBacklog(context.Context, time.Time) (int64, error)
 	ClaimDue(context.Context, time.Time, string, time.Duration, time.Duration, int) ([]model.BroadcastRun, error)
 	RecoverExpiredRuns(context.Context, time.Time, string, time.Duration, time.Duration, int) ([]model.BroadcastRun, error)
 	ClaimManualRun(context.Context, int, uint, time.Time, string, time.Duration) (*model.BroadcastRun, string, error)

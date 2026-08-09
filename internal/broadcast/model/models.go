@@ -23,7 +23,9 @@ const (
 	RunStatusSkippedDomainBusy            = "skipped_domain_busy"
 	RunStatusSkippedInterconnected        = "skipped_interconnected"
 	RunStatusSkippedNoReceiver            = "skipped_no_receiver"
+	RunStatusSkippedSiteDisabled          = "skipped_site_disabled"
 	RunStatusCancelled                    = "cancelled"
+	RunStatusCancelledSiteDisabled        = "cancelled_site_disabled"
 	RunStatusCancelledInterconnectEnabled = "cancelled_interconnect_enabled"
 	RunStatusFailed                       = "failed"
 )

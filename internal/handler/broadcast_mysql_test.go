@@ -144,6 +144,7 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		_ = db.Where("link_group_id = ?", virtual.ID).Delete(&gormdb.GroupLink{}).Error
 		_ = db.Delete(&gormdb.Group{}, []int{groupA.ID, groupB.ID, virtual.ID}).Error
 		_ = db.Delete(&gormdb.User{}, []int{owner.ID, other.ID, admin.ID}).Error
+		_ = db.Where("config_key IN ?", []string{repository.OperationalEnabledKey, repository.OperationalEnabledKey + ".emergency_fence"}).Delete(&gormdb.SiteConfig{}).Error
 	})
 
 	wav := makeBroadcastTestWAV(850 * time.Millisecond)
@@ -256,6 +257,23 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		}
 	}()
 
+	healthResult := performBroadcastHandlerRequest(t, admin, http.MethodGet, "/broadcast/health", "/broadcast/health", nil, "", GetBroadcastHealth)
+	requireBroadcastStatus(t, healthResult, http.StatusOK)
+	metricsResult := performBroadcastHandlerRequest(t, admin, http.MethodGet, "/broadcast/metrics", "/broadcast/metrics", nil, "", GetBroadcastMetrics)
+	requireBroadcastStatus(t, metricsResult, http.StatusOK)
+	if bytes.Contains(metricsResult.Body, []byte("broadcast-audios/")) {
+		t.Fatalf("broadcast metrics leaked an object key: %s", metricsResult.Body)
+	}
+	disableResult := performBroadcastHandlerRequest(t, admin, http.MethodPut, "/broadcast/runtime", "/broadcast/runtime", []byte(`{"enabled":false}`), "application/json", UpdateBroadcastOperationalState)
+	requireBroadcastStatus(t, disableResult, http.StatusOK)
+	disabledTrigger := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules/:scheduleId/run", fmt.Sprintf("/groups/%d/broadcast-schedules/%d/run", groupA.ID, scheduleA1.ID), nil, "", RunBroadcastSchedule)
+	requireBroadcastStatus(t, disabledTrigger, http.StatusConflict)
+	if !bytes.Contains(disabledTrigger.Body, []byte("site_broadcast_disabled")) {
+		t.Fatalf("disabled trigger reason missing: %s", disabledTrigger.Body)
+	}
+	enableResult := performBroadcastHandlerRequest(t, admin, http.MethodPut, "/broadcast/runtime", "/broadcast/runtime", []byte(`{"enabled":true}`), "application/json", UpdateBroadcastOperationalState)
+	requireBroadcastStatus(t, enableResult, http.StatusOK)
+
 	trigger := func(scheduleID uint) model.BroadcastRun {
 		t.Helper()
 		result := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules/:scheduleId/run", fmt.Sprintf("/groups/%d/broadcast-schedules/%d/run", groupA.ID, scheduleID), nil, "", RunBroadcastSchedule)
@@ -278,6 +296,22 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	crossCancel := performBroadcastHandlerRequest(t, other, http.MethodPost, "/groups/:id/broadcast-runs/:runId/cancel", fmt.Sprintf("/groups/%d/broadcast-runs/%d/cancel", groupB.ID, cancelledRun.ID), nil, "", CancelBroadcastRun)
 	requireBroadcastStatus(t, crossCancel, http.StatusNotFound)
 
+	emergencyRun := trigger(scheduleB.ID)
+	emergencyResult := performBroadcastHandlerRequest(t, admin, http.MethodPost, "/broadcast/emergency-stop", "/broadcast/emergency-stop", nil, "", EmergencyStopBroadcasts)
+	requireBroadcastStatus(t, emergencyResult, http.StatusOK)
+	var emergencyEnvelope struct {
+		Data struct {
+			StoppedRuns int `json:"stopped_runs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(emergencyResult.Body, &emergencyEnvelope); err != nil || emergencyEnvelope.Data.StoppedRuns < 1 {
+		t.Fatalf("emergency stop response: err=%v body=%s", err, emergencyResult.Body)
+	}
+	emergencyRun = waitBroadcastRunTerminal(t, repo, groupA.ID, emergencyRun.ID)
+	if emergencyRun.Status != model.RunStatusCancelled || emergencyRun.ErrorCode != "emergency_stop" || emergencyRun.SentPackets > 1 {
+		t.Fatalf("emergency-stopped run=%#v", emergencyRun)
+	}
+
 	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
 	succeededRun := trigger(scheduleA2.ID)
 	succeededRun = waitBroadcastRunTerminal(t, repo, groupA.ID, succeededRun.ID)
@@ -290,6 +324,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	}
 	wantRecords := 1
 	if cancelledRun.SentPackets > 0 {
+		wantRecords++
+	}
+	if emergencyRun.SentPackets > 0 {
 		wantRecords++
 	}
 	if len(automaticRecords) != wantRecords {

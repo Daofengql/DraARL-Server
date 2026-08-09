@@ -31,12 +31,13 @@ var (
 )
 
 type Processor struct {
-	config config.BroadcastConfig
-	repo   *repository.Repository
-	jobs   chan uint
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	config  config.BroadcastConfig
+	repo    *repository.Repository
+	jobs    chan uint
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	metrics processorMetrics
 }
 
 func NewProcessor(cfg config.BroadcastConfig, repo *repository.Repository) *Processor {
@@ -69,6 +70,7 @@ func (p *Processor) Start() error {
 			return err
 		}
 	}
+	p.metrics.running.Store(true)
 	return nil
 }
 
@@ -76,6 +78,7 @@ func (p *Processor) Stop(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
+	p.metrics.running.Store(false)
 	p.cancel()
 	done := make(chan struct{})
 	go func() {
@@ -96,6 +99,7 @@ func (p *Processor) Enqueue(audioID uint) error {
 	}
 	select {
 	case p.jobs <- audioID:
+		p.metrics.enqueued.Add(1)
 		return nil
 	case <-p.ctx.Done():
 		return p.ctx.Err()
@@ -126,6 +130,9 @@ func (p *Processor) ProcessAudio(parent context.Context, audioID uint) error {
 	if audio.Status != model.AudioStatusProcessing {
 		return nil
 	}
+	startedAt := p.metrics.begin()
+	succeeded := false
+	defer func() { p.metrics.finish(startedAt, succeeded) }()
 	ctx, cancel := context.WithTimeout(parent, time.Duration(p.config.TranscodeTimeoutSeconds)*time.Second)
 	defer cancel()
 	metadata, playbackKey, err := p.process(ctx, audio)
@@ -139,6 +146,7 @@ func (p *Processor) ProcessAudio(parent context.Context, audioID uint) error {
 		_ = storage.Delete(context.WithoutCancel(parent), playbackKey)
 		return fmt.Errorf("commit broadcast playback metadata: %w", err)
 	}
+	succeeded = true
 	return nil
 }
 

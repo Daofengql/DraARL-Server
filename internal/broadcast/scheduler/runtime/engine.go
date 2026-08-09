@@ -23,12 +23,14 @@ const (
 )
 
 var (
-	ErrSchedulerDisabled  = errors.New("broadcast scheduler is disabled")
-	ErrSchedulerStopped   = errors.New("broadcast scheduler is stopped")
-	ErrSchedulerBusy      = errors.New("broadcast scheduler is at capacity")
-	ErrManualStop         = errors.New("broadcast manually stopped")
-	ErrInterconnectChange = errors.New("broadcast stopped by interconnect change")
-	ErrServiceShutdown    = errors.New("broadcast stopped by service shutdown")
+	ErrSchedulerDisabled   = errors.New("broadcast scheduler is disabled")
+	ErrSchedulerStopped    = errors.New("broadcast scheduler is stopped")
+	ErrSchedulerBusy       = errors.New("broadcast scheduler is at capacity")
+	ErrManualStop          = errors.New("broadcast manually stopped")
+	ErrInterconnectChange  = errors.New("broadcast stopped by interconnect change")
+	ErrOperationalDisabled = errors.New("site automatic broadcasts are disabled")
+	ErrEmergencyStop       = errors.New("all automatic broadcasts were stopped by an administrator")
+	ErrServiceShutdown     = errors.New("broadcast stopped by service shutdown")
 )
 
 type RunValidationError struct {
@@ -56,16 +58,19 @@ type Engine struct {
 	instanceID  string
 	now         func() time.Time
 
-	lifecycleMu sync.Mutex
-	ctx         context.Context
-	cancel      context.CancelCauseFunc
-	started     bool
-	stopped     bool
-	wg          sync.WaitGroup
+	lifecycleMu        sync.Mutex
+	ctx                context.Context
+	cancel             context.CancelCauseFunc
+	started            bool
+	stopped            bool
+	wg                 sync.WaitGroup
+	operationalMu      sync.RWMutex
+	operationalEnabled bool
 
 	activeMu sync.Mutex
 	active   map[uint]activeRun
 	slots    chan struct{}
+	metrics  engineMetrics
 }
 
 func NewEngine(cfg config.BroadcastConfig, repository RuntimeRepository, store ObjectStore) (*Engine, error) {
@@ -83,7 +88,8 @@ func NewEngine(cfg config.BroadcastConfig, repository RuntimeRepository, store O
 	return &Engine{
 		config: cfg, repository: repository, store: store, broadcaster: DefaultBroadcaster{},
 		instanceID: instanceID, now: time.Now, active: make(map[uint]activeRun),
-		slots: make(chan struct{}, cfg.ClaimBatchSize),
+		operationalEnabled: true,
+		slots:              make(chan struct{}, cfg.ClaimBatchSize),
 	}, nil
 }
 
@@ -100,6 +106,15 @@ func (e *Engine) Start() error {
 		return nil
 	}
 	e.ctx, e.cancel = context.WithCancelCause(context.Background())
+	enabled, err := e.repository.EnsureOperationalEnabled(e.ctx)
+	if err != nil {
+		e.cancel(err)
+		e.ctx, e.cancel = nil, nil
+		return fmt.Errorf("load broadcast runtime switch: %w", err)
+	}
+	e.operationalMu.Lock()
+	e.operationalEnabled = enabled
+	e.operationalMu.Unlock()
 	e.started = true
 	e.wg.Add(1)
 	go e.scanLoop()
@@ -123,11 +138,37 @@ func (e *Engine) scanLoop() {
 }
 
 func (e *Engine) scanOnce(ctx context.Context) error {
-	available := cap(e.slots) - len(e.slots)
-	if available <= 0 {
+	scanAt := e.now().UTC()
+	e.metrics.scanStarted(scanAt)
+	succeeded := false
+	defer func() { e.metrics.scanFinished(succeeded, e.now().UTC()) }()
+
+	e.operationalMu.Lock()
+	enabled, err := e.repository.OperationalEnabled(ctx)
+	if err != nil {
+		e.operationalMu.Unlock()
+		return err
+	}
+	e.operationalEnabled = enabled
+	e.operationalMu.Unlock()
+	if !enabled {
+		e.CancelAll(ErrOperationalDisabled)
+		succeeded = true
 		return nil
 	}
-	now := e.now().UTC()
+
+	e.operationalMu.RLock()
+	defer e.operationalMu.RUnlock()
+	if !e.operationalEnabled {
+		succeeded = true
+		return nil
+	}
+	available := cap(e.slots) - len(e.slots)
+	if available <= 0 {
+		succeeded = true
+		return nil
+	}
+	now := scanAt
 	recoveryWindow := time.Duration(e.config.RecoveryWindowSeconds) * time.Second
 	recovered, err := e.repository.RecoverExpiredRuns(ctx, now, e.instanceID, RunLeaseDuration, recoveryWindow, available)
 	if err != nil {
@@ -144,8 +185,10 @@ func (e *Engine) scanOnce(ctx context.Context) error {
 		claimed = append(claimed, due...)
 	}
 	for index := range claimed {
+		e.metrics.observeClaim(claimed[index], index < len(recovered), now)
 		e.launch(claimed[index])
 	}
+	succeeded = true
 	return nil
 }
 
@@ -195,6 +238,11 @@ func (e *Engine) TriggerManual(ctx context.Context, groupID int, scheduleID uint
 	if !started || stopped {
 		return nil, "", ErrSchedulerStopped
 	}
+	e.operationalMu.RLock()
+	defer e.operationalMu.RUnlock()
+	if !e.operationalEnabled {
+		return nil, "", ErrOperationalDisabled
+	}
 	select {
 	case e.slots <- struct{}{}:
 	default:
@@ -210,6 +258,12 @@ func (e *Engine) TriggerManual(ctx context.Context, groupID int, scheduleID uint
 }
 
 func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
+	playing := false
+	defer func() {
+		if playing {
+			e.metrics.currentPlaying.Add(-1)
+		}
+	}()
 	execution, code, err := e.repository.LoadClaimedExecution(ctx, run.ID, e.instanceID, e.now().UTC())
 	if err != nil {
 		if contextError(ctx) != nil {
@@ -224,6 +278,8 @@ func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
 		status := model.RunStatusCancelled
 		if code == "virtual_group_broadcast_suspended" {
 			status = model.RunStatusSkippedInterconnected
+		} else if code == "site_broadcast_disabled" {
+			status = model.RunStatusSkippedSiteDisabled
 		}
 		e.finish(run, status, playerSummary{}, nil, LeaseSnapshot{}, code, "broadcast execution was no longer eligible")
 		return
@@ -246,6 +302,8 @@ func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
 			if code != "" {
 				return &RunValidationError{Code: code}
 			}
+			playing = true
+			e.metrics.currentPlaying.Add(1)
 			return nil
 		},
 		Validate: func(validateCtx context.Context) error {
@@ -323,11 +381,13 @@ func (e *Engine) finish(run model.BroadcastRun, status string, summary playerSum
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), finalizeTimeout)
 	defer cancel()
+	e.metrics.observeTerminal(status, summary.sentPackets, summary.droppedPackets)
 	if err := e.repository.FinishRun(
 		ctx, run.ID, e.instanceID, status, endedAt.UTC(), summary.playedDurationMS,
 		summary.sentPackets, summary.droppedPackets, lastVoiceAt,
 		snapshot.DomainKey, snapshot.DomainGroupIDs, errorCode, errorMessage,
 	); err != nil && !errors.Is(err, context.Canceled) {
+		e.metrics.finalizeErrors.Add(1)
 		log.Printf("[BROADCAST] finalize run failed: run_id=%d status=%s", run.ID, status)
 	}
 }
@@ -349,12 +409,22 @@ func playbackTerminal(ctx context.Context, err error) (string, string) {
 		if validation.Code == "virtual_group_broadcast_suspended" {
 			return model.RunStatusCancelledInterconnectEnabled, validation.Code
 		}
+		if validation.Code == "site_broadcast_disabled" {
+			return model.RunStatusCancelledSiteDisabled, validation.Code
+		}
+		if validation.Code == "emergency_stop" {
+			return model.RunStatusCancelled, validation.Code
+		}
 		return model.RunStatusCancelled, validation.Code
 	}
 	cause := context.Cause(ctx)
 	switch {
 	case errors.Is(cause, ErrInterconnectChange):
 		return model.RunStatusCancelledInterconnectEnabled, "interconnect_changed"
+	case errors.Is(cause, ErrOperationalDisabled):
+		return model.RunStatusCancelledSiteDisabled, "site_broadcast_disabled"
+	case errors.Is(cause, ErrEmergencyStop):
+		return model.RunStatusCancelled, "emergency_stop"
 	case errors.Is(cause, ErrManualStop):
 		return model.RunStatusCancelled, "manual_stop"
 	case errors.Is(cause, ErrServiceShutdown):
@@ -384,6 +454,123 @@ func (e *Engine) CancelRun(runID uint, cause error) bool {
 func (e *Engine) CancelGroups(groupIDs []int, cause error) int {
 	count, _ := e.CancelGroupsAndWait(context.Background(), groupIDs, cause, false)
 	return count
+}
+
+func (e *Engine) CancelAll(cause error) int {
+	count, _ := e.CancelAllAndWait(context.Background(), cause, false)
+	return count
+}
+
+func (e *Engine) CancelAllAndWait(ctx context.Context, cause error, wait bool) (int, error) {
+	if cause == nil {
+		cause = ErrManualStop
+	}
+	e.activeMu.Lock()
+	activeRuns := make([]activeRun, 0, len(e.active))
+	for _, active := range e.active {
+		activeRuns = append(activeRuns, active)
+	}
+	e.activeMu.Unlock()
+	for _, active := range activeRuns {
+		active.cancel(cause)
+	}
+	if !wait {
+		return len(activeRuns), nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, active := range activeRuns {
+		select {
+		case <-active.done:
+		case <-ctx.Done():
+			return len(activeRuns), ctx.Err()
+		}
+	}
+	return len(activeRuns), nil
+}
+
+func (e *Engine) SetOperationalEnabled(ctx context.Context, enabled bool) (HealthSnapshot, error) {
+	if e == nil {
+		return HealthSnapshot{}, ErrSchedulerStopped
+	}
+	e.lifecycleMu.Lock()
+	started, stopped := e.started, e.stopped
+	e.lifecycleMu.Unlock()
+	if !started || stopped {
+		return HealthSnapshot{}, ErrSchedulerStopped
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.operationalMu.Lock()
+	err := e.repository.SetOperationalEnabled(ctx, enabled, e.now().UTC())
+	if err == nil {
+		e.operationalEnabled = enabled
+	}
+	e.operationalMu.Unlock()
+	if err != nil {
+		return HealthSnapshot{}, err
+	}
+	if !enabled {
+		if _, err := e.CancelAllAndWait(ctx, ErrOperationalDisabled, true); err != nil {
+			return HealthSnapshot{}, err
+		}
+	}
+	return e.Health(ctx)
+}
+
+func (e *Engine) EmergencyStop(ctx context.Context) (int, error) {
+	if e == nil {
+		return 0, ErrSchedulerStopped
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.operationalMu.Lock()
+	err := e.repository.FenceEmergencyStop(ctx, e.now().UTC())
+	e.operationalMu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return e.CancelAllAndWait(ctx, ErrEmergencyStop, true)
+}
+
+func (e *Engine) Metrics() MetricsSnapshot {
+	if e == nil {
+		return MetricsSnapshot{RunsByStatus: map[string]uint64{}}
+	}
+	return e.metrics.snapshot()
+}
+
+func (e *Engine) Health(ctx context.Context) (HealthSnapshot, error) {
+	if e == nil {
+		return HealthSnapshot{}, ErrSchedulerStopped
+	}
+	e.lifecycleMu.Lock()
+	started, stopped := e.started, e.stopped
+	e.lifecycleMu.Unlock()
+	e.operationalMu.RLock()
+	enabled := e.operationalEnabled
+	e.operationalMu.RUnlock()
+	e.activeMu.Lock()
+	activeCount := len(e.active)
+	e.activeMu.Unlock()
+	backlog, err := e.repository.DueBacklog(ctx, e.now().UTC())
+	if err != nil {
+		return HealthSnapshot{}, err
+	}
+	metrics := e.metrics.snapshot()
+	healthy := started && !stopped && metrics.ConsecutiveScanErrors < 3
+	if metrics.LastScanAt != nil && e.now().Sub(*metrics.LastScanAt) > 3*time.Duration(e.config.ScanIntervalMS)*time.Millisecond {
+		healthy = false
+	}
+	return HealthSnapshot{
+		Started: started, Stopped: stopped, OperationalEnabled: enabled, Healthy: healthy,
+		ActiveRuns: activeCount, Capacity: cap(e.slots), DueBacklog: backlog,
+		LastScanAt: metrics.LastScanAt, LastSuccessfulScanAt: metrics.LastSuccessfulScanAt,
+		ConsecutiveScanErrors: metrics.ConsecutiveScanErrors,
+	}, nil
 }
 
 func (e *Engine) CancelGroupsAndWait(ctx context.Context, groupIDs []int, cause error, wait bool) (int, error) {

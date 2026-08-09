@@ -365,6 +365,10 @@ func (s *Server) setupRoutes() {
 			admin.POST("/cache/metrics/reset", cacheHandler.ResetCacheMetrics)
 			admin.POST("/cache/clear", cacheHandler.ClearAllCache)
 			admin.GET("/udp/metrics", handler.GetUDPMetrics)
+			admin.GET("/broadcast/metrics", handler.GetBroadcastMetrics)
+			admin.GET("/broadcast/health", handler.GetBroadcastHealth)
+			admin.PUT("/broadcast/runtime", handler.UpdateBroadcastOperationalState)
+			admin.POST("/broadcast/emergency-stop", handler.EmergencyStopBroadcasts)
 
 			// 站点配置管理（读取需要登录，修改需要管理员权限）
 			configHandler := handler.NewSiteConfigHandler()

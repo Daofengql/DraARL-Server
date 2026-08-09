@@ -90,6 +90,46 @@ func CancelRunsAndWait(ctx context.Context, runIDs []uint, cause error) (int, er
 	return engine.CancelRunsAndWait(ctx, runIDs, cause)
 }
 
+func Metrics() (schedruntime.MetricsSnapshot, bool) {
+	global.RLock()
+	engine := global.engine
+	global.RUnlock()
+	if engine == nil {
+		return schedruntime.MetricsSnapshot{RunsByStatus: map[string]uint64{}}, false
+	}
+	return engine.Metrics(), true
+}
+
+func Health(ctx context.Context) (schedruntime.HealthSnapshot, error) {
+	global.RLock()
+	engine := global.engine
+	global.RUnlock()
+	if engine == nil {
+		return schedruntime.HealthSnapshot{}, ErrUnavailable
+	}
+	return engine.Health(ctx)
+}
+
+func SetOperationalEnabled(ctx context.Context, enabled bool) (schedruntime.HealthSnapshot, error) {
+	global.RLock()
+	engine := global.engine
+	global.RUnlock()
+	if engine == nil {
+		return schedruntime.HealthSnapshot{}, ErrUnavailable
+	}
+	return engine.SetOperationalEnabled(ctx, enabled)
+}
+
+func EmergencyStop(ctx context.Context) (int, error) {
+	global.RLock()
+	engine := global.engine
+	global.RUnlock()
+	if engine == nil {
+		return 0, ErrUnavailable
+	}
+	return engine.EmergencyStop(ctx)
+}
+
 func Stop(ctx context.Context) error {
 	global.Lock()
 	engine := global.engine

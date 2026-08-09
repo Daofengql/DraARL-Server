@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"bytes"
+	"net"
 	"testing"
 	"time"
 
@@ -109,6 +110,13 @@ func TestScheduledBroadcastUsesCenterSpeakerHooks(t *testing.T) {
 
 func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T) {
 	env := setupRouteTest(t, 62200, true)
+	ghostConn := listenRouteTestUDP(t)
+	ghostAddr := ghostConn.LocalAddr().(*net.UDPAddr)
+	udpGhost := modernUDPGhost("broadcast-udp-ghost", 62299, ghostAddr.Port, env.groupA, []int{env.groupA, env.groupB})
+	udpGhost.UDPAddr = ghostAddr
+	if _, err := GlobalUDPGhostManager.RegisterSession(udpGhost); err != nil {
+		t.Fatal(err)
+	}
 	oldHooks := centerHooks()
 	var relayedRunID uint
 	var relayedSourceGroupID int
@@ -154,7 +162,7 @@ func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T
 		t.Fatalf("route result=%#v", frame)
 	}
 	stats := source.Finish()
-	if stats.SentPackets != 1 || stats.DroppedPackets != 0 || stats.UDPTargetsSent != 3 || stats.WSTargetsSent != 3 || stats.EdgeRelayErrors != 0 {
+	if stats.SentPackets != 1 || stats.DroppedPackets != 0 || stats.UDPTargetsSent != 4 || stats.WSTargetsSent != 3 || stats.EdgeRelayErrors != 0 {
 		t.Fatalf("source stats=%#v", stats)
 	}
 
@@ -166,6 +174,12 @@ func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T
 	for _, endpoint := range []routeTestEndpoint{env.udpA1, env.udpA2, env.udpB} {
 		assertRouteTestPacket(t, readRouteTestPacket(t, endpoint.conn), want, payload)
 	}
+	ghostWant, ok := protocol.WithSourceGroupID(want, env.groupA)
+	if !ok {
+		t.Fatal("build UDP ghost source-group packet")
+	}
+	assertRouteTestPacket(t, readRouteTestPacket(t, ghostConn), ghostWant, payload)
+	assertNoRouteTestPacket(t, ghostConn)
 	assertNoRouteTestPacket(t, env.udpC.conn)
 	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
 	if relayedRunID != 30 || relayedSourceGroupID != env.groupA || relayedDomainID != lease.domainID || !bytes.Equal(relayedPacket, want) {

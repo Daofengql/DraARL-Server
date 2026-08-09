@@ -293,19 +293,32 @@ func TestVirtualGroupCoordinationMySQL(t *testing.T) {
 		t.Fatalf("remove selected source error=%v", err)
 	}
 
-	policy = &model.VirtualGroupBroadcastPolicy{VirtualGroupID: groups.virtual.ID, Mode: model.PolicySuspendAll, UpdatedBy: owner.ID}
-	if _, err := repo.UpdateVirtualGroupPolicy(ctx, policy, now.Add(10*time.Minute)); err != nil {
-		t.Fatal(err)
+	invalidReplacement := &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: groups.virtual.ID, Mode: model.PolicyAllowSingleSource,
+		AllowedSourceGroupID: &groups.a.ID, UpdatedBy: owner.ID,
 	}
-	if _, err := repo.RemoveVirtualGroupMember(ctx, groups.virtual.ID, groups.a.ID, now.Add(20*time.Minute)); err != nil {
-		t.Fatalf("remove non-selected source: %v", err)
+	if _, err := repo.RemoveVirtualGroupMemberWithPolicy(ctx, groups.virtual.ID, groups.a.ID, invalidReplacement, now.Add(10*time.Minute)); !errors.Is(err, ErrPolicySourceNotMember) {
+		t.Fatalf("invalid atomic source replacement error=%v", err)
+	}
+	storedPolicy, err := repo.GetPolicy(ctx, groups.virtual.ID)
+	if err != nil || storedPolicy.AllowedSourceGroupID == nil || *storedPolicy.AllowedSourceGroupID != groups.a.ID {
+		t.Fatalf("invalid atomic replacement changed policy: policy=%#v err=%v", storedPolicy, err)
+	}
+
+	replacement := &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: groups.virtual.ID, Mode: model.PolicyAllowSingleSource,
+		AllowedSourceGroupID: &groups.b.ID, UpdatedBy: owner.ID,
+	}
+	if _, err := repo.RemoveVirtualGroupMemberWithPolicy(ctx, groups.virtual.ID, groups.a.ID, replacement, now.Add(20*time.Minute)); err != nil {
+		t.Fatalf("atomically replace source and remove member: %v", err)
 	}
 	assertScheduleState(t, repo, dailyA.ID, true, "", true)
-	assertScheduleState(t, repo, dailyB.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	assertScheduleState(t, repo, dailyB.ID, true, "", true)
 	if _, err := repo.AddVirtualGroupMember(ctx, groups.virtual.ID, groups.a.ID, now.Add(25*time.Minute)); err != nil {
 		t.Fatalf("re-add active member: %v", err)
 	}
 	assertScheduleState(t, repo, dailyA.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	assertScheduleState(t, repo, dailyB.ID, true, "", true)
 
 	closedAt := now.Add(time.Hour)
 	if _, err := repo.SetVirtualGroupStatus(ctx, groups.virtual.ID, 0, closedAt); err != nil {

@@ -82,6 +82,8 @@ export function GroupLinkPage() {
   const [selectedTargets, setSelectedTargets] = useState<number[]>([])
   const [targetSearch, setTargetSearch] = useState('')
   const [linkWarning, setLinkWarning] = useState<string | null>(null)
+  const [removingPolicySourceId, setRemovingPolicySourceId] = useState<number | null>(null)
+  const [replacementPolicySource, setReplacementPolicySource] = useState('suspend_all')
 
   // 确认对话框
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -216,9 +218,13 @@ export function GroupLinkPage() {
 
   // 打开关联管理对话框
   const handleOpenLink = async (vg: VirtualGroup) => {
-    setSelectedVirtualGroup(vg)
     setLinkWarning(null)
-    await Promise.all([fetchAvailableGroups(), fetchLinkedTargets(vg.id)])
+    const [detail] = await Promise.all([
+      groupLinkService.getVirtualGroup(vg.id),
+      fetchAvailableGroups(),
+      fetchLinkedTargets(vg.id),
+    ])
+    setSelectedVirtualGroup(detail)
     setSelectedTargets([])
     setTargetSearch('')
     setLinkDialogOpen(true)
@@ -236,8 +242,12 @@ export function GroupLinkPage() {
         }
       }
       setSelectedTargets([])
-      await fetchLinkedTargets(selectedVirtualGroup.id)
-      await fetchVirtualGroups()
+      const [detail] = await Promise.all([
+        groupLinkService.getVirtualGroup(selectedVirtualGroup.id),
+        fetchLinkedTargets(selectedVirtualGroup.id),
+        fetchVirtualGroups(),
+      ])
+      setSelectedVirtualGroup(detail)
     } catch (err: any) {
       setError(err.message || '添加关联失败')
     }
@@ -246,10 +256,40 @@ export function GroupLinkPage() {
   // 移除关联群组
   const handleRemoveTarget = async (targetId: number) => {
     if (!selectedVirtualGroup) return
+    const policy = selectedVirtualGroup.broadcast_policy
+    if (policy?.mode === 'allow_single_source' && policy.allowed_source_group_id === targetId) {
+      setRemovingPolicySourceId(targetId)
+      setReplacementPolicySource('suspend_all')
+      return
+    }
     try {
       await groupLinkService.removeGroupLinkTarget(selectedVirtualGroup.id, targetId)
-      await fetchLinkedTargets(selectedVirtualGroup.id)
-      await fetchVirtualGroups()
+      const [detail] = await Promise.all([
+        groupLinkService.getVirtualGroup(selectedVirtualGroup.id),
+        fetchLinkedTargets(selectedVirtualGroup.id),
+        fetchVirtualGroups(),
+      ])
+      setSelectedVirtualGroup(detail)
+    } catch (err: any) {
+      setError(err.message || '移除关联失败')
+    }
+  }
+
+  const handleRemovePolicySource = async () => {
+    if (!selectedVirtualGroup || removingPolicySourceId === null) return
+    try {
+      await groupLinkService.removeGroupLinkTarget(
+        selectedVirtualGroup.id,
+        removingPolicySourceId,
+        replacementPolicySource === 'suspend_all'
+          ? { mode: 'suspend_all' }
+          : { mode: 'allow_single_source', allowed_source_group_id: Number(replacementPolicySource) },
+      )
+      const refreshed = await groupLinkService.getVirtualGroup(selectedVirtualGroup.id)
+      setSelectedVirtualGroup(refreshed)
+      setRemovingPolicySourceId(null)
+      setReplacementPolicySource('suspend_all')
+      await Promise.all([fetchLinkedTargets(selectedVirtualGroup.id), fetchVirtualGroups()])
     } catch (err: any) {
       setError(err.message || '移除关联失败')
     }
@@ -792,6 +832,44 @@ export function GroupLinkPage() {
           void fetchVirtualGroups()
         }}
       />
+
+      <Dialog
+        open={removingPolicySourceId !== null}
+        onClose={() => setRemovingPolicySourceId(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>移除保留信标来源</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Alert severity="warning">
+              该实体组是当前保留的唯一信标来源。请选择移除后使用的策略；成员关系与策略会同时保存。
+            </Alert>
+            <RadioGroup value={replacementPolicySource} onChange={event => setReplacementPolicySource(event.target.value)}>
+              <FormControlLabel value="suspend_all" control={<Radio />} label="全部暂停" />
+              {(selectedVirtualGroup?.broadcast_members || [])
+                .filter(member => member.group_id !== removingPolicySourceId)
+                .map(member => (
+                  <FormControlLabel
+                    key={member.group_id}
+                    value={String(member.group_id)}
+                    control={<Radio />}
+                    label={`${member.group_name} · ${member.enabled_count} 个启用计划`}
+                  />
+                ))}
+            </RadioGroup>
+            {replacementPolicySource !== 'suspend_all' && (
+              <Alert severity="warning">
+                只保留一个信标源；播放期间仍会占用整个互联话权，真人语音不能抢占。
+              </Alert>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRemovingPolicySourceId(null)}>取消</Button>
+          <Button variant="contained" color="warning" onClick={() => void handleRemovePolicySource()}>保存并移除</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

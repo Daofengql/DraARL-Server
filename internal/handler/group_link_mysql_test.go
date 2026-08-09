@@ -158,11 +158,23 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 		t.Fatalf("unexpected selected-source removal response: %s", removeSelected.Body)
 	}
 
-	suspendAll := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id/broadcast-policy", policyPath, []byte(`{"mode":"suspend_all"}`), UpdateVirtualGroupBroadcastPolicy)
-	requireBroadcastStatus(t, suspendAll, http.StatusOK)
-	removed := performVirtualGroupHandlerRequest(t, admin, http.MethodDelete, "/group-links/:id/targets/:targetId", removeAPath, nil, RemoveGroupLinkTarget)
+	invalidAtomicRemoval := performVirtualGroupHandlerRequest(t, admin, http.MethodDelete, "/group-links/:id/targets/:targetId", removeAPath, []byte(fmt.Sprintf(`{"broadcast_policy":{"mode":"allow_single_source","allowed_source_group_id":%d}}`, groupA.ID)), RemoveGroupLinkTarget)
+	requireBroadcastStatus(t, invalidAtomicRemoval, http.StatusBadRequest)
+	stillLinked := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/group-links/:id", statusPath, nil, GetVirtualGroup)
+	if !bytes.Contains(stillLinked.Body, []byte(fmt.Sprintf(`"allowed_source_group_id":%d`, groupA.ID))) || !bytes.Contains(stillLinked.Body, []byte(fmt.Sprintf(`"group_id":%d`, groupA.ID))) {
+		t.Fatalf("failed atomic removal changed membership or policy: %s", stillLinked.Body)
+	}
+
+	atomicPayload := []byte(fmt.Sprintf(`{"broadcast_policy":{"mode":"allow_single_source","allowed_source_group_id":%d}}`, groupB.ID))
+	removed := performVirtualGroupHandlerRequest(t, admin, http.MethodDelete, "/group-links/:id/targets/:targetId", removeAPath, atomicPayload, RemoveGroupLinkTarget)
 	requireBroadcastStatus(t, removed, http.StatusOK)
 	assertHTTPBroadcastSchedule(t, repo, scheduleA.ID, "", true)
+	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, "", true)
+	assertHTTPBroadcastSchedule(t, repo, scheduleC.ID, model.SuspendReasonActiveVirtualGroup, false)
+	afterAtomicRemoval := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/group-links/:id", statusPath, nil, GetVirtualGroup)
+	if !bytes.Contains(afterAtomicRemoval.Body, []byte(fmt.Sprintf(`"allowed_source_group_id":%d`, groupB.ID))) || bytes.Contains(afterAtomicRemoval.Body, []byte(fmt.Sprintf(`"group_id":%d`, groupA.ID))) {
+		t.Fatalf("atomic removal did not persist replacement policy and member set: %s", afterAtomicRemoval.Body)
+	}
 
 	disabled := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id", statusPath, []byte(`{"status":0}`), UpdateVirtualGroup)
 	requireBroadcastStatus(t, disabled, http.StatusOK)
@@ -172,7 +184,8 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 	requireBroadcastStatus(t, repeatedDisabled, http.StatusOK)
 	reenabled := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id", statusPath, []byte(`{"status":1}`), UpdateVirtualGroup)
 	requireBroadcastStatus(t, reenabled, http.StatusOK)
-	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, model.SuspendReasonActiveVirtualGroup, false)
+	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, "", true)
+	assertHTTPBroadcastSchedule(t, repo, scheduleC.ID, model.SuspendReasonActiveVirtualGroup, false)
 	deleted := performVirtualGroupHandlerRequest(t, admin, http.MethodDelete, "/group-links/:id", statusPath, nil, DeleteVirtualGroup)
 	requireBroadcastStatus(t, deleted, http.StatusOK)
 	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, "", true)

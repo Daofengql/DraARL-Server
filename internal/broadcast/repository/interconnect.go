@@ -250,8 +250,19 @@ func (r *Repository) AddVirtualGroupMember(ctx context.Context, virtualGroupID, 
 }
 
 func (r *Repository) RemoveVirtualGroupMember(ctx context.Context, virtualGroupID, targetGroupID int, now time.Time) (*VirtualGroupMutation, error) {
+	return r.RemoveVirtualGroupMemberWithPolicy(ctx, virtualGroupID, targetGroupID, nil, now)
+}
+
+// RemoveVirtualGroupMemberWithPolicy atomically removes a member and, when
+// supplied, replaces the virtual group's broadcast policy against the remaining
+// member set. This prevents a selected source from being removed in a separate
+// transaction that would temporarily leave an invalid policy.
+func (r *Repository) RemoveVirtualGroupMemberWithPolicy(ctx context.Context, virtualGroupID, targetGroupID int, replacementPolicy *model.VirtualGroupBroadcastPolicy, now time.Time) (*VirtualGroupMutation, error) {
 	if virtualGroupID <= 0 || targetGroupID <= 0 {
 		return nil, ErrInvalidEntityGroup
+	}
+	if replacementPolicy != nil && (replacementPolicy.VirtualGroupID != virtualGroupID || replacementPolicy.UpdatedBy <= 0 || !model.IsPolicyMode(replacementPolicy.Mode)) {
+		return nil, ErrInvalidPolicy
 	}
 	now = now.UTC()
 	mutation := &VirtualGroupMutation{}
@@ -267,8 +278,18 @@ func (r *Repository) RemoveVirtualGroupMember(ctx context.Context, virtualGroupI
 		if err != nil {
 			return err
 		}
-		if policy.Mode == model.PolicyAllowSingleSource && policy.AllowedSourceGroupID != nil && *policy.AllowedSourceGroupID == targetGroupID {
+		remainingMemberIDs := removeGroupID(memberIDs, targetGroupID)
+		if replacementPolicy == nil && policy.Mode == model.PolicyAllowSingleSource && policy.AllowedSourceGroupID != nil && *policy.AllowedSourceGroupID == targetGroupID {
 			return ErrPolicySourceStillMember
+		}
+		if replacementPolicy != nil {
+			if err := normalizeAndValidatePolicy(tx, replacementPolicy, remainingMemberIDs); err != nil {
+				return err
+			}
+			if err := saveVirtualGroupPolicy(tx, replacementPolicy); err != nil {
+				return err
+			}
+			policy = replacementPolicy
 		}
 		mutation.CancelGroupIDs = nil
 		if group.Status == 1 {
@@ -285,7 +306,12 @@ func (r *Repository) RemoveVirtualGroupMember(ctx context.Context, virtualGroupI
 		if err := restoreSchedulesForVirtualGroup(tx, virtualGroupID, []int{targetGroupID}, now); err != nil {
 			return err
 		}
-		mutation.MemberGroupIDs = removeGroupID(memberIDs, targetGroupID)
+		if group.Status == 1 && replacementPolicy != nil {
+			if err := applyActiveVirtualGroupPolicy(tx, virtualGroupID, remainingMemberIDs, policy, now); err != nil {
+				return err
+			}
+		}
+		mutation.MemberGroupIDs = remainingMemberIDs
 		return nil
 	})
 	return mutation, err

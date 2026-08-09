@@ -836,7 +836,26 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 		return
 	}
 
-	mutation, err := repository.Default().RemoveVirtualGroupMember(c.Request.Context(), linkGroupID, targetGroupID, time.Now().UTC())
+	var req struct {
+		BroadcastPolicy *VirtualGroupBroadcastPolicyRequest `json:"broadcast_policy"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			writeVirtualGroupError(c, http.StatusBadRequest, "virtual_broadcast_policy_invalid", "自动播报策略格式无效")
+			return
+		}
+	}
+	var replacementPolicy *model.VirtualGroupBroadcastPolicy
+	if req.BroadcastPolicy != nil {
+		replacementPolicy = &model.VirtualGroupBroadcastPolicy{
+			VirtualGroupID:       linkGroupID,
+			Mode:                 strings.TrimSpace(req.BroadcastPolicy.Mode),
+			AllowedSourceGroupID: req.BroadcastPolicy.AllowedSourceGroupID,
+			UpdatedBy:            currentUser.ID,
+		}
+	}
+
+	mutation, err := repository.Default().RemoveVirtualGroupMemberWithPolicy(c.Request.Context(), linkGroupID, targetGroupID, replacementPolicy, time.Now().UTC())
 	if err != nil {
 		writeVirtualGroupRepositoryError(c, err)
 		return
@@ -851,7 +870,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 记录审计日志
 	oplog.AddLog(
-		fmt.Sprintf("移除群组互联: 虚拟组 ID %d <- 目标组 ID %d", linkGroupID, targetGroupID),
+		fmt.Sprintf("移除群组互联: 虚拟组 ID %d <- 目标组 ID %d%s", linkGroupID, targetGroupID, removedMemberPolicyLogSuffix(replacementPolicy)),
 		"group_link_remove",
 		currentUser.ID,
 		currentUser.Name,
@@ -862,7 +881,18 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "移除成功",
+		"data":    gin.H{"broadcast_policy": replacementPolicy},
 	})
+}
+
+func removedMemberPolicyLogSuffix(policy *model.VirtualGroupBroadcastPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	if policy.Mode == model.PolicyAllowSingleSource && policy.AllowedSourceGroupID != nil {
+		return fmt.Sprintf(", 同步切换信标来源为实体组 ID %d", *policy.AllowedSourceGroupID)
+	}
+	return ", 同步切换信标策略为全部暂停"
 }
 
 func UpdateVirtualGroupBroadcastPolicy(c *gin.Context) {

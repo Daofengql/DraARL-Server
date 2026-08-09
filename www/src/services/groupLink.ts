@@ -108,8 +108,14 @@ export const groupLinkService = {
   },
 
   // 移除关联群组
-  async removeGroupLinkTarget(id: number, targetId: number): Promise<void> {
-    const res = await apiClient.delete<BackendResponse<unknown>>(`/api/group-links/${id}/targets/${targetId}`)
+  async removeGroupLinkTarget(
+    id: number,
+    targetId: number,
+    broadcastPolicy?: Pick<VirtualGroupBroadcastPolicy, 'mode' | 'allowed_source_group_id'>,
+  ): Promise<void> {
+    const res = await apiClient.delete<BackendResponse<unknown>>(`/api/group-links/${id}/targets/${targetId}`, broadcastPolicy
+      ? { data: { broadcast_policy: broadcastPolicy } }
+      : undefined)
     if (res.code !== 200) {
       throw new Error(res.message || '移除关联群组失败')
     }

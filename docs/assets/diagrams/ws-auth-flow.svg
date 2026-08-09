@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 450" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="650" height="45" fill="#1565c0" rx="8"/>
+  <text x="325" y="30" text-anchor="middle" fill="white" font-size="18" font-weight="bold">WebSocket 认证流程</text>
+
+  <!-- 浏览器 -->
+  <rect x="30" y="70" width="120" height="50" fill="white" rx="8" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <text x="90" y="100" text-anchor="middle" fill="#333" font-size="14" font-weight="bold">浏览器</text>
+
+  <!-- 服务器 -->
+  <rect x="500" y="70" width="120" height="50" fill="white" rx="8" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
+  <text x="560" y="100" text-anchor="middle" fill="#333" font-size="14" font-weight="bold">服务器</text>
+
+  <!-- 步骤1: 登录 -->
+  <rect x="170" y="80" width="310" height="70" fill="#e3f2fd" rx="6" stroke="#1976d2" stroke-width="1"/>
+  <text x="325" y="100" text-anchor="middle" fill="#1565c0" font-size="12" font-weight="bold">1. 登录</text>
+  <text x="325" y="118" text-anchor="middle" fill="#333" font-size="10">POST /api/auth/login</text>
+  <text x="325" y="135" text-anchor="middle" fill="#666" font-size="9">{ username, password }</text>
+  
+  <path d="M 150 95 L 170 95" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 480 95 L 500 95" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  
+  <text x="325" y="165" text-anchor="middle" fill="#4caf50" font-size="10">← Set-Cookie: refresh_token (HttpOnly)</text>
+
+  <!-- 步骤2: 同步ws_token -->
+  <rect x="170" y="185" width="310" height="60" fill="#fff3e0" rx="6" stroke="#ff9800" stroke-width="1"/>
+  <text x="325" y="210" text-anchor="middle" fill="#e65100" font-size="12" font-weight="bold">2. 同步 WebSocket Token</text>
+  <text x="325" y="230" text-anchor="middle" fill="#333" font-size="10">POST /api/auth/ws-token/sync</text>
+  
+  <path d="M 150 215 L 170 215" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 480 215 L 500 215" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  
+  <text x="325" y="260" text-anchor="middle" fill="#4caf50" font-size="10">← Set-Cookie: ws_token (HttpOnly)</text>
+
+  <!-- 步骤3: WebSocket连接 -->
+  <rect x="170" y="280" width="310" height="50" fill="#e8f5e9" rx="6" stroke="#4caf50" stroke-width="1"/>
+  <text x="325" y="305" text-anchor="middle" fill="#2e7d32" font-size="12" font-weight="bold">3. WebSocket 握手</text>
+  <text x="325" y="320" text-anchor="middle" fill="#333" font-size="10">GET /ws | Cookie: ws_token</text>
+  
+  <path d="M 150 305 L 170 305" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 480 305 L 500 305" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤4: JWT认证 -->
+  <rect x="170" y="350" width="310" height="50" fill="#f3e5f5" rx="6" stroke="#9c27b0" stroke-width="1"/>
+  <text x="325" y="375" text-anchor="middle" fill="#7b1fa2" font-size="12" font-weight="bold">4. JWT 二进制认证</text>
+  <text x="325" y="392" text-anchor="middle" fill="#333" font-size="10">Type=1 | DATA: JWT Token</text>
+  
+  <path d="M 150 375 L 170 375" stroke="#9c27b0" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 480 375 L 500 375" stroke="#9c27b0" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 完成 -->
+  <rect x="230" y="415" width="190" height="25" fill="#4caf50" rx="12"/>
+  <text x="325" y="432" text-anchor="middle" fill="white" font-size="11" font-weight="bold">连接建立，可收发消息</text>
+</svg>

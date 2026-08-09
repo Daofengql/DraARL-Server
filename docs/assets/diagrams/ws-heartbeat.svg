@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 180" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+  </defs>
+
+  <!-- 浏览器 -->
+  <rect x="30" y="20" width="100" height="40" fill="#e3f2fd" rx="6" stroke="#1976d2" stroke-width="2"/>
+  <text x="80" y="45" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">浏览器</text>
+
+  <!-- 服务器 -->
+  <rect x="370" y="20" width="100" height="40" fill="#e8f5e9" rx="6" stroke="#4caf50" stroke-width="2"/>
+  <text x="420" y="45" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">服务器</text>
+
+  <!-- 心跳发送 -->
+  <rect x="150" y="70" width="200" height="30" fill="#fff3e0" rx="4"/>
+  <text x="250" y="90" text-anchor="middle" fill="#e65100" font-size="10">Heartbeat (Type=2)</text>
+  <path d="M 130 85 L 150 85" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 350 85 L 370 85" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 服务器处理 -->
+  <text x="420" y="120" text-anchor="middle" fill="#666" font-size="9">更新在线状态</text>
+
+  <!-- 心跳响应 -->
+  <rect x="150" y="130" width="200" height="30" fill="#e8f5e9" rx="4"/>
+  <text x="250" y="150" text-anchor="middle" fill="#2e7d32" font-size="10">CallSign: "BG1AAA"</text>
+  <path d="M 370 145 L 350 145" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 150 145 L 130 145" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+</svg>

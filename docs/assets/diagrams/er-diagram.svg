@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- users -->
+  <rect x="50" y="50" width="160" height="130" fill="white" rx="8" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <rect x="50" y="50" width="160" height="35" fill="#1976d2" rx="8"/>
+  <rect x="50" y="70" width="160" height="15" fill="#1976d2"/>
+  <text x="130" y="75" text-anchor="middle" fill="white" font-size="14" font-weight="bold">users</text>
+  <text x="70" y="105" fill="#333" font-size="11">id (PK)</text>
+  <text x="70" y="122" fill="#333" font-size="11">name</text>
+  <text x="70" y="139" fill="#333" font-size="11">email</text>
+  <text x="70" y="156" fill="#333" font-size="11">callsign</text>
+  <text x="70" y="173" fill="#333" font-size="11">roles | status</text>
+
+  <!-- devices -->
+  <rect x="320" y="50" width="160" height="130" fill="white" rx="8" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
+  <rect x="320" y="50" width="160" height="35" fill="#4caf50" rx="8"/>
+  <rect x="320" y="70" width="160" height="15" fill="#4caf50"/>
+  <text x="400" y="75" text-anchor="middle" fill="white" font-size="14" font-weight="bold">devices</text>
+  <text x="340" y="105" fill="#333" font-size="11">id (PK)</text>
+  <text x="340" y="122" fill="#333" font-size="11">owner_id (FK)</text>
+  <text x="340" y="139" fill="#333" font-size="11">ssid | dev_model</text>
+  <text x="340" y="156" fill="#333" font-size="11">group_id (FK)</text>
+  <text x="340" y="173" fill="#333" font-size="11">is_online</text>
+
+  <!-- groups -->
+  <rect x="590" y="50" width="160" height="130" fill="white" rx="8" filter="url(#shadow)" stroke="#ff9800" stroke-width="2"/>
+  <rect x="590" y="50" width="160" height="35" fill="#ff9800" rx="8"/>
+  <rect x="590" y="70" width="160" height="15" fill="#ff9800"/>
+  <text x="670" y="75" text-anchor="middle" fill="white" font-size="14" font-weight="bold">public_groups</text>
+  <text x="610" y="105" fill="#333" font-size="11">id (PK)</text>
+  <text x="610" y="122" fill="#333" font-size="11">name | type</text>
+  <text x="610" y="139" fill="#333" font-size="11">ower_id</text>
+  <text x="610" y="156" fill="#333" font-size="11">is_virtual</text>
+
+  <!-- Arrows users -> devices -->
+  <path d="M 210 115 L 320 115" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <text x="265" y="108" text-anchor="middle" fill="#1976d2" font-size="9">1:N</text>
+
+  <!-- Arrows devices -> groups -->
+  <path d="M 480 115 L 590 115" stroke="#ff9800" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <text x="535" y="108" text-anchor="middle" fill="#ff9800" font-size="9">N:1</text>
+
+  <!-- group_members -->
+  <rect x="50" y="230" width="160" height="100" fill="white" rx="8" filter="url(#shadow)" stroke="#9c27b0" stroke-width="2"/>
+  <rect x="50" y="230" width="160" height="30" fill="#9c27b0" rx="8"/>
+  <rect x="50" y="250" width="160" height="10" fill="#9c27b0"/>
+  <text x="130" y="253" text-anchor="middle" fill="white" font-size="12" font-weight="bold">group_members</text>
+  <text x="70" y="280" fill="#333" font-size="11">id (PK)</text>
+  <text x="70" y="297" fill="#333" font-size="11">group_id (FK)</text>
+  <text x="70" y="314" fill="#333" font-size="11">user_id (FK)</text>
+
+  <!-- comm_records -->
+  <rect x="320" y="230" width="160" height="100" fill="white" rx="8" filter="url(#shadow)" stroke="#e91e63" stroke-width="2"/>
+  <rect x="320" y="230" width="160" height="30" fill="#e91e63" rx="8"/>
+  <rect x="320" y="250" width="160" height="10" fill="#e91e63"/>
+  <text x="400" y="253" text-anchor="middle" fill="white" font-size="12" font-weight="bold">comm_records</text>
+  <text x="340" y="280" fill="#333" font-size="11">id (PK)</text>
+  <text x="340" y="297" fill="#333" font-size="11">device_id | group_id</text>
+  <text x="340" y="314" fill="#333" font-size="11">user_id | duration</text>
+
+  <!-- group_links -->
+  <rect x="590" y="230" width="160" height="100" fill="white" rx="8" filter="url(#shadow)" stroke="#00bcd4" stroke-width="2"/>
+  <rect x="590" y="230" width="160" height="30" fill="#00bcd4" rx="8"/>
+  <rect x="590" y="250" width="160" height="10" fill="#00bcd4"/>
+  <text x="670" y="253" text-anchor="middle" fill="white" font-size="12" font-weight="bold">group_links</text>
+  <text x="610" y="280" fill="#333" font-size="11">id (PK)</text>
+  <text x="610" y="297" fill="#333" font-size="11">link_group_id (FK)</text>
+  <text x="610" y="314" fill="#333" font-size="11">target_group_id (FK)</text>
+
+  <!-- Arrows users -> group_members -->
+  <path d="M 130 180 L 130 230" stroke="#9c27b0" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- Arrows devices -> comm_records -->
+  <path d="M 400 180 L 400 230" stroke="#e91e63" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- Arrows groups -> group_links -->
+  <path d="M 670 180 L 670 230" stroke="#00bcd4" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- groups -> comm_records -->
+  <path d="M 590 130 L 480 230" stroke="#e91e63" stroke-width="1" fill="none" marker-end="url(#arrow)" stroke-dasharray="5,5"/>
+</svg>

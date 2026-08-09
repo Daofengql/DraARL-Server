@@ -1,0 +1,437 @@
+package handler
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+
+	"draarl/internal/gormdb"
+	oplog "draarl/internal/log"
+	"draarl/internal/protocol"
+	"draarl/internal/routesync"
+	"draarl/internal/udphub"
+	"draarl/pkg/cache"
+	ws "draarl/pkg/websocket"
+
+	"github.com/gin-gonic/gin"
+)
+
+// RadioConfigResponse 在线收发配置响应
+type RadioConfigResponse struct {
+	SSID         int  `json:"ssid"`
+	DefaultGroup int  `json:"default_group"`
+	Enabled      bool `json:"enabled"`
+}
+
+// RadioStatusResponse 幽灵设备状态响应
+type RadioStatusResponse struct {
+	Connected    bool   `json:"connected"`
+	GroupID      int    `json:"group_id"`
+	OnlineSince  string `json:"online_since,omitempty"`
+	CallSign     string `json:"callsign"`
+	SSID         int    `json:"ssid"`
+	IsSpeaking   bool   `json:"is_speaking"`
+	VoiceSending bool   `json:"voice_sending"`
+}
+
+// RadioDeviceResponse 在线设备响应
+type RadioDeviceResponse struct {
+	ID           int    `json:"id"`
+	Username     string `json:"username"`
+	CallSign     string `json:"callsign"`
+	SSID         int    `json:"ssid"`
+	Nickname     string `json:"nickname,omitempty"`
+	DevModel     int    `json:"dev_model"`
+	GroupID      int    `json:"group_id"`
+	IsGhost      bool   `json:"is_ghost"`
+	DisableSend  bool   `json:"disable_send"`
+	DisableRecv  bool   `json:"disable_recv"`
+	ConnectTime  string `json:"connect_time,omitempty"`
+	LastActivity string `json:"last_activity,omitempty"`
+}
+
+// getUserIDFromContext 从 gin context 获取用户 ID
+// JWT 中只有 username，需要从数据库查询用户 ID
+func getUserIDFromContext(c *gin.Context) (int, bool) {
+	username, exists := c.Get("username")
+	if !exists {
+		return 0, false
+	}
+	repo := gormdb.NewUserRepository()
+	user, err := repo.GetUserByName(username.(string))
+	if err != nil || user == nil {
+		return 0, false
+	}
+	return int(user.ID), true
+}
+
+// GetRadioConfig 获取在线收发配置 (API-001)
+func GetRadioConfig(c *gin.Context) {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	// 检查 WebSocket 幽灵设备状态
+	isConnected := false
+	groupID := 999 // 默认群组
+	ssid := int(protocol.SSIDGhostWeb)
+
+	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
+	if ok && ghostDevice != nil {
+		isConnected = true
+		groupID = ghostDevice.GroupID
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": RadioConfigResponse{
+			SSID:         ssid,
+			DefaultGroup: groupID,
+			Enabled:      true,
+		},
+		"connected": isConnected,
+	})
+}
+
+// UpdateRadioSSID 已废弃，保留旧路由用于提示 Web 幽灵设备 SSID 固定为 105。
+func UpdateRadioSSID(c *gin.Context) {
+	c.JSON(http.StatusGone, gin.H{
+		"code":    410,
+		"message": "Web 幽灵设备 SSID 固定为 105，不再支持修改",
+		"data": gin.H{
+			"ssid": int(protocol.SSIDGhostWeb),
+		},
+	})
+}
+
+// GetRadioStatus 获取幽灵设备状态 (API-003)
+func GetRadioStatus(c *gin.Context) {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	ghostDevice, ok := ws.GlobalGhostManager.GetGhostDevice(userID)
+	if !ok || ghostDevice == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"data": RadioStatusResponse{
+				Connected: false,
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": RadioStatusResponse{
+			Connected:    true,
+			GroupID:      ghostDevice.GroupID,
+			OnlineSince:  ghostDevice.Conn.ConnectTime.Format("2006-01-02 15:04:05"),
+			CallSign:     ghostDevice.CallSign,
+			SSID:         int(protocol.SSIDGhostWeb),
+			IsSpeaking:   false, // 语音状态通过 WebSocket 实时推送，API 不再提供
+			VoiceSending: false, // 语音状态通过 WebSocket 实时推送，API 不再提供
+		},
+	})
+}
+
+// GetRadioGroupDevices 获取群组在线设备（含幽灵设备标记）(API-004)
+func GetRadioGroupDevices(c *gin.Context) {
+	groupIDStr := c.Param("id")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
+		return
+	}
+	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	if err != nil || group == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		return
+	}
+	if _, ok := requireGroupViewAccess(c, group); !ok {
+		return
+	}
+
+	devices := make([]RadioDeviceResponse, 0)
+	seenDevices := make(map[string]bool) // 用于去重
+
+	// 1. 获取 UDP 设备
+	udpDevices := udphub.GetOnlineDevicesByGroup(groupID)
+	for _, dev := range udpDevices {
+		key := fmt.Sprintf("udp-%d", dev.ID)
+		if seenDevices[key] {
+			continue
+		}
+		seenDevices[key] = true
+
+		devices = append(devices, RadioDeviceResponse{
+			ID:           dev.ID,
+			Username:     dev.Name,
+			CallSign:     dev.CallSign,
+			SSID:         int(dev.SSID),
+			Nickname:     dev.Name,
+			DevModel:     int(dev.DevModel),
+			GroupID:      dev.GroupID,
+			IsGhost:      false,
+			DisableSend:  dev.DisableSend,
+			DisableRecv:  dev.DisableRecv,
+			ConnectTime:  dev.OnlineTime.Format("2006-01-02 15:04:05"),
+			LastActivity: dev.LastPacketTime.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	// 2. 获取 WebSocket 设备（包括幽灵设备）
+	wsDevices := ws.GlobalManager.GetDevicesByGroup(groupID)
+	for _, device := range wsDevices {
+		key := fmt.Sprintf("ws-%d-%d", device.GetDeviceID(), device.GetSSID())
+		if seenDevices[key] {
+			continue
+		}
+		seenDevices[key] = true
+
+		dev := RadioDeviceResponse{
+			ID:           device.GetDeviceID(),
+			Username:     device.GetUsername(),
+			CallSign:     device.GetCallSign(),
+			SSID:         int(device.GetSSID()),
+			GroupID:      device.GetGroupID(),
+			IsGhost:      device.IsGhost(),
+			DisableSend:  device.IsDisabledSend(),
+			DisableRecv:  device.IsDisabledRecv(),
+			DevModel:     int(device.GetDevModel()),
+			ConnectTime:  device.GetConnectTime().Format("2006-01-02 15:04:05"),
+			LastActivity: device.GetLastPacketTime().Format("2006-01-02 15:04:05"),
+		}
+
+		devices = append(devices, dev)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": devices,
+	})
+}
+
+// UpdateRadioGroupRequest 更新幽灵设备群组请求
+type UpdateRadioGroupRequest struct {
+	GroupID  int `json:"group_id" binding:"required"`
+	DevModel int `json:"dev_model"` // 设备型号（101=Android, 102=iOS, 103=Windows, 104=macOS, 105=Web）
+}
+
+// UpdateRadioGroup 更新幽灵设备群组 (API-005)
+// 【核心修复】支持分平台群组偏好，同时更新 WSDevice 和 GhostDevice 的 GroupID
+func UpdateRadioGroup(c *gin.Context) {
+	var req UpdateRadioGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
+		return
+	}
+
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	userID := currentUser.ID
+
+	// 群组必须存在于数据库、处于启用状态且不是虚拟互联组。
+	group, err := gormdb.NewGroupRepository().GetGroupByID(req.GroupID)
+	if err != nil || group == nil || group.Status != 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "目标群组不存在或未激活"})
+		return
+	}
+	if _, ok := requireGroupViewAccess(c, group); !ok {
+		return
+	}
+
+	// 如果未指定 dev_model，默认为 Web (105)
+	devModel := byte(req.DevModel)
+	if devModel == 0 {
+		devModel = 105 // 默认 Web 端
+	}
+
+	oldGroupID := 0
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+	var webGhost *ws.GhostDevice
+	var udpGhostUsername string
+
+	// Capture the current runtime location for the response and audit log, but
+	// do not mutate it until the authoritative preference write succeeds.
+	if devModel == protocol.DraARLDevModelBrowser {
+		if ghostDevice, exists := ws.GlobalGhostManager.GetGhostDevice(userID); exists && ghostDevice != nil {
+			webGhost = ghostDevice
+			oldGroupID = ghostDevice.GroupID
+		}
+	} else if usernameStr != "" {
+		if ghostDevice := udphub.GlobalUDPGhostManager.Get(usernameStr, devModel); ghostDevice != nil {
+			udpGhostUsername = usernameStr
+			oldGroupID = ghostDevice.GroupID
+		}
+	}
+
+	// Persist first. Runtime state and Type 0 routes are projections of this
+	// committed preference and must never advance when the write fails.
+	userRepo := gormdb.NewUserRepository()
+	if err := userRepo.UpsertUserDevicePreference(userID, devModel, req.GroupID); err != nil {
+		log.Printf("[RADIO] 更新用户 %d 设备 %d 的群组偏好失败: %v", userID, devModel, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "保存群组偏好失败"})
+		return
+	}
+
+	// 【分平台处理】根据 dev_model 更新对应的设备群组
+	if devModel == protocol.DraARLDevModelBrowser {
+		// Web 端 (WebSocket 幽灵设备)
+		if webGhost != nil {
+			// 1. 更新 GhostDeviceManager 中的 GroupID
+			if err := ws.GlobalGhostManager.SetGhostDeviceGroup(userID, req.GroupID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新群组失败"})
+				return
+			}
+
+			// 2. 更新 WSConnectionManager 中的 WSDevice.GroupID
+			if webGhost.Conn != nil {
+				ws.GlobalManager.SetDeviceGroup(webGhost.Conn, req.GroupID)
+			}
+		}
+	} else if udpGhostUsername != "" {
+		// UDP 幽灵设备 (101-104)
+		// SSID 等于 DevModel（幽灵设备的 SSID 规则）
+		if err := udphub.GlobalUDPGhostManager.SetDeviceGroup(udpGhostUsername, devModel, req.GroupID); err != nil {
+			log.Printf("[RADIO] 警告: 更新 UDP 幽灵设备群组失败: %v", err)
+		}
+	}
+
+	if devModel != protocol.DraARLDevModelBrowser {
+		routesync.PublishIdentity(userID, devModel, req.GroupID, false, false)
+	}
+
+	log.Printf("[RADIO] 幽灵设备群组切换: 用户 %d 设备 %d 从群组 %d 切换到群组 %d", userID, devModel, oldGroupID, req.GroupID)
+
+	// 获取用户名用于缓存失效
+	// 【缓存失效】清除用户缓存，确保页面刷新后能读取到最新的群组设置
+	// 必须传入 username，否则 GetUserByName 使用的 userByNameKey 缓存不会被清除
+	if userCache := cache.GetUserCache(); userCache != nil && usernameStr != "" {
+		if err := userCache.InvalidateUser(c.Request.Context(), userID, usernameStr); err != nil {
+			log.Printf("[RADIO] 警告: 失效用户 %d 缓存失败: %v", userID, err)
+		}
+	}
+
+	operatorName := ""
+	operatorCallSign := ""
+	if usernameStr != "" {
+		if user, err := gormdb.NewUserRepository().GetUserByName(usernameStr); err == nil && user != nil {
+			operatorName = user.Name
+			operatorCallSign = user.CallSign
+		} else {
+			operatorName = usernameStr
+		}
+	}
+	oplog.AddLog(
+		fmt.Sprintf("切换在线收发群组: user_id=%d, dev_model=%d, group_id=%d->%d", userID, devModel, oldGroupID, req.GroupID),
+		"radio_group_update",
+		userID,
+		operatorName,
+		operatorCallSign,
+		c.ClientIP(),
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "群组切换成功",
+		"data": gin.H{
+			"group_id":     req.GroupID,
+			"old_group_id": oldGroupID,
+		},
+	})
+}
+
+// GetRadioGroupStats 获取用户有权限访问的群组实时统计信息
+// 此接口专门为 Radio 页面设计，返回包含 WS 设备的实时统计
+// 只返回用户有权限访问的群组（公开群组 + 用户已验证的私有群组）
+func GetRadioGroupStats(c *gin.Context) {
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	userID := currentUser.ID
+
+	// 获取用户有权限访问的群组 ID 列表
+	// 构建用户有权限的群组 ID 集合
+	accessibleGroupIDs := make(map[int]bool)
+	if !isAdminUser(currentUser) {
+		memberRepo := gormdb.NewGroupMemberRepository()
+		members, err := memberRepo.ListGroupsByUser(userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
+			return
+		}
+		for _, m := range members {
+			accessibleGroupIDs[m.GroupID] = true
+		}
+	}
+
+	// 获取所有群组统计
+	allStats := udphub.GetAllGroupStats()
+
+	// 只返回用户有权限访问的群组（公开群组 type=1 或用户已验证的私有群组）
+	result := make([]gin.H, 0, len(allStats))
+	for _, s := range allStats {
+		// 公开群组（type=1）对所有用户可见
+		// 私有群组（type=2）只对已验证用户可见
+		if s.Type == groupTypePublic || isAdminUser(currentUser) || s.OwnerID == userID || accessibleGroupIDs[s.ID] {
+			result = append(result, gin.H{
+				"id":                s.ID,
+				"name":              s.Name,
+				"type":              s.Type,
+				"online_dev_number": s.OnlineDevNumber,
+				"total_dev_number":  s.TotalDevNumber,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "成功",
+		"data":    result,
+	})
+}
+
+// CheckGhostDeviceConflict 检查幽灵设备连接冲突 (API-007)
+// 用于前端在建立 WebSocket 连接前预检查
+// 返回 200 表示可以连接，返回 409 表示存在冲突（该用户已有在线的幽灵设备）
+func CheckGhostDeviceConflict(c *gin.Context) {
+	// 获取当前用户 ID
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		return
+	}
+
+	// 检查该用户是否已有在线的幽灵设备
+	if ws.GlobalManager.IsGhostDeviceOnline(userID) {
+		c.JSON(http.StatusConflict, gin.H{
+			"code":    409,
+			"message": "您的账号已在其他页面建立了电台连接，请先断开其他页面的连接",
+			"data": gin.H{
+				"conflict": true,
+			},
+		})
+		return
+	}
+
+	// 没有冲突，可以建立连接
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "可以建立连接",
+		"data": gin.H{
+			"conflict": false,
+		},
+	})
+}

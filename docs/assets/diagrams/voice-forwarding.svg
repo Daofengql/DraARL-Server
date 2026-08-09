@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 200" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="600" height="40" fill="#1565c0" rx="8"/>
+  <text x="300" y="27" text-anchor="middle" fill="white" font-size="16" font-weight="bold">语音转发流程</text>
+
+  <!-- 设备A -->
+  <rect x="30" y="60" width="120" height="50" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="90" y="80" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">设备 A</text>
+  <text x="90" y="98" text-anchor="middle" fill="#666" font-size="10">BG1AAA</text>
+
+  <!-- 服务器 -->
+  <rect x="240" y="60" width="120" height="50" fill="white" rx="8" stroke="#4caf50" stroke-width="2"/>
+  <text x="300" y="80" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">服务器</text>
+  <text x="300" y="98" text-anchor="middle" fill="#666" font-size="10">转发</text>
+
+  <!-- 设备B -->
+  <rect x="450" y="60" width="120" height="50" fill="white" rx="8" stroke="#ff9800" stroke-width="2"/>
+  <text x="510" y="80" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">设备 B</text>
+  <text x="510" y="98" text-anchor="middle" fill="#666" font-size="10">BG2BBB</text>
+
+  <!-- 语音发送 -->
+  <rect x="170" y="130" width="50" height="25" fill="#e3f2fd" rx="4"/>
+  <text x="195" y="147" text-anchor="middle" fill="#1565c0" font-size="9">Opus</text>
+  <path d="M 150 142 L 170 142" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 220 142 L 240 142" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 转发 -->
+  <rect x="380" y="130" width="50" height="25" fill="#fff3e0" rx="4"/>
+  <text x="405" y="147" text-anchor="middle" fill="#e65100" font-size="9">转发</text>
+  <path d="M 360 142 L 380 142" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 430 142 L 450 142" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 显示 -->
+  <rect x="470" y="165" width="80" height="20" fill="#e8f5e9" rx="10"/>
+  <text x="510" y="179" text-anchor="middle" fill="#2e7d32" font-size="8">"BG1AAA 正在发言"</text>
+</svg>

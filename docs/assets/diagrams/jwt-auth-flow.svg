@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 550 250" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="550" height="40" fill="#2196f3" rx="8"/>
+  <text x="275" y="27" text-anchor="middle" fill="white" font-size="16" font-weight="bold">JWT 认证流程 (幽灵设备)</text>
+
+  <!-- App/PC -->
+  <rect x="30" y="60" width="100" height="40" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="80" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">App/PC</text>
+
+  <!-- 服务器 -->
+  <rect x="420" y="60" width="100" height="40" fill="white" rx="8" stroke="#4caf50" stroke-width="2"/>
+  <text x="470" y="85" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">服务器</text>
+
+  <!-- JWT Auth -->
+  <rect x="150" y="110" width="250" height="50" fill="#e3f2fd" rx="4"/>
+  <text x="275" y="130" text-anchor="middle" fill="#1565c0" font-size="11" font-weight="bold">JWT Auth (Type=1)</text>
+  <text x="275" y="148" text-anchor="middle" fill="#666" font-size="9">DevModel: 101-104 | DATA: JWT Token</text>
+  <path d="M 130 135 L 150 135" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 400 135 L 420 135" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 服务器处理 -->
+  <rect x="420" y="170" width="100" height="40" fill="#fff3e0" rx="4"/>
+  <text x="470" y="185" text-anchor="middle" fill="#e65100" font-size="8">1. 验证Token</text>
+  <text x="470" y="200" text-anchor="middle" fill="#e65100" font-size="8">2. 获取用户信息</text>
+
+  <!-- 响应 -->
+  <rect x="150" y="220" width="250" height="40" fill="#e8f5e9" rx="4"/>
+  <text x="275" y="237" text-anchor="middle" fill="#2e7d32" font-size="10">Response: SSID, CallSign, Status</text>
+  <path d="M 420 240 L 400 240" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 150 240 L 130 240" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+</svg>

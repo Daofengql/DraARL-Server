@@ -1,0 +1,86 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+draarl.arm
+draarl.arm64
+/draarl
+/draarl_test
+/draarl_*
+old/
+.claude/
+__pycache__
+
+__pycache__/*
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Configuration files (may contain sensitive data)
+*.yaml
+*.yml
+!compose.yaml
+!config.yaml.example
+!*.example.yaml
+!*.example.yml
+!deploy/docker/*.yaml
+!docs/mkdocs.yml
+!.github/workflows/*.yml
+
+# Database files
+*.sqlite3
+*.db
+*.sql
+
+# Log files
+*.log
+/logs/
+
+# Upload and temporary files
+uploads/
+tmp/
+temp/
+
+# Local storage root (Storage.Local.RootPath 默认 ./data/storage)
+/data/
+
+# Build output
+bin/
+build/
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IP database
+*.ipdb
+
+# Development notes
+TODO*.md
+bugs.md
+
+.claude/
+
+# Local agent working specs
+.trae/

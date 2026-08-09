@@ -1,0 +1,65 @@
+System:
+  Host: ""
+  Port: "60050"
+  LogPath: ""
+  IPfile: ""
+  ProxyProtocol: ""
+
+UDP:
+  SendWorkers: 0
+  IngressWorkers: 0
+  FrameQueueSize: 64
+  MaxFrameAgeMS: 120
+  ReadBufferBytes: 4194304
+  WriteBufferBytes: 4194304
+
+Interconnect:
+  Enabled: false
+
+Database:
+  Host: mysql
+  Port: 3306
+  User: draarl
+  Password: "${DRAARL_MYSQL_PASSWORD}"
+  DBName: draarl
+  Charset: utf8mb4
+  Collate: utf8mb4_unicode_ci
+  MaxOpenConns: 50
+  MaxIdleConns: 10
+  MaxLifetime: 300
+
+Redis:
+  Host: redis
+  Port: 6379
+  Password: "${DRAARL_REDIS_PASSWORD}"
+  DB: 0
+  Prefix: draarl
+  DialTimeoutSec: 3
+  ReadTimeoutSec: 2
+  WriteTimeoutSec: 2
+  PoolSize: 20
+
+Web:
+  Host: ""
+  Port: "9000"
+  FrontendURL: "${DRAARL_PUBLIC_URL}"
+  AllowedOrigins:
+    - "${DRAARL_PUBLIC_URL}"
+
+Storage:
+  Driver: minio
+  MinIO:
+    Endpoint: "${DRAARL_MINIO_ENDPOINT}"
+    PublicEndpoint: "${DRAARL_MINIO_ENDPOINT}"
+    AccessKey: "${DRAARL_MINIO_ROOT_USER}"
+    SecretKey: "${DRAARL_MINIO_ROOT_PASSWORD}"
+    UseSSL: ${DRAARL_MINIO_USE_SSL}
+    PublicUseSSL: ${DRAARL_MINIO_USE_SSL}
+    Bucket: draarl
+    DownloadURLPrefix: ""
+
+JWT:
+  Secret: "${DRAARL_JWT_SECRET}"
+
+DeviceAuth:
+  AESKey: "${DRAARL_AES_KEY}"

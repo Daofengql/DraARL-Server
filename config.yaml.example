@@ -1,0 +1,218 @@
+# DraARL 配置文件模板
+# 复制此文件为 config.yaml 并根据实际情况修改配置
+
+# 系统配置
+System:
+    Host: ""                   # 监听地址，空则监听所有网卡
+    Port: "60050"              # UDP服务端口
+    LogPath: ""                # 日志文件路径，空则不输出文件
+    IPfile: ./ipinfo.ipdb      # IP数据库文件路径
+    ProxyProtocol: ""          # PROXY Protocol 版本: "v2" 启用, 留空禁用。启用后可从 frp 等代理获取真实客户端 IP
+
+# UDP 转发性能配置。SendWorkers/IngressWorkers 为 0 时按 CPU 自动选择。
+UDP:
+    SendWorkers: 0             # 并发发送 FD 数，自动值最多 8；手动值范围 1-32
+    IngressWorkers: 0          # 按设备身份分片的处理 worker，自动值最多 16
+    FrameQueueSize: 64         # 发送队列按完整帧计数；满时淘汰最旧帧
+    MaxFrameAgeMS: 120         # 超过该排队时间的实时帧不再发送
+    ReadBufferBytes: 4194304   # 请求的 UDP 接收缓冲（实际值以启动日志/指标为准）
+    WriteBufferBytes: 4194304  # 请求的 UDP 发送缓冲（实际值以启动日志/指标为准）
+
+# 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
+Interconnect:
+    Enabled: false
+    ControlListen: ":60100"   # 仅 TLS/TCP 节点控制面
+    TLSCertFile: ""
+    TLSKeyFile: ""
+    TLSClientCAFile: ""
+    AllowSelfSigned: false       # 仅本地开发/测试
+    RegistrationTokenTTL: 86400
+    CredentialRotationGraceSeconds: 600 # 在线轮换后旧凭据可重连的短时宽限，最大 3600 秒
+    SessionRecoveryWindowSeconds: 180   # 中心重启/节点重连时保留旧设备归属的恢复窗口，30-600 秒
+    NodeTokens: {}               # 开发引导配置；生产使用后台签发凭据
+    Resources:
+        MaxNodes: 256
+        MaxPendingHandshakes: 64
+        AuthAttemptsPerMinutePerIP: 30
+        DataSoftPPSPerNode: 50000       # 软阈值只记录告警，不丢包
+        DataHardPPSPerNode: 100000
+        DataHardMbpsPerNode: 1000
+        DataQueuePerNode: 512
+        DataQueueGlobal: 4096
+        DataWorkers: 0                  # 0 按 CPU 自动选择（2-16）
+        DataMaxQueueAgeMS: 200
+        ControlSoftPPSPerNode: 1000
+        ControlHardPPSPerNode: 2000
+        ControlHardMbpsPerNode: 256
+        DeviceAuthPPSPerNode: 500
+        MaxDeviceSessionsPerNode: 25000
+
+# 仅在 `draarl --edge -c config.yaml` 下读取；中心模式忽略此块。
+# 边缘不需要下方 Database/Redis/Web/Storage 等中心依赖。
+Edge:
+    Center: "center.example.com:60100" # 中心 TLS 控制面
+    CenterUDP: "center.example.com:60050" # 中心 Type 0 UDP，与中心普通设备端口复用
+    Token: ""                  # 后台一次性注册凭据；首次注册后使用独立 identity 文件
+    NodeID: ""                 # 可由注册凭据携带，通常无需手填
+    Listen: ":60050"           # 边缘普通设备与 Type 0 共用双向 socket；远程中心场景不要绑定 127.0.0.1
+    ProxyProtocol: ""          # 设为 v2 时解析 FRP PROXY Protocol v2；应使用防火墙仅允许受信代理访问
+    TLSCAFile: ""              # 中心证书 CA；使用公共 CA 时可留空
+    TLSServerName: "center.example.com"
+    InsecureSkipVerify: false     # 仅本地测试可临时开启
+    IdentityFile: "edge-identity.json"
+    DeviceSessionTimeoutSeconds: 20 # 普通设备无包超时；超时后立即从本地路由移除并报告中心
+    GrantRenewBeforeSeconds: 30     # 在中心短期授权到期前随设备心跳续租
+    DisconnectedLocalGraceSeconds: 15 # 控制链断开后仅允许已有设备短暂本地通信，随后失败关闭
+
+# MySQL数据库配置
+Database:
+    Host: "127.0.0.1"
+    Port: 3306
+    User: "draarl"
+    Password: "your_password_here"
+    DBName: "draarl"
+    Charset: "utf8mb4"
+    Collate: "utf8mb4_unicode_ci"
+
+    # 连接池配置
+    MaxOpenConns: 25           # 最大打开连接数
+    MaxIdleConns: 5            # 最大空闲连接数
+    MaxLifetime: 300           # 连接最大存活时间(秒)
+
+# Redis 配置（refresh token 优先使用 Redis；不可用时自动降级到内存存储）
+Redis:
+    Host: "127.0.0.1"
+    Port: 6379
+    Password: ""
+    DB: 0
+    Prefix: "draarl"
+    DialTimeoutSec: 3
+    ReadTimeoutSec: 2
+    WriteTimeoutSec: 2
+    PoolSize: 20
+
+# Web服务配置
+Web:
+    Host: ""                   # 监听地址，空则监听所有网卡
+    Port: "9000"               # Web服务端口
+    FrontendURL: "http://localhost:5173"  # 前端地址，用于SSO回调后重定向
+    AllowedOrigins:            # CORS / WS Origin 白名单：填写真正发起 API/WS 请求的页面域名
+        - "http://localhost:5173"
+
+# Keycloak SSO 单点登录配置 (可选)
+Keycloak:
+    Enabled: false                    # 是否启用SSO登录
+    Name: "企业SSO"                    # SSO显示名称，用于登录按钮和绑定提示
+    BaseURL: "http://localhost:8080"   # Keycloak服务器地址
+    Realm: "draarl"                  # Realm名称
+    ClientID: "draarl-frontend"      # 客户端ID
+    ClientSecret: ""                  # 客户端密钥(如需要)
+    RedirectURI: "http://localhost:9000/api/sso/callback"  # 回调地址（后端API）
+
+# 统一存储配置（主块）
+# Driver 为空时：若 Storage.MinIO.Endpoint 非空 → minio，否则 local。
+# 新部署建议使用 ActiveProfile + Profiles；MinIO 旧配置仍保持兼容。
+Storage:
+    Driver: ""                        # minio | s3 | r2 | cos | oss | local；空则自动推断
+    UploadLimits:
+        ClientResourceBytes: 536870912 # 客户端资源直传上限，默认 512 MiB
+    Local:
+        RootPath: "./data/storage"    # 本地磁盘根目录（已做路径穿越防护）
+        BaseURL: ""                   # 公开访问前缀，空则使用 /files
+    MinIO:
+        Endpoint: "localhost:9000"    # 后端连接 MinIO 的地址
+        PublicEndpoint: ""            # 可选，对外预签名地址；容器部署时与内部 Endpoint 分离
+        AccessKey: "minioadmin"       # Access Key
+        SecretKey: "minioadmin"       # Secret Key
+        UseSSL: false                 # 是否使用 HTTPS
+        PublicUseSSL: false           # PublicEndpoint 是否使用 HTTPS
+        Bucket: "draarl"             # 默认存储桶
+        DownloadURLPrefix: ""         # 可选：预签名 GET 的访问前缀；仅供用户自行配置的反向代理使用
+    # 统一 S3 兼容配置。Driver=s3/r2/cos/oss 时使用此块。
+    S3:
+        Provider: ""                  # minio | r2 | cos | oss（标识与文档用途）
+        Endpoint: ""                  # 后端 S3 API host:port 或完整 http(s):// URL；scheme 会覆盖 UseSSL
+        PresignEndpoint: ""           # 浏览器可访问的 S3 API 地址；空则使用 Endpoint，scheme 会覆盖 PresignUseSSL
+        DownloadURLPrefix: ""         # 可选：替换预签名 GET 的 URL 前缀；不影响 PUT，不代表对象公开
+        Region: ""                    # R2 留空时自动使用 auto；COS/OSS 必须按 Bucket 地域填写
+        BucketLookup: "auto"          # auto | path | dns；非法值会拒绝启动
+        AccessKey: ""
+        SecretKey: ""
+        SessionToken: ""              # 可选 STS 临时凭据
+        UseSSL: true
+        PresignUseSSL: true
+        Bucket: "draarl"
+        AutoCreateBucket: false        # 公有云默认由部署侧预先创建 bucket
+
+    # 多 profile 示例。运行时用 ActiveProfile 指定一个 profile；存储迁移可在命令中同时引用任意两个 profile。
+    # AccessKey/SecretKey/SessionToken 可写为精确的 ${ENV_NAME}，运行时解析且不会将解析后的密钥写回配置文件。
+    # ActiveProfile: "r2-prod"
+    # Profiles:
+    #     minio-prod:
+    #         Driver: s3
+    #         S3:
+    #             Provider: minio
+    #             Endpoint: "minio.internal:9000"
+    #             PresignEndpoint: "storage.example.com"
+    #             DownloadURLPrefix: "" # 高级选项：用户自管反向代理的下载路径前缀
+    #             Region: "us-east-1"
+    #             BucketLookup: path
+    #             AccessKey: "${MINIO_ACCESS_KEY}"
+    #             SecretKey: "${MINIO_SECRET_KEY}"
+    #             UseSSL: false
+    #             PresignUseSSL: true
+    #             Bucket: "draarl"
+    #             AutoCreateBucket: true
+    #     r2-prod:
+    #         Driver: s3
+    #         S3:
+    #             Provider: r2
+    #             Endpoint: "<account-id>.r2.cloudflarestorage.com"
+    #             Region: "auto"
+    #             BucketLookup: path
+    #             AccessKey: "${R2_ACCESS_KEY}"
+    #             SecretKey: "${R2_SECRET_KEY}"
+    #             UseSSL: true
+    #             Bucket: "draarl"
+    #             AutoCreateBucket: false
+    #     cos-prod:
+    #         Driver: cos
+    #         S3:
+    #             Endpoint: "cos.ap-guangzhou.myqcloud.com"
+    #             PresignEndpoint: "cos.ap-guangzhou.myqcloud.com"
+    #             Region: "ap-guangzhou"
+    #             BucketLookup: dns
+    #             AccessKey: "${COS_SECRET_ID}"
+    #             SecretKey: "${COS_SECRET_KEY}"
+    #             UseSSL: true
+    #             PresignUseSSL: true
+    #             Bucket: "draarl-<appid>"
+    #             AutoCreateBucket: false
+    #     oss-prod:
+    #         Driver: oss
+    #         S3:
+    #             Endpoint: "oss-cn-hangzhou.aliyuncs.com"
+    #             PresignEndpoint: "oss-cn-hangzhou.aliyuncs.com"
+    #             Region: "cn-hangzhou"
+    #             BucketLookup: dns
+    #             AccessKey: "${OSS_ACCESS_KEY_ID}"
+    #             SecretKey: "${OSS_ACCESS_KEY_SECRET}"
+    #             UseSSL: true
+    #             PresignUseSSL: true
+    #             Bucket: "draarl"
+    #             AutoCreateBucket: false
+
+# JWT 配置
+JWT:
+    Secret: ""                         # JWT 签名密钥，至少 32 字符；留空或过短时程序会自动生成并写入配置文件
+
+# 设备认证配置
+DeviceAuth:
+    AESKey: ""                        # AES 加密密钥，用于设备密码加密存储
+                                      # 必须为 16、24 或 32 字节（对应 AES-128/192/256）
+                                      # 留空则自动生成 32 字节密钥并写入配置文件
+
+# 微信小程序配置 (可选，用于小程序端绑定与快捷登录)
+WeChat:
+    AppID: ""                         # 微信小程序 AppID
+    AppSecret: ""                     # 微信小程序 AppSecret

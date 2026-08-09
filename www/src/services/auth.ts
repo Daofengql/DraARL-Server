@@ -1,0 +1,450 @@
+import { apiClient } from './api'
+import type {
+  User,
+  LoginRequest,
+  RegisterRequest,
+  FileUploadResponse,
+  CertificateResponse,
+  OperatorCertificateUpload,
+} from '../types'
+
+interface LoginResponse {
+  token: string
+  refresh_token?: string
+  expires_in?: number
+  refresh_expires_in?: number
+  user: User
+}
+
+interface BackendResponse<T> {
+  code: number
+  message: string
+  data?: T
+}
+
+export const authService = {
+  // 用户登录
+  async login(data: LoginRequest): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>('/api/auth/login', data)
+    return res.data!
+  },
+
+  // 管理员直接切换为目标用户登录。返回的是目标用户自己的完整登录态。
+  async switchLogin(userId: number): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>(`/api/auth/switch-login/${userId}`)
+    return res.data!
+  },
+
+  // 用户登出
+  async logout(): Promise<void> {
+    try {
+      await apiClient.post('/api/auth/logout')
+    } finally {
+      // 无论 API 调用成功与否，都清除本地认证信息
+      this.clearAuth()
+    }
+  },
+
+  // 用户注册
+  async register(data: RegisterRequest): Promise<RegisterResponse> {
+    const res = await apiClient.post<BackendResponse<RegisterResponse>>('/api/auth/register', data)
+    return res.data!
+  },
+
+  // 获取当前用户信息
+  async getMe(): Promise<User> {
+    const res = await apiClient.get<BackendResponse<User>>('/api/me')
+    return res.data!
+  },
+
+  // 更新个人资料
+  async updateProfile(data: Partial<User>): Promise<User> {
+    const res = await apiClient.put<BackendResponse<User>>('/api/me', data)
+    return res.data!
+  },
+
+  // 修改自己的密码
+  async changeOwnPassword(data: { old_password: string; new_password: string }): Promise<void> {
+    await apiClient.put('/api/me/password', data)
+  },
+
+  // 上传文件（通用，用于头像等）
+  async uploadFile(file: File, fileType: string): Promise<FileUploadResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('file_type', fileType)
+    const res = await apiClient.post<BackendResponse<FileUploadResponse>>('/api/upload/file', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return res.data!
+  },
+
+  // 上传操作证（file 可选，用于纯呼号更新；有文件时固定直传）
+  async uploadOperatorCertificate(file?: File, callsign?: string): Promise<OperatorCertificateUpload> {
+    const formData = new FormData()
+    if (callsign) {
+      formData.append('callsign', callsign)
+    }
+
+    if (file) {
+      const { directUpload } = await import('./storageUpload')
+      const uploaded = await directUpload(file, 'operator_cert')
+      formData.append('object_key', uploaded.object_key)
+      formData.append('upload_token', uploaded.upload_token)
+      formData.append('file_name', file.name)
+      formData.append('content_type', uploaded.content_type)
+      formData.append('file_size', String(uploaded.size))
+    }
+
+    const res = await apiClient.post<BackendResponse<OperatorCertificateUpload>>('/api/upload/operator-certificate', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return res.data!
+  },
+
+  // 获取操作证信息（返回 active_cert 和 pending_cert）
+  async getOperatorCertificate(): Promise<CertificateResponse> {
+    const res = await apiClient.get<BackendResponse<CertificateResponse>>('/api/operator-certificate')
+    return res.data || { active_cert: null, pending_cert: null }
+  },
+
+  // 获取操作证临时访问URL
+  async getOperatorCertificateUrl(id: number): Promise<{ url: string; expires_in: number }> {
+    const res = await apiClient.get<BackendResponse<{ url: string; expires_in: number }>>(`/api/operator-certificate/${id}/url`)
+    return res.data!
+  },
+
+  // 保存认证信息
+  saveAuth(token: string, user: User) {
+    localStorage.setItem('token', token)
+    localStorage.setItem('user', JSON.stringify(user))
+    void this.syncWSTokenCookie()
+    // 触发自定义事件，通知其他组件用户信息已更新
+    window.dispatchEvent(new CustomEvent('user-updated'))
+  },
+
+  // 清除认证信息
+  clearAuth() {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    void this.clearWSTokenCookie()
+  },
+
+  async syncWSTokenCookie(): Promise<void> {
+    try {
+      await apiClient.post('/api/auth/ws-token/sync')
+    } catch (error) {
+      console.warn('Failed to sync ws_token cookie:', error)
+    }
+  },
+
+  async clearWSTokenCookie(): Promise<void> {
+    try {
+      await apiClient.post('/api/auth/ws-token/clear')
+    } catch (error) {
+      console.warn('Failed to clear ws_token cookie:', error)
+    }
+  },
+
+  // 获取存储的用户信息
+  getStoredUser(): User | null {
+    const userStr = localStorage.getItem('user')
+    if (userStr) {
+      try {
+        return JSON.parse(userStr)
+      } catch {
+        return null
+      }
+    }
+    return null
+  },
+
+  // 获取存储的 token
+  getToken(): string | null {
+    return localStorage.getItem('token')
+  },
+
+  // 检查是否已登录
+  isAuthenticated(): boolean {
+    return !!this.getToken()
+  },
+
+  // 检查是否是管理员
+  isAdmin(): boolean {
+    const user = this.getStoredUser()
+    if (!user) return false
+
+    // 检查 isAdmin 字段
+    if (user.isAdmin === true) return true
+
+    // 检查 roles 数组是否包含 admin
+    if (user.roles && Array.isArray(user.roles)) {
+      return user.roles.includes('admin')
+    }
+
+    // 检查 role 字段
+    if (user.role === 'admin') return true
+
+    return false
+  },
+
+  // 检查用户是否已审核通过
+  isApproved(): boolean {
+    const user = this.getStoredUser()
+    if (!user) return false
+    // 管理员总是可以通过
+    if (this.isAdmin()) return true
+    // 检查审核状态：1=已通过
+    return user.approval_status === 1
+  },
+
+  // 刷新用户信息（从服务器获取最新信息并更新 localStorage）
+  async refreshUserInfo(): Promise<User | null> {
+    try {
+      const user = await this.getMe()
+      const token = this.getToken()
+      if (token && user) {
+        // 保留 token，只更新用户信息
+        localStorage.setItem('user', JSON.stringify(user))
+        // 触发自定义事件，通知其他组件用户信息已更新
+        window.dispatchEvent(new CustomEvent('user-updated'))
+      }
+      return user
+    } catch (error) {
+      console.error('Failed to refresh user info:', error)
+      return null
+    }
+  },
+
+  // ========== 设备密码管理 ==========
+
+  // 获取设备密码（脱敏显示）
+  async getDevicePassword(): Promise<DevicePasswordResponse> {
+    const res = await apiClient.get<BackendResponse<DevicePasswordResponse>>('/api/user/device-password')
+    return res.data!
+  },
+
+  // 修改设备密码
+  async updateDevicePassword(newPassword: string): Promise<UpdateDevicePasswordResponse> {
+    const res = await apiClient.put<BackendResponse<UpdateDevicePasswordResponse>>('/api/user/device-password', {
+      new_password: newPassword,
+    })
+    return res.data!
+  },
+
+  // 重新生成设备密码
+  async regenerateDevicePassword(): Promise<RegenerateDevicePasswordResponse> {
+    const res = await apiClient.post<BackendResponse<RegenerateDevicePasswordResponse>>('/api/user/device-password/regenerate')
+    return res.data!
+  },
+}
+
+// 设备密码响应类型
+export interface DevicePasswordResponse {
+  device_password: string
+  has_password: boolean
+  is_new: boolean
+  created_at: string
+}
+
+export interface UpdateDevicePasswordResponse {
+  masked_password: string
+}
+
+export interface RegenerateDevicePasswordResponse {
+  device_password: string
+}
+
+// ========== 设备动态码绑定相关接口 ==========
+
+// 绑定设备请求
+export interface BindDeviceRequest {
+  dynamic_code: string
+}
+
+// 绑定设备响应
+export interface BindDeviceResponse {
+  device_mac: string
+  call_sign: string
+  message: string
+  available_ssids: number[]
+  recommended_ssid: number
+  replaceable_devices: Array<{
+    device_id: number
+    name: string
+    callsign: string
+    ssid: number
+    last_online_ip?: string
+    online_time?: string
+  }>
+}
+
+// 提交设备配置请求
+export interface SubmitDeviceConfigRequest {
+  device_mac: string
+  ssid?: number
+  replace_device_id?: number
+}
+
+// 提交设备配置响应
+export interface SubmitDeviceConfigResponse {
+  message: string
+  ssid?: number
+  udp_auth_info: {
+    username: string
+    device_password: string
+  }
+  dmr_id: number
+}
+
+export const deviceBindService = {
+  // 通过动态码绑定设备
+  async bindDevice(dynamicCode: string): Promise<BindDeviceResponse> {
+    const res = await apiClient.post<BackendResponse<BindDeviceResponse>>('/api/device/bind', {
+      dynamic_code: dynamicCode,
+    })
+    return res.data!
+  },
+
+  // 提交设备配置
+  async submitDeviceConfig(data: SubmitDeviceConfigRequest): Promise<SubmitDeviceConfigResponse> {
+    const res = await apiClient.post<BackendResponse<SubmitDeviceConfigResponse>>('/api/device/submit-config', data)
+    return res.data!
+  },
+}
+
+export interface RegisterResponse {
+  id: number
+  username: string
+  nickname: string
+  approval_status: number
+  device_password: string
+}
+
+// SSO 相关接口
+export interface SSOLoginURLResponse {
+  url: string
+}
+
+export interface SSOStatusResponse {
+  bound: boolean
+  keycloak_id?: string
+}
+
+export interface SSOCodeExchangeRequest {
+  code: string
+}
+
+export const ssoService = {
+  // 获取 SSO 登录 URL
+  async getLoginURL(): Promise<SSOLoginURLResponse> {
+    const res = await apiClient.get<BackendResponse<SSOLoginURLResponse>>('/api/sso/login')
+    return res.data!
+  },
+
+  // 获取当前用户的 SSO 绑定状态
+  async getStatus(): Promise<SSOStatusResponse> {
+    const res = await apiClient.get<BackendResponse<SSOStatusResponse>>('/api/sso/status')
+    return res.data!
+  },
+
+  // 发起 SSO 绑定
+  async bind(): Promise<SSOLoginURLResponse> {
+    const res = await apiClient.post<BackendResponse<SSOLoginURLResponse>>('/api/sso/bind')
+    return res.data!
+  },
+
+  // 解除 SSO 绑定
+  async unbind(): Promise<void> {
+    await apiClient.delete('/api/sso/unbind')
+  },
+
+  // 使用一次性交换码换取登录态数据
+  async exchangeCode(code: string): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>('/api/sso/exchange', { code } satisfies SSOCodeExchangeRequest)
+    return res.data!
+  },
+}
+
+// ========== 验证码相关接口 ==========
+
+// 图片验证码响应
+export interface CaptchaResponse {
+  captcha_id: string
+  captcha_image: string
+  expire: number
+}
+
+// 发送验证码响应
+export interface SendCodeResponse {
+  session_id: string
+  expires_in: number
+}
+
+// 邮箱验证码登录请求
+export interface EmailLoginRequest {
+  session_id: string
+  code: string
+}
+
+// 邮箱验证请求（注册用）
+export interface VerifyEmailRequest {
+  session_id: string
+  code: string
+}
+
+// 重置密码请求
+export interface ResetPasswordRequest {
+  session_id: string
+  code: string
+  new_password: string
+}
+
+export const captchaService = {
+  // 获取图片验证码
+  async getCaptcha(): Promise<CaptchaResponse> {
+    const res = await apiClient.get<BackendResponse<CaptchaResponse>>('/api/captcha')
+    return res.data!
+  },
+}
+
+export const emailAuthService = {
+  // 发送邮箱验证码
+  async sendCode(data: {
+    email: string
+    purpose: 'register' | 'login' | 'reset_password' | 'change_email'
+    captcha_id: string
+    captcha_code: string
+  }): Promise<SendCodeResponse> {
+    const res = await apiClient.post<BackendResponse<SendCodeResponse>>('/api/auth/send-code', data)
+    return res.data!
+  },
+
+  // 邮箱验证码登录
+  async emailLogin(data: EmailLoginRequest): Promise<LoginResponse> {
+    const res = await apiClient.post<BackendResponse<LoginResponse>>('/api/auth/email-login', data)
+    return res.data!
+  },
+
+  // 验证邮箱（注册流程）
+  async verifyEmail(data: VerifyEmailRequest): Promise<{ email: string; session_id: string }> {
+    const res = await apiClient.post<BackendResponse<{ email: string; session_id: string }>>('/api/auth/verify-email', data)
+    return res.data!
+  },
+
+  // 重置密码
+  async resetPassword(data: ResetPasswordRequest): Promise<void> {
+    await apiClient.post('/api/auth/reset-password', data)
+  },
+
+  // 修改邮箱（需要双验证）
+  async changeEmail(data: {
+    old_session_id?: string
+    old_code?: string
+    new_session_id: string
+    new_code: string
+  }): Promise<{ email: string }> {
+    const res = await apiClient.put<BackendResponse<{ email: string }>>('/api/me/email', data)
+    return res.data!
+  },
+}

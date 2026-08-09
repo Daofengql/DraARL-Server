@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#1a237e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#283593;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="clientGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#e3f2fd;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#bbdefb;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="serverGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#e8f5e9;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c8e6c9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="dataGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fff3e0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ffe0b2;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="1200" height="60" fill="url(#headerGrad)" rx="8"/>
+  <text x="600" y="38" text-anchor="middle" fill="white" font-size="24" font-weight="bold">DraARL Server 整体架构</text>
+
+  <!-- 客户端层 -->
+  <rect x="50" y="80" width="1100" height="140" fill="url(#clientGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="600" y="105" text-anchor="middle" fill="#1565c0" font-size="16" font-weight="bold">客户端层</text>
+  
+  <rect x="80" y="120" width="150" height="80" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="155" y="150" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">ESP32 设备</text>
+  <text x="155" y="170" text-anchor="middle" fill="#666" font-size="11">UDP / 设备密码</text>
+  <text x="155" y="185" text-anchor="middle" fill="#666" font-size="11">DraARLv1</text>
+
+  <rect x="260" y="120" width="150" height="80" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="335" y="150" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">Android / iOS</text>
+  <text x="335" y="170" text-anchor="middle" fill="#666" font-size="11">UDP / JWT</text>
+  <text x="335" y="185" text-anchor="middle" fill="#666" font-size="11">DraARLv1</text>
+
+  <rect x="440" y="120" width="150" height="80" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="515" y="150" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">Windows PC</text>
+  <text x="515" y="170" text-anchor="middle" fill="#666" font-size="11">UDP / JWT</text>
+  <text x="515" y="185" text-anchor="middle" fill="#666" font-size="11">DraARLv1</text>
+
+  <rect x="620" y="120" width="150" height="80" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="695" y="150" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">Web 浏览器</text>
+  <text x="695" y="170" text-anchor="middle" fill="#666" font-size="11">WebSocket / JWT</text>
+  <text x="695" y="185" text-anchor="middle" fill="#666" font-size="11">DraARLv1</text>
+
+  <rect x="800" y="120" width="150" height="80" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="875" y="150" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">对讲桥接器</text>
+  <text x="875" y="170" text-anchor="middle" fill="#666" font-size="11">UDP / 设备密码</text>
+  <text x="875" y="185" text-anchor="middle" fill="#666" font-size="11">南山/涛涛/HT</text>
+
+  <rect x="980" y="120" width="140" height="80" fill="white" rx="8" stroke="#1976d2" stroke-width="2"/>
+  <text x="1050" y="150" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">其他服务器</text>
+  <text x="1050" y="170" text-anchor="middle" fill="#666" font-size="11">UDP / 互联</text>
+  <text x="1050" y="185" text-anchor="middle" fill="#666" font-size="11">DraARLv1</text>
+
+  <!-- 连接箭头 -->
+  <path d="M 155 200 L 155 250" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <path d="M 335 200 L 335 250" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <path d="M 515 200 L 515 250" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <path d="M 695 200 L 695 250" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <path d="M 875 200 L 875 250" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <path d="M 1050 200 L 1050 250" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2"/>
+    </marker>
+  </defs>
+
+  <!-- 网络接入层 -->
+  <rect x="50" y="250" width="1100" height="100" fill="url(#serverGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="600" y="275" text-anchor="middle" fill="#2e7d32" font-size="16" font-weight="bold">网络接入层</text>
+  
+  <rect x="150" y="285" width="200" height="50" fill="white" rx="6" stroke="#43a047" stroke-width="2"/>
+  <text x="250" y="305" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">UDP Server</text>
+  <text x="250" y="322" text-anchor="middle" fill="#666" font-size="11">端口 60050 | PROXY Proto</text>
+
+  <rect x="420" y="285" width="200" height="50" fill="white" rx="6" stroke="#43a047" stroke-width="2"/>
+  <text x="520" y="305" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">HTTP Server</text>
+  <text x="520" y="322" text-anchor="middle" fill="#666" font-size="11">端口 9002 | Gin</text>
+
+  <rect x="690" y="285" width="200" height="50" fill="white" rx="6" stroke="#43a047" stroke-width="2"/>
+  <text x="790" y="305" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">WebSocket</text>
+  <text x="790" y="322" text-anchor="middle" fill="#666" font-size="11">/ws | Gorilla WS</text>
+
+  <!-- 箭头向下 -->
+  <path d="M 250 335 L 250 380" stroke="#43a047" stroke-width="2" fill="none" marker-end="url(#arrowGreen)"/>
+  <path d="M 520 335 L 520 380" stroke="#43a047" stroke-width="2" fill="none" marker-end="url(#arrowGreen)"/>
+  <path d="M 790 335 L 790 380" stroke="#43a047" stroke-width="2" fill="none" marker-end="url(#arrowGreen)"/>
+
+  <defs>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#43a047"/>
+    </marker>
+  </defs>
+
+  <!-- 业务逻辑层 -->
+  <rect x="50" y="380" width="1100" height="200" fill="#f5f5f5" rx="10" filter="url(#shadow)"/>
+  <text x="600" y="405" text-anchor="middle" fill="#424242" font-size="16" font-weight="bold">业务逻辑层</text>
+  
+  <rect x="70" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
+  <text x="150" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">认证服务</text>
+  <text x="150" y="462" text-anchor="middle" fill="#666" font-size="10">JWT | 设备密码 | SSO</text>
+  <text x="150" y="477" text-anchor="middle" fill="#666" font-size="10">阶梯封禁</text>
+
+  <rect x="250" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
+  <text x="330" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">设备管理</text>
+  <text x="330" y="462" text-anchor="middle" fill="#666" font-size="10">动态码绑定 | 配置同步</text>
+  <text x="330" y="477" text-anchor="middle" fill="#666" font-size="10">固件OTA</text>
+
+  <rect x="430" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
+  <text x="510" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">群组管理</text>
+  <text x="510" y="462" text-anchor="middle" fill="#666" font-size="10">路由 | 互联 | 半双工</text>
+  <text x="510" y="477" text-anchor="middle" fill="#666" font-size="10">RCU缓存</text>
+
+  <rect x="610" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
+  <text x="690" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">语音引擎</text>
+  <text x="690" y="462" text-anchor="middle" fill="#666" font-size="10">Opus编解码 | 转发</text>
+  <text x="690" y="477" text-anchor="middle" fill="#666" font-size="10">平滑发送</text>
+
+  <rect x="790" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
+  <text x="870" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">通信录制</text>
+  <text x="870" y="462" text-anchor="middle" fill="#666" font-size="10">缓冲 | MinIO上传</text>
+  <text x="870" y="477" text-anchor="middle" fill="#666" font-size="10">数据库同步</text>
+
+  <rect x="970" y="420" width="160" height="70" fill="white" rx="6" stroke="#ff9800" stroke-width="2"/>
+  <text x="1050" y="445" text-anchor="middle" fill="#333" font-size="12" font-weight="bold">APRS / AI</text>
+  <text x="1050" y="462" text-anchor="middle" fill="#666" font-size="10">位置上报 | 服务器发现</text>
+  <text x="1050" y="477" text-anchor="middle" fill="#666" font-size="10">OpenAI集成</text>
+
+  <!-- 子模块 -->
+  <rect x="70" y="510" width="520" height="55" fill="white" rx="6" stroke="#e0e0e0" stroke-width="1" stroke-dasharray="5,5"/>
+  <text x="330" y="530" text-anchor="middle" fill="#666" font-size="11">UDP核心子模块</text>
+  <text x="330" y="550" text-anchor="middle" fill="#888" font-size="10">auth.go | jwt_auth.go | ghost.go | half_duplex.go | group_link.go | comm_recorder.go | pending_device.go | config.go</text>
+
+  <rect x="610" y="510" width="520" height="55" fill="white" rx="6" stroke="#e0e0e0" stroke-width="1" stroke-dasharray="5,5"/>
+  <text x="870" y="530" text-anchor="middle" fill="#666" font-size="11">HTTP/WS处理器</text>
+  <text x="870" y="550" text-anchor="middle" fill="#888" font-size="10">handler/ | middleware/ | service/ | pkg/websocket/ | pkg/cache/ | pkg/jwt/ | pkg/crypto/</text>
+
+  <!-- 箭头向下 -->
+  <path d="M 300 565 L 300 610" stroke="#ff9800" stroke-width="2" fill="none" marker-end="url(#arrowOrange)"/>
+  <path d="M 600 565 L 600 610" stroke="#ff9800" stroke-width="2" fill="none" marker-end="url(#arrowOrange)"/>
+  <path d="M 900 565 L 900 610" stroke="#ff9800" stroke-width="2" fill="none" marker-end="url(#arrowOrange)"/>
+
+  <defs>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ff9800"/>
+    </marker>
+  </defs>
+
+  <!-- 数据存储层 -->
+  <rect x="50" y="610" width="1100" height="120" fill="url(#dataGrad)" rx="10" filter="url(#shadow)"/>
+  <text x="600" y="635" text-anchor="middle" fill="#e65100" font-size="16" font-weight="bold">数据存储层</text>
+  
+  <rect x="100" y="650" width="200" height="65" fill="white" rx="6" stroke="#f57c00" stroke-width="2"/>
+  <text x="200" y="675" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">MySQL</text>
+  <text x="200" y="695" text-anchor="middle" fill="#666" font-size="11">主数据库 | GORM</text>
+
+  <rect x="350" y="650" width="200" height="65" fill="white" rx="6" stroke="#f57c00" stroke-width="2"/>
+  <text x="450" y="675" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">Redis (可选)</text>
+  <text x="450" y="695" text-anchor="middle" fill="#666" font-size="11">Token存储 | 会话</text>
+
+  <rect x="600" y="650" width="200" height="65" fill="white" rx="6" stroke="#f57c00" stroke-width="2"/>
+  <text x="700" y="675" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">MinIO (可选)</text>
+  <text x="700" y="695" text-anchor="middle" fill="#666" font-size="11">对象存储 | 音频/固件</text>
+
+  <rect x="850" y="650" width="250" height="65" fill="white" rx="6" stroke="#f57c00" stroke-width="2"/>
+  <text x="975" y="675" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">内存缓存 (L1)</text>
+  <text x="975" y="695" text-anchor="middle" fill="#666" font-size="11">分片锁 | RCU | 命中率监控</text>
+
+  <!-- 外部服务 -->
+  <rect x="50" y="760" width="1100" height="80" fill="#fafafa" rx="10" filter="url(#shadow)" stroke="#e0e0e0"/>
+  <text x="600" y="785" text-anchor="middle" fill="#616161" font-size="14" font-weight="bold">外部服务</text>
+  
+  <rect x="100" y="795" width="150" height="35" fill="white" rx="4" stroke="#9e9e9e"/>
+  <text x="175" y="817" text-anchor="middle" fill="#666" font-size="11">APRS-IS 网络</text>
+
+  <rect x="300" y="795" width="150" height="35" fill="white" rx="4" stroke="#9e9e9e"/>
+  <text x="375" y="817" text-anchor="middle" fill="#666" font-size="11">Keycloak SSO</text>
+
+  <rect x="500" y="795" width="150" height="35" fill="white" rx="4" stroke="#9e9e9e"/>
+  <text x="575" y="817" text-anchor="middle" fill="#666" font-size="11">SMTP 邮件</text>
+
+  <rect x="700" y="795" width="150" height="35" fill="white" rx="4" stroke="#9e9e9e"/>
+  <text x="775" y="817" text-anchor="middle" fill="#666" font-size="11">OpenAI API</text>
+
+  <rect x="900" y="795" width="200" height="35" fill="white" rx="4" stroke="#9e9e9e"/>
+  <text x="1000" y="817" text-anchor="middle" fill="#666" font-size="11">其他 DraARL 服务器</text>
+
+  <!-- 图例 -->
+  <rect x="50" y="860" width="1100" height="35" fill="white" rx="6" stroke="#e0e0e0"/>
+  <text x="100" y="883" fill="#666" font-size="11">图例：</text>
+  <rect x="150" y="870" width="20" height="12" fill="#bbdefb" stroke="#1976d2"/>
+  <text x="175" y="883" fill="#666" font-size="11">客户端</text>
+  <rect x="250" y="870" width="20" height="12" fill="#c8e6c9" stroke="#43a047"/>
+  <text x="275" y="883" fill="#666" font-size="11">接入层</text>
+  <rect x="350" y="870" width="20" height="12" fill="#fff9c4" stroke="#ff9800"/>
+  <text x="375" y="883" fill="#666" font-size="11">业务层</text>
+  <rect x="450" y="870" width="20" height="12" fill="#ffe0b2" stroke="#f57c00"/>
+  <text x="475" y="883" fill="#666" font-size="11">存储层</text>
+  <text x="600" y="883" fill="#888" font-size="10">DraARLv1协议: 90字节固定头 + 变长DATA | 支持UDP和WebSocket传输</text>
+</svg>

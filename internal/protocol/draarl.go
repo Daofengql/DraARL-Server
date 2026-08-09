@@ -1,0 +1,685 @@
+package protocol
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// forwardPacketPool 复用转发改写缓冲。调用方在 fan-out 完成后应 ReleaseForwardPacket。
+var forwardPacketPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, DraARLv1MaxPacketSize)
+		return &b
+	},
+}
+
+var routingPacketPool = sync.Pool{
+	New: func() interface{} {
+		return &DraARLv1Packet{}
+	},
+}
+
+// DraARLv1 协议版本标识
+const DraARLVersion = "DraA"
+
+// 固定头部大小
+const DraARLv1HeaderSize = 90
+
+// 最大包体大小（含头部）
+// Opus 包通常 < 800B；PCM 16K 双帧可达 ~3930B，取整 4096B
+const DraARLv1MaxPacketSize = 4096
+
+const (
+	HeartbeatGPSPayloadSize = 24
+)
+
+// DraARLv1 数据包类型常量
+const (
+	DraARLTypeJWTAuth     byte = 1 // JWT 认证包
+	DraARLTypeHeartbeat   byte = 2 // 心跳包
+	DraARLTypeConfig      byte = 3 // 设备配置
+	DraARLTypeTextMessage byte = 4 // 文本消息
+	DraARLTypeOpus16K     byte = 5 // Opus 16K 语音
+	DraARLTypePCM16K      byte = 6 // PCM 16K 语音（小程序端输入，服务端转码为 Opus）
+)
+
+// IsSupportedDraARLType 报告类型是否属于当前 DraARLv1 核心协议。
+func IsSupportedDraARLType(packetType byte) bool {
+	return packetType >= DraARLTypeJWTAuth && packetType <= DraARLTypePCM16K
+}
+
+// DraARLv1 设备型号常量
+const (
+	DraARLDevModelUnknown      byte = 0   // 未知/历史默认
+	DraARLDevModelESP32Radio   byte = 1   // ESP32 链路盒子（1W 射频版）
+	DraARLDevModelESP32NoRadio byte = 2   // ESP32 链路盒子（无射频版）
+	DraARLDevModelWeChatMini   byte = 100 // 微信小程序
+	DraARLDevModelAndroid      byte = 101 // Android 客户端
+	DraARLDevModelIOS          byte = 102 // iOS 客户端
+	DraARLDevModelWindows      byte = 103 // Windows 客户端
+	DraARLDevModelMacOS        byte = 104 // macOS 客户端 (预留)
+	DraARLDevModelBrowser      byte = 105 // 浏览器客户端
+	DraARLDevModelLegacyBridge byte = 106 // 互联设备（历史型号，仅兼容显示）
+	DraARLDevModelLegacyESP32  byte = 107 // ESP32 链路台/手咪（历史型号，仅兼容显示）
+	DraARLDevModelNSBridge     byte = 236 // 南山对讲软件桥接器
+	DraARLDevModelTTBridge     byte = 237 // 涛涛对讲软件桥接器
+	DraARLDevModelHTBridge     byte = 238 // 本视对讲（HT）软件桥接器
+	DraARLDevModelNRL2Bridge   byte = 239 // NRL2 系统软件桥接器
+)
+
+const (
+	DraARLDevModelInterconnect = DraARLDevModelLegacyBridge
+	DraARLDevModelESP32        = DraARLDevModelLegacyESP32
+)
+
+// ==========================================
+// SSID 范围常量（双轨制认证）
+// ==========================================
+
+const (
+	// 普通设备 SSID 范围（两段）
+	SSIDRangeNormal1Min byte = 1   // 普通设备第一段最小 SSID
+	SSIDRangeNormal1Max byte = 99  // 普通设备第一段最大 SSID
+	SSIDRangeNormal2Min byte = 106 // 普通设备第二段最小 SSID
+	SSIDRangeNormal2Max byte = 254 // 普通设备第二段最大 SSID
+
+	// 幽灵设备保留 SSID 范围
+	SSIDRangeGhostMin byte = 100 // 幽灵设备保留最小
+	SSIDRangeGhostMax byte = 105 // 幽灵设备保留最大 (含 Web)
+
+	// 系统/历史特殊保留 SSID 范围
+	SSIDRangeInterconnectMin byte = 255 // 系统/历史特殊保留最小
+	SSIDRangeInterconnectMax byte = 255 // 系统/历史特殊保留最大
+
+	// 幽灵设备 SSID（等于 DevModel）
+	SSIDGhostAndroid byte = 101 // Android App
+	SSIDGhostIOS     byte = 102 // iOS App
+	SSIDGhostWindows byte = 103 // Windows PC
+	SSIDGhostMacOS   byte = 104 // macOS (预留)
+	SSIDGhostWeb     byte = 105 // Web 浏览器
+)
+
+// JWT 认证响应状态码
+const (
+	JWTAuthSuccess             byte = 0 // 认证成功
+	JWTAuthInvalidToken        byte = 1 // Token 无效或过期
+	JWTAuthUserNotFound        byte = 2 // 用户不存在
+	JWTAuthUserDisabled        byte = 3 // 用户已禁用
+	JWTAuthUserNotApproved     byte = 4 // 用户未审核
+	JWTAuthInvalidDevModel     byte = 5 // 无效的设备型号 (非 101-104)
+	JWTAuthGhostDeviceConflict byte = 6 // 同平台已有在线幽灵设备
+)
+
+// Heartbeat 响应状态码
+const (
+	HeartbeatStatusSuccess              byte = 0 // 心跳成功
+	HeartbeatStatusDeviceConflictOnline byte = 1 // 同一 owner_id + ssid 已有在线设备
+	HeartbeatStatusReservedSSID         byte = 2 // 保留 SSID，普通设备不可用
+	HeartbeatStatusAuthFailed           byte = 3 // 认证失败
+)
+
+// DraARLv1Packet DraARLv1协议数据包
+type DraARLv1Packet struct {
+	TimeStamp time.Time
+	UDPAddr   *net.UDPAddr
+
+	// Header fields (90 bytes)
+	Version        string // 4B  - "DraA"
+	Length         uint16 // 2B  - 报文总长度
+	Username       string // 32B - 用户名
+	DevicePassword string // 10B - 设备准入密码
+	Type           byte   // 1B  - 数据包类型
+	DevModel       byte   // 1B  - 设备型号
+	SSID           byte   // 1B  - 设备子号
+	DMRID          uint32 // 3B  - DMR ID (uint24)
+	CallSign       string // 32B - 呼号（服务器填充）
+	Reserved       []byte // 4B  - 保留
+
+	// DATA region
+	DATA []byte
+}
+
+// NewDraARLv1Packet 创建新的 DraARLv1 数据包
+func NewDraARLv1Packet(remoteAddr *net.UDPAddr, data []byte) (*DraARLv1Packet, error) {
+	packet := &DraARLv1Packet{
+		UDPAddr:   remoteAddr,
+		TimeStamp: time.Now(),
+	}
+
+	err := packet.Decode(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return packet, nil
+}
+
+// NewDraARLv1RoutingPacket 只物化路由热路径实际需要的字符串字段。
+// 返回的对象必须通过 ReleaseDraARLv1RoutingPacket 归还。
+func NewDraARLv1RoutingPacket(remoteAddr *net.UDPAddr, data []byte) (*DraARLv1Packet, error) {
+	packet := routingPacketPool.Get().(*DraARLv1Packet)
+	*packet = DraARLv1Packet{UDPAddr: remoteAddr, TimeStamp: time.Now()}
+	if err := packet.DecodeRouting(data); err != nil {
+		ReleaseDraARLv1RoutingPacket(packet)
+		return nil, err
+	}
+	return packet, nil
+}
+
+func ReleaseDraARLv1RoutingPacket(packet *DraARLv1Packet) {
+	if packet == nil {
+		return
+	}
+	*packet = DraARLv1Packet{}
+	routingPacketPool.Put(packet)
+}
+
+func (p *DraARLv1Packet) decodeEnvelope(data []byte) error {
+	if len(data) < DraARLv1HeaderSize {
+		return errors.New("packet too short, minimum 90 bytes required")
+	}
+	if data[0] != 'D' || data[1] != 'r' || data[2] != 'a' || data[3] != 'A' {
+		return fmt.Errorf("invalid protocol version: expected %s, got %s", DraARLVersion, string(data[0:4]))
+	}
+
+	p.Version = DraARLVersion
+	p.Length = binary.BigEndian.Uint16(data[4:6])
+	if int(p.Length) != len(data) {
+		return fmt.Errorf("invalid packet length: header=%d actual=%d", p.Length, len(data))
+	}
+	p.Type = data[48]
+	if !IsSupportedDraARLType(p.Type) {
+		return fmt.Errorf("unsupported packet type: %d", p.Type)
+	}
+	p.DevModel = data[49]
+	p.SSID = data[50]
+	p.DMRID = bytesToUint24(data[51:54])
+	p.Reserved = data[86:90]
+	if len(data) > DraARLv1HeaderSize {
+		p.DATA = data[DraARLv1HeaderSize:]
+	}
+	return nil
+}
+
+// DecodeRouting 解码路由所需字段。语音和文本包不解析
+// password/callsign，避免为每个实时帧构造不会使用的字符串。
+func (p *DraARLv1Packet) DecodeRouting(data []byte) error {
+	if err := p.decodeEnvelope(data); err != nil {
+		return err
+	}
+	p.Username = string(bytes.TrimRight(data[6:38], "\x00"))
+	if p.Type == DraARLTypeHeartbeat {
+		p.DevicePassword = string(bytes.TrimRight(data[38:48], "\x00"))
+	}
+	return nil
+}
+
+// Decode 解码 DraARLv1 报文
+func (p *DraARLv1Packet) Decode(data []byte) error {
+	if err := p.decodeEnvelope(data); err != nil {
+		return err
+	}
+
+	// 解析 Username (6-37)
+	p.Username = string(bytes.TrimRight(data[6:38], "\x00"))
+
+	// 解析 DevicePassword (38-47)
+	p.DevicePassword = string(bytes.TrimRight(data[38:48], "\x00"))
+
+	// 解析 CallSign (54-85)
+	p.CallSign = string(bytes.TrimRight(data[54:86], "\x00"))
+
+	return nil
+}
+
+// Encode 编码 DraARLv1 报文
+func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel byte, dmrid uint32, callsign string, data []byte) []byte {
+	totalSize := DraARLv1HeaderSize + len(data)
+	packet := make([]byte, totalSize)
+
+	// 写入 Version (0-3)
+	copy(packet[0:4], []byte(DraARLVersion))
+
+	// 写入 Length (4-5)
+	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
+
+	// 写入 Username (6-37)
+	usernameBytes := []byte(username)
+	if len(usernameBytes) > 32 {
+		usernameBytes = usernameBytes[:32]
+	}
+	copy(packet[6:38], usernameBytes)
+
+	// 写入 DevicePassword (38-47)
+	passwordBytes := []byte(devicePassword)
+	if len(passwordBytes) > 10 {
+		passwordBytes = passwordBytes[:10]
+	}
+	copy(packet[38:48], passwordBytes)
+
+	// 写入 Type (48)
+	packet[48] = packetType
+
+	// 写入 DevModel (49)
+	packet[49] = devModel
+
+	// 写入 SSID (50)
+	packet[50] = ssid
+
+	// 写入 DMRID (51-53)
+	uint24ToBytes(dmrid, packet[51:54])
+
+	// 写入 CallSign (54-85)
+	callsignBytes := []byte(callsign)
+	if len(callsignBytes) > 32 {
+		callsignBytes = callsignBytes[:32]
+	}
+	copy(packet[54:86], callsignBytes)
+
+	// Reserved (86-89) - 已经是 0
+
+	// 写入 DATA (90+)
+	if len(data) > 0 {
+		copy(packet[DraARLv1HeaderSize:], data)
+	}
+
+	return packet
+}
+
+// RewriteForwardHeader 在已有完整报文上改写转发头字段：
+// 清空设备密码、填充呼号，并可选覆盖 Type/DevModel/SSID/DMRID/Username。
+// 返回缓冲可能来自 pool；热路径 fan-out 完成后调用 ReleaseForwardPacket。
+// 若 src 非法则返回 nil，调用方应回退到 EncodeDraARLv1。
+func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetType, devModel byte, dmrid uint32) []byte {
+	if len(src) < DraARLv1HeaderSize {
+		return nil
+	}
+	if src[0] != 'D' || src[1] != 'r' || src[2] != 'a' || src[3] != 'A' {
+		return nil
+	}
+
+	p := forwardPacketPool.Get().(*[]byte)
+	out := *p
+	if cap(out) < len(src) {
+		// 旧缓冲太小：归还后重新分配
+		*p = (*p)[:0]
+		forwardPacketPool.Put(p)
+		out = make([]byte, len(src))
+	} else {
+		out = out[:len(src)]
+	}
+	copy(out, src)
+
+	// Username (6-37)
+	for i := 6; i < 38; i++ {
+		out[i] = 0
+	}
+	usernameBytes := []byte(username)
+	if len(usernameBytes) > 32 {
+		usernameBytes = usernameBytes[:32]
+	}
+	copy(out[6:38], usernameBytes)
+
+	// DevicePassword (38-47) 转发时必须清空
+	for i := 38; i < 48; i++ {
+		out[i] = 0
+	}
+
+	out[48] = packetType
+	out[49] = devModel
+	out[50] = ssid
+	uint24ToBytes(dmrid, out[51:54])
+
+	// CallSign (54-85)
+	for i := 54; i < 86; i++ {
+		out[i] = 0
+	}
+	callsignBytes := []byte(callsign)
+	if len(callsignBytes) > 32 {
+		callsignBytes = callsignBytes[:32]
+	}
+	copy(out[54:86], callsignBytes)
+
+	// 长度字段保持与实际一致
+	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
+	return out
+}
+
+// ReleaseForwardPacket 归还 PrepareForwardPacket/RewriteForwardHeader 使用的缓冲。
+// 对非 pool / 超大切片安全忽略。
+func ReleaseForwardPacket(b []byte) {
+	if b == nil {
+		return
+	}
+	c := cap(b)
+	if c < DraARLv1HeaderSize || c > 8192 {
+		return
+	}
+	b = b[:0]
+	forwardPacketPool.Put(&b)
+}
+
+// PrepareForwardPacket 优先基于入站完整报文做头字段改写；失败时回退完整编码。
+// 返回值在 fan-out 完成后应调用 ReleaseForwardPacket（Encode 回退分配也可安全调用）。
+func PrepareForwardPacket(src []byte, username, callsign string, ssid, packetType, devModel byte, dmrid uint32, payload []byte) []byte {
+	if payload == nil {
+		payload = []byte{}
+	}
+	if len(src) == DraARLv1HeaderSize+len(payload) {
+		if rewritten := RewriteForwardHeader(src, username, callsign, ssid, packetType, devModel, dmrid); rewritten != nil {
+			return rewritten
+		}
+	}
+	return EncodeDraARLv1(username, "", ssid, packetType, devModel, dmrid, callsign, payload)
+}
+
+// EncodeHeartbeatResponse 编码心跳响应包（填充 CallSign）
+func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
+	totalSize := DraARLv1HeaderSize + len(req.DATA)
+	packet := make([]byte, totalSize)
+
+	// 复制原始请求的大部分字段
+	copy(packet[0:4], []byte(DraARLVersion))
+	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
+
+	// 复制 Username
+	usernameBytes := []byte(req.Username)
+	copy(packet[6:38], usernameBytes)
+
+	// 复制 DevicePassword
+	passwordBytes := []byte(req.DevicePassword)
+	copy(packet[38:48], passwordBytes)
+
+	// 复制 Type
+	packet[48] = req.Type
+
+	// 复制 DevModel
+	packet[49] = req.DevModel
+
+	// 复制 SSID
+	packet[50] = req.SSID
+
+	// 复制 DMRID
+	uint24ToBytes(req.DMRID, packet[51:54])
+
+	// 填充 CallSign（服务器填充）
+	callsignBytes := []byte(callsign)
+	if len(callsignBytes) > 32 {
+		callsignBytes = callsignBytes[:32]
+	}
+	copy(packet[54:86], callsignBytes)
+
+	// Reserved - 已经是 0
+
+	// 复制 DATA
+	if len(req.DATA) > 0 {
+		copy(packet[DraARLv1HeaderSize:], req.DATA)
+	}
+
+	return packet
+}
+
+// EncodeHeartbeatRejectResponse 编码心跳拒绝响应包。
+// DATA[0] 为拒绝状态码，后续可附带可读错误信息。
+func EncodeHeartbeatRejectResponse(req *DraARLv1Packet, code byte, message string) []byte {
+	data := []byte{code}
+	if message != "" {
+		data = append(data, []byte(message)...)
+	}
+	return EncodeDraARLv1(req.Username, "", req.SSID, req.Type, req.DevModel, req.DMRID, "", data)
+}
+
+// NormalizeMAC 规范化 MAC 文本为大写冒号格式；非法输入返回空串。
+func NormalizeMAC(mac string) string {
+	mac = strings.ToUpper(strings.TrimSpace(mac))
+	if len(mac) != 17 {
+		return ""
+	}
+	for i := 0; i < len(mac); i++ {
+		if i%3 == 2 {
+			if mac[i] != ':' {
+				return ""
+			}
+			continue
+		}
+		c := mac[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			return ""
+		}
+	}
+	return mac
+}
+
+// ExtractHeartbeatMAC 从心跳 DATA 中提取可选 MAC。
+// 约定：前 24 字节仍为 GPS，剩余内容如果是合法 MAC 文本则返回。
+func ExtractHeartbeatMAC(data []byte) string {
+	if len(data) <= HeartbeatGPSPayloadSize {
+		return ""
+	}
+	raw := strings.TrimSpace(string(bytes.Trim(data[HeartbeatGPSPayloadSize:], "\x00")))
+	return NormalizeMAC(raw)
+}
+
+// bytesToUint24 将 3 字节转换为 uint32 (big-endian)
+func bytesToUint24(b []byte) uint32 {
+	if len(b) < 3 {
+		return 0
+	}
+	return uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])
+}
+
+// uint24ToBytes 将 uint32 转换为 3 字节 (big-endian)
+func uint24ToBytes(v uint32, b []byte) {
+	if len(b) < 3 {
+		return
+	}
+	b[0] = byte(v >> 16)
+	b[1] = byte(v >> 8)
+	b[2] = byte(v)
+}
+
+// String 返回报文的字符串表示
+func (p *DraARLv1Packet) String() string {
+	return fmt.Sprintf("DraARLv1[ver:%s len:%d user:%s type:%d model:%d ssid:%d dmrid:%d callsign:%s data_len:%d]",
+		p.Version, p.Length, p.Username, p.Type, p.DevModel, p.SSID, p.DMRID, p.CallSign, len(p.DATA))
+}
+
+// GetUsernameSSID 获取组合 username-ssid
+func GetUsernameSSID(username string, ssid byte) string {
+	return username + "-" + strconv.Itoa(int(ssid))
+}
+
+// GetCallSignSSID 获取组合 callsign-ssid（向后兼容）
+func GetCallSignSSID(callsign string, ssid byte) string {
+	return callsign + "-" + strconv.Itoa(int(ssid))
+}
+
+// ParseUsernameSSID 解析 username-ssid
+func ParseUsernameSSID(s string) (username string, ssid byte, err error) {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '-' {
+			username = s[:i]
+			var ssidInt int
+			fmt.Sscanf(s[i+1:], "%d", &ssidInt)
+			return username, byte(ssidInt), nil
+		}
+	}
+	return "", 0, errors.New("invalid username-ssid format")
+}
+
+// IsValidDevicePassword 验证设备密码格式
+// 仅允许大小写字母和数字，长度 6-10 位
+func IsValidDevicePassword(password string) bool {
+	length := len(password)
+	if length < 6 || length > 10 {
+		return false
+	}
+	for _, c := range password {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// MaskDevicePassword 脱敏显示设备密码
+// 例如: "Abc12345" -> "A****5"
+func MaskDevicePassword(password string) string {
+	length := len(password)
+	if length <= 2 {
+		return "***"
+	}
+	return string(password[0]) + "****" + string(password[length-1])
+}
+
+// ==========================================
+// 幽灵设备辅助函数
+// ==========================================
+
+// IsGhostDevModel 判断是否为 UDP 幽灵设备型号
+// UDP 幽灵设备: 101 (Android), 102 (iOS), 103 (Windows), 104 (macOS)
+// 注意: 105 (Web) 使用 WebSocket，不在此范围内
+func IsGhostDevModel(devModel byte) bool {
+	return devModel >= DraARLDevModelAndroid && devModel <= DraARLDevModelMacOS
+}
+
+// IsGhostDevModelOrWeb 判断是否为幽灵设备型号（包括 Web）
+// 预留的幽灵设备段: 100-105
+func IsGhostDevModelOrWeb(devModel byte) bool {
+	return devModel >= DraARLDevModelWeChatMini && devModel <= DraARLDevModelBrowser
+}
+
+// GetGhostSSID 获取幽灵设备的 SSID (等于 DevModel)
+// 如果不是有效的幽灵设备型号，返回 0
+func GetGhostSSID(devModel byte) byte {
+	if IsGhostDevModelOrWeb(devModel) {
+		return devModel
+	}
+	return 0
+}
+
+// ==========================================
+// SSID 验证函数
+// ==========================================
+
+// IsValidNormalSSID 检查是否为有效的普通设备 SSID
+// 普通设备可用: 1-99 或 106-254
+func IsValidNormalSSID(ssid byte) bool {
+	return (ssid >= SSIDRangeNormal1Min && ssid <= SSIDRangeNormal1Max) ||
+		(ssid >= SSIDRangeNormal2Min && ssid <= SSIDRangeNormal2Max)
+}
+
+// IsGhostSSID 检查是否为幽灵设备保留 SSID (100-105)
+func IsGhostSSID(ssid byte) bool {
+	return ssid >= SSIDRangeGhostMin && ssid <= SSIDRangeGhostMax
+}
+
+// IsInterconnectSSID 检查是否为系统/历史特殊保留 SSID。
+// 兼容旧命名，当前仅 255 属于该范围。
+func IsInterconnectSSID(ssid byte) bool {
+	return ssid >= SSIDRangeInterconnectMin && ssid <= SSIDRangeInterconnectMax
+}
+
+// IsReservedSSID 检查是否为保留 SSID (用户不可分配)
+// 保留范围: 100-105 (幽灵设备) 和 255 (系统/历史特殊保留)
+func IsReservedSSID(ssid byte) bool {
+	return IsGhostSSID(ssid) || IsInterconnectSSID(ssid)
+}
+
+// IsInterconnectProductDevModel 判断是否属于互联产品段（0-99）
+func IsInterconnectProductDevModel(devModel byte) bool {
+	return devModel <= 99
+}
+
+// IsGhostReservedDevModel 判断是否属于幽灵/保留段（100-105）
+func IsGhostReservedDevModel(devModel byte) bool {
+	return devModel >= DraARLDevModelWeChatMini && devModel <= DraARLDevModelBrowser
+}
+
+// IsBridgeSoftwareDevModel 判断是否属于互联网桥软件正式型号段（236-239）
+func IsBridgeSoftwareDevModel(devModel byte) bool {
+	return devModel >= DraARLDevModelNSBridge && devModel <= DraARLDevModelNRL2Bridge
+}
+
+// IsValidClientReportedDevModel 判断客户端上报的设备型号是否在协议允许范围内。
+// 规则：
+// 1) 0-99 互联产品段
+// 2) 100-105 幽灵/保留段
+// 3) 106/107 历史兼容型号
+// 4) 151-255 待定/扩展段，其中 236-239 为当前正式互联网桥软件型号
+// 5) 108-150 视为当前无效保留段（不再兼容 110-113）
+func IsValidClientReportedDevModel(devModel byte) bool {
+	if IsInterconnectProductDevModel(devModel) || IsGhostReservedDevModel(devModel) || IsBridgeSoftwareDevModel(devModel) {
+		return true
+	}
+	if devModel == DraARLDevModelLegacyBridge || devModel == DraARLDevModelLegacyESP32 {
+		return true
+	}
+	return devModel >= 151
+}
+
+// IsSelectableHardwareDevModel 判断是否为当前前台允许新选的硬件型号
+func IsSelectableHardwareDevModel(devModel byte) bool {
+	return devModel == DraARLDevModelESP32Radio || devModel == DraARLDevModelESP32NoRadio
+}
+
+// FirmwareSupportedDevModels 支持固件升级的设备型号白名单
+var FirmwareSupportedDevModels = []byte{
+	DraARLDevModelESP32Radio,
+	DraARLDevModelESP32NoRadio,
+}
+
+// IsFirmwareSupportedDevModel 判断设备型号是否支持固件升级
+func IsFirmwareSupportedDevModel(devModel byte) bool {
+	for _, m := range FirmwareSupportedDevModels {
+		if m == devModel {
+			return true
+		}
+	}
+	return false
+}
+
+// GetDevModelName 获取设备型号名称
+func GetDevModelName(devModel byte) string {
+	switch devModel {
+	case DraARLDevModelUnknown:
+		return "Unknown"
+	case DraARLDevModelESP32Radio:
+		return "ESP32 Radio Box (1W)"
+	case DraARLDevModelESP32NoRadio:
+		return "ESP32 Link Box (No RF)"
+	case DraARLDevModelWeChatMini:
+		return "WeChat Mini"
+	case DraARLDevModelAndroid:
+		return "Android"
+	case DraARLDevModelIOS:
+		return "iOS"
+	case DraARLDevModelWindows:
+		return "Windows"
+	case DraARLDevModelMacOS:
+		return "macOS"
+	case DraARLDevModelBrowser:
+		return "Web Browser"
+	case DraARLDevModelLegacyBridge:
+		return "Interconnect (Legacy)"
+	case DraARLDevModelLegacyESP32:
+		return "ESP32 Link Device (Legacy)"
+	case DraARLDevModelNSBridge:
+		return "Nanshan Soft Bridge"
+	case DraARLDevModelHTBridge:
+		return "HT Soft Bridge"
+	case DraARLDevModelTTBridge:
+		return "Taotao Soft Bridge"
+	case DraARLDevModelNRL2Bridge:
+		return "NRL2 Soft Bridge"
+	default:
+		return fmt.Sprintf("Unknown(%d)", devModel)
+	}
+}

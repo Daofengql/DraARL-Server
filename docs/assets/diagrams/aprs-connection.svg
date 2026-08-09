@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 400" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1976d2"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <rect x="0" y="0" width="700" height="45" fill="#1565c0" rx="8"/>
+  <text x="350" y="30" text-anchor="middle" fill="white" font-size="18" font-weight="bold">APRS-IS 连接流程</text>
+
+  <!-- DraARL Server -->
+  <rect x="50" y="70" width="150" height="60" fill="white" rx="8" filter="url(#shadow)" stroke="#1976d2" stroke-width="2"/>
+  <text x="125" y="100" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">DraARL Server</text>
+  <text x="125" y="118" text-anchor="middle" fill="#666" font-size="10">BG1AAA</text>
+
+  <!-- APRS-IS Server -->
+  <rect x="500" y="70" width="150" height="60" fill="white" rx="8" filter="url(#shadow)" stroke="#4caf50" stroke-width="2"/>
+  <text x="575" y="100" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">APRS-IS Server</text>
+  <text x="575" y="118" text-anchor="middle" fill="#666" font-size="10">rotate.aprs2.net</text>
+
+  <!-- 步骤1: TCP连接 -->
+  <path d="M 200 90 L 500 90" stroke="#1976d2" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <rect x="300" y="75" width="100" height="20" fill="#e3f2fd" rx="4"/>
+  <text x="350" y="89" text-anchor="middle" fill="#1565c0" font-size="10">TCP连接</text>
+  <text x="350" y="70" text-anchor="middle" fill="#666" font-size="9">端口 14580</text>
+
+  <!-- 步骤2: 登录验证 -->
+  <rect x="80" y="160" width="540" height="50" fill="#e8f5e9" rx="6" stroke="#4caf50" stroke-width="1"/>
+  <text x="350" y="180" text-anchor="middle" fill="#2e7d32" font-size="12" font-weight="bold">登录验证</text>
+  <text x="350" y="200" text-anchor="middle" fill="#666" font-size="10">user BG1AAA-10 pass 12345</text>
+  
+  <path d="M 200 130 L 200 160" stroke="#4caf50" stroke-width="1.5" fill="none"/>
+  <path d="M 500 130 L 500 160" stroke="#4caf50" stroke-width="1.5" fill="none"/>
+  <path d="M 200 185 L 500 185" stroke="#4caf50" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤3: 服务器响应 -->
+  <rect x="80" y="230" width="540" height="40" fill="#fff3e0" rx="6" stroke="#ff9800" stroke-width="1"/>
+  <text x="350" y="255" text-anchor="middle" fill="#e65100" font-size="12"># aprsc 2.9.0</text>
+  
+  <path d="M 500 210 L 500 230" stroke="#ff9800" stroke-width="1.5" fill="none"/>
+  <path d="M 200 210 L 200 230" stroke="#ff9800" stroke-width="1.5" fill="none"/>
+  <path d="M 500 250 L 200 250" stroke="#ff9800" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- 步骤4: 位置上报 -->
+  <rect x="80" y="290" width="540" height="80" fill="#e3f2fd" rx="6" stroke="#1976d2" stroke-width="1"/>
+  <text x="350" y="315" text-anchor="middle" fill="#1565c0" font-size="12" font-weight="bold">位置上报</text>
+  <text x="350" y="335" text-anchor="middle" fill="#333" font-size="10" font-family="monospace">BG1AAA-10>APRS,TCPIP*:</text>
+  <text x="350" y="355" text-anchor="middle" fill="#333" font-size="10" font-family="monospace">=3954.25N/11624.44E>DraARL Server</text>
+  
+  <path d="M 200 270 L 200 290" stroke="#1976d2" stroke-width="1.5" fill="none"/>
+  <path d="M 200 330 L 500 330" stroke="#1976d2" stroke-width="1.5" fill="none" marker-end="url(#arrowBlue)"/>
+</svg>

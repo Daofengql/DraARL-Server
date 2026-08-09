@@ -1,0 +1,10 @@
+# Edge mode deliberately has no Database/Redis/Web section.
+Edge:
+  NodeID: edge-fuzhou-01
+  Center: center.example.com:60100
+  CenterUDP: center.example.com:60050
+  Token: replace-with-one-time-or-issued-node-token
+  Listen: :60050
+  TLSCAFile: ./center-ca.pem
+  TLSServerName: center.example.com
+  InsecureSkipVerify: false

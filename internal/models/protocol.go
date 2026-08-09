@@ -1,0 +1,146 @@
+package models
+
+import (
+	"fmt"
+	"net"
+	"time"
+)
+
+// DeviceModel 设备型号
+const (
+	DevModelUnknown      byte = 0
+	DevModelESP32Radio   byte = 1
+	DevModelESP32NoRadio byte = 2
+	DevModelWeChatMini   byte = 100
+	DevModelAndroid      byte = 101
+	DevModelIOS          byte = 102
+	DevModelWindows      byte = 103
+	DevModelBrowser      byte = 105
+	DevModelLegacyBridge byte = 106
+	DevModelLegacyESP32  byte = 107
+	DevModelNSBridge     byte = 236
+	DevModelTTBridge     byte = 237
+	DevModelHTBridge     byte = 238
+	DevModelNRL2Bridge   byte = 239
+	DevModelBM           byte = 201
+	DevModelNanny        byte = 250
+	DevModelFullNet      byte = 255
+)
+
+const (
+	DevModelRescue = DevModelLegacyBridge
+	DevModelESP32  = DevModelLegacyESP32
+)
+
+// SSIDRange SSID 范围定义
+const (
+	SSIDReserved         byte = 0
+	SSIDNormalMin1       byte = 1
+	SSIDNormalMax1       byte = 99
+	SSIDGhostReservedMin byte = 100
+	SSIDGhostReservedMax byte = 105
+	SSIDNormalMin2       byte = 106
+	SSIDNormalMax2       byte = 254
+	SSIDInterconnectMin  byte = 255
+	SSIDInterconnectMax  byte = 255
+	SSIDHardwareMin           = SSIDNormalMin1
+	SSIDHardwareMax           = SSIDNormalMax2
+	SSIDSoftwareMin           = SSIDGhostReservedMin
+	SSIDSoftwareMax           = SSIDGhostReservedMax
+	SSIDServerMin             = SSIDInterconnectMin
+	SSIDServerMax             = SSIDInterconnectMax
+)
+
+// GroupType 群组类型
+const (
+	GroupTypeNormal   int = 0 // 普通群组（历史兼容）
+	GroupTypeRelay    int = 1 // 公开群组（历史命名）
+	GroupTypeReserved int = 2 // 私有群组（历史命名）
+)
+
+// GroupID 预定义群组ID
+const (
+	GroupIDDefault   int = 0   // 默认测试组
+	GroupIDPrivate1  int = 1   // 私有群组1
+	GroupIDPrivate2  int = 2   // 私有群组2
+	GroupIDPrivate3  int = 3   // 私有群组3
+	GroupIDPublicMin int = 999 // 公共群组起始
+)
+
+// DeviceStatus 设备状态位
+const (
+	DevStatusTxDisable byte = 1 << 0 // 禁止发射
+	DevStatusRxDisable byte = 1 << 1 // 禁止接收
+	DevStatusNoRelay   byte = 1 << 2 // 不参与转发
+)
+
+// ServerStats 服务器统计信息
+type ServerStats struct {
+	PacketNumber    int64
+	VoiceTime       int64
+	Traffic         int64
+	OnlineDevNumber int
+}
+
+// QTH QTH信息
+type QTH struct {
+	QTH          string    `json:"qth"`
+	CallSignSSID string    `json:"callsign_ssid"`
+	JoinTime     time.Time `json:"join_time"`
+	Name         string    `json:"name"`
+}
+
+// Server 服务器信息
+type Server struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	ServerType   int    `json:"server_type"`
+	JoinKey      string `json:"join_key"`
+	CpuType      int    `json:"cpu_type"`
+	MemSize      int    `json:"mem_size"`
+	InputRate    int    `json:"input_rate"`
+	OutputRate   int    `json:"output_rate"`
+	Providers    string `json:"providers"`
+	NetCard      string `json:"netcard"`
+	IPType       int    `json:"ip_type"`
+	IPAddr       string `json:"ip_addr"`
+	UDPPort      string `json:"udp_port"`
+	DNSName      string `json:"dns_name"`
+	Status       int    `json:"status"`
+	OwerID       int    `json:"ower_id"`
+	OwerCallSign string `json:"ower_callsign"`
+	CreateTime   string `json:"create_time"`
+	UpdateTime   string `json:"update_time"`
+	Note         string `json:"note"`
+	// 运行时字段
+	Host    string       `json:"host"`
+	Port    int          `json:"port"`
+	Online  int          `json:"online"`
+	Total   int          `json:"total"`
+	UDPAddr *net.UDPAddr `json:"-"`
+}
+
+// Relay 中继台信息
+type Relay struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	UpFreq       string `json:"up_freq"`
+	DownFreq     string `json:"down_freq"`
+	SendCTSS     string `json:"send_ctss"`
+	ReceiveCTSS  string `json:"recive_ctss"`
+	OwerCallSign string `json:"ower_callsign"`
+	CreateTime   string `json:"create_time"`
+	UpdateTime   string `json:"update_time"`
+	Status       int    `json:"status"`
+	Note         string `json:"note"`
+}
+
+// String 返回中继台的字符串表示
+func (r *Relay) String() string {
+	return fmt.Sprintf("中继台[%s] 上行:%s 下行:%s 所有者:%s", r.Name, r.UpFreq, r.DownFreq, r.OwerCallSign)
+}
+
+// String 返回服务器的字符串表示
+func (s *Server) String() string {
+	return fmt.Sprintf("服务器[%s] 类型:%d 地址:%s:%s", s.Name, s.ServerType, s.IPAddr, s.UDPPort)
+}

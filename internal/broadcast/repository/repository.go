@@ -283,9 +283,9 @@ func (r *Repository) activeRunIDs(ctx context.Context, predicate string, args ..
 }
 
 // ClaimDue atomically advances each due schedule and creates at most one run
-// for its current theoretical occurrence. SKIP LOCKED permits multiple centre
-// workers during rolling upgrades while the unique occurrence key remains the
-// final duplicate-execution guard.
+// for its current theoretical occurrence. Plain row locks deliberately keep
+// this compatible with MySQL 5.7 and older MariaDB versions; the unique
+// occurrence key remains the final duplicate-execution guard.
 func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy string, leaseDuration, recoveryWindow time.Duration, limit int) ([]model.BroadcastRun, error) {
 	claimedBy = strings.TrimSpace(claimedBy)
 	if claimedBy == "" || leaseDuration <= 0 || recoveryWindow < 0 || limit <= 0 {
@@ -328,7 +328,7 @@ func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy stri
 			return err
 		}
 		var schedules []model.BroadcastSchedule
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id IN ? AND enabled = ? AND suspended_reason = '' AND next_run_at IS NOT NULL AND next_run_at <= ?", scheduleIDs, true, now).
 			Order("next_run_at ASC, id ASC").Limit(limit).Find(&schedules).Error; err != nil {
 			return err
@@ -412,7 +412,7 @@ func (r *Repository) RecoverExpiredRuns(ctx context.Context, now time.Time, clai
 			return err
 		}
 		var runs []model.BroadcastRun
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("status = ? AND (lease_until IS NULL OR lease_until <= ?)", model.RunStatusClaimed, now).
 			Order("scheduled_for ASC, id ASC").Limit(limit).Find(&runs).Error; err != nil {
 			return err
@@ -579,7 +579,7 @@ func (r *Repository) lockExecutionGuards(tx *gorm.DB, sourceGroupID int) (string
 	if !enabled {
 		return "site_broadcast_disabled", nil
 	}
-	if err := lockEntityGroupsShared(tx, []int{sourceGroupID}); err != nil {
+	if err := lockEntityGroups(tx, []int{sourceGroupID}); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return "group_unavailable", nil
 		}
@@ -596,10 +596,10 @@ func loadRunExecution(tx *gorm.DB, runID uint) (scheduler.RunExecution, error) {
 		}
 		return execution, err
 	}
-	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Schedule, execution.Run.ScheduleID).Error; err != nil {
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&execution.Schedule, execution.Run.ScheduleID).Error; err != nil {
 		return execution, err
 	}
-	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Audio, execution.Run.AudioID).Error; err != nil {
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&execution.Audio, execution.Run.AudioID).Error; err != nil {
 		return execution, err
 	}
 	return execution, nil
@@ -958,10 +958,6 @@ func lockEntityGroups(tx *gorm.DB, groupIDs []int) error {
 	return lockEntityGroupsWithStrength(tx, groupIDs, "UPDATE")
 }
 
-func lockEntityGroupsShared(tx *gorm.DB, groupIDs []int) error {
-	return lockEntityGroupsWithStrength(tx, groupIDs, "SHARE")
-}
-
 func lockEntityGroupsWithStrength(tx *gorm.DB, groupIDs []int, strength string) error {
 	groupIDs = SortedUniqueGroupIDs(groupIDs)
 	if len(groupIDs) == 0 {
@@ -985,7 +981,7 @@ func lockEntityGroupsWithStrength(tx *gorm.DB, groupIDs []int, strength string) 
 
 func validateAudioForSchedule(tx *gorm.DB, groupID int, audioID uint) error {
 	var audio model.BroadcastAudio
-	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&audio, audioID).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&audio, audioID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrNotFound
 		}

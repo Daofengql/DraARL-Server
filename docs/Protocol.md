@@ -1,6 +1,6 @@
 # DraARLv1 协议规范
 
-本文对应 DraARL Server `v2.0.0-alpha5`。报文线格式仍以固定字符串 `DraA` 标识；
+本文对应 DraARL Server `v2.0.0-alpha6`。报文线格式仍以固定字符串 `DraA` 标识；
 文末协议修订号描述功能演进，不等同于服务端发布版本。
 
 ## 协议概述

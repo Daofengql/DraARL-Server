@@ -90,7 +90,10 @@ func (r *Repository) SetOperationalEnabled(ctx context.Context, enabled bool, no
 func (r *Repository) operationalEnabled(tx *gorm.DB, lock bool) (bool, error) {
 	query := tx.Where("config_key = ?", r.runtimeStateKey())
 	if lock {
-		query = query.Clauses(clause.Locking{Strength: "SHARE"})
+		// FOR UPDATE is supported by MySQL 5.7 and newer MariaDB releases.
+		// The stronger lock keeps the runtime switch serialized without relying
+		// on the MySQL 8-only FOR SHARE syntax.
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
 	var configRow gormdb.SiteConfig
 	err := query.First(&configRow).Error

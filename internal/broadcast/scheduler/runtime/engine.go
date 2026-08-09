@@ -127,7 +127,7 @@ func (e *Engine) scanLoop() {
 	defer ticker.Stop()
 	for {
 		if err := e.scanOnce(e.ctx); err != nil && contextError(e.ctx) == nil {
-			log.Printf("[BROADCAST] scheduler scan failed")
+			log.Printf("[BROADCAST] scheduler scan failed: %v", err)
 		}
 		select {
 		case <-e.ctx.Done():

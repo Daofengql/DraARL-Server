@@ -2,7 +2,7 @@
 
 # UDP fan-out benchmark
 
-本文档对应 DraARL Server `v2.0.0-alpha4` 的 benchmark 参数和 Type 0 路由模型。
+本文档对应 DraARL Server `v2.0.0-alpha6` 的 benchmark 参数和 Type 0 路由模型。
 
 `udp_fanout` 使用真实 DraARLv1 心跳认证和 UDP socket，测量单机或中心/多边缘拓扑在大量在线设备下的语音 fan-out 能力。工具支持一个或多个独立群组，并为每个群组安排一个同时发言的设备。
 

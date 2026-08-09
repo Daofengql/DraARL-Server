@@ -1,0 +1,69 @@
+site_name: DraARL Server Docs
+site_description: DraARL Server 完整文档 - 数字无线电高级应用实时链路平台
+site_url: "https://daofengql.github.io/DraARL-Server/"
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - 首页: index.md
+  - 架构设计: 架构设计.md
+  - Type 0 节点互联协议: 节点互联协议.md
+  - UDP 转发压力测试: UDP单机转发压力测试.md
+  - 幽灵多收与消息查询性能验证: 幽灵多收与消息查询性能验证.md
+  - 数据字典: 数据字典.md
+  - 使用与说明文档:
+      - 总览: usage/README.md
+      - 01. 部署与配置: usage/01-部署与配置.md
+      - 02. 账号、登录与权限: usage/02-账号登录与权限.md
+      - 03. 用户控制台: usage/03-用户控制台.md
+      - 04. 设备与群组: usage/04-设备与群组.md
+      - 05. 在线收发、通信记录与通联日志: usage/05-在线收发与通信记录.md
+      - 06. 管理员后台: usage/06-管理员后台.md
+      - 07. 设备接入与 API 快速对接: usage/07-设备接入与API快速对接.md
+      - 08. 运维与排障: usage/08-运维与排障.md
+      - 09. 固件与OTA升级: usage/09-固件与OTA升级.md
+      - 10. APRS与位置服务: usage/10-APRS与位置服务.md
+      - 11. v1.1.5-alpha1升级说明（历史）: usage/11-v1.1.5-alpha1升级说明.md
+      - 12. v2.0.0-alpha3 幽灵多端与频道消息升级: usage/12-幽灵多端与频道消息升级说明.md
+  - 协议文档: Protocol.md
+  - API 文档:
+      - 总览: api/README.md
+      - 00. 约定与鉴权: api/00-约定与鉴权.md
+      - 01. 认证与 SSO: api/01-认证与SSO.md
+      - 02. 用户与资料: api/02-用户与资料.md
+      - 03. 设备与配置: api/03-设备与配置.md
+      - 04. 群组与互联: api/04-群组与互联.md
+      - 05. 无线电与实时通信: api/05-无线电与实时通信.md
+      - 06. 通联记录与日志: api/06-通联记录与日志.md
+      - 07. 资源上传与站点配置: api/07-资源上传与站点配置.md
+      - 08. 运维与管理接口: api/08-运维与管理接口.md
+      - 09. 完整路由索引: api/09-完整路由索引.md
+      - 10. WebSocket协议详解: api/10-WebSocket协议详解.md
+      - 11. 错误码与状态码: api/11-错误码与状态码.md
+      - 12. 客户端资源分发: api/12-客户端资源分发.md

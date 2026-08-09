@@ -158,6 +158,78 @@ type MessageAPIConfig struct {
 }
 
 const (
+	DefaultBroadcastQuietWindowSeconds = 5
+	DefaultBroadcastMaxDurationSeconds = 30
+	MaxBroadcastDurationSeconds        = 60
+	DefaultBroadcastMaxUploadBytes     = 20 * 1024 * 1024
+)
+
+type BroadcastConfig struct {
+	Enabled                 bool   `yaml:"Enabled" json:"enabled"`
+	QuietWindowSeconds      int    `yaml:"QuietWindowSeconds" json:"quiet_window_seconds"`
+	MaxAudioDurationSeconds int    `yaml:"MaxAudioDurationSeconds" json:"max_audio_duration_seconds"`
+	MaxUploadBytes          int64  `yaml:"MaxUploadBytes" json:"max_upload_bytes"`
+	TranscodeTimeoutSeconds int    `yaml:"TranscodeTimeoutSeconds" json:"transcode_timeout_seconds"`
+	ScanIntervalMS          int    `yaml:"ScanIntervalMS" json:"scan_interval_ms"`
+	RecoveryWindowSeconds   int    `yaml:"RecoveryWindowSeconds" json:"recovery_window_seconds"`
+	ClaimBatchSize          int    `yaml:"ClaimBatchSize" json:"claim_batch_size"`
+	FFmpegPath              string `yaml:"FFmpegPath" json:"ffmpeg_path"`
+	FFprobePath             string `yaml:"FFprobePath" json:"ffprobe_path"`
+}
+
+func (c *BroadcastConfig) SetDefaults() error {
+	if c.QuietWindowSeconds == 0 {
+		c.QuietWindowSeconds = DefaultBroadcastQuietWindowSeconds
+	}
+	if c.QuietWindowSeconds < 1 || c.QuietWindowSeconds > 30 {
+		return fmt.Errorf("Broadcast.QuietWindowSeconds must be between 1 and 30")
+	}
+	if c.MaxAudioDurationSeconds == 0 {
+		c.MaxAudioDurationSeconds = DefaultBroadcastMaxDurationSeconds
+	}
+	if c.MaxAudioDurationSeconds < 1 || c.MaxAudioDurationSeconds > MaxBroadcastDurationSeconds {
+		return fmt.Errorf("Broadcast.MaxAudioDurationSeconds must be between 1 and %d", MaxBroadcastDurationSeconds)
+	}
+	if c.MaxUploadBytes == 0 {
+		c.MaxUploadBytes = DefaultBroadcastMaxUploadBytes
+	}
+	if c.MaxUploadBytes < 1024 || c.MaxUploadBytes > 100*1024*1024 {
+		return fmt.Errorf("Broadcast.MaxUploadBytes must be between 1024 and 104857600")
+	}
+	if c.TranscodeTimeoutSeconds == 0 {
+		c.TranscodeTimeoutSeconds = 90
+	}
+	if c.TranscodeTimeoutSeconds < 5 || c.TranscodeTimeoutSeconds > 300 {
+		return fmt.Errorf("Broadcast.TranscodeTimeoutSeconds must be between 5 and 300")
+	}
+	if c.ScanIntervalMS == 0 {
+		c.ScanIntervalMS = 1000
+	}
+	if c.ScanIntervalMS < 250 || c.ScanIntervalMS > 5000 {
+		return fmt.Errorf("Broadcast.ScanIntervalMS must be between 250 and 5000")
+	}
+	if c.RecoveryWindowSeconds == 0 {
+		c.RecoveryWindowSeconds = 10
+	}
+	if c.RecoveryWindowSeconds < 1 || c.RecoveryWindowSeconds > 60 {
+		return fmt.Errorf("Broadcast.RecoveryWindowSeconds must be between 1 and 60")
+	}
+	if c.ClaimBatchSize == 0 {
+		c.ClaimBatchSize = 20
+	}
+	if c.ClaimBatchSize < 1 || c.ClaimBatchSize > 100 {
+		return fmt.Errorf("Broadcast.ClaimBatchSize must be between 1 and 100")
+	}
+	if strings.TrimSpace(c.FFmpegPath) == "" {
+		c.FFmpegPath = "ffmpeg"
+	}
+	if strings.TrimSpace(c.FFprobePath) == "" {
+		c.FFprobePath = "ffprobe"
+	}
+	return nil
+}
+
+const (
 	DefaultMessageAPIPageSize        = 50
 	DefaultMessageAPIMaxPageSize     = 100
 	DefaultMessageAPIRequestsPerUser = 120
@@ -265,6 +337,7 @@ type Configuration struct {
 	GhostSessions GhostSessionConfig `yaml:"GhostSessions" json:"ghost_sessions"`
 	MessageAPI    MessageAPIConfig   `yaml:"MessageAPI" json:"message_api"`
 	Interconnect  InterconnectConfig `yaml:"Interconnect" json:"interconnect"`
+	Broadcast     BroadcastConfig    `yaml:"Broadcast" json:"broadcast"`
 
 	Database struct {
 		Host     string `yaml:"Host" json:"host"`
@@ -396,6 +469,9 @@ func (c *Configuration) SetDefaults() error {
 		return err
 	}
 	if err := c.MessageAPI.SetDefaults(); err != nil {
+		return err
+	}
+	if err := c.Broadcast.SetDefaults(); err != nil {
 		return err
 	}
 	if c.Firmware.MaxPresignedURLLength <= 0 {

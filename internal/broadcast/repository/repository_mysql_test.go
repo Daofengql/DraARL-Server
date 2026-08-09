@@ -123,6 +123,41 @@ func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	}
 }
 
+func TestRepositorySupportsMultipleSchedulesWithSameAndDifferentAudioMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	audioA := createReadyAudio(t, repo, owner.ID, groups.a.ID, "shared-audio")
+	audioB := createReadyAudio(t, repo, owner.ID, groups.a.ID, "alternate-audio")
+	now := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	schedules := []*model.BroadcastSchedule{
+		{GroupID: groups.a.ID, AudioID: audioA.ID, Name: "morning shared", ScheduleType: model.ScheduleTypeDaily, Timezone: "Asia/Shanghai", LocalTime: "08:00:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID},
+		{GroupID: groups.a.ID, AudioID: audioA.ID, Name: "evening shared", ScheduleType: model.ScheduleTypeDaily, Timezone: "Asia/Shanghai", LocalTime: "20:00:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID},
+		{GroupID: groups.a.ID, AudioID: audioB.ID, Name: "weekly alternate", ScheduleType: model.ScheduleTypeWeekly, Timezone: "Asia/Shanghai", LocalTime: "12:30:00", WeekdayMask: 1 << uint(time.Monday), Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID},
+	}
+	for _, schedule := range schedules {
+		if err := repo.SaveSchedule(ctx, schedule, now); err != nil {
+			t.Fatalf("save %q: %v", schedule.Name, err)
+		}
+		if schedule.ID == 0 || schedule.NextRunAt == nil {
+			t.Fatalf("schedule was not independently persisted: %#v", schedule)
+		}
+	}
+	stored, err := repo.ListSchedules(ctx, groups.a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 3 {
+		t.Fatalf("stored schedules=%d, want 3", len(stored))
+	}
+	counts := map[uint]int{}
+	for _, schedule := range stored {
+		counts[schedule.AudioID]++
+	}
+	if counts[audioA.ID] != 2 || counts[audioB.ID] != 1 {
+		t.Fatalf("audio schedule references=%v, want shared=2 alternate=1", counts)
+	}
+}
+
 type repositoryGroups struct {
 	a       *gormdb.Group
 	b       *gormdb.Group

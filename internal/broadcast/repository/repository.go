@@ -59,6 +59,24 @@ func (r *Repository) GetAudio(ctx context.Context, groupID int, audioID uint) (*
 	return &audio, err
 }
 
+func (r *Repository) GetAudioByID(ctx context.Context, audioID uint) (*model.BroadcastAudio, error) {
+	var audio model.BroadcastAudio
+	err := r.db.WithContext(ctx).First(&audio, audioID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &audio, err
+}
+
+func (r *Repository) ListProcessingAudios(ctx context.Context, limit int) ([]model.BroadcastAudio, error) {
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+	var audios []model.BroadcastAudio
+	err := r.db.WithContext(ctx).Where("status = ?", model.AudioStatusProcessing).Order("id ASC").Limit(limit).Find(&audios).Error
+	return audios, err
+}
+
 func (r *Repository) CreateAudio(ctx context.Context, audio *model.BroadcastAudio) error {
 	if audio == nil || audio.GroupID <= 0 || audio.CreatedBy <= 0 || strings.TrimSpace(audio.Name) == "" {
 		return ErrInvalidAudio

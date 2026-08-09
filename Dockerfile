@@ -23,7 +23,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/draarl ./cmd/draarl
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates gettext-envsubst tzdata && \
+ARG FFMPEG_VERSION=6.1.2-r2
+RUN apk add --no-cache ca-certificates gettext-envsubst tzdata ffmpeg=${FFMPEG_VERSION} && \
     addgroup -S -g 10001 draarl && \
     adduser -S -D -H -u 10001 -G draarl draarl && \
     mkdir -p /var/lib/draarl && \

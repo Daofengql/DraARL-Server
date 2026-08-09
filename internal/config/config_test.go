@@ -87,6 +87,27 @@ func TestLegacyMinIOConfigMigratesToStorage(t *testing.T) {
 	}
 }
 
+func TestBroadcastConfigDefaultsAndBounds(t *testing.T) {
+	cfg := &BroadcastConfig{}
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QuietWindowSeconds != 5 || cfg.MaxAudioDurationSeconds != 30 ||
+		cfg.MaxUploadBytes != 20*1024*1024 || cfg.ScanIntervalMS != 1000 ||
+		cfg.FFmpegPath != "ffmpeg" || cfg.FFprobePath != "ffprobe" {
+		t.Fatalf("unexpected broadcast defaults: %#v", cfg)
+	}
+
+	invalid := BroadcastConfig{QuietWindowSeconds: 31}
+	if err := invalid.SetDefaults(); err == nil {
+		t.Fatal("quiet window above bound was accepted")
+	}
+	invalid = BroadcastConfig{MaxAudioDurationSeconds: MaxBroadcastDurationSeconds + 1}
+	if err := invalid.SetDefaults(); err == nil {
+		t.Fatal("duration above hard limit was accepted")
+	}
+}
+
 func TestDeprecatedS3PublicBaseURLMigratesToDownloadURLPrefix(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"

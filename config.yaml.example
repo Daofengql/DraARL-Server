@@ -118,6 +118,19 @@ Web:
     AllowedOrigins:            # CORS / WS Origin 白名单：填写真正发起 API/WS 请求的页面域名
         - "http://localhost:5173"
 
+# 群组自动播报（仅中心完整模式执行）
+Broadcast:
+    Enabled: false                 # 站点总开关；启用前确认无人值守发射合规要求
+    QuietWindowSeconds: 5         # 活动通信域连续静默时间；最近有语音则本轮跳过
+    MaxAudioDurationSeconds: 30   # 单条播报上限，服务端硬上限 60 秒
+    MaxUploadBytes: 20971520      # 原始音频上传上限（20 MiB）
+    TranscodeTimeoutSeconds: 90   # ffprobe + ffmpeg 单任务总超时
+    ScanIntervalMS: 1000          # 到期计划扫描间隔
+    RecoveryWindowSeconds: 10     # 重启后允许认领的短暂到期窗口
+    ClaimBatchSize: 20            # 每轮最多认领任务数
+    FFmpegPath: "ffmpeg"
+    FFprobePath: "ffprobe"
+
 # Keycloak SSO 单点登录配置 (可选)
 Keycloak:
     Enabled: false                    # 是否启用SSO登录

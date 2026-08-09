@@ -46,6 +46,18 @@ Web:
   AllowedOrigins:
     - "${DRAARL_PUBLIC_URL}"
 
+Broadcast:
+  Enabled: ${DRAARL_BROADCAST_ENABLED}
+  QuietWindowSeconds: 5
+  MaxAudioDurationSeconds: 30
+  MaxUploadBytes: 20971520
+  TranscodeTimeoutSeconds: 90
+  ScanIntervalMS: 1000
+  RecoveryWindowSeconds: 10
+  ClaimBatchSize: 20
+  FFmpegPath: "/usr/bin/ffmpeg"
+  FFprobePath: "/usr/bin/ffprobe"
+
 Storage:
   Driver: minio
   MinIO:

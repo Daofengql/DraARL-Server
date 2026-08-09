@@ -9,6 +9,8 @@ ARG DRAARL_VERSION=dev
 RUN VITE_APP_VERSION="${DRAARL_VERSION}" npm run build
 
 FROM golang:1.25-alpine AS backend
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -32,11 +34,13 @@ RUN apk add --no-cache ca-certificates gettext-envsubst tzdata ffmpeg=${FFMPEG_V
 COPY --from=backend /out/draarl /usr/local/bin/draarl
 COPY deploy/docker/config.yaml.template /etc/draarl/config.yaml.template
 COPY deploy/docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/draarl /usr/local/bin/docker-entrypoint.sh
+COPY deploy/docker/healthcheck.sh /usr/local/bin/docker-healthcheck.sh
+RUN chmod 0755 /usr/local/bin/draarl /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck.sh
 
 USER draarl
 WORKDIR /var/lib/draarl
 ENV TZ=Asia/Shanghai
 EXPOSE 60050/udp 9000/tcp 60100/tcp
 VOLUME ["/var/lib/draarl"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["/usr/local/bin/docker-healthcheck.sh"]
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

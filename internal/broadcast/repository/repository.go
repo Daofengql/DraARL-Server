@@ -806,6 +806,56 @@ type MemberScheduleStats struct {
 	SuspendedCount int64  `json:"suspended_count"`
 }
 
+type VirtualGroupPolicySummary struct {
+	VirtualGroupID       int    `json:"virtual_group_id"`
+	Mode                 string `json:"mode"`
+	AllowedSourceGroupID *int   `json:"allowed_source_group_id,omitempty"`
+	AllowedSourceName    string `json:"allowed_source_name,omitempty"`
+}
+
+func (r *Repository) ListVirtualGroupPolicySummaries(ctx context.Context, virtualGroupIDs []int) (map[int]VirtualGroupPolicySummary, error) {
+	virtualGroupIDs = SortedUniqueGroupIDs(virtualGroupIDs)
+	result := make(map[int]VirtualGroupPolicySummary, len(virtualGroupIDs))
+	if len(virtualGroupIDs) == 0 {
+		return result, nil
+	}
+	var rows []VirtualGroupPolicySummary
+	err := r.db.WithContext(ctx).Table("public_groups vg").
+		Select("vg.id AS virtual_group_id, COALESCE(p.mode, ?) AS mode, p.allowed_source_group_id, COALESCE(source.name, '') AS allowed_source_name", model.PolicySuspendAll).
+		Joins("LEFT JOIN virtual_group_broadcast_policies p ON p.virtual_group_id = vg.id").
+		Joins("LEFT JOIN public_groups source ON source.id = p.allowed_source_group_id").
+		Where("vg.id IN ? AND vg.is_virtual = 1", virtualGroupIDs).Order("vg.id ASC").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.VirtualGroupID] = row
+	}
+	return result, nil
+}
+
+func (r *Repository) EnabledScheduleCounts(ctx context.Context, groupIDs []int) (map[int]int64, error) {
+	groupIDs = SortedUniqueGroupIDs(groupIDs)
+	result := make(map[int]int64, len(groupIDs))
+	if len(groupIDs) == 0 {
+		return result, nil
+	}
+	var rows []struct {
+		GroupID int
+		Count   int64
+	}
+	err := r.db.WithContext(ctx).Model(&model.BroadcastSchedule{}).
+		Select("group_id, COUNT(*) AS count").Where("group_id IN ? AND enabled = 1", groupIDs).
+		Group("group_id").Order("group_id ASC").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.GroupID] = row.Count
+	}
+	return result, nil
+}
+
 func (r *Repository) ListPolicyMemberStats(ctx context.Context, virtualGroupID int) ([]MemberScheduleStats, error) {
 	var stats []MemberScheduleStats
 	err := r.db.WithContext(ctx).Table("group_links gl").

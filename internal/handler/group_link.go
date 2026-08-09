@@ -243,15 +243,27 @@ func GetVirtualGroups(c *gin.Context) {
 	linkRepo := gormdb.NewGroupLinkRepository()
 	type virtualGroupWithCount struct {
 		*gormdb.Group
-		TargetCount int64 `json:"target_count"`
+		TargetCount       int64                                `json:"target_count"`
+		BroadcastPolicy   repository.VirtualGroupPolicySummary `json:"broadcast_policy"`
+		AllowedSourceName string                               `json:"allowed_source_name,omitempty"`
+	}
+	virtualGroupIDs := make([]int, 0, len(virtualGroups))
+	for _, group := range virtualGroups {
+		virtualGroupIDs = append(virtualGroupIDs, group.ID)
+	}
+	policySummaries, err := repository.Default().ListVirtualGroupPolicySummaries(c.Request.Context(), virtualGroupIDs)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
 	}
 
 	result := make([]virtualGroupWithCount, 0, len(virtualGroups))
 	for _, vg := range virtualGroups {
 		count, _ := linkRepo.GetLinkCount(vg.ID)
+		policy := policySummaries[vg.ID]
 		result = append(result, virtualGroupWithCount{
-			Group:       vg,
-			TargetCount: count,
+			Group: vg, TargetCount: count, BroadcastPolicy: policy,
+			AllowedSourceName: policy.AllowedSourceName,
 		})
 	}
 
@@ -952,13 +964,30 @@ func GetAvailableTargetGroups(c *gin.Context) {
 	}
 
 	availableGroups := filterAvailableGroupLinkTargets(groups, linkedTargetSet)
+	availableGroupIDs := make([]int, 0, len(availableGroups))
+	for _, group := range availableGroups {
+		availableGroupIDs = append(availableGroupIDs, group.ID)
+	}
+	scheduleCounts, err := repository.Default().EnabledScheduleCounts(c.Request.Context(), availableGroupIDs)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	type availableTarget struct {
+		*gormdb.Group
+		EnabledBroadcastScheduleCount int64 `json:"enabled_broadcast_schedule_count"`
+	}
+	items := make([]availableTarget, 0, len(availableGroups))
+	for _, group := range availableGroups {
+		items = append(items, availableTarget{Group: group, EnabledBroadcastScheduleCount: scheduleCounts[group.ID]})
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"items": availableGroups,
-			"total": len(availableGroups),
+			"items": items,
+			"total": len(items),
 		},
 	})
 }

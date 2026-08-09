@@ -85,6 +85,18 @@ func TestRepositorySchedulePolicyMySQL(t *testing.T) {
 	if len(stats) != 2 || stats[0].EnabledCount+stats[1].EnabledCount != 2 || stats[0].SuspendedCount+stats[1].SuspendedCount != 1 {
 		t.Fatalf("unexpected member stats: %#v", stats)
 	}
+	counts, err := repo.EnabledScheduleCounts(ctx, []int{groups.a.ID, groups.b.ID})
+	if err != nil || counts[groups.a.ID] != 1 || counts[groups.b.ID] != 1 {
+		t.Fatalf("unexpected enabled schedule counts: counts=%v err=%v", counts, err)
+	}
+	summaries, err := repo.ListVirtualGroupPolicySummaries(ctx, []int{groups.virtual.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := summaries[groups.virtual.ID]
+	if summary.Mode != model.PolicyAllowSingleSource || summary.AllowedSourceGroupID == nil || *summary.AllowedSourceGroupID != groups.b.ID || summary.AllowedSourceName == "" {
+		t.Fatalf("unexpected policy summary: %#v", summary)
+	}
 }
 
 func TestRepositoryOperationalSwitchBlocksRunsAndSkipsMissedSchedulesMySQL(t *testing.T) {

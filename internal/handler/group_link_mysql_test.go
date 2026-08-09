@@ -92,6 +92,11 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 		return schedule
 	}
 	scheduleA, scheduleB, scheduleC := newSchedule(groupA, "vg-audio-a"), newSchedule(groupB, "vg-audio-b"), newSchedule(groupC, "vg-audio-c")
+	available := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/group-links/available-targets", "/group-links/available-targets", nil, GetAvailableTargetGroups)
+	requireBroadcastStatus(t, available, http.StatusOK)
+	if !bytes.Contains(available.Body, []byte(`"enabled_broadcast_schedule_count":1`)) {
+		t.Fatalf("available target response omitted schedule counts: %s", available.Body)
+	}
 
 	createPayload := []byte(fmt.Sprintf(`{"name":"互联点名","status":0,"target_group_ids":[%d,%d],"broadcast_policy":{"mode":"allow_single_source","allowed_source_group_id":%d}}`, groupA.ID, groupB.ID, groupB.ID))
 	created := performVirtualGroupHandlerRequest(t, admin, http.MethodPost, "/group-links", "/group-links", createPayload, CreateVirtualGroup)
@@ -107,6 +112,11 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 	virtualGroupID = createdEnvelope.Data.ID
 	assertHTTPBroadcastSchedule(t, repo, scheduleA.ID, "", true)
 	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, "", true)
+	list := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/group-links", "/group-links", nil, GetVirtualGroups)
+	requireBroadcastStatus(t, list, http.StatusOK)
+	if !bytes.Contains(list.Body, []byte(`"broadcast_policy":{"virtual_group_id":`)) || !bytes.Contains(list.Body, []byte(`"allowed_source_name":`)) {
+		t.Fatalf("virtual group list omitted policy summary: %s", list.Body)
+	}
 
 	statusPath := fmt.Sprintf("/group-links/%d", virtualGroupID)
 	enabled := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id", statusPath, []byte(`{"status":1}`), UpdateVirtualGroup)

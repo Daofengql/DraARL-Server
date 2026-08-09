@@ -875,6 +875,35 @@ type ActivePolicy struct {
 	AllowedSourceGroupID *int
 }
 
+type EntityGroupBroadcastContext struct {
+	VirtualGroupID       int    `json:"virtual_group_id"`
+	VirtualGroupName     string `json:"virtual_group_name"`
+	VirtualGroupStatus   int    `json:"virtual_group_status"`
+	PolicyMode           string `json:"policy_mode"`
+	AllowedSourceGroupID *int   `json:"allowed_source_group_id,omitempty"`
+	AllowedSourceName    string `json:"allowed_source_name,omitempty"`
+}
+
+func (r *Repository) BroadcastContextForEntityGroup(ctx context.Context, groupID int) (*EntityGroupBroadcastContext, error) {
+	if groupID <= 0 {
+		return nil, ErrInvalidEntityGroup
+	}
+	var result EntityGroupBroadcastContext
+	query := r.db.WithContext(ctx).Table("group_links gl").
+		Select("vg.id AS virtual_group_id, vg.name AS virtual_group_name, vg.status AS virtual_group_status, COALESCE(p.mode, ?) AS policy_mode, p.allowed_source_group_id, COALESCE(source.name, '') AS allowed_source_name", model.PolicySuspendAll).
+		Joins("JOIN public_groups vg ON vg.id = gl.link_group_id AND vg.is_virtual = 1").
+		Joins("LEFT JOIN virtual_group_broadcast_policies p ON p.virtual_group_id = vg.id").
+		Joins("LEFT JOIN public_groups source ON source.id = p.allowed_source_group_id").
+		Where("gl.target_group_id = ?", groupID).Limit(1).Scan(&result)
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	if query.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &result, nil
+}
+
 func (r *Repository) ActivePolicyForEntityGroup(ctx context.Context, groupID int) (*ActivePolicy, error) {
 	return activePolicyForEntityGroup(r.db.WithContext(ctx), groupID)
 }

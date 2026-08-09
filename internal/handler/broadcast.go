@@ -68,6 +68,45 @@ type broadcastScheduleRequest struct {
 	Enabled      *bool      `json:"enabled"`
 }
 
+type broadcastContextResponse struct {
+	GroupID              int    `json:"group_id"`
+	InterconnectLinked   bool   `json:"interconnect_linked"`
+	InterconnectEnabled  bool   `json:"interconnect_enabled"`
+	VirtualGroupID       int    `json:"virtual_group_id,omitempty"`
+	VirtualGroupName     string `json:"virtual_group_name,omitempty"`
+	PolicyMode           string `json:"policy_mode,omitempty"`
+	AllowedSourceGroupID *int   `json:"allowed_source_group_id,omitempty"`
+	AllowedSourceName    string `json:"allowed_source_name,omitempty"`
+	SourceAllowed        bool   `json:"source_allowed"`
+}
+
+func GetBroadcastContext(c *gin.Context) {
+	_, _, groupID, ok := requireManagedBroadcastGroup(c)
+	if !ok {
+		return
+	}
+	result := broadcastContextResponse{GroupID: groupID, SourceAllowed: true}
+	contextState, err := repository.Default().BroadcastContextForEntityGroup(c.Request.Context(), groupID)
+	if err != nil {
+		writeBroadcastError(c, http.StatusInternalServerError, "broadcast_context_failed", "读取自动播报互联状态失败")
+		return
+	}
+	if contextState != nil {
+		result.InterconnectLinked = true
+		result.InterconnectEnabled = contextState.VirtualGroupStatus == 1
+		result.VirtualGroupID = contextState.VirtualGroupID
+		result.VirtualGroupName = contextState.VirtualGroupName
+		result.PolicyMode = contextState.PolicyMode
+		result.AllowedSourceGroupID = contextState.AllowedSourceGroupID
+		result.AllowedSourceName = contextState.AllowedSourceName
+		if result.InterconnectEnabled {
+			result.SourceAllowed = contextState.PolicyMode == model.PolicyAllowSingleSource &&
+				contextState.AllowedSourceGroupID != nil && *contextState.AllowedSourceGroupID == groupID
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": result})
+}
+
 func ListBroadcastAudios(c *gin.Context) {
 	_, _, groupID, ok := requireManagedBroadcastGroup(c)
 	if !ok {

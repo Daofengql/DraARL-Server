@@ -86,6 +86,18 @@ export interface BroadcastScheduleInput {
   enabled: boolean
 }
 
+export interface BroadcastContext {
+  group_id: number
+  interconnect_linked: boolean
+  interconnect_enabled: boolean
+  virtual_group_id?: number
+  virtual_group_name?: string
+  policy_mode?: 'suspend_all' | 'allow_single_source'
+  allowed_source_group_id?: number
+  allowed_source_name?: string
+  source_allowed: boolean
+}
+
 interface BackendResponse<T> {
   code: number
   message: string
@@ -100,6 +112,11 @@ function unwrap<T>(response: BackendResponse<T>, fallback: string): T {
 }
 
 export const broadcastService = {
+  async getContext(groupId: number): Promise<BroadcastContext> {
+    const response = await apiClient.get<BackendResponse<BroadcastContext>>(`/api/groups/${groupId}/broadcast-context`)
+    return unwrap(response, '读取自动播报互联状态失败')
+  },
+
   async listAudios(groupId: number): Promise<BroadcastAudio[]> {
     const response = await apiClient.get<BackendResponse<{ items: BroadcastAudio[] }>>(`/api/groups/${groupId}/broadcast-audios`)
     return unwrap(response, '读取播报音频失败').items

@@ -112,6 +112,11 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 	virtualGroupID = createdEnvelope.Data.ID
 	assertHTTPBroadcastSchedule(t, repo, scheduleA.ID, "", true)
 	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, "", true)
+	closedContext := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/groups/:id/broadcast-context", fmt.Sprintf("/groups/%d/broadcast-context", groupA.ID), nil, GetBroadcastContext)
+	requireBroadcastStatus(t, closedContext, http.StatusOK)
+	if !bytes.Contains(closedContext.Body, []byte(`"interconnect_linked":true`)) || !bytes.Contains(closedContext.Body, []byte(`"interconnect_enabled":false`)) || !bytes.Contains(closedContext.Body, []byte(`"source_allowed":true`)) {
+		t.Fatalf("closed interconnect context was incorrect: %s", closedContext.Body)
+	}
 	list := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/group-links", "/group-links", nil, GetVirtualGroups)
 	requireBroadcastStatus(t, list, http.StatusOK)
 	if !bytes.Contains(list.Body, []byte(`"broadcast_policy":{"virtual_group_id":`)) || !bytes.Contains(list.Body, []byte(`"allowed_source_name":`)) {
@@ -123,6 +128,11 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 	requireBroadcastStatus(t, enabled, http.StatusOK)
 	assertHTTPBroadcastSchedule(t, repo, scheduleA.ID, model.SuspendReasonActiveVirtualGroup, false)
 	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, "", true)
+	enabledContext := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/groups/:id/broadcast-context", fmt.Sprintf("/groups/%d/broadcast-context", groupA.ID), nil, GetBroadcastContext)
+	requireBroadcastStatus(t, enabledContext, http.StatusOK)
+	if !bytes.Contains(enabledContext.Body, []byte(`"interconnect_enabled":true`)) || !bytes.Contains(enabledContext.Body, []byte(`"source_allowed":false`)) {
+		t.Fatalf("enabled interconnect context was incorrect: %s", enabledContext.Body)
+	}
 
 	detail := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/group-links/:id", statusPath, nil, GetVirtualGroup)
 	requireBroadcastStatus(t, detail, http.StatusOK)

@@ -41,6 +41,7 @@ import Upload from '@mui/icons-material/Upload'
 import {
   broadcastService,
   type BroadcastAudio,
+  type BroadcastContext,
   type BroadcastRun,
   type BroadcastRunStatus,
   type BroadcastSchedule,
@@ -149,6 +150,7 @@ function scheduleDescription(schedule: BroadcastSchedule): string {
 export function BroadcastManagementDialog({ open, group, onClose }: BroadcastManagementDialogProps) {
   const [tab, setTab] = useState(0)
   const [audios, setAudios] = useState<BroadcastAudio[]>([])
+  const [broadcastContext, setBroadcastContext] = useState<BroadcastContext | null>(null)
   const [schedules, setSchedules] = useState<BroadcastSchedule[]>([])
   const [runs, setRuns] = useState<BroadcastRun[]>([])
   const [runTotal, setRunTotal] = useState(0)
@@ -177,11 +179,13 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
     if (!group) return
     if (!quiet) setLoading(true)
     try {
-      const [audioItems, scheduleItems, runResult] = await Promise.all([
+      const [contextState, audioItems, scheduleItems, runResult] = await Promise.all([
+        broadcastService.getContext(group.id),
         broadcastService.listAudios(group.id),
         broadcastService.listSchedules(group.id),
         broadcastService.listRuns(group.id, runPage + 1, 20),
       ])
+      setBroadcastContext(contextState)
       setAudios(audioItems)
       setSchedules(scheduleItems)
       setRuns(runResult.items)
@@ -341,6 +345,22 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
         <DialogContent sx={{ minHeight: 460, p: 2 }}>
           {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
           {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
+          {broadcastContext && (
+            <Alert
+              severity={!broadcastContext.interconnect_linked || !broadcastContext.interconnect_enabled
+                ? 'info'
+                : broadcastContext.source_allowed ? 'success' : 'warning'}
+              sx={{ mb: 2 }}
+            >
+              {!broadcastContext.interconnect_linked
+                ? '当前实体组未加入虚拟互联组，自动播报按本组计划独立运行。'
+                : !broadcastContext.interconnect_enabled
+                  ? `互联“${broadcastContext.virtual_group_name}”当前关闭，自动播报正常运行。`
+                  : broadcastContext.source_allowed
+                    ? `互联“${broadcastContext.virtual_group_name}”当前开启，本组是允许的唯一信标来源。`
+                    : `互联“${broadcastContext.virtual_group_name}”当前开启，本组自动播报已按信标策略挂起。`}
+            </Alert>
+          )}
 
           {tab === 0 && (
             <Stack spacing={2}>

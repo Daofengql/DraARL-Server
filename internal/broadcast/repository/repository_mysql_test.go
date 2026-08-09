@@ -97,6 +97,10 @@ func TestRepositorySchedulePolicyMySQL(t *testing.T) {
 	if summary.Mode != model.PolicyAllowSingleSource || summary.AllowedSourceGroupID == nil || *summary.AllowedSourceGroupID != groups.b.ID || summary.AllowedSourceName == "" {
 		t.Fatalf("unexpected policy summary: %#v", summary)
 	}
+	contextState, err := repo.BroadcastContextForEntityGroup(ctx, groups.a.ID)
+	if err != nil || contextState == nil || contextState.VirtualGroupID != groups.virtual.ID || contextState.VirtualGroupStatus != 1 || contextState.PolicyMode != model.PolicyAllowSingleSource || contextState.AllowedSourceName == "" {
+		t.Fatalf("unexpected entity group broadcast context: context=%#v err=%v", contextState, err)
+	}
 }
 
 func TestRepositoryOperationalSwitchBlocksRunsAndSkipsMissedSchedulesMySQL(t *testing.T) {

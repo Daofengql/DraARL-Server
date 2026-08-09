@@ -185,6 +185,10 @@ func (g *CenterGateway) ReleaseScheduledBroadcast(runID uint, domainID uint64) {
 	g.speaker.ReleaseLocal(sessionID, 1, domainID)
 }
 
+func (g *CenterGateway) HasScheduledBroadcastReceiver(domainID uint64) bool {
+	return g != nil && g.cluster != nil && g.cluster.HasTargetNode(domainID, CenterLocalNodeID)
+}
+
 func (g *CenterGateway) RelayScheduledBroadcast(runID uint, sourceGroupID int, domainID uint64, inner []byte) error {
 	if g.cluster == nil || g.speaker == nil || runID == 0 || sourceGroupID <= 0 || domainID == 0 {
 		return errors.New("scheduled broadcast relay is incomplete")

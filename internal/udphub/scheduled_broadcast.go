@@ -4,6 +4,8 @@ import (
 	"slices"
 	"sync/atomic"
 	"time"
+
+	"draarl/internal/groupaccess"
 )
 
 type ScheduledBroadcastAcquireResult string
@@ -12,6 +14,7 @@ const (
 	ScheduledBroadcastAcquired    ScheduledBroadcastAcquireResult = "acquired"
 	ScheduledBroadcastRecentVoice ScheduledBroadcastAcquireResult = "recent_voice"
 	ScheduledBroadcastDomainBusy  ScheduledBroadcastAcquireResult = "domain_busy"
+	ScheduledBroadcastNoReceiver  ScheduledBroadcastAcquireResult = "no_receiver"
 	ScheduledBroadcastInvalid     ScheduledBroadcastAcquireResult = "invalid_domain"
 )
 
@@ -84,7 +87,42 @@ func TryAcquireScheduledBroadcast(sourceGroupID int, runID uint, now time.Time, 
 	// Receiver membership is frozen only after the domain lease has been
 	// acquired. Later topology or session changes cannot expand this run.
 	lease.receiverSnap = getDomainReceiverSnap(sourceGroupID)
+	if !scheduledBroadcastHasReceiver(lease) {
+		ReleaseScheduledBroadcast(lease)
+		return nil, lastVoiceAt, ScheduledBroadcastNoReceiver
+	}
 	return lease, lastVoiceAt, ScheduledBroadcastAcquired
+}
+
+func scheduledBroadcastHasReceiver(lease *ScheduledBroadcastLease) bool {
+	if lease == nil {
+		return false
+	}
+	if lease.receiverSnap != nil && len(lease.receiverSnap.entries) != 0 {
+		return true
+	}
+	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+		for _, groupID := range lease.DomainGroupIDs {
+			for _, device := range GlobalMessageRouter.wsManager.GetDevicesByGroup(groupID) {
+				if device == nil {
+					continue
+				}
+				rxGroupIDs := device.GetRxGroupIDs()
+				if len(rxGroupIDs) == 0 {
+					rxGroupIDs = []int{device.GetGroupID()}
+				}
+				if groupaccess.CanReceiveRoute(device.IsDisabledRecv(), rxGroupIDs, groupID) &&
+					!CenterIdentityOwnedByRemote(device.GetUserID(), device.GetSSID()) {
+					return true
+				}
+			}
+		}
+	}
+	if lease.interconnect {
+		hooks := centerHooks()
+		return hooks.HasBroadcastReceiver != nil && hooks.HasBroadcastReceiver(lease.domainID)
+	}
+	return false
 }
 
 func acquireScheduledBroadcastArbiter(lease *ScheduledBroadcastLease, now time.Time) bool {

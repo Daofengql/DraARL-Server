@@ -266,6 +266,30 @@ func TestEngineMapsQuietGateAndManualCancellation(t *testing.T) {
 		}
 	})
 
+	t.Run("no receiver", func(t *testing.T) {
+		engine, repo, _ := engineFixture(t)
+		engine.broadcaster = broadcasterFunc(func(context.Context, BroadcastRequest) (BroadcastOutcome, error) {
+			return BroadcastOutcome{
+				AcquireResult: udphub.ScheduledBroadcastNoReceiver,
+				Snapshot:      LeaseSnapshot{DomainKey: "101", DomainGroupIDs: []int{101}},
+			}, nil
+		})
+		if err := engine.Start(); err != nil {
+			t.Fatal(err)
+		}
+		finished := waitFinished(t, repo)
+		stopEngine(t, engine)
+		if finished.status != model.RunStatusSkippedNoReceiver || finished.errorCode != "no_receiver" {
+			t.Fatalf("finished=%#v", finished)
+		}
+		repo.mu.Lock()
+		marked := repo.marked
+		repo.mu.Unlock()
+		if marked != 0 {
+			t.Fatalf("receiverless run was marked playing %d times", marked)
+		}
+	})
+
 	t.Run("manual stop", func(t *testing.T) {
 		engine, repo, _ := engineFixture(t)
 		playing := make(chan struct{})

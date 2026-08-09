@@ -216,6 +216,46 @@ func TestScheduledBroadcastRelayRequiresItsActiveSpeakerLease(t *testing.T) {
 	}
 }
 
+func TestScheduledBroadcastReceiverRequiresConnectedReceivableEdgeRoute(t *testing.T) {
+	cluster := NewClusterManager(1)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	domainID := uint64(89)
+	route := DeviceRoute{SessionID: 1001, SessionEpoch: 1, DeviceID: 7, DomainID: domainID}
+	if err := cluster.UpsertNodeRoute("edge-a", route); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("disconnected edge projection counted as a receiver")
+	}
+
+	session := &NodeSession{NodeID: "edge-a", SessionID: 44}
+	cluster.OnConnect(session)
+	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
+		t.Fatal(err)
+	}
+	if !gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("connected receivable edge route was not counted")
+	}
+
+	route.DisableRecv = true
+	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("receive-disabled edge route counted as a receiver")
+	}
+
+	route.DisableRecv = false
+	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
+		t.Fatal(err)
+	}
+	cluster.OnDisconnect(session, nil)
+	if gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("disconnected edge route remained reachable")
+	}
+}
+
 func BenchmarkSpeakerLeaseAcceptFrameSameDomain(b *testing.B) {
 	manager := NewSpeakerLeaseManager()
 	now := time.Unix(400, 0)

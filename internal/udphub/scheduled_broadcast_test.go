@@ -108,6 +108,55 @@ func TestScheduledBroadcastUsesCenterSpeakerHooks(t *testing.T) {
 	}
 }
 
+func TestScheduledBroadcastSkipsWithoutAnyReachableReceiver(t *testing.T) {
+	env := setupRouteTest(t, 62100, true)
+	for _, endpoint := range []routeTestEndpoint{env.udpA1, env.udpA2, env.udpB, env.udpC} {
+		endpoint.device.ISOnline = false
+	}
+	for _, device := range env.wsManager.devices {
+		device.disableRecv = true
+	}
+	InvalidateDomainReceiverCache()
+	ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+
+	if lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 21, time.Now(), 5*time.Second); lease != nil || result != ScheduledBroadcastNoReceiver {
+		t.Fatalf("receiverless acquire: lease=%v result=%s", lease, result)
+	}
+
+	// A no-receiver decision must release the local arbiter immediately.
+	env.wsA.disableRecv = false
+	lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 22, time.Now(), 5*time.Second)
+	if lease == nil || result != ScheduledBroadcastAcquired {
+		t.Fatalf("WS-only acquire after receiverless skip: lease=%v result=%s", lease, result)
+	}
+	ReleaseScheduledBroadcast(lease)
+	env.wsA.disableRecv = true
+
+	oldHooks := centerHooks()
+	edgeReachable := false
+	released := 0
+	SetCenterInterconnectHooks(CenterInterconnectHooks{
+		Activate:             func(*CenterLocalSource) error { return nil },
+		AcquireBroadcast:     func(uint, uint64, time.Time) bool { return true },
+		ReleaseBroadcast:     func(uint, uint64) { released++ },
+		HasBroadcastReceiver: func(uint64) bool { return edgeReachable },
+	})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+
+	if lease, _, result = TryAcquireScheduledBroadcast(env.groupA, 23, time.Now(), 5*time.Second); lease != nil || result != ScheduledBroadcastNoReceiver || released != 1 {
+		t.Fatalf("edge-unreachable acquire: lease=%v result=%s released=%d", lease, result, released)
+	}
+	edgeReachable = true
+	lease, _, result = TryAcquireScheduledBroadcast(env.groupA, 24, time.Now(), 5*time.Second)
+	if lease == nil || result != ScheduledBroadcastAcquired {
+		t.Fatalf("edge-only acquire: lease=%v result=%s", lease, result)
+	}
+	ReleaseScheduledBroadcast(lease)
+	if released != 2 {
+		t.Fatalf("edge-only release count=%d", released)
+	}
+}
+
 func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T) {
 	env := setupRouteTest(t, 62200, true)
 	ghostConn := listenRouteTestUDP(t)

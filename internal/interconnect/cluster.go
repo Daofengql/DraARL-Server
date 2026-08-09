@@ -321,6 +321,20 @@ func (m *ClusterManager) TargetNodes(domainID uint64, sourceNode string) []strin
 	return result
 }
 
+func (m *ClusterManager) HasTargetNode(domainID uint64, sourceNode string) bool {
+	if m == nil || domainID == 0 {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for nodeID := range m.domainNodes[domainID] {
+		if nodeID != sourceNode && nodeID != CenterLocalNodeID && m.nodes[nodeID] != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *ClusterManager) targetNodeVersions(domainID uint64, sourceNode string) map[string]uint64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

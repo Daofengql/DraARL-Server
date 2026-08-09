@@ -275,6 +275,7 @@ func main() {
 			AcquireBroadcast:     centerRuntime.Gateway.AcquireScheduledBroadcast,
 			AcceptBroadcastFrame: centerRuntime.Gateway.AcceptScheduledBroadcastFrame,
 			ReleaseBroadcast:     centerRuntime.Gateway.ReleaseScheduledBroadcast,
+			HasBroadcastReceiver: centerRuntime.Gateway.HasScheduledBroadcastReceiver,
 			RelayBroadcast:       centerRuntime.Gateway.RelayScheduledBroadcast,
 			RemoteOwner:          centerRuntime.Gateway.IdentityOwnedByRemote,
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {

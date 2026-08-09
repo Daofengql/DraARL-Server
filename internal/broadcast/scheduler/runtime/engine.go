@@ -398,6 +398,8 @@ func acquireTerminal(result udphub.ScheduledBroadcastAcquireResult) (string, str
 		return model.RunStatusSkippedRecentVoice, "recent_voice"
 	case udphub.ScheduledBroadcastDomainBusy:
 		return model.RunStatusSkippedDomainBusy, "domain_busy"
+	case udphub.ScheduledBroadcastNoReceiver:
+		return model.RunStatusSkippedNoReceiver, "no_receiver"
 	default:
 		return model.RunStatusFailed, "invalid_communication_domain"
 	}

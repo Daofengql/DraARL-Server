@@ -1,5 +1,11 @@
 import { apiClient } from './api'
-import type { VirtualGroup, GroupLinkTarget, Group } from '../types'
+import type {
+  VirtualGroup,
+  GroupLinkTarget,
+  Group,
+  VirtualGroupBroadcastMember,
+  VirtualGroupBroadcastPolicy,
+} from '../types'
 
 interface BackendResponse<T> {
   code: number
@@ -13,6 +19,8 @@ interface CreateVirtualGroupRequest {
   name: string
   note?: string
   status?: number
+  target_group_ids?: number[]
+  broadcast_policy?: Pick<VirtualGroupBroadcastPolicy, 'mode' | 'allowed_source_group_id'>
 }
 
 // 虚拟互联组更新请求
@@ -105,5 +113,19 @@ export const groupLinkService = {
     if (res.code !== 200) {
       throw new Error(res.message || '移除关联群组失败')
     }
+  },
+
+  async updateBroadcastPolicy(id: number, policy: Pick<VirtualGroupBroadcastPolicy, 'mode' | 'allowed_source_group_id'>): Promise<{
+    broadcast_policy: VirtualGroupBroadcastPolicy
+    broadcast_members: VirtualGroupBroadcastMember[]
+  }> {
+    const res = await apiClient.put<BackendResponse<{
+      broadcast_policy: VirtualGroupBroadcastPolicy
+      broadcast_members: VirtualGroupBroadcastMember[]
+    }>>(`/api/group-links/${id}/broadcast-policy`, policy)
+    if (res.code !== 200 || !res.data) {
+      throw new Error(res.message || '更新自动播报策略失败')
+    }
+    return res.data
   },
 }

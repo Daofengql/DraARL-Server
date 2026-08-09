@@ -17,6 +17,7 @@ import (
 	"draarl/internal/aprs"
 	authstore "draarl/internal/auth"
 	"draarl/internal/broadcast/media"
+	broadcastruntime "draarl/internal/broadcast/runtime"
 	"draarl/internal/buildinfo"
 	"draarl/internal/config"
 	"draarl/internal/db"
@@ -299,6 +300,9 @@ func main() {
 	if err := media.InitProcessor(cfg); err != nil {
 		stdlog.Fatalf("启动自动播报媒体处理器失败: %v", err)
 	}
+	if err := broadcastruntime.Init(cfg); err != nil {
+		stdlog.Fatalf("启动自动播报调度器失败: %v", err)
+	}
 	httpErrCh := make(chan error, 1)
 	go func() {
 		stdlog.Println("正在启动 HTTP 服务器...")
@@ -328,6 +332,12 @@ func main() {
 	}
 
 	stdlog.Println("正在关闭服务...")
+
+	broadcastShutdownCtx, broadcastShutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := broadcastruntime.Stop(broadcastShutdownCtx); err != nil {
+		stdlog.Printf("自动播报调度器关闭失败: %v", err)
+	}
+	broadcastShutdownCancel()
 
 	// 优雅关闭 HTTP 服务
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)

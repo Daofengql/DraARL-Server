@@ -1,0 +1,405 @@
+package runtime
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"draarl/internal/broadcast/media"
+	"draarl/internal/broadcast/model"
+	core "draarl/internal/broadcast/scheduler"
+	"draarl/internal/config"
+	"draarl/internal/udphub"
+)
+
+const (
+	RunLeaseDuration = 5 * time.Second
+	finalizeTimeout  = 5 * time.Second
+)
+
+var (
+	ErrSchedulerDisabled  = errors.New("broadcast scheduler is disabled")
+	ErrSchedulerStopped   = errors.New("broadcast scheduler is stopped")
+	ErrManualStop         = errors.New("broadcast manually stopped")
+	ErrInterconnectChange = errors.New("broadcast stopped by interconnect change")
+	ErrServiceShutdown    = errors.New("broadcast stopped by service shutdown")
+)
+
+type RunValidationError struct {
+	Code string
+}
+
+func (e *RunValidationError) Error() string {
+	if e == nil || e.Code == "" {
+		return "broadcast run is no longer valid"
+	}
+	return "broadcast run is no longer valid: " + e.Code
+}
+
+type activeRun struct {
+	groupID int
+	cancel  context.CancelCauseFunc
+}
+
+type Engine struct {
+	config      config.BroadcastConfig
+	repository  RuntimeRepository
+	store       ObjectStore
+	broadcaster Broadcaster
+	instanceID  string
+	now         func() time.Time
+
+	lifecycleMu sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelCauseFunc
+	started     bool
+	stopped     bool
+	wg          sync.WaitGroup
+
+	activeMu sync.Mutex
+	active   map[uint]activeRun
+	slots    chan struct{}
+}
+
+func NewEngine(cfg config.BroadcastConfig, repository RuntimeRepository, store ObjectStore) (*Engine, error) {
+	if !cfg.Enabled {
+		return nil, ErrSchedulerDisabled
+	}
+	if err := cfg.SetDefaults(); err != nil {
+		return nil, err
+	}
+	if repository == nil || store == nil {
+		return nil, errors.New("broadcast scheduler dependencies are incomplete")
+	}
+	hostname, _ := os.Hostname()
+	instanceID := fmt.Sprintf("%s:%d:%d", hostname, os.Getpid(), time.Now().UnixNano())
+	return &Engine{
+		config: cfg, repository: repository, store: store, broadcaster: DefaultBroadcaster{},
+		instanceID: instanceID, now: time.Now, active: make(map[uint]activeRun),
+		slots: make(chan struct{}, cfg.ClaimBatchSize),
+	}, nil
+}
+
+func (e *Engine) Start() error {
+	if e == nil {
+		return errors.New("nil broadcast scheduler")
+	}
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.stopped {
+		return ErrSchedulerStopped
+	}
+	if e.started {
+		return nil
+	}
+	e.ctx, e.cancel = context.WithCancelCause(context.Background())
+	e.started = true
+	e.wg.Add(1)
+	go e.scanLoop()
+	return nil
+}
+
+func (e *Engine) scanLoop() {
+	defer e.wg.Done()
+	ticker := time.NewTicker(time.Duration(e.config.ScanIntervalMS) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := e.scanOnce(e.ctx); err != nil && contextError(e.ctx) == nil {
+			log.Printf("[BROADCAST] scheduler scan failed")
+		}
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Engine) scanOnce(ctx context.Context) error {
+	available := cap(e.slots) - len(e.slots)
+	if available <= 0 {
+		return nil
+	}
+	now := e.now().UTC()
+	recoveryWindow := time.Duration(e.config.RecoveryWindowSeconds) * time.Second
+	recovered, err := e.repository.RecoverExpiredRuns(ctx, now, e.instanceID, RunLeaseDuration, recoveryWindow, available)
+	if err != nil {
+		return err
+	}
+	available -= len(recovered)
+	claimed := make([]model.BroadcastRun, 0, len(recovered)+max(available, 0))
+	claimed = append(claimed, recovered...)
+	if available > 0 {
+		due, claimErr := e.repository.ClaimDue(ctx, now, e.instanceID, RunLeaseDuration, recoveryWindow, available)
+		if claimErr != nil {
+			return claimErr
+		}
+		claimed = append(claimed, due...)
+	}
+	for index := range claimed {
+		e.launch(claimed[index])
+	}
+	return nil
+}
+
+func (e *Engine) launch(run model.BroadcastRun) {
+	select {
+	case e.slots <- struct{}{}:
+	default:
+		return
+	}
+	runCtx, cancel := context.WithCancelCause(e.ctx)
+	e.activeMu.Lock()
+	if _, exists := e.active[run.ID]; exists {
+		e.activeMu.Unlock()
+		cancel(ErrSchedulerStopped)
+		<-e.slots
+		return
+	}
+	e.active[run.ID] = activeRun{groupID: run.SourceGroupID, cancel: cancel}
+	e.activeMu.Unlock()
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		defer func() {
+			e.activeMu.Lock()
+			delete(e.active, run.ID)
+			e.activeMu.Unlock()
+			<-e.slots
+		}()
+		e.executeRun(runCtx, run)
+	}()
+}
+
+func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
+	execution, code, err := e.repository.LoadClaimedExecution(ctx, run.ID, e.instanceID, e.now().UTC())
+	if err != nil {
+		e.finish(run, model.RunStatusFailed, playerSummary{}, nil, LeaseSnapshot{}, "execution_load_failed", "broadcast execution could not be loaded")
+		return
+	}
+	if code != "" {
+		status := model.RunStatusCancelled
+		if code == "virtual_group_broadcast_suspended" {
+			status = model.RunStatusSkippedInterconnected
+		}
+		e.finish(run, status, playerSummary{}, nil, LeaseSnapshot{}, code, "broadcast execution was no longer eligible")
+		return
+	}
+	container, loadCode := e.loadContainer(ctx, execution)
+	if loadCode != "" {
+		e.finish(run, model.RunStatusFailed, playerSummary{}, nil, LeaseSnapshot{}, loadCode, "broadcast playback media is unavailable or invalid")
+		return
+	}
+
+	request := BroadcastRequest{
+		RunID: run.ID, SourceGroupID: run.SourceGroupID,
+		QuietWindow: time.Duration(e.config.QuietWindowSeconds) * time.Second,
+		Container:   container,
+		OnAcquired: func(snapshot LeaseSnapshot) error {
+			code, err := e.repository.MarkRunPlaying(ctx, run.ID, e.instanceID, snapshot.DomainKey, snapshot.DomainGroupIDs, e.now().UTC(), RunLeaseDuration)
+			if err != nil {
+				return err
+			}
+			if code != "" {
+				return &RunValidationError{Code: code}
+			}
+			return nil
+		},
+		Validate: func(validateCtx context.Context) error {
+			code, err := e.repository.ValidateAndRenewRun(validateCtx, run.ID, e.instanceID, e.now().UTC(), RunLeaseDuration)
+			if err != nil {
+				return err
+			}
+			if code != "" {
+				return &RunValidationError{Code: code}
+			}
+			return nil
+		},
+	}
+	outcome, playErr := e.broadcaster.Broadcast(ctx, request)
+	if playErr != nil && outcome.AcquireResult != udphub.ScheduledBroadcastAcquired {
+		status, errorCode := playbackTerminal(ctx, playErr)
+		e.finish(run, status, playerSummary{}, nil, outcome.Snapshot, errorCode, "broadcast playback stopped before acquiring the communication domain")
+		return
+	}
+	if outcome.AcquireResult != udphub.ScheduledBroadcastAcquired {
+		status, errorCode := acquireTerminal(outcome.AcquireResult)
+		var lastVoiceAt *time.Time
+		if !outcome.LastVoiceAt.IsZero() {
+			value := outcome.LastVoiceAt.UTC()
+			lastVoiceAt = &value
+		}
+		e.finish(run, status, playerSummary{}, lastVoiceAt, outcome.Snapshot, errorCode, "scheduled broadcast did not acquire the communication domain")
+		return
+	}
+	summary := playerSummary{
+		playedDurationMS: int(outcome.Playback.PlayedDuration.Milliseconds()),
+		sentPackets:      outcome.Playback.SentPackets, droppedPackets: outcome.Playback.DroppedPackets,
+		endedAt: outcome.Playback.EndedAt,
+	}
+	if playErr == nil {
+		e.finish(run, model.RunStatusSucceeded, summary, nil, outcome.Snapshot, "", "")
+		return
+	}
+	status, errorCode := playbackTerminal(ctx, playErr)
+	e.finish(run, status, summary, nil, outcome.Snapshot, errorCode, "broadcast playback stopped before normal completion")
+}
+
+func (e *Engine) loadContainer(ctx context.Context, execution *core.RunExecution) (*media.Container, string) {
+	if execution == nil || execution.Audio.PlaybackSize <= 0 || strings.TrimSpace(execution.Audio.PlaybackObjectKey) == "" {
+		return nil, "playback_metadata_invalid"
+	}
+	reader, err := e.store.Open(ctx, execution.Audio.PlaybackObjectKey)
+	if err != nil {
+		return nil, "playback_object_unavailable"
+	}
+	container, readErr := media.ReadContainer(reader, execution.Audio.PlaybackSize)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, "playback_container_invalid"
+	}
+	if container.Metadata.Size != execution.Audio.PlaybackSize ||
+		container.Metadata.DurationMS != execution.Audio.DurationMS ||
+		container.Metadata.PacketCount != execution.Audio.PacketCount {
+		return nil, "playback_metadata_mismatch"
+	}
+	return container, ""
+}
+
+type playerSummary struct {
+	playedDurationMS int
+	sentPackets      int
+	droppedPackets   int
+	endedAt          time.Time
+}
+
+func (e *Engine) finish(run model.BroadcastRun, status string, summary playerSummary, lastVoiceAt *time.Time, snapshot LeaseSnapshot, errorCode, errorMessage string) {
+	endedAt := summary.endedAt
+	if endedAt.IsZero() {
+		endedAt = e.now()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), finalizeTimeout)
+	defer cancel()
+	if err := e.repository.FinishRun(
+		ctx, run.ID, e.instanceID, status, endedAt.UTC(), summary.playedDurationMS,
+		summary.sentPackets, summary.droppedPackets, lastVoiceAt,
+		snapshot.DomainKey, snapshot.DomainGroupIDs, errorCode, errorMessage,
+	); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("[BROADCAST] finalize run failed: run_id=%d status=%s", run.ID, status)
+	}
+}
+
+func acquireTerminal(result udphub.ScheduledBroadcastAcquireResult) (string, string) {
+	switch result {
+	case udphub.ScheduledBroadcastRecentVoice:
+		return model.RunStatusSkippedRecentVoice, "recent_voice"
+	case udphub.ScheduledBroadcastDomainBusy:
+		return model.RunStatusSkippedDomainBusy, "domain_busy"
+	default:
+		return model.RunStatusFailed, "invalid_communication_domain"
+	}
+}
+
+func playbackTerminal(ctx context.Context, err error) (string, string) {
+	var validation *RunValidationError
+	if errors.As(err, &validation) {
+		if validation.Code == "virtual_group_broadcast_suspended" {
+			return model.RunStatusCancelledInterconnectEnabled, validation.Code
+		}
+		return model.RunStatusCancelled, validation.Code
+	}
+	cause := context.Cause(ctx)
+	switch {
+	case errors.Is(cause, ErrInterconnectChange):
+		return model.RunStatusCancelledInterconnectEnabled, "interconnect_changed"
+	case errors.Is(cause, ErrManualStop):
+		return model.RunStatusCancelled, "manual_stop"
+	case errors.Is(cause, ErrServiceShutdown):
+		return model.RunStatusCancelled, "service_shutdown"
+	case errors.Is(err, udphub.ErrBroadcastLeaseLost):
+		return model.RunStatusCancelled, "communication_domain_changed"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return model.RunStatusCancelled, "playback_cancelled"
+	default:
+		return model.RunStatusFailed, "playback_failed"
+	}
+}
+
+func (e *Engine) CancelRun(runID uint, cause error) bool {
+	if cause == nil {
+		cause = ErrManualStop
+	}
+	e.activeMu.Lock()
+	active, ok := e.active[runID]
+	e.activeMu.Unlock()
+	if ok {
+		active.cancel(cause)
+	}
+	return ok
+}
+
+func (e *Engine) CancelGroups(groupIDs []int, cause error) int {
+	set := make(map[int]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if groupID > 0 {
+			set[groupID] = struct{}{}
+		}
+	}
+	e.activeMu.Lock()
+	cancels := make([]context.CancelCauseFunc, 0)
+	for _, active := range e.active {
+		if _, ok := set[active.groupID]; ok {
+			cancels = append(cancels, active.cancel)
+		}
+	}
+	e.activeMu.Unlock()
+	for _, cancel := range cancels {
+		cancel(cause)
+	}
+	return len(cancels)
+}
+
+func (e *Engine) Stop(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
+	e.lifecycleMu.Lock()
+	if e.stopped {
+		e.lifecycleMu.Unlock()
+		return nil
+	}
+	e.stopped = true
+	if e.cancel != nil {
+		e.cancel(ErrServiceShutdown)
+	}
+	e.lifecycleMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func contextError(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}

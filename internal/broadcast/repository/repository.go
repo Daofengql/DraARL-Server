@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -28,6 +29,8 @@ var (
 	ErrPolicySourceNotMember  = errors.New("virtual group broadcast source is not a member")
 	ErrVirtualGroupRequired   = errors.New("virtual group is required")
 	ErrManualTriggerSuspended = errors.New("virtual group broadcast suspended")
+	ErrRunLeaseLost           = errors.New("broadcast run lease lost")
+	ErrRunNotRunnable         = errors.New("broadcast run is not runnable")
 )
 
 type Repository struct {
@@ -258,6 +261,305 @@ func (r *Repository) GetRun(ctx context.Context, groupID int, runID uint) (*mode
 		return nil, ErrNotFound
 	}
 	return &run, err
+}
+
+// ClaimDue atomically advances each due schedule and creates at most one run
+// for its current theoretical occurrence. SKIP LOCKED permits multiple centre
+// workers during rolling upgrades while the unique occurrence key remains the
+// final duplicate-execution guard.
+func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy string, leaseDuration, recoveryWindow time.Duration, limit int) ([]model.BroadcastRun, error) {
+	claimedBy = strings.TrimSpace(claimedBy)
+	if claimedBy == "" || leaseDuration <= 0 || recoveryWindow < 0 || limit <= 0 {
+		return nil, ErrInvalidSchedule
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	now = now.UTC()
+	leaseUntil := now.Add(leaseDuration)
+	claimed := make([]model.BroadcastRun, 0, limit)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var schedules []model.BroadcastSchedule
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("enabled = ? AND suspended_reason = '' AND next_run_at IS NOT NULL AND next_run_at <= ?", true, now).
+			Order("next_run_at ASC, id ASC").Limit(limit).Find(&schedules).Error; err != nil {
+			return err
+		}
+		for index := range schedules {
+			schedule := &schedules[index]
+			scheduledFor := schedule.NextRunAt.UTC()
+			if err := advanceClaimedSchedule(tx, schedule, now); err != nil {
+				return err
+			}
+			run := model.BroadcastRun{
+				ScheduleID: schedule.ID, AudioID: schedule.AudioID, SourceGroupID: schedule.GroupID,
+				ScheduledFor: scheduledFor, Status: model.RunStatusClaimed,
+				ClaimedBy: claimedBy, LeaseUntil: &leaseUntil,
+			}
+			if scheduledFor.Before(now.Add(-recoveryWindow)) {
+				run.Status = model.RunStatusFailed
+				run.ClaimedBy = ""
+				run.LeaseUntil = nil
+				run.EndedAt = &now
+				run.ErrorCode = "recovery_window_expired"
+				run.ErrorMessage = "scheduled occurrence exceeded the recovery window"
+			}
+			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&run)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 1 && run.Status == model.RunStatusClaimed {
+				claimed = append(claimed, run)
+			}
+		}
+		return nil
+	})
+	return claimed, err
+}
+
+func advanceClaimedSchedule(tx *gorm.DB, schedule *model.BroadcastSchedule, now time.Time) error {
+	if schedule.ScheduleType == model.ScheduleTypeOnce {
+		schedule.Enabled = false
+		schedule.NextRunAt = nil
+	} else {
+		next, err := scheduler.NextOccurrence(schedule, now)
+		if err != nil || next == nil {
+			if err == nil {
+				err = errors.New("schedule has no future occurrence")
+			}
+			return fmt.Errorf("%w: %v", ErrInvalidSchedule, err)
+		}
+		schedule.NextRunAt = next
+	}
+	return tx.Model(&model.BroadcastSchedule{}).Where("id = ?", schedule.ID).Updates(map[string]any{
+		"enabled": schedule.Enabled, "next_run_at": schedule.NextRunAt,
+	}).Error
+}
+
+// RecoverExpiredRuns never replays a run that had entered playing. Claimed
+// runs may be transferred only while their theoretical occurrence remains in
+// the bounded recovery window.
+func (r *Repository) RecoverExpiredRuns(ctx context.Context, now time.Time, claimedBy string, leaseDuration, recoveryWindow time.Duration, limit int) ([]model.BroadcastRun, error) {
+	claimedBy = strings.TrimSpace(claimedBy)
+	if claimedBy == "" || leaseDuration <= 0 || recoveryWindow < 0 || limit <= 0 {
+		return nil, ErrInvalidSchedule
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	now = now.UTC()
+	leaseUntil := now.Add(leaseDuration)
+	recovered := make([]model.BroadcastRun, 0, limit)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.BroadcastRun{}).
+			Where("status = ? AND (lease_until IS NULL OR lease_until <= ?)", model.RunStatusPlaying, now).
+			Updates(map[string]any{
+				"status": model.RunStatusFailed, "ended_at": now, "claimed_by": "", "lease_until": nil,
+				"error_code": "worker_lost_during_playback", "error_message": "playback worker lease expired",
+			}).Error; err != nil {
+			return err
+		}
+		var runs []model.BroadcastRun
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("status = ? AND (lease_until IS NULL OR lease_until <= ?)", model.RunStatusClaimed, now).
+			Order("scheduled_for ASC, id ASC").Limit(limit).Find(&runs).Error; err != nil {
+			return err
+		}
+		for index := range runs {
+			run := &runs[index]
+			if run.ScheduledFor.Before(now.Add(-recoveryWindow)) {
+				if err := tx.Model(run).Updates(map[string]any{
+					"status": model.RunStatusFailed, "ended_at": now, "claimed_by": "", "lease_until": nil,
+					"error_code": "recovery_window_expired", "error_message": "claimed run exceeded the recovery window",
+				}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if err := tx.Model(run).Updates(map[string]any{"claimed_by": claimedBy, "lease_until": leaseUntil}).Error; err != nil {
+				return err
+			}
+			run.ClaimedBy, run.LeaseUntil = claimedBy, &leaseUntil
+			recovered = append(recovered, *run)
+		}
+		return nil
+	})
+	return recovered, err
+}
+
+func (r *Repository) LoadClaimedExecution(ctx context.Context, runID uint, claimedBy string, now time.Time) (*scheduler.RunExecution, string, error) {
+	var execution scheduler.RunExecution
+	code := ""
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		execution, err = loadRunExecution(tx, runID)
+		if err != nil {
+			return err
+		}
+		code, err = validateExecutionEligibility(tx, &execution, claimedBy, now.UTC())
+		return err
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if code != "" {
+		return nil, code, nil
+	}
+	return &execution, "", nil
+}
+
+func loadRunExecution(tx *gorm.DB, runID uint) (scheduler.RunExecution, error) {
+	var execution scheduler.RunExecution
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&execution.Run, runID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return execution, ErrNotFound
+		}
+		return execution, err
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Schedule, execution.Run.ScheduleID).Error; err != nil {
+		return execution, err
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Audio, execution.Run.AudioID).Error; err != nil {
+		return execution, err
+	}
+	return execution, nil
+}
+
+func validateExecutionEligibility(tx *gorm.DB, execution *scheduler.RunExecution, claimedBy string, now time.Time) (string, error) {
+	if execution == nil || execution.Run.ClaimedBy != claimedBy || execution.Run.LeaseUntil == nil || !execution.Run.LeaseUntil.After(now) ||
+		(execution.Run.Status != model.RunStatusClaimed && execution.Run.Status != model.RunStatusPlaying) {
+		return "run_lease_lost", nil
+	}
+	schedule, audio := &execution.Schedule, &execution.Audio
+	if !schedule.Enabled {
+		return "schedule_disabled", nil
+	}
+	if schedule.SuspendedReason != "" {
+		return "virtual_group_broadcast_suspended", nil
+	}
+	var group gormdb.Group
+	if err := tx.First(&group, execution.Run.SourceGroupID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "group_unavailable", nil
+		}
+		return "", err
+	}
+	if group.Status != 1 || group.IsVirtual || (group.Type != 1 && group.Type != 2) {
+		return "group_unavailable", nil
+	}
+	if schedule.GroupID != execution.Run.SourceGroupID || schedule.AudioID != execution.Run.AudioID ||
+		audio.GroupID != execution.Run.SourceGroupID || audio.Status != model.AudioStatusReady || strings.TrimSpace(audio.PlaybackObjectKey) == "" {
+		return "audio_unavailable", nil
+	}
+	policy, err := activePolicyForEntityGroup(tx, execution.Run.SourceGroupID)
+	if err != nil {
+		return "", err
+	}
+	if policy != nil && (policy.Mode != model.PolicyAllowSingleSource || policy.AllowedSourceGroupID == nil || *policy.AllowedSourceGroupID != execution.Run.SourceGroupID) {
+		return "virtual_group_broadcast_suspended", nil
+	}
+	return "", nil
+}
+
+func (r *Repository) MarkRunPlaying(ctx context.Context, runID uint, claimedBy, domainKey string, domainGroupIDs []int, now time.Time, leaseDuration time.Duration) (string, error) {
+	now = now.UTC()
+	domainJSON, err := json.Marshal(SortedUniqueGroupIDs(domainGroupIDs))
+	if err != nil {
+		return "", err
+	}
+	code := ""
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		execution, loadErr := loadRunExecution(tx, runID)
+		if loadErr != nil {
+			return loadErr
+		}
+		code, loadErr = validateExecutionEligibility(tx, &execution, claimedBy, now)
+		if loadErr != nil || code != "" {
+			return loadErr
+		}
+		if execution.Run.Status != model.RunStatusClaimed {
+			code = "run_lease_lost"
+			return nil
+		}
+		result := tx.Model(&model.BroadcastRun{}).
+			Where("id = ? AND status = ? AND claimed_by = ?", runID, model.RunStatusClaimed, claimedBy).
+			Updates(map[string]any{
+				"status": model.RunStatusPlaying, "started_at": now, "lease_until": now.Add(leaseDuration),
+				"domain_key": strings.TrimSpace(domainKey), "domain_group_ids": string(domainJSON),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			code = "run_lease_lost"
+		}
+		return nil
+	})
+	return code, err
+}
+
+// ValidateAndRenewRun is called before every paced packet. The transaction
+// closes the validation/renewal window against schedule and group mutations.
+func (r *Repository) ValidateAndRenewRun(ctx context.Context, runID uint, claimedBy string, now time.Time, leaseDuration time.Duration) (string, error) {
+	now = now.UTC()
+	code := ""
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		execution, err := loadRunExecution(tx, runID)
+		if err != nil {
+			return err
+		}
+		code, err = validateExecutionEligibility(tx, &execution, claimedBy, now)
+		if err != nil || code != "" {
+			return err
+		}
+		if execution.Run.Status != model.RunStatusPlaying {
+			code = "run_lease_lost"
+			return nil
+		}
+		result := tx.Model(&model.BroadcastRun{}).
+			Where("id = ? AND status = ? AND claimed_by = ?", runID, model.RunStatusPlaying, claimedBy).
+			Update("lease_until", now.Add(leaseDuration))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			code = "run_lease_lost"
+		}
+		return nil
+	})
+	return code, err
+}
+
+func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, status string, endedAt time.Time, playedDurationMS, sentPackets, droppedPackets int, lastVoiceAt *time.Time, domainKey string, domainGroupIDs []int, errorCode, errorMessage string) error {
+	if runID == 0 || strings.TrimSpace(claimedBy) == "" || status == "" {
+		return ErrRunLeaseLost
+	}
+	values := map[string]any{
+		"status": status, "ended_at": endedAt.UTC(), "played_duration_ms": max(playedDurationMS, 0),
+		"sent_packets": max(sentPackets, 0), "dropped_packets": max(droppedPackets, 0),
+		"claimed_by": "", "lease_until": nil, "error_code": truncate(strings.TrimSpace(errorCode), 64),
+		"error_message": truncate(strings.TrimSpace(errorMessage), 500), "last_voice_at": lastVoiceAt,
+	}
+	if strings.TrimSpace(domainKey) != "" {
+		values["domain_key"] = strings.TrimSpace(domainKey)
+	}
+	if domainGroupIDs != nil {
+		domainJSON, err := json.Marshal(SortedUniqueGroupIDs(domainGroupIDs))
+		if err != nil {
+			return err
+		}
+		values["domain_group_ids"] = string(domainJSON)
+	}
+	result := r.db.WithContext(ctx).Model(&model.BroadcastRun{}).
+		Where("id = ? AND claimed_by = ? AND status IN ?", runID, claimedBy, []string{model.RunStatusClaimed, model.RunStatusPlaying}).
+		Updates(values)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrRunLeaseLost
+	}
+	return nil
 }
 
 func (r *Repository) GetPolicy(ctx context.Context, virtualGroupID int) (*model.VirtualGroupBroadcastPolicy, error) {

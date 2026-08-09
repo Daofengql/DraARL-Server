@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"draarl/internal/broadcast/model"
 	"draarl/internal/gormdb"
+
+	"gorm.io/gorm"
 )
 
 func TestRepositorySchedulePolicyMySQL(t *testing.T) {
@@ -158,6 +161,182 @@ func TestRepositorySupportsMultipleSchedulesWithSameAndDifferentAudioMySQL(t *te
 	}
 }
 
+func TestRepositoryClaimsAndAdvancesIndependentSchedulesMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	audioA := createReadyAudio(t, repo, owner.ID, groups.a.ID, "claim-shared")
+	audioB := createReadyAudio(t, repo, owner.ID, groups.a.ID, "claim-alternate")
+	now := time.Date(2026, 8, 9, 5, 0, 0, 0, time.UTC)
+	schedules := make([]*model.BroadcastSchedule, 0, 12)
+	for index := 0; index < 12; index++ {
+		audioID := audioA.ID
+		if index%3 == 0 {
+			audioID = audioB.ID
+		}
+		schedule := &model.BroadcastSchedule{
+			GroupID: groups.a.ID, AudioID: audioID, Name: fmt.Sprintf("claim-%d", index),
+			ScheduleType: model.ScheduleTypeDaily, Timezone: "Asia/Shanghai", LocalTime: "13:30:00",
+			Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+		}
+		if err := repo.SaveSchedule(ctx, schedule, now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		due := now.Add(-time.Second)
+		if err := repo.DB().Model(schedule).Update("next_run_at", due).Error; err != nil {
+			t.Fatal(err)
+		}
+		schedules = append(schedules, schedule)
+	}
+
+	var wg sync.WaitGroup
+	claimedCh := make(chan []model.BroadcastRun, 8)
+	errCh := make(chan error, 8)
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			claimed, err := repo.ClaimDue(ctx, now, fmt.Sprintf("worker-%d", worker), 5*time.Second, 10*time.Second, 12)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			claimedCh <- claimed
+		}(worker)
+	}
+	wg.Wait()
+	close(claimedCh)
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimedBySchedule := make(map[uint]model.BroadcastRun)
+	for batch := range claimedCh {
+		for _, run := range batch {
+			if _, duplicate := claimedBySchedule[run.ScheduleID]; duplicate {
+				t.Fatalf("schedule %d was claimed twice", run.ScheduleID)
+			}
+			claimedBySchedule[run.ScheduleID] = run
+		}
+	}
+	if len(claimedBySchedule) != len(schedules) {
+		t.Fatalf("claimed schedules=%d want=%d", len(claimedBySchedule), len(schedules))
+	}
+	for _, schedule := range schedules {
+		var stored model.BroadcastSchedule
+		if err := repo.DB().First(&stored, schedule.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.NextRunAt == nil || !stored.NextRunAt.After(now) || !stored.Enabled {
+			t.Fatalf("schedule was not advanced to the future: %#v", stored)
+		}
+		if run := claimedBySchedule[schedule.ID]; run.AudioID != schedule.AudioID || !run.ScheduledFor.Equal(now.Add(-time.Second)) {
+			t.Fatalf("independent run mismatch: %#v", run)
+		}
+	}
+	if duplicate, err := repo.ClaimDue(ctx, now, "late-worker", 5*time.Second, 10*time.Second, 100); err != nil || len(duplicate) != 0 {
+		t.Fatalf("second claim=%d err=%v", len(duplicate), err)
+	}
+}
+
+func TestRepositoryRecoveryWindowAndRunLeaseMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	audio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "recovery-audio")
+	now := time.Date(2026, 8, 9, 6, 0, 0, 0, time.UTC)
+
+	onceAt := now.Add(time.Hour)
+	once := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audio.ID, Name: "stale-once", ScheduleType: model.ScheduleTypeOnce,
+		Timezone: "UTC", ScheduledAt: &onceAt, Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	if err := repo.SaveSchedule(ctx, once, now); err != nil {
+		t.Fatal(err)
+	}
+	staleAt := now.Add(-11 * time.Second)
+	if err := repo.DB().Model(once).Update("next_run_at", staleAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimDue(ctx, now, "worker-a", 5*time.Second, 10*time.Second, 10)
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("stale once claim=%d err=%v", len(claimed), err)
+	}
+	var storedOnce model.BroadcastSchedule
+	if err := repo.DB().First(&storedOnce, once.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOnce.Enabled || storedOnce.NextRunAt != nil {
+		t.Fatalf("stale once schedule remained active: %#v", storedOnce)
+	}
+	var staleRun model.BroadcastRun
+	if err := repo.DB().Where("schedule_id = ? AND scheduled_for = ?", once.ID, staleAt).First(&staleRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	if staleRun.Status != model.RunStatusFailed || staleRun.ErrorCode != "recovery_window_expired" {
+		t.Fatalf("stale run=%#v", staleRun)
+	}
+
+	daily := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audio.ID, Name: "recover-daily", ScheduleType: model.ScheduleTypeDaily,
+		Timezone: "UTC", LocalTime: "07:00:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	if err := repo.SaveSchedule(ctx, daily, now); err != nil {
+		t.Fatal(err)
+	}
+	expiredLease := now.Add(-time.Second)
+	runs := []model.BroadcastRun{
+		{ScheduleID: daily.ID, AudioID: audio.ID, SourceGroupID: groups.a.ID, ScheduledFor: now.Add(-5 * time.Second), Status: model.RunStatusClaimed, ClaimedBy: "dead-a", LeaseUntil: &expiredLease},
+		{ScheduleID: daily.ID, AudioID: audio.ID, SourceGroupID: groups.a.ID, ScheduledFor: now.Add(-20 * time.Second), Status: model.RunStatusClaimed, ClaimedBy: "dead-b", LeaseUntil: &expiredLease},
+		{ScheduleID: daily.ID, AudioID: audio.ID, SourceGroupID: groups.a.ID, ScheduledFor: now.Add(-4 * time.Second), Status: model.RunStatusPlaying, ClaimedBy: "dead-c", LeaseUntil: &expiredLease},
+	}
+	if err := repo.DB().Create(&runs).Error; err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := repo.RecoverExpiredRuns(ctx, now, "worker-b", 5*time.Second, 10*time.Second, 10)
+	if err != nil || len(recovered) != 1 || recovered[0].ID != runs[0].ID {
+		t.Fatalf("recovered=%#v err=%v", recovered, err)
+	}
+	var staleClaim, crashedPlaying model.BroadcastRun
+	if err := repo.DB().First(&staleClaim, runs[1].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DB().First(&crashedPlaying, runs[2].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if staleClaim.Status != model.RunStatusFailed || staleClaim.ErrorCode != "recovery_window_expired" ||
+		crashedPlaying.Status != model.RunStatusFailed || crashedPlaying.ErrorCode != "worker_lost_during_playback" {
+		t.Fatalf("recovery terminal states stale=%#v playing=%#v", staleClaim, crashedPlaying)
+	}
+
+	execution, code, err := repo.LoadClaimedExecution(ctx, runs[0].ID, "worker-b", now)
+	if err != nil || code != "" || execution.Audio.ID != audio.ID {
+		t.Fatalf("load execution=%#v code=%q err=%v", execution, code, err)
+	}
+	if code, err := repo.MarkRunPlaying(ctx, runs[0].ID, "worker-b", "1,2", []int{groups.b.ID, groups.a.ID, groups.a.ID}, now, 5*time.Second); err != nil || code != "" {
+		t.Fatalf("mark playing code=%q err=%v", code, err)
+	}
+	if code, err := repo.ValidateAndRenewRun(ctx, runs[0].ID, "worker-b", now.Add(time.Second), 5*time.Second); err != nil || code != "" {
+		t.Fatalf("validate active run code=%q err=%v", code, err)
+	}
+	if err := repo.DB().Model(daily).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if code, err := repo.ValidateAndRenewRun(ctx, runs[0].ID, "worker-b", now.Add(2*time.Second), 5*time.Second); err != nil || code != "schedule_disabled" {
+		t.Fatalf("validate disabled schedule code=%q err=%v", code, err)
+	}
+	if err := repo.FinishRun(ctx, runs[0].ID, "worker-b", model.RunStatusCancelled, now.Add(2*time.Second), 120, 1, 0, nil, "1,2", []int{groups.a.ID, groups.b.ID}, "schedule_disabled", "schedule disabled during playback"); err != nil {
+		t.Fatal(err)
+	}
+	var finished model.BroadcastRun
+	if err := repo.DB().First(&finished, runs[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if finished.Status != model.RunStatusCancelled || finished.PlayedDurationMS != 120 || finished.SentPackets != 1 || finished.ClaimedBy != "" || finished.LeaseUntil != nil || len(finished.DomainGroupIDs) != 2 || finished.DomainGroupIDs[0] != groups.a.ID {
+		t.Fatalf("finished run=%#v", finished)
+	}
+}
+
 type repositoryGroups struct {
 	a       *gormdb.Group
 	b       *gormdb.Group
@@ -180,6 +359,13 @@ func setupRepositoryMySQL(t *testing.T) (*Repository, *gormdb.User, repositoryGr
 	t.Cleanup(func() { _ = gormdb.Close() })
 	if err := gormdb.AutoMigrate(); err != nil {
 		t.Fatal(err)
+	}
+	// ClaimDue intentionally scans the whole site. Isolate each E2E scenario
+	// from due schedules left by earlier tests in the shared test database.
+	for _, value := range []any{&model.BroadcastRun{}, &model.BroadcastSchedule{}, &model.BroadcastAudio{}} {
+		if err := gormdb.Get().Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(value).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	stamp := time.Now().UnixNano()

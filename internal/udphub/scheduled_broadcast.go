@@ -27,8 +27,22 @@ type ScheduledBroadcastLease struct {
 	closed         atomic.Bool
 }
 
+func (lease *ScheduledBroadcastLease) DomainKey() string {
+	if lease == nil {
+		return ""
+	}
+	return lease.domainKey
+}
+
 func scheduledBroadcastSpeakerKey(runID uint) uint64 {
 	return 0x9000000000000000 | (uint64(runID) & 0x0fffffffffffffff)
+}
+
+func GetActiveCommunicationDomainKey(sourceGroupID int) string {
+	if GetActiveCommunicationDomainID(sourceGroupID) == 0 {
+		return ""
+	}
+	return getHalfDuplexDomainKey(sourceGroupID)
 }
 
 // TryAcquireScheduledBroadcast performs a quiet check, reserves the current

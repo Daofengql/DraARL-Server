@@ -1,6 +1,6 @@
 ﻿# DraARL Server API 文档（客户端对接版）
 
-> 对应 DraARL Server `v2.0.0-alpha4`，基于当前代码实现整理
+> 对应 DraARL Server `v2.0.0-alpha5`，基于当前代码实现整理
 > （`internal/server/server.go` + `internal/handler/*` + `pkg/websocket/*`）。
 
 ## 文档目录

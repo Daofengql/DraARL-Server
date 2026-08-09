@@ -19,6 +19,81 @@ type VirtualGroupMutation struct {
 	CancelGroupIDs []int
 }
 
+type VirtualGroupFields struct {
+	Name   *string
+	Note   *string
+	Status *int
+}
+
+func (r *Repository) CreateVirtualGroup(ctx context.Context, group *gormdb.Group, targetGroupIDs []int, policy *model.VirtualGroupBroadcastPolicy, now time.Time) (*VirtualGroupMutation, error) {
+	if group == nil || !group.IsVirtual || group.OwerID <= 0 || (group.Status != 0 && group.Status != 1) ||
+		policy == nil || policy.UpdatedBy <= 0 || !model.IsPolicyMode(policy.Mode) {
+		return nil, ErrInvalidPolicy
+	}
+	now = now.UTC()
+	memberIDs := SortedUniqueGroupIDs(targetGroupIDs)
+	mutation := &VirtualGroupMutation{MemberGroupIDs: memberIDs}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockEntityGroups(tx, memberIDs); err != nil {
+			return err
+		}
+		if len(memberIDs) != 0 {
+			var enabledCount int64
+			if err := tx.Model(&gormdb.Group{}).Where("id IN ? AND status = 1", memberIDs).Count(&enabledCount).Error; err != nil {
+				return err
+			}
+			if enabledCount != int64(len(memberIDs)) {
+				return ErrInvalidEntityGroup
+			}
+			var occupied int64
+			if err := tx.Model(&gormdb.GroupLink{}).Where("target_group_id IN ?", memberIDs).Count(&occupied).Error; err != nil {
+				return err
+			}
+			if occupied != 0 {
+				return gormdb.ErrTargetGroupAlreadyLinked
+			}
+		}
+		if err := normalizeAndValidatePolicy(tx, policy, memberIDs); err != nil {
+			return err
+		}
+		desiredStatus := group.Status
+		if err := tx.Select("name", "type", "password", "ower_id", "note", "status", "is_virtual").Create(group).Error; err != nil {
+			return err
+		}
+		if group.Status != desiredStatus {
+			if err := tx.Model(group).Update("status", desiredStatus).Error; err != nil {
+				return err
+			}
+			group.Status = desiredStatus
+		}
+		if len(memberIDs) != 0 {
+			links := make([]gormdb.GroupLink, len(memberIDs))
+			for index, targetGroupID := range memberIDs {
+				links[index] = gormdb.GroupLink{LinkGroupID: group.ID, TargetGroupID: targetGroupID}
+			}
+			if err := tx.Create(&links).Error; err != nil {
+				return err
+			}
+		}
+		policy.VirtualGroupID = group.ID
+		if err := tx.Create(policy).Error; err != nil {
+			return err
+		}
+		if group.Status != 1 {
+			return nil
+		}
+		if err := applyActiveVirtualGroupPolicy(tx, group.ID, memberIDs, policy, now); err != nil {
+			return err
+		}
+		if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+			return err
+		}
+		mutation.CancelGroupIDs = memberIDs
+		return nil
+	})
+	return mutation, err
+}
+
 func (r *Repository) UpdateVirtualGroupPolicy(ctx context.Context, policy *model.VirtualGroupBroadcastPolicy, now time.Time) (*VirtualGroupMutation, error) {
 	if policy == nil || policy.VirtualGroupID <= 0 || policy.UpdatedBy <= 0 || !model.IsPolicyMode(policy.Mode) {
 		return nil, ErrInvalidPolicy
@@ -53,7 +128,11 @@ func (r *Repository) UpdateVirtualGroupPolicy(ctx context.Context, policy *model
 }
 
 func (r *Repository) SetVirtualGroupStatus(ctx context.Context, virtualGroupID, status int, now time.Time) (*VirtualGroupMutation, error) {
-	if virtualGroupID <= 0 || (status != 0 && status != 1) {
+	return r.UpdateVirtualGroup(ctx, virtualGroupID, VirtualGroupFields{Status: &status}, now)
+}
+
+func (r *Repository) UpdateVirtualGroup(ctx context.Context, virtualGroupID int, fields VirtualGroupFields, now time.Time) (*VirtualGroupMutation, error) {
+	if virtualGroupID <= 0 || (fields.Status != nil && *fields.Status != 0 && *fields.Status != 1) {
 		return nil, ErrVirtualGroupRequired
 	}
 	now = now.UTC()
@@ -64,10 +143,8 @@ func (r *Repository) SetVirtualGroupStatus(ctx context.Context, virtualGroupID, 
 			return err
 		}
 		mutation.MemberGroupIDs = memberIDs
-		if group.Status == status {
-			return nil
-		}
-		if status == 1 {
+		statusChanged := fields.Status != nil && group.Status != *fields.Status
+		if statusChanged && *fields.Status == 1 {
 			policy, err := loadPolicyForUpdate(tx, virtualGroupID)
 			if err != nil {
 				return err
@@ -82,10 +159,27 @@ func (r *Repository) SetVirtualGroupStatus(ctx context.Context, virtualGroupID, 
 				return err
 			}
 			mutation.CancelGroupIDs = memberIDs
-			return tx.Model(group).Update("status", status).Error
 		}
-		if err := tx.Model(group).Update("status", status).Error; err != nil {
-			return err
+		updates := make(map[string]any)
+		if fields.Name != nil {
+			updates["name"] = *fields.Name
+			group.Name = *fields.Name
+		}
+		if fields.Note != nil {
+			updates["note"] = *fields.Note
+			group.Note = *fields.Note
+		}
+		if fields.Status != nil {
+			updates["status"] = *fields.Status
+			group.Status = *fields.Status
+		}
+		if len(updates) != 0 {
+			if err := tx.Model(group).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		if !statusChanged || *fields.Status == 1 {
+			return nil
 		}
 		if err := restoreSchedulesForVirtualGroup(tx, virtualGroupID, memberIDs, now); err != nil {
 			return err

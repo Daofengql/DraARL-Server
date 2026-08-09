@@ -313,6 +313,7 @@ func (s *Server) setupRoutes() {
 			admin.GET("/group-links/:id/targets", handler.GetGroupLinkTargets)
 			admin.POST("/group-links/:id/targets", handler.AddGroupLinkTarget)
 			admin.DELETE("/group-links/:id/targets/:targetId", handler.RemoveGroupLinkTarget)
+			admin.PUT("/group-links/:id/broadcast-policy", handler.UpdateVirtualGroupBroadcastPolicy)
 
 			// 中继台和服务器（需要管理员权限）
 			admin.GET("/relays", handler.GetRelays)

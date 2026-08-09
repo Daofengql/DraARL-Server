@@ -237,7 +237,7 @@ func (p *Processor) probe(ctx context.Context, inputPath string) (probeResult, e
 	var stdout bytes.Buffer
 	stderr := &limitedBuffer{limit: 8192}
 	command.Stdout, command.Stderr = &stdout, stderr
-	if err := command.Run(); err != nil {
+	if err := p.runCommand(command); err != nil {
 		return probeResult{}, fmt.Errorf("%w: ffprobe: %v: %s", ErrMediaProcess, err, stderr.String())
 	}
 	if stdout.Len() > 64*1024 {
@@ -286,10 +286,22 @@ func (p *Processor) transcode(ctx context.Context, inputPath, outputPath string)
 	)
 	stderr := &limitedBuffer{limit: 8192}
 	command.Stdout, command.Stderr = io.Discard, stderr
-	if err := command.Run(); err != nil {
+	if err := p.runCommand(command); err != nil {
 		return fmt.Errorf("%w: ffmpeg: %v: %s", ErrMediaProcess, err, stderr.String())
 	}
 	return nil
+}
+
+func (p *Processor) runCommand(command *exec.Cmd) error {
+	if err := command.Start(); err != nil {
+		return err
+	}
+	if err := applyMediaProcessLimits(command.Process.Pid, p.config.TranscodeMemoryLimitMB, p.config.TranscodeCPULimitSeconds); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return err
+	}
+	return command.Wait()
 }
 
 func safeProcessingMessage(err error) string {

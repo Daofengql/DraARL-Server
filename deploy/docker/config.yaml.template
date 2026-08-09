@@ -52,6 +52,8 @@ Broadcast:
   MaxAudioDurationSeconds: 30
   MaxUploadBytes: 20971520
   TranscodeTimeoutSeconds: 90
+  TranscodeMemoryLimitMB: 512
+  TranscodeCPULimitSeconds: 60
   ScanIntervalMS: 1000
   RecoveryWindowSeconds: 10
   ClaimBatchSize: 20

@@ -158,23 +158,27 @@ type MessageAPIConfig struct {
 }
 
 const (
-	DefaultBroadcastQuietWindowSeconds = 5
-	DefaultBroadcastMaxDurationSeconds = 30
-	MaxBroadcastDurationSeconds        = 60
-	DefaultBroadcastMaxUploadBytes     = 20 * 1024 * 1024
+	DefaultBroadcastQuietWindowSeconds  = 5
+	DefaultBroadcastMaxDurationSeconds  = 30
+	MaxBroadcastDurationSeconds         = 60
+	DefaultBroadcastMaxUploadBytes      = 20 * 1024 * 1024
+	DefaultBroadcastTranscodeMemoryMB   = 512
+	DefaultBroadcastTranscodeCPUSeconds = 60
 )
 
 type BroadcastConfig struct {
-	Enabled                 bool   `yaml:"Enabled" json:"enabled"`
-	QuietWindowSeconds      int    `yaml:"QuietWindowSeconds" json:"quiet_window_seconds"`
-	MaxAudioDurationSeconds int    `yaml:"MaxAudioDurationSeconds" json:"max_audio_duration_seconds"`
-	MaxUploadBytes          int64  `yaml:"MaxUploadBytes" json:"max_upload_bytes"`
-	TranscodeTimeoutSeconds int    `yaml:"TranscodeTimeoutSeconds" json:"transcode_timeout_seconds"`
-	ScanIntervalMS          int    `yaml:"ScanIntervalMS" json:"scan_interval_ms"`
-	RecoveryWindowSeconds   int    `yaml:"RecoveryWindowSeconds" json:"recovery_window_seconds"`
-	ClaimBatchSize          int    `yaml:"ClaimBatchSize" json:"claim_batch_size"`
-	FFmpegPath              string `yaml:"FFmpegPath" json:"ffmpeg_path"`
-	FFprobePath             string `yaml:"FFprobePath" json:"ffprobe_path"`
+	Enabled                  bool   `yaml:"Enabled" json:"enabled"`
+	QuietWindowSeconds       int    `yaml:"QuietWindowSeconds" json:"quiet_window_seconds"`
+	MaxAudioDurationSeconds  int    `yaml:"MaxAudioDurationSeconds" json:"max_audio_duration_seconds"`
+	MaxUploadBytes           int64  `yaml:"MaxUploadBytes" json:"max_upload_bytes"`
+	TranscodeTimeoutSeconds  int    `yaml:"TranscodeTimeoutSeconds" json:"transcode_timeout_seconds"`
+	TranscodeMemoryLimitMB   int    `yaml:"TranscodeMemoryLimitMB" json:"transcode_memory_limit_mb"`
+	TranscodeCPULimitSeconds int    `yaml:"TranscodeCPULimitSeconds" json:"transcode_cpu_limit_seconds"`
+	ScanIntervalMS           int    `yaml:"ScanIntervalMS" json:"scan_interval_ms"`
+	RecoveryWindowSeconds    int    `yaml:"RecoveryWindowSeconds" json:"recovery_window_seconds"`
+	ClaimBatchSize           int    `yaml:"ClaimBatchSize" json:"claim_batch_size"`
+	FFmpegPath               string `yaml:"FFmpegPath" json:"ffmpeg_path"`
+	FFprobePath              string `yaml:"FFprobePath" json:"ffprobe_path"`
 }
 
 func (c *BroadcastConfig) SetDefaults() error {
@@ -201,6 +205,18 @@ func (c *BroadcastConfig) SetDefaults() error {
 	}
 	if c.TranscodeTimeoutSeconds < 5 || c.TranscodeTimeoutSeconds > 300 {
 		return fmt.Errorf("Broadcast.TranscodeTimeoutSeconds must be between 5 and 300")
+	}
+	if c.TranscodeMemoryLimitMB == 0 {
+		c.TranscodeMemoryLimitMB = DefaultBroadcastTranscodeMemoryMB
+	}
+	if c.TranscodeMemoryLimitMB < 512 || c.TranscodeMemoryLimitMB > 1024 {
+		return fmt.Errorf("Broadcast.TranscodeMemoryLimitMB must be between 512 and 1024")
+	}
+	if c.TranscodeCPULimitSeconds == 0 {
+		c.TranscodeCPULimitSeconds = DefaultBroadcastTranscodeCPUSeconds
+	}
+	if c.TranscodeCPULimitSeconds < 1 || c.TranscodeCPULimitSeconds > 300 {
+		return fmt.Errorf("Broadcast.TranscodeCPULimitSeconds must be between 1 and 300")
 	}
 	if c.ScanIntervalMS == 0 {
 		c.ScanIntervalMS = 1000

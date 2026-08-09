@@ -125,6 +125,8 @@ Broadcast:
     MaxAudioDurationSeconds: 30   # 单条播报上限，服务端硬上限 60 秒
     MaxUploadBytes: 20971520      # 原始音频上传上限（20 MiB）
     TranscodeTimeoutSeconds: 90   # ffprobe + ffmpeg 单任务总超时
+    TranscodeMemoryLimitMB: 512   # Linux 子进程地址空间上限；容器还受 /tmp 64 MiB 限制
+    TranscodeCPULimitSeconds: 60  # Linux 子进程累计 CPU 时间上限；ffmpeg 固定单线程
     ScanIntervalMS: 1000          # 到期计划扫描间隔
     RecoveryWindowSeconds: 10     # 重启后允许认领的短暂到期窗口
     ClaimBatchSize: 20            # 每轮最多认领任务数

@@ -3,6 +3,8 @@ package interconnect
 import (
 	"testing"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 func speakerClaim(requestID, sessionID, epoch, domainID, leaseID uint64) SpeakerLeaseControl {
@@ -167,6 +169,90 @@ func TestEdgeSpeakerClaimTimeoutDropsBufferedFrames(t *testing.T) {
 	state := gateway.speakerDomains[9]
 	if state == nil || state.pendingRequest != 0 || len(state.buffered) != 0 || !state.blockedUntil.After(now) {
 		t.Fatalf("timed out claim state=%#v", state)
+	}
+}
+
+func TestScheduledBroadcastSpeakerLeaseCompetesWithDeviceVoice(t *testing.T) {
+	gateway := NewCenterGateway(nil, nil)
+	now := time.Now()
+	domainID := uint64(77)
+	if _, ok := gateway.speaker.AcquireLocal(100, 1, domainID, now); !ok {
+		t.Fatal("device voice did not acquire speaker lease")
+	}
+	if gateway.AcquireScheduledBroadcast(9, domainID, now.Add(100*time.Millisecond)) {
+		t.Fatal("scheduled broadcast displaced active device voice")
+	}
+	if !gateway.AcquireScheduledBroadcast(9, domainID, now.Add(SpeakerLeaseIdleTimeout+time.Millisecond)) {
+		t.Fatal("scheduled broadcast did not acquire expired domain")
+	}
+	if !gateway.AcceptScheduledBroadcastFrame(9, domainID, now.Add(SpeakerLeaseIdleTimeout+100*time.Millisecond)) {
+		t.Fatal("scheduled broadcast frame did not renew lease")
+	}
+	if _, ok := gateway.speaker.AcquireLocal(101, 1, domainID, now.Add(SpeakerLeaseIdleTimeout+100*time.Millisecond)); ok {
+		t.Fatal("device voice displaced active scheduled broadcast")
+	}
+	gateway.ReleaseScheduledBroadcast(9, domainID)
+	if _, ok := gateway.speaker.AcquireLocal(101, 1, domainID, now.Add(SpeakerLeaseIdleTimeout+101*time.Millisecond)); !ok {
+		t.Fatal("scheduled broadcast release retained speaker lease")
+	}
+}
+
+func TestScheduledBroadcastRelayRequiresItsActiveSpeakerLease(t *testing.T) {
+	cluster := NewClusterManager(1)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	now := time.Now()
+	domainID := uint64(88)
+	wire := protocol.EncodeDraARLv1("system-broadcast", "", 255, protocol.DraARLTypeOpus16K, 0, 0, "AUTO", []byte{0, 1, 1})
+	if !gateway.AcquireScheduledBroadcast(10, domainID, now) {
+		t.Fatal("scheduled broadcast did not acquire speaker lease")
+	}
+	if err := gateway.RelayScheduledBroadcast(10, 7, domainID, wire); err != nil {
+		t.Fatalf("relay with active lease: %v", err)
+	}
+	gateway.ReleaseScheduledBroadcast(10, domainID)
+	if err := gateway.RelayScheduledBroadcast(10, 7, domainID, wire); err == nil {
+		t.Fatal("relay without active lease was accepted")
+	}
+}
+
+func TestScheduledBroadcastReceiverRequiresConnectedReceivableEdgeRoute(t *testing.T) {
+	cluster := NewClusterManager(1)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	domainID := uint64(89)
+	route := DeviceRoute{SessionID: 1001, SessionEpoch: 1, DeviceID: 7, DomainID: domainID}
+	if err := cluster.UpsertNodeRoute("edge-a", route); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("disconnected edge projection counted as a receiver")
+	}
+
+	session := &NodeSession{NodeID: "edge-a", SessionID: 44}
+	cluster.OnConnect(session)
+	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
+		t.Fatal(err)
+	}
+	if !gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("connected receivable edge route was not counted")
+	}
+
+	route.DisableRecv = true
+	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("receive-disabled edge route counted as a receiver")
+	}
+
+	route.DisableRecv = false
+	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
+		t.Fatal(err)
+	}
+	cluster.OnDisconnect(session, nil)
+	if gateway.HasScheduledBroadcastReceiver(domainID) {
+		t.Fatal("disconnected edge route remained reachable")
 	}
 }
 

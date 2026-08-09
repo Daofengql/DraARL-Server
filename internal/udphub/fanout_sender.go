@@ -474,6 +474,35 @@ func (s *FanoutSender) enqueueDomainFrame(data []byte, snap *domainReceiverSnap,
 	})
 }
 
+func (s *FanoutSender) enqueueFixedDomainFrame(
+	data []byte,
+	snap *domainReceiverSnap,
+	sourceGroupID int,
+	generation *atomic.Uint64,
+	onComplete func(fanoutWriteResult),
+) bool {
+	if s == nil || snap == nil || len(data) == 0 || len(snap.entries) == 0 || snap.workers != len(s.writers) || generation == nil {
+		return false
+	}
+	var sourceGroupData []byte
+	for i := range snap.entries {
+		if snap.entries[i].sourceGroupV1 {
+			sourceGroupData, _ = protocol.WithSourceGroupID(data, sourceGroupID)
+			break
+		}
+	}
+	return s.enqueue(fanoutFrameJob{
+		data:            append([]byte(nil), data...),
+		sourceGroupData: sourceGroupData,
+		partitions:      snap.partitions,
+		enqueuedAt:      time.Now(),
+		snapshotGen:     generation.Load(),
+		validateGen:     false,
+		generation:      generation,
+		onComplete:      onComplete,
+	})
+}
+
 func writeUDPDomain(data []byte, snap *domainReceiverSnap, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string, sourceGroupID int) {
 	if len(data) == 0 || snap == nil || len(snap.entries) == 0 {
 		return

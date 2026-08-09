@@ -153,6 +153,64 @@ func (g *CenterGateway) AcquireLocalVoice(grant DeviceGrant) bool {
 	return allowed
 }
 
+const scheduledBroadcastSessionPrefix = uint64(0xb000000000000000)
+
+func scheduledBroadcastSessionID(runID uint) uint64 {
+	return scheduledBroadcastSessionPrefix | (uint64(runID) & 0x0fffffffffffffff)
+}
+
+func (g *CenterGateway) AcquireScheduledBroadcast(runID uint, domainID uint64, now time.Time) bool {
+	if g.speaker == nil || runID == 0 || domainID == 0 {
+		return false
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	_, allowed := g.speaker.AcquireLocal(sessionID, 1, domainID, now)
+	return allowed
+}
+
+func (g *CenterGateway) AcceptScheduledBroadcastFrame(runID uint, domainID uint64, now time.Time) bool {
+	if g.speaker == nil || runID == 0 || domainID == 0 {
+		return false
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	_, allowed := g.speaker.CurrentLocal(sessionID, 1, domainID, now)
+	return allowed
+}
+
+func (g *CenterGateway) ReleaseScheduledBroadcast(runID uint, domainID uint64) {
+	if g.speaker == nil || runID == 0 || domainID == 0 {
+		return
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	g.speaker.ReleaseLocal(sessionID, 1, domainID)
+}
+
+func (g *CenterGateway) HasScheduledBroadcastReceiver(domainID uint64) bool {
+	return g != nil && g.cluster != nil && g.cluster.HasTargetNode(domainID, CenterLocalNodeID)
+}
+
+func (g *CenterGateway) RelayScheduledBroadcast(runID uint, sourceGroupID int, domainID uint64, inner []byte) error {
+	if g.cluster == nil || g.speaker == nil || runID == 0 || sourceGroupID <= 0 || domainID == 0 {
+		return errors.New("scheduled broadcast relay is incomplete")
+	}
+	if err := protocol.ValidateRelayInnerPacket(inner); err != nil {
+		return err
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	leaseID, allowed := g.speaker.CurrentLocal(sessionID, 1, domainID, time.Now())
+	if !allowed {
+		return errors.New("scheduled broadcast speaker lease is not active")
+	}
+	relayInner := inner
+	if tagged, ok := protocol.WithSourceGroupID(inner, sourceGroupID); ok {
+		relayInner = tagged
+	}
+	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
+		SessionID: sessionID, SessionEpoch: 1, DomainID: domainID,
+		SpeakerLeaseID: leaseID, InnerPacket: relayInner,
+	})
+}
+
 func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {
 	if grant.SessionID == 0 || grant.SessionEpoch == 0 || g.cluster == nil {
 		return false

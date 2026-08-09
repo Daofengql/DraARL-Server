@@ -67,6 +67,7 @@ services:
       dockerfile: Dockerfile
       args:
         DRAARL_VERSION: ${DRAARL_VERSION:-dev}
+        GOPROXY: ${DRAARL_GO_PROXY:-https://proxy.golang.org,direct}
     restart: unless-stopped
     init: true
     depends_on:
@@ -87,6 +88,7 @@ services:
       DRAARL_JWT_SECRET: ${DRAARL_JWT_SECRET:-}
       DRAARL_AES_KEY: ${DRAARL_AES_KEY:-}
       DRAARL_AUTO_MIGRATE: ${DRAARL_AUTO_MIGRATE:-true}
+      DRAARL_BROADCAST_ENABLED: ${DRAARL_BROADCAST_ENABLED:-false}
       TZ: Asia/Shanghai
     ports:
       - "${DRAARL_HTTP_PORT:-9000}:9000"
@@ -101,10 +103,10 @@ services:
     cap_drop: [ALL]
     stop_grace_period: 45s
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/healthz"]
-      interval: 10s
-      timeout: 3s
-      retries: 12
+      test: ["CMD", "/usr/local/bin/docker-healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 30s
     networks: [draarl]
 

@@ -95,6 +95,7 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 
 	globalConn = conn
 	udpShutdown = make(chan struct{})
+	ResetAcceptedVoiceActivity(time.Now())
 	log.Printf("DraARLv1 UDP server started on %s (%s)", conn.LocalAddr(), network)
 
 	// 启动认证失败记录清理器

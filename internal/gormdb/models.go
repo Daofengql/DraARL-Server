@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"draarl/internal/accesspoint"
+	broadcastmodel "draarl/internal/broadcast/model"
 
 	"gorm.io/gorm"
 )
@@ -356,6 +357,7 @@ type CommRecord struct {
 	SenderCallSign   string    `gorm:"type:varchar(32);column:sender_callsign" json:"sender_callsign"`
 	SenderNickname   string    `gorm:"type:varchar(255);column:sender_nickname" json:"sender_nickname"`
 	SenderDevModel   int       `gorm:"type:int;column:sender_dev_model" json:"sender_dev_model"`
+	IsAutoBroadcast  bool      `gorm:"type:tinyint(1);not null;default:0;index;column:is_auto_broadcast" json:"is_auto_broadcast"`
 	CreatedAt        time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	DeliveryGroupIDs []uint    `gorm:"-" json:"-"`
 }
@@ -775,6 +777,10 @@ func AutoMigrate() error {
 		&ClientResourceRelease{},
 		&ClientResourceArtifact{},
 		&ClientResourceArtifactTarget{},
+		&broadcastmodel.BroadcastAudio{},
+		&broadcastmodel.BroadcastSchedule{},
+		&broadcastmodel.VirtualGroupBroadcastPolicy{},
+		&broadcastmodel.BroadcastRun{},
 	)
 
 	if err != nil {
@@ -787,6 +793,9 @@ func AutoMigrate() error {
 		return err
 	}
 	if err := backfillServerPublicAccessIDs(db); err != nil {
+		return err
+	}
+	if err := backfillVirtualGroupBroadcastPolicies(db); err != nil {
 		return err
 	}
 
@@ -806,6 +815,17 @@ func AutoMigrate() error {
 
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 	return nil
+}
+
+func backfillVirtualGroupBroadcastPolicies(db *gorm.DB) error {
+	return db.Exec(`
+		INSERT INTO virtual_group_broadcast_policies
+			(virtual_group_id, mode, allowed_source_group_id, updated_by, created_at, updated_at)
+		SELECT g.id, ?, NULL, g.ower_id, NOW(3), NOW(3)
+		FROM public_groups g
+		LEFT JOIN virtual_group_broadcast_policies p ON p.virtual_group_id = g.id
+		WHERE g.is_virtual = 1 AND p.virtual_group_id IS NULL
+	`, broadcastmodel.PolicySuspendAll).Error
 }
 
 func backfillCommRecordMessages(db *gorm.DB) error {

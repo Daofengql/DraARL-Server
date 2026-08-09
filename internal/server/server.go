@@ -274,6 +274,20 @@ func (s *Server) setupRoutes() {
 				// 离开群组
 				approved.POST("/groups/:id/leave", handler.LeaveGroup)
 
+				// 实体群组自动播报；handler 内再次校验群主或站点管理员权限。
+				approved.GET("/groups/:id/broadcast-audios", handler.ListBroadcastAudios)
+				approved.GET("/groups/:id/broadcast-context", handler.GetBroadcastContext)
+				approved.POST("/groups/:id/broadcast-audios", handler.UploadBroadcastAudio)
+				approved.GET("/groups/:id/broadcast-audios/:audioId", handler.GetBroadcastAudio)
+				approved.DELETE("/groups/:id/broadcast-audios/:audioId", handler.DeleteBroadcastAudio)
+				approved.GET("/groups/:id/broadcast-schedules", handler.ListBroadcastSchedules)
+				approved.POST("/groups/:id/broadcast-schedules", handler.CreateBroadcastSchedule)
+				approved.PATCH("/groups/:id/broadcast-schedules/:scheduleId", handler.UpdateBroadcastSchedule)
+				approved.DELETE("/groups/:id/broadcast-schedules/:scheduleId", handler.DeleteBroadcastSchedule)
+				approved.POST("/groups/:id/broadcast-schedules/:scheduleId/run", handler.RunBroadcastSchedule)
+				approved.GET("/groups/:id/broadcast-runs", handler.ListBroadcastRuns)
+				approved.POST("/groups/:id/broadcast-runs/:runId/cancel", handler.CancelBroadcastRun)
+
 				// 群组管理操作（需要群组所有者或管理员权限）
 				groupOwner := approved.Group("")
 				groupOwner.Use(middleware.RequireAdminOrOwner())
@@ -300,6 +314,7 @@ func (s *Server) setupRoutes() {
 			admin.GET("/group-links/:id/targets", handler.GetGroupLinkTargets)
 			admin.POST("/group-links/:id/targets", handler.AddGroupLinkTarget)
 			admin.DELETE("/group-links/:id/targets/:targetId", handler.RemoveGroupLinkTarget)
+			admin.PUT("/group-links/:id/broadcast-policy", handler.UpdateVirtualGroupBroadcastPolicy)
 
 			// 中继台和服务器（需要管理员权限）
 			admin.GET("/relays", handler.GetRelays)
@@ -351,6 +366,10 @@ func (s *Server) setupRoutes() {
 			admin.POST("/cache/metrics/reset", cacheHandler.ResetCacheMetrics)
 			admin.POST("/cache/clear", cacheHandler.ClearAllCache)
 			admin.GET("/udp/metrics", handler.GetUDPMetrics)
+			admin.GET("/broadcast/metrics", handler.GetBroadcastMetrics)
+			admin.GET("/broadcast/health", handler.GetBroadcastHealth)
+			admin.PUT("/broadcast/runtime", handler.UpdateBroadcastOperationalState)
+			admin.POST("/broadcast/emergency-stop", handler.EmergencyStopBroadcasts)
 
 			// 站点配置管理（读取需要登录，修改需要管理员权限）
 			configHandler := handler.NewSiteConfigHandler()

@@ -1,11 +1,19 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
+	"draarl/internal/broadcast/model"
+	"draarl/internal/broadcast/repository"
+	broadcastruntime "draarl/internal/broadcast/runtime"
+	schedruntime "draarl/internal/broadcast/scheduler/runtime"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/routesync"
@@ -35,11 +43,63 @@ func filterAvailableGroupLinkTargets(groups []*gormdb.Group, occupied map[int]st
 	return available
 }
 
+func writeVirtualGroupError(c *gin.Context, status int, errorCode, message string) {
+	c.JSON(status, gin.H{"code": status, "error_code": errorCode, "message": message})
+}
+
+func writeVirtualGroupRepositoryError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		writeVirtualGroupError(c, http.StatusNotFound, "virtual_group_not_found", "虚拟互联组或成员不存在")
+	case errors.Is(err, repository.ErrVirtualGroupRequired):
+		writeVirtualGroupError(c, http.StatusBadRequest, "virtual_group_required", "目标群组不是虚拟互联组")
+	case errors.Is(err, repository.ErrInvalidEntityGroup):
+		writeVirtualGroupError(c, http.StatusBadRequest, "invalid_virtual_group_member", "只能关联已启用的公开或私有实体群组")
+	case errors.Is(err, repository.ErrInvalidPolicy):
+		writeVirtualGroupError(c, http.StatusBadRequest, "virtual_broadcast_policy_required", "必须保存有效的自动播报策略")
+	case errors.Is(err, repository.ErrPolicySourceNotMember):
+		writeVirtualGroupError(c, http.StatusBadRequest, "virtual_broadcast_source_not_member", "保留的自动播报来源必须属于该虚拟组")
+	case errors.Is(err, repository.ErrPolicySourceStillMember):
+		writeVirtualGroupError(c, http.StatusConflict, "virtual_broadcast_source_must_change", "移除当前保留来源前必须先选择其他来源或全部暂停")
+	case errors.Is(err, gormdb.ErrTargetGroupAlreadyLinked):
+		writeVirtualGroupError(c, http.StatusConflict, "virtual_group_member_already_linked", "目标实体组已被虚拟互联组关联")
+	default:
+		log.Printf("[BROADCAST] virtual group coordination failed: %v", err)
+		writeVirtualGroupError(c, http.StatusInternalServerError, "virtual_group_coordination_failed", "虚拟互联组更新失败")
+	}
+}
+
+func waitForBroadcastTopologyMutation(c *gin.Context, mutation *repository.VirtualGroupMutation) bool {
+	if mutation == nil || len(mutation.CancelRunIDs) == 0 {
+		return true
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := broadcastruntime.CancelRunsAndWait(waitCtx, mutation.CancelRunIDs, schedruntime.ErrInterconnectChange); err != nil {
+		log.Printf("[BROADCAST] timed out waiting for interconnect playback release: groups=%v runs=%v err=%v", mutation.CancelGroupIDs, mutation.CancelRunIDs, err)
+		writeVirtualGroupError(c, http.StatusServiceUnavailable, "broadcast_interconnect_release_timeout", "互联配置已保存，但自动播报尚未安全释放；运行态拓扑未刷新")
+		return false
+	}
+	if err := repository.Default().FinalizeOrphanedInterconnectRuns(waitCtx, mutation.CancelRunIDs, time.Now().UTC()); err != nil {
+		log.Printf("[BROADCAST] failed to finalize orphaned interconnect runs: groups=%v runs=%v err=%v", mutation.CancelGroupIDs, mutation.CancelRunIDs, err)
+		writeVirtualGroupError(c, http.StatusServiceUnavailable, "broadcast_interconnect_finalize_failed", "互联配置已保存，但自动播报执行状态尚未安全收尾；运行态拓扑未刷新")
+		return false
+	}
+	return true
+}
+
 // CreateVirtualGroupRequest 创建虚拟互联组请求
 type CreateVirtualGroupRequest struct {
-	Name   string `json:"name" binding:"required"`
-	Note   string `json:"note"`
-	Status int    `json:"status"`
+	Name            string                              `json:"name" binding:"required"`
+	Note            string                              `json:"note"`
+	Status          int                                 `json:"status"`
+	TargetGroupIDs  []int                               `json:"target_group_ids"`
+	BroadcastPolicy *VirtualGroupBroadcastPolicyRequest `json:"broadcast_policy"`
+}
+
+type VirtualGroupBroadcastPolicyRequest struct {
+	Mode                 string `json:"mode"`
+	AllowedSourceGroupID *int   `json:"allowed_source_group_id"`
 }
 
 // CreateVirtualGroup 创建虚拟互联组（仅管理员）
@@ -74,7 +134,19 @@ func CreateVirtualGroup(c *gin.Context) {
 		return
 	}
 
-	// 创建虚拟互联组
+	if req.Status != 0 && req.Status != 1 {
+		writeVirtualGroupError(c, http.StatusBadRequest, "invalid_virtual_group_status", "虚拟互联组状态只能是关闭或开启")
+		return
+	}
+	policyRequest := req.BroadcastPolicy
+	if policyRequest == nil {
+		policyRequest = &VirtualGroupBroadcastPolicyRequest{Mode: model.PolicySuspendAll}
+	}
+	policyRequest.Mode = strings.TrimSpace(policyRequest.Mode)
+	if policyRequest.Mode == "" {
+		policyRequest.Mode = model.PolicySuspendAll
+	}
+
 	group := &gormdb.Group{
 		Name:      req.Name,
 		Type:      1, // 公开类型
@@ -83,13 +155,15 @@ func CreateVirtualGroup(c *gin.Context) {
 		IsVirtual: true,
 		Note:      req.Note,
 	}
-
-	repo := gormdb.NewGroupRepository()
-	if err := repo.CreateGroup(group); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "创建虚拟互联组失败",
-		})
+	policy := &model.VirtualGroupBroadcastPolicy{
+		Mode: policyRequest.Mode, AllowedSourceGroupID: policyRequest.AllowedSourceGroupID, UpdatedBy: currentUser.ID,
+	}
+	mutation, err := repository.Default().CreateVirtualGroup(c.Request.Context(), group, req.TargetGroupIDs, policy, time.Now().UTC())
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
 
@@ -100,6 +174,8 @@ func CreateVirtualGroup(c *gin.Context) {
 
 	// 通知 udphub 刷新群组缓存
 	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -115,9 +191,8 @@ func CreateVirtualGroup(c *gin.Context) {
 		"code":    201,
 		"message": "创建成功",
 		"data": gin.H{
-			"id":         group.ID,
-			"name":       group.Name,
-			"is_virtual": group.IsVirtual,
+			"id": group.ID, "name": group.Name, "is_virtual": group.IsVirtual,
+			"broadcast_policy": policy,
 		},
 	})
 }
@@ -168,15 +243,27 @@ func GetVirtualGroups(c *gin.Context) {
 	linkRepo := gormdb.NewGroupLinkRepository()
 	type virtualGroupWithCount struct {
 		*gormdb.Group
-		TargetCount int64 `json:"target_count"`
+		TargetCount       int64                                `json:"target_count"`
+		BroadcastPolicy   repository.VirtualGroupPolicySummary `json:"broadcast_policy"`
+		AllowedSourceName string                               `json:"allowed_source_name,omitempty"`
+	}
+	virtualGroupIDs := make([]int, 0, len(virtualGroups))
+	for _, group := range virtualGroups {
+		virtualGroupIDs = append(virtualGroupIDs, group.ID)
+	}
+	policySummaries, err := repository.Default().ListVirtualGroupPolicySummaries(c.Request.Context(), virtualGroupIDs)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
 	}
 
 	result := make([]virtualGroupWithCount, 0, len(virtualGroups))
 	for _, vg := range virtualGroups {
 		count, _ := linkRepo.GetLinkCount(vg.ID)
+		policy := policySummaries[vg.ID]
 		result = append(result, virtualGroupWithCount{
-			Group:       vg,
-			TargetCount: count,
+			Group: vg, TargetCount: count, BroadcastPolicy: policy,
+			AllowedSourceName: policy.AllowedSourceName,
 		})
 	}
 
@@ -243,10 +330,35 @@ func GetVirtualGroup(c *gin.Context) {
 		return
 	}
 
+	broadcastRepo := repository.Default()
+	policy, err := broadcastRepo.GetPolicy(c.Request.Context(), group.ID)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	memberStats, err := broadcastRepo.ListPolicyMemberStats(c.Request.Context(), group.ID)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	allowedSourceName := ""
+	if policy.AllowedSourceGroupID != nil {
+		for _, stats := range memberStats {
+			if stats.GroupID == *policy.AllowedSourceGroupID {
+				allowedSourceName = stats.GroupName
+				break
+			}
+		}
+	}
+	type virtualGroupDetail struct {
+		*gormdb.Group
+		BroadcastPolicy   *model.VirtualGroupBroadcastPolicy `json:"broadcast_policy"`
+		AllowedSourceName string                             `json:"allowed_source_name,omitempty"`
+		BroadcastMembers  []repository.MemberScheduleStats   `json:"broadcast_members"`
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "成功",
-		"data":    group,
+		"code": 200, "message": "成功",
+		"data": virtualGroupDetail{Group: group, BroadcastPolicy: policy, AllowedSourceName: allowedSourceName, BroadcastMembers: memberStats},
 	})
 }
 
@@ -316,22 +428,28 @@ func UpdateVirtualGroup(c *gin.Context) {
 		return
 	}
 
-	// 更新字段
+	fields := repository.VirtualGroupFields{Status: req.Status}
 	if req.Name != "" {
-		group.Name = req.Name
+		fields.Name = &req.Name
 	}
 	if req.Note != "" {
-		group.Note = req.Note
+		fields.Note = &req.Note
 	}
-	if req.Status != nil {
-		group.Status = *req.Status
+	mutation, err := repository.Default().UpdateVirtualGroup(c.Request.Context(), id, fields, time.Now().UTC())
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
 	}
-
-	if err := repo.UpdateGroup(group); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "更新失败",
-		})
+	if fields.Name != nil {
+		group.Name = *fields.Name
+	}
+	if fields.Note != nil {
+		group.Note = *fields.Note
+	}
+	if fields.Status != nil {
+		group.Status = *fields.Status
+	}
+	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
 
@@ -413,6 +531,15 @@ func DeleteVirtualGroup(c *gin.Context) {
 			"code":    400,
 			"message": "该群组不是虚拟互联组",
 		})
+		return
+	}
+
+	mutation, err := repository.Default().SetVirtualGroupStatus(c.Request.Context(), id, 0, time.Now().UTC())
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
 
@@ -622,19 +749,12 @@ func AddGroupLinkTarget(c *gin.Context) {
 		return
 	}
 
-	// 添加关联
-	if err := linkRepo.AddLink(linkGroupID, req.TargetGroupID); err != nil {
-		if errors.Is(err, gormdb.ErrTargetGroupAlreadyLinked) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"code":    400,
-				"message": "目标群组已被其他虚拟互联组关联，每个实体组只能加入一个虚拟互联组",
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "添加关联失败",
-		})
+	mutation, err := repository.Default().AddVirtualGroupMember(c.Request.Context(), linkGroupID, req.TargetGroupID, time.Now().UTC())
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
 
@@ -716,13 +836,31 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 		return
 	}
 
-	// 移除关联
-	linkRepo := gormdb.NewGroupLinkRepository()
-	if err := linkRepo.RemoveLink(linkGroupID, targetGroupID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "移除关联失败",
-		})
+	var req struct {
+		BroadcastPolicy *VirtualGroupBroadcastPolicyRequest `json:"broadcast_policy"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			writeVirtualGroupError(c, http.StatusBadRequest, "virtual_broadcast_policy_invalid", "自动播报策略格式无效")
+			return
+		}
+	}
+	var replacementPolicy *model.VirtualGroupBroadcastPolicy
+	if req.BroadcastPolicy != nil {
+		replacementPolicy = &model.VirtualGroupBroadcastPolicy{
+			VirtualGroupID:       linkGroupID,
+			Mode:                 strings.TrimSpace(req.BroadcastPolicy.Mode),
+			AllowedSourceGroupID: req.BroadcastPolicy.AllowedSourceGroupID,
+			UpdatedBy:            currentUser.ID,
+		}
+	}
+
+	mutation, err := repository.Default().RemoveVirtualGroupMemberWithPolicy(c.Request.Context(), linkGroupID, targetGroupID, replacementPolicy, time.Now().UTC())
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
 
@@ -732,7 +870,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 记录审计日志
 	oplog.AddLog(
-		fmt.Sprintf("移除群组互联: 虚拟组 ID %d <- 目标组 ID %d", linkGroupID, targetGroupID),
+		fmt.Sprintf("移除群组互联: 虚拟组 ID %d <- 目标组 ID %d%s", linkGroupID, targetGroupID, removedMemberPolicyLogSuffix(replacementPolicy)),
 		"group_link_remove",
 		currentUser.ID,
 		currentUser.Name,
@@ -743,6 +881,64 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "移除成功",
+		"data":    gin.H{"broadcast_policy": replacementPolicy},
+	})
+}
+
+func removedMemberPolicyLogSuffix(policy *model.VirtualGroupBroadcastPolicy) string {
+	if policy == nil {
+		return ""
+	}
+	if policy.Mode == model.PolicyAllowSingleSource && policy.AllowedSourceGroupID != nil {
+		return fmt.Sprintf(", 同步切换信标来源为实体组 ID %d", *policy.AllowedSourceGroupID)
+	}
+	return ", 同步切换信标策略为全部暂停"
+}
+
+func UpdateVirtualGroupBroadcastPolicy(c *gin.Context) {
+	virtualGroupID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || virtualGroupID <= 0 {
+		writeVirtualGroupError(c, http.StatusBadRequest, "invalid_virtual_group_id", "无效的群组ID")
+		return
+	}
+	var req VirtualGroupBroadcastPolicyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeVirtualGroupError(c, http.StatusBadRequest, "virtual_broadcast_policy_required", "必须提交有效的自动播报策略")
+		return
+	}
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !currentUser.HasRole("admin") {
+		writeVirtualGroupError(c, http.StatusForbidden, "admin_required", "需要管理员权限")
+		return
+	}
+	policy := &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: virtualGroupID, Mode: strings.TrimSpace(req.Mode),
+		AllowedSourceGroupID: req.AllowedSourceGroupID, UpdatedBy: currentUser.ID,
+	}
+	broadcastRepo := repository.Default()
+	mutation, err := broadcastRepo.UpdateVirtualGroupPolicy(c.Request.Context(), policy, time.Now().UTC())
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	if !waitForBroadcastTopologyMutation(c, mutation) {
+		return
+	}
+	memberStats, err := broadcastRepo.ListPolicyMemberStats(c.Request.Context(), virtualGroupID)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	oplog.AddLog(
+		fmt.Sprintf("更新虚拟组自动播报策略: 虚拟组 ID %d, 模式 %s", virtualGroupID, policy.Mode),
+		"virtual_group_broadcast_policy_update", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP(),
+	)
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200, "message": "自动播报策略更新成功",
+		"data": gin.H{"broadcast_policy": policy, "broadcast_members": memberStats},
 	})
 }
 
@@ -798,13 +994,30 @@ func GetAvailableTargetGroups(c *gin.Context) {
 	}
 
 	availableGroups := filterAvailableGroupLinkTargets(groups, linkedTargetSet)
+	availableGroupIDs := make([]int, 0, len(availableGroups))
+	for _, group := range availableGroups {
+		availableGroupIDs = append(availableGroupIDs, group.ID)
+	}
+	scheduleCounts, err := repository.Default().EnabledScheduleCounts(c.Request.Context(), availableGroupIDs)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+	type availableTarget struct {
+		*gormdb.Group
+		EnabledBroadcastScheduleCount int64 `json:"enabled_broadcast_schedule_count"`
+	}
+	items := make([]availableTarget, 0, len(availableGroups))
+	for _, group := range availableGroups {
+		items = append(items, availableTarget{Group: group, EnabledBroadcastScheduleCount: scheduleCounts[group.ID]})
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
 		"data": gin.H{
-			"items": availableGroups,
-			"total": len(availableGroups),
+			"items": items,
+			"total": len(items),
 		},
 	})
 }

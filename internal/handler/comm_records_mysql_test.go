@@ -83,6 +83,7 @@ func TestCommRecordsAuthorizationHTTPE2E(t *testing.T) {
 		{DeviceID: 0, DeviceSSID: 101, GroupID: &publicGroupID, UserID: &otherID, StartTime: now.Add(time.Millisecond), EndTime: now.Add(time.Millisecond), AudioPath: "text:other", Status: 2},
 		{DeviceID: uint(device.ID), DeviceSSID: device.SSID, GroupID: &publicGroupID, UserID: nil, StartTime: now.Add(2 * time.Millisecond), EndTime: now.Add(2 * time.Millisecond), AudioPath: "text:legacy", Status: 2},
 		{DeviceID: 0, DeviceSSID: 101, GroupID: &privateGroupID, UserID: &otherID, StartTime: now.Add(3 * time.Millisecond), EndTime: now.Add(3 * time.Millisecond), AudioPath: "text:private", Status: 2},
+		{DeviceID: 0, DeviceSSID: 255, GroupID: &publicGroupID, UserID: nil, StartTime: now.Add(4 * time.Millisecond), EndTime: now.Add(124 * time.Millisecond), DurationMs: 120, AudioPath: "", AudioSize: 0, Status: 2, MessageType: gormdb.CommMessageTypeVoice, SenderUsername: "system-broadcast", SenderCallSign: "AUTO", SenderNickname: "自动播报", IsAutoBroadcast: true},
 	}
 	for _, record := range records {
 		if err := db.Create(record).Error; err != nil {
@@ -119,6 +120,13 @@ func TestCommRecordsAuthorizationHTTPE2E(t *testing.T) {
 	assertStatus("other sender detail", owner, detailPattern, fmt.Sprintf("/api/comm-records/%d", records[1].ID), GetCommRecord, http.StatusForbidden)
 	assertStatus("legacy physical owner detail", owner, detailPattern, fmt.Sprintf("/api/comm-records/%d", records[2].ID), GetCommRecord, http.StatusOK)
 	assertStatus("admin detail", admin, detailPattern, fmt.Sprintf("/api/comm-records/%d", records[1].ID), GetCommRecord, http.StatusOK)
+	autoBody := assertStatus("automatic broadcast detail", admin, detailPattern, fmt.Sprintf("/api/comm-records/%d", records[4].ID), GetCommRecord, http.StatusOK)
+	var autoEnvelope struct {
+		Data CommRecordResponse `json:"data"`
+	}
+	if err := json.Unmarshal(autoBody, &autoEnvelope); err != nil || !autoEnvelope.Data.IsAutoBroadcast || autoEnvelope.Data.AudioPath != "" || autoEnvelope.Data.AudioSize != 0 {
+		t.Fatalf("automatic broadcast flag or empty-audio semantics missing: err=%v body=%s", err, autoBody)
+	}
 	assertStatus("missing detail", owner, detailPattern, "/api/comm-records/4294967295", GetCommRecord, http.StatusNotFound)
 
 	listPattern := "/api/comm-records"
@@ -153,8 +161,8 @@ func TestCommRecordsAuthorizationHTTPE2E(t *testing.T) {
 	if err := json.Unmarshal(body, &listEnvelope); err != nil {
 		t.Fatalf("decode admin public group response: %v", err)
 	}
-	if listEnvelope.Data.Total != 3 {
-		t.Fatalf("admin public group total=%d want=3 body=%s", listEnvelope.Data.Total, body)
+	if listEnvelope.Data.Total != 4 {
+		t.Fatalf("admin public group total=%d want=4 body=%s", listEnvelope.Data.Total, body)
 	}
 	assertStatus("invalid group id", owner, listPattern, "/api/comm-records?group_id=invalid", GetCommRecords, http.StatusBadRequest)
 	assertStatus("missing group", owner, listPattern, "/api/comm-records?group_id=2147483647", GetCommRecords, http.StatusNotFound)

@@ -5,7 +5,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
+	broadcastrepository "draarl/internal/broadcast/repository"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/models"
@@ -424,6 +426,59 @@ func DeleteUser(c *gin.Context) {
 		})
 		return
 	}
+	ownedGroups, err := repo.ListOwnedGroups(id)
+	if err != nil {
+		log.Printf("删除用户前读取群组失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户群组失败"})
+		return
+	}
+
+	// Virtual groups must go through the same state transition as the normal
+	// delete path. This restores surviving members' future schedules and waits
+	// for every active domain broadcast before the topology is removed.
+	for _, group := range ownedGroups {
+		if !group.IsVirtual || group.Status != 1 {
+			continue
+		}
+		mutation, transitionErr := broadcastrepository.Default().SetVirtualGroupStatus(c.Request.Context(), group.ID, 0, time.Now().UTC())
+		if transitionErr != nil {
+			log.Printf("删除用户前关闭虚拟群组 %d 失败: %v", group.ID, transitionErr)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "停止虚拟群组自动播报失败"})
+			return
+		}
+		if !waitForBroadcastTopologyMutation(c, mutation) {
+			return
+		}
+		group.Status = 0
+	}
+
+	entityGroupIDs := make([]int, 0, len(ownedGroups))
+	for _, group := range ownedGroups {
+		if group.IsVirtual {
+			continue
+		}
+		if group.Status == 1 {
+			if updateErr := gormdb.NewGroupRepository().UpdateGroupFields(group.ID, map[string]interface{}{"status": 0}); updateErr != nil {
+				log.Printf("删除用户前停用实体群组 %d 失败: %v", group.ID, updateErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "停止实体群组自动播报失败"})
+				return
+			}
+			group.Status = 0
+		}
+		// Removing an entity group must repair any surviving virtual group's
+		// selected-source policy before the group foreign key disappears.
+		if _, ok := prepareEntityGroupBroadcastDeletion(c, currentUserModel.ID, group.ID); !ok {
+			return
+		}
+		entityGroupIDs = append(entityGroupIDs, group.ID)
+	}
+	if len(entityGroupIDs) != 0 {
+		udphub.RefreshGroupCache()
+		routesync.RefreshTopology()
+		if !cancelBroadcastGroupsAfterMutation(c, entityGroupIDs, "group_unavailable") {
+			return
+		}
+	}
 
 	cascadeResult, err := repo.DeleteUserWithCascade(id)
 	if err != nil {
@@ -475,6 +530,7 @@ func DeleteUser(c *gin.Context) {
 		routesync.PublishDevice(device.ID)
 	}
 	routesync.RefreshTopology()
+	cleanupPending := cleanupDeletedBroadcastObjects(c, cascadeResult.BroadcastObjectKeys)
 
 	// 获取当前操作用户信息
 	if username, exists := c.Get("username"); exists {
@@ -494,7 +550,8 @@ func DeleteUser(c *gin.Context) {
 		"code":    200,
 		"message": "删除成功",
 		"data": gin.H{
-			"id": id,
+			"id":                        id,
+			"broadcast_cleanup_pending": cleanupPending,
 		},
 	})
 }

@@ -37,12 +37,13 @@ import Edit from '@mui/icons-material/Edit'
 import Delete from '@mui/icons-material/Delete'
 import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import ManageAccounts from '@mui/icons-material/ManageAccounts'
+import Campaign from '@mui/icons-material/Campaign'
 import { groupService, userService } from '../../services'
 import type { Group, User } from '../../types'
 import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
-import { GroupDeviceManagementDialog, GroupMemberManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
+import { BroadcastManagementDialog, GroupDeviceManagementDialog, GroupMemberManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function GroupsPage() {
   // const navigate = useNavigate() // 移除了冗余的路由跳转
@@ -66,6 +67,7 @@ export function GroupsPage() {
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
   const [managedGroup, setManagedGroup] = useState<Group | null>(null)
   const [managedMembersGroup, setManagedMembersGroup] = useState<Group | null>(null)
+  const [broadcastGroup, setBroadcastGroup] = useState<Group | null>(null)
   const [searchResults, setSearchResults] = useState<Group[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchKeywordInput, setSearchKeywordInput] = useState('')
@@ -363,6 +365,13 @@ export function GroupsPage() {
         )}
         {group.is_owner && (
           <>
+            {!group.is_virtual && (
+              <Tooltip title="自动播报">
+                <IconButton size="small" onClick={() => setBroadcastGroup(group)}>
+                  <Campaign fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            )}
             {group.type === GROUP_TYPE_PRIVATE && (
               <Tooltip title="管理成员">
                 <IconButton size="small" onClick={() => setManagedMembersGroup(group)}>
@@ -645,6 +654,12 @@ export function GroupsPage() {
         group={managedMembersGroup}
         onClose={() => setManagedMembersGroup(null)}
         onChanged={() => void loadGroups()}
+      />
+
+      <BroadcastManagementDialog
+        open={Boolean(broadcastGroup)}
+        group={broadcastGroup}
+        onClose={() => setBroadcastGroup(null)}
       />
 
       {/* 用户详情弹窗 */}

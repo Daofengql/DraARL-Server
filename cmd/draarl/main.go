@@ -16,6 +16,8 @@ import (
 
 	"draarl/internal/aprs"
 	authstore "draarl/internal/auth"
+	"draarl/internal/broadcast/media"
+	broadcastruntime "draarl/internal/broadcast/runtime"
 	"draarl/internal/buildinfo"
 	"draarl/internal/config"
 	"draarl/internal/db"
@@ -270,7 +272,12 @@ func main() {
 			AcquireVoice: func(source udphub.CenterLocalSource) bool {
 				return centerRuntime.Gateway.AcquireLocalVoice(localSourceGrant(&source))
 			},
-			RemoteOwner: centerRuntime.Gateway.IdentityOwnedByRemote,
+			AcquireBroadcast:     centerRuntime.Gateway.AcquireScheduledBroadcast,
+			AcceptBroadcastFrame: centerRuntime.Gateway.AcceptScheduledBroadcastFrame,
+			ReleaseBroadcast:     centerRuntime.Gateway.ReleaseScheduledBroadcast,
+			HasBroadcastReceiver: centerRuntime.Gateway.HasScheduledBroadcastReceiver,
+			RelayBroadcast:       centerRuntime.Gateway.RelayScheduledBroadcast,
+			RemoteOwner:          centerRuntime.Gateway.IdentityOwnedByRemote,
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {
 				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
 			},
@@ -291,6 +298,12 @@ func main() {
 
 	// 启动 HTTP 服务器（Web API 和前端服务）
 	srv := server.New(cfg)
+	if err := media.InitProcessor(cfg); err != nil {
+		stdlog.Fatalf("启动自动播报媒体处理器失败: %v", err)
+	}
+	if err := broadcastruntime.Init(cfg); err != nil {
+		stdlog.Fatalf("启动自动播报调度器失败: %v", err)
+	}
 	httpErrCh := make(chan error, 1)
 	go func() {
 		stdlog.Println("正在启动 HTTP 服务器...")
@@ -321,12 +334,24 @@ func main() {
 
 	stdlog.Println("正在关闭服务...")
 
+	broadcastShutdownCtx, broadcastShutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := broadcastruntime.Stop(broadcastShutdownCtx); err != nil {
+		stdlog.Printf("自动播报调度器关闭失败: %v", err)
+	}
+	broadcastShutdownCancel()
+
 	// 优雅关闭 HTTP 服务
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		stdlog.Printf("HTTP 服务关闭失败: %v", err)
 	}
 	shutdownCancel()
+
+	mediaShutdownCtx, mediaShutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := media.StopProcessor(mediaShutdownCtx); err != nil {
+		stdlog.Printf("自动播报媒体处理器关闭失败: %v", err)
+	}
+	mediaShutdownCancel()
 
 	// 停止 UDP 服务器
 	stdlog.Println("正在停止 UDP 服务器...")

@@ -40,13 +40,18 @@ type CenterLocalSource struct {
 }
 
 type CenterInterconnectHooks struct {
-	Activate     func(*CenterLocalSource) error
-	Authorize    func(CenterLocalSource) bool
-	AcquireVoice func(CenterLocalSource) bool
-	RemoteOwner  func(ownerID int, ssid byte) bool
-	Relay        func(CenterLocalSource, []byte) error
-	SendConfig   func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
-	Revoke       func(CenterLocalSource)
+	Activate             func(*CenterLocalSource) error
+	Authorize            func(CenterLocalSource) bool
+	AcquireVoice         func(CenterLocalSource) bool
+	AcquireBroadcast     func(runID uint, domainID uint64, now time.Time) bool
+	AcceptBroadcastFrame func(runID uint, domainID uint64, now time.Time) bool
+	ReleaseBroadcast     func(runID uint, domainID uint64)
+	HasBroadcastReceiver func(domainID uint64) bool
+	RelayBroadcast       func(runID uint, sourceGroupID int, domainID uint64, data []byte) error
+	RemoteOwner          func(ownerID int, ssid byte) bool
+	Relay                func(CenterLocalSource, []byte) error
+	SendConfig           func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
+	Revoke               func(CenterLocalSource)
 }
 
 var centerInterconnectBridge struct {

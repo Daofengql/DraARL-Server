@@ -157,6 +157,11 @@ func UpdateGroup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口修改虚拟群组"})
 		return
 	}
+	if req.Status != nil && *req.Status != 0 && *req.Status != 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "群组状态只能是关闭或开启"})
+		return
+	}
+	previousStatus := group.Status
 
 	// 更新字段
 	if req.Name != "" {
@@ -200,6 +205,11 @@ func UpdateGroup(c *gin.Context) {
 	udphub.RefreshGroupCache()
 	routesync.RefreshTopology()
 	reconcileGhostSessionsForGroup(id)
+	if previousStatus == 1 && group.Status != 1 {
+		if !cancelBroadcastGroupsAfterMutation(c, []int{id}, "group_unavailable") {
+			return
+		}
+	}
 
 	// Get owner callsign from user table
 	var ownerCallSign string
@@ -289,8 +299,25 @@ func DeleteGroup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备失败"})
 		return
 	}
+	broadcastObjectKeys, ok := prepareEntityGroupBroadcastDeletion(c, currentUser.ID, id)
+	if !ok {
+		return
+	}
+	if group.Status == 1 {
+		if err := repo.UpdateGroupFields(id, map[string]interface{}{"status": 0}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "停止群组自动播报失败"})
+			return
+		}
+		group.Status = 0
+		udphub.RefreshGroupCache()
+		routesync.RefreshTopology()
+	}
+	if !cancelBroadcastGroupsAfterMutation(c, []int{id}, "group_unavailable") {
+		return
+	}
 
 	if err := repo.DeleteGroupWithCascade(id); err != nil {
+		log.Printf("[GROUP] delete group %d failed: %v", id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除群组失败",
@@ -334,10 +361,12 @@ func DeleteGroup(c *gin.Context) {
 		routesync.PublishDevice(device.ID)
 	}
 	routesync.RefreshTopology()
+	cleanupPending := cleanupDeletedBroadcastObjects(c, broadcastObjectKeys)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "删除成功",
+		"data":    gin.H{"broadcast_cleanup_pending": cleanupPending},
 	})
 }
 

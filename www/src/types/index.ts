@@ -130,6 +130,7 @@ export interface Group {
   created_at?: string // 前端兼容字段
   update_time?: string
   updated_at?: string // 前端兼容字段
+  enabled_broadcast_schedule_count?: number
 }
 
 // 群组互联关联类型
@@ -147,6 +148,24 @@ export interface GroupLink {
 export interface VirtualGroup extends Group {
   target_count?: number  // 关联的目标群组数量
   targets?: GroupLinkTarget[]
+  broadcast_policy?: VirtualGroupBroadcastPolicy
+  allowed_source_name?: string
+  broadcast_members?: VirtualGroupBroadcastMember[]
+}
+
+export type VirtualGroupBroadcastPolicyMode = 'suspend_all' | 'allow_single_source'
+
+export interface VirtualGroupBroadcastPolicy {
+  virtual_group_id?: number
+  mode: VirtualGroupBroadcastPolicyMode
+  allowed_source_group_id?: number
+}
+
+export interface VirtualGroupBroadcastMember {
+  group_id: number
+  group_name: string
+  enabled_count: number
+  suspended_count: number
 }
 
 // 互联组关联的目标群组

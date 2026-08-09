@@ -31,6 +31,13 @@ import {
   Divider,
   Card,
   CardHeader,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  FormControlLabel,
+  Radio,
+  RadioGroup,
 } from '@mui/material'
 import Add from '@mui/icons-material/Add'
 import Edit from '@mui/icons-material/Edit'
@@ -39,9 +46,11 @@ import Refresh from '@mui/icons-material/Refresh'
 import LinkIcon from '@mui/icons-material/Link'
 import LinkOff from '@mui/icons-material/LinkOff'
 import GroupIcon from '@mui/icons-material/Group'
+import Campaign from '@mui/icons-material/Campaign'
 import { groupLinkService } from '../../services'
 import type { VirtualGroup, Group, GroupLinkTarget } from '../../types'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
+import { VirtualGroupBroadcastPolicyDialog, broadcastPolicySummary } from '../../components/groups'
 
 export function GroupLinkPage() {
   const [virtualGroups, setVirtualGroups] = useState<VirtualGroup[]>([])
@@ -55,14 +64,17 @@ export function GroupLinkPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
+  const [policyGroup, setPolicyGroup] = useState<VirtualGroup | null>(null)
   const [selectedVirtualGroup, setSelectedVirtualGroup] = useState<VirtualGroup | null>(null)
 
   // 表单状态
   const [formData, setFormData] = useState({
     name: '',
     note: '',
-    status: 1,
+    status: 0,
   })
+  const [createTargetIds, setCreateTargetIds] = useState<number[]>([])
+  const [createPolicySource, setCreatePolicySource] = useState('suspend_all')
 
   // 关联群组相关
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
@@ -70,6 +82,8 @@ export function GroupLinkPage() {
   const [selectedTargets, setSelectedTargets] = useState<number[]>([])
   const [targetSearch, setTargetSearch] = useState('')
   const [linkWarning, setLinkWarning] = useState<string | null>(null)
+  const [removingPolicySourceId, setRemovingPolicySourceId] = useState<number | null>(null)
+  const [replacementPolicySource, setReplacementPolicySource] = useState('suspend_all')
 
   // 确认对话框
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -130,9 +144,15 @@ export function GroupLinkPage() {
         name: formData.name,
         note: formData.note,
         status: formData.status,
+        target_group_ids: createTargetIds,
+        broadcast_policy: createPolicySource === 'suspend_all'
+          ? { mode: 'suspend_all' }
+          : { mode: 'allow_single_source', allowed_source_group_id: Number(createPolicySource) },
       })
       setCreateDialogOpen(false)
-      setFormData({ name: '', note: '', status: 1 })
+      setFormData({ name: '', note: '', status: 0 })
+      setCreateTargetIds([])
+      setCreatePolicySource('suspend_all')
       setSuccess('创建成功')
       fetchVirtualGroups()
       setTimeout(() => setSuccess(null), 3000)
@@ -198,9 +218,13 @@ export function GroupLinkPage() {
 
   // 打开关联管理对话框
   const handleOpenLink = async (vg: VirtualGroup) => {
-    setSelectedVirtualGroup(vg)
     setLinkWarning(null)
-    await Promise.all([fetchAvailableGroups(), fetchLinkedTargets(vg.id)])
+    const [detail] = await Promise.all([
+      groupLinkService.getVirtualGroup(vg.id),
+      fetchAvailableGroups(),
+      fetchLinkedTargets(vg.id),
+    ])
+    setSelectedVirtualGroup(detail)
     setSelectedTargets([])
     setTargetSearch('')
     setLinkDialogOpen(true)
@@ -218,8 +242,12 @@ export function GroupLinkPage() {
         }
       }
       setSelectedTargets([])
-      await fetchLinkedTargets(selectedVirtualGroup.id)
-      await fetchVirtualGroups()
+      const [detail] = await Promise.all([
+        groupLinkService.getVirtualGroup(selectedVirtualGroup.id),
+        fetchLinkedTargets(selectedVirtualGroup.id),
+        fetchVirtualGroups(),
+      ])
+      setSelectedVirtualGroup(detail)
     } catch (err: any) {
       setError(err.message || '添加关联失败')
     }
@@ -228,10 +256,40 @@ export function GroupLinkPage() {
   // 移除关联群组
   const handleRemoveTarget = async (targetId: number) => {
     if (!selectedVirtualGroup) return
+    const policy = selectedVirtualGroup.broadcast_policy
+    if (policy?.mode === 'allow_single_source' && policy.allowed_source_group_id === targetId) {
+      setRemovingPolicySourceId(targetId)
+      setReplacementPolicySource('suspend_all')
+      return
+    }
     try {
       await groupLinkService.removeGroupLinkTarget(selectedVirtualGroup.id, targetId)
-      await fetchLinkedTargets(selectedVirtualGroup.id)
-      await fetchVirtualGroups()
+      const [detail] = await Promise.all([
+        groupLinkService.getVirtualGroup(selectedVirtualGroup.id),
+        fetchLinkedTargets(selectedVirtualGroup.id),
+        fetchVirtualGroups(),
+      ])
+      setSelectedVirtualGroup(detail)
+    } catch (err: any) {
+      setError(err.message || '移除关联失败')
+    }
+  }
+
+  const handleRemovePolicySource = async () => {
+    if (!selectedVirtualGroup || removingPolicySourceId === null) return
+    try {
+      await groupLinkService.removeGroupLinkTarget(
+        selectedVirtualGroup.id,
+        removingPolicySourceId,
+        replacementPolicySource === 'suspend_all'
+          ? { mode: 'suspend_all' }
+          : { mode: 'allow_single_source', allowed_source_group_id: Number(replacementPolicySource) },
+      )
+      const refreshed = await groupLinkService.getVirtualGroup(selectedVirtualGroup.id)
+      setSelectedVirtualGroup(refreshed)
+      setRemovingPolicySourceId(null)
+      setReplacementPolicySource('suspend_all')
+      await Promise.all([fetchLinkedTargets(selectedVirtualGroup.id), fetchVirtualGroups()])
     } catch (err: any) {
       setError(err.message || '移除关联失败')
     }
@@ -253,7 +311,7 @@ export function GroupLinkPage() {
     setConfirmDialog({
       open: true,
       title: `${actionText}虚拟互联组`,
-      message: `确定要${actionText}虚拟互联组 "${vg.name}" 吗？`,
+      message: `确定要${actionText}虚拟互联组 "${vg.name}" 吗？已保存信标策略：${broadcastPolicySummary(vg)}。`,
       type: newStatus === 1 ? 'info' : 'warning',
       onConfirm: async () => {
         try {
@@ -281,9 +339,28 @@ export function GroupLinkPage() {
   return (
     <Box sx={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
       {/* 标题和操作栏 */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexShrink: 0 }}>
-        <Typography variant="h4">互联管理</Typography>
-        <Stack direction="row" spacing={2}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'stretch', sm: 'center' },
+          gap: { xs: 1.5, sm: 0 },
+          mb: 2,
+          flexShrink: 0,
+        }}
+      >
+        <Typography variant="h4" sx={{ fontSize: { xs: '1.75rem', sm: '2.125rem' } }}>互联管理</Typography>
+        <Stack
+          direction="row"
+          spacing={1.5}
+          sx={{
+            '& .MuiButton-root': {
+              flex: { xs: 1, sm: 'initial' },
+              whiteSpace: 'nowrap',
+            },
+          }}
+        >
           <Button
             startIcon={<Refresh />}
             onClick={fetchVirtualGroups}
@@ -294,8 +371,11 @@ export function GroupLinkPage() {
           <Button
             startIcon={<Add />}
             onClick={() => {
-              setFormData({ name: '', note: '', status: 1 })
-              setCreateDialogOpen(true)
+                setFormData({ name: '', note: '', status: 0 })
+                setCreateTargetIds([])
+                setCreatePolicySource('suspend_all')
+                void fetchAvailableGroups()
+                setCreateDialogOpen(true)
             }}
             variant="contained"
           >
@@ -327,13 +407,14 @@ export function GroupLinkPage() {
       {/* 虚拟互联组列表 */}
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <TableContainer sx={{ flex: 1 }}>
-          <Table stickyHeader>
+          <Table stickyHeader sx={{ minWidth: 980 }}>
             <TableHead>
               <TableRow>
                 <TableCell width={60}>ID</TableCell>
                 <TableCell>互联组名称</TableCell>
                 <TableCell width={120}>关联群组数</TableCell>
                 <TableCell width={100}>状态</TableCell>
+                <TableCell width={190}>信标策略</TableCell>
                 <TableCell>备注</TableCell>
                 <TableCell width={250} align="right">操作</TableCell>
               </TableRow>
@@ -341,11 +422,11 @@ export function GroupLinkPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} align="center">加载中...</TableCell>
+                  <TableCell colSpan={7} align="center">加载中...</TableCell>
                 </TableRow>
               ) : virtualGroups.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} align="center">
+                  <TableCell colSpan={7} align="center">
                     <Typography color="text.secondary" sx={{ py: 4 }}>
                       暂无虚拟互联组，点击"创建互联组"按钮开始创建
                     </Typography>
@@ -381,6 +462,12 @@ export function GroupLinkPage() {
                         </Tooltip>
                       </TableCell>
                       <TableCell>
+                        <Stack spacing={0.25}>
+                          <Typography variant="body2">信标：{broadcastPolicySummary(vg)}</Typography>
+                          <Typography variant="caption" color="text.secondary">{vg.status === 1 ? '互联期间生效' : '互联关闭，实体组正常运行'}</Typography>
+                        </Stack>
+                      </TableCell>
+                      <TableCell>
                         <Typography
                           sx={{
                             maxWidth: 200,
@@ -393,6 +480,11 @@ export function GroupLinkPage() {
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
+                        <Tooltip title="修改信标策略">
+                          <IconButton size="small" onClick={() => setPolicyGroup(vg)}>
+                            <Campaign fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
                         <Tooltip title="管理关联群组">
                           <IconButton
                             size="small"
@@ -463,6 +555,50 @@ export function GroupLinkPage() {
               onChange={(e) => setFormData({ ...formData, note: e.target.value })}
               placeholder="描述该互联组的用途"
             />
+            <FormControl fullWidth>
+              <InputLabel>成员实体组</InputLabel>
+              <Select
+                multiple
+                label="成员实体组"
+                value={createTargetIds}
+                onChange={event => {
+                  const ids = (event.target.value as number[])
+                  setCreateTargetIds(ids)
+                  if (createPolicySource !== 'suspend_all' && !ids.includes(Number(createPolicySource))) setCreatePolicySource('suspend_all')
+                }}
+                renderValue={ids => ids.map(id => availableGroups.find(group => group.id === id)?.name || `#${id}`).join('、')}
+              >
+                {availableGroups.map(group => (
+                  <MenuItem key={group.id} value={group.id}>
+                    <Checkbox checked={createTargetIds.includes(group.id)} />
+                    <ListItemText primary={group.name} secondary={`${group.enabled_broadcast_schedule_count || 0} 个启用计划`} />
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 0.5 }}>信标策略</Typography>
+              <RadioGroup value={createPolicySource} onChange={event => setCreatePolicySource(event.target.value)}>
+                <FormControlLabel value="suspend_all" control={<Radio />} label="全部暂停" />
+                {availableGroups.filter(group => createTargetIds.includes(group.id)).map(group => (
+                  <FormControlLabel
+                    key={group.id}
+                    value={String(group.id)}
+                    control={<Radio />}
+                    label={`${group.name} · ${group.enabled_broadcast_schedule_count || 0} 个启用计划`}
+                  />
+                ))}
+              </RadioGroup>
+              {createPolicySource !== 'suspend_all' && (
+                <Alert severity="warning" sx={{ mt: 1 }}>
+                  只保留一个信标源；播放期间仍会占用整个互联话权，真人语音不能抢占。
+                </Alert>
+              )}
+            </Box>
+            <FormControlLabel
+              control={<Switch checked={formData.status === 1} onChange={event => setFormData({ ...formData, status: event.target.checked ? 1 : 0 })} />}
+              label="创建后立即开启互联"
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -522,6 +658,15 @@ export function GroupLinkPage() {
               {linkWarning}
             </Alert>
           )}
+
+          <Alert
+            severity={selectedVirtualGroup?.status === 1 ? 'warning' : 'info'}
+            sx={{ mb: 2 }}
+            action={<Button color="inherit" size="small" onClick={() => selectedVirtualGroup && setPolicyGroup(selectedVirtualGroup)}>修改信标策略</Button>}
+          >
+            信标：{selectedVirtualGroup ? broadcastPolicySummary(selectedVirtualGroup) : '全部暂停'}；
+            {selectedVirtualGroup?.status === 1 ? '互联开启期间按此策略运行。' : '互联当前关闭，各实体组自动播报正常运行。'}
+          </Alert>
 
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ height: { xs: 'auto', md: 360 } }}>
             {/* 左侧：已关联的群组 */}
@@ -695,6 +840,55 @@ export function GroupLinkPage() {
         }}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, open: false }))}
       />
+
+      <VirtualGroupBroadcastPolicyDialog
+        open={Boolean(policyGroup)}
+        group={policyGroup}
+        onClose={() => setPolicyGroup(null)}
+        onSaved={(updated) => {
+          setVirtualGroups(current => current.map(group => group.id === updated.id ? { ...group, ...updated } : group))
+          setSelectedVirtualGroup(current => current?.id === updated.id ? { ...current, ...updated } : current)
+          void fetchVirtualGroups()
+        }}
+      />
+
+      <Dialog
+        open={removingPolicySourceId !== null}
+        onClose={() => setRemovingPolicySourceId(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>移除保留信标来源</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Alert severity="warning">
+              该实体组是当前保留的唯一信标来源。请选择移除后使用的策略；成员关系与策略会同时保存。
+            </Alert>
+            <RadioGroup value={replacementPolicySource} onChange={event => setReplacementPolicySource(event.target.value)}>
+              <FormControlLabel value="suspend_all" control={<Radio />} label="全部暂停" />
+              {(selectedVirtualGroup?.broadcast_members || [])
+                .filter(member => member.group_id !== removingPolicySourceId)
+                .map(member => (
+                  <FormControlLabel
+                    key={member.group_id}
+                    value={String(member.group_id)}
+                    control={<Radio />}
+                    label={`${member.group_name} · ${member.enabled_count} 个启用计划`}
+                  />
+                ))}
+            </RadioGroup>
+            {replacementPolicySource !== 'suspend_all' && (
+              <Alert severity="warning">
+                只保留一个信标源；播放期间仍会占用整个互联话权，真人语音不能抢占。
+              </Alert>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRemovingPolicySourceId(null)}>取消</Button>
+          <Button variant="contained" color="warning" onClick={() => void handleRemovePolicySource()}>保存并移除</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

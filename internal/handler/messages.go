@@ -42,6 +42,7 @@ type MessageResponse struct {
 	AudioSize        int64                 `json:"audio_size,omitempty"`
 	AudioFormat      string                `json:"audio_format,omitempty"`
 	Status           int                   `json:"status"`
+	IsAutoBroadcast  bool                  `json:"is_auto_broadcast"`
 }
 
 type messageCursorPayload struct {
@@ -154,9 +155,10 @@ func toMessageResponse(record *gormdb.MessageRecord, requestedGroupID uint) Mess
 			UserID: record.UserID, Username: username, CallSign: callSign, Nickname: nickname,
 			SSID: record.DeviceSSID, DevModel: devModel, IsGhost: record.DeviceID == 0,
 		},
-		SentAt:     record.StartTime.UTC().Format(time.RFC3339Nano),
-		DurationMs: record.DurationMs,
-		Status:     record.Status,
+		SentAt:          record.StartTime.UTC().Format(time.RFC3339Nano),
+		DurationMs:      record.DurationMs,
+		Status:          record.Status,
+		IsAutoBroadcast: record.IsAutoBroadcast,
 	}
 	if !record.EndTime.IsZero() {
 		response.EndTime = record.EndTime.UTC().Format(time.RFC3339Nano)

@@ -1,6 +1,6 @@
 ﻿# DraARL 文档站
 
-当前文档对应 DraARL Server `v2.0.0-alpha4`。版本事实以仓库根目录
+当前文档对应 DraARL Server `v2.0.0-alpha5`。版本事实以仓库根目录
 `VERSION` 为准；API 路由以 `internal/server/server.go` 为准，配置默认值以
 `config.yaml.example` 和 `internal/config/config.go` 为准。
 

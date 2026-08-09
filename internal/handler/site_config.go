@@ -211,6 +211,12 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 		})
 		return
 	}
+	if isReservedBroadcastRuntimeKey(strings.TrimSpace(req.Key)) {
+		c.JSON(http.StatusBadRequest, Response{
+			Code: http.StatusBadRequest, Message: "自动播报运行状态必须通过专用管理接口修改",
+		})
+		return
+	}
 
 	if err := h.repo.Set(req.Key, req.Value, req.Category, ""); err != nil {
 		c.JSON(http.StatusInternalServerError, Response{

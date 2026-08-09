@@ -87,6 +87,141 @@ func TestRepositorySchedulePolicyMySQL(t *testing.T) {
 	}
 }
 
+func TestVirtualGroupCoordinationMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 9, 4, 0, 0, 0, time.UTC)
+	audioA := createReadyAudio(t, repo, owner.ID, groups.a.ID, "coord-a")
+	audioB := createReadyAudio(t, repo, owner.ID, groups.b.ID, "coord-b")
+	newDaily := func(groupID int, audioID uint, name string, enabled bool) *model.BroadcastSchedule {
+		schedule := &model.BroadcastSchedule{
+			GroupID: groupID, AudioID: audioID, Name: name, ScheduleType: model.ScheduleTypeDaily,
+			Timezone: "UTC", LocalTime: "12:00:00", Enabled: enabled, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+		}
+		if err := repo.SaveSchedule(ctx, schedule, now); err != nil {
+			t.Fatalf("save %s: %v", name, err)
+		}
+		return schedule
+	}
+	dailyA := newDaily(groups.a.ID, audioA.ID, "daily A", true)
+	disabledA := newDaily(groups.a.ID, audioA.ID, "disabled A", false)
+	dailyB := newDaily(groups.b.ID, audioB.ID, "daily B", true)
+	onceAt := now.Add(30 * time.Minute)
+	onceA := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audioA.ID, Name: "once A", ScheduleType: model.ScheduleTypeOnce,
+		Timezone: "UTC", ScheduledAt: &onceAt, Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	if err := repo.SaveSchedule(ctx, onceA, now); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, groupID := range []int{groups.a.ID, groups.b.ID} {
+		mutation, err := repo.AddVirtualGroupMember(ctx, groups.virtual.ID, groupID, now)
+		if err != nil {
+			t.Fatalf("add closed member %d: %v", groupID, err)
+		}
+		if len(mutation.CancelGroupIDs) != 0 {
+			t.Fatalf("closed interconnect requested cancellation: %#v", mutation)
+		}
+	}
+	assertScheduleState(t, repo, dailyA.ID, true, "", true)
+	assertScheduleState(t, repo, dailyB.ID, true, "", true)
+
+	policy := &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: groups.virtual.ID, Mode: model.PolicyAllowSingleSource,
+		AllowedSourceGroupID: &groups.b.ID, UpdatedBy: owner.ID,
+	}
+	if mutation, err := repo.UpdateVirtualGroupPolicy(ctx, policy, now); err != nil || len(mutation.CancelGroupIDs) != 0 {
+		t.Fatalf("save closed policy mutation=%#v err=%v", mutation, err)
+	}
+	lease := now.Add(time.Minute)
+	preEnableRuns := []*model.BroadcastRun{
+		{ScheduleID: dailyA.ID, AudioID: audioA.ID, SourceGroupID: groups.a.ID, ScheduledFor: now.Add(-2 * time.Second), Status: model.RunStatusClaimed, ClaimedBy: "old-a", LeaseUntil: &lease},
+		{ScheduleID: dailyB.ID, AudioID: audioB.ID, SourceGroupID: groups.b.ID, ScheduledFor: now.Add(-time.Second), Status: model.RunStatusPlaying, ClaimedBy: "old-b", LeaseUntil: &lease},
+	}
+	if err := repo.DB().Create(preEnableRuns).Error; err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := repo.SetVirtualGroupStatus(ctx, groups.virtual.ID, 1, now)
+	if err != nil {
+		t.Fatalf("enable virtual group: %v", err)
+	}
+	if len(mutation.CancelGroupIDs) != 2 {
+		t.Fatalf("enable cancellation groups=%v", mutation.CancelGroupIDs)
+	}
+	assertScheduleState(t, repo, dailyA.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	assertScheduleState(t, repo, onceA.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	assertScheduleState(t, repo, dailyB.ID, true, "", true)
+	assertScheduleState(t, repo, disabledA.ID, false, "", false)
+	for _, run := range preEnableRuns {
+		var stored model.BroadcastRun
+		if err := repo.DB().First(&stored, run.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != model.RunStatusCancelledInterconnectEnabled || stored.ErrorCode != "interconnect_changed" || stored.LeaseUntil != nil || stored.ClaimedBy != "" {
+			t.Fatalf("run not cancelled by enable: %#v", stored)
+		}
+	}
+
+	activeCreated := newDaily(groups.a.ID, audioA.ID, "created while active", true)
+	assertScheduleState(t, repo, activeCreated.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	policy = &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: groups.virtual.ID, Mode: model.PolicyAllowSingleSource,
+		AllowedSourceGroupID: &groups.a.ID, UpdatedBy: owner.ID,
+	}
+	if _, err := repo.UpdateVirtualGroupPolicy(ctx, policy, now.Add(5*time.Minute)); err != nil {
+		t.Fatalf("switch allowed source: %v", err)
+	}
+	assertScheduleState(t, repo, dailyA.ID, true, "", true)
+	assertScheduleState(t, repo, dailyB.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	if _, err := repo.RemoveVirtualGroupMember(ctx, groups.virtual.ID, groups.a.ID, now); !errors.Is(err, ErrPolicySourceStillMember) {
+		t.Fatalf("remove selected source error=%v", err)
+	}
+
+	policy = &model.VirtualGroupBroadcastPolicy{VirtualGroupID: groups.virtual.ID, Mode: model.PolicySuspendAll, UpdatedBy: owner.ID}
+	if _, err := repo.UpdateVirtualGroupPolicy(ctx, policy, now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RemoveVirtualGroupMember(ctx, groups.virtual.ID, groups.a.ID, now.Add(20*time.Minute)); err != nil {
+		t.Fatalf("remove non-selected source: %v", err)
+	}
+	assertScheduleState(t, repo, dailyA.ID, true, "", true)
+	assertScheduleState(t, repo, dailyB.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+	if _, err := repo.AddVirtualGroupMember(ctx, groups.virtual.ID, groups.a.ID, now.Add(25*time.Minute)); err != nil {
+		t.Fatalf("re-add active member: %v", err)
+	}
+	assertScheduleState(t, repo, dailyA.ID, true, model.SuspendReasonActiveVirtualGroup, false)
+
+	closedAt := now.Add(time.Hour)
+	if _, err := repo.SetVirtualGroupStatus(ctx, groups.virtual.ID, 0, closedAt); err != nil {
+		t.Fatalf("disable virtual group: %v", err)
+	}
+	assertScheduleState(t, repo, dailyA.ID, true, "", true)
+	assertScheduleState(t, repo, dailyB.ID, true, "", true)
+	assertScheduleState(t, repo, onceA.ID, false, "", false)
+	var skipped model.BroadcastRun
+	if err := repo.DB().Where("schedule_id = ? AND scheduled_for = ?", onceA.ID, onceAt).First(&skipped).Error; err != nil {
+		t.Fatalf("load elapsed one-time result: %v", err)
+	}
+	if skipped.Status != model.RunStatusSkippedInterconnected || skipped.ErrorCode != "virtual_group_broadcast_suspended" {
+		t.Fatalf("unexpected elapsed one-time result: %#v", skipped)
+	}
+}
+
+func assertScheduleState(t *testing.T, repo *Repository, scheduleID uint, enabled bool, suspendedReason string, hasNext bool) {
+	t.Helper()
+	var schedule model.BroadcastSchedule
+	if err := repo.DB().First(&schedule, scheduleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if schedule.Enabled != enabled || schedule.SuspendedReason != suspendedReason || (schedule.NextRunAt != nil) != hasNext {
+		t.Fatalf("schedule %d state enabled=%t suspended=%q next=%v", scheduleID, schedule.Enabled, schedule.SuspendedReason, schedule.NextRunAt)
+	}
+	if suspendedReason == "" && (schedule.SuspendedByVirtualGroupID != nil || schedule.SuspendedAt != nil) {
+		t.Fatalf("schedule %d retained suspension metadata: %#v", scheduleID, schedule)
+	}
+}
+
 func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	repo, owner, groups := setupRepositoryMySQL(t)
 	ctx := context.Background()
@@ -439,6 +574,12 @@ func setupRepositoryMySQL(t *testing.T) (*Repository, *gormdb.User, repositoryGr
 		group := &gormdb.Group{Name: fmt.Sprintf("%s-%d", name, stamp), Type: 1, OwerID: owner.ID, Status: status, IsVirtual: virtual}
 		if err := gormdb.Get().Create(group).Error; err != nil {
 			t.Fatal(err)
+		}
+		if virtual {
+			if err := gormdb.Get().Model(group).Update("status", 0).Error; err != nil {
+				t.Fatal(err)
+			}
+			group.Status = 0
 		}
 		return group
 	}

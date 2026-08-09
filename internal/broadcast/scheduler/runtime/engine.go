@@ -45,6 +45,7 @@ func (e *RunValidationError) Error() string {
 type activeRun struct {
 	groupID int
 	cancel  context.CancelCauseFunc
+	done    <-chan struct{}
 }
 
 type Engine struct {
@@ -159,6 +160,7 @@ func (e *Engine) launch(run model.BroadcastRun) {
 
 func (e *Engine) launchReserved(run model.BroadcastRun) {
 	runCtx, cancel := context.WithCancelCause(e.ctx)
+	done := make(chan struct{})
 	e.activeMu.Lock()
 	if _, exists := e.active[run.ID]; exists {
 		e.activeMu.Unlock()
@@ -166,7 +168,7 @@ func (e *Engine) launchReserved(run model.BroadcastRun) {
 		<-e.slots
 		return
 	}
-	e.active[run.ID] = activeRun{groupID: run.SourceGroupID, cancel: cancel}
+	e.active[run.ID] = activeRun{groupID: run.SourceGroupID, cancel: cancel, done: done}
 	e.activeMu.Unlock()
 
 	e.wg.Add(1)
@@ -177,6 +179,7 @@ func (e *Engine) launchReserved(run model.BroadcastRun) {
 			delete(e.active, run.ID)
 			e.activeMu.Unlock()
 			<-e.slots
+			close(done)
 		}()
 		e.executeRun(runCtx, run)
 	}()
@@ -379,6 +382,11 @@ func (e *Engine) CancelRun(runID uint, cause error) bool {
 }
 
 func (e *Engine) CancelGroups(groupIDs []int, cause error) int {
+	count, _ := e.CancelGroupsAndWait(context.Background(), groupIDs, cause, false)
+	return count
+}
+
+func (e *Engine) CancelGroupsAndWait(ctx context.Context, groupIDs []int, cause error, wait bool) (int, error) {
 	set := make(map[int]struct{}, len(groupIDs))
 	for _, groupID := range groupIDs {
 		if groupID > 0 {
@@ -386,17 +394,30 @@ func (e *Engine) CancelGroups(groupIDs []int, cause error) int {
 		}
 	}
 	e.activeMu.Lock()
-	cancels := make([]context.CancelCauseFunc, 0)
+	activeRuns := make([]activeRun, 0)
 	for _, active := range e.active {
 		if _, ok := set[active.groupID]; ok {
-			cancels = append(cancels, active.cancel)
+			activeRuns = append(activeRuns, active)
 		}
 	}
 	e.activeMu.Unlock()
-	for _, cancel := range cancels {
-		cancel(cause)
+	for _, active := range activeRuns {
+		active.cancel(cause)
 	}
-	return len(cancels)
+	if !wait {
+		return len(activeRuns), nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, active := range activeRuns {
+		select {
+		case <-active.done:
+		case <-ctx.Done():
+			return len(activeRuns), ctx.Err()
+		}
+	}
+	return len(activeRuns), nil
 }
 
 func (e *Engine) Stop(ctx context.Context) error {

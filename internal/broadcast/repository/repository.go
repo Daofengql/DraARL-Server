@@ -18,19 +18,20 @@ import (
 )
 
 var (
-	ErrNotFound               = errors.New("broadcast resource not found")
-	ErrInvalidEntityGroup     = errors.New("broadcast target must be an entity group")
-	ErrInvalidAudio           = errors.New("invalid broadcast audio")
-	ErrAudioNotReady          = errors.New("broadcast audio is not ready")
-	ErrAudioGroupMismatch     = errors.New("broadcast audio belongs to another group")
-	ErrAudioInUse             = errors.New("broadcast audio is referenced by a schedule")
-	ErrInvalidSchedule        = errors.New("invalid broadcast schedule")
-	ErrInvalidPolicy          = errors.New("invalid virtual group broadcast policy")
-	ErrPolicySourceNotMember  = errors.New("virtual group broadcast source is not a member")
-	ErrVirtualGroupRequired   = errors.New("virtual group is required")
-	ErrManualTriggerSuspended = errors.New("virtual group broadcast suspended")
-	ErrRunLeaseLost           = errors.New("broadcast run lease lost")
-	ErrRunNotRunnable         = errors.New("broadcast run is not runnable")
+	ErrNotFound                = errors.New("broadcast resource not found")
+	ErrInvalidEntityGroup      = errors.New("broadcast target must be an entity group")
+	ErrInvalidAudio            = errors.New("invalid broadcast audio")
+	ErrAudioNotReady           = errors.New("broadcast audio is not ready")
+	ErrAudioGroupMismatch      = errors.New("broadcast audio belongs to another group")
+	ErrAudioInUse              = errors.New("broadcast audio is referenced by a schedule")
+	ErrInvalidSchedule         = errors.New("invalid broadcast schedule")
+	ErrInvalidPolicy           = errors.New("invalid virtual group broadcast policy")
+	ErrPolicySourceNotMember   = errors.New("virtual group broadcast source is not a member")
+	ErrPolicySourceStillMember = errors.New("virtual group broadcast source must be changed before removing the member")
+	ErrVirtualGroupRequired    = errors.New("virtual group is required")
+	ErrManualTriggerSuspended  = errors.New("virtual group broadcast suspended")
+	ErrRunLeaseLost            = errors.New("broadcast run lease lost")
+	ErrRunNotRunnable          = errors.New("broadcast run is not runnable")
 )
 
 type Repository struct {
@@ -279,9 +280,34 @@ func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy stri
 	leaseUntil := now.Add(leaseDuration)
 	claimed := make([]model.BroadcastRun, 0, limit)
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Discover candidates without locks, then take the shared coordination
+		// locks in entity-group order before locking schedules. A candidate that
+		// changes meanwhile is filtered by the second query and retried next scan.
+		type dueCandidate struct {
+			ID      uint
+			GroupID int
+		}
+		var candidates []dueCandidate
+		if err := tx.Model(&model.BroadcastSchedule{}).Select("id, group_id").
+			Where("enabled = ? AND suspended_reason = '' AND next_run_at IS NOT NULL AND next_run_at <= ?", true, now).
+			Order("next_run_at ASC, id ASC").Limit(limit).Find(&candidates).Error; err != nil {
+			return err
+		}
+		if len(candidates) == 0 {
+			return nil
+		}
+		groupIDs := make([]int, 0, len(candidates))
+		scheduleIDs := make([]uint, 0, len(candidates))
+		for _, candidate := range candidates {
+			groupIDs = append(groupIDs, candidate.GroupID)
+			scheduleIDs = append(scheduleIDs, candidate.ID)
+		}
+		if err := lockEntityGroups(tx, groupIDs); err != nil {
+			return err
+		}
 		var schedules []model.BroadcastSchedule
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("enabled = ? AND suspended_reason = '' AND next_run_at IS NOT NULL AND next_run_at <= ?", true, now).
+			Where("id IN ? AND enabled = ? AND suspended_reason = '' AND next_run_at IS NOT NULL AND next_run_at <= ?", scheduleIDs, true, now).
 			Order("next_run_at ASC, id ASC").Limit(limit).Find(&schedules).Error; err != nil {
 			return err
 		}
@@ -652,38 +678,8 @@ func (r *Repository) GetPolicy(ctx context.Context, virtualGroupID int) (*model.
 }
 
 func (r *Repository) SavePolicy(ctx context.Context, policy *model.VirtualGroupBroadcastPolicy) error {
-	if policy == nil || policy.VirtualGroupID <= 0 || policy.UpdatedBy <= 0 || !model.IsPolicyMode(policy.Mode) {
-		return ErrInvalidPolicy
-	}
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var group gormdb.Group
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&group, policy.VirtualGroupID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
-			return err
-		}
-		if !group.IsVirtual {
-			return ErrVirtualGroupRequired
-		}
-		if policy.Mode == model.PolicySuspendAll {
-			policy.AllowedSourceGroupID = nil
-		} else {
-			if policy.AllowedSourceGroupID == nil || *policy.AllowedSourceGroupID <= 0 {
-				return ErrInvalidPolicy
-			}
-			var count int64
-			if err := tx.Model(&gormdb.GroupLink{}).
-				Where("link_group_id = ? AND target_group_id = ?", policy.VirtualGroupID, *policy.AllowedSourceGroupID).
-				Count(&count).Error; err != nil {
-				return err
-			}
-			if count != 1 {
-				return ErrPolicySourceNotMember
-			}
-		}
-		return tx.Save(policy).Error
-	})
+	_, err := r.UpdateVirtualGroupPolicy(ctx, policy, time.Now().UTC())
+	return err
 }
 
 type MemberScheduleStats struct {
@@ -739,6 +735,27 @@ func lockEntityGroup(tx *gorm.DB, groupID int) error {
 	}
 	if group.IsVirtual || (group.Type != 1 && group.Type != 2) {
 		return ErrInvalidEntityGroup
+	}
+	return nil
+}
+
+func lockEntityGroups(tx *gorm.DB, groupIDs []int) error {
+	groupIDs = SortedUniqueGroupIDs(groupIDs)
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	var groups []gormdb.Group
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id IN ?", groupIDs).Order("id ASC").Find(&groups).Error; err != nil {
+		return err
+	}
+	if len(groups) != len(groupIDs) {
+		return ErrNotFound
+	}
+	for index := range groups {
+		if groups[index].IsVirtual || (groups[index].Type != 1 && groups[index].Type != 2) {
+			return ErrInvalidEntityGroup
+		}
 	}
 	return nil
 }

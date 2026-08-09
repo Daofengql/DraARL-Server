@@ -316,3 +316,32 @@ func TestEngineManualStopBeforeExecutionLoadIsStillCancelled(t *testing.T) {
 		t.Fatalf("finished=%#v", finished)
 	}
 }
+
+func TestEngineCancelGroupsWaitsForExecutionRelease(t *testing.T) {
+	engine, repo, _ := engineFixture(t)
+	repo.claimed = true
+	repo.blockLoad = true
+	repo.loadStarted = make(chan struct{}, 1)
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := engine.TriggerManual(context.Background(), repo.run.SourceGroupID, repo.run.ScheduleID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-repo.loadStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run did not enter execution load")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	count, err := engine.CancelGroupsAndWait(ctx, []int{repo.run.SourceGroupID}, ErrInterconnectChange, true)
+	if err != nil || count != 1 {
+		t.Fatalf("cancel count=%d err=%v", count, err)
+	}
+	finished := waitFinished(t, repo)
+	stopEngine(t, engine)
+	if finished.status != model.RunStatusCancelledInterconnectEnabled || finished.errorCode != "interconnect_changed" {
+		t.Fatalf("finished=%#v", finished)
+	}
+}

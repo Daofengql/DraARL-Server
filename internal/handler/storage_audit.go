@@ -46,8 +46,8 @@ func AuditStorage(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), storageAuditTimeout)
 	defer cancel()
-	response := storageAuditResponse{GeneratedAt: time.Now().UTC(), Prefixes: make([]storage.AuditResult, 0, 2)}
-	for _, prefix := range []string{"client-resources/", "firmware/"} {
+	response := storageAuditResponse{GeneratedAt: time.Now().UTC(), Prefixes: make([]storage.AuditResult, 0, 3)}
+	for _, prefix := range []string{"client-resources/", "firmware/", "broadcast-audios/"} {
 		result, auditErr := storage.AuditPrefix(ctx, prefix, references[prefix])
 		if auditErr != nil {
 			writeClientResourceError(c, http.StatusInternalServerError, "扫描存储对象失败")

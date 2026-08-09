@@ -274,6 +274,17 @@ func (s *Server) setupRoutes() {
 				// 离开群组
 				approved.POST("/groups/:id/leave", handler.LeaveGroup)
 
+				// 实体群组自动播报；handler 内再次校验群主或站点管理员权限。
+				approved.GET("/groups/:id/broadcast-audios", handler.ListBroadcastAudios)
+				approved.POST("/groups/:id/broadcast-audios", handler.UploadBroadcastAudio)
+				approved.GET("/groups/:id/broadcast-audios/:audioId", handler.GetBroadcastAudio)
+				approved.DELETE("/groups/:id/broadcast-audios/:audioId", handler.DeleteBroadcastAudio)
+				approved.GET("/groups/:id/broadcast-schedules", handler.ListBroadcastSchedules)
+				approved.POST("/groups/:id/broadcast-schedules", handler.CreateBroadcastSchedule)
+				approved.PATCH("/groups/:id/broadcast-schedules/:scheduleId", handler.UpdateBroadcastSchedule)
+				approved.DELETE("/groups/:id/broadcast-schedules/:scheduleId", handler.DeleteBroadcastSchedule)
+				approved.GET("/groups/:id/broadcast-runs", handler.ListBroadcastRuns)
+
 				// 群组管理操作（需要群组所有者或管理员权限）
 				groupOwner := approved.Group("")
 				groupOwner.Use(middleware.RequireAdminOrOwner())

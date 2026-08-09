@@ -50,6 +50,26 @@ func (r *Repository) ListAudios(ctx context.Context, groupID int) ([]model.Broad
 	return audios, err
 }
 
+func (r *Repository) AudioScheduleCounts(ctx context.Context, groupID int) (map[uint]int64, error) {
+	type countRow struct {
+		AudioID uint
+		Count   int64
+	}
+	var rows []countRow
+	err := r.db.WithContext(ctx).Model(&model.BroadcastSchedule{}).
+		Select("audio_id, COUNT(*) AS count").
+		Where("group_id = ?", groupID).
+		Group("audio_id").Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[uint]int64, len(rows))
+	for _, row := range rows {
+		counts[row.AudioID] = row.Count
+	}
+	return counts, nil
+}
+
 func (r *Repository) GetAudio(ctx context.Context, groupID int, audioID uint) (*model.BroadcastAudio, error) {
 	var audio model.BroadcastAudio
 	err := r.db.WithContext(ctx).Where("group_id = ? AND id = ?", groupID, audioID).First(&audio).Error

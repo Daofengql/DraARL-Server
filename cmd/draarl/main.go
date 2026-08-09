@@ -16,6 +16,7 @@ import (
 
 	"draarl/internal/aprs"
 	authstore "draarl/internal/auth"
+	"draarl/internal/broadcast/media"
 	"draarl/internal/buildinfo"
 	"draarl/internal/config"
 	"draarl/internal/db"
@@ -291,6 +292,9 @@ func main() {
 
 	// 启动 HTTP 服务器（Web API 和前端服务）
 	srv := server.New(cfg)
+	if err := media.InitProcessor(cfg); err != nil {
+		stdlog.Fatalf("启动自动播报媒体处理器失败: %v", err)
+	}
 	httpErrCh := make(chan error, 1)
 	go func() {
 		stdlog.Println("正在启动 HTTP 服务器...")
@@ -327,6 +331,12 @@ func main() {
 		stdlog.Printf("HTTP 服务关闭失败: %v", err)
 	}
 	shutdownCancel()
+
+	mediaShutdownCtx, mediaShutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := media.StopProcessor(mediaShutdownCtx); err != nil {
+		stdlog.Printf("自动播报媒体处理器关闭失败: %v", err)
+	}
+	mediaShutdownCancel()
 
 	// 停止 UDP 服务器
 	stdlog.Println("正在停止 UDP 服务器...")

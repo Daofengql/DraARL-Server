@@ -7,6 +7,7 @@ import (
 
 	"draarl/internal/broadcast/repository"
 	"draarl/internal/config"
+	"draarl/pkg/storage"
 )
 
 var (
@@ -17,6 +18,9 @@ var (
 func InitProcessor(cfg *config.Configuration) error {
 	if cfg == nil || !cfg.Broadcast.Enabled {
 		return nil
+	}
+	if !storage.IsEnabled() {
+		return fmt.Errorf("broadcast media processor requires initialized storage")
 	}
 	processor := NewProcessor(cfg.Broadcast, repository.Default())
 	if err := processor.Start(); err != nil {

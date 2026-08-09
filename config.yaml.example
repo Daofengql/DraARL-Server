@@ -120,7 +120,7 @@ Web:
 
 # 群组自动播报（仅中心完整模式执行）
 Broadcast:
-    Enabled: false                 # 站点总开关；启用前确认无人值守发射合规要求
+    Enabled: false                 # 站点总开关；由接入射频设备的台站管理员显式启用
     QuietWindowSeconds: 5         # 活动通信域连续静默时间；最近有语音则本轮跳过
     MaxAudioDurationSeconds: 30   # 单条播报上限，服务端硬上限 60 秒
     MaxUploadBytes: 20971520      # 原始音频上传上限（20 MiB）

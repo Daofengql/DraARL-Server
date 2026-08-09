@@ -494,6 +494,94 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			t.Fatalf("storage audit reference missing %q", key)
 		}
 	}
+
+	// Account deletion must not be blocked by broadcast audit foreign keys. The
+	// target owns groupA, while it previously created assets and a policy in
+	// groups owned by other users; those surviving records are reassigned to
+	// their group owners. It also exercises the live topology and player release
+	// path rather than directly deleting database rows.
+	survivorAudio := &model.BroadcastAudio{
+		GroupID: groupB.ID, Name: "保留的群组资源", OriginalObjectKey: "broadcast-audios/survivor-" + suffix + ".wav",
+		PlaybackObjectKey: "broadcast-audios/survivor-" + suffix + ".dabr", OriginalMIMEType: "audio/wav",
+		OriginalSize: 4, PlaybackSize: 4, DurationMS: 480, PacketCount: 4, SHA256: strings.Repeat("c", 64),
+		Status: model.AudioStatusReady, CreatedBy: owner.ID,
+	}
+	for _, key := range []string{survivorAudio.OriginalObjectKey, survivorAudio.PlaybackObjectKey} {
+		if err := storage.Put(context.Background(), key, bytes.NewReader([]byte("keep")), 4, "application/octet-stream"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.CreateAudio(context.Background(), survivorAudio); err != nil {
+		t.Fatal(err)
+	}
+	survivorSchedule := &model.BroadcastSchedule{
+		GroupID: groupB.ID, AudioID: survivorAudio.ID, Name: "保留的创建者", ScheduleType: model.ScheduleTypeDaily,
+		Timezone: "Asia/Shanghai", LocalTime: "20:20:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	if err := repo.SaveSchedule(context.Background(), survivorSchedule, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	survivorVirtual := &gormdb.Group{Name: "broadcast-survivor-v-" + suffix, Type: groupTypePublic, OwerID: admin.ID, Status: 0, IsVirtual: true}
+	if _, err := repo.CreateVirtualGroup(context.Background(), survivorVirtual, []int{groupB.ID}, &model.VirtualGroupBroadcastPolicy{
+		Mode: model.PolicySuspendAll, UpdatedBy: owner.ID,
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = gormdb.NewGroupRepository().DeleteGroupWithCascade(survivorVirtual.ID)
+		_ = storage.Delete(context.Background(), survivorAudio.OriginalObjectKey)
+		_ = storage.Delete(context.Background(), survivorAudio.PlaybackObjectKey)
+	})
+
+	if _, err := repo.AddVirtualGroupMember(context.Background(), virtual.ID, groupA.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateVirtualGroupPolicy(context.Background(), &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: virtual.ID, Mode: model.PolicyAllowSingleSource, AllowedSourceGroupID: &groupA.ID, UpdatedBy: owner.ID,
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	userDeleteAudio := uploadWAV(owner, groupA.ID, "用户删除释放", makeBroadcastTestWAV(4*time.Second))
+	userDeleteSchedule := createSchedule(userDeleteAudio.ID, "播放中删除用户", "23:50:00")
+	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	userDeleteRun := trigger(userDeleteSchedule.ID)
+	waitBroadcastRunPlaying(t, repo, groupA.ID, userDeleteRun.ID)
+	deleteUserResult := performBroadcastHandlerRequest(t, admin, http.MethodDelete, "/users/:id", fmt.Sprintf("/users/%d", owner.ID), nil, "", DeleteUser)
+	requireBroadcastStatus(t, deleteUserResult, http.StatusOK)
+	if !bytes.Contains(deleteUserResult.Body, []byte(`"broadcast_cleanup_pending":false`)) {
+		t.Fatalf("user deletion cleanup result=%s", deleteUserResult.Body)
+	}
+	if _, _, err := storage.Stat(context.Background(), userDeleteAudio.OriginalObjectKey); err == nil {
+		t.Fatal("user-owned group original broadcast object still exists")
+	}
+	if _, _, err := storage.Stat(context.Background(), userDeleteAudio.PlaybackObjectKey); err == nil {
+		t.Fatal("user-owned group playback broadcast object still exists")
+	}
+	ownerAfterDelete, err := gormdb.NewUserRepository().GetUserByID(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	} else if ownerAfterDelete != nil {
+		t.Fatal("deleted user remains present")
+	}
+	if _, err := repo.GetRun(context.Background(), groupA.ID, userDeleteRun.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("user deletion retained deleted-group run: %v", err)
+	}
+	retainedAudio, err := repo.GetAudio(context.Background(), groupB.ID, survivorAudio.ID)
+	if err != nil || retainedAudio.CreatedBy != other.ID {
+		t.Fatalf("surviving audio creator was not reassigned: audio=%#v err=%v", retainedAudio, err)
+	}
+	retainedSchedule, err := repo.GetSchedule(context.Background(), groupB.ID, survivorSchedule.ID)
+	if err != nil || retainedSchedule.CreatedBy != other.ID || retainedSchedule.UpdatedBy != other.ID {
+		t.Fatalf("surviving schedule audit was not reassigned: schedule=%#v err=%v", retainedSchedule, err)
+	}
+	retainedPolicy, err := repo.GetPolicy(context.Background(), survivorVirtual.ID)
+	if err != nil || retainedPolicy.UpdatedBy != admin.ID {
+		t.Fatalf("surviving policy updater was not reassigned: policy=%#v err=%v", retainedPolicy, err)
+	}
+	remainingPolicy, err = repo.GetPolicy(context.Background(), virtual.ID)
+	if err != nil || remainingPolicy.Mode != model.PolicySuspendAll || remainingPolicy.AllowedSourceGroupID != nil {
+		t.Fatalf("deleted user selected source left invalid policy: policy=%#v err=%v", remainingPolicy, err)
+	}
 }
 
 func performBroadcastHandlerRequest(t *testing.T, actor *gormdb.User, method, pattern, requestPath string, body []byte, contentType string, handler gin.HandlerFunc) broadcastHTTPResult {
@@ -502,6 +590,7 @@ func performBroadcastHandlerRequest(t *testing.T, actor *gormdb.User, method, pa
 	router := gin.New()
 	router.Handle(method, pattern, func(c *gin.Context) {
 		c.Set("user", actor)
+		c.Set("username", actor.Name)
 		handler(c)
 	})
 	response := httptest.NewRecorder()

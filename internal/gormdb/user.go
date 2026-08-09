@@ -2,7 +2,9 @@ package gormdb
 
 import (
 	"errors"
+	"sort"
 
+	broadcastmodel "draarl/internal/broadcast/model"
 	"draarl/internal/models"
 
 	"gorm.io/gorm"
@@ -259,18 +261,29 @@ func (r *UserRepository) DeleteUser(id int) error {
 }
 
 type DeleteUserCascadeResult struct {
-	DeletedDevices []*Device
-	MovedDevices   []*Device
-	OwnedGroupIDs  []int
+	DeletedDevices      []*Device
+	MovedDevices        []*Device
+	OwnedGroupIDs       []int
+	BroadcastObjectKeys []string
+}
+
+// ListOwnedGroups returns every group currently owned by the user. Callers that
+// remove a user use it to coordinate virtual-group state and active broadcasts
+// before the deletion transaction changes the topology.
+func (r *UserRepository) ListOwnedGroups(userID int) ([]*Group, error) {
+	groups := make([]*Group, 0)
+	err := r.db.Where("ower_id = ?", userID).Order("id ASC").Find(&groups).Error
+	return groups, err
 }
 
 // DeleteUserWithCascade 删除用户及其所有关联数据（事务级联删除），并返回
 // 需要在事务提交后同步运行时与缓存的设备/群组清单。
 func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult, error) {
 	result := &DeleteUserCascadeResult{
-		DeletedDevices: make([]*Device, 0),
-		MovedDevices:   make([]*Device, 0),
-		OwnedGroupIDs:  make([]int, 0),
+		DeletedDevices:      make([]*Device, 0),
+		MovedDevices:        make([]*Device, 0),
+		OwnedGroupIDs:       make([]int, 0),
+		BroadcastObjectKeys: make([]string, 0),
 	}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("owner_id = ?", id).Find(&result.DeletedDevices).Error; err != nil {
@@ -308,8 +321,18 @@ func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult
 		if err := tx.Model(&Group{}).Where("ower_id = ?", id).Pluck("id", &result.OwnedGroupIDs).Error; err != nil {
 			return err
 		}
+		// Broadcast resources remain owned by their group, not by the account
+		// which happened to create or last edit them. Reassign every resource in
+		// a surviving group before removing the user so the audit foreign keys do
+		// not make account deletion depend on a historical editor.
+		if err := reassignSurvivingBroadcastUserReferences(tx, id); err != nil {
+			return err
+		}
 
 		if len(result.OwnedGroupIDs) > 0 {
+			if err := collectDeletedGroupBroadcastObjectKeys(tx, result.OwnedGroupIDs, &result.BroadcastObjectKeys); err != nil {
+				return err
+			}
 			if err := tx.Where("group_id IN ?", result.OwnedGroupIDs).Find(&result.MovedDevices).Error; err != nil {
 				return err
 			}
@@ -333,6 +356,26 @@ func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult
 				return err
 			}
 			if err := clearGhostClientGroupReferences(tx, nil, result.OwnedGroupIDs); err != nil {
+				return err
+			}
+			// A selected source may be deleted while its virtual group survives.
+			// Preserve the virtual group with a safe suspend-all policy instead of
+			// leaving an invalid selected-source foreign key behind.
+			if err := tx.Model(&broadcastmodel.VirtualGroupBroadcastPolicy{}).
+				Where("allowed_source_group_id IN ?", result.OwnedGroupIDs).
+				Updates(map[string]interface{}{"mode": broadcastmodel.PolicySuspendAll, "allowed_source_group_id": nil}).Error; err != nil {
+				return err
+			}
+			// Delete broadcast rows explicitly in FK order. The audio rows are
+			// RESTRICT-referenced by schedules and runs, so relying on concurrent
+			// database cascades is not safe on MySQL.
+			if err := tx.Where("source_group_id IN ?", result.OwnedGroupIDs).Delete(&broadcastmodel.BroadcastRun{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Where("group_id IN ?", result.OwnedGroupIDs).Delete(&broadcastmodel.BroadcastSchedule{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Where("group_id IN ?", result.OwnedGroupIDs).Delete(&broadcastmodel.BroadcastAudio{}).Error; err != nil {
 				return err
 			}
 			// 批量删除群组
@@ -375,6 +418,64 @@ func (r *UserRepository) DeleteUserWithCascade(id int) (*DeleteUserCascadeResult
 		return nil, err
 	}
 	return result, nil
+}
+
+func collectDeletedGroupBroadcastObjectKeys(tx *gorm.DB, groupIDs []int, objectKeys *[]string) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	var audios []broadcastmodel.BroadcastAudio
+	if err := tx.Unscoped().Where("group_id IN ?", groupIDs).Find(&audios).Error; err != nil {
+		return err
+	}
+	set := make(map[string]struct{}, len(audios)*2)
+	for _, audio := range audios {
+		if audio.OriginalObjectKey != "" {
+			set[audio.OriginalObjectKey] = struct{}{}
+		}
+		if audio.PlaybackObjectKey != "" {
+			set[audio.PlaybackObjectKey] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	*objectKeys = append(*objectKeys, keys...)
+	return nil
+}
+
+func reassignSurvivingBroadcastUserReferences(tx *gorm.DB, userID int) error {
+	var groups []Group
+	if err := tx.Where("ower_id <> ?", userID).Find(&groups).Error; err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if err := tx.Unscoped().Model(&broadcastmodel.BroadcastAudio{}).
+			Where("group_id = ? AND created_by = ?", group.ID, userID).
+			Update("created_by", group.OwerID).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Model(&broadcastmodel.BroadcastSchedule{}).
+			Where("group_id = ? AND created_by = ?", group.ID, userID).
+			Update("created_by", group.OwerID).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Model(&broadcastmodel.BroadcastSchedule{}).
+			Where("group_id = ? AND updated_by = ?", group.ID, userID).
+			Update("updated_by", group.OwerID).Error; err != nil {
+			return err
+		}
+		if group.IsVirtual {
+			if err := tx.Model(&broadcastmodel.VirtualGroupBroadcastPolicy{}).
+				Where("virtual_group_id = ? AND updated_by = ?", group.ID, userID).
+				Update("updated_by", group.OwerID).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // AddOperatorLog 添加操作日志

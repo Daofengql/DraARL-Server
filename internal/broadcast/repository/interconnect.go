@@ -17,6 +17,7 @@ import (
 type VirtualGroupMutation struct {
 	MemberGroupIDs []int
 	CancelGroupIDs []int
+	CancelRunIDs   []uint
 }
 
 type VirtualGroupFields struct {
@@ -85,10 +86,12 @@ func (r *Repository) CreateVirtualGroup(ctx context.Context, group *gormdb.Group
 		if err := applyActiveVirtualGroupPolicy(tx, group.ID, memberIDs, policy, now); err != nil {
 			return err
 		}
-		if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+		cancelRunIDs, err := cancelInterconnectRuns(tx, memberIDs, now)
+		if err != nil {
 			return err
 		}
 		mutation.CancelGroupIDs = memberIDs
+		mutation.CancelRunIDs = cancelRunIDs
 		return nil
 	})
 	return mutation, err
@@ -118,10 +121,12 @@ func (r *Repository) UpdateVirtualGroupPolicy(ctx context.Context, policy *model
 		if err := applyActiveVirtualGroupPolicy(tx, policy.VirtualGroupID, memberIDs, policy, now); err != nil {
 			return err
 		}
-		if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+		cancelRunIDs, err := cancelInterconnectRuns(tx, memberIDs, now)
+		if err != nil {
 			return err
 		}
 		mutation.CancelGroupIDs = memberIDs
+		mutation.CancelRunIDs = cancelRunIDs
 		return nil
 	})
 	return mutation, err
@@ -155,10 +160,12 @@ func (r *Repository) UpdateVirtualGroup(ctx context.Context, virtualGroupID int,
 			if err := applyActiveVirtualGroupPolicy(tx, virtualGroupID, memberIDs, policy, now); err != nil {
 				return err
 			}
-			if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+			cancelRunIDs, err := cancelInterconnectRuns(tx, memberIDs, now)
+			if err != nil {
 				return err
 			}
 			mutation.CancelGroupIDs = memberIDs
+			mutation.CancelRunIDs = cancelRunIDs
 		}
 		updates := make(map[string]any)
 		if fields.Name != nil {
@@ -184,10 +191,12 @@ func (r *Repository) UpdateVirtualGroup(ctx context.Context, virtualGroupID int,
 		if err := restoreSchedulesForVirtualGroup(tx, virtualGroupID, memberIDs, now); err != nil {
 			return err
 		}
-		if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+		cancelRunIDs, err := cancelInterconnectRuns(tx, memberIDs, now)
+		if err != nil {
 			return err
 		}
 		mutation.CancelGroupIDs = memberIDs
+		mutation.CancelRunIDs = cancelRunIDs
 		return nil
 	})
 	return mutation, err
@@ -229,10 +238,12 @@ func (r *Repository) AddVirtualGroupMember(ctx context.Context, virtualGroupID, 
 		if err := applyActiveVirtualGroupPolicy(tx, virtualGroupID, memberIDs, policy, now); err != nil {
 			return err
 		}
-		if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+		cancelRunIDs, err := cancelInterconnectRuns(tx, memberIDs, now)
+		if err != nil {
 			return err
 		}
 		mutation.CancelGroupIDs = memberIDs
+		mutation.CancelRunIDs = cancelRunIDs
 		return nil
 	})
 	return mutation, err
@@ -261,10 +272,12 @@ func (r *Repository) RemoveVirtualGroupMember(ctx context.Context, virtualGroupI
 		}
 		mutation.CancelGroupIDs = nil
 		if group.Status == 1 {
-			if err := cancelInterconnectRuns(tx, memberIDs, now); err != nil {
+			cancelRunIDs, err := cancelInterconnectRuns(tx, memberIDs, now)
+			if err != nil {
 				return err
 			}
 			mutation.CancelGroupIDs = memberIDs
+			mutation.CancelRunIDs = cancelRunIDs
 		}
 		if err := tx.Where("link_group_id = ? AND target_group_id = ?", virtualGroupID, targetGroupID).Delete(&gormdb.GroupLink{}).Error; err != nil {
 			return err
@@ -431,14 +444,45 @@ func restoreSchedule(tx *gorm.DB, scheduleModel *model.BroadcastSchedule, now ti
 	return tx.Save(scheduleModel).Error
 }
 
-func cancelInterconnectRuns(tx *gorm.DB, groupIDs []int, now time.Time) error {
+func cancelInterconnectRuns(tx *gorm.DB, groupIDs []int, now time.Time) ([]uint, error) {
 	if len(groupIDs) == 0 {
-		return nil
+		return nil, nil
 	}
-	return tx.Model(&model.BroadcastRun{}).
+	var runs []model.BroadcastRun
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("source_group_id IN ? AND status IN ?", groupIDs, []string{model.RunStatusClaimed, model.RunStatusPlaying}).
+		Order("id ASC").Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	cancelRunIDs := make([]uint, 0, len(runs))
+	claimedRunIDs := make([]uint, 0, len(runs))
+	for _, run := range runs {
+		cancelRunIDs = append(cancelRunIDs, run.ID)
+		if run.Status == model.RunStatusClaimed {
+			claimedRunIDs = append(claimedRunIDs, run.ID)
+		}
+	}
+	if len(claimedRunIDs) == 0 {
+		return cancelRunIDs, nil
+	}
+	err := tx.Model(&model.BroadcastRun{}).
+		Where("id IN ? AND status = ?", claimedRunIDs, model.RunStatusClaimed).
 		Updates(map[string]any{
 			"status": model.RunStatusCancelledInterconnectEnabled, "ended_at": now,
+			"claimed_by": "", "lease_until": nil, "error_code": "interconnect_changed",
+			"error_message": "broadcast execution stopped because interconnect topology or policy changed",
+		}).Error
+	return cancelRunIDs, err
+}
+
+func (r *Repository) FinalizeOrphanedInterconnectRuns(ctx context.Context, runIDs []uint, now time.Time) error {
+	if len(runIDs) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Model(&model.BroadcastRun{}).
+		Where("id IN ? AND status IN ?", runIDs, []string{model.RunStatusClaimed, model.RunStatusPlaying}).
+		Updates(map[string]any{
+			"status": model.RunStatusCancelledInterconnectEnabled, "ended_at": now.UTC(),
 			"claimed_by": "", "lease_until": nil, "error_code": "interconnect_changed",
 			"error_message": "broadcast execution stopped because interconnect topology or policy changed",
 		}).Error

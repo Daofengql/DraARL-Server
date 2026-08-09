@@ -27,6 +27,7 @@ type MessageRecord struct {
 	SenderCallSign  string    `gorm:"column:sender_callsign"`
 	SenderNickname  string    `gorm:"column:sender_nickname"`
 	SenderDevModel  int       `gorm:"column:sender_dev_model"`
+	IsAutoBroadcast bool      `gorm:"column:is_auto_broadcast"`
 	CurrentUsername string    `gorm:"column:current_username"`
 	CurrentCallSign string    `gorm:"column:current_callsign"`
 	CurrentNickname string    `gorm:"column:current_nickname"`
@@ -67,7 +68,7 @@ func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB 
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id AS source_group_id,
 			COALESCE(cr.user_id, d.owner_id) AS user_id, cr.start_time, cr.end_time, cr.duration_ms,
 			cr.audio_path, cr.audio_size, cr.status, cr.message_type, cr.text_content,
-			cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
+			cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
 			g.name AS source_group_name,
 			u.name AS current_username, u.callsign AS current_callsign, u.nickname AS current_nickname,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END AS current_dev_model

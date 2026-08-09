@@ -91,6 +91,13 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 	oldest := newRecord(&publicID, gormdb.CommMessageTypeText, "oldest", baseTime.Add(-time.Second), 2)
 	sameTimeText := newRecord(&publicID, gormdb.CommMessageTypeText, "same-time-text", baseTime, 2)
 	sameTimeVoice := newRecord(&publicID, gormdb.CommMessageTypeVoice, "", baseTime, 2)
+	sameTimeVoice.UserID = nil
+	sameTimeVoice.DeviceSSID = 255
+	sameTimeVoice.SenderUsername = "system-broadcast"
+	sameTimeVoice.SenderCallSign = "AUTO"
+	sameTimeVoice.SenderNickname = "自动播报"
+	sameTimeVoice.SenderDevModel = 0
+	sameTimeVoice.IsAutoBroadcast = true
 	incomplete := newRecord(&publicID, gormdb.CommMessageTypeText, "incomplete", baseTime.Add(time.Second), 0)
 	privateMessage := newRecord(&privateID, gormdb.CommMessageTypeText, "private", baseTime, 2)
 	unrelatedMessage := newRecord(&unrelatedID, gormdb.CommMessageTypeText, "unrelated", baseTime, 2)
@@ -138,7 +145,7 @@ func TestGroupMessagesHTTPE2E(t *testing.T) {
 	if len(firstPage.Data.Messages) != 1 || firstPage.Data.Messages[0].ID != sameTimeVoice.ID || !firstPage.Data.HasMore || firstPage.Data.NextCursor == "" || firstPage.Data.ServerTime == "" {
 		t.Fatalf("unexpected first page: %s", body)
 	}
-	if firstPage.Data.Messages[0].Sender.Username != "message-sender-at-send-time" || firstPage.Data.Messages[0].Sender.CallSign != "BG7OLD" {
+	if firstPage.Data.Messages[0].Sender.Username != "system-broadcast" || firstPage.Data.Messages[0].Sender.CallSign != "AUTO" || !firstPage.Data.Messages[0].IsAutoBroadcast {
 		t.Fatalf("sender snapshot was not used: %#v", firstPage.Data.Messages[0].Sender)
 	}
 

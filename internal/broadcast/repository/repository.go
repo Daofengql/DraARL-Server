@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"draarl/internal/broadcast/identity"
 	"draarl/internal/broadcast/model"
 	"draarl/internal/broadcast/scheduler"
 	"draarl/internal/gormdb"
@@ -656,16 +657,50 @@ func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, statu
 		}
 		values["domain_group_ids"] = string(domainJSON)
 	}
-	result := r.db.WithContext(ctx).Model(&model.BroadcastRun{}).
-		Where("id = ? AND claimed_by = ? AND status IN ?", runID, claimedBy, []string{model.RunStatusClaimed, model.RunStatusPlaying}).
-		Updates(values)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return ErrRunLeaseLost
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var run model.BroadcastRun
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&run, runID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRunLeaseLost
+			}
+			return err
+		}
+		if run.ClaimedBy != claimedBy || (run.Status != model.RunStatusClaimed && run.Status != model.RunStatusPlaying) {
+			return ErrRunLeaseLost
+		}
+		result := tx.Model(&model.BroadcastRun{}).
+			Where("id = ? AND claimed_by = ? AND status IN ?", runID, claimedBy, []string{model.RunStatusClaimed, model.RunStatusPlaying}).
+			Updates(values)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrRunLeaseLost
+		}
+		if sentPackets <= 0 {
+			return nil
+		}
+		startTime := endedAt.UTC().Add(-time.Duration(max(playedDurationMS, 0)) * time.Millisecond)
+		if run.StartedAt != nil && !run.StartedAt.IsZero() {
+			startTime = run.StartedAt.UTC()
+		}
+		sourceGroupID := uint(run.SourceGroupID)
+		deliveryGroupIDs := make([]uint, 0, len(domainGroupIDs))
+		for _, groupID := range SortedUniqueGroupIDs(domainGroupIDs) {
+			if groupID > 0 {
+				deliveryGroupIDs = append(deliveryGroupIDs, uint(groupID))
+			}
+		}
+		record := &gormdb.CommRecord{
+			DeviceID: 0, DeviceSSID: identity.SSID, GroupID: &sourceGroupID, UserID: nil,
+			StartTime: startTime, EndTime: endedAt.UTC(), DurationMs: max(playedDurationMS, 0),
+			AudioPath: "", AudioSize: 0, Status: 2, MessageType: gormdb.CommMessageTypeVoice,
+			SenderUsername: identity.Username, SenderCallSign: identity.CallSign,
+			SenderNickname: identity.Nickname, SenderDevModel: 0, IsAutoBroadcast: true,
+			DeliveryGroupIDs: deliveryGroupIDs,
+		}
+		return gormdb.CreateCommRecordsWithDeliveryGroups(tx, []*gormdb.CommRecord{record}, 1)
+	})
 }
 
 func (r *Repository) GetPolicy(ctx context.Context, virtualGroupID int) (*model.VirtualGroupBroadcastPolicy, error) {

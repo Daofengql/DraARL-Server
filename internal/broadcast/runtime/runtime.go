@@ -80,6 +80,16 @@ func CancelGroupsAndWait(ctx context.Context, groupIDs []int, cause error) (int,
 	return engine.CancelGroupsAndWait(ctx, groupIDs, cause, true)
 }
 
+func CancelRunsAndWait(ctx context.Context, runIDs []uint, cause error) (int, error) {
+	global.RLock()
+	engine := global.engine
+	global.RUnlock()
+	if engine == nil {
+		return 0, nil
+	}
+	return engine.CancelRunsAndWait(ctx, runIDs, cause)
+}
+
 func Stop(ctx context.Context) error {
 	global.Lock()
 	engine := global.engine

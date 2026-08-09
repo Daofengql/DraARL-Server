@@ -21,24 +21,25 @@ import (
 
 // CommRecordResponse 通信记录响应结构（用于前端显示）
 type CommRecordResponse struct {
-	ID          uint   `json:"id"`
-	DeviceID    uint   `json:"device_id"`
-	DeviceName  string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
-	DevModel    int    `json:"dev_model"`   // 设备型号：105=浏览器
-	GroupID     *uint  `json:"group_id"`
-	GroupName   string `json:"group_name"` // 通过联表查询获取：public_groups.name
-	UserID      *uint  `json:"user_id"`
-	Username    string `json:"username"` // 登录用户名（用于前端查询头像）
-	Nickname    string `json:"nickname"` // 用户昵称（用于显示）
-	StartTime   string `json:"start_time"`
-	EndTime     string `json:"end_time"`
-	DurationMs  int    `json:"duration_ms"`
-	AudioPath   string `json:"audio_path,omitempty"`
-	AudioURL    string `json:"audio_url,omitempty"`
-	AudioSize   int64  `json:"audio_size"`
-	Status      int    `json:"status"`
-	MsgType     int    `json:"msg_type"`     // 消息类型：0=音频, 1=文本
-	TextContent string `json:"text_content"` // 文本消息内容（仅文本消息有值)
+	ID              uint   `json:"id"`
+	DeviceID        uint   `json:"device_id"`
+	DeviceName      string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
+	DevModel        int    `json:"dev_model"`   // 设备型号：105=浏览器
+	GroupID         *uint  `json:"group_id"`
+	GroupName       string `json:"group_name"` // 通过联表查询获取：public_groups.name
+	UserID          *uint  `json:"user_id"`
+	Username        string `json:"username"` // 登录用户名（用于前端查询头像）
+	Nickname        string `json:"nickname"` // 用户昵称（用于显示）
+	StartTime       string `json:"start_time"`
+	EndTime         string `json:"end_time"`
+	DurationMs      int    `json:"duration_ms"`
+	AudioPath       string `json:"audio_path,omitempty"`
+	AudioURL        string `json:"audio_url,omitempty"`
+	AudioSize       int64  `json:"audio_size"`
+	Status          int    `json:"status"`
+	MsgType         int    `json:"msg_type"`     // 消息类型：0=音频, 1=文本
+	TextContent     string `json:"text_content"` // 文本消息内容（仅文本消息有值)
+	IsAutoBroadcast bool   `json:"is_auto_broadcast"`
 }
 
 // CommRecordWithDetails 联表查询结果
@@ -67,6 +68,7 @@ type CommRecordWithDetails struct {
 	SenderCallSign  string    `gorm:"column:sender_callsign"`
 	SenderNickname  string    `gorm:"column:sender_nickname"`
 	SenderDevModel  int       `gorm:"column:sender_dev_model"`
+	IsAutoBroadcast bool      `gorm:"column:is_auto_broadcast"`
 	CurrentDevModel int       `gorm:"column:current_dev_model"`
 }
 
@@ -174,23 +176,24 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 
 	return CommRecordResponse{
-		ID:          r.ID,
-		DeviceID:    r.DeviceID,
-		DeviceName:  deviceName,
-		DevModel:    devModel,
-		GroupID:     r.GroupID,
-		GroupName:   r.GroupName,
-		UserID:      r.UserID,
-		Username:    username,
-		Nickname:    nickname,
-		StartTime:   r.StartTime.Format("2006-01-02 15:04:05"),
-		EndTime:     r.EndTime.Format("2006-01-02 15:04:05"),
-		DurationMs:  r.DurationMs,
-		AudioURL:    audioURL,
-		AudioSize:   r.AudioSize,
-		Status:      r.Status,
-		MsgType:     msgType,
-		TextContent: textContent,
+		ID:              r.ID,
+		DeviceID:        r.DeviceID,
+		DeviceName:      deviceName,
+		DevModel:        devModel,
+		GroupID:         r.GroupID,
+		GroupName:       r.GroupName,
+		UserID:          r.UserID,
+		Username:        username,
+		Nickname:        nickname,
+		StartTime:       r.StartTime.Format("2006-01-02 15:04:05"),
+		EndTime:         r.EndTime.Format("2006-01-02 15:04:05"),
+		DurationMs:      r.DurationMs,
+		AudioURL:        audioURL,
+		AudioSize:       r.AudioSize,
+		Status:          r.Status,
+		MsgType:         msgType,
+		TextContent:     textContent,
+		IsAutoBroadcast: r.IsAutoBroadcast,
 	}
 }
 
@@ -230,7 +233,7 @@ func newCommRecordDetailsQuery(db *gorm.DB) *gorm.DB {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
 			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
@@ -397,7 +400,7 @@ func GetCommRecord(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
 			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,

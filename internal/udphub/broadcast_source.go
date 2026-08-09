@@ -6,15 +6,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"draarl/internal/broadcast/identity"
 	"draarl/internal/interfaces"
 	"draarl/internal/protocol"
 )
 
 const (
-	SystemBroadcastUsername = "system-broadcast"
-	SystemBroadcastNickname = "自动播报"
-	SystemBroadcastCallSign = "AUTO"
-	SystemBroadcastSSID     = byte(255)
+	SystemBroadcastUsername = identity.Username
+	SystemBroadcastNickname = identity.Nickname
+	SystemBroadcastCallSign = identity.CallSign
+	SystemBroadcastSSID     = identity.SSID
 )
 
 var (

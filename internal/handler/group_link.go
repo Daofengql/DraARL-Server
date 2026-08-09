@@ -70,14 +70,19 @@ func writeVirtualGroupRepositoryError(c *gin.Context, err error) {
 }
 
 func waitForBroadcastTopologyMutation(c *gin.Context, mutation *repository.VirtualGroupMutation) bool {
-	if mutation == nil || len(mutation.CancelGroupIDs) == 0 {
+	if mutation == nil || len(mutation.CancelRunIDs) == 0 {
 		return true
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := broadcastruntime.CancelGroupsAndWait(waitCtx, mutation.CancelGroupIDs, schedruntime.ErrInterconnectChange); err != nil {
-		log.Printf("[BROADCAST] timed out waiting for interconnect playback release: groups=%v err=%v", mutation.CancelGroupIDs, err)
+	if _, err := broadcastruntime.CancelRunsAndWait(waitCtx, mutation.CancelRunIDs, schedruntime.ErrInterconnectChange); err != nil {
+		log.Printf("[BROADCAST] timed out waiting for interconnect playback release: groups=%v runs=%v err=%v", mutation.CancelGroupIDs, mutation.CancelRunIDs, err)
 		writeVirtualGroupError(c, http.StatusServiceUnavailable, "broadcast_interconnect_release_timeout", "互联配置已保存，但自动播报尚未安全释放；运行态拓扑未刷新")
+		return false
+	}
+	if err := repository.Default().FinalizeOrphanedInterconnectRuns(waitCtx, mutation.CancelRunIDs, time.Now().UTC()); err != nil {
+		log.Printf("[BROADCAST] failed to finalize orphaned interconnect runs: groups=%v runs=%v err=%v", mutation.CancelGroupIDs, mutation.CancelRunIDs, err)
+		writeVirtualGroupError(c, http.StatusServiceUnavailable, "broadcast_interconnect_finalize_failed", "互联配置已保存，但自动播报执行状态尚未安全收尾；运行态拓扑未刷新")
 		return false
 	}
 	return true

@@ -317,7 +317,7 @@ func TestEngineManualStopBeforeExecutionLoadIsStillCancelled(t *testing.T) {
 	}
 }
 
-func TestEngineCancelGroupsWaitsForExecutionRelease(t *testing.T) {
+func TestEngineCancelRunsWaitsForExecutionRelease(t *testing.T) {
 	engine, repo, _ := engineFixture(t)
 	repo.claimed = true
 	repo.blockLoad = true
@@ -335,7 +335,7 @@ func TestEngineCancelGroupsWaitsForExecutionRelease(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	count, err := engine.CancelGroupsAndWait(ctx, []int{repo.run.SourceGroupID}, ErrInterconnectChange, true)
+	count, err := engine.CancelRunsAndWait(ctx, []uint{repo.run.ID}, ErrInterconnectChange)
 	if err != nil || count != 1 {
 		t.Fatalf("cancel count=%d err=%v", count, err)
 	}

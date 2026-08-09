@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	t.Cleanup(func() { _ = gormdb.Close() })
 	db := gormdb.Get()
 	if err := db.AutoMigrate(
-		&gormdb.User{}, &gormdb.Group{}, &gormdb.GroupLink{},
+		&gormdb.User{}, &gormdb.Group{}, &gormdb.GroupLink{}, &gormdb.CommRecord{}, &gormdb.CommRecordDeliveryGroup{},
 		&gormdb.ClientResource{}, &gormdb.ClientResourceRelease{}, &gormdb.ClientResourceArtifact{}, &gormdb.FirmwareRelease{},
 		&model.BroadcastAudio{}, &model.BroadcastSchedule{},
 		&model.VirtualGroupBroadcastPolicy{}, &model.BroadcastRun{},
@@ -78,8 +79,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		FFmpegPath: "ffmpeg", FFprobePath: "ffprobe",
 	}
 	cfg.Storage.ActiveProfile = "broadcast-e2e"
+	storageRoot := t.TempDir()
 	cfg.Storage.Profiles = map[string]config.StorageProfile{
-		cfg.Storage.ActiveProfile: {Driver: storage.DriverLocal, Local: config.LocalStorageConfig{RootPath: t.TempDir(), BaseURL: "/files"}},
+		cfg.Storage.ActiveProfile: {Driver: storage.DriverLocal, Local: config.LocalStorageConfig{RootPath: storageRoot, BaseURL: "/files"}},
 	}
 	config.Config = cfg
 	if err := jwtutil.SetSecret(cfg.JWT.Secret); err != nil {
@@ -129,6 +131,12 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			if audio.PlaybackObjectKey != "" {
 				_ = storage.Delete(context.Background(), audio.PlaybackObjectKey)
 			}
+		}
+		var recordIDs []uint
+		_ = db.Model(&gormdb.CommRecord{}).Where("group_id IN ?", []int{groupA.ID, groupB.ID}).Pluck("id", &recordIDs).Error
+		if len(recordIDs) != 0 {
+			_ = db.Where("record_id IN ?", recordIDs).Delete(&gormdb.CommRecordDeliveryGroup{}).Error
+			_ = db.Where("id IN ?", recordIDs).Delete(&gormdb.CommRecord{}).Error
 		}
 		_ = db.Where("source_group_id IN ?", []int{groupA.ID, groupB.ID}).Delete(&model.BroadcastRun{}).Error
 		_ = db.Where("group_id IN ?", []int{groupA.ID, groupB.ID}).Delete(&model.BroadcastSchedule{}).Error
@@ -275,6 +283,29 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	succeededRun = waitBroadcastRunTerminal(t, repo, groupA.ID, succeededRun.ID)
 	if succeededRun.Status != model.RunStatusSucceeded || succeededRun.SentPackets != audioA.PacketCount || succeededRun.PlayedDurationMS != audioA.DurationMS {
 		t.Fatalf("successful manual run=%#v audio=%#v", succeededRun, audioA)
+	}
+	var automaticRecords []gormdb.CommRecord
+	if err := db.Where("group_id = ? AND is_auto_broadcast = ?", groupA.ID, true).Order("id ASC").Find(&automaticRecords).Error; err != nil {
+		t.Fatal(err)
+	}
+	wantRecords := 1
+	if cancelledRun.SentPackets > 0 {
+		wantRecords++
+	}
+	if len(automaticRecords) != wantRecords {
+		t.Fatalf("automatic communication records=%d want=%d", len(automaticRecords), wantRecords)
+	}
+	for _, record := range automaticRecords {
+		if record.AudioPath != "" || record.AudioSize != 0 || !record.IsAutoBroadcast || record.SenderUsername != "system-broadcast" || record.SenderCallSign != "AUTO" {
+			t.Fatalf("unexpected automatic communication record: %#v", record)
+		}
+		var deliveryCount int64
+		if err := db.Model(&gormdb.CommRecordDeliveryGroup{}).Where("record_id = ? AND group_id = ?", record.ID, groupA.ID).Count(&deliveryCount).Error; err != nil || deliveryCount != 1 {
+			t.Fatalf("automatic record delivery snapshot count=%d err=%v", deliveryCount, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(storageRoot, "comm-records")); !os.IsNotExist(err) {
+		t.Fatalf("automatic broadcast created a communication recording directory: err=%v", err)
 	}
 	afterManual, err := repo.GetSchedule(context.Background(), groupA.ID, scheduleA2.ID)
 	if err != nil || afterManual.NextRunAt == nil || persistedA2.NextRunAt == nil || !afterManual.NextRunAt.Equal(*persistedA2.NextRunAt) {

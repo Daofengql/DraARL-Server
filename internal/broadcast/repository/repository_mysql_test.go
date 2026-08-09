@@ -153,6 +153,19 @@ func TestVirtualGroupCoordinationMySQL(t *testing.T) {
 	assertScheduleState(t, repo, onceA.ID, true, model.SuspendReasonActiveVirtualGroup, false)
 	assertScheduleState(t, repo, dailyB.ID, true, "", true)
 	assertScheduleState(t, repo, disabledA.ID, false, "", false)
+	var playingBeforeFinalize model.BroadcastRun
+	if err := repo.DB().First(&playingBeforeFinalize, preEnableRuns[1].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if playingBeforeFinalize.Status != model.RunStatusPlaying || playingBeforeFinalize.ClaimedBy == "" {
+		t.Fatalf("playing run was finalized before runtime could report delivery: %#v", playingBeforeFinalize)
+	}
+	if len(mutation.CancelRunIDs) != 2 {
+		t.Fatalf("enable cancellation runs=%v", mutation.CancelRunIDs)
+	}
+	if err := repo.FinalizeOrphanedInterconnectRuns(ctx, mutation.CancelRunIDs, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	for _, run := range preEnableRuns {
 		var stored model.BroadcastRun
 		if err := repo.DB().First(&stored, run.ID).Error; err != nil {
@@ -470,6 +483,75 @@ func TestRepositoryRecoveryWindowAndRunLeaseMySQL(t *testing.T) {
 	}
 }
 
+func TestRepositoryFinishRunCreatesOneAutoBroadcastRecordMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 9, 6, 0, 0, 0, time.UTC)
+	audio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "record-audio")
+	schedule := &model.BroadcastSchedule{
+		GroupID: groups.a.ID, AudioID: audio.ID, Name: "record schedule", ScheduleType: model.ScheduleTypeDaily,
+		Timezone: "UTC", LocalTime: "18:00:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+	}
+	if err := repo.SaveSchedule(ctx, schedule, now); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := now.Add(time.Second)
+	leaseUntil := now.Add(time.Minute)
+	run := &model.BroadcastRun{
+		ScheduleID: schedule.ID, AudioID: audio.ID, SourceGroupID: groups.a.ID, ScheduledFor: now,
+		Status: model.RunStatusPlaying, StartedAt: &startedAt, ClaimedBy: "record-worker", LeaseUntil: &leaseUntil,
+	}
+	if err := repo.DB().Create(run).Error; err != nil {
+		t.Fatal(err)
+	}
+	endedAt := startedAt.Add(360 * time.Millisecond)
+	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.b.ID, groups.a.ID, groups.b.ID}, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var records []gormdb.CommRecord
+	if err := repo.DB().Where("group_id = ? AND is_auto_broadcast = ?", groups.a.ID, true).Find(&records).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("auto broadcast records=%d want=1", len(records))
+	}
+	record := records[0]
+	if record.DeviceID != 0 || record.DeviceSSID != 255 || record.UserID != nil || record.MessageType != gormdb.CommMessageTypeVoice ||
+		record.Status != 2 || record.AudioPath != "" || record.AudioSize != 0 || record.DurationMs != 360 ||
+		record.SenderUsername != "system-broadcast" || record.SenderCallSign != "AUTO" || record.SenderNickname != "自动播报" ||
+		!record.StartTime.Equal(startedAt) || !record.EndTime.Equal(endedAt) {
+		t.Fatalf("unexpected automatic communication record: %#v", record)
+	}
+	var deliveryGroups []gormdb.CommRecordDeliveryGroup
+	if err := repo.DB().Where("record_id = ?", record.ID).Order("group_id ASC").Find(&deliveryGroups).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveryGroups) != 2 || deliveryGroups[0].GroupID != uint(groups.a.ID) || deliveryGroups[1].GroupID != uint(groups.b.ID) {
+		t.Fatalf("delivery snapshot=%#v", deliveryGroups)
+	}
+	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.a.ID, groups.b.ID}, "", ""); !errors.Is(err, ErrRunLeaseLost) {
+		t.Fatalf("duplicate finish error=%v", err)
+	}
+	var count int64
+	if err := repo.DB().Model(&gormdb.CommRecord{}).Where("group_id = ? AND is_auto_broadcast = ?", groups.a.ID, true).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("duplicate finish records=%d err=%v", count, err)
+	}
+
+	zeroRun := &model.BroadcastRun{
+		ScheduleID: schedule.ID, AudioID: audio.ID, SourceGroupID: groups.a.ID, ScheduledFor: now.Add(time.Millisecond),
+		Status: model.RunStatusClaimed, ClaimedBy: "zero-worker", LeaseUntil: &leaseUntil,
+	}
+	if err := repo.DB().Create(zeroRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FinishRun(ctx, zeroRun.ID, "zero-worker", model.RunStatusSkippedRecentVoice, now.Add(2*time.Second), 0, 0, 0, nil, "", []int{groups.a.ID}, "recent_voice", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DB().Model(&gormdb.CommRecord{}).Where("group_id = ? AND is_auto_broadcast = ?", groups.a.ID, true).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("zero-packet finish records=%d err=%v", count, err)
+	}
+}
+
 func TestRepositoryManualClaimsAreIndependentAndDoNotAdvanceScheduleMySQL(t *testing.T) {
 	repo, owner, groups := setupRepositoryMySQL(t)
 	ctx := context.Background()
@@ -586,6 +668,12 @@ func setupRepositoryMySQL(t *testing.T) (*Repository, *gormdb.User, repositoryGr
 	groups := repositoryGroups{a: newGroup("A", false), b: newGroup("B", false), outside: newGroup("outside", false), virtual: newGroup("virtual", true)}
 	t.Cleanup(func() {
 		groupIDs := []int{groups.a.ID, groups.b.ID, groups.outside.ID, groups.virtual.ID}
+		var recordIDs []uint
+		_ = gormdb.Get().Model(&gormdb.CommRecord{}).Where("group_id IN ?", groupIDs).Pluck("id", &recordIDs).Error
+		if len(recordIDs) != 0 {
+			_ = gormdb.Get().Where("record_id IN ?", recordIDs).Delete(&gormdb.CommRecordDeliveryGroup{}).Error
+			_ = gormdb.Get().Where("id IN ?", recordIDs).Delete(&gormdb.CommRecord{}).Error
+		}
 		_ = gormdb.Get().Where("source_group_id IN ?", groupIDs).Delete(&model.BroadcastRun{}).Error
 		_ = gormdb.Get().Where("group_id IN ?", groupIDs).Delete(&model.BroadcastSchedule{}).Error
 		_ = gormdb.Get().Where("group_id IN ?", groupIDs).Delete(&model.BroadcastAudio{}).Error

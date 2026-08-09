@@ -420,6 +420,37 @@ func (e *Engine) CancelGroupsAndWait(ctx context.Context, groupIDs []int, cause 
 	return len(activeRuns), nil
 }
 
+func (e *Engine) CancelRunsAndWait(ctx context.Context, runIDs []uint, cause error) (int, error) {
+	set := make(map[uint]struct{}, len(runIDs))
+	for _, runID := range runIDs {
+		if runID > 0 {
+			set[runID] = struct{}{}
+		}
+	}
+	e.activeMu.Lock()
+	activeRuns := make([]activeRun, 0, len(set))
+	for runID := range set {
+		if active, ok := e.active[runID]; ok {
+			activeRuns = append(activeRuns, active)
+		}
+	}
+	e.activeMu.Unlock()
+	for _, active := range activeRuns {
+		active.cancel(cause)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, active := range activeRuns {
+		select {
+		case <-active.done:
+		case <-ctx.Done():
+			return len(activeRuns), ctx.Err()
+		}
+	}
+	return len(activeRuns), nil
+}
+
 func (e *Engine) Stop(ctx context.Context) error {
 	if e == nil {
 		return nil

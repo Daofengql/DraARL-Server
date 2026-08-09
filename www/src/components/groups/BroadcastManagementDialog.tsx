@@ -115,6 +115,25 @@ function formatDuration(value: number): string {
   return `${(Math.max(value, 0) / 1000).toFixed(1)} 秒`
 }
 
+function runStatusPresentation(run: BroadcastRun): { label: string; color: 'default' | 'success' | 'warning' | 'error' | 'info' } {
+  if (run.status === 'cancelled') {
+    switch (run.error_code) {
+      case 'schedule_disabled': return { label: '计划已停用', color: 'default' }
+      case 'audio_unavailable': return { label: '音频已撤销', color: 'default' }
+      case 'group_unavailable': return { label: '群组已停用', color: 'default' }
+      case 'service_shutdown': return { label: '服务关闭', color: 'default' }
+    }
+  }
+  return RUN_STATUS[run.status] || { label: run.status, color: 'default' }
+}
+
+function displayedRunDuration(run: BroadcastRun, now: number): number {
+  if (run.status !== 'playing' || !run.started_at) return run.played_duration_ms
+  const startedAt = Date.parse(run.started_at)
+  if (Number.isNaN(startedAt)) return run.played_duration_ms
+  return Math.max(run.played_duration_ms, now - startedAt)
+}
+
 function formatDateTime(value?: string): string {
   if (!value) return '-'
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
@@ -155,6 +174,7 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
   const [runs, setRuns] = useState<BroadcastRun[]>([])
   const [runTotal, setRunTotal] = useState(0)
   const [runPage, setRunPage] = useState(0)
+  const [now, setNow] = useState(() => Date.now())
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -220,6 +240,12 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
     const timer = window.setInterval(() => void loadAll(true), 2000)
     return () => window.clearInterval(timer)
   }, [open, group?.id, audios, runs]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open || !runs.some(run => run.status === 'playing')) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [open, runs])
 
   const showSuccess = (message: string) => {
     setSuccess(message)
@@ -462,7 +488,7 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                   </TableRow></TableHead>
                   <TableBody>
                     {runs.length === 0 ? <TableRow><TableCell colSpan={7} align="center">暂无执行记录</TableCell></TableRow> : runs.map(run => {
-                      const status = RUN_STATUS[run.status] || { label: run.status, color: 'default' as const }
+                      const status = runStatusPresentation(run)
                       const schedule = schedules.find(item => item.id === run.schedule_id)
                       return (
                         <TableRow key={run.id} hover>
@@ -470,7 +496,7 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                           <TableCell>{formatDateTime(run.scheduled_for)}</TableCell>
                           <TableCell>{formatDateTime(run.started_at)}</TableCell>
                           <TableCell><Tooltip title={run.error_message || ''}><Chip size="small" label={status.label} color={status.color} /></Tooltip></TableCell>
-                          <TableCell>{formatDuration(run.played_duration_ms)}</TableCell>
+                          <TableCell>{formatDuration(displayedRunDuration(run, now))}</TableCell>
                           <TableCell>{run.sent_packets} / 丢 {run.dropped_packets}</TableCell>
                           <TableCell align="right"><Tooltip title="停止"><span><IconButton size="small" color="error" disabled={run.status !== 'claimed' && run.status !== 'playing'} onClick={() => void perform(() => broadcastService.cancelRun(group!.id, run.id), '停止请求已提交')}><Stop /></IconButton></span></Tooltip></TableCell>
                         </TableRow>

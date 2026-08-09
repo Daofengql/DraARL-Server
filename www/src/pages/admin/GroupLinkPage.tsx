@@ -386,12 +386,6 @@ export function GroupLinkPage() {
                         </Stack>
                       </TableCell>
                       <TableCell>
-                        <Stack spacing={0.25}>
-                          <Typography variant="body2">信标：{broadcastPolicySummary(vg)}</Typography>
-                          <Typography variant="caption" color="text.secondary">{vg.status === 1 ? '互联期间生效' : '互联关闭，实体组正常运行'}</Typography>
-                        </Stack>
-                      </TableCell>
-                      <TableCell>
                         <Chip
                           label={`${vg.target_count || 0} 个群组`}
                           size="small"
@@ -407,6 +401,12 @@ export function GroupLinkPage() {
                             color={vg.status === 1 ? 'success' : 'default'}
                           />
                         </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <Stack spacing={0.25}>
+                          <Typography variant="body2">信标：{broadcastPolicySummary(vg)}</Typography>
+                          <Typography variant="caption" color="text.secondary">{vg.status === 1 ? '互联期间生效' : '互联关闭，实体组正常运行'}</Typography>
+                        </Stack>
                       </TableCell>
                       <TableCell>
                         <Typography

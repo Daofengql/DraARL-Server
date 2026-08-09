@@ -31,6 +31,7 @@ import Delete from '@mui/icons-material/Delete'
 import Person from '@mui/icons-material/Person'
 import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import ManageAccounts from '@mui/icons-material/ManageAccounts'
+import Campaign from '@mui/icons-material/Campaign'
 import { groupService } from '../../services/group'
 import { userService } from '../../services'
 import type { Group, User } from '../../types'
@@ -38,7 +39,7 @@ import { UserDetailPopover } from '../../components/UserDetailPopover'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 import { PageHeader } from '../../components/common/PageHeader'
 import { SearchBar } from '../../components/common/SearchBar'
-import { GroupDeviceManagementDialog, GroupMemberManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
+import { BroadcastManagementDialog, GroupDeviceManagementDialog, GroupMemberManagementDialog, GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from '../../components/groups'
 
 export function AdminGroupPage() {
   const [groups, setGroups] = useState<Group[]>([])
@@ -54,6 +55,7 @@ export function AdminGroupPage() {
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null)
   const [managedGroup, setManagedGroup] = useState<Group | null>(null)
   const [managedMembersGroup, setManagedMembersGroup] = useState<Group | null>(null)
+  const [broadcastGroup, setBroadcastGroup] = useState<Group | null>(null)
 
   // 用户详情弹窗状态
   const [userDetailAnchorEl, setUserDetailAnchorEl] = useState<HTMLElement | null>(null)
@@ -295,6 +297,11 @@ export function AdminGroupPage() {
           </Typography>
         </TableCell>
         <TableCell align="right" width={120}>
+          {!group.is_virtual && (
+            <Tooltip title="自动播报">
+              <IconButton size="small" onClick={() => setBroadcastGroup(group)}><Campaign fontSize="small" /></IconButton>
+            </Tooltip>
+          )}
           {group.type === GROUP_TYPE_PRIVATE && (
             <Tooltip title="管理成员">
               <IconButton size="small" onClick={() => setManagedMembersGroup(group)}><ManageAccounts fontSize="small" /></IconButton>
@@ -510,6 +517,12 @@ export function AdminGroupPage() {
         group={managedMembersGroup}
         onClose={() => setManagedMembersGroup(null)}
         onChanged={() => void fetchGroups()}
+      />
+
+      <BroadcastManagementDialog
+        open={Boolean(broadcastGroup)}
+        group={broadcastGroup}
+        onClose={() => setBroadcastGroup(null)}
       />
 
       {/* 用户详情弹窗 */}

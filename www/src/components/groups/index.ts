@@ -3,3 +3,4 @@ export { GroupPickerDialog, GroupPickerSelect, GroupListItem } from './GroupPick
 export { GroupTypeIcon, GROUP_TYPE_PUBLIC, GROUP_TYPE_PRIVATE } from './GroupTypeIcon'
 export { GroupDeviceManagementDialog } from './GroupDeviceManagementDialog'
 export { GroupMemberManagementDialog } from './GroupMemberManagementDialog'
+export { BroadcastManagementDialog } from './BroadcastManagementDialog'

@@ -14,6 +14,11 @@ export { commStatsService } from './commStats'
 export { radioSessionService } from './radioSession'
 export type { AdminRadioSession, GhostTransport } from './radioSession'
 export { groupLinkService } from './groupLink'
+export { broadcastService } from './broadcast'
+export type {
+  BroadcastAudio, BroadcastAudioStatus, BroadcastRun, BroadcastRunStatus,
+  BroadcastSchedule, BroadcastScheduleInput, BroadcastScheduleType,
+} from './broadcast'
 export { listFirmware, uploadFirmware, deleteFirmware, getLatestFirmware } from './firmware'
 export type { FirmwareRelease } from './firmware'
 export {

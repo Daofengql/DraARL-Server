@@ -339,9 +339,28 @@ export function GroupLinkPage() {
   return (
     <Box sx={{ height: 'calc(100vh - 120px)', display: 'flex', flexDirection: 'column' }}>
       {/* 标题和操作栏 */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexShrink: 0 }}>
-        <Typography variant="h4">互联管理</Typography>
-        <Stack direction="row" spacing={2}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
+          alignItems: { xs: 'stretch', sm: 'center' },
+          gap: { xs: 1.5, sm: 0 },
+          mb: 2,
+          flexShrink: 0,
+        }}
+      >
+        <Typography variant="h4" sx={{ fontSize: { xs: '1.75rem', sm: '2.125rem' } }}>互联管理</Typography>
+        <Stack
+          direction="row"
+          spacing={1.5}
+          sx={{
+            '& .MuiButton-root': {
+              flex: { xs: 1, sm: 'initial' },
+              whiteSpace: 'nowrap',
+            },
+          }}
+        >
           <Button
             startIcon={<Refresh />}
             onClick={fetchVirtualGroups}
@@ -388,7 +407,7 @@ export function GroupLinkPage() {
       {/* 虚拟互联组列表 */}
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <TableContainer sx={{ flex: 1 }}>
-          <Table stickyHeader>
+          <Table stickyHeader sx={{ minWidth: 980 }}>
             <TableHead>
               <TableRow>
                 <TableCell width={60}>ID</TableCell>

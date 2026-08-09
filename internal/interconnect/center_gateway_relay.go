@@ -153,6 +153,38 @@ func (g *CenterGateway) AcquireLocalVoice(grant DeviceGrant) bool {
 	return allowed
 }
 
+const scheduledBroadcastSessionPrefix = uint64(0xb000000000000000)
+
+func scheduledBroadcastSessionID(runID uint) uint64 {
+	return scheduledBroadcastSessionPrefix | (uint64(runID) & 0x0fffffffffffffff)
+}
+
+func (g *CenterGateway) AcquireScheduledBroadcast(runID uint, domainID uint64, now time.Time) bool {
+	if g.speaker == nil || runID == 0 || domainID == 0 {
+		return false
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	_, allowed := g.speaker.AcquireLocal(sessionID, 1, domainID, now)
+	return allowed
+}
+
+func (g *CenterGateway) AcceptScheduledBroadcastFrame(runID uint, domainID uint64, now time.Time) bool {
+	if g.speaker == nil || runID == 0 || domainID == 0 {
+		return false
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	_, allowed := g.speaker.CurrentLocal(sessionID, 1, domainID, now)
+	return allowed
+}
+
+func (g *CenterGateway) ReleaseScheduledBroadcast(runID uint, domainID uint64) {
+	if g.speaker == nil || runID == 0 || domainID == 0 {
+		return
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	g.speaker.ReleaseLocal(sessionID, 1, domainID)
+}
+
 func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {
 	if grant.SessionID == 0 || grant.SessionEpoch == 0 || g.cluster == nil {
 		return false

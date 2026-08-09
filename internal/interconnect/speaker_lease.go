@@ -185,6 +185,19 @@ func (m *SpeakerLeaseManager) Release(nodeID string, controlSessionID uint64, re
 	return true
 }
 
+func (m *SpeakerLeaseManager) ReleaseLocal(sessionID, sessionEpoch, domainID uint64) bool {
+	owner := leaseOwner(CenterLocalNodeID, sessionID, sessionID, sessionEpoch)
+	shard := m.shard(domainID)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	state, ok := shard.domains[domainID]
+	if !ok || !state.owner.matches(owner) {
+		return false
+	}
+	delete(shard.domains, domainID)
+	return true
+}
+
 func (m *SpeakerLeaseManager) ReleaseSession(sessionID, sessionEpoch uint64) int {
 	if sessionID == 0 {
 		return 0

@@ -65,7 +65,7 @@ func canSendFromDevice(dev *models.Device, groupID int) bool {
 // handleDraARLVoice 处理 DraARLv1 语音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
-	if gp == nil || !canSendFromDevice(dev, gp.ID) {
+	if gp == nil || len(packet.DATA) == 0 || !canSendFromDevice(dev, gp.ID) {
 		return
 	}
 
@@ -76,6 +76,7 @@ func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models
 	} else if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
 		return
 	}
+	MarkAcceptedVoice(gp.ID, packet.TimeStamp)
 	if dev.GhostSessionID != "" {
 		ghostsession.Global.MarkPTTActive(dev.GhostSessionID, packet.TimeStamp)
 	}

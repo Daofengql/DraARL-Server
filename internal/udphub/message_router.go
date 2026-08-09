@@ -94,7 +94,7 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		log.Println("[ROUTE_ERR] WS -> UDP 转发失败: 全局 UDP 连接尚未初始化")
 		return
 	}
-	if source == nil || source.IsDisabledSend() {
+	if source == nil || source.IsDisabledSend() || len(opusData) == 0 {
 		return
 	}
 
@@ -111,15 +111,17 @@ func (r *MessageRouter) RouteVoiceToUDP(source interfaces.WSDeviceInterface, opu
 		return
 	}
 
+	now := time.Now()
 	if CenterInterconnectActive() {
 		if !AcquireCenterLocalWSVoice(source, groupID) {
 			return
 		}
-	} else if !tryAcquireHalfDuplex(groupID, buildWSSpeaker(source), time.Now()) {
+	} else if !tryAcquireHalfDuplex(groupID, buildWSSpeaker(source), now) {
 		return
 	}
+	MarkAcceptedVoice(groupID, now)
 	if sessionID := source.GetSessionID(); sessionID != "" {
-		ghostsession.Global.MarkPTTActive(sessionID, time.Now())
+		ghostsession.Global.MarkPTTActive(sessionID, now)
 	}
 
 	// WebSocket 与 UDP 共用 Type 5 标准 Opus 16K 语音包。

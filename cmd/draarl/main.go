@@ -271,7 +271,10 @@ func main() {
 			AcquireVoice: func(source udphub.CenterLocalSource) bool {
 				return centerRuntime.Gateway.AcquireLocalVoice(localSourceGrant(&source))
 			},
-			RemoteOwner: centerRuntime.Gateway.IdentityOwnedByRemote,
+			AcquireBroadcast:     centerRuntime.Gateway.AcquireScheduledBroadcast,
+			AcceptBroadcastFrame: centerRuntime.Gateway.AcceptScheduledBroadcastFrame,
+			ReleaseBroadcast:     centerRuntime.Gateway.ReleaseScheduledBroadcast,
+			RemoteOwner:          centerRuntime.Gateway.IdentityOwnedByRemote,
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {
 				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
 			},

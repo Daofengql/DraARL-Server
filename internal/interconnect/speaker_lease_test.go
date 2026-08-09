@@ -170,6 +170,31 @@ func TestEdgeSpeakerClaimTimeoutDropsBufferedFrames(t *testing.T) {
 	}
 }
 
+func TestScheduledBroadcastSpeakerLeaseCompetesWithDeviceVoice(t *testing.T) {
+	gateway := NewCenterGateway(nil, nil)
+	now := time.Now()
+	domainID := uint64(77)
+	if _, ok := gateway.speaker.AcquireLocal(100, 1, domainID, now); !ok {
+		t.Fatal("device voice did not acquire speaker lease")
+	}
+	if gateway.AcquireScheduledBroadcast(9, domainID, now.Add(100*time.Millisecond)) {
+		t.Fatal("scheduled broadcast displaced active device voice")
+	}
+	if !gateway.AcquireScheduledBroadcast(9, domainID, now.Add(SpeakerLeaseIdleTimeout+time.Millisecond)) {
+		t.Fatal("scheduled broadcast did not acquire expired domain")
+	}
+	if !gateway.AcceptScheduledBroadcastFrame(9, domainID, now.Add(SpeakerLeaseIdleTimeout+100*time.Millisecond)) {
+		t.Fatal("scheduled broadcast frame did not renew lease")
+	}
+	if _, ok := gateway.speaker.AcquireLocal(101, 1, domainID, now.Add(SpeakerLeaseIdleTimeout+100*time.Millisecond)); ok {
+		t.Fatal("device voice displaced active scheduled broadcast")
+	}
+	gateway.ReleaseScheduledBroadcast(9, domainID)
+	if _, ok := gateway.speaker.AcquireLocal(101, 1, domainID, now.Add(SpeakerLeaseIdleTimeout+101*time.Millisecond)); !ok {
+		t.Fatal("scheduled broadcast release retained speaker lease")
+	}
+}
+
 func BenchmarkSpeakerLeaseAcceptFrameSameDomain(b *testing.B) {
 	manager := NewSpeakerLeaseManager()
 	now := time.Unix(400, 0)

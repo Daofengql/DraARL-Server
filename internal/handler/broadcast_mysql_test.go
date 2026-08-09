@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -115,8 +116,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	}
 	groupA := &gormdb.Group{Name: "broadcast-a-" + suffix, Type: groupTypePublic, OwerID: owner.ID, Status: 1}
 	groupB := &gormdb.Group{Name: "broadcast-b-" + suffix, Type: groupTypePrivate, OwerID: other.ID, Status: 1}
+	groupDelete := &gormdb.Group{Name: "broadcast-delete-" + suffix, Type: groupTypePrivate, OwerID: owner.ID, Status: 1}
 	virtual := &gormdb.Group{Name: "broadcast-v-" + suffix, Type: groupTypePublic, OwerID: admin.ID, Status: 0, IsVirtual: true}
-	for _, group := range []*gormdb.Group{groupA, groupB, virtual} {
+	for _, group := range []*gormdb.Group{groupA, groupB, groupDelete, virtual} {
 		if err := db.Create(group).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -124,8 +126,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 
 	repo := repository.Default()
 	t.Cleanup(func() {
+		entityGroupIDs := []int{groupA.ID, groupB.ID, groupDelete.ID}
 		var audios []model.BroadcastAudio
-		_ = db.Where("group_id IN ?", []int{groupA.ID, groupB.ID}).Find(&audios).Error
+		_ = db.Where("group_id IN ?", entityGroupIDs).Find(&audios).Error
 		for _, audio := range audios {
 			_ = storage.Delete(context.Background(), audio.OriginalObjectKey)
 			if audio.PlaybackObjectKey != "" {
@@ -133,24 +136,24 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			}
 		}
 		var recordIDs []uint
-		_ = db.Model(&gormdb.CommRecord{}).Where("group_id IN ?", []int{groupA.ID, groupB.ID}).Pluck("id", &recordIDs).Error
+		_ = db.Model(&gormdb.CommRecord{}).Where("group_id IN ?", entityGroupIDs).Pluck("id", &recordIDs).Error
 		if len(recordIDs) != 0 {
 			_ = db.Where("record_id IN ?", recordIDs).Delete(&gormdb.CommRecordDeliveryGroup{}).Error
 			_ = db.Where("id IN ?", recordIDs).Delete(&gormdb.CommRecord{}).Error
 		}
-		_ = db.Where("source_group_id IN ?", []int{groupA.ID, groupB.ID}).Delete(&model.BroadcastRun{}).Error
-		_ = db.Where("group_id IN ?", []int{groupA.ID, groupB.ID}).Delete(&model.BroadcastSchedule{}).Error
-		_ = db.Where("group_id IN ?", []int{groupA.ID, groupB.ID}).Delete(&model.BroadcastAudio{}).Error
+		_ = db.Where("source_group_id IN ?", entityGroupIDs).Delete(&model.BroadcastRun{}).Error
+		_ = db.Where("group_id IN ?", entityGroupIDs).Delete(&model.BroadcastSchedule{}).Error
+		_ = db.Where("group_id IN ?", entityGroupIDs).Delete(&model.BroadcastAudio{}).Error
 		_ = db.Where("link_group_id = ?", virtual.ID).Delete(&gormdb.GroupLink{}).Error
-		_ = db.Delete(&gormdb.Group{}, []int{groupA.ID, groupB.ID, virtual.ID}).Error
+		_ = db.Delete(&gormdb.Group{}, []int{groupA.ID, groupB.ID, groupDelete.ID, virtual.ID}).Error
 		_ = db.Delete(&gormdb.User{}, []int{owner.ID, other.ID, admin.ID}).Error
 		_ = db.Where("config_key IN ?", []string{repository.OperationalEnabledKey, repository.OperationalEnabledKey + ".emergency_fence"}).Delete(&gormdb.SiteConfig{}).Error
 	})
 
 	wav := makeBroadcastTestWAV(850 * time.Millisecond)
-	upload := func(actor *gormdb.User, groupID int, name string) *model.BroadcastAudio {
+	uploadWAV := func(actor *gormdb.User, groupID int, name string, data []byte) *model.BroadcastAudio {
 		t.Helper()
-		body, contentType := makeBroadcastMultipart(t, name+".wav", name, wav)
+		body, contentType := makeBroadcastMultipart(t, name+".wav", name, data)
 		result := performBroadcastHandlerRequest(t, actor, http.MethodPost, "/groups/:id/broadcast-audios", fmt.Sprintf("/groups/%d/broadcast-audios", groupID), body, contentType, UploadBroadcastAudio)
 		requireBroadcastStatus(t, result, http.StatusAccepted)
 		var envelope struct {
@@ -163,6 +166,10 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			t.Fatalf("upload response leaked object key: %s", result.Body)
 		}
 		return waitBroadcastAudioReady(t, repo, groupID, envelope.Data.ID)
+	}
+	upload := func(actor *gormdb.User, groupID int, name string) *model.BroadcastAudio {
+		t.Helper()
+		return uploadWAV(actor, groupID, name, wav)
 	}
 
 	audioA := upload(owner, groupA.ID, "同音频多时刻")
@@ -184,10 +191,10 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		t.Fatalf("audio detail preview missing: err=%v body=%s", err, detail.Body)
 	}
 
-	createSchedule := func(audioID uint, name, localTime string) broadcastScheduleResponse {
+	createScheduleFor := func(groupID int, audioID uint, name, localTime string) broadcastScheduleResponse {
 		t.Helper()
 		payload := []byte(fmt.Sprintf(`{"audio_id":%d,"name":%q,"schedule_type":"daily","timezone":"Asia/Shanghai","local_time":%q,"enabled":true}`, audioID, name, localTime))
-		result := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules", fmt.Sprintf("/groups/%d/broadcast-schedules", groupA.ID), payload, "application/json", CreateBroadcastSchedule)
+		result := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules", fmt.Sprintf("/groups/%d/broadcast-schedules", groupID), payload, "application/json", CreateBroadcastSchedule)
 		requireBroadcastStatus(t, result, http.StatusCreated)
 		var envelope struct {
 			Data broadcastScheduleResponse `json:"data"`
@@ -199,6 +206,10 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			t.Fatalf("new schedule is not effective: %s", result.Body)
 		}
 		return envelope.Data
+	}
+	createSchedule := func(audioID uint, name, localTime string) broadcastScheduleResponse {
+		t.Helper()
+		return createScheduleFor(groupA.ID, audioID, name, localTime)
 	}
 	scheduleA1 := createSchedule(audioA.ID, "音频A上午", "08:00:00")
 	scheduleA2 := createSchedule(audioA.ID, "音频A下午", "16:00:00")
@@ -274,9 +285,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	enableResult := performBroadcastHandlerRequest(t, admin, http.MethodPut, "/broadcast/runtime", "/broadcast/runtime", []byte(`{"enabled":true}`), "application/json", UpdateBroadcastOperationalState)
 	requireBroadcastStatus(t, enableResult, http.StatusOK)
 
-	trigger := func(scheduleID uint) model.BroadcastRun {
+	triggerFor := func(groupID int, scheduleID uint) model.BroadcastRun {
 		t.Helper()
-		result := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules/:scheduleId/run", fmt.Sprintf("/groups/%d/broadcast-schedules/%d/run", groupA.ID, scheduleID), nil, "", RunBroadcastSchedule)
+		result := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-schedules/:scheduleId/run", fmt.Sprintf("/groups/%d/broadcast-schedules/%d/run", groupID, scheduleID), nil, "", RunBroadcastSchedule)
 		requireBroadcastStatus(t, result, http.StatusAccepted)
 		var envelope struct {
 			Data model.BroadcastRun `json:"data"`
@@ -285,6 +296,10 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			t.Fatalf("decode manual run: err=%v body=%s", err, result.Body)
 		}
 		return envelope.Data
+	}
+	trigger := func(scheduleID uint) model.BroadcastRun {
+		t.Helper()
+		return triggerFor(groupA.ID, scheduleID)
 	}
 	cancelledRun := trigger(scheduleA1.ID)
 	cancelResult := performBroadcastHandlerRequest(t, owner, http.MethodPost, "/groups/:id/broadcast-runs/:runId/cancel", fmt.Sprintf("/groups/%d/broadcast-runs/%d/cancel", groupA.ID, cancelledRun.ID), nil, "", CancelBroadcastRun)
@@ -344,6 +359,84 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(storageRoot, "comm-records")); !os.IsNotExist(err) {
 		t.Fatalf("automatic broadcast created a communication recording directory: err=%v", err)
 	}
+
+	longAudio := uploadWAV(owner, groupA.ID, "运行态释放", makeBroadcastTestWAV(4*time.Second))
+	deletedSchedule := createSchedule(longAudio.ID, "播放中删除计划", "22:00:00")
+	// A normally completed speaker retains the same 900 ms half-duplex hold as
+	// a real device. Let that hold elapse before starting the mutation case.
+	time.Sleep(1100 * time.Millisecond)
+	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	deletedScheduleRun := trigger(deletedSchedule.ID)
+	waitBroadcastRunPlaying(t, repo, groupA.ID, deletedScheduleRun.ID)
+	deleteScheduleResult := performBroadcastHandlerRequest(t, owner, http.MethodDelete, "/groups/:id/broadcast-schedules/:scheduleId", fmt.Sprintf("/groups/%d/broadcast-schedules/%d", groupA.ID, deletedSchedule.ID), nil, "", DeleteBroadcastSchedule)
+	requireBroadcastStatus(t, deleteScheduleResult, http.StatusOK)
+	deletedScheduleRun = waitBroadcastRunTerminal(t, repo, groupA.ID, deletedScheduleRun.ID)
+	if deletedScheduleRun.Status != model.RunStatusCancelled || deletedScheduleRun.ErrorCode != "schedule_disabled" || deletedScheduleRun.SentPackets == 0 {
+		t.Fatalf("run after schedule deletion=%#v", deletedScheduleRun)
+	}
+	assertBroadcastRunStopped(t, repo, groupA.ID, deletedScheduleRun)
+	deleteLongAudio := performBroadcastHandlerRequest(t, owner, http.MethodDelete, "/groups/:id/broadcast-audios/:audioId", fmt.Sprintf("/groups/%d/broadcast-audios/%d", groupA.ID, longAudio.ID), nil, "", DeleteBroadcastAudio)
+	requireBroadcastStatus(t, deleteLongAudio, http.StatusOK)
+	if retained, err := repo.GetRun(context.Background(), groupA.ID, deletedScheduleRun.ID); err != nil || retained.ScheduleID != deletedSchedule.ID || retained.AudioID != longAudio.ID {
+		t.Fatalf("deleted resource run history missing: run=%#v err=%v", retained, err)
+	}
+
+	groupStopAudio := uploadWAV(owner, groupA.ID, "群组停用释放", makeBroadcastTestWAV(4*time.Second))
+	groupStopSchedule := createSchedule(groupStopAudio.ID, "播放中停用群组", "23:00:00")
+	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	groupStopRun := trigger(groupStopSchedule.ID)
+	waitBroadcastRunPlaying(t, repo, groupA.ID, groupStopRun.ID)
+	disableGroup := performBroadcastHandlerRequest(t, owner, http.MethodPut, "/groups/:id", fmt.Sprintf("/groups/%d", groupA.ID), []byte(`{"status":0}`), "application/json", UpdateGroup)
+	requireBroadcastStatus(t, disableGroup, http.StatusOK)
+	groupStopRun = waitBroadcastRunTerminal(t, repo, groupA.ID, groupStopRun.ID)
+	if groupStopRun.Status != model.RunStatusCancelled || groupStopRun.ErrorCode != "group_unavailable" || groupStopRun.SentPackets == 0 {
+		t.Fatalf("run after group disable=%#v", groupStopRun)
+	}
+	assertBroadcastRunStopped(t, repo, groupA.ID, groupStopRun)
+	reenableGroup := performBroadcastHandlerRequest(t, owner, http.MethodPut, "/groups/:id", fmt.Sprintf("/groups/%d", groupA.ID), []byte(`{"status":1}`), "application/json", UpdateGroup)
+	requireBroadcastStatus(t, reenableGroup, http.StatusOK)
+
+	if err := db.Create(&gormdb.GroupLink{LinkGroupID: virtual.ID, TargetGroupID: groupDelete.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: virtual.ID, Mode: model.PolicyAllowSingleSource,
+		AllowedSourceGroupID: &groupDelete.ID, UpdatedBy: admin.ID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(virtual).Update("status", 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	virtual.Status = 1
+	udphub.RefreshGroupLinkCache()
+	deleteGroupAudio := uploadWAV(owner, groupDelete.ID, "群组删除释放", makeBroadcastTestWAV(4*time.Second))
+	deleteGroupSchedule := createScheduleFor(groupDelete.ID, deleteGroupAudio.ID, "播放中删除群组", "23:30:00")
+	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	deleteGroupRun := triggerFor(groupDelete.ID, deleteGroupSchedule.ID)
+	waitBroadcastRunPlaying(t, repo, groupDelete.ID, deleteGroupRun.ID)
+	deleteGroupResult := performBroadcastHandlerRequest(t, owner, http.MethodDelete, "/groups/:id", fmt.Sprintf("/groups/%d", groupDelete.ID), nil, "", DeleteGroup)
+	requireBroadcastStatus(t, deleteGroupResult, http.StatusOK)
+	if !bytes.Contains(deleteGroupResult.Body, []byte(`"broadcast_cleanup_pending":false`)) {
+		t.Fatalf("group deletion cleanup result=%s", deleteGroupResult.Body)
+	}
+	if _, _, err := storage.Stat(context.Background(), deleteGroupAudio.OriginalObjectKey); err == nil {
+		t.Fatal("deleted group original broadcast object still exists")
+	}
+	if _, _, err := storage.Stat(context.Background(), deleteGroupAudio.PlaybackObjectKey); err == nil {
+		t.Fatal("deleted group playback broadcast object still exists")
+	}
+	if _, err := repo.GetRun(context.Background(), groupDelete.ID, deleteGroupRun.ID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("deleted group retained broadcast run: %v", err)
+	}
+	remainingPolicy, err := repo.GetPolicy(context.Background(), virtual.ID)
+	if err != nil || remainingPolicy.Mode != model.PolicySuspendAll || remainingPolicy.AllowedSourceGroupID != nil {
+		t.Fatalf("deleted selected source left invalid policy: policy=%#v err=%v", remainingPolicy, err)
+	}
+	if linked, err := gormdb.NewGroupLinkRepository().GetLinksByTargetGroup(groupDelete.ID); err != nil || len(linked) != 0 {
+		t.Fatalf("deleted selected source remained linked: links=%#v err=%v", linked, err)
+	}
+
 	afterManual, err := repo.GetSchedule(context.Background(), groupA.ID, scheduleA2.ID)
 	if err != nil || afterManual.NextRunAt == nil || persistedA2.NextRunAt == nil || !afterManual.NextRunAt.Equal(*persistedA2.NextRunAt) {
 		t.Fatalf("manual run changed future schedule: before=%v after=%#v err=%v", persistedA2.NextRunAt, afterManual, err)
@@ -485,6 +578,46 @@ func waitBroadcastRunTerminal(t *testing.T, repo *repository.Repository, groupID
 	}
 	t.Fatalf("broadcast run %d did not finish", runID)
 	return model.BroadcastRun{}
+}
+
+func waitBroadcastRunPlaying(t *testing.T, repo *repository.Repository, groupID int, runID uint) model.BroadcastRun {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := repo.GetRun(context.Background(), groupID, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status == model.RunStatusPlaying {
+			time.Sleep(180 * time.Millisecond)
+			stillPlaying, err := repo.GetRun(context.Background(), groupID, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stillPlaying.Status == model.RunStatusPlaying {
+				return *stillPlaying
+			}
+			t.Fatalf("broadcast run %d ended before release mutation: %#v", runID, stillPlaying)
+		}
+		if run.Status != model.RunStatusClaimed && run.Status != model.RunStatusPlaying {
+			t.Fatalf("broadcast run %d became terminal before release test: %#v", runID, run)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("broadcast run %d did not enter playback", runID)
+	return model.BroadcastRun{}
+}
+
+func assertBroadcastRunStopped(t *testing.T, repo *repository.Repository, groupID int, terminal model.BroadcastRun) {
+	t.Helper()
+	time.Sleep(150 * time.Millisecond)
+	stored, err := repo.GetRun(context.Background(), groupID, terminal.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != terminal.Status || stored.ErrorCode != terminal.ErrorCode || stored.SentPackets != terminal.SentPackets || stored.PlayedDurationMS != terminal.PlayedDurationMS {
+		t.Fatalf("broadcast run changed after mutation response: before=%#v after=%#v", terminal, stored)
+	}
 }
 
 func makeBroadcastTestWAV(duration time.Duration) []byte {

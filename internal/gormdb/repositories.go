@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	broadcastmodel "draarl/internal/broadcast/model"
 	"draarl/internal/models"
 
 	"gorm.io/gorm"
@@ -127,7 +128,24 @@ func (r *GroupRepository) DeleteGroupWithCascade(id int) error {
 			return err
 		}
 
-		// 5. 最后删除群组本身
+		// 5. 按外键依赖顺序硬删除群组播报资源。音频被计划和执行记录
+		// RESTRICT 引用，不能依赖 MySQL 同级级联的未定义执行顺序。
+		if err := tx.Where("source_group_id = ?", id).Delete(&broadcastmodel.BroadcastRun{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("group_id = ?", id).Delete(&broadcastmodel.BroadcastSchedule{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where("group_id = ?", id).Delete(&broadcastmodel.BroadcastAudio{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&broadcastmodel.VirtualGroupBroadcastPolicy{}).
+			Where("allowed_source_group_id = ?", id).
+			Updates(map[string]interface{}{"mode": broadcastmodel.PolicySuspendAll, "allowed_source_group_id": nil}).Error; err != nil {
+			return err
+		}
+
+		// 6. 最后删除群组本身
 		if err := tx.Delete(&Group{}, id).Error; err != nil {
 			return err
 		}

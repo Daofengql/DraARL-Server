@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"draarl/internal/broadcast/model"
 	"draarl/internal/gormdb"
@@ -26,7 +27,8 @@ func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 		t.Fatalf("initial migration: %v", err)
 	}
 	db := gormdb.Get()
-	user := &gormdb.User{Name: "broadcast-schema-owner", Email: "broadcast-schema@example.invalid", CallSign: "BCAST01", Roles: "admin", Status: 1}
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	user := &gormdb.User{Name: "broadcast-schema-owner-" + suffix, Email: "broadcast-schema-" + suffix + "@example.invalid", CallSign: "BC" + suffix[len(suffix)-6:], Roles: "admin", Status: 1}
 	if err := db.Create(user).Error; err != nil {
 		t.Fatalf("create migration owner: %v", err)
 	}
@@ -34,6 +36,10 @@ func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 	if err := db.Create(virtualGroup).Error; err != nil {
 		t.Fatalf("create legacy virtual group: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = db.Delete(&gormdb.Group{}, virtualGroup.ID).Error
+		_ = db.Delete(&gormdb.User{}, user.ID).Error
+	})
 
 	if err := gormdb.AutoMigrate(); err != nil {
 		t.Fatalf("repeat migration: %v", err)
@@ -53,6 +59,9 @@ func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 	}
 	if !db.Migrator().HasIndex(&model.BroadcastRun{}, "uk_broadcast_run_occurrence") {
 		t.Fatal("broadcast run occurrence unique index was not migrated")
+	}
+	if !db.Migrator().HasColumn(&model.BroadcastAudio{}, "deleted_at") || !db.Migrator().HasColumn(&model.BroadcastSchedule{}, "deleted_at") {
+		t.Fatal("broadcast soft-delete columns were not migrated")
 	}
 
 	var policy model.VirtualGroupBroadcastPolicy

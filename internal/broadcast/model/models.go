@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 const (
 	AudioStatusProcessing = "processing"
@@ -45,22 +49,23 @@ type UserReference struct {
 func (UserReference) TableName() string { return "users" }
 
 type BroadcastAudio struct {
-	ID                uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID           int       `gorm:"not null;index;column:group_id" json:"group_id"`
-	Name              string    `gorm:"type:varchar(255);not null;column:name" json:"name"`
-	OriginalObjectKey string    `gorm:"type:varchar(512);not null;column:original_object_key" json:"-"`
-	PlaybackObjectKey string    `gorm:"type:varchar(512);column:playback_object_key" json:"-"`
-	OriginalMIMEType  string    `gorm:"type:varchar(100);column:original_mime_type" json:"original_mime_type"`
-	OriginalSize      int64     `gorm:"type:bigint;column:original_size" json:"original_size"`
-	PlaybackSize      int64     `gorm:"type:bigint;column:playback_size" json:"playback_size"`
-	DurationMS        int       `gorm:"type:int;column:duration_ms" json:"duration_ms"`
-	PacketCount       int       `gorm:"type:int;column:packet_count" json:"packet_count"`
-	SHA256            string    `gorm:"type:char(64);index:idx_broadcast_audio_group_sha,priority:2;column:sha256" json:"sha256"`
-	Status            string    `gorm:"type:varchar(20);not null;default:processing;index;column:status" json:"status"`
-	ErrorMessage      string    `gorm:"type:varchar(500);column:error_message" json:"error_message,omitempty"`
-	CreatedBy         int       `gorm:"not null;column:created_by" json:"created_by"`
-	CreatedAt         time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
-	UpdatedAt         time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+	ID                uint           `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID           int            `gorm:"not null;index;column:group_id" json:"group_id"`
+	Name              string         `gorm:"type:varchar(255);not null;column:name" json:"name"`
+	OriginalObjectKey string         `gorm:"type:varchar(512);not null;column:original_object_key" json:"-"`
+	PlaybackObjectKey string         `gorm:"type:varchar(512);column:playback_object_key" json:"-"`
+	OriginalMIMEType  string         `gorm:"type:varchar(100);column:original_mime_type" json:"original_mime_type"`
+	OriginalSize      int64          `gorm:"type:bigint;column:original_size" json:"original_size"`
+	PlaybackSize      int64          `gorm:"type:bigint;column:playback_size" json:"playback_size"`
+	DurationMS        int            `gorm:"type:int;column:duration_ms" json:"duration_ms"`
+	PacketCount       int            `gorm:"type:int;column:packet_count" json:"packet_count"`
+	SHA256            string         `gorm:"type:char(64);index:idx_broadcast_audio_group_sha,priority:2;column:sha256" json:"sha256"`
+	Status            string         `gorm:"type:varchar(20);not null;default:processing;index;column:status" json:"status"`
+	ErrorMessage      string         `gorm:"type:varchar(500);column:error_message" json:"error_message,omitempty"`
+	CreatedBy         int            `gorm:"not null;column:created_by" json:"created_by"`
+	CreatedAt         time.Time      `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt         time.Time      `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"index;column:deleted_at" json:"-"`
 
 	Group   *GroupReference `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	Creator *UserReference  `gorm:"foreignKey:CreatedBy;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
@@ -69,24 +74,25 @@ type BroadcastAudio struct {
 func (BroadcastAudio) TableName() string { return "broadcast_audios" }
 
 type BroadcastSchedule struct {
-	ID                        uint       `gorm:"primaryKey;autoIncrement" json:"id"`
-	GroupID                   int        `gorm:"not null;index;column:group_id" json:"group_id"`
-	AudioID                   uint       `gorm:"not null;index;column:audio_id" json:"audio_id"`
-	Name                      string     `gorm:"type:varchar(255);not null;column:name" json:"name"`
-	ScheduleType              string     `gorm:"type:varchar(16);not null;column:schedule_type" json:"schedule_type"`
-	Timezone                  string     `gorm:"type:varchar(64);not null;column:timezone" json:"timezone"`
-	ScheduledAt               *time.Time `gorm:"type:datetime(3);column:scheduled_at" json:"scheduled_at,omitempty"`
-	LocalTime                 string     `gorm:"type:char(8);column:local_time" json:"local_time,omitempty"`
-	WeekdayMask               uint8      `gorm:"type:tinyint unsigned;column:weekday_mask" json:"weekday_mask,omitempty"`
-	NextRunAt                 *time.Time `gorm:"type:datetime(3);index:idx_broadcast_schedule_due,priority:2;column:next_run_at" json:"next_run_at,omitempty"`
-	Enabled                   bool       `gorm:"type:tinyint(1);not null;index:idx_broadcast_schedule_due,priority:1;column:enabled" json:"enabled"`
-	SuspendedReason           string     `gorm:"type:varchar(64);column:suspended_reason" json:"suspended_reason,omitempty"`
-	SuspendedByVirtualGroupID *int       `gorm:"index;column:suspended_by_virtual_group_id" json:"suspended_by_virtual_group_id,omitempty"`
-	SuspendedAt               *time.Time `gorm:"type:datetime(3);column:suspended_at" json:"suspended_at,omitempty"`
-	CreatedBy                 int        `gorm:"not null;column:created_by" json:"created_by"`
-	UpdatedBy                 int        `gorm:"not null;column:updated_by" json:"updated_by"`
-	CreatedAt                 time.Time  `gorm:"autoCreateTime;column:created_at" json:"created_at"`
-	UpdatedAt                 time.Time  `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+	ID                        uint           `gorm:"primaryKey;autoIncrement" json:"id"`
+	GroupID                   int            `gorm:"not null;index;column:group_id" json:"group_id"`
+	AudioID                   uint           `gorm:"not null;index;column:audio_id" json:"audio_id"`
+	Name                      string         `gorm:"type:varchar(255);not null;column:name" json:"name"`
+	ScheduleType              string         `gorm:"type:varchar(16);not null;column:schedule_type" json:"schedule_type"`
+	Timezone                  string         `gorm:"type:varchar(64);not null;column:timezone" json:"timezone"`
+	ScheduledAt               *time.Time     `gorm:"type:datetime(3);column:scheduled_at" json:"scheduled_at,omitempty"`
+	LocalTime                 string         `gorm:"type:char(8);column:local_time" json:"local_time,omitempty"`
+	WeekdayMask               uint8          `gorm:"type:tinyint unsigned;column:weekday_mask" json:"weekday_mask,omitempty"`
+	NextRunAt                 *time.Time     `gorm:"type:datetime(3);index:idx_broadcast_schedule_due,priority:2;column:next_run_at" json:"next_run_at,omitempty"`
+	Enabled                   bool           `gorm:"type:tinyint(1);not null;index:idx_broadcast_schedule_due,priority:1;column:enabled" json:"enabled"`
+	SuspendedReason           string         `gorm:"type:varchar(64);column:suspended_reason" json:"suspended_reason,omitempty"`
+	SuspendedByVirtualGroupID *int           `gorm:"index;column:suspended_by_virtual_group_id" json:"suspended_by_virtual_group_id,omitempty"`
+	SuspendedAt               *time.Time     `gorm:"type:datetime(3);column:suspended_at" json:"suspended_at,omitempty"`
+	CreatedBy                 int            `gorm:"not null;column:created_by" json:"created_by"`
+	UpdatedBy                 int            `gorm:"not null;column:updated_by" json:"updated_by"`
+	CreatedAt                 time.Time      `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt                 time.Time      `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt `gorm:"index;column:deleted_at" json:"-"`
 
 	Group                   *GroupReference `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	Audio                   *BroadcastAudio `gorm:"foreignKey:AudioID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`

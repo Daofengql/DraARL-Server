@@ -490,11 +490,25 @@ func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	if err := repo.SaveSchedule(ctx, schedule, now); err != nil {
 		t.Fatal(err)
 	}
+	run := &model.BroadcastRun{
+		ScheduleID: schedule.ID, AudioID: audioA.ID, SourceGroupID: groups.a.ID,
+		ScheduledFor: now.Add(-time.Second), Status: model.RunStatusSucceeded, EndedAt: &now,
+	}
+	if err := repo.DB().Create(run).Error; err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := repo.DeleteAudio(ctx, groups.a.ID, audioA.ID); !errors.Is(err, ErrAudioInUse) {
 		t.Fatalf("delete referenced audio error = %v, want ErrAudioInUse", err)
 	}
 	if err := repo.DeleteSchedule(ctx, groups.a.ID, schedule.ID); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := repo.GetSchedule(ctx, groups.a.ID, schedule.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("soft-deleted schedule remained visible: %v", err)
+	}
+	var deletedSchedule model.BroadcastSchedule
+	if err := repo.DB().Unscoped().First(&deletedSchedule, schedule.ID).Error; err != nil || !deletedSchedule.DeletedAt.Valid {
+		t.Fatalf("schedule was not soft deleted: schedule=%#v err=%v", deletedSchedule, err)
 	}
 	original, playback, err := repo.DeleteAudio(ctx, groups.a.ID, audioA.ID)
 	if err != nil {
@@ -502,6 +516,70 @@ func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	}
 	if original == "" || playback == "" {
 		t.Fatalf("delete did not return object keys: %q, %q", original, playback)
+	}
+	if _, err := repo.GetAudio(ctx, groups.a.ID, audioA.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("soft-deleted audio remained visible: %v", err)
+	}
+	var deletedAudio model.BroadcastAudio
+	if err := repo.DB().Unscoped().First(&deletedAudio, audioA.ID).Error; err != nil || !deletedAudio.DeletedAt.Valid {
+		t.Fatalf("audio was not soft deleted: audio=%#v err=%v", deletedAudio, err)
+	}
+	var retainedRun model.BroadcastRun
+	if err := repo.DB().First(&retainedRun, run.ID).Error; err != nil || retainedRun.ScheduleID != schedule.ID || retainedRun.AudioID != audioA.ID {
+		t.Fatalf("soft deletion removed execution history: run=%#v err=%v", retainedRun, err)
+	}
+}
+
+func TestRepositorySoftDeletedResourcesFenceRunsAndKeepHistoryMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	newSchedule := func(audio *model.BroadcastAudio, name string) *model.BroadcastSchedule {
+		t.Helper()
+		schedule := &model.BroadcastSchedule{
+			GroupID: groups.a.ID, AudioID: audio.ID, Name: name, ScheduleType: model.ScheduleTypeDaily,
+			Timezone: "UTC", LocalTime: "12:00:00", Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+		}
+		if err := repo.SaveSchedule(ctx, schedule, now); err != nil {
+			t.Fatal(err)
+		}
+		return schedule
+	}
+	claim := func(schedule *model.BroadcastSchedule, worker string, at time.Time) *model.BroadcastRun {
+		t.Helper()
+		run, code, err := repo.ClaimManualRun(ctx, groups.a.ID, schedule.ID, at, worker, 30*time.Second)
+		if err != nil || code != "" || run == nil {
+			t.Fatalf("claim run=%#v code=%q err=%v", run, code, err)
+		}
+		return run
+	}
+
+	scheduleAudio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "deleted-schedule-audio")
+	deletedSchedule := newSchedule(scheduleAudio, "deleted schedule")
+	scheduleRun := claim(deletedSchedule, "deleted-schedule-worker", now)
+	if err := repo.DeleteSchedule(ctx, groups.a.ID, deletedSchedule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if execution, code, err := repo.LoadClaimedExecution(ctx, scheduleRun.ID, "deleted-schedule-worker", now.Add(time.Second)); err != nil || execution != nil || code != "schedule_disabled" {
+		t.Fatalf("deleted schedule execution=%#v code=%q err=%v", execution, code, err)
+	}
+
+	deletedAudio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "deleted-active-audio")
+	audioSchedule := newSchedule(deletedAudio, "audio revoked during run")
+	audioRun := claim(audioSchedule, "deleted-audio-worker", now.Add(2*time.Millisecond))
+	if err := repo.DB().Delete(deletedAudio).Error; err != nil {
+		t.Fatal(err)
+	}
+	if execution, code, err := repo.LoadClaimedExecution(ctx, audioRun.ID, "deleted-audio-worker", now.Add(time.Second)); err != nil || execution != nil || code != "audio_unavailable" {
+		t.Fatalf("deleted audio execution=%#v code=%q err=%v", execution, code, err)
+	}
+
+	for _, runID := range []uint{scheduleRun.ID, audioRun.ID} {
+		var retained model.BroadcastRun
+		if err := repo.DB().First(&retained, runID).Error; err != nil {
+			t.Fatalf("run %d history was removed: %v", runID, err)
+		}
 	}
 }
 

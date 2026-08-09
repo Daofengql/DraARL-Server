@@ -266,6 +266,22 @@ func (r *Repository) GetRun(ctx context.Context, groupID int, runID uint) (*mode
 	return &run, err
 }
 
+func (r *Repository) ActiveRunIDsForSchedule(ctx context.Context, groupID int, scheduleID uint) ([]uint, error) {
+	return r.activeRunIDs(ctx, "source_group_id = ? AND schedule_id = ?", groupID, scheduleID)
+}
+
+func (r *Repository) ActiveRunIDsForAudio(ctx context.Context, groupID int, audioID uint) ([]uint, error) {
+	return r.activeRunIDs(ctx, "source_group_id = ? AND audio_id = ?", groupID, audioID)
+}
+
+func (r *Repository) activeRunIDs(ctx context.Context, predicate string, args ...any) ([]uint, error) {
+	var runIDs []uint
+	err := r.db.WithContext(ctx).Model(&model.BroadcastRun{}).
+		Where(predicate, args...).Where("status IN ?", []string{model.RunStatusClaimed, model.RunStatusPlaying}).
+		Order("id ASC").Pluck("id", &runIDs).Error
+	return runIDs, err
+}
+
 // ClaimDue atomically advances each due schedule and creates at most one run
 // for its current theoretical occurrence. SKIP LOCKED permits multiple centre
 // workers during rolling upgrades while the unique occurrence key remains the
@@ -580,10 +596,10 @@ func loadRunExecution(tx *gorm.DB, runID uint) (scheduler.RunExecution, error) {
 		}
 		return execution, err
 	}
-	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Schedule, execution.Run.ScheduleID).Error; err != nil {
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Schedule, execution.Run.ScheduleID).Error; err != nil {
 		return execution, err
 	}
-	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Audio, execution.Run.AudioID).Error; err != nil {
+	if err := tx.Unscoped().Clauses(clause.Locking{Strength: "SHARE"}).First(&execution.Audio, execution.Run.AudioID).Error; err != nil {
 		return execution, err
 	}
 	return execution, nil
@@ -602,7 +618,7 @@ func (r *Repository) validateExecutionEligibility(tx *gorm.DB, execution *schedu
 		return "emergency_stop", nil
 	}
 	schedule, audio := &execution.Schedule, &execution.Audio
-	if !schedule.Enabled {
+	if schedule.DeletedAt.Valid || !schedule.Enabled {
 		return "schedule_disabled", nil
 	}
 	if schedule.SuspendedReason != "" {
@@ -619,7 +635,7 @@ func (r *Repository) validateExecutionEligibility(tx *gorm.DB, execution *schedu
 		return "group_unavailable", nil
 	}
 	if schedule.GroupID != execution.Run.SourceGroupID || schedule.AudioID != execution.Run.AudioID ||
-		audio.GroupID != execution.Run.SourceGroupID || audio.Status != model.AudioStatusReady || strings.TrimSpace(audio.PlaybackObjectKey) == "" {
+		audio.GroupID != execution.Run.SourceGroupID || audio.DeletedAt.Valid || audio.Status != model.AudioStatusReady || strings.TrimSpace(audio.PlaybackObjectKey) == "" {
 		return "audio_unavailable", nil
 	}
 	policy, err := activePolicyForEntityGroup(tx, execution.Run.SourceGroupID)

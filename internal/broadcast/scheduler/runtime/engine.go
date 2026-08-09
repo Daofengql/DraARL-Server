@@ -418,6 +418,15 @@ func playbackTerminal(ctx context.Context, err error) (string, string) {
 		return model.RunStatusCancelled, validation.Code
 	}
 	cause := context.Cause(ctx)
+	if errors.As(cause, &validation) {
+		if validation.Code == "virtual_group_broadcast_suspended" {
+			return model.RunStatusCancelledInterconnectEnabled, validation.Code
+		}
+		if validation.Code == "site_broadcast_disabled" {
+			return model.RunStatusCancelledSiteDisabled, validation.Code
+		}
+		return model.RunStatusCancelled, validation.Code
+	}
 	switch {
 	case errors.Is(cause, ErrInterconnectChange):
 		return model.RunStatusCancelledInterconnectEnabled, "interconnect_changed"

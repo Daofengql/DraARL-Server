@@ -383,6 +383,47 @@ func TestEngineCancelRunsWaitsForExecutionRelease(t *testing.T) {
 	}
 }
 
+func TestEngineResourceCancellationPreservesValidationReason(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "schedule disabled", code: "schedule_disabled"},
+		{name: "audio unavailable", code: "audio_unavailable"},
+		{name: "group unavailable", code: "group_unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine, repo, _ := engineFixture(t)
+			repo.claimed = true
+			repo.blockLoad = true
+			repo.loadStarted = make(chan struct{}, 1)
+			if err := engine.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := engine.TriggerManual(context.Background(), repo.run.SourceGroupID, repo.run.ScheduleID); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-repo.loadStarted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("run did not enter execution load")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			count, err := engine.CancelRunsAndWait(ctx, []uint{repo.run.ID}, &RunValidationError{Code: test.code})
+			if err != nil || count != 1 {
+				t.Fatalf("cancel count=%d err=%v", count, err)
+			}
+			finished := waitFinished(t, repo)
+			stopEngine(t, engine)
+			if finished.status != model.RunStatusCancelled || finished.errorCode != test.code {
+				t.Fatalf("finished=%#v", finished)
+			}
+		})
+	}
+}
+
 func TestEngineOperationalDisablePersistsCancelsAndReportsMetrics(t *testing.T) {
 	engine, repo, _ := engineFixture(t)
 	playing := make(chan struct{})

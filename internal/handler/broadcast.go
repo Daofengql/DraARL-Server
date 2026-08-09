@@ -262,6 +262,14 @@ func DeleteBroadcastAudio(c *gin.Context) {
 		writeBroadcastRepositoryError(c, err)
 		return
 	}
+	runIDs, err := repository.Default().ActiveRunIDsForAudio(c.Request.Context(), groupID, audioID)
+	if err != nil {
+		writeBroadcastError(c, http.StatusInternalServerError, "broadcast_run_list_failed", "读取活动播报任务失败")
+		return
+	}
+	if !cancelBroadcastRunsAfterResourceMutation(c, runIDs, "audio_unavailable") {
+		return
+	}
 	cleanupPending := false
 	for _, key := range []string{originalKey, playbackKey} {
 		if key == "" {
@@ -343,6 +351,16 @@ func UpdateBroadcastSchedule(c *gin.Context) {
 		writeBroadcastRepositoryError(c, err)
 		return
 	}
+	if req.Enabled != nil && !*req.Enabled {
+		runIDs, runErr := repo.ActiveRunIDsForSchedule(c.Request.Context(), groupID, schedule.ID)
+		if runErr != nil {
+			writeBroadcastError(c, http.StatusInternalServerError, "broadcast_run_list_failed", "读取活动播报任务失败")
+			return
+		}
+		if !cancelBroadcastRunsAfterResourceMutation(c, runIDs, "schedule_disabled") {
+			return
+		}
+	}
 	action := "broadcast_schedule_update"
 	if req.Enabled != nil {
 		if *req.Enabled {
@@ -364,8 +382,17 @@ func DeleteBroadcastSchedule(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := repository.Default().DeleteSchedule(c.Request.Context(), groupID, scheduleID); err != nil {
+	repo := repository.Default()
+	if err := repo.DeleteSchedule(c.Request.Context(), groupID, scheduleID); err != nil {
 		writeBroadcastRepositoryError(c, err)
+		return
+	}
+	runIDs, err := repo.ActiveRunIDsForSchedule(c.Request.Context(), groupID, scheduleID)
+	if err != nil {
+		writeBroadcastError(c, http.StatusInternalServerError, "broadcast_run_list_failed", "读取活动播报任务失败")
+		return
+	}
+	if !cancelBroadcastRunsAfterResourceMutation(c, runIDs, "schedule_disabled") {
 		return
 	}
 	oplog.AddLog(fmt.Sprintf("删除自动播报计划: ID=%d (群组: %s)", scheduleID, group.Name), "broadcast_schedule_delete", user.ID, user.Name, user.CallSign, c.ClientIP())

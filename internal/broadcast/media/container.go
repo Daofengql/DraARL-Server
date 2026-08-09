@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 const (
@@ -159,4 +160,14 @@ func validateMergedFrames(packet []byte) (int, bool) {
 		frames++
 	}
 	return frames, offset == len(packet)
+}
+
+// PacketDuration derives the wire duration from the packet's length-prefixed
+// Opus frames. DABR packets may contain one or two 60ms frames.
+func PacketDuration(packet []byte) (time.Duration, error) {
+	frames, ok := validateMergedFrames(packet)
+	if !ok || frames < 1 || frames > MaxFramesPerPacket {
+		return 0, fmt.Errorf("%w: invalid merged Opus payload", ErrInvalidContainer)
+	}
+	return time.Duration(frames*OpusFrameDurationMS) * time.Millisecond, nil
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"draarl/internal/broadcast/model"
 	"draarl/internal/config"
@@ -31,6 +32,22 @@ func TestContainerRoundTrip(t *testing.T) {
 	}
 	if framesInFirst, ok := validateMergedFrames(parsed.Packets[0]); !ok || framesInFirst != 2 {
 		t.Fatalf("first packet frames=%d valid=%v", framesInFirst, ok)
+	}
+}
+
+func TestPacketDurationUsesMergedFrameLengths(t *testing.T) {
+	one := []byte{0, 3, 1, 2, 3}
+	two := append(append([]byte{}, one...), 0, 2, 4, 5)
+	if got, err := PacketDuration(one); err != nil || got != 60*time.Millisecond {
+		t.Fatalf("one frame duration=%s err=%v", got, err)
+	}
+	if got, err := PacketDuration(two); err != nil || got != 120*time.Millisecond {
+		t.Fatalf("two frame duration=%s err=%v", got, err)
+	}
+	for _, invalid := range [][]byte{nil, {0, 0}, {0, 3, 1}, append(append(append([]byte{}, one...), one...), one...)} {
+		if _, err := PacketDuration(invalid); err == nil {
+			t.Fatalf("invalid packet accepted: %x", invalid)
+		}
 	}
 }
 

@@ -181,12 +181,12 @@ func (r *Repository) emergencyStopsRun(tx *gorm.DB, run *model.BroadcastRun) (bo
 		return false, nil
 	}
 	var row gormdb.SiteConfig
-	err := tx.Where("config_key = ?", r.emergencyFenceKey()).First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, nil
+	result := tx.Where("config_key = ?", r.emergencyFenceKey()).Limit(1).Find(&row)
+	if result.Error != nil {
+		return false, result.Error
 	}
-	if err != nil {
-		return false, err
+	if result.RowsAffected == 0 {
+		return false, nil
 	}
 	var fence emergencyFence
 	if err := json.Unmarshal([]byte(row.Value), &fence); err != nil {

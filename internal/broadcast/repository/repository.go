@@ -512,10 +512,18 @@ func (r *Repository) ClaimManualRun(ctx context.Context, groupID int, scheduleID
 }
 
 func (r *Repository) LoadClaimedExecution(ctx context.Context, runID uint, claimedBy string, now time.Time) (*scheduler.RunExecution, string, error) {
+	sourceGroupID, err := r.runSourceGroupID(ctx, runID)
+	if err != nil {
+		return nil, "", err
+	}
 	var execution scheduler.RunExecution
 	code := ""
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
+		code, err = r.lockExecutionGuards(tx, sourceGroupID)
+		if err != nil || code != "" {
+			return err
+		}
 		execution, err = loadRunExecution(tx, runID)
 		if err != nil {
 			return err
@@ -530,6 +538,38 @@ func (r *Repository) LoadClaimedExecution(ctx context.Context, runID uint, claim
 		return nil, code, nil
 	}
 	return &execution, "", nil
+}
+
+func (r *Repository) runSourceGroupID(ctx context.Context, runID uint) (int, error) {
+	var row struct {
+		SourceGroupID int
+	}
+	result := r.db.WithContext(ctx).Model(&model.BroadcastRun{}).
+		Select("source_group_id").Where("id = ?", runID).Limit(1).Scan(&row)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected != 1 || row.SourceGroupID <= 0 {
+		return 0, ErrNotFound
+	}
+	return row.SourceGroupID, nil
+}
+
+func (r *Repository) lockExecutionGuards(tx *gorm.DB, sourceGroupID int) (string, error) {
+	enabled, err := r.operationalEnabled(tx, true)
+	if err != nil {
+		return "", err
+	}
+	if !enabled {
+		return "site_broadcast_disabled", nil
+	}
+	if err := lockEntityGroupsShared(tx, []int{sourceGroupID}); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "group_unavailable", nil
+		}
+		return "", err
+	}
+	return "", nil
 }
 
 func loadRunExecution(tx *gorm.DB, runID uint) (scheduler.RunExecution, error) {
@@ -553,13 +593,6 @@ func (r *Repository) validateExecutionEligibility(tx *gorm.DB, execution *schedu
 	if execution == nil || execution.Run.ClaimedBy != claimedBy || execution.Run.LeaseUntil == nil || !execution.Run.LeaseUntil.After(now) ||
 		(execution.Run.Status != model.RunStatusClaimed && execution.Run.Status != model.RunStatusPlaying) {
 		return "run_lease_lost", nil
-	}
-	enabled, err := r.operationalEnabled(tx, false)
-	if err != nil {
-		return "", err
-	}
-	if !enabled {
-		return "site_broadcast_disabled", nil
 	}
 	emergencyStopped, err := r.emergencyStopsRun(tx, &execution.Run)
 	if err != nil {
@@ -601,12 +634,21 @@ func (r *Repository) validateExecutionEligibility(tx *gorm.DB, execution *schedu
 
 func (r *Repository) MarkRunPlaying(ctx context.Context, runID uint, claimedBy, domainKey string, domainGroupIDs []int, now time.Time, leaseDuration time.Duration) (string, error) {
 	now = now.UTC()
+	sourceGroupID, err := r.runSourceGroupID(ctx, runID)
+	if err != nil {
+		return "", err
+	}
 	domainJSON, err := json.Marshal(SortedUniqueGroupIDs(domainGroupIDs))
 	if err != nil {
 		return "", err
 	}
 	code := ""
 	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var guardErr error
+		code, guardErr = r.lockExecutionGuards(tx, sourceGroupID)
+		if guardErr != nil || code != "" {
+			return guardErr
+		}
 		execution, loadErr := loadRunExecution(tx, runID)
 		if loadErr != nil {
 			return loadErr
@@ -640,8 +682,17 @@ func (r *Repository) MarkRunPlaying(ctx context.Context, runID uint, claimedBy, 
 // closes the validation/renewal window against schedule and group mutations.
 func (r *Repository) ValidateAndRenewRun(ctx context.Context, runID uint, claimedBy string, now time.Time, leaseDuration time.Duration) (string, error) {
 	now = now.UTC()
+	sourceGroupID, err := r.runSourceGroupID(ctx, runID)
+	if err != nil {
+		return "", err
+	}
 	code := ""
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var guardErr error
+		code, guardErr = r.lockExecutionGuards(tx, sourceGroupID)
+		if guardErr != nil || code != "" {
+			return guardErr
+		}
 		execution, err := loadRunExecution(tx, runID)
 		if err != nil {
 			return err
@@ -780,15 +831,18 @@ func (r *Repository) ActivePolicyForEntityGroup(ctx context.Context, groupID int
 
 func activePolicyForEntityGroup(tx *gorm.DB, groupID int) (*ActivePolicy, error) {
 	var policy ActivePolicy
-	err := tx.Table("group_links gl").
+	result := tx.Table("group_links gl").
 		Select("vg.id AS virtual_group_id, COALESCE(p.mode, ?) AS mode, p.allowed_source_group_id", model.PolicySuspendAll).
 		Joins("JOIN public_groups vg ON vg.id = gl.link_group_id AND vg.is_virtual = 1 AND vg.status = 1").
 		Joins("LEFT JOIN virtual_group_broadcast_policies p ON p.virtual_group_id = vg.id").
-		Where("gl.target_group_id = ?", groupID).Take(&policy).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+		Where("gl.target_group_id = ?", groupID).Limit(1).Find(&policy)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
 		return nil, nil
 	}
-	return &policy, err
+	return &policy, nil
 }
 
 func lockEntityGroup(tx *gorm.DB, groupID int) error {
@@ -806,12 +860,20 @@ func lockEntityGroup(tx *gorm.DB, groupID int) error {
 }
 
 func lockEntityGroups(tx *gorm.DB, groupIDs []int) error {
+	return lockEntityGroupsWithStrength(tx, groupIDs, "UPDATE")
+}
+
+func lockEntityGroupsShared(tx *gorm.DB, groupIDs []int) error {
+	return lockEntityGroupsWithStrength(tx, groupIDs, "SHARE")
+}
+
+func lockEntityGroupsWithStrength(tx *gorm.DB, groupIDs []int, strength string) error {
 	groupIDs = SortedUniqueGroupIDs(groupIDs)
 	if len(groupIDs) == 0 {
 		return nil
 	}
 	var groups []gormdb.Group
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+	if err := tx.Clauses(clause.Locking{Strength: strength}).
 		Where("id IN ?", groupIDs).Order("id ASC").Find(&groups).Error; err != nil {
 		return err
 	}

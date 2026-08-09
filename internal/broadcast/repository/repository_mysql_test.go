@@ -307,6 +307,137 @@ func TestVirtualGroupCoordinationMySQL(t *testing.T) {
 	}
 }
 
+func TestVirtualGroupEnableRacesOneHundredPlayingRunsMySQL(t *testing.T) {
+	repo, owner, groups := setupRepositoryMySQL(t)
+	repo.operationalKey = fmt.Sprintf("broadcast.test_topology_race_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = repo.DB().Where("config_key IN ?", []string{repo.operationalKey, repo.emergencyFenceKey()}).Delete(&gormdb.SiteConfig{}).Error
+	})
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := repo.EnsureOperationalEnabled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, groupID := range []int{groups.a.ID, groups.b.ID} {
+		if _, err := repo.AddVirtualGroupMember(ctx, groups.virtual.ID, groupID, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: groups.virtual.ID, Mode: model.PolicyAllowSingleSource,
+		AllowedSourceGroupID: &groups.b.ID, UpdatedBy: owner.ID,
+	}
+	if _, err := repo.UpdateVirtualGroupPolicy(ctx, policy, now); err != nil {
+		t.Fatal(err)
+	}
+
+	audio := createReadyAudio(t, repo, owner.ID, groups.a.ID, "topology-race")
+	scheduleIDs := make([]uint, 0, 100)
+	for index := 0; index < 100; index++ {
+		scheduleModel := &model.BroadcastSchedule{
+			GroupID: groups.a.ID, AudioID: audio.ID, Name: fmt.Sprintf("race-%03d", index),
+			ScheduleType: model.ScheduleTypeDaily, Timezone: "UTC", LocalTime: "23:59:59",
+			Enabled: true, CreatedBy: owner.ID, UpdatedBy: owner.ID,
+		}
+		if err := repo.SaveSchedule(ctx, scheduleModel, now); err != nil {
+			t.Fatal(err)
+		}
+		scheduleIDs = append(scheduleIDs, scheduleModel.ID)
+	}
+	dueAt := now.Add(-time.Second)
+	if err := repo.DB().Model(&model.BroadcastSchedule{}).Where("id IN ?", scheduleIDs).Update("next_run_at", dueAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	runs, err := repo.ClaimDue(ctx, now, "topology-race-worker", 30*time.Second, 10*time.Second, 100)
+	if err != nil || len(runs) != 100 {
+		t.Fatalf("claimed runs=%d err=%v", len(runs), err)
+	}
+
+	markErrors := make(chan error, len(runs))
+	var markWG sync.WaitGroup
+	for _, run := range runs {
+		run := run
+		markWG.Add(1)
+		go func() {
+			defer markWG.Done()
+			code, err := repo.MarkRunPlaying(ctx, run.ID, "topology-race-worker", fmt.Sprintf("%d", groups.a.ID), []int{groups.a.ID}, now, 30*time.Second)
+			if err != nil {
+				markErrors <- fmt.Errorf("mark run %d: %w", run.ID, err)
+			} else if code != "" {
+				markErrors <- fmt.Errorf("mark run %d returned %q", run.ID, code)
+			}
+		}()
+	}
+	markWG.Wait()
+	close(markErrors)
+	for err := range markErrors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := make(chan struct{})
+	validationErrors := make(chan error, len(runs)+1)
+	mutationCh := make(chan *VirtualGroupMutation, 1)
+	var raceWG sync.WaitGroup
+	for _, run := range runs {
+		run := run
+		raceWG.Add(1)
+		go func() {
+			defer raceWG.Done()
+			<-start
+			code, err := repo.ValidateAndRenewRun(ctx, run.ID, "topology-race-worker", now.Add(time.Millisecond), 30*time.Second)
+			if err != nil {
+				validationErrors <- fmt.Errorf("validate run %d: %w", run.ID, err)
+				return
+			}
+			if code != "" && code != "virtual_group_broadcast_suspended" {
+				validationErrors <- fmt.Errorf("validate run %d returned %q", run.ID, code)
+			}
+		}()
+	}
+	raceWG.Add(1)
+	go func() {
+		defer raceWG.Done()
+		<-start
+		mutation, err := repo.SetVirtualGroupStatus(ctx, groups.virtual.ID, 1, now.Add(2*time.Millisecond))
+		if err != nil {
+			validationErrors <- fmt.Errorf("enable virtual group: %w", err)
+			return
+		}
+		mutationCh <- mutation
+	}()
+	close(start)
+	raceWG.Wait()
+	close(validationErrors)
+	for err := range validationErrors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(mutationCh)
+	mutation := <-mutationCh
+	if mutation == nil || len(mutation.CancelRunIDs) != 100 {
+		t.Fatalf("topology mutation cancellation ids=%v", mutation)
+	}
+
+	for _, run := range runs {
+		code, err := repo.ValidateAndRenewRun(ctx, run.ID, "topology-race-worker", now.Add(3*time.Millisecond), 30*time.Second)
+		if err != nil || code != "virtual_group_broadcast_suspended" {
+			t.Fatalf("post-commit validation run=%d code=%q err=%v", run.ID, code, err)
+		}
+	}
+	if err := repo.FinalizeOrphanedInterconnectRuns(ctx, mutation.CancelRunIDs, now.Add(4*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var unsafeRuns int64
+	if err := repo.DB().Model(&model.BroadcastRun{}).
+		Where("id IN ? AND (status <> ? OR sent_packets <> 0)", mutation.CancelRunIDs, model.RunStatusCancelledInterconnectEnabled).
+		Count(&unsafeRuns).Error; err != nil || unsafeRuns != 0 {
+		t.Fatalf("unsafe post-commit runs=%d err=%v", unsafeRuns, err)
+	}
+}
+
 func assertScheduleState(t *testing.T, repo *Repository, scheduleID uint, enabled bool, suspendedReason string, hasNext bool) {
 	t.Helper()
 	var schedule model.BroadcastSchedule

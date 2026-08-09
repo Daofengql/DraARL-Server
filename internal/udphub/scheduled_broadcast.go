@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"slices"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,8 @@ type ScheduledBroadcastLease struct {
 	domainID       uint64
 	speakerKey     uint64
 	interconnect   bool
+	receiverSnap   *domainReceiverSnap
+	closed         atomic.Bool
 }
 
 func scheduledBroadcastSpeakerKey(runID uint) uint64 {
@@ -64,6 +67,9 @@ func TryAcquireScheduledBroadcast(sourceGroupID int, runID uint, now time.Time, 
 		ReleaseScheduledBroadcast(lease)
 		return nil, lastVoiceAt, ScheduledBroadcastRecentVoice
 	}
+	// Receiver membership is frozen only after the domain lease has been
+	// acquired. Later topology or session changes cannot expand this run.
+	lease.receiverSnap = getDomainReceiverSnap(sourceGroupID)
 	return lease, lastVoiceAt, ScheduledBroadcastAcquired
 }
 
@@ -95,7 +101,7 @@ func acquireScheduledBroadcastArbiter(lease *ScheduledBroadcastLease, now time.T
 // for its fixed delivery snapshot. A topology change invalidates the lease
 // before the next frame can be accepted.
 func AcceptScheduledBroadcastFrame(lease *ScheduledBroadcastLease, acceptedAt time.Time) bool {
-	if !scheduledBroadcastTopologyMatches(lease) {
+	if lease == nil || lease.closed.Load() || !scheduledBroadcastTopologyMatches(lease) {
 		return false
 	}
 	if acceptedAt.IsZero() {
@@ -133,9 +139,22 @@ func scheduledBroadcastTopologyMatches(lease *ScheduledBroadcastLease) bool {
 }
 
 func ReleaseScheduledBroadcast(lease *ScheduledBroadcastLease) {
-	if lease == nil {
+	if lease == nil || !lease.closed.CompareAndSwap(false, true) {
 		return
 	}
+	releaseScheduledBroadcastArbiter(lease)
+}
+
+// FinishScheduledBroadcast closes the source without clearing the arbiter.
+// The existing 900ms voice hold then applies after the final accepted packet,
+// just as it does for a real speaker. Cancellation uses Release instead.
+func FinishScheduledBroadcast(lease *ScheduledBroadcastLease) {
+	if lease != nil {
+		lease.closed.CompareAndSwap(false, true)
+	}
+}
+
+func releaseScheduledBroadcastArbiter(lease *ScheduledBroadcastLease) {
 	if lease.interconnect {
 		hooks := centerHooks()
 		if hooks.ReleaseBroadcast != nil {

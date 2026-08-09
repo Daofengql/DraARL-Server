@@ -3,6 +3,8 @@ package interconnect
 import (
 	"testing"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 func speakerClaim(requestID, sessionID, epoch, domainID, leaseID uint64) SpeakerLeaseControl {
@@ -192,6 +194,25 @@ func TestScheduledBroadcastSpeakerLeaseCompetesWithDeviceVoice(t *testing.T) {
 	gateway.ReleaseScheduledBroadcast(9, domainID)
 	if _, ok := gateway.speaker.AcquireLocal(101, 1, domainID, now.Add(SpeakerLeaseIdleTimeout+101*time.Millisecond)); !ok {
 		t.Fatal("scheduled broadcast release retained speaker lease")
+	}
+}
+
+func TestScheduledBroadcastRelayRequiresItsActiveSpeakerLease(t *testing.T) {
+	cluster := NewClusterManager(1)
+	defer cluster.Close()
+	gateway := NewCenterGateway(cluster, nil)
+	now := time.Now()
+	domainID := uint64(88)
+	wire := protocol.EncodeDraARLv1("system-broadcast", "", 255, protocol.DraARLTypeOpus16K, 0, 0, "AUTO", []byte{0, 1, 1})
+	if !gateway.AcquireScheduledBroadcast(10, domainID, now) {
+		t.Fatal("scheduled broadcast did not acquire speaker lease")
+	}
+	if err := gateway.RelayScheduledBroadcast(10, 7, domainID, wire); err != nil {
+		t.Fatalf("relay with active lease: %v", err)
+	}
+	gateway.ReleaseScheduledBroadcast(10, domainID)
+	if err := gateway.RelayScheduledBroadcast(10, 7, domainID, wire); err == nil {
+		t.Fatal("relay without active lease was accepted")
 	}
 }
 

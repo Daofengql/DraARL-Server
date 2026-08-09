@@ -185,6 +185,28 @@ func (g *CenterGateway) ReleaseScheduledBroadcast(runID uint, domainID uint64) {
 	g.speaker.ReleaseLocal(sessionID, 1, domainID)
 }
 
+func (g *CenterGateway) RelayScheduledBroadcast(runID uint, sourceGroupID int, domainID uint64, inner []byte) error {
+	if g.cluster == nil || g.speaker == nil || runID == 0 || sourceGroupID <= 0 || domainID == 0 {
+		return errors.New("scheduled broadcast relay is incomplete")
+	}
+	if err := protocol.ValidateRelayInnerPacket(inner); err != nil {
+		return err
+	}
+	sessionID := scheduledBroadcastSessionID(runID)
+	leaseID, allowed := g.speaker.CurrentLocal(sessionID, 1, domainID, time.Now())
+	if !allowed {
+		return errors.New("scheduled broadcast speaker lease is not active")
+	}
+	relayInner := inner
+	if tagged, ok := protocol.WithSourceGroupID(inner, sourceGroupID); ok {
+		relayInner = tagged
+	}
+	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
+		SessionID: sessionID, SessionEpoch: 1, DomainID: domainID,
+		SpeakerLeaseID: leaseID, InnerPacket: relayInner,
+	})
+}
+
 func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {
 	if grant.SessionID == 0 || grant.SessionEpoch == 0 || g.cluster == nil {
 		return false

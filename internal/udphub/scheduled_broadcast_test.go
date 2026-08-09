@@ -1,8 +1,11 @@
 package udphub
 
 import (
+	"bytes"
 	"testing"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 func TestTryAcquireScheduledBroadcastQuietAndBusyResults(t *testing.T) {
@@ -101,5 +104,103 @@ func TestScheduledBroadcastUsesCenterSpeakerHooks(t *testing.T) {
 	ReleaseScheduledBroadcast(lease)
 	if released != 1 {
 		t.Fatalf("center release count=%d", released)
+	}
+}
+
+func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T) {
+	env := setupRouteTest(t, 62200, true)
+	oldHooks := centerHooks()
+	var relayedRunID uint
+	var relayedSourceGroupID int
+	var relayedDomainID uint64
+	var relayedPacket []byte
+	SetCenterInterconnectHooks(CenterInterconnectHooks{
+		RelayBroadcast: func(runID uint, sourceGroupID int, domainID uint64, data []byte) error {
+			relayedRunID, relayedSourceGroupID, relayedDomainID = runID, sourceGroupID, domainID
+			relayedPacket = append([]byte(nil), data...)
+			return nil
+		},
+	})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+
+	start := time.Now()
+	ResetAcceptedVoiceActivity(start.Add(-10 * time.Second))
+	lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 30, start, 5*time.Second)
+	if lease == nil || result != ScheduledBroadcastAcquired {
+		t.Fatalf("acquire source lease: lease=%v result=%s", lease, result)
+	}
+	source, err := NewBroadcastSource(lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// This receiver joins after acquisition. Invalidating the live cache must
+	// not expand the run's frozen UDP snapshot.
+	groupA, ok := GetGroupFromCache(env.groupA)
+	if !ok {
+		t.Fatal("source group disappeared")
+	}
+	pool := groupA.ConnPool.(*CurrentConnPool)
+	env.udpC.device.GroupID = env.groupA
+	pool.storeConnList(append(pool.snapshotConnList(), env.udpC.device))
+	InvalidateDomainReceiverCache()
+
+	payload := []byte{0, 3, 1, 2, 3}
+	frame, err := source.SendVoice(payload, start.Add(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !frame.UDPQueued || !frame.EdgeRelayed || frame.WSSent != 3 || frame.WSDropped != 0 {
+		t.Fatalf("route result=%#v", frame)
+	}
+	stats := source.Finish()
+	if stats.SentPackets != 1 || stats.DroppedPackets != 0 || stats.UDPTargetsSent != 3 || stats.WSTargetsSent != 3 || stats.EdgeRelayErrors != 0 {
+		t.Fatalf("source stats=%#v", stats)
+	}
+
+	want := protocol.EncodeDraARLv1(
+		SystemBroadcastUsername, "", SystemBroadcastSSID,
+		protocol.DraARLTypeOpus16K, protocol.DraARLDevModelUnknown,
+		0, SystemBroadcastCallSign, payload,
+	)
+	for _, endpoint := range []routeTestEndpoint{env.udpA1, env.udpA2, env.udpB} {
+		assertRouteTestPacket(t, readRouteTestPacket(t, endpoint.conn), want, payload)
+	}
+	assertNoRouteTestPacket(t, env.udpC.conn)
+	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+	if relayedRunID != 30 || relayedSourceGroupID != env.groupA || relayedDomainID != lease.domainID || !bytes.Equal(relayedPacket, want) {
+		t.Fatalf("edge relay run=%d source=%d domain=%d packet_match=%t", relayedRunID, relayedSourceGroupID, relayedDomainID, bytes.Equal(relayedPacket, want))
+	}
+
+	other := halfDuplexSpeaker{key: 1234, labelBase: "real-device", ssid: 1}
+	if tryAcquireHalfDuplex(env.groupA, other, start.Add(time.Millisecond+halfDuplexVoiceHoldTimeout)) {
+		t.Fatal("real device acquired before the post-broadcast hold elapsed")
+	}
+	if !tryAcquireHalfDuplex(env.groupA, other, start.Add(time.Millisecond+halfDuplexVoiceHoldTimeout+time.Nanosecond)) {
+		t.Fatal("real device did not acquire after the post-broadcast hold elapsed")
+	}
+}
+
+func TestBroadcastSourceCancelReleasesImmediately(t *testing.T) {
+	env := setupRouteTest(t, 62400, false)
+	oldHooks := centerHooks()
+	SetCenterInterconnectHooks(CenterInterconnectHooks{})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+	now := time.Now()
+	ResetAcceptedVoiceActivity(now.Add(-10 * time.Second))
+	lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 31, now, 5*time.Second)
+	if lease == nil || result != ScheduledBroadcastAcquired {
+		t.Fatalf("acquire source lease: lease=%v result=%s", lease, result)
+	}
+	source, err := NewBroadcastSource(lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Cancel()
+	if _, err := source.SendVoice([]byte{0, 1, 1}, now); err != ErrBroadcastLeaseLost {
+		t.Fatalf("send after cancel error=%v", err)
+	}
+	if !tryAcquireHalfDuplex(env.groupA, halfDuplexSpeaker{key: 5678, labelBase: "real-device"}, now) {
+		t.Fatal("cancelled broadcast retained the half-duplex lease")
 	}
 }

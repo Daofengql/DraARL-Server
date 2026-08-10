@@ -1,6 +1,8 @@
 package model
 
 import (
+	"path"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -54,9 +56,11 @@ type BroadcastAudio struct {
 	Name              string         `gorm:"type:varchar(255);not null;column:name" json:"name"`
 	OriginalObjectKey string         `gorm:"type:varchar(512);not null;column:original_object_key" json:"-"`
 	PlaybackObjectKey string         `gorm:"type:varchar(512);column:playback_object_key" json:"-"`
+	RecordObjectKey   string         `gorm:"type:varchar(512);column:record_object_key" json:"-"`
 	OriginalMIMEType  string         `gorm:"type:varchar(100);column:original_mime_type" json:"original_mime_type"`
 	OriginalSize      int64          `gorm:"type:bigint;column:original_size" json:"original_size"`
 	PlaybackSize      int64          `gorm:"type:bigint;column:playback_size" json:"playback_size"`
+	RecordSize        int64          `gorm:"type:bigint;column:record_size" json:"-"`
 	DurationMS        int            `gorm:"type:int;column:duration_ms" json:"duration_ms"`
 	PacketCount       int            `gorm:"type:int;column:packet_count" json:"packet_count"`
 	SHA256            string         `gorm:"type:char(64);index:idx_broadcast_audio_group_sha,priority:2;column:sha256" json:"sha256"`
@@ -72,6 +76,16 @@ type BroadcastAudio struct {
 }
 
 func (BroadcastAudio) TableName() string { return "broadcast_audios" }
+
+func (a BroadcastAudio) EffectiveRecordObjectKey() string {
+	if key := strings.TrimSpace(a.RecordObjectKey); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(a.PlaybackObjectKey); key != "" {
+		return path.Join(path.Dir(key), "record.raw")
+	}
+	return ""
+}
 
 type BroadcastSchedule struct {
 	ID                        uint           `gorm:"primaryKey;autoIncrement" json:"id"`

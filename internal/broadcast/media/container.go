@@ -40,6 +40,50 @@ type Container struct {
 	Packets  [][]byte
 }
 
+// BuildRawOpusFromPackets converts DABR wire packets to the Raw Opus format
+// used by communication records. maxPackets limits the output to the packets
+// actually sent by a partially completed broadcast; a non-positive value uses
+// all packets.
+func BuildRawOpusFromPackets(packets [][]byte, maxPackets int) ([]byte, int, error) {
+	if len(packets) == 0 {
+		return nil, 0, fmt.Errorf("%w: no Opus packets", ErrInvalidContainer)
+	}
+	if maxPackets <= 0 || maxPackets > len(packets) {
+		maxPackets = len(packets)
+	}
+
+	frames := make([][]byte, 0, maxPackets*MaxFramesPerPacket)
+	for _, packet := range packets[:maxPackets] {
+		packetFrames, ok := splitMergedFrames(packet)
+		if !ok {
+			return nil, 0, fmt.Errorf("%w: invalid merged Opus payload", ErrInvalidContainer)
+		}
+		frames = append(frames, packetFrames...)
+	}
+	if len(frames) == 0 {
+		return nil, 0, fmt.Errorf("%w: no Opus frames", ErrInvalidContainer)
+	}
+
+	output := bytes.NewBuffer(make([]byte, 0, 24+len(frames)*64))
+	var magic [4]byte
+	copy(magic[:], []byte("OPUS"))
+	_, _ = output.Write(magic[:])
+	_ = binary.Write(output, binary.LittleEndian, uint16(1))
+	_ = binary.Write(output, binary.LittleEndian, uint32(OpusSampleRate))
+	_ = binary.Write(output, binary.LittleEndian, uint16(1))
+	_ = binary.Write(output, binary.LittleEndian, uint16(960))
+	_ = binary.Write(output, binary.LittleEndian, uint32(len(frames)))
+	_, _ = output.Write(make([]byte, 6))
+	for _, frame := range frames {
+		if len(frame) == 0 || len(frame) > int(^uint16(0)) {
+			return nil, 0, fmt.Errorf("%w: invalid Opus frame length", ErrInvalidContainer)
+		}
+		_ = binary.Write(output, binary.LittleEndian, uint16(len(frame)))
+		_, _ = output.Write(frame)
+	}
+	return output.Bytes(), len(frames), nil
+}
+
 func BuildContainer(frames [][]byte) ([]byte, ContainerMetadata, error) {
 	if len(frames) == 0 {
 		return nil, ContainerMetadata{}, fmt.Errorf("%w: no Opus frames", ErrInvalidContainer)
@@ -160,6 +204,23 @@ func validateMergedFrames(packet []byte) (int, bool) {
 		frames++
 	}
 	return frames, offset == len(packet)
+}
+
+func splitMergedFrames(packet []byte) ([][]byte, bool) {
+	offset, frames := 0, make([][]byte, 0, MaxFramesPerPacket)
+	for offset < len(packet) {
+		if len(packet)-offset < 2 {
+			return nil, false
+		}
+		length := int(binary.BigEndian.Uint16(packet[offset : offset+2]))
+		offset += 2
+		if length < 1 || length > 1000 || length > len(packet)-offset {
+			return nil, false
+		}
+		frames = append(frames, append([]byte(nil), packet[offset:offset+length]...))
+		offset += length
+	}
+	return frames, offset == len(packet) && len(frames) >= 1 && len(frames) <= MaxFramesPerPacket
 }
 
 // PacketDuration derives the wire duration from the packet's length-prefixed

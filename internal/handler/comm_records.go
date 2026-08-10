@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	minio_local "draarl/pkg/minio"
+	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -461,6 +463,8 @@ func DeleteCommRecord(c *gin.Context) {
 	userRepo := gormdb.NewUserRepository()
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 
+	var record gormdb.CommRecord
+	_ = gormdb.Get().Select("id", "audio_path").First(&record, id).Error
 	result := gormdb.Get().Delete(&gormdb.CommRecord{}, id)
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -468,6 +472,20 @@ func DeleteCommRecord(c *gin.Context) {
 			"message": "删除失败",
 		})
 		return
+	}
+	if record.AudioPath != "" {
+		var recordReferences, broadcastReferences int64
+		recordErr := gormdb.Get().Model(&gormdb.CommRecord{}).Where("audio_path = ?", record.AudioPath).Count(&recordReferences).Error
+		broadcastErr := gormdb.Get().Table("broadcast_audios").
+			Where("deleted_at IS NULL AND (record_object_key = ? OR playback_object_key LIKE ?)", record.AudioPath, path.Dir(record.AudioPath)+"/%").
+			Count(&broadcastReferences).Error
+		if recordErr != nil || broadcastErr != nil {
+			log.Printf("[COMM_RECORD] count audio references failed: path=%s record_err=%v broadcast_err=%v", record.AudioPath, recordErr, broadcastErr)
+		} else if recordReferences == 0 && broadcastReferences == 0 {
+			if err := storage.Delete(c.Request.Context(), record.AudioPath); err != nil {
+				log.Printf("[COMM_RECORD] cleanup unreferenced audio failed: path=%s err=%v", record.AudioPath, err)
+			}
+		}
 	}
 
 	// 记录审计日志

@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -127,12 +126,22 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	repo := repository.Default()
 	t.Cleanup(func() {
 		entityGroupIDs := []int{groupA.ID, groupB.ID, groupDelete.ID}
+		var autoRecordPaths []string
+		_ = db.Model(&gormdb.CommRecord{}).Where("group_id IN ? AND is_auto_broadcast = ?", entityGroupIDs, true).Pluck("audio_path", &autoRecordPaths).Error
+		for _, audioPath := range autoRecordPaths {
+			if audioPath != "" {
+				_ = storage.Delete(context.Background(), audioPath)
+			}
+		}
 		var audios []model.BroadcastAudio
 		_ = db.Where("group_id IN ?", entityGroupIDs).Find(&audios).Error
 		for _, audio := range audios {
 			_ = storage.Delete(context.Background(), audio.OriginalObjectKey)
 			if audio.PlaybackObjectKey != "" {
 				_ = storage.Delete(context.Background(), audio.PlaybackObjectKey)
+			}
+			if audio.RecordObjectKey != "" {
+				_ = storage.Delete(context.Background(), audio.RecordObjectKey)
 			}
 		}
 		var recordIDs []uint
@@ -347,17 +356,22 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	if len(automaticRecords) != wantRecords {
 		t.Fatalf("automatic communication records=%d want=%d", len(automaticRecords), wantRecords)
 	}
+	usedSharedRecording := false
 	for _, record := range automaticRecords {
-		if record.AudioPath != "" || record.AudioSize != 0 || !record.IsAutoBroadcast || record.SenderUsername != "system-broadcast" || record.SenderCallSign != "AUTO" {
+		if record.AudioPath == "" || record.AudioSize <= 24 || !record.IsAutoBroadcast || record.SenderUsername != "system-broadcast" || record.SenderCallSign != "AUTO" {
 			t.Fatalf("unexpected automatic communication record: %#v", record)
 		}
 		var deliveryCount int64
 		if err := db.Model(&gormdb.CommRecordDeliveryGroup{}).Where("record_id = ? AND group_id = ?", record.ID, groupA.ID).Count(&deliveryCount).Error; err != nil || deliveryCount != 1 {
 			t.Fatalf("automatic record delivery snapshot count=%d err=%v", deliveryCount, err)
 		}
+		if _, _, err := storage.Stat(context.Background(), record.AudioPath); err != nil {
+			t.Fatalf("automatic recording object missing path=%s err=%v", record.AudioPath, err)
+		}
+		usedSharedRecording = usedSharedRecording || record.AudioPath == audioA.RecordObjectKey
 	}
-	if _, err := os.Stat(filepath.Join(storageRoot, "comm-records")); !os.IsNotExist(err) {
-		t.Fatalf("automatic broadcast created a communication recording directory: err=%v", err)
+	if !usedSharedRecording {
+		t.Fatalf("successful automatic broadcast did not reuse shared recording %q", audioA.RecordObjectKey)
 	}
 
 	longAudio := uploadWAV(owner, groupA.ID, "运行态释放", makeBroadcastTestWAV(4*time.Second))
@@ -426,6 +440,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	if _, _, err := storage.Stat(context.Background(), deleteGroupAudio.PlaybackObjectKey); err == nil {
 		t.Fatal("deleted group playback broadcast object still exists")
 	}
+	if _, _, err := storage.Stat(context.Background(), deleteGroupAudio.RecordObjectKey); err == nil {
+		t.Fatal("deleted group unreferenced shared recording still exists")
+	}
 	if _, err := repo.GetRun(context.Background(), groupDelete.ID, deleteGroupRun.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("deleted group retained broadcast run: %v", err)
 	}
@@ -448,7 +465,7 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	requireBroadcastStatus(t, deleteInUse, http.StatusConflict)
 
 	unused := upload(owner, groupA.ID, "待删除音频")
-	unusedOriginal, unusedPlayback := unused.OriginalObjectKey, unused.PlaybackObjectKey
+	unusedOriginal, unusedPlayback, unusedRecord := unused.OriginalObjectKey, unused.PlaybackObjectKey, unused.RecordObjectKey
 	deletedUnused := performBroadcastHandlerRequest(t, owner, http.MethodDelete, "/groups/:id/broadcast-audios/:audioId", fmt.Sprintf("/groups/%d/broadcast-audios/%d", groupA.ID, unused.ID), nil, "", DeleteBroadcastAudio)
 	requireBroadcastStatus(t, deletedUnused, http.StatusOK)
 	if _, _, err := storage.Stat(context.Background(), unusedOriginal); err == nil {
@@ -456,6 +473,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	}
 	if _, _, err := storage.Stat(context.Background(), unusedPlayback); err == nil {
 		t.Fatal("deleted audio playback object still exists")
+	}
+	if _, _, err := storage.Stat(context.Background(), unusedRecord); err == nil {
+		t.Fatal("deleted unreferenced shared recording still exists")
 	}
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -489,7 +509,7 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{audioA.OriginalObjectKey, audioA.PlaybackObjectKey, audioB.OriginalObjectKey, audioB.PlaybackObjectKey} {
+	for _, key := range []string{audioA.OriginalObjectKey, audioA.PlaybackObjectKey, audioA.RecordObjectKey, audioB.OriginalObjectKey, audioB.PlaybackObjectKey, audioB.RecordObjectKey} {
 		if _, ok := references["broadcast-audios/"][key]; !ok {
 			t.Fatalf("storage audit reference missing %q", key)
 		}
@@ -556,6 +576,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	}
 	if _, _, err := storage.Stat(context.Background(), userDeleteAudio.PlaybackObjectKey); err == nil {
 		t.Fatal("user-owned group playback broadcast object still exists")
+	}
+	if _, _, err := storage.Stat(context.Background(), userDeleteAudio.RecordObjectKey); err == nil {
+		t.Fatal("user-owned group unreferenced shared recording still exists")
 	}
 	ownerAfterDelete, err := gormdb.NewUserRepository().GetUserByID(owner.ID)
 	if err != nil {

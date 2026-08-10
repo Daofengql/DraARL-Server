@@ -60,7 +60,6 @@ interface PageState {
 
 function toRadioMessage(record: ChannelMessageResponse, currentUser?: CurrentUser): RadioMessage {
   const sender = record.sender
-  const sameUserId = currentUser?.id != null && sender.user_id === currentUser.id
   const sameIdentity = Boolean(currentUser?.username && currentUser?.callsign) &&
     sender.username.toLowerCase() === currentUser!.username.toLowerCase() &&
     sender.callsign.toUpperCase() === currentUser!.callsign.toUpperCase() &&
@@ -80,7 +79,8 @@ function toRadioMessage(record: ChannelMessageResponse, currentUser?: CurrentUse
     content: record.message_type === 'text' ? (record.text_content || '') : (record.audio_url || ''),
     duration: record.duration_ms,
     timestamp: new Date(record.sent_at).getTime(),
-    isSelf: sameUserId || sameIdentity,
+    // 仅当前浏览器客户端（呼号 + SSID）显示在我方；同账号的其他设备仍属于对方。
+    isSelf: sameIdentity,
     isPlayed: true,
   }
 }

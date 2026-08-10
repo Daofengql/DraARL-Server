@@ -250,6 +250,13 @@ export class RadioService {
   private incomingVoiceStreams = new Map<string, IncomingVoiceStream>()
   private activeSpeakers = new Map<string, RadioSpeaker>()
 
+  private isCurrentClient(username: string | undefined, callsign: string | undefined, ssid: number): boolean {
+    return Boolean(this.username && this.callsign) &&
+      username?.toLowerCase() === this.username.toLowerCase() &&
+      callsign?.toUpperCase() === this.callsign.toUpperCase() &&
+      ssid === this.ssid
+  }
+
   // 发送语音缓存（用于记录自己发送的语音）
   private sendingVoiceChunks: Uint8Array[] = []
   private sendingVoiceStartTime: number = 0
@@ -825,7 +832,7 @@ export class RadioService {
       senderSSID: packet.ssid,
       content: message,
       timestamp: Date.now(),
-      isSelf: packet.username === this.username && packet.callsign === this.callsign && packet.ssid === this.ssid,
+      isSelf: this.isCurrentClient(packet.username, packet.callsign, packet.ssid),
     }
 
     // 直接触发事件，不再存储到 IndexedDB
@@ -874,7 +881,7 @@ export class RadioService {
 
     try {
       const voiceBlob = await opusFramesToWav(stream.chunks)
-      const isSelf = stream.username === this.username && stream.callsign === this.callsign && stream.ssid === this.ssid
+      const isSelf = this.isCurrentClient(stream.username, stream.callsign, stream.ssid)
       const radioMessage: RadioMessage = {
         id: generateMessageId(stream.groupId, stream.startedAt, stream.callsign),
         type: 'voice',

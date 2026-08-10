@@ -510,7 +510,7 @@ func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	if err := repo.DB().Create(run).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := repo.DeleteAudio(ctx, groups.a.ID, audioA.ID); !errors.Is(err, ErrAudioInUse) {
+	if _, _, _, err := repo.DeleteAudio(ctx, groups.a.ID, audioA.ID); !errors.Is(err, ErrAudioInUse) {
 		t.Fatalf("delete referenced audio error = %v, want ErrAudioInUse", err)
 	}
 	if err := repo.DeleteSchedule(ctx, groups.a.ID, schedule.ID); err != nil {
@@ -523,12 +523,12 @@ func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	if err := repo.DB().Unscoped().First(&deletedSchedule, schedule.ID).Error; err != nil || !deletedSchedule.DeletedAt.Valid {
 		t.Fatalf("schedule was not soft deleted: schedule=%#v err=%v", deletedSchedule, err)
 	}
-	original, playback, err := repo.DeleteAudio(ctx, groups.a.ID, audioA.ID)
+	original, playback, recordObject, err := repo.DeleteAudio(ctx, groups.a.ID, audioA.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if original == "" || playback == "" {
-		t.Fatalf("delete did not return object keys: %q, %q", original, playback)
+	if original == "" || playback == "" || recordObject == "" {
+		t.Fatalf("delete did not return object keys: %q, %q, %q", original, playback, recordObject)
 	}
 	if _, err := repo.GetAudio(ctx, groups.a.ID, audioA.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("soft-deleted audio remained visible: %v", err)
@@ -540,6 +540,21 @@ func TestRepositoryOwnershipAndDeleteProtectionMySQL(t *testing.T) {
 	var retainedRun model.BroadcastRun
 	if err := repo.DB().First(&retainedRun, run.ID).Error; err != nil || retainedRun.ScheduleID != schedule.ID || retainedRun.AudioID != audioA.ID {
 		t.Fatalf("soft deletion removed execution history: run=%#v err=%v", retainedRun, err)
+	}
+	groupBID := uint(groups.b.ID)
+	referencedRecord := &gormdb.CommRecord{
+		DeviceID: 0, DeviceSSID: 255, GroupID: &groupBID, StartTime: now, EndTime: now,
+		AudioPath: audioB.RecordObjectKey, AudioSize: audioB.RecordSize, Status: 2, MessageType: gormdb.CommMessageTypeVoice,
+	}
+	if err := repo.DB().Create(referencedRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, retainedRecordObject, err := repo.DeleteAudio(ctx, groups.b.ID, audioB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retainedRecordObject != "" {
+		t.Fatalf("shared recording still referenced by history was scheduled for deletion: %q", retainedRecordObject)
 	}
 }
 
@@ -795,7 +810,7 @@ func TestRepositoryRecoveryWindowAndRunLeaseMySQL(t *testing.T) {
 	if code, err := repo.ValidateAndRenewRun(ctx, runs[0].ID, "worker-b", now.Add(2*time.Second), 5*time.Second); err != nil || code != "schedule_disabled" {
 		t.Fatalf("validate disabled schedule code=%q err=%v", code, err)
 	}
-	if err := repo.FinishRun(ctx, runs[0].ID, "worker-b", model.RunStatusCancelled, now.Add(2*time.Second), 120, 1, 0, nil, "1,2", []int{groups.a.ID, groups.b.ID}, "schedule_disabled", "schedule disabled during playback"); err != nil {
+	if err := repo.FinishRun(ctx, runs[0].ID, "worker-b", model.RunStatusCancelled, now.Add(2*time.Second), 120, 1, 0, nil, "1,2", []int{groups.a.ID, groups.b.ID}, "", 0, "schedule_disabled", "schedule disabled during playback"); err != nil {
 		t.Fatal(err)
 	}
 	var finished model.BroadcastRun
@@ -829,7 +844,7 @@ func TestRepositoryFinishRunCreatesOneAutoBroadcastRecordMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	endedAt := startedAt.Add(360 * time.Millisecond)
-	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.b.ID, groups.a.ID, groups.b.ID}, "", ""); err != nil {
+	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.b.ID, groups.a.ID, groups.b.ID}, "comm-records/auto-broadcast/test.raw", 128, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	var records []gormdb.CommRecord
@@ -841,7 +856,7 @@ func TestRepositoryFinishRunCreatesOneAutoBroadcastRecordMySQL(t *testing.T) {
 	}
 	record := records[0]
 	if record.DeviceID != 0 || record.DeviceSSID != 255 || record.UserID != nil || record.MessageType != gormdb.CommMessageTypeVoice ||
-		record.Status != 2 || record.AudioPath != "" || record.AudioSize != 0 || record.DurationMs != 360 ||
+		record.Status != 2 || record.AudioPath != "comm-records/auto-broadcast/test.raw" || record.AudioSize != 128 || record.DurationMs != 360 ||
 		record.SenderUsername != "system-broadcast" || record.SenderCallSign != "AUTO" || record.SenderNickname != "自动播报" ||
 		!record.StartTime.Equal(startedAt) || !record.EndTime.Equal(endedAt) {
 		t.Fatalf("unexpected automatic communication record: %#v", record)
@@ -853,7 +868,7 @@ func TestRepositoryFinishRunCreatesOneAutoBroadcastRecordMySQL(t *testing.T) {
 	if len(deliveryGroups) != 2 || deliveryGroups[0].GroupID != uint(groups.a.ID) || deliveryGroups[1].GroupID != uint(groups.b.ID) {
 		t.Fatalf("delivery snapshot=%#v", deliveryGroups)
 	}
-	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.a.ID, groups.b.ID}, "", ""); !errors.Is(err, ErrRunLeaseLost) {
+	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.a.ID, groups.b.ID}, "", 0, "", ""); !errors.Is(err, ErrRunLeaseLost) {
 		t.Fatalf("duplicate finish error=%v", err)
 	}
 	var count int64
@@ -868,7 +883,7 @@ func TestRepositoryFinishRunCreatesOneAutoBroadcastRecordMySQL(t *testing.T) {
 	if err := repo.DB().Create(zeroRun).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.FinishRun(ctx, zeroRun.ID, "zero-worker", model.RunStatusSkippedRecentVoice, now.Add(2*time.Second), 0, 0, 0, nil, "", []int{groups.a.ID}, "recent_voice", ""); err != nil {
+	if err := repo.FinishRun(ctx, zeroRun.ID, "zero-worker", model.RunStatusSkippedRecentVoice, now.Add(2*time.Second), 0, 0, 0, nil, "", []int{groups.a.ID}, "", 0, "recent_voice", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.DB().Model(&gormdb.CommRecord{}).Where("group_id = ? AND is_auto_broadcast = ?", groups.a.ID, true).Count(&count).Error; err != nil || count != 1 {
@@ -1012,8 +1027,8 @@ func setupRepositoryMySQL(t *testing.T) (*Repository, *gormdb.User, repositoryGr
 func createReadyAudio(t *testing.T, repo *Repository, ownerID, groupID int, name string) *model.BroadcastAudio {
 	t.Helper()
 	audio := &model.BroadcastAudio{
-		GroupID: groupID, Name: name, OriginalObjectKey: name + ".wav", PlaybackObjectKey: name + ".dabr",
-		OriginalMIMEType: "audio/wav", OriginalSize: 10, PlaybackSize: 8, DurationMS: 1000,
+		GroupID: groupID, Name: name, OriginalObjectKey: name + ".wav", PlaybackObjectKey: name + ".dabr", RecordObjectKey: name + ".raw",
+		OriginalMIMEType: "audio/wav", OriginalSize: 10, PlaybackSize: 8, RecordSize: 12, DurationMS: 1000,
 		PacketCount: 8, SHA256: strings.Repeat("a", 64), Status: model.AudioStatusReady, CreatedBy: ownerID,
 	}
 	if err := repo.CreateAudio(context.Background(), audio); err != nil {

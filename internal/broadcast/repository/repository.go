@@ -115,12 +115,14 @@ func (r *Repository) CreateAudio(ctx context.Context, audio *model.BroadcastAudi
 	})
 }
 
-func (r *Repository) MarkAudioReady(ctx context.Context, audioID uint, playbackKey string, playbackSize int64, durationMS, packetCount int) error {
+func (r *Repository) MarkAudioReady(ctx context.Context, audioID uint, playbackKey string, playbackSize int64, recordKey string, recordSize int64, durationMS, packetCount int) error {
 	result := r.db.WithContext(ctx).Model(&model.BroadcastAudio{}).
 		Where("id = ? AND status = ?", audioID, model.AudioStatusProcessing).
 		Updates(map[string]any{
 			"playback_object_key": strings.TrimSpace(playbackKey),
 			"playback_size":       playbackSize,
+			"record_object_key":   strings.TrimSpace(recordKey),
+			"record_size":         recordSize,
 			"duration_ms":         durationMS,
 			"packet_count":        packetCount,
 			"status":              model.AudioStatusReady,
@@ -149,10 +151,11 @@ func (r *Repository) MarkAudioFailed(ctx context.Context, audioID uint, safeMess
 	return nil
 }
 
-// DeleteAudio returns the object keys that should be deleted after the
-// metadata transaction commits.
-func (r *Repository) DeleteAudio(ctx context.Context, groupID int, audioID uint) (string, string, error) {
-	var originalKey, playbackKey string
+// DeleteAudio returns object keys that are no longer referenced after the
+// metadata transaction commits. Shared record audio is retained while any
+// communication record still points at it.
+func (r *Repository) DeleteAudio(ctx context.Context, groupID int, audioID uint) (string, string, string, error) {
+	var originalKey, playbackKey, recordKey string
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var audio model.BroadcastAudio
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -173,9 +176,19 @@ func (r *Repository) DeleteAudio(ctx context.Context, groupID int, audioID uint)
 			return err
 		}
 		originalKey, playbackKey = audio.OriginalObjectKey, audio.PlaybackObjectKey
+		sharedRecordKey := audio.EffectiveRecordObjectKey()
+		if sharedRecordKey != "" {
+			var recordReferences int64
+			if err := tx.Model(&gormdb.CommRecord{}).Where("audio_path = ?", sharedRecordKey).Count(&recordReferences).Error; err != nil {
+				return err
+			}
+			if recordReferences == 0 {
+				recordKey = sharedRecordKey
+			}
+		}
 		return nil
 	})
-	return originalKey, playbackKey, err
+	return originalKey, playbackKey, recordKey, err
 }
 
 func (r *Repository) ListSchedules(ctx context.Context, groupID int) ([]model.BroadcastSchedule, error) {
@@ -735,7 +748,7 @@ func (r *Repository) ValidateAndRenewRun(ctx context.Context, runID uint, claime
 	return code, err
 }
 
-func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, status string, endedAt time.Time, playedDurationMS, sentPackets, droppedPackets int, lastVoiceAt *time.Time, domainKey string, domainGroupIDs []int, errorCode, errorMessage string) error {
+func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, status string, endedAt time.Time, playedDurationMS, sentPackets, droppedPackets int, lastVoiceAt *time.Time, domainKey string, domainGroupIDs []int, audioPath string, audioSize int64, errorCode, errorMessage string) error {
 	if runID == 0 || strings.TrimSpace(claimedBy) == "" || status == "" {
 		return ErrRunLeaseLost
 	}
@@ -792,7 +805,7 @@ func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, statu
 		record := &gormdb.CommRecord{
 			DeviceID: 0, DeviceSSID: identity.SSID, GroupID: &sourceGroupID, UserID: nil,
 			StartTime: startTime, EndTime: endedAt.UTC(), DurationMs: max(playedDurationMS, 0),
-			AudioPath: "", AudioSize: 0, Status: 2, MessageType: gormdb.CommMessageTypeVoice,
+			AudioPath: audioPath, AudioSize: audioSize, Status: 2, MessageType: gormdb.CommMessageTypeVoice,
 			SenderUsername: identity.Username, SenderCallSign: identity.CallSign,
 			SenderNickname: identity.Nickname, SenderDevModel: 0, IsAutoBroadcast: true,
 			DeliveryGroupIDs: deliveryGroupIDs,

@@ -24,11 +24,12 @@ type RuntimeRepository interface {
 	LoadClaimedExecution(context.Context, uint, string, time.Time) (*core.RunExecution, string, error)
 	MarkRunPlaying(context.Context, uint, string, string, []int, time.Time, time.Duration) (string, error)
 	ValidateAndRenewRun(context.Context, uint, string, time.Time, time.Duration) (string, error)
-	FinishRun(context.Context, uint, string, string, time.Time, int, int, int, *time.Time, string, []int, string, string) error
+	FinishRun(context.Context, uint, string, string, time.Time, int, int, int, *time.Time, string, []int, string, int64, string, string) error
 }
 
 type ObjectStore interface {
 	Open(context.Context, string) (io.ReadCloser, error)
+	Put(context.Context, string, io.Reader, int64, string) error
 }
 
 type LeaseSnapshot struct {

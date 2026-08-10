@@ -40,10 +40,11 @@ func managedStorageReferences(db *gorm.DB) (map[string]map[string]struct{}, erro
 	type broadcastKeys struct {
 		Original string
 		Playback string
+		Record   string
 	}
 	var audioKeys []broadcastKeys
 	if err := db.Model(&broadcastmodel.BroadcastAudio{}).
-		Select("original_object_key AS original, playback_object_key AS playback").
+		Select("original_object_key AS original, playback_object_key AS playback, record_object_key AS record").
 		Scan(&audioKeys).Error; err != nil {
 		return nil, err
 	}
@@ -53,6 +54,20 @@ func managedStorageReferences(db *gorm.DB) (map[string]map[string]struct{}, erro
 		}
 		if keys.Playback != "" {
 			references["broadcast-audios/"][keys.Playback] = struct{}{}
+		}
+		if keys.Record != "" {
+			references["broadcast-audios/"][keys.Record] = struct{}{}
+		}
+	}
+	var recordKeys []string
+	if err := db.Model(&CommRecord{}).
+		Where("audio_path LIKE ?", "broadcast-audios/%").
+		Pluck("audio_path", &recordKeys).Error; err != nil {
+		return nil, err
+	}
+	for _, key := range recordKeys {
+		if key != "" {
+			references["broadcast-audios/"][key] = struct{}{}
 		}
 	}
 	return references, nil

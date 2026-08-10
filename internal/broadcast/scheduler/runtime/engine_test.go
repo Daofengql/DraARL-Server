@@ -24,6 +24,8 @@ type finishedRun struct {
 	lastVoiceAt      *time.Time
 	domainKey        string
 	domainGroupIDs   []int
+	audioPath        string
+	audioSize        int64
 	errorCode        string
 }
 
@@ -129,11 +131,12 @@ func (r *fakeRuntimeRepository) ValidateAndRenewRun(context.Context, uint, strin
 	return code, nil
 }
 
-func (r *fakeRuntimeRepository) FinishRun(_ context.Context, _ uint, _ string, status string, _ time.Time, playedDurationMS, sentPackets, droppedPackets int, lastVoiceAt *time.Time, domainKey string, domainGroupIDs []int, errorCode, _ string) error {
+func (r *fakeRuntimeRepository) FinishRun(_ context.Context, _ uint, _ string, status string, _ time.Time, playedDurationMS, sentPackets, droppedPackets int, lastVoiceAt *time.Time, domainKey string, domainGroupIDs []int, audioPath string, audioSize int64, errorCode, _ string) error {
 	r.mu.Lock()
 	r.finished = append(r.finished, finishedRun{
 		status: status, playedDurationMS: playedDurationMS, sentPackets: sentPackets, droppedPackets: droppedPackets,
-		lastVoiceAt: lastVoiceAt, domainKey: domainKey, domainGroupIDs: append([]int(nil), domainGroupIDs...), errorCode: errorCode,
+		lastVoiceAt: lastVoiceAt, domainKey: domainKey, domainGroupIDs: append([]int(nil), domainGroupIDs...),
+		audioPath: audioPath, audioSize: audioSize, errorCode: errorCode,
 	})
 	if r.finishedCh != nil {
 		select {
@@ -146,11 +149,22 @@ func (r *fakeRuntimeRepository) FinishRun(_ context.Context, _ uint, _ string, s
 }
 
 type memoryObjectStore struct {
-	data []byte
+	mu         sync.Mutex
+	data       []byte
+	putCount   int
+	lastPutKey string
 }
 
-func (s memoryObjectStore) Open(context.Context, string) (io.ReadCloser, error) {
+func (s *memoryObjectStore) Open(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(s.data)), nil
+}
+
+func (s *memoryObjectStore) Put(_ context.Context, key string, _ io.Reader, _ int64, _ string) error {
+	s.mu.Lock()
+	s.putCount++
+	s.lastPutKey = key
+	s.mu.Unlock()
+	return nil
 }
 
 type broadcasterFunc func(context.Context, BroadcastRequest) (BroadcastOutcome, error)
@@ -179,12 +193,13 @@ func engineFixture(t *testing.T) (*Engine, *fakeRuntimeRepository, *media.Contai
 			Schedule: model.BroadcastSchedule{ID: run.ScheduleID, GroupID: run.SourceGroupID, AudioID: run.AudioID, Enabled: true},
 			Audio: model.BroadcastAudio{
 				ID: run.AudioID, GroupID: run.SourceGroupID, Status: model.AudioStatusReady,
-				PlaybackObjectKey: "fixture.dabr", PlaybackSize: int64(len(wire)), DurationMS: metadata.DurationMS, PacketCount: metadata.PacketCount,
+				PlaybackObjectKey: "fixture.dabr", PlaybackSize: int64(len(wire)), RecordObjectKey: "fixture.raw", RecordSize: 128,
+				DurationMS: metadata.DurationMS, PacketCount: metadata.PacketCount,
 			},
 		},
 	}
 	cfg := config.BroadcastConfig{Enabled: true, ScanIntervalMS: 250, ClaimBatchSize: 2, QuietWindowSeconds: 5, RecoveryWindowSeconds: 10}
-	engine, err := NewEngine(cfg, repo, memoryObjectStore{data: wire})
+	engine, err := NewEngine(cfg, repo, &memoryObjectStore{data: wire})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +250,12 @@ func TestEngineExecutesClaimedContainerAndFinalizesSuccess(t *testing.T) {
 	}
 	finished := waitFinished(t, repo)
 	stopEngine(t, engine)
-	if finished.status != model.RunStatusSucceeded || finished.playedDurationMS != container.Metadata.DurationMS || finished.sentPackets != len(container.Packets) || finished.droppedPackets != 1 || finished.domainKey != "101,102" || len(finished.domainGroupIDs) != 2 {
+	if finished.status != model.RunStatusSucceeded || finished.playedDurationMS != container.Metadata.DurationMS || finished.sentPackets != len(container.Packets) || finished.droppedPackets != 1 || finished.domainKey != "101,102" || len(finished.domainGroupIDs) != 2 || finished.audioPath != "fixture.raw" || finished.audioSize != 128 {
 		t.Fatalf("finished=%#v", finished)
+	}
+	store := engine.store.(*memoryObjectStore)
+	if store.putCount != 0 {
+		t.Fatalf("full broadcast wrote duplicate recording objects: %d", store.putCount)
 	}
 	repo.mu.Lock()
 	marked, validated := repo.marked, repo.validated
@@ -318,8 +337,12 @@ func TestEngineMapsQuietGateAndManualCancellation(t *testing.T) {
 		}
 		finished := waitFinished(t, repo)
 		stopEngine(t, engine)
-		if finished.status != model.RunStatusCancelled || finished.errorCode != "manual_stop" || finished.sentPackets != 1 {
+		if finished.status != model.RunStatusCancelled || finished.errorCode != "manual_stop" || finished.sentPackets != 1 || finished.audioPath != "comm-records/auto-broadcast/71.raw" || finished.audioSize <= 24 {
 			t.Fatalf("finished=%#v", finished)
+		}
+		store := engine.store.(*memoryObjectStore)
+		if store.putCount != 1 || store.lastPutKey != "comm-records/auto-broadcast/71.raw" {
+			t.Fatalf("partial broadcast recording writes=%d key=%q", store.putCount, store.lastPutKey)
 		}
 	})
 }

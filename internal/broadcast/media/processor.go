@@ -135,66 +135,77 @@ func (p *Processor) ProcessAudio(parent context.Context, audioID uint) error {
 	defer func() { p.metrics.finish(startedAt, succeeded) }()
 	ctx, cancel := context.WithTimeout(parent, time.Duration(p.config.TranscodeTimeoutSeconds)*time.Second)
 	defer cancel()
-	metadata, playbackKey, err := p.process(ctx, audio)
+	metadata, playbackKey, recordKey, recordSize, err := p.process(ctx, audio)
 	if err != nil {
 		if parent.Err() == nil && !errors.Is(err, context.Canceled) {
 			_ = p.repo.MarkAudioFailed(context.WithoutCancel(parent), audio.ID, safeProcessingMessage(err))
 		}
 		return err
 	}
-	if err := p.repo.MarkAudioReady(parent, audio.ID, playbackKey, metadata.Size, metadata.DurationMS, metadata.PacketCount); err != nil {
+	if err := p.repo.MarkAudioReady(parent, audio.ID, playbackKey, metadata.Size, recordKey, recordSize, metadata.DurationMS, metadata.PacketCount); err != nil {
 		_ = storage.Delete(context.WithoutCancel(parent), playbackKey)
+		_ = storage.Delete(context.WithoutCancel(parent), recordKey)
 		return fmt.Errorf("commit broadcast playback metadata: %w", err)
 	}
 	succeeded = true
 	return nil
 }
 
-func (p *Processor) process(ctx context.Context, audio *model.BroadcastAudio) (ContainerMetadata, string, error) {
+func (p *Processor) process(ctx context.Context, audio *model.BroadcastAudio) (ContainerMetadata, string, string, int64, error) {
 	tempDir, err := os.MkdirTemp("", "draarl-broadcast-")
 	if err != nil {
-		return ContainerMetadata{}, "", fmt.Errorf("%w: create temp directory", ErrMediaProcess)
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: create temp directory", ErrMediaProcess)
 	}
 	defer os.RemoveAll(tempDir)
 	inputPath := filepath.Join(tempDir, "input"+path.Ext(audio.OriginalObjectKey))
 	if err := p.copyOriginal(ctx, audio, inputPath); err != nil {
-		return ContainerMetadata{}, "", err
+		return ContainerMetadata{}, "", "", 0, err
 	}
 	probe, err := p.probe(ctx, inputPath)
 	if err != nil {
-		return ContainerMetadata{}, "", err
+		return ContainerMetadata{}, "", "", 0, err
 	}
 	if err := p.validateProbe(audio, probe); err != nil {
-		return ContainerMetadata{}, "", err
+		return ContainerMetadata{}, "", "", 0, err
 	}
 	oggPath := filepath.Join(tempDir, "playback.opus")
 	if err := p.transcode(ctx, inputPath, oggPath); err != nil {
-		return ContainerMetadata{}, "", err
+		return ContainerMetadata{}, "", "", 0, err
 	}
 	ogg, err := os.Open(oggPath)
 	if err != nil {
-		return ContainerMetadata{}, "", fmt.Errorf("%w: open transcoded output", ErrMediaProcess)
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: open transcoded output", ErrMediaProcess)
 	}
 	frames, parseErr := ParseOggOpus(ogg, p.config.MaxUploadBytes*2)
 	_ = ogg.Close()
 	if parseErr != nil {
-		return ContainerMetadata{}, "", fmt.Errorf("%w: %v", ErrMediaProcess, parseErr)
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: %v", ErrMediaProcess, parseErr)
 	}
 	containerData, metadata, err := BuildContainer(frames)
 	if err != nil {
-		return ContainerMetadata{}, "", fmt.Errorf("%w: %v", ErrMediaProcess, err)
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: %v", ErrMediaProcess, err)
 	}
 	if metadata.DurationMS > p.config.MaxAudioDurationSeconds*1000+OpusFrameDurationMS {
-		return ContainerMetadata{}, "", ErrMediaDuration
+		return ContainerMetadata{}, "", "", 0, ErrMediaDuration
 	}
-	if _, err := ReadContainer(bytes.NewReader(containerData), int64(len(containerData))); err != nil {
-		return ContainerMetadata{}, "", fmt.Errorf("%w: verify container: %v", ErrMediaProcess, err)
+	container, err := ReadContainer(bytes.NewReader(containerData), int64(len(containerData)))
+	if err != nil {
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: verify container: %v", ErrMediaProcess, err)
+	}
+	recordData, _, err := BuildRawOpusFromPackets(container.Packets, container.Metadata.PacketCount)
+	if err != nil {
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: build communication recording: %v", ErrMediaProcess, err)
 	}
 	playbackKey := path.Join(path.Dir(audio.OriginalObjectKey), "playback.dabr")
 	if err := storage.Put(ctx, playbackKey, bytes.NewReader(containerData), int64(len(containerData)), "application/vnd.draarl.broadcast"); err != nil {
-		return ContainerMetadata{}, "", fmt.Errorf("write broadcast playback object: %w", err)
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("write broadcast playback object: %w", err)
 	}
-	return metadata, playbackKey, nil
+	recordKey := path.Join(path.Dir(audio.OriginalObjectKey), "record.raw")
+	if err := storage.Put(ctx, recordKey, bytes.NewReader(recordData), int64(len(recordData)), "application/octet-stream"); err != nil {
+		_ = storage.Delete(context.WithoutCancel(ctx), playbackKey)
+		return ContainerMetadata{}, "", "", 0, fmt.Errorf("write broadcast recording object: %w", err)
+	}
+	return metadata, playbackKey, recordKey, int64(len(recordData)), nil
 }
 
 func (p *Processor) copyOriginal(ctx context.Context, audio *model.BroadcastAudio, target string) error {

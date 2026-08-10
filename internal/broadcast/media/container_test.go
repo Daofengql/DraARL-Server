@@ -35,6 +35,27 @@ func TestContainerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBuildRawOpusFromPackets(t *testing.T) {
+	data, _, err := BuildContainer([][]byte{{1, 2, 3}, {4, 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	container, err := ReadContainer(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, frameCount, err := BuildRawOpusFromPackets(container.Packets, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frameCount != 2 || string(raw[:4]) != "OPUS" || binary.LittleEndian.Uint32(raw[14:18]) != 2 {
+		t.Fatalf("unexpected raw header: frameCount=%d bytes=%v", frameCount, raw[:18])
+	}
+	if !bytes.Equal(raw[24:], []byte{3, 0, 1, 2, 3, 2, 0, 4, 5}) {
+		t.Fatalf("unexpected raw frames: %v", raw[24:])
+	}
+}
+
 func TestPacketDurationUsesMergedFrameLengths(t *testing.T) {
 	one := []byte{0, 3, 1, 2, 3}
 	two := append(append([]byte{}, one...), 0, 2, 4, 5)

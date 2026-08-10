@@ -211,7 +211,7 @@ func UploadBroadcastAudio(c *gin.Context) {
 		return
 	}
 	if err := media.Enqueue(audio.ID); err != nil {
-		_, _, _ = repo.DeleteAudio(context.WithoutCancel(c.Request.Context()), groupID, audio.ID)
+		_, _, _, _ = repo.DeleteAudio(context.WithoutCancel(c.Request.Context()), groupID, audio.ID)
 		_ = storage.Delete(context.WithoutCancel(c.Request.Context()), objectKey)
 		writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_media_queue_unavailable", "音频处理服务暂不可用")
 		return
@@ -257,7 +257,7 @@ func DeleteBroadcastAudio(c *gin.Context) {
 	if !ok {
 		return
 	}
-	originalKey, playbackKey, err := repository.Default().DeleteAudio(c.Request.Context(), groupID, audioID)
+	originalKey, playbackKey, recordKey, err := repository.Default().DeleteAudio(c.Request.Context(), groupID, audioID)
 	if err != nil {
 		writeBroadcastRepositoryError(c, err)
 		return
@@ -271,8 +271,17 @@ func DeleteBroadcastAudio(c *gin.Context) {
 		return
 	}
 	cleanupPending := false
-	for _, key := range []string{originalKey, playbackKey} {
+	for _, key := range []string{originalKey, playbackKey, recordKey} {
 		if key == "" {
+			continue
+		}
+		var recordReferences int64
+		if err := gormdb.Get().Model(&gormdb.CommRecord{}).Where("audio_path = ?", key).Count(&recordReferences).Error; err != nil {
+			cleanupPending = true
+			log.Printf("[BROADCAST] recheck deleted audio references key=%s failed: %v", key, err)
+			continue
+		}
+		if recordReferences > 0 {
 			continue
 		}
 		if err := storage.Delete(context.WithoutCancel(c.Request.Context()), key); err != nil {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -338,6 +339,7 @@ func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
 		sentPackets:      outcome.Playback.SentPackets, droppedPackets: outcome.Playback.DroppedPackets,
 		endedAt: outcome.Playback.EndedAt,
 	}
+	summary.audioPath, summary.audioSize = e.persistRunAudio(ctx, run.ID, execution.Audio, container, summary.sentPackets)
 	if playErr == nil {
 		e.finish(run, model.RunStatusSucceeded, summary, nil, outcome.Snapshot, "", "")
 		return
@@ -372,6 +374,34 @@ type playerSummary struct {
 	sentPackets      int
 	droppedPackets   int
 	endedAt          time.Time
+	audioPath        string
+	audioSize        int64
+}
+
+func (e *Engine) persistRunAudio(ctx context.Context, runID uint, audio model.BroadcastAudio, container *media.Container, sentPackets int) (string, int64) {
+	if e.store == nil || runID == 0 || container == nil || sentPackets <= 0 {
+		return "", 0
+	}
+	fullBroadcast := sentPackets == container.Metadata.PacketCount
+	if fullBroadcast && strings.TrimSpace(audio.RecordObjectKey) != "" && audio.RecordSize > 24 {
+		return audio.RecordObjectKey, audio.RecordSize
+	}
+	raw, _, err := media.BuildRawOpusFromPackets(container.Packets, sentPackets)
+	if err != nil {
+		log.Printf("[BROADCAST] 自动播报记录转换音频失败 run_id=%d err=%v", runID, err)
+		return "", 0
+	}
+	objectKey := fmt.Sprintf("comm-records/auto-broadcast/%d.raw", runID)
+	if fullBroadcast && audio.EffectiveRecordObjectKey() != "" {
+		objectKey = audio.EffectiveRecordObjectKey()
+	}
+	archiveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizeTimeout)
+	defer cancel()
+	if err := e.store.Put(archiveCtx, objectKey, bytes.NewReader(raw), int64(len(raw)), "application/octet-stream"); err != nil {
+		log.Printf("[BROADCAST] 自动播报记录保存音频失败 run_id=%d err=%v", runID, err)
+		return "", 0
+	}
+	return objectKey, int64(len(raw))
 }
 
 func (e *Engine) finish(run model.BroadcastRun, status string, summary playerSummary, lastVoiceAt *time.Time, snapshot LeaseSnapshot, errorCode, errorMessage string) {
@@ -385,7 +415,7 @@ func (e *Engine) finish(run model.BroadcastRun, status string, summary playerSum
 	if err := e.repository.FinishRun(
 		ctx, run.ID, e.instanceID, status, endedAt.UTC(), summary.playedDurationMS,
 		summary.sentPackets, summary.droppedPackets, lastVoiceAt,
-		snapshot.DomainKey, snapshot.DomainGroupIDs, errorCode, errorMessage,
+		snapshot.DomainKey, snapshot.DomainGroupIDs, summary.audioPath, summary.audioSize, errorCode, errorMessage,
 	); err != nil && !errors.Is(err, context.Canceled) {
 		e.metrics.finalizeErrors.Add(1)
 		log.Printf("[BROADCAST] finalize run failed: run_id=%d status=%s", run.ID, status)

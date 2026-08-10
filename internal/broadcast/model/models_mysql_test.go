@@ -10,6 +10,17 @@ import (
 	"draarl/internal/gormdb"
 )
 
+func TestBroadcastAudioEffectiveRecordObjectKey(t *testing.T) {
+	legacy := model.BroadcastAudio{PlaybackObjectKey: "broadcast-audios/1/asset/playback.dabr"}
+	if got := legacy.EffectiveRecordObjectKey(); got != "broadcast-audios/1/asset/record.raw" {
+		t.Fatalf("legacy record key=%q", got)
+	}
+	explicit := model.BroadcastAudio{PlaybackObjectKey: "ignored/playback.dabr", RecordObjectKey: "shared/record.raw"}
+	if got := explicit.EffectiveRecordObjectKey(); got != "shared/record.raw" {
+		t.Fatalf("explicit record key=%q", got)
+	}
+}
+
 func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("DRAARL_BROADCAST_SCHEMA_E2E")), "true") {
 		t.Skip("set DRAARL_BROADCAST_SCHEMA_E2E=true and DRAARL_TEST_MYSQL_DSN to run the broadcast schema E2E")
@@ -62,6 +73,9 @@ func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 	}
 	if !db.Migrator().HasColumn(&model.BroadcastAudio{}, "deleted_at") || !db.Migrator().HasColumn(&model.BroadcastSchedule{}, "deleted_at") {
 		t.Fatal("broadcast soft-delete columns were not migrated")
+	}
+	if !db.Migrator().HasColumn(&model.BroadcastAudio{}, "record_object_key") || !db.Migrator().HasColumn(&model.BroadcastAudio{}, "record_size") {
+		t.Fatal("broadcast shared recording columns were not migrated")
 	}
 
 	var policy model.VirtualGroupBroadcastPolicy

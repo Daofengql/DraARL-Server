@@ -46,6 +46,9 @@ const useStyles = () => ({
   root: {
     // 使用固定高度填满视口，减去顶部导航栏 64px
     height: 'calc(100vh - 64px)',
+    '@supports (height: 100dvh)': {
+      height: 'calc(100dvh - 64px)',
+    },
     margin: { xs: -2, sm: -3 }, // 抵消父容器的 padding
     display: 'flex',
     flexDirection: 'column',
@@ -105,6 +108,7 @@ const useStyles = () => ({
   inputArea: {
     flexShrink: 0, // 固定高度，不压缩
     p: 2,
+    pb: { xs: 'calc(16px + env(safe-area-inset-bottom))', sm: 2 },
     borderTop: 1,
     borderColor: 'divider',
     bgcolor: 'background.paper',

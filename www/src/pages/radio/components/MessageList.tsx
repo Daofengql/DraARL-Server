@@ -7,7 +7,7 @@
  * 4. 限制缓存大小防止内存泄漏
  */
 
-import React, { useEffect, useRef, forwardRef, useState, useCallback, useMemo, memo } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, forwardRef, useState, useCallback, useMemo, memo } from 'react'
 import {
   Box,
   Typography,
@@ -543,26 +543,43 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     const [cacheVersion, setCacheVersion] = useState(0)
 
     const prevScrollHeightRef = useRef<number>(0)
+    const prevScrollTopRef = useRef<number>(0)
     const isInitialLoadRef = useRef(true)
-    const prevLastMsgTimeRef = useRef(0)
+    const prevLastMsgKeyRef = useRef<string | null>(null)
+    const isNearBottomRef = useRef(true)
+
+    const scrollToBottom = useCallback(() => {
+      const node = scrollRef.current
+      if (!node) return
+      node.scrollTop = node.scrollHeight
+      isNearBottomRef.current = true
+    }, [])
 
     // 滚动检测
     const handleScroll = useCallback(() => {
-      if (!scrollRef.current || !onLoadMore || isLoadingMore || !hasMore) return
+      const node = scrollRef.current
+      if (!node) return
 
-      if (scrollRef.current.scrollTop < 100) {
-        prevScrollHeightRef.current = scrollRef.current.scrollHeight
+      const { scrollTop, scrollHeight, clientHeight } = node
+      isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 150
+
+      if (!onLoadMore || isLoadingMore || !hasMore) return
+
+      if (scrollTop < 100) {
+        prevScrollHeightRef.current = scrollHeight
+        prevScrollTopRef.current = scrollTop
         onLoadMore()
       }
     }, [onLoadMore, isLoadingMore, hasMore])
 
     // 加载更多后恢复滚动位置
-    useEffect(() => {
+    useLayoutEffect(() => {
       if (scrollRef.current && prevScrollHeightRef.current > 0) {
         const newScrollHeight = scrollRef.current.scrollHeight
         const scrollDiff = newScrollHeight - prevScrollHeightRef.current
-        scrollRef.current.scrollTop = scrollDiff
+        scrollRef.current.scrollTop = prevScrollTopRef.current + scrollDiff
         prevScrollHeightRef.current = 0
+        prevScrollTopRef.current = 0
       }
     }, [messages.length])
 
@@ -613,35 +630,41 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     useEffect(() => {
       if (messages.length === 0) {
         isInitialLoadRef.current = true
-        prevLastMsgTimeRef.current = 0
+        prevLastMsgKeyRef.current = null
       }
     }, [messages.length])
 
     // 自动滚动到底部
-    useEffect(() => {
-      if (scrollRef.current) {
-        if (isInitialLoadRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-          isInitialLoadRef.current = false
-          if (messages.length > 0) {
-            prevLastMsgTimeRef.current = messages[messages.length - 1].timestamp
-          }
-          return
-        }
+    useLayoutEffect(() => {
+      const node = scrollRef.current
+      if (!node) return
 
-        const lastMsgTime = messages.length > 0 ? messages[messages.length - 1].timestamp : 0
-        const hasNewMessage = lastMsgTime > prevLastMsgTimeRef.current
-        prevLastMsgTimeRef.current = lastMsgTime
-
-        if (hasNewMessage) {
-          const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-          const isNearBottom = scrollHeight - scrollTop - clientHeight < 150
-          if (isNearBottom) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-          }
-        }
+      if (isInitialLoadRef.current) {
+        scrollToBottom()
+        isInitialLoadRef.current = false
+        prevLastMsgKeyRef.current = messages.length > 0
+          ? String(messages[messages.length - 1].id || messages[messages.length - 1].timestamp)
+          : null
+        return
       }
-    }, [messages])
+
+      const lastMessageKey = messages.length > 0
+        ? String(messages[messages.length - 1].id || messages[messages.length - 1].timestamp)
+        : null
+      const hasNewMessage = lastMessageKey !== prevLastMsgKeyRef.current
+      prevLastMsgKeyRef.current = lastMessageKey
+
+      // 分页加载历史消息时只恢复原位置，不能因为数组变化跳到底部。
+      if (prevScrollHeightRef.current > 0) return
+
+      if (hasNewMessage && isNearBottomRef.current) {
+        scrollToBottom()
+        // 头像等异步内容可能在下一帧改变高度，再补一次保证新消息可见。
+        requestAnimationFrame(() => {
+          if (isNearBottomRef.current) scrollToBottom()
+        })
+      }
+    }, [messages, scrollToBottom])
 
     // 格式化时间（使用 useCallback 缓存）
     const formatTime = useCallback((timestamp: number) => {

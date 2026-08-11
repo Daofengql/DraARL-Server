@@ -287,7 +287,9 @@ func (p *Processor) validateProbe(audio *model.BroadcastAudio, probe probeResult
 }
 
 func (p *Processor) transcode(ctx context.Context, inputPath, outputPath string) error {
-	filter := "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB,loudnorm=I=-20:TP=-3:LRA=7,alimiter=limit=0.85"
+	// Keep the source timeline intact. In particular, scheduled broadcasts must
+	// retain leading and trailing silence instead of shortening the uploaded media.
+	filter := "loudnorm=I=-20:TP=-3:LRA=7,alimiter=limit=0.85"
 	command := exec.CommandContext(ctx, p.config.FFmpegPath,
 		"-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe",
 		"-i", inputPath, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", strconv.Itoa(OpusSampleRate),

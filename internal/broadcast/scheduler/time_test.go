@@ -30,6 +30,27 @@ func TestNextOccurrence(t *testing.T) {
 			after:    "2026-08-09T00:00:00Z", want: "2026-08-10T00:30:00Z",
 		},
 		{
+			name:     "interval starts after requested duration",
+			schedule: model.BroadcastSchedule{ScheduleType: model.ScheduleTypeInterval, IntervalSeconds: 15 * 60, IntervalStartAt: timePointer(mustTime(t, "2026-08-09T04:00:00Z"))},
+			after:    "2026-08-09T03:30:00Z", want: "2026-08-09T04:00:00Z",
+		},
+		{
+			name: "interval advances from zero point",
+			schedule: model.BroadcastSchedule{
+				ScheduleType: model.ScheduleTypeInterval, IntervalSeconds: 15 * 60,
+				IntervalStartAt: timePointer(mustTime(t, "2026-08-09T04:00:00Z")),
+			},
+			after: "2026-08-09T04:10:00Z", want: "2026-08-09T04:15:00Z",
+		},
+		{
+			name: "interval skips missed occurrences without drifting",
+			schedule: model.BroadcastSchedule{
+				ScheduleType: model.ScheduleTypeInterval, IntervalSeconds: 15 * 60,
+				IntervalStartAt: timePointer(mustTime(t, "2026-08-09T04:00:00Z")),
+			},
+			after: "2026-08-09T04:31:00Z", want: "2026-08-09T04:45:00Z",
+		},
+		{
 			name:     "skip nonexistent DST time",
 			schedule: model.BroadcastSchedule{ScheduleType: model.ScheduleTypeDaily, Timezone: "America/New_York", LocalTime: "02:30:00"},
 			after:    "2026-03-08T05:00:00Z", want: "2026-03-09T06:30:00Z",
@@ -64,6 +85,23 @@ func TestNextOccurrenceOnceExpired(t *testing.T) {
 	got, err := NextOccurrence(&model.BroadcastSchedule{ScheduleType: model.ScheduleTypeOnce, ScheduledAt: &at}, at)
 	if err != nil || got != nil {
 		t.Fatalf("expired once = %v, %v; want nil, nil", got, err)
+	}
+}
+
+func TestNextOccurrenceRejectsInvalidInterval(t *testing.T) {
+	for _, seconds := range []int{59, 61} {
+		start := time.Now()
+		_, err := NextOccurrence(&model.BroadcastSchedule{ScheduleType: model.ScheduleTypeInterval, IntervalSeconds: seconds, IntervalStartAt: &start}, start)
+		if err == nil {
+			t.Fatalf("interval %d seconds should be rejected", seconds)
+		}
+	}
+}
+
+func TestNextOccurrenceRejectsIntervalWithoutZeroPoint(t *testing.T) {
+	_, err := NextOccurrence(&model.BroadcastSchedule{ScheduleType: model.ScheduleTypeInterval, IntervalSeconds: 15 * 60}, time.Now())
+	if err == nil {
+		t.Fatal("interval without a zero point should be rejected")
 	}
 }
 

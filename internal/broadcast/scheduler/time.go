@@ -20,6 +20,9 @@ func NextOccurrence(schedule *model.BroadcastSchedule, after time.Time) (*time.T
 	if !model.IsScheduleType(schedule.ScheduleType) {
 		return nil, fmt.Errorf("unsupported schedule type %q", schedule.ScheduleType)
 	}
+	if schedule.ScheduleType == model.ScheduleTypeInterval {
+		return nextIntervalOccurrence(schedule, after)
+	}
 	if schedule.ScheduleType == model.ScheduleTypeOnce {
 		if schedule.ScheduledAt == nil {
 			return nil, fmt.Errorf("scheduled_at is required for once schedule")
@@ -62,6 +65,24 @@ func NextOccurrence(schedule *model.BroadcastSchedule, after time.Time) (*time.T
 		}
 	}
 	return nil, fmt.Errorf("no valid occurrence found within 370 days")
+}
+
+func nextIntervalOccurrence(schedule *model.BroadcastSchedule, after time.Time) (*time.Time, error) {
+	if schedule.IntervalSeconds < model.MinScheduleIntervalSeconds || schedule.IntervalSeconds > model.MaxScheduleIntervalSeconds || schedule.IntervalSeconds%60 != 0 {
+		return nil, fmt.Errorf("interval_seconds must be a whole minute between %d and %d", model.MinScheduleIntervalSeconds, model.MaxScheduleIntervalSeconds)
+	}
+	if schedule.IntervalStartAt == nil {
+		return nil, fmt.Errorf("interval_start_at is required")
+	}
+	interval := time.Duration(schedule.IntervalSeconds) * time.Second
+	after = after.UTC()
+	start := schedule.IntervalStartAt.UTC()
+	if start.After(after) {
+		return &start, nil
+	}
+	steps := after.Sub(start)/interval + 1
+	candidate := start.Add(steps * interval)
+	return &candidate, nil
 }
 
 func parseLocalTime(value string) (int, int, int, error) {

@@ -504,7 +504,7 @@ func (c *Configuration) SetDefaults() error {
 		c.UDP.FrameQueueSize = 64
 	}
 	if c.UDP.MaxFrameAgeMS <= 0 {
-		c.UDP.MaxFrameAgeMS = 120
+		c.UDP.MaxFrameAgeMS = 500
 	}
 	if c.UDP.ReadBufferBytes <= 0 {
 		c.UDP.ReadBufferBytes = 4 * 1024 * 1024

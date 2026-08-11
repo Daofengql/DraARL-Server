@@ -38,12 +38,13 @@ type LeaseSnapshot struct {
 }
 
 type BroadcastRequest struct {
-	RunID         uint
-	SourceGroupID int
-	QuietWindow   time.Duration
-	Container     *media.Container
-	OnAcquired    func(LeaseSnapshot) error
-	Validate      player.Validator
+	RunID            uint
+	SourceGroupID    int
+	QuietWindow      time.Duration
+	ValidateInterval time.Duration
+	Container        *media.Container
+	OnAcquired       func(LeaseSnapshot) error
+	Validate         player.Validator
 }
 
 type BroadcastOutcome struct {

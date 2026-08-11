@@ -173,6 +173,29 @@ func TestPlayerValidatesBeforeEveryPacketAndCancels(t *testing.T) {
 	}
 }
 
+func TestPlayerValidatesAtConfiguredInterval(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 8, 9, 8, 0, 0, 0, time.UTC)}
+	source := &fakeSource{clock: clock, delayAfter: map[int]time.Duration{}, sendErrorAt: -1}
+	validations := 0
+	p, err := New(source, Options{
+		Validate: func(context.Context) error {
+			validations++
+			return nil
+		},
+		ValidateInterval: 250 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.clock = clock
+	if _, err := p.Play(context.Background(), testContainer(t, 8)); err != nil {
+		t.Fatal(err)
+	}
+	if validations != 2 {
+		t.Fatalf("validations=%d want 2", validations)
+	}
+}
+
 func TestPlayerRejectsInvalidContainerBeforeSending(t *testing.T) {
 	clock := &fakeClock{now: time.Now()}
 	source := &fakeSource{clock: clock, delayAfter: map[int]time.Duration{}, sendErrorAt: -1}

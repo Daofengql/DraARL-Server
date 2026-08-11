@@ -1,7 +1,7 @@
 import { apiClient } from './api'
 
 export type BroadcastAudioStatus = 'processing' | 'ready' | 'failed'
-export type BroadcastScheduleType = 'once' | 'daily' | 'weekly'
+export type BroadcastScheduleType = 'once' | 'daily' | 'weekly' | 'interval'
 export type BroadcastRunStatus =
   | 'claimed'
   | 'playing'
@@ -44,6 +44,8 @@ export interface BroadcastSchedule {
   scheduled_at?: string
   local_time?: string
   weekday_mask?: number
+  interval_seconds?: number
+  interval_start_at?: string
   next_run_at?: string
   enabled: boolean
   suspended_reason?: string
@@ -83,6 +85,8 @@ export interface BroadcastScheduleInput {
   scheduled_at?: string
   local_time?: string
   weekday_mask?: number
+  interval_seconds?: number
+  interval_start_at?: string
   enabled: boolean
 }
 

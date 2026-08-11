@@ -132,7 +132,10 @@ func TestRealFFmpegPipeline(t *testing.T) {
 	tempDir := t.TempDir()
 	inputPath := filepath.Join(tempDir, "input.wav")
 	generate := exec.Command(cfg.FFmpegPath,
-		"-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=880:duration=2",
+		"-nostdin", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=frequency=880:duration=2",
+		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=1",
+		"-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1",
 		"-ac", "2", "-ar", "44100", inputPath,
 	)
 	if output, err := generate.CombinedOutput(); err != nil {
@@ -167,7 +170,7 @@ func TestRealFFmpegPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.DurationMS < 1900 || metadata.DurationMS > 2100 || metadata.PacketCount < 15 {
+	if metadata.DurationMS < 2900 || metadata.DurationMS > 3100 || metadata.PacketCount < 23 {
 		t.Fatalf("unexpected real media metadata: %#v", metadata)
 	}
 	container, err := ReadContainer(bytes.NewReader(data), int64(len(data)))

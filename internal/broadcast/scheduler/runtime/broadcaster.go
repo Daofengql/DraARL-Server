@@ -46,7 +46,10 @@ func (DefaultBroadcaster) Broadcast(ctx context.Context, request BroadcastReques
 			return outcome, err
 		}
 	}
-	playback, err := player.New(source, player.Options{Validate: request.Validate})
+	playback, err := player.New(source, player.Options{
+		Validate:         request.Validate,
+		ValidateInterval: request.ValidateInterval,
+	})
 	if err != nil {
 		source.Cancel()
 		return outcome, err

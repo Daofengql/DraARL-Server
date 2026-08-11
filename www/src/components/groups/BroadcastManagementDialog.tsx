@@ -61,13 +61,20 @@ interface BroadcastManagementDialogProps {
 interface ScheduleFormState {
   audioId: string
   name: string
-  scheduleType: BroadcastScheduleType
+  scheduleType: ScheduleRepeatMode
   timezone: string
   scheduledAt: string
   localTime: string
   weekdayMask: number
+  intervalValue: string
+  intervalStartAt: string
   enabled: boolean
 }
+
+type ScheduleRepeatMode = Exclude<BroadcastScheduleType, 'interval'> | 'interval_minutes' | 'interval_hours'
+
+const MAX_INTERVAL_MINUTES = 30 * 24 * 60
+const MAX_INTERVAL_HOURS = 30 * 24
 
 const WEEKDAYS = [
   { label: '周一', value: 1 },
@@ -155,6 +162,8 @@ function initialScheduleForm(): ScheduleFormState {
     scheduledAt: '',
     localTime: '08:00',
     weekdayMask: 0,
+    intervalValue: '5',
+    intervalStartAt: toLocalDateTimeInput(new Date().toISOString()),
     enabled: true,
   }
 }
@@ -162,8 +171,17 @@ function initialScheduleForm(): ScheduleFormState {
 function scheduleDescription(schedule: BroadcastSchedule): string {
   if (schedule.schedule_type === 'once') return `一次 · ${formatDateTime(schedule.scheduled_at)}`
   if (schedule.schedule_type === 'daily') return `每天 ${schedule.local_time?.slice(0, 5) || '-'}`
+  if (schedule.schedule_type === 'interval') {
+    const seconds = schedule.interval_seconds || 0
+    if (seconds > 0 && seconds % 3600 === 0) return `每 ${seconds / 3600} 小时`
+    return `每 ${Math.max(seconds / 60, 0)} 分钟`
+  }
   const days = WEEKDAYS.filter(day => (schedule.weekday_mask || 0) & (1 << day.value)).map(day => day.label).join('、')
   return `${days || '未选择星期'} ${schedule.local_time?.slice(0, 5) || '-'}`
+}
+
+function isIntervalMode(value: ScheduleRepeatMode): value is 'interval_minutes' | 'interval_hours' {
+  return value === 'interval_minutes' || value === 'interval_hours'
 }
 
 export function BroadcastManagementDialog({ open, group, onClose }: BroadcastManagementDialogProps) {
@@ -280,14 +298,20 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
   const openScheduleEditor = (schedule?: BroadcastSchedule) => {
     setEditingSchedule(schedule || null)
     if (schedule) {
+      const intervalSeconds = schedule.interval_seconds || 5 * 60
+      const intervalUsesHours = schedule.schedule_type === 'interval' && intervalSeconds % 3600 === 0
       setScheduleForm({
         audioId: String(schedule.audio_id),
         name: schedule.name,
-        scheduleType: schedule.schedule_type,
+        scheduleType: schedule.schedule_type === 'interval'
+          ? intervalUsesHours ? 'interval_hours' : 'interval_minutes'
+          : schedule.schedule_type,
         timezone: schedule.timezone,
         scheduledAt: toLocalDateTimeInput(schedule.scheduled_at),
         localTime: schedule.local_time?.slice(0, 5) || '08:00',
         weekdayMask: schedule.weekday_mask || 0,
+        intervalValue: String(intervalUsesHours ? intervalSeconds / 3600 : intervalSeconds / 60),
+        intervalStartAt: toLocalDateTimeInput(schedule.interval_start_at) || toLocalDateTimeInput(new Date().toISOString()),
         enabled: schedule.enabled,
       })
     } else {
@@ -311,16 +335,28 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
       setError('请至少选择一个星期')
       return
     }
+    const intervalValue = Number(scheduleForm.intervalValue)
+    const maxIntervalValue = scheduleForm.scheduleType === 'interval_hours' ? MAX_INTERVAL_HOURS : MAX_INTERVAL_MINUTES
+    if (isIntervalMode(scheduleForm.scheduleType) && (!Number.isInteger(intervalValue) || intervalValue < 1 || intervalValue > maxIntervalValue)) {
+      setError(`间隔必须是 1 到 ${maxIntervalValue} 的整数`)
+      return
+    }
+    if (isIntervalMode(scheduleForm.scheduleType) && !scheduleForm.intervalStartAt) {
+      setError('请选择间隔计划的计时 0 点')
+      return
+    }
     const input: BroadcastScheduleInput = {
       audio_id: audioId,
       name: scheduleForm.name.trim(),
-      schedule_type: scheduleForm.scheduleType,
+      schedule_type: isIntervalMode(scheduleForm.scheduleType) ? 'interval' : scheduleForm.scheduleType,
       timezone: scheduleForm.timezone,
       enabled: scheduleForm.enabled,
     }
     if (scheduleForm.scheduleType === 'once') input.scheduled_at = new Date(scheduleForm.scheduledAt).toISOString()
-    if (scheduleForm.scheduleType !== 'once') input.local_time = `${scheduleForm.localTime}:00`
+    if (scheduleForm.scheduleType === 'daily' || scheduleForm.scheduleType === 'weekly') input.local_time = `${scheduleForm.localTime}:00`
     if (scheduleForm.scheduleType === 'weekly') input.weekday_mask = scheduleForm.weekdayMask
+    if (isIntervalMode(scheduleForm.scheduleType)) input.interval_seconds = intervalValue * (scheduleForm.scheduleType === 'interval_hours' ? 3600 : 60)
+    if (isIntervalMode(scheduleForm.scheduleType)) input.interval_start_at = new Date(scheduleForm.intervalStartAt).toISOString()
 
     setBusy(true)
     try {
@@ -461,7 +497,12 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                       <TableRow key={schedule.id} hover>
                         <TableCell>{schedule.name}</TableCell>
                         <TableCell>{audioNames.get(schedule.audio_id) || `音频 #${schedule.audio_id}`}</TableCell>
-                        <TableCell><Typography variant="body2">{scheduleDescription(schedule)}</Typography><Typography variant="caption" color="text.secondary">{schedule.timezone}</Typography></TableCell>
+                        <TableCell>
+                          <Typography variant="body2">{scheduleDescription(schedule)}</Typography>
+                          {schedule.schedule_type === 'interval'
+                            ? <Typography variant="caption" color="text.secondary">计时 0 点：{formatDateTime(schedule.interval_start_at)}</Typography>
+                            : <Typography variant="caption" color="text.secondary">{schedule.timezone}</Typography>}
+                        </TableCell>
                         <TableCell>{formatDateTime(schedule.next_run_at)}</TableCell>
                         <TableCell>
                           <Chip size="small" label={!schedule.enabled ? '已停用' : schedule.suspended_reason ? '互联挂起' : schedule.effective_enabled ? '运行中' : '待安排'} color={!schedule.enabled ? 'default' : schedule.suspended_reason ? 'warning' : 'success'} />
@@ -527,18 +568,45 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
             </FormControl>
             <FormControl fullWidth>
               <InputLabel>重复方式</InputLabel>
-              <Select label="重复方式" value={scheduleForm.scheduleType} onChange={event => setScheduleForm(current => ({ ...current, scheduleType: event.target.value as BroadcastScheduleType }))}>
-                <MenuItem value="once">一次</MenuItem><MenuItem value="daily">每天</MenuItem><MenuItem value="weekly">每周</MenuItem>
+              <Select label="重复方式" value={scheduleForm.scheduleType} onChange={event => setScheduleForm(current => ({ ...current, scheduleType: event.target.value as ScheduleRepeatMode }))}>
+                <MenuItem value="once">一次</MenuItem>
+                <MenuItem value="daily">每天</MenuItem>
+                <MenuItem value="weekly">每周</MenuItem>
+                <MenuItem value="interval_minutes">每 N 分钟</MenuItem>
+                <MenuItem value="interval_hours">每 N 小时</MenuItem>
               </Select>
             </FormControl>
-            <FormControl fullWidth>
-              <InputLabel>时区</InputLabel>
-              <Select label="时区" value={scheduleForm.timezone} onChange={event => setScheduleForm(current => ({ ...current, timezone: String(event.target.value) }))}>
-                {TIMEZONES.map(timezone => <MenuItem key={timezone} value={timezone}>{timezone}</MenuItem>)}
-              </Select>
-            </FormControl>
+            {!isIntervalMode(scheduleForm.scheduleType) && (
+              <FormControl fullWidth>
+                <InputLabel>时区</InputLabel>
+                <Select label="时区" value={scheduleForm.timezone} onChange={event => setScheduleForm(current => ({ ...current, timezone: String(event.target.value) }))}>
+                  {TIMEZONES.map(timezone => <MenuItem key={timezone} value={timezone}>{timezone}</MenuItem>)}
+                </Select>
+              </FormControl>
+            )}
             {scheduleForm.scheduleType === 'once' ? (
               <TextField label="播放时刻" type="datetime-local" value={scheduleForm.scheduledAt} onChange={event => setScheduleForm(current => ({ ...current, scheduledAt: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} fullWidth required />
+            ) : isIntervalMode(scheduleForm.scheduleType) ? (
+              <Stack spacing={2}>
+                <TextField
+                  label={scheduleForm.scheduleType === 'interval_hours' ? '间隔小时数' : '间隔分钟数'}
+                  type="number"
+                  value={scheduleForm.intervalValue}
+                  onChange={event => setScheduleForm(current => ({ ...current, intervalValue: event.target.value }))}
+                  slotProps={{ htmlInput: { min: 1, max: scheduleForm.scheduleType === 'interval_hours' ? MAX_INTERVAL_HOURS : MAX_INTERVAL_MINUTES, step: 1 } }}
+                  fullWidth
+                  required
+                />
+                <TextField
+                  label="计时 0 点"
+                  type="datetime-local"
+                  value={scheduleForm.intervalStartAt}
+                  onChange={event => setScheduleForm(current => ({ ...current, intervalStartAt: event.target.value }))}
+                  slotProps={{ inputLabel: { shrink: true } }}
+                  fullWidth
+                  required
+                />
+              </Stack>
             ) : (
               <TextField label="播放时间" type="time" value={scheduleForm.localTime} onChange={event => setScheduleForm(current => ({ ...current, localTime: event.target.value }))} slotProps={{ inputLabel: { shrink: true }, htmlInput: { step: 60 } }} fullWidth required />
             )}

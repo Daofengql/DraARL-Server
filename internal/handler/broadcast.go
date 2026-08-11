@@ -58,14 +58,16 @@ type broadcastScheduleResponse struct {
 }
 
 type broadcastScheduleRequest struct {
-	AudioID      *uint      `json:"audio_id"`
-	Name         *string    `json:"name"`
-	ScheduleType *string    `json:"schedule_type"`
-	Timezone     *string    `json:"timezone"`
-	ScheduledAt  *time.Time `json:"scheduled_at"`
-	LocalTime    *string    `json:"local_time"`
-	WeekdayMask  *uint8     `json:"weekday_mask"`
-	Enabled      *bool      `json:"enabled"`
+	AudioID         *uint      `json:"audio_id"`
+	Name            *string    `json:"name"`
+	ScheduleType    *string    `json:"schedule_type"`
+	Timezone        *string    `json:"timezone"`
+	ScheduledAt     *time.Time `json:"scheduled_at"`
+	LocalTime       *string    `json:"local_time"`
+	WeekdayMask     *uint8     `json:"weekday_mask"`
+	IntervalSeconds *int       `json:"interval_seconds"`
+	IntervalStartAt *time.Time `json:"interval_start_at"`
+	Enabled         *bool      `json:"enabled"`
 }
 
 type broadcastContextResponse struct {
@@ -560,6 +562,12 @@ func applyBroadcastScheduleRequest(schedule *model.BroadcastSchedule, req *broad
 	}
 	if req.WeekdayMask != nil {
 		schedule.WeekdayMask = *req.WeekdayMask
+	}
+	if req.IntervalSeconds != nil {
+		schedule.IntervalSeconds = *req.IntervalSeconds
+	}
+	if req.IntervalStartAt != nil {
+		schedule.IntervalStartAt = req.IntervalStartAt
 	}
 	if req.Enabled != nil {
 		schedule.Enabled = *req.Enabled

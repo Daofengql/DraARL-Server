@@ -13,9 +13,13 @@ const (
 	AudioStatusReady      = "ready"
 	AudioStatusFailed     = "failed"
 
-	ScheduleTypeOnce   = "once"
-	ScheduleTypeDaily  = "daily"
-	ScheduleTypeWeekly = "weekly"
+	ScheduleTypeOnce     = "once"
+	ScheduleTypeDaily    = "daily"
+	ScheduleTypeWeekly   = "weekly"
+	ScheduleTypeInterval = "interval"
+
+	MinScheduleIntervalSeconds = 60
+	MaxScheduleIntervalSeconds = 30 * 24 * 60 * 60
 
 	SuspendReasonActiveVirtualGroup = "active_virtual_group"
 
@@ -97,6 +101,8 @@ type BroadcastSchedule struct {
 	ScheduledAt               *time.Time     `gorm:"type:datetime(3);column:scheduled_at" json:"scheduled_at,omitempty"`
 	LocalTime                 string         `gorm:"type:char(8);column:local_time" json:"local_time,omitempty"`
 	WeekdayMask               uint8          `gorm:"type:tinyint unsigned;column:weekday_mask" json:"weekday_mask,omitempty"`
+	IntervalSeconds           int            `gorm:"type:int unsigned;not null;default:0;column:interval_seconds" json:"interval_seconds,omitempty"`
+	IntervalStartAt           *time.Time     `gorm:"type:datetime(3);column:interval_start_at" json:"interval_start_at,omitempty"`
 	NextRunAt                 *time.Time     `gorm:"type:datetime(3);index:idx_broadcast_schedule_due,priority:2;column:next_run_at" json:"next_run_at,omitempty"`
 	Enabled                   bool           `gorm:"type:tinyint(1);not null;index:idx_broadcast_schedule_due,priority:1;column:enabled" json:"enabled"`
 	SuspendedReason           string         `gorm:"type:varchar(64);column:suspended_reason" json:"suspended_reason,omitempty"`
@@ -165,7 +171,7 @@ func (BroadcastRun) TableName() string { return "broadcast_runs" }
 
 func IsScheduleType(value string) bool {
 	switch value {
-	case ScheduleTypeOnce, ScheduleTypeDaily, ScheduleTypeWeekly:
+	case ScheduleTypeOnce, ScheduleTypeDaily, ScheduleTypeWeekly, ScheduleTypeInterval:
 		return true
 	default:
 		return false

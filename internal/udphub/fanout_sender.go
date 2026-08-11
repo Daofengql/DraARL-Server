@@ -80,7 +80,7 @@ type FanoutSender struct {
 
 const (
 	defaultFanoutFrameQueue  = 64
-	defaultFanoutMaxFrameAge = 120 * time.Millisecond
+	defaultFanoutMaxFrameAge = 500 * time.Millisecond
 )
 
 var (

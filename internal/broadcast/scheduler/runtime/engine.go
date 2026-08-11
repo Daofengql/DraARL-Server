@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	RunLeaseDuration = 5 * time.Second
-	finalizeTimeout  = 5 * time.Second
+	RunLeaseDuration      = 5 * time.Second
+	RunValidationInterval = 1 * time.Second
+	finalizeTimeout       = 5 * time.Second
 )
 
 var (
@@ -293,8 +294,9 @@ func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
 
 	request := BroadcastRequest{
 		RunID: run.ID, SourceGroupID: run.SourceGroupID,
-		QuietWindow: time.Duration(e.config.QuietWindowSeconds) * time.Second,
-		Container:   container,
+		QuietWindow:      time.Duration(e.config.QuietWindowSeconds) * time.Second,
+		ValidateInterval: RunValidationInterval,
+		Container:        container,
 		OnAcquired: func(snapshot LeaseSnapshot) error {
 			code, err := e.repository.MarkRunPlaying(ctx, run.ID, e.instanceID, snapshot.DomainKey, snapshot.DomainGroupIDs, e.now().UTC(), RunLeaseDuration)
 			if err != nil {

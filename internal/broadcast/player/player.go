@@ -25,7 +25,8 @@ type Source interface {
 type Validator func(context.Context) error
 
 type Options struct {
-	Validate Validator
+	Validate         Validator
+	ValidateInterval time.Duration
 }
 
 type Result struct {
@@ -62,17 +63,23 @@ func (realPlaybackClock) WaitUntil(ctx context.Context, target time.Time) error 
 }
 
 type Player struct {
-	source   Source
-	validate Validator
-	clock    playbackClock
-	started  atomic.Bool
+	source           Source
+	validate         Validator
+	validateInterval time.Duration
+	clock            playbackClock
+	started          atomic.Bool
 }
 
 func New(source Source, options Options) (*Player, error) {
 	if source == nil {
 		return nil, ErrInvalidSource
 	}
-	return &Player{source: source, validate: options.Validate, clock: realPlaybackClock{}}, nil
+	return &Player{
+		source:           source,
+		validate:         options.Validate,
+		validateInterval: options.ValidateInterval,
+		clock:            realPlaybackClock{},
+	}, nil
 }
 
 func (p *Player) Play(ctx context.Context, container *media.Container) (result Result, err error) {
@@ -106,13 +113,20 @@ func (p *Player) Play(ctx context.Context, container *media.Container) (result R
 	}()
 
 	nextSendAt := p.clock.Now()
+	nextValidationAt := time.Time{}
 	for index, packet := range container.Packets {
 		if err = p.clock.WaitUntil(ctx, nextSendAt); err != nil {
 			return result, err
 		}
 		if p.validate != nil {
-			if err = p.validate(ctx); err != nil {
-				return result, err
+			now := p.clock.Now()
+			if nextValidationAt.IsZero() || p.validateInterval <= 0 || !now.Before(nextValidationAt) {
+				if err = p.validate(ctx); err != nil {
+					return result, err
+				}
+				if p.validateInterval > 0 {
+					nextValidationAt = p.clock.Now().Add(p.validateInterval)
+				}
 			}
 		}
 		if err = contextError(ctx); err != nil {

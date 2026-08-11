@@ -231,6 +231,11 @@ func (r *Repository) SaveSchedule(ctx context.Context, schedule *model.Broadcast
 			}
 			schedule.CreatedBy = existing.CreatedBy
 			schedule.CreatedAt = existing.CreatedAt
+			if scheduleTimingEqual(&existing, schedule) {
+				schedule.NextRunAt = existing.NextRunAt
+			} else {
+				schedule.NextRunAt = nil
+			}
 		}
 		if err := applyScheduleRuntimeState(tx, schedule, now); err != nil {
 			return err
@@ -1066,19 +1071,57 @@ func normalizeSchedule(schedule *model.BroadcastSchedule) error {
 		schedule.ScheduledAt = &utc
 		schedule.LocalTime = ""
 		schedule.WeekdayMask = 0
+		schedule.IntervalSeconds = 0
+		schedule.IntervalStartAt = nil
 	case model.ScheduleTypeDaily:
 		if schedule.LocalTime == "" {
 			return fmt.Errorf("%w: local_time is required", ErrInvalidSchedule)
 		}
 		schedule.ScheduledAt = nil
 		schedule.WeekdayMask = 0
+		schedule.IntervalSeconds = 0
+		schedule.IntervalStartAt = nil
 	case model.ScheduleTypeWeekly:
 		if schedule.LocalTime == "" || schedule.WeekdayMask == 0 || schedule.WeekdayMask&0x80 != 0 {
 			return fmt.Errorf("%w: local_time and weekday_mask are required", ErrInvalidSchedule)
 		}
 		schedule.ScheduledAt = nil
+		schedule.IntervalSeconds = 0
+		schedule.IntervalStartAt = nil
+	case model.ScheduleTypeInterval:
+		if schedule.IntervalSeconds < model.MinScheduleIntervalSeconds || schedule.IntervalSeconds > model.MaxScheduleIntervalSeconds || schedule.IntervalSeconds%60 != 0 {
+			return fmt.Errorf("%w: interval_seconds must be a whole minute between %d and %d", ErrInvalidSchedule, model.MinScheduleIntervalSeconds, model.MaxScheduleIntervalSeconds)
+		}
+		if schedule.IntervalStartAt == nil {
+			return fmt.Errorf("%w: interval_start_at is required", ErrInvalidSchedule)
+		}
+		start := schedule.IntervalStartAt.UTC()
+		schedule.IntervalStartAt = &start
+		schedule.ScheduledAt = nil
+		schedule.LocalTime = ""
+		schedule.WeekdayMask = 0
 	}
 	return nil
+}
+
+func scheduleTimingEqual(left, right *model.BroadcastSchedule) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return left.ScheduleType == right.ScheduleType &&
+		left.Timezone == right.Timezone &&
+		timePointersEqual(left.ScheduledAt, right.ScheduledAt) &&
+		left.LocalTime == right.LocalTime &&
+		left.WeekdayMask == right.WeekdayMask &&
+		left.IntervalSeconds == right.IntervalSeconds &&
+		timePointersEqual(left.IntervalStartAt, right.IntervalStartAt)
+}
+
+func timePointersEqual(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
 }
 
 func SortedUniqueGroupIDs(ids []int) []int {

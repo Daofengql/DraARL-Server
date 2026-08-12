@@ -91,10 +91,10 @@ func testContainer(t *testing.T, frameCount int) *media.Container {
 	return container
 }
 
-func TestPlayerPacesFromActualSendsWithoutCatchUp(t *testing.T) {
+func TestPlayerRecoversSmallDelaysWithoutAccumulatingDrift(t *testing.T) {
 	start := time.Date(2026, 8, 9, 8, 0, 0, 0, time.UTC)
 	clock := &fakeClock{now: start}
-	source := &fakeSource{clock: clock, delayAfter: map[int]time.Duration{0: 200 * time.Millisecond}, sendErrorAt: -1}
+	source := &fakeSource{clock: clock, delayAfter: map[int]time.Duration{0: 130 * time.Millisecond}, sendErrorAt: -1}
 	p, err := New(source, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +104,7 @@ func TestPlayerPacesFromActualSendsWithoutCatchUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []time.Time{start, start.Add(200 * time.Millisecond), start.Add(320 * time.Millisecond)}
+	want := []time.Time{start, start.Add(130 * time.Millisecond), start.Add(240 * time.Millisecond)}
 	if len(source.sentAt) != len(want) {
 		t.Fatalf("send count=%d want=%d", len(source.sentAt), len(want))
 	}
@@ -113,7 +113,7 @@ func TestPlayerPacesFromActualSendsWithoutCatchUp(t *testing.T) {
 			t.Fatalf("send %d at %v want %v", index, source.sentAt[index], want[index])
 		}
 	}
-	if result.PlayedDuration != 300*time.Millisecond || !result.EndedAt.Equal(start.Add(380*time.Millisecond)) || result.SentPackets != 3 || result.DroppedPackets != 2 {
+	if result.PlayedDuration != 300*time.Millisecond || !result.EndedAt.Equal(start.Add(300*time.Millisecond)) || result.SentPackets != 3 || result.DroppedPackets != 2 {
 		t.Fatalf("result=%#v", result)
 	}
 	if source.finished != 1 || source.cancelled != 0 {
@@ -121,6 +121,30 @@ func TestPlayerPacesFromActualSendsWithoutCatchUp(t *testing.T) {
 	}
 	if _, err := p.Play(context.Background(), testContainer(t, 1)); !errors.Is(err, ErrAlreadyStarted) {
 		t.Fatalf("second play error=%v", err)
+	}
+}
+
+func TestPlayerRebasesAfterFullPacketStall(t *testing.T) {
+	start := time.Date(2026, 8, 9, 8, 0, 0, 0, time.UTC)
+	clock := &fakeClock{now: start}
+	source := &fakeSource{clock: clock, delayAfter: map[int]time.Duration{0: 300 * time.Millisecond}, sendErrorAt: -1}
+	p, err := New(source, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.clock = clock
+	result, err := p.Play(context.Background(), testContainer(t, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Time{start, start.Add(300 * time.Millisecond), start.Add(420 * time.Millisecond)}
+	for index := range want {
+		if !source.sentAt[index].Equal(want[index]) {
+			t.Fatalf("send %d at %v want %v", index, source.sentAt[index], want[index])
+		}
+	}
+	if !result.EndedAt.Equal(start.Add(480 * time.Millisecond)) {
+		t.Fatalf("ended at %v want %v", result.EndedAt, start.Add(480*time.Millisecond))
 	}
 }
 

@@ -882,6 +882,10 @@ interface MixerStream {
   lastActiveAt: number
 }
 
+export function resolveMixerStartTime(nextStartTime: number, now: number, startupBuffer = 0.08): number {
+  return nextStartTime > now ? nextStartTime : now + startupBuffer
+}
+
 /**
  * 多流 Opus 混音器。
  * 每个来源流使用独立解码器和时间轴，各频道经独立增益节点汇入主混音总线。
@@ -991,7 +995,7 @@ export class MultiChannelAudioMixer {
     source.buffer = audioBuffer
     source.connect(this.getChannelGain(stream.groupId))
 
-    const startTime = Math.max(stream.nextStartTime, now + 0.08)
+    const startTime = resolveMixerStartTime(stream.nextStartTime, now)
     stream.nextStartTime = startTime + audioBuffer.duration
     stream.lastActiveAt = Date.now()
     stream.sources.add(source)

@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 当前版本 | `v2.0.0-alpha12`（以根目录 `VERSION` 和 Release 页面为准） |
+| 当前版本 | `v2.0.0-alpha13`（以根目录 `VERSION` 和 Release 页面为准） |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |

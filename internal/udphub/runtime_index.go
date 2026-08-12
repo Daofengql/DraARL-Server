@@ -41,10 +41,27 @@ func isRecentlyActiveDevice(dev *models.Device) bool {
 }
 
 func shouldRejectNormalDeviceConflict(dev *models.Device, addr *net.UDPAddr, incomingMAC string) bool {
+	if dev == nil {
+		return false
+	}
+	return shouldRejectNormalDeviceConflictForModel(dev, addr, incomingMAC, dev.DevModel)
+}
+
+func shouldRejectNormalDeviceConflictForModel(dev *models.Device, addr *net.UDPAddr, incomingMAC string, incomingDevModel byte) bool {
 	if dev == nil || !isRecentlyActiveDevice(dev) || dev.UDPAddr == nil {
 		return false
 	}
+	if sameUDPAddr(dev.UDPAddr, addr) {
+		return false
+	}
+
+	// Modern Android releases may not expose a stable hardware MAC. A
+	// password-authenticated heartbeat is sufficient to take over a new NAT
+	// binding after a network switch. A supplied MAC remains checked below.
 	incomingMAC = protocol.NormalizeMAC(incomingMAC)
+	if incomingMAC == "" && (dev.DevModel == protocol.DraARLDevModelAndroid || incomingDevModel == protocol.DraARLDevModelAndroid) {
+		return false
+	}
 	if incomingMAC != "" {
 		existingMAC := protocol.NormalizeMAC(dev.MAC)
 		if existingMAC == "" {
@@ -54,7 +71,7 @@ func shouldRejectNormalDeviceConflict(dev *models.Device, addr *net.UDPAddr, inc
 			return false
 		}
 	}
-	return !sameUDPAddr(dev.UDPAddr, addr)
+	return true
 }
 
 func indexRuntimeDevice(dev *models.Device) {

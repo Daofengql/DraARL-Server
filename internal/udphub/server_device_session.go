@@ -141,7 +141,7 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		return
 	}
 
-	if existingDev := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflict(existingDev, packet.UDPAddr, incomingMAC) {
+	if existingDev := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflictForModel(existingDev, packet.UDPAddr, incomingMAC, packet.DevModel) {
 		log.Printf("[AUTH] Device conflict rejected: owner_id=%d ssid=%d existing_addr=%v new_addr=%v",
 			authResult.User.ID, packet.SSID, existingDev.UDPAddr, packet.UDPAddr)
 		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusDeviceConflictOnline, "device_conflict_online")
@@ -341,7 +341,12 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 
 	// 记录日志（非幽灵设备才记录）
 	if !isGhost && !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
-		logBuffer <- dev
+		select {
+		case logBuffer <- dev:
+		default:
+			// A saturated audit queue must not delay heartbeat responses.
+			log.Printf("[LOG] device activity log queue full: device=%d", dev.ID)
+		}
 		dev.Loged = true
 	}
 
@@ -353,7 +358,9 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 
 	// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
 	response := protocol.EncodeHeartbeatResponse(packet, dev.CallSign)
-	conn.WriteToUDP(response, packet.UDPAddr)
+	if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
+		log.Printf("[HEARTBEAT] response send failed: device=%d addr=%v err=%v", dev.ID, packet.UDPAddr, err)
+	}
 
 	if !dev.ISOnline {
 		// 新设备上线

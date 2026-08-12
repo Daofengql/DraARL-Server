@@ -102,7 +102,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 					sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, authResult.Error)
 					return
 				}
-				if shouldRejectNormalDeviceConflict(dev, packet.UDPAddr, incomingMAC) {
+				if shouldRejectNormalDeviceConflictForModel(dev, packet.UDPAddr, incomingMAC, packet.DevModel) {
 					log.Printf("[AUTH] Device conflict rejected: owner_id=%d ssid=%d existing_addr=%v new_addr=%v",
 						dev.OwnerID, dev.SSID, dev.UDPAddr, packet.UDPAddr)
 					sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusDeviceConflictOnline, "device_conflict_online")

@@ -3,6 +3,8 @@ import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse,
 const BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '')
 const WS_TOKEN_CLEAR_PATH = '/api/auth/ws-token/clear'
 const AUTH_REFRESH_PATH = '/api/auth/refresh'
+const AUTH_REFRESH_LOCK_KEY = 'draarl:auth-refresh-lock'
+const AUTH_REFRESH_LOCK_TTL_MS = 35000
 
 interface BackendResponse<T> {
   code: number
@@ -132,25 +134,125 @@ class ApiClient {
       return this.refreshPromise
     }
 
-    this.refreshPromise = (async () => {
-      try {
-        const response = await this.refreshClient.post<BackendResponse<RefreshResponseData>>(AUTH_REFRESH_PATH, {})
-        const token = response.data?.data?.token
-        if (!token) {
-          return false
-        }
+    const previousToken = localStorage.getItem('token')
+    this.refreshPromise = this.refreshAcrossTabs(previousToken).finally(() => {
+      this.refreshPromise = null
+    })
+    return this.refreshPromise
+  }
 
-        localStorage.setItem('token', token)
+  private async refreshAcrossTabs(previousToken: string | null): Promise<boolean> {
+    if (typeof navigator !== 'undefined' && 'locks' in navigator) {
+      const locks = navigator.locks
+      let result = false
+      await locks.request('draarl-auth-refresh', async () => {
+        if (localStorage.getItem('token') !== previousToken) {
+          window.dispatchEvent(new CustomEvent('user-updated'))
+          result = true
+          return
+        }
+        result = await this.refreshWithServer()
+      })
+      return result
+    }
+
+    const owner = this.createRefreshLockOwner()
+    const acquired = await this.acquireRefreshLock(owner, previousToken)
+    if (!acquired) {
+      return localStorage.getItem('token') !== previousToken
+    }
+
+    try {
+      // Another tab may have completed the rotation while this tab was
+      // waiting for the lock. Reuse its access token instead of rotating again.
+      if (localStorage.getItem('token') !== previousToken) {
         window.dispatchEvent(new CustomEvent('user-updated'))
         return true
-      } catch {
-        return false
-      } finally {
-        this.refreshPromise = null
       }
-    })()
 
-    return this.refreshPromise
+      return await this.refreshWithServer()
+    } catch {
+      return false
+    } finally {
+      this.releaseRefreshLock(owner)
+    }
+  }
+
+  private async refreshWithServer(): Promise<boolean> {
+    try {
+      const response = await this.refreshClient.post<BackendResponse<RefreshResponseData>>(AUTH_REFRESH_PATH, {})
+      const token = response.data?.data?.token
+      if (!token) return false
+      localStorage.setItem('token', token)
+      window.dispatchEvent(new CustomEvent('user-updated'))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private createRefreshLockOwner(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+
+  private readRefreshLock(): { owner: string; expiresAt: number } | null {
+    try {
+      const raw = localStorage.getItem(AUTH_REFRESH_LOCK_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as { owner?: unknown; expiresAt?: unknown }
+      if (typeof parsed.owner !== 'string' || typeof parsed.expiresAt !== 'number') return null
+      if (parsed.expiresAt <= Date.now()) return null
+      return { owner: parsed.owner, expiresAt: parsed.expiresAt }
+    } catch {
+      return null
+    }
+  }
+
+  private async acquireRefreshLock(owner: string, previousToken: string | null): Promise<boolean> {
+    const deadline = Date.now() + AUTH_REFRESH_LOCK_TTL_MS - 1000
+    while (Date.now() < deadline) {
+      if (localStorage.getItem('token') !== previousToken) {
+        window.dispatchEvent(new CustomEvent('user-updated'))
+        return false
+      }
+
+      const current = this.readRefreshLock()
+      if (current && current.owner !== owner) {
+        await this.delay(50)
+        continue
+      }
+
+      try {
+        localStorage.setItem(AUTH_REFRESH_LOCK_KEY, JSON.stringify({
+          owner,
+          expiresAt: Date.now() + AUTH_REFRESH_LOCK_TTL_MS,
+        }))
+        const confirmed = this.readRefreshLock()
+        if (confirmed?.owner === owner) return true
+      } catch {
+        // Private browsing or restricted storage: fall back to local locking.
+        return true
+      }
+      await this.delay(25)
+    }
+    return false
+  }
+
+  private releaseRefreshLock(owner: string): void {
+    try {
+      if (this.readRefreshLock()?.owner === owner) {
+        localStorage.removeItem(AUTH_REFRESH_LOCK_KEY)
+      }
+    } catch {
+      // Ignore storage cleanup failures; the short lease will expire.
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => window.setTimeout(resolve, ms))
   }
 
   async get<T = any>(url: string, config?: AxiosRequestConfig): Promise<T> {

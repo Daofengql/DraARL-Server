@@ -1053,6 +1053,8 @@ func normalizeSchedule(schedule *model.BroadcastSchedule) error {
 	schedule.ScheduleType = strings.ToLower(strings.TrimSpace(schedule.ScheduleType))
 	schedule.Timezone = strings.TrimSpace(schedule.Timezone)
 	schedule.LocalTime = strings.TrimSpace(schedule.LocalTime)
+	schedule.BlackoutStartTime = strings.TrimSpace(schedule.BlackoutStartTime)
+	schedule.BlackoutEndTime = strings.TrimSpace(schedule.BlackoutEndTime)
 	if schedule.Name == "" || len(schedule.Name) > 255 || !model.IsScheduleType(schedule.ScheduleType) {
 		return ErrInvalidSchedule
 	}
@@ -1061,6 +1063,24 @@ func normalizeSchedule(schedule *model.BroadcastSchedule) error {
 	}
 	if _, err := time.LoadLocation(schedule.Timezone); err != nil {
 		return fmt.Errorf("%w: invalid timezone", ErrInvalidSchedule)
+	}
+	if (schedule.BlackoutStartTime == "") != (schedule.BlackoutEndTime == "") {
+		return fmt.Errorf("%w: blackout_start_time and blackout_end_time must be provided together", ErrInvalidSchedule)
+	}
+	if schedule.BlackoutStartTime != "" {
+		start, err := normalizeScheduleClock(schedule.BlackoutStartTime)
+		if err != nil {
+			return fmt.Errorf("%w: invalid blackout_start_time", ErrInvalidSchedule)
+		}
+		end, err := normalizeScheduleClock(schedule.BlackoutEndTime)
+		if err != nil {
+			return fmt.Errorf("%w: invalid blackout_end_time", ErrInvalidSchedule)
+		}
+		if start == end {
+			return fmt.Errorf("%w: blackout start and end times must differ", ErrInvalidSchedule)
+		}
+		schedule.BlackoutStartTime = start
+		schedule.BlackoutEndTime = end
 	}
 	switch schedule.ScheduleType {
 	case model.ScheduleTypeOnce:
@@ -1114,7 +1134,19 @@ func scheduleTimingEqual(left, right *model.BroadcastSchedule) bool {
 		left.LocalTime == right.LocalTime &&
 		left.WeekdayMask == right.WeekdayMask &&
 		left.IntervalSeconds == right.IntervalSeconds &&
-		timePointersEqual(left.IntervalStartAt, right.IntervalStartAt)
+		timePointersEqual(left.IntervalStartAt, right.IntervalStartAt) &&
+		left.BlackoutStartTime == right.BlackoutStartTime &&
+		left.BlackoutEndTime == right.BlackoutEndTime
+}
+
+func normalizeScheduleClock(value string) (string, error) {
+	for _, layout := range []string{"15:04:05", "15:04"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed.Format("15:04:05"), nil
+		}
+	}
+	return "", errors.New("clock time must use HH:MM or HH:MM:SS")
 }
 
 func timePointersEqual(left, right *time.Time) bool {

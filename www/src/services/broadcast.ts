@@ -46,6 +46,8 @@ export interface BroadcastSchedule {
   weekday_mask?: number
   interval_seconds?: number
   interval_start_at?: string
+  blackout_start_time?: string
+  blackout_end_time?: string
   next_run_at?: string
   enabled: boolean
   suspended_reason?: string
@@ -87,6 +89,8 @@ export interface BroadcastScheduleInput {
   weekday_mask?: number
   interval_seconds?: number
   interval_start_at?: string
+  blackout_start_time?: string
+  blackout_end_time?: string
   enabled: boolean
 }
 

@@ -51,6 +51,33 @@ func TestNextOccurrence(t *testing.T) {
 			after: "2026-08-09T04:31:00Z", want: "2026-08-09T04:45:00Z",
 		},
 		{
+			name: "interval skips daytime blackout",
+			schedule: model.BroadcastSchedule{
+				ScheduleType: model.ScheduleTypeInterval, Timezone: "Asia/Shanghai",
+				IntervalSeconds: 15 * 60, IntervalStartAt: timePointer(mustTime(t, "2026-08-09T00:00:00Z")),
+				BlackoutStartTime: "08:30:00", BlackoutEndTime: "10:00:00",
+			},
+			after: "2026-08-09T00:15:00Z", want: "2026-08-09T02:00:00Z",
+		},
+		{
+			name: "interval skips overnight blackout",
+			schedule: model.BroadcastSchedule{
+				ScheduleType: model.ScheduleTypeInterval, Timezone: "Asia/Shanghai",
+				IntervalSeconds: 30 * 60, IntervalStartAt: timePointer(mustTime(t, "2026-08-09T13:00:00Z")),
+				BlackoutStartTime: "22:00", BlackoutEndTime: "07:00",
+			},
+			after: "2026-08-09T13:30:00Z", want: "2026-08-09T23:00:00Z",
+		},
+		{
+			name: "blackout end boundary is allowed",
+			schedule: model.BroadcastSchedule{
+				ScheduleType: model.ScheduleTypeInterval, Timezone: "Asia/Shanghai",
+				IntervalSeconds: 30 * 60, IntervalStartAt: timePointer(mustTime(t, "2026-08-09T13:00:00Z")),
+				BlackoutStartTime: "22:00:00", BlackoutEndTime: "23:00:00",
+			},
+			after: "2026-08-09T13:30:00Z", want: "2026-08-09T15:00:00Z",
+		},
+		{
 			name:     "skip nonexistent DST time",
 			schedule: model.BroadcastSchedule{ScheduleType: model.ScheduleTypeDaily, Timezone: "America/New_York", LocalTime: "02:30:00"},
 			after:    "2026-03-08T05:00:00Z", want: "2026-03-09T06:30:00Z",
@@ -102,6 +129,20 @@ func TestNextOccurrenceRejectsIntervalWithoutZeroPoint(t *testing.T) {
 	_, err := NextOccurrence(&model.BroadcastSchedule{ScheduleType: model.ScheduleTypeInterval, IntervalSeconds: 15 * 60}, time.Now())
 	if err == nil {
 		t.Fatal("interval without a zero point should be rejected")
+	}
+}
+
+func TestNextOccurrenceRejectsInvalidBlackoutWindow(t *testing.T) {
+	start := mustTime(t, "2026-08-09T00:00:00Z")
+	tests := []model.BroadcastSchedule{
+		{ScheduleType: model.ScheduleTypeInterval, Timezone: "UTC", IntervalSeconds: 60, IntervalStartAt: &start, BlackoutStartTime: "22:00"},
+		{ScheduleType: model.ScheduleTypeInterval, Timezone: "UTC", IntervalSeconds: 60, IntervalStartAt: &start, BlackoutStartTime: "25:00", BlackoutEndTime: "07:00"},
+		{ScheduleType: model.ScheduleTypeInterval, Timezone: "UTC", IntervalSeconds: 60, IntervalStartAt: &start, BlackoutStartTime: "07:00", BlackoutEndTime: "07:00"},
+	}
+	for _, schedule := range tests {
+		if _, err := NextOccurrence(&schedule, start); err == nil {
+			t.Fatalf("invalid blackout window should be rejected: %#v", schedule)
+		}
 	}
 }
 

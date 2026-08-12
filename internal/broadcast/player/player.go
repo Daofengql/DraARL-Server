@@ -142,11 +142,13 @@ func (p *Player) Play(ctx context.Context, container *media.Container) (result R
 		}
 		result.PlayedDuration += durations[index]
 
-		// Advance from both the monotonic media timeline and the actual send.
-		// The latter prevents a late packet from causing catch-up bursts.
-		nextSendAt = nextSendAt.Add(durations[index])
-		if fromActual := sentAt.Add(durations[index]); nextSendAt.Before(fromActual) {
-			nextSendAt = fromActual
+		packetDuration := durations[index]
+		if sentAt.Sub(nextSendAt) >= packetDuration {
+			// A full packet behind would make the next send immediate. Rebase after
+			// exceptional stalls, but keep small wake-up delays off the media clock.
+			nextSendAt = sentAt.Add(packetDuration)
+		} else {
+			nextSendAt = nextSendAt.Add(packetDuration)
 		}
 	}
 	if err = p.clock.WaitUntil(ctx, nextSendAt); err != nil {

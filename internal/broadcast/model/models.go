@@ -103,6 +103,8 @@ type BroadcastSchedule struct {
 	WeekdayMask               uint8          `gorm:"type:tinyint unsigned;column:weekday_mask" json:"weekday_mask,omitempty"`
 	IntervalSeconds           int            `gorm:"type:int unsigned;not null;default:0;column:interval_seconds" json:"interval_seconds,omitempty"`
 	IntervalStartAt           *time.Time     `gorm:"type:datetime(3);column:interval_start_at" json:"interval_start_at,omitempty"`
+	BlackoutStartTime         string         `gorm:"type:char(8);column:blackout_start_time" json:"blackout_start_time,omitempty"`
+	BlackoutEndTime           string         `gorm:"type:char(8);column:blackout_end_time" json:"blackout_end_time,omitempty"`
 	NextRunAt                 *time.Time     `gorm:"type:datetime(3);index:idx_broadcast_schedule_due,priority:2;column:next_run_at" json:"next_run_at,omitempty"`
 	Enabled                   bool           `gorm:"type:tinyint(1);not null;index:idx_broadcast_schedule_due,priority:1;column:enabled" json:"enabled"`
 	SuspendedReason           string         `gorm:"type:varchar(64);column:suspended_reason" json:"suspended_reason,omitempty"`

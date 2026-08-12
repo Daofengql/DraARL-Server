@@ -68,6 +68,9 @@ interface ScheduleFormState {
   weekdayMask: number
   intervalValue: string
   intervalStartAt: string
+  blackoutEnabled: boolean
+  blackoutStartTime: string
+  blackoutEndTime: string
   enabled: boolean
 }
 
@@ -164,6 +167,9 @@ function initialScheduleForm(): ScheduleFormState {
     weekdayMask: 0,
     intervalValue: '5',
     intervalStartAt: toLocalDateTimeInput(new Date().toISOString()),
+    blackoutEnabled: false,
+    blackoutStartTime: '22:00',
+    blackoutEndTime: '07:00',
     enabled: true,
   }
 }
@@ -312,6 +318,9 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
         weekdayMask: schedule.weekday_mask || 0,
         intervalValue: String(intervalUsesHours ? intervalSeconds / 3600 : intervalSeconds / 60),
         intervalStartAt: toLocalDateTimeInput(schedule.interval_start_at) || toLocalDateTimeInput(new Date().toISOString()),
+        blackoutEnabled: Boolean(schedule.blackout_start_time && schedule.blackout_end_time),
+        blackoutStartTime: schedule.blackout_start_time?.slice(0, 5) || '22:00',
+        blackoutEndTime: schedule.blackout_end_time?.slice(0, 5) || '07:00',
         enabled: schedule.enabled,
       })
     } else {
@@ -345,11 +354,17 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
       setError('请选择间隔计划的计时 0 点')
       return
     }
+    if (scheduleForm.blackoutEnabled && (!scheduleForm.blackoutStartTime || !scheduleForm.blackoutEndTime || scheduleForm.blackoutStartTime === scheduleForm.blackoutEndTime)) {
+      setError('禁播开始和结束时间不能为空且不能相同')
+      return
+    }
     const input: BroadcastScheduleInput = {
       audio_id: audioId,
       name: scheduleForm.name.trim(),
       schedule_type: isIntervalMode(scheduleForm.scheduleType) ? 'interval' : scheduleForm.scheduleType,
       timezone: scheduleForm.timezone,
+      blackout_start_time: scheduleForm.blackoutEnabled ? `${scheduleForm.blackoutStartTime}:00` : '',
+      blackout_end_time: scheduleForm.blackoutEnabled ? `${scheduleForm.blackoutEndTime}:00` : '',
       enabled: scheduleForm.enabled,
     }
     if (scheduleForm.scheduleType === 'once') input.scheduled_at = new Date(scheduleForm.scheduledAt).toISOString()
@@ -502,6 +517,11 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                           {schedule.schedule_type === 'interval'
                             ? <Typography variant="caption" color="text.secondary">计时 0 点：{formatDateTime(schedule.interval_start_at)}</Typography>
                             : <Typography variant="caption" color="text.secondary">{schedule.timezone}</Typography>}
+                          {schedule.blackout_start_time && schedule.blackout_end_time && (
+                            <Typography variant="caption" color="text.secondary" display="block">
+                              禁播：{schedule.blackout_start_time.slice(0, 5)}-{schedule.blackout_end_time.slice(0, 5)} · {schedule.timezone}
+                            </Typography>
+                          )}
                         </TableCell>
                         <TableCell>{formatDateTime(schedule.next_run_at)}</TableCell>
                         <TableCell>
@@ -576,14 +596,12 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                 <MenuItem value="interval_hours">每 N 小时</MenuItem>
               </Select>
             </FormControl>
-            {!isIntervalMode(scheduleForm.scheduleType) && (
-              <FormControl fullWidth>
-                <InputLabel>时区</InputLabel>
-                <Select label="时区" value={scheduleForm.timezone} onChange={event => setScheduleForm(current => ({ ...current, timezone: String(event.target.value) }))}>
-                  {TIMEZONES.map(timezone => <MenuItem key={timezone} value={timezone}>{timezone}</MenuItem>)}
-                </Select>
-              </FormControl>
-            )}
+            <FormControl fullWidth>
+              <InputLabel>时区</InputLabel>
+              <Select label="时区" value={scheduleForm.timezone} onChange={event => setScheduleForm(current => ({ ...current, timezone: String(event.target.value) }))}>
+                {TIMEZONES.map(timezone => <MenuItem key={timezone} value={timezone}>{timezone}</MenuItem>)}
+              </Select>
+            </FormControl>
             {scheduleForm.scheduleType === 'once' ? (
               <TextField label="播放时刻" type="datetime-local" value={scheduleForm.scheduledAt} onChange={event => setScheduleForm(current => ({ ...current, scheduledAt: event.target.value }))} slotProps={{ inputLabel: { shrink: true } }} fullWidth required />
             ) : isIntervalMode(scheduleForm.scheduleType) ? (
@@ -620,6 +638,32 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                   })}
                 </Stack>
               </Box>
+            )}
+            <FormControlLabel
+              control={<Switch checked={scheduleForm.blackoutEnabled} onChange={event => setScheduleForm(current => ({ ...current, blackoutEnabled: event.target.checked }))} />}
+              label="设置禁播时段"
+            />
+            {scheduleForm.blackoutEnabled && (
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <TextField
+                  label="禁播开始"
+                  type="time"
+                  value={scheduleForm.blackoutStartTime}
+                  onChange={event => setScheduleForm(current => ({ ...current, blackoutStartTime: event.target.value }))}
+                  slotProps={{ inputLabel: { shrink: true }, htmlInput: { step: 60 } }}
+                  fullWidth
+                  required
+                />
+                <TextField
+                  label="禁播结束"
+                  type="time"
+                  value={scheduleForm.blackoutEndTime}
+                  onChange={event => setScheduleForm(current => ({ ...current, blackoutEndTime: event.target.value }))}
+                  slotProps={{ inputLabel: { shrink: true }, htmlInput: { step: 60 } }}
+                  fullWidth
+                  required
+                />
+              </Stack>
             )}
             <FormControlLabel control={<Switch checked={scheduleForm.enabled} onChange={event => setScheduleForm(current => ({ ...current, enabled: event.target.checked }))} />} label="启用计划" />
           </Stack>

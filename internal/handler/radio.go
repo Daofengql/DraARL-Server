@@ -36,10 +36,12 @@ type RadioStatusResponse struct {
 // RadioDeviceResponse 在线设备响应
 type RadioDeviceResponse struct {
 	ID           int    `json:"id"`
+	UserID       int    `json:"user_id,omitempty"`
 	Username     string `json:"username"`
 	CallSign     string `json:"callsign"`
 	SSID         int    `json:"ssid"`
 	Nickname     string `json:"nickname,omitempty"`
+	DeviceName   string `json:"device_name,omitempty"`
 	DevModel     int    `json:"dev_model"`
 	GroupID      int    `json:"group_id"`
 	IsGhost      bool   `json:"is_ghost"`
@@ -172,10 +174,12 @@ func GetRadioGroupDevices(c *gin.Context) {
 
 		devices = append(devices, RadioDeviceResponse{
 			ID:           dev.ID,
-			Username:     dev.Name,
+			UserID:       dev.OwnerID,
+			Username:     dev.Username,
 			CallSign:     dev.CallSign,
 			SSID:         int(dev.SSID),
-			Nickname:     dev.Name,
+			Nickname:     dev.Nickname,
+			DeviceName:   dev.Name,
 			DevModel:     int(dev.DevModel),
 			GroupID:      dev.GroupID,
 			IsGhost:      false,

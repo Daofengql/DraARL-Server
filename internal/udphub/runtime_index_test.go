@@ -66,13 +66,37 @@ func TestShouldRejectNormalDeviceConflict(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "different active address",
+			name: "different active address without mac remains protected for hardware devices",
 			dev: &models.Device{
 				ISOnline:       true,
 				LastPacketTime: now,
 				UDPAddr:        addrA,
 			},
 			addr: addrB,
+			want: true,
+		},
+		{
+			name: "android address change without mac",
+			dev: &models.Device{
+				ISOnline:       true,
+				LastPacketTime: now,
+				UDPAddr:        addrA,
+				DevModel:       protocol.DraARLDevModelAndroid,
+			},
+			addr: addrB,
+			want: false,
+		},
+		{
+			name: "different known mac remains rejected",
+			dev: &models.Device{
+				ISOnline:       true,
+				LastPacketTime: now,
+				UDPAddr:        addrA,
+				DevModel:       protocol.DraARLDevModelAndroid,
+				MAC:            "AA:BB:CC:DD:EE:FF",
+			},
+			addr: addrB,
+			mac:  "11:22:33:44:55:66",
 			want: true,
 		},
 	}

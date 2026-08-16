@@ -16,7 +16,7 @@ interface SmtpTabProps {
 
 export function SmtpTab({ value, config, setConfig, loading, onSave }: SmtpTabProps) {
   return (
-    <TabPanel value={value} index={5}>
+    <TabPanel value={value} index={4}>
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card><CardContent>
           <Typography variant="h6" gutterBottom>SMTP邮件配置</Typography>

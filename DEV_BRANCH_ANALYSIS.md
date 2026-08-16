@@ -16,7 +16,7 @@
 
 1. **UDP 数据面身份伪造**（严重）：普通设备转发路径不校验源地址与设备绑定，群内成员可冒名注入语音/文本。
 2. **缓存系统数据污染 + 内存泄漏**（严重）：`sync.Pool` 缓冲复用导致缓存数据被覆盖；LRU 淘汰机制失效导致缓存无界增长。
-3. **站点密钥越权读取**（严重）：任何已登录（甚至未审核）用户可读取 OpenAI API Key、SMTP 邮箱授权码明文。
+3. **站点密钥越权读取**（严重）：任何已登录（甚至未审核）用户可读取 SMTP 邮箱授权码明文（OpenAI 配置已于 2026-08-16 删除，风险面相应缩小）。
 4. 另有多处 **密钥明文落库/进日志**、**数据面 DoS**、**竞态与锁滥用** 问题，详见下文。
 
 ---
@@ -40,8 +40,8 @@
 
 ### S3. 站点配置密钥越权读取 【安全】
 - **位置**：`internal/handler/site_config.go:74-111`（`GetConfigsByCategory`）；路由 `internal/server/server.go:377` `GET /api/config/category/:category` 仅挂在 `protected`（AuthMiddleware），无 admin 校验
-- **描述**：`GetByCategory` 返回原始 `site_configs` 行（key/value 明文、无脱敏）。密钥按分类明文存储：`openai.api_key`、`smtp.password`。**任何已登录用户**（含 ApprovalStatus=0 的未审核账号）直接请求 `/config/category/openai` 或 `/category/smtp` 即可拿到密钥。
-- **影响**：密钥泄露，攻击者可冒用 OpenAI 配额、伪造 SMTP 发送邮件（钓鱼）。
+- **描述**：`GetByCategory` 返回原始 `site_configs` 行（key/value 明文、无脱敏）。密钥按分类明文存储：`smtp.password`（OpenAI 配置系统已于 2026-08-16 随"删除预留功能"一并移除，`openai.api_key` 不再存在）。**任何已登录用户**（含 ApprovalStatus=0 的未审核账号）直接请求 `/config/category/smtp` 即可拿到 SMTP 邮箱授权码明文。
+- **影响**：SMTP 授权码泄露，攻击者可伪造邮件发送（钓鱼）。（OpenAI 配额冒用面已随功能删除而消除）
 - **建议**：该接口改为仅管理员可用，或按分类白名单 + 对 `password`/`api_key` 类字段脱敏后返回。
 
 ---
@@ -107,7 +107,7 @@
 
 ### H11. 通用配置更新把密钥明文写入审计日志 【安全】
 - **位置**：`internal/handler/site_config.go:238-245`（`"更新站点配置: %s = %s"`）
-- **描述**：管理员走通用 `PUT /config` 设置 `openai.api_key` / `smtp.password` 时，密钥明文落入 `operator_logs` 表。
+- **描述**：管理员走通用 `PUT /config` 设置 `smtp.password` 时，密钥明文落入 `operator_logs` 表。（OpenAI 配置系统已于 2026-08-16 删除，`openai.api_key` 不再可写）
 - **建议**：对含 `password`/`key`/`secret` 的 key 在审计日志中脱敏。
 
 ### H12. AutoMigrate 非幂等，大表 ALTER 锁库 【性能/逻辑】

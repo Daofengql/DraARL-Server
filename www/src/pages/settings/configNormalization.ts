@@ -5,7 +5,6 @@ import type {
   BackendResponse,
   CommSettingsConfig,
   ConfigEntry,
-  OpenAIConfig,
   RegistrationConfig,
   SiteConfigs,
   SMTPConfig,
@@ -17,7 +16,6 @@ export interface RawSiteConfigResponses {
   system: BackendResponse<ConfigEntry[]>
   accessDiscovery: BackendResponse<AccessDiscoveryConfig>
   aprs: BackendResponse<APRSConfig>
-  openai: BackendResponse<OpenAIConfig>
   commSettings: BackendResponse<CommSettingsConfig>
   registration: BackendResponse<RegistrationConfig>
   smtp: BackendResponse<SMTPConfig>
@@ -47,7 +45,6 @@ export function normalizeSiteConfigs(responses: Partial<RawSiteConfigResponses>)
     configs.accessDiscovery = responses.accessDiscovery.data
   }
   if (responses.aprs?.code === 200 && responses.aprs.data) configs.aprs = responses.aprs.data
-  if (responses.openai?.code === 200 && responses.openai.data) configs.openai = responses.openai.data
   if (responses.commSettings?.code === 200 && responses.commSettings.data) {
     configs.commSettings = responses.commSettings.data
   }

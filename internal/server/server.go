@@ -382,13 +382,11 @@ func (s *Server) setupRoutes() {
 			admin.PUT("/config/aprs", configHandler.UpdateAPRSConfig)
 			admin.GET("/config/access-discovery", configHandler.GetAccessDiscoveryConfig)
 			admin.PUT("/config/access-discovery", configHandler.UpdateAccessDiscoveryConfig)
-			admin.PUT("/config/openai", configHandler.UpdateOpenAIConfig)
 			admin.GET("/config/registration", configHandler.GetRegistrationConfig)
 			admin.PUT("/config/registration", configHandler.UpdateRegistrationConfig)
 			admin.GET("/config/all", configHandler.GetAllConfigs)
 			admin.GET("/config/system", configHandler.GetSystemInfoConfig)
 			admin.GET("/config/aprs", configHandler.GetAPRSConfig)
-			admin.GET("/config/openai", configHandler.GetOpenAIConfig)
 			admin.GET("/config/aprs/logs", configHandler.GetAPRSLogs)
 			// SMTP 配置（需要管理员权限）
 			admin.GET("/config/smtp", configHandler.GetSMTPConfig)
@@ -489,9 +487,6 @@ func initSiteConfigs(cfg *config.Configuration) {
 		"000000",             // 海拔
 		0,                    // 纬度
 		0,                    // 经度
-		"",                   // OpenAI BaseURL
-		"",                   // OpenAI APIKey
-		"",                   // OpenAI Engine
 	); err != nil {
 		log.Printf("初始化站点配置失败: %v", err)
 		return

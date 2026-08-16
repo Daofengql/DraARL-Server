@@ -37,7 +37,6 @@ const (
 	CategoryICP             = "icp"
 	CategorySystem          = "system"
 	CategoryAPRS            = "aprs"
-	CategoryOpenAI          = "openai"
 	CategoryCommConfig      = "comm_config"
 	CategorySMTP            = "smtp"
 	CategoryRegistration    = "registration"
@@ -89,13 +88,6 @@ type AccessDiscoveryConfig struct {
 	EdgeHealthTTLSeconds int                         `json:"edge_health_ttl_seconds"`
 	CacheMaxAgeSeconds   int                         `json:"cache_max_age_seconds"`
 	Center               AccessDiscoveryCenterConfig `json:"center"`
-}
-
-// OpenAIConfig OpenAI配置
-type OpenAIConfig struct {
-	BaseURL string `json:"base_url"`
-	APIKEY  string `json:"api_key"`
-	Engine  string `json:"engine"`
 }
 
 // CommSettingsConfig 通信设置配置
@@ -415,43 +407,6 @@ func (r *SiteConfigRepository) SetAccessDiscoveryConfig(config AccessDiscoveryCo
 	return r.SetBatch(configs)
 }
 
-// GetOpenAIConfig 获取OpenAI配置
-func (r *SiteConfigRepository) GetOpenAIConfig() (*OpenAIConfig, error) {
-	configs, err := r.GetByCategory(CategoryOpenAI)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &OpenAIConfig{
-		BaseURL: "",
-		APIKEY:  "",
-		Engine:  "",
-	}
-
-	for _, config := range configs {
-		switch config.Key {
-		case "openai.base_url":
-			result.BaseURL = config.Value
-		case "openai.api_key":
-			result.APIKEY = config.Value
-		case "openai.engine":
-			result.Engine = config.Value
-		}
-	}
-
-	return result, nil
-}
-
-// SetOpenAIConfig 设置OpenAI配置
-func (r *SiteConfigRepository) SetOpenAIConfig(config OpenAIConfig) error {
-	configs := []SiteConfig{
-		{Key: "openai.base_url", Value: config.BaseURL, Category: CategoryOpenAI, Description: "OpenAI API Base URL"},
-		{Key: "openai.api_key", Value: config.APIKEY, Category: CategoryOpenAI, Description: "OpenAI API Key"},
-		{Key: "openai.engine", Value: config.Engine, Category: CategoryOpenAI, Description: "OpenAI Engine/Model"},
-	}
-	return r.SetBatch(configs)
-}
-
 // GetCommSettingsConfig 获取通信设置配置
 func (r *SiteConfigRepository) GetCommSettingsConfig() (*CommSettingsConfig, error) {
 	configs, err := r.GetByCategory(CategoryCommConfig)
@@ -565,8 +520,7 @@ func (r *SiteConfigRepository) GetAllConfigMap() (map[string]string, error) {
 // InitDefaultConfigs 初始化默认配置（从YAML配置迁移）
 func (r *SiteConfigRepository) InitDefaultConfigs(yamlICP, yamlName, yamlNameShorthand, yamlLogoURL, yamlLanguage string,
 	yamlAPRSServerHost, yamlAPRSServerPort, yamlSelfAddress, yamlSelfPort, yamlCallSign, yamlSSID, yamlAltitude string,
-	yamlLatitude, yamlLongitude float64,
-	yamlOpenAIBaseURL, yamlOpenAIAPIKey, yamlOpenAIEngine string) error {
+	yamlLatitude, yamlLongitude float64) error {
 
 	// ICP配置
 	if err := r.SetICPConfig(yamlICP); err != nil {
@@ -597,16 +551,6 @@ func (r *SiteConfigRepository) InitDefaultConfigs(yamlICP, yamlName, yamlNameSho
 		Altitude:       yamlAltitude,
 	}
 	if err := r.SetAPRSConfig(aprsConfig); err != nil {
-		return err
-	}
-
-	// OpenAI配置
-	openaiConfig := OpenAIConfig{
-		BaseURL: yamlOpenAIBaseURL,
-		APIKEY:  yamlOpenAIAPIKey,
-		Engine:  yamlOpenAIEngine,
-	}
-	if err := r.SetOpenAIConfig(openaiConfig); err != nil {
 		return err
 	}
 

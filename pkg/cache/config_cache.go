@@ -71,11 +71,6 @@ func accessDiscoveryConfigKey() string {
 	return "config:system:access_discovery"
 }
 
-// openAIConfigKey OpenAI配置缓存键
-func openAIConfigKey() string {
-	return "config:system:openai"
-}
-
 // allConfigsKey 所有配置缓存键
 func allConfigsKey() string {
 	return "config:all"
@@ -228,31 +223,6 @@ func (c *ConfigCache) GetAccessDiscoveryConfig(ctx context.Context) (*gormdb.Acc
 	return dbConfig, nil
 }
 
-// GetOpenAIConfig 获取OpenAI配置（带缓存）
-func (c *ConfigCache) GetOpenAIConfig(ctx context.Context) (*gormdb.OpenAIConfig, error) {
-	key := openAIConfigKey()
-
-	var config gormdb.OpenAIConfig
-	if err := c.cache.Get(ctx, key, &config); err == nil {
-		return &config, nil
-	}
-
-	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
-	dbConfig, err := repo.GetOpenAIConfig()
-	if err != nil {
-		return nil, err
-	}
-	if dbConfig == nil {
-		return nil, nil
-	}
-
-	// 写入缓存
-	_ = c.cache.Set(ctx, key, dbConfig, 0)
-
-	return dbConfig, nil
-}
-
 // GetAllConfigs 获取所有配置（带缓存）
 func (c *ConfigCache) GetAllConfigs(ctx context.Context) ([]gormdb.SiteConfig, error) {
 	key := allConfigsKey()
@@ -310,11 +280,6 @@ func (c *ConfigCache) InvalidateAccessDiscoveryConfig(ctx context.Context) error
 	return c.cache.Delete(ctx, accessDiscoveryConfigKey())
 }
 
-// InvalidateOpenAIConfig 使OpenAI配置缓存失效
-func (c *ConfigCache) InvalidateOpenAIConfig(ctx context.Context) error {
-	return c.cache.Delete(ctx, openAIConfigKey())
-}
-
 // InvalidateAll 使所有配置缓存失效
 func (c *ConfigCache) InvalidateAll(ctx context.Context) error {
 	return c.cache.Delete(ctx,
@@ -323,7 +288,6 @@ func (c *ConfigCache) InvalidateAll(ctx context.Context) error {
 		systemInfoConfigKey(),
 		aprsConfigKey(),
 		accessDiscoveryConfigKey(),
-		openAIConfigKey(),
 	)
 }
 

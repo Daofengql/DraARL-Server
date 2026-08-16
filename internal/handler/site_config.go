@@ -562,58 +562,6 @@ func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*go
 	return &result, nil
 }
 
-// UpdateOpenAIConfig 更新OpenAI配置（管理员）
-func (h *SiteConfigHandler) UpdateOpenAIConfig(c *gin.Context) {
-	user, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
-		return
-	}
-
-	userModel := user.(*gormdb.User)
-
-	var req gormdb.OpenAIConfig
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
-		return
-	}
-
-	if err := h.repo.SetOpenAIConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新OpenAI配置失败",
-		})
-		return
-	}
-
-	// 使OpenAI配置缓存失效
-	if configCache := cache.GetConfigCache(); configCache != nil {
-		_ = configCache.InvalidateOpenAIConfig(c.Request.Context())
-	}
-
-	// 记录审计日志
-	oplog.AddLog(
-		fmt.Sprintf("更新OpenAI配置: BaseURL=%s, Engine=%s", req.BaseURL, req.Engine),
-		"config_update",
-		userModel.ID,
-		userModel.Name,
-		userModel.CallSign,
-		c.ClientIP(),
-	)
-
-	c.JSON(http.StatusOK, Response{
-		Code:    200,
-		Message: "更新成功",
-	})
-}
-
 // GetAPRSConfig 获取APRS配置（管理员）
 func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 	user, exists := c.Get("user")
@@ -642,45 +590,6 @@ func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
 			Message: "获取APRS配置失败",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    200,
-		Message: "获取成功",
-		Data:    config,
-	})
-}
-
-// GetOpenAIConfig 获取OpenAI配置（管理员）
-func (h *SiteConfigHandler) GetOpenAIConfig(c *gin.Context) {
-	user, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
-		return
-	}
-
-	_ = user // 路由已通过 RequireAdmin 中间件验证权限
-
-	ctx := c.Request.Context()
-	configCache := cache.GetConfigCache()
-
-	var config *gormdb.OpenAIConfig
-	var err error
-
-	if configCache != nil {
-		config, err = configCache.GetOpenAIConfig(ctx)
-	} else {
-		config, err = h.repo.GetOpenAIConfig()
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取OpenAI配置失败",
 		})
 		return
 	}

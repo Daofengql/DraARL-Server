@@ -36,7 +36,7 @@ export function OperatorLogsTab({ value }: { value: number }) {
   }, [loadLogs, value])
 
   return (
-    <TabPanel value={value} index={7}>
+    <TabPanel value={value} index={6}>
       <Box sx={{ px: 2 }}>
         <Card><CardContent>
           <Typography variant="h6" gutterBottom>操作日志</Typography>

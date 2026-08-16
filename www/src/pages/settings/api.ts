@@ -11,7 +11,6 @@ import type {
   BackendResponse,
   CommSettingsConfig,
   ConfigEntry,
-  OpenAIConfig,
   RegistrationConfig,
   SiteConfigs,
   SMTPConfig,
@@ -20,18 +19,17 @@ import type {
 import type { BrandResourceKind } from './brandResources'
 
 export async function getSiteConfigs(): Promise<SiteConfigs> {
-  const [icp, system, accessDiscovery, aprs, openai, commSettings, registration, smtp] = await Promise.all([
+  const [icp, system, accessDiscovery, aprs, commSettings, registration, smtp] = await Promise.all([
     apiClient.get<BackendResponse<ConfigEntry[]>>('/api/config/category/icp'),
     apiClient.get<BackendResponse<ConfigEntry[]>>('/api/config/category/system'),
     apiClient.get<BackendResponse<AccessDiscoveryConfig>>('/api/config/access-discovery'),
     apiClient.get<BackendResponse<APRSConfig>>('/api/config/aprs'),
-    apiClient.get<BackendResponse<OpenAIConfig>>('/api/config/openai'),
     apiClient.get<BackendResponse<CommSettingsConfig>>('/api/config/comm-settings'),
     apiClient.get<BackendResponse<RegistrationConfig>>('/api/config/registration'),
     apiClient.get<BackendResponse<SMTPConfig>>('/api/config/smtp'),
   ])
 
-  return normalizeSiteConfigs({ icp, system, accessDiscovery, aprs, openai, commSettings, registration, smtp })
+  return normalizeSiteConfigs({ icp, system, accessDiscovery, aprs, commSettings, registration, smtp })
 }
 
 export async function saveSystemInfo(config: SystemInfoConfig): Promise<void> {
@@ -47,10 +45,6 @@ export async function saveAccessDiscovery(config: AccessDiscoveryConfig): Promis
 
 export function saveAPRS(config: APRSConfig) {
   return apiClient.put('/api/config/aprs', config)
-}
-
-export function saveOpenAI(config: OpenAIConfig) {
-  return apiClient.put('/api/config/openai', config)
 }
 
 export function saveCommSettings(config: CommSettingsConfig) {

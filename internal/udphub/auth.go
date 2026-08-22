@@ -1,6 +1,8 @@
 package udphub
 
 import (
+	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -10,10 +12,11 @@ import (
 
 // AuthFailure 认证失败记录
 type AuthFailure struct {
-	IP           string
-	Username     string
-	FailCount    int
-	BlockedUntil time.Time
+	IP            string
+	Username      string
+	FailCount     int
+	BlockedUntil  time.Time
+	LastFailureAt time.Time
 }
 
 // DeviceAuthResult 设备认证结果
@@ -39,6 +42,13 @@ var (
 	}
 )
 
+func authContextError(ctx context.Context) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "auth_backend_timeout"
+	}
+	return "auth_canceled"
+}
+
 // getBlockKey 获取封禁 key
 func getBlockKey(ip, username string) string {
 	return ip + ":" + username
@@ -55,36 +65,36 @@ func isBlocked(ip, username string) (bool, time.Time) {
 	return false, time.Time{}
 }
 
-// recordFailure 记录认证失败
+// recordFailure records all mutable failure state under one shard lock.
 func recordFailure(ip, username string) time.Duration {
 	key := getBlockKey(ip, username)
-
-	var failure *AuthFailure
-	var exists bool
-	if failure, exists = authFailures.Get(key); !exists {
-		failure = &AuthFailure{
-			IP:       ip,
-			Username: username,
-		}
-		authFailures.Set(key, failure)
-	} else {
-		// 已存在，需要增加计数
-		failure.FailCount++
-	}
-
-	// 连续失败 3 次后开始封禁
+	now := time.Now()
 	var blockDuration time.Duration
-	if failure.FailCount >= 3 {
-		blockLevel := failure.FailCount - 3
-		if blockLevel >= len(blockDurations) {
-			blockLevel = len(blockDurations) - 1
+	failure, admitted := authFailures.UpdateBounded(key, func(failure AuthFailure) AuthFailure {
+		failure.IP = ip
+		failure.Username = username
+		failure.LastFailureAt = now
+		if failure.FailCount < 1024 {
+			failure.FailCount++
 		}
-		blockDuration = blockDurations[blockLevel]
-		failure.BlockedUntil = time.Now().Add(blockDuration)
+		if failure.FailCount >= 3 {
+			blockLevel := failure.FailCount - 3
+			if blockLevel >= len(blockDurations) {
+				blockLevel = len(blockDurations) - 1
+			}
+			blockDuration = blockDurations[blockLevel]
+			failure.BlockedUntil = now.Add(blockDuration)
+		}
+		return failure
+	})
+	if !admitted {
+		// Preserve active throttles when the bounded table is saturated. The
+		// current failure is intentionally not admitted rather than allowing
+		// attacker-controlled identities to grow memory without a limit.
+		return 0
+	}
+	if blockDuration > 0 {
 		log.Printf("[AUTH] 封禁 %s:%s，失败次数: %d，封禁时长: %v", ip, username, failure.FailCount, blockDuration)
-
-		// 更新分片中的记录
-		authFailures.Set(key, failure)
 	}
 
 	return blockDuration
@@ -99,7 +109,21 @@ func clearFailure(ip, username string) {
 // AuthenticateDevice 认证设备
 // 返回认证结果，包含用户信息和呼号
 func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
+	return AuthenticateDeviceContext(context.Background(), ip, username, password)
+}
+
+// AuthenticateDeviceContext is the bounded form used by UDP authentication
+// workers. Database outages must not be counted as credential failures or
+// leave a worker blocked until the driver's default timeout.
+func AuthenticateDeviceContext(ctx context.Context, ip, username, password string) *DeviceAuthResult {
 	result := &DeviceAuthResult{}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		result.Error = authContextError(ctx)
+		return result
+	}
 
 	// 检查是否被封禁
 	if blocked, blockEnd := isBlocked(ip, username); blocked {
@@ -112,8 +136,13 @@ func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
 
 	// 查询用户
 	repo := gormdb.NewUserRepository()
-	user, err := repo.GetUserByName(username)
-	if err != nil || user == nil {
+	user, err := repo.GetUserByNameContext(ctx, username)
+	if err != nil {
+		result.Error = "auth_backend_unavailable"
+		log.Printf("[AUTH] 设备认证后端查询失败: %s:%s, err: %v", ip, username, err)
+		return result
+	}
+	if user == nil {
 		recordFailure(ip, username)
 		result.Error = "user_not_found"
 		log.Printf("[AUTH] 设备认证失败（用户不存在）: %s:%s", ip, username)
@@ -141,9 +170,17 @@ func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
 		log.Printf("[AUTH] 设备认证失败（设备密码未设置）: %s:%s", ip, username)
 		return result
 	}
+	if err := ctx.Err(); err != nil {
+		result.Error = authContextError(ctx)
+		return result
+	}
 
 	// 验证设备密码（兼容历史 bcrypt）
 	match, legacyPassword, err := crypto.VerifyDevicePassword(user.DevicePassword, password)
+	if err := ctx.Err(); err != nil {
+		result.Error = authContextError(ctx)
+		return result
+	}
 	if err != nil {
 		recordFailure(ip, username)
 		result.Error = "invalid_password"
@@ -164,11 +201,15 @@ func AuthenticateDevice(ip, username, password string) *DeviceAuthResult {
 		encryptedPassword, encErr := crypto.Encrypt(password)
 		if encErr != nil {
 			log.Printf("[AUTH] 历史设备密码迁移加密失败: %s:%s, err: %v", ip, username, encErr)
-		} else if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
+		} else if updateErr := repo.UpdateUserDevicePasswordContext(ctx, user.ID, encryptedPassword); updateErr != nil {
 			log.Printf("[AUTH] 历史设备密码迁移写库失败: %s:%s, err: %v", ip, username, updateErr)
 		} else {
 			log.Printf("[AUTH] 历史设备密码已迁移为 AES 存储: %s:%s", ip, username)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		result.Error = authContextError(ctx)
+		return result
 	}
 
 	// 认证成功，清除失败记录

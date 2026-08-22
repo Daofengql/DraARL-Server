@@ -243,9 +243,10 @@ func BroadcastVoiceFromUDPDomain(source *models.Device, data []byte, sourceGroup
 	if GlobalMessageRouter == nil || GlobalMessageRouter.wsManager == nil || source == nil {
 		return
 	}
+	state := source.RuntimeSnapshot()
 	GlobalMessageRouter.wsManager.BroadcastToGroups(
 		activeDomainGroupIDs(sourceGroupID), data, 2,
-		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID, SourceGroupID: sourceGroupID},
+		interfaces.WSBroadcastFilter{ExcludeDeviceID: state.ID, SourceGroupID: sourceGroupID},
 	)
 }
 
@@ -254,9 +255,10 @@ func BroadcastTextFromUDPDomain(source *models.Device, data []byte, sourceGroupI
 	if GlobalMessageRouter == nil || GlobalMessageRouter.wsManager == nil || source == nil {
 		return
 	}
+	state := source.RuntimeSnapshot()
 	GlobalMessageRouter.wsManager.BroadcastToGroups(
 		activeDomainGroupIDs(sourceGroupID), data, 2,
-		interfaces.WSBroadcastFilter{ExcludeDeviceID: source.ID, SourceGroupID: sourceGroupID},
+		interfaces.WSBroadcastFilter{ExcludeDeviceID: state.ID, SourceGroupID: sourceGroupID},
 	)
 }
 

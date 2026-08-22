@@ -2,10 +2,21 @@ package tcp
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"log"
 	"net"
 	"sync"
 	"time"
+)
+
+// TCP 客户端读写保护常量：
+// 【修复】写超时避免死对端写缓冲打满永久阻塞；读超时避免静默对端永久阻塞；
+// 单行上限防止无换行超长报文耗尽内存。
+const (
+	tcpWriteTimeout = 10 * time.Second
+	tcpReadTimeout  = 60 * time.Second
+	tcpMaxLineSize  = 1 << 20 // 1MB
 )
 
 // Client TCP客户端
@@ -46,7 +57,7 @@ func (c *Client) Connect() error {
 		default:
 		}
 
-		conn, err := net.Dial("tcp", net.JoinHostPort(c.host, c.port))
+		conn, err := c.dial()
 		if err != nil {
 			log.Printf("无法连接到TCP服务器 %s:%s: %v", c.host, c.port, err)
 			select {
@@ -57,6 +68,17 @@ func (c *Client) Connect() error {
 			continue
 		}
 
+		select {
+		case <-c.stopChan:
+			_ = conn.Close()
+			return net.ErrClosed
+		default:
+		}
+
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			_ = tcpConn.SetKeepAlive(true)
+			_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
+		}
 		c.mu.Lock()
 		c.conn = conn
 		c.connected = true
@@ -64,10 +86,27 @@ func (c *Client) Connect() error {
 		log.Printf("已连接到TCP服务器 %s:%s", c.host, c.port)
 
 		// 启动读取消息的 goroutine
-		go c.readMessages()
+		go c.readMessages(conn)
 
 		return nil
 	}
+}
+
+func (c *Client) dial() (net.Conn, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-c.stopChan:
+			cancel()
+		case <-done:
+		}
+	}()
+	defer close(done)
+	defer cancel()
+
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+	return dialer.DialContext(ctx, "tcp", net.JoinHostPort(c.host, c.port))
 }
 
 // Send 发送消息
@@ -79,6 +118,7 @@ func (c *Client) Send(message string) error {
 		return net.ErrWriteToConnected
 	}
 
+	_ = c.conn.SetWriteDeadline(time.Now().Add(tcpWriteTimeout))
 	_, err := c.conn.Write([]byte(message))
 	if err != nil {
 		c.close()
@@ -97,6 +137,7 @@ func (c *Client) SendBytes(data []byte) error {
 		return net.ErrWriteToConnected
 	}
 
+	_ = c.conn.SetWriteDeadline(time.Now().Add(tcpWriteTimeout))
 	_, err := c.conn.Write(data)
 	if err != nil {
 		c.close()
@@ -140,32 +181,66 @@ func (c *Client) IsConnected() bool {
 }
 
 // readMessages 读取消息
-func (c *Client) readMessages() {
+func (c *Client) readMessages(conn net.Conn) {
+	if conn == nil {
+		return
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("TCP客户端读取消息panic: %v", r)
 		}
 	}()
 
-	reader := bufio.NewReader(c.conn)
+	reader := bufio.NewReader(conn)
 	for {
-		message, err := reader.ReadBytes('\n')
-		if err != nil {
-			c.mu.Lock()
-			c.connected = false
-			c.mu.Unlock()
-
-			if c.onError != nil {
-				c.onError(err)
+		// 滚动读超时：静默对端不再永久阻塞
+		_ = conn.SetReadDeadline(time.Now().Add(tcpReadTimeout))
+		line := make([]byte, 0, 256)
+		lineTooLong := false
+		for {
+			fragment, err := reader.ReadSlice('\n')
+			line = append(line, fragment...)
+			if len(line) > tcpMaxLineSize {
+				lineTooLong = true
+				break
 			}
-			log.Printf("TCP客户端读取消息错误: %v", err)
+			if err == nil {
+				break
+			}
+			if err != bufio.ErrBufferFull {
+				c.handleReadError(conn, err)
+				return
+			}
+		}
+		if lineTooLong {
+			c.handleReadError(conn, errors.New("tcp line exceeds size limit"))
 			return
 		}
-
-		if c.onMessage != nil {
-			c.onMessage(message)
+		c.mu.Lock()
+		onMessage := c.onMessage
+		c.mu.Unlock()
+		if onMessage != nil {
+			onMessage(line)
 		}
 	}
+}
+
+func (c *Client) handleReadError(conn net.Conn, err error) {
+	c.mu.Lock()
+	if c.conn == conn {
+		c.conn = nil
+		c.connected = false
+	}
+	onError := c.onError
+	c.mu.Unlock()
+	// Always close the reader's own connection. If a reconnect already
+	// installed a different connection, the identity check above keeps it
+	// untouched while this closes only the stale socket.
+	_ = conn.Close()
+	if onError != nil {
+		onError(err)
+	}
+	log.Printf("TCP客户端读取消息错误: %v", err)
 }
 
 // GetRemoteAddr 获取远程地址

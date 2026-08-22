@@ -49,6 +49,7 @@ var (
 	halfDuplexDomainKeyCache sync.Map
 	// key: domainKey，value: []int 连通域内群组 ID 快照（用于一帧多组转发）
 	halfDuplexDomainGroupsCache sync.Map
+	halfDuplexDomainCacheMu     sync.RWMutex
 )
 
 func init() {
@@ -112,8 +113,18 @@ func tryAcquireHalfDuplex(groupID int, speaker halfDuplexSpeaker, ts time.Time) 
 // resetHalfDuplexDomainCache 刷新群组互联关系后清理域缓存。
 // 注意：不主动清空活跃占用状态，避免定时刷新期间中断正在进行的发言。
 func resetHalfDuplexDomainCache() {
-	halfDuplexDomainKeyCache = sync.Map{}
-	halfDuplexDomainGroupsCache = sync.Map{}
+	// Do not replace a sync.Map after its first use; the realtime path may
+	// concurrently Load/Range while topology refreshes invalidate entries.
+	halfDuplexDomainCacheMu.Lock()
+	halfDuplexDomainKeyCache.Range(func(key, _ any) bool {
+		halfDuplexDomainKeyCache.Delete(key)
+		return true
+	})
+	halfDuplexDomainGroupsCache.Range(func(key, _ any) bool {
+		halfDuplexDomainGroupsCache.Delete(key)
+		return true
+	})
+	halfDuplexDomainCacheMu.Unlock()
 	resetDomainGroupReverseCache()
 
 	// 仅回收明显过期的占用状态，防止状态表长期增长。
@@ -130,35 +141,61 @@ func resetHalfDuplexDomainCache() {
 	}
 }
 
+// ActiveHalfDuplexDomainGroups 返回当前已知连通域的 groupID 列表快照，
+// 供域接收者缓存做拓扑变化后的后台预构建。
+func ActiveHalfDuplexDomainGroups() map[string][]int {
+	out := make(map[string][]int)
+	halfDuplexDomainCacheMu.RLock()
+	defer halfDuplexDomainCacheMu.RUnlock()
+	halfDuplexDomainGroupsCache.Range(func(key, value any) bool {
+		if ids, ok := value.([]int); ok && len(ids) > 0 {
+			out[key.(string)] = append([]int(nil), ids...)
+		}
+		return true
+	})
+	return out
+}
+
 func getHalfDuplexDomainKey(groupID int) string {
+	halfDuplexDomainCacheMu.RLock()
 	if cached, ok := halfDuplexDomainKeyCache.Load(groupID); ok {
+		halfDuplexDomainCacheMu.RUnlock()
 		return cached.(string)
 	}
+	halfDuplexDomainCacheMu.RUnlock()
 
 	ids := collectHalfDuplexDomainGroupIDs(groupID)
 	sort.Ints(ids)
 	domainKey := encodeHalfDuplexDomainKey(ids)
 
 	// 将同一连通域的 groupID 都映射到同一个 key，后续可直接命中缓存。
+	halfDuplexDomainCacheMu.Lock()
 	for _, id := range ids {
 		halfDuplexDomainKeyCache.Store(id, domainKey)
 	}
 	// 缓存连通域群组列表，供转发路径一次取全量目标组。
 	halfDuplexDomainGroupsCache.Store(domainKey, append([]int(nil), ids...))
+	halfDuplexDomainCacheMu.Unlock()
 	return domainKey
 }
 
 // GetHalfDuplexDomainGroupIDs 返回 groupID 所在连通域的全部群组 ID（已排序快照）。
 func GetHalfDuplexDomainGroupIDs(groupID int) []int {
 	domainKey := getHalfDuplexDomainKey(groupID)
+	halfDuplexDomainCacheMu.RLock()
 	if v, ok := halfDuplexDomainGroupsCache.Load(domainKey); ok {
 		if ids, ok := v.([]int); ok {
-			return ids
+			result := append([]int(nil), ids...)
+			halfDuplexDomainCacheMu.RUnlock()
+			return result
 		}
 	}
+	halfDuplexDomainCacheMu.RUnlock()
 	ids := collectHalfDuplexDomainGroupIDs(groupID)
 	sort.Ints(ids)
+	halfDuplexDomainCacheMu.Lock()
 	halfDuplexDomainGroupsCache.Store(domainKey, append([]int(nil), ids...))
+	halfDuplexDomainCacheMu.Unlock()
 	return ids
 }
 

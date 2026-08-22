@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"draarl/internal/ghostsession"
+	"draarl/internal/protocol"
 	"draarl/internal/udphub"
 
 	"github.com/gorilla/websocket"
@@ -25,6 +26,22 @@ var (
 		CheckOrigin:     checkOrigin,
 	}
 )
+
+// maxWSReadLimit WebSocket 单帧读取上限。
+// 【H2 安全修复】gorilla 默认无上限，恶意超大帧会被完整缓冲进内存；
+// 超过上限的连接将被强制关闭。
+const maxWSReadLimit int64 = 256 * 1024
+
+// wsReadTimeout 认证后的滚动读超时：覆盖 3 个 ping 周期（30s），
+// 客户端只要持续响应 Pong 或发送报文即保持连接，死连接 90s 内被回收。
+const wsReadTimeout = 90 * time.Second
+
+// wsWriteTimeout 单次写超时：慢/死对端写缓冲打满时，writer 不再无限阻塞，
+// 超时后关闭连接由读侧回收。
+const wsWriteTimeout = 30 * time.Second
+
+// maxWSConnections 全局 WebSocket 连接上限，防止单进程被海量连接耗尽资源。
+const maxWSConnections = 20000
 
 // SetAllowedOrigins 配置 WebSocket 的 Origin 白名单。
 func SetAllowedOrigins(origins []string) {
@@ -110,11 +127,21 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 【连接上限】全局 WS 连接数保护：达到上限时在升级前直接拒绝，
+	// 避免每连接 3 goroutine + 64 槽通道的资源被无限连接耗尽。
+	if GlobalManager.GetTotalCount() >= maxWSConnections {
+		http.Error(w, "server_at_capacity", http.StatusServiceUnavailable)
+		log.Printf("[WS] connection rejected: server at capacity (%d)", GlobalManager.GetTotalCount())
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] Upgrade failed: %v", err)
 		return
 	}
+	// 【H2 安全修复】限制单帧读取上限，防止超大帧内存耗尽
+	conn.SetReadLimit(maxWSReadLimit)
 	remoteAddr := conn.RemoteAddr().String()
 	log.Printf("[WS] New connection from %s", remoteAddr)
 	// 处理认证
@@ -138,11 +165,17 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 func startPingPong(device *WSDevice) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		if !device.WritePing() {
-			log.Printf("[WS] Ping failed for %s: write channel closed", device.GetIdentifier())
-			device.Conn.Close()
+	stop := device.writerStopChannel()
+	for {
+		select {
+		case <-stop:
 			return
+		case <-ticker.C:
+			if !device.WritePing() {
+				log.Printf("[WS] Ping failed for %s: write channel closed", device.GetIdentifier())
+				device.Conn.Close()
+				return
+			}
 		}
 	}
 }
@@ -157,8 +190,15 @@ func handleAuthenticatedConnection(device *WSDevice) {
 		log.Printf("[WS] Ghost device disconnected: %s", device.GetIdentifier())
 	}()
 
-	// 重置读取超时（认证完成后不再需要超时）
-	device.Conn.SetReadDeadline(time.Time{})
+	// 【心跳判活修复】设置 PongHandler：客户端 Pong 也算活跃，更新活动时间并
+	// 刷新读超时；不再"健康但静默"的客户端被误踢，也不再对死连接无限空转。
+	device.Conn.SetPongHandler(func(string) error {
+		GlobalManager.UpdateDeviceActivity(device)
+		device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		return nil
+	})
+	// 认证完成后改为滚动读超时：长时间无任何报文/心跳的连接会被关闭
+	device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 
 	for {
 		messageType, data, err := device.Conn.ReadMessage()
@@ -168,6 +208,8 @@ func handleAuthenticatedConnection(device *WSDevice) {
 			}
 			break
 		}
+		// 任何成功收到的消息都刷新读超时
+		device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		// 只处理二进制消息（DraARLv1 协议）
 		if messageType != websocket.BinaryMessage {
 			continue
@@ -176,6 +218,12 @@ func handleAuthenticatedConnection(device *WSDevice) {
 		packet, err := DecodeWSPacket(data)
 		if err != nil {
 			log.Printf("[WS] Packet decode error from %s: %v", device.GetIdentifier(), err)
+			continue
+		}
+		if packet.Type == protocol.DraARLTypeOpus16K && !device.allowVoiceFrame(time.Now()) {
+			if dropped := device.voiceRateLimitedCount(); dropped == 1 || dropped%100 == 0 {
+				log.Printf("[WS] voice rate limited for %s (dropped=%d)", device.GetIdentifier(), dropped)
+			}
 			continue
 		}
 		// 更新活动时间
@@ -199,7 +247,7 @@ func sendAuthenticationSuccess(device *WSDevice) {
 			"tx_group_id":      device.GetGroupID(), "rx_group_ids": device.GetRxGroupIDs(),
 		},
 	})
-	if err != nil || !device.AsyncWrite(websocket.TextMessage, payload) {
+	if err != nil || !device.AsyncWriteBlocking(websocket.TextMessage, payload, 2*time.Second) {
 		log.Printf("[WS] Failed to queue authentication success for %s", device.GetIdentifier())
 	}
 }
@@ -215,7 +263,7 @@ func sendRoutingUpdated(device *WSDevice) {
 			"tx_group_id": device.GetGroupID(), "rx_group_ids": device.GetRxGroupIDs(),
 		},
 	})
-	if err != nil || !device.AsyncWrite(websocket.TextMessage, payload) {
+	if err != nil || !device.AsyncWriteBlocking(websocket.TextMessage, payload, 2*time.Second) {
 		log.Printf("[WS] Failed to queue routing update for %s", device.GetIdentifier())
 	}
 }

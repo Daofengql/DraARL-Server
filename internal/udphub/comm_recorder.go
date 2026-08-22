@@ -3,6 +3,7 @@ package udphub
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -227,6 +228,7 @@ func (cr *CommRecorder) GetStats() map[string]interface{} {
 		"running":           running,
 		"active_sessions":   cr.buffer.GetActiveSessionCount(),
 		"pending_uploads":   cr.uploader.GetPendingCount(),
+		"dropped_uploads":   cr.uploader.GetDroppedCount(),
 		"pending_db_writes": cr.syncer.GetPendingCount(),
 	}
 }
@@ -314,7 +316,47 @@ func RecordCommPacket(
 		return
 	}
 	// 异步录制：拷贝 payload 后投递有界队列，满则丢弃录制不堵转发
-	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, sender, SnapshotDeliveryGroupIDs(groupID), audioData)
+	// 【性能修复】投递群组快照带 500ms 缓存，避免每帧重复遍历域群组。
+	enqueueCommRecord(sourceKey, deviceID, deviceSSID, groupID, userID, sender, snapshotDeliveryGroupIDsCached(sourceKey, groupID), audioData)
+}
+
+// 投递群组快照缓存：拓扑变化频率远低于语音帧率，500ms 内复用同一快照，
+// 把每帧的域群组遍历降为偶尔一次。
+const deliverySnapTTL = 500 * time.Millisecond
+
+type deliverySnapEntry struct {
+	groups []uint
+	at     time.Time
+}
+
+var (
+	deliverySnapMu    sync.Mutex
+	deliverySnapCache = make(map[string]deliverySnapEntry)
+)
+
+func snapshotDeliveryGroupIDsCached(sourceKey string, groupID *uint) []uint {
+	if groupID == nil || *groupID == 0 {
+		return nil
+	}
+	key := sourceKey + ":" + strconv.Itoa(int(*groupID))
+	now := time.Now()
+	deliverySnapMu.Lock()
+	if e, ok := deliverySnapCache[key]; ok && now.Sub(e.at) < deliverySnapTTL {
+		deliverySnapMu.Unlock()
+		return e.groups
+	}
+	deliverySnapMu.Unlock()
+
+	groups := SnapshotDeliveryGroupIDs(groupID)
+
+	deliverySnapMu.Lock()
+	// 有界防御：条目过多时重建，避免长期运行内存增长
+	if len(deliverySnapCache) >= 8192 {
+		deliverySnapCache = make(map[string]deliverySnapEntry, 64)
+	}
+	deliverySnapCache[key] = deliverySnapEntry{groups: groups, at: now}
+	deliverySnapMu.Unlock()
+	return groups
 }
 
 // ReloadCommSettings 重新加载通信设置

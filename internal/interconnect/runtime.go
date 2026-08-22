@@ -140,6 +140,7 @@ type EdgeRuntimeConfig struct {
 	CenterUDP            string
 	Listen               string
 	ProxyProtocol        string
+	ProxyTrustedCIDRs    []string
 	TLSConfig            *tls.Config
 	DeviceSessionTimeout time.Duration
 	GrantRenewBefore     time.Duration
@@ -179,6 +180,7 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
+	gateway.SetProxyTrustedCIDRs(cfg.ProxyTrustedCIDRs)
 	if cfg.DeviceSessionTimeout > 0 {
 		gateway.sessionTimeout = cfg.DeviceSessionTimeout
 	}
@@ -407,7 +409,14 @@ func (r *EdgeRuntime) connectionLoop(client *NodeClient) {
 				}
 				return
 			}
-			if lastFailureLog.IsZero() || time.Since(lastFailureLog) >= 30*time.Second {
+			if errors.Is(err, ErrNodeAuthenticationRejected) {
+				// 【运营告警】凭据被中心永久拒绝：明确提示运维检查节点凭据/注册状态，
+				// 避免无限静默重试无感知。
+				if lastFailureLog.IsZero() || time.Since(lastFailureLog) >= 5*time.Minute {
+					log.Printf("[INTERCONNECT][WARN] 边缘节点凭据被中心拒绝，请检查节点凭据/注册状态: %v", err)
+					lastFailureLog = time.Now()
+				}
+			} else if lastFailureLog.IsZero() || time.Since(lastFailureLog) >= 30*time.Second {
 				log.Printf("[INTERCONNECT] edge control reconnect failed: %v", err)
 				lastFailureLog = time.Now()
 			}

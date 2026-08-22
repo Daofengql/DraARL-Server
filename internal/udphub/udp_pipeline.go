@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"runtime"
@@ -84,6 +85,56 @@ var (
 	udpMaxQueueNanos  int64
 )
 
+// proxy trusted sources（PROXY Protocol v2 安全修复）
+var (
+	proxyTrustedCIDRsMu sync.RWMutex
+	proxyTrustedCIDRs   []*net.IPNet
+	proxyTrustAllWarned atomic.Bool
+)
+
+// setProxyTrustedCIDRs configures trusted proxy prefixes for the centre UDP
+// pipeline; an empty list preserves compatibility by trusting all sources.
+func setProxyTrustedCIDRs(cidrs []string) error {
+	nets, err := config.ParseProxyTrustedCIDRs(cidrs)
+	if err != nil {
+		return fmt.Errorf("invalid proxy trusted CIDRs: %w", err)
+	}
+	proxyTrustedCIDRsMu.Lock()
+	proxyTrustedCIDRs = nets
+	proxyTrustedCIDRsMu.Unlock()
+	return nil
+}
+
+// isTrustedProxySourceFor applies one endpoint's immutable trusted-prefix
+// snapshot. A nil warning flag is useful for callers that only need a pure
+// decision (for example tests); production endpoints pass their own flag.
+func isTrustedProxySourceFor(ip net.IP, nets []*net.IPNet, warned *atomic.Bool) bool {
+	if ip == nil {
+		return false
+	}
+	if len(nets) == 0 {
+		if warned != nil && warned.CompareAndSwap(false, true) {
+			log.Printf("[WARN] PROXY Protocol 已启用但未配置 ProxyTrustedCIDRs，当前信任所有来源（不安全），请配置受信代理前缀")
+		}
+		return true
+	}
+	for _, ipNet := range nets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTrustedProxySource 判断中心 UDP pipeline 的数据报源地址是否允许
+// 解析 PROXY Protocol 头。
+func isTrustedProxySource(ip net.IP) bool {
+	proxyTrustedCIDRsMu.RLock()
+	nets := proxyTrustedCIDRs
+	proxyTrustedCIDRsMu.RUnlock()
+	return isTrustedProxySourceFor(ip, nets, &proxyTrustAllWarned)
+}
+
 func udpWorkerCount() int {
 	workers := runtime.GOMAXPROCS(0)
 	if workers < 2 {
@@ -102,18 +153,13 @@ func udpWorkerCount() int {
 }
 
 // startUDPPipeline 使用单 reader 避免同 FD readLock 竞争，再按源地址稳定分片。
-func startUDPPipeline(conn *net.UDPConn) {
+func startUDPPipeline(conn *net.UDPConn, proxyEnabled bool) {
 	workers := udpWorkerCount()
 	perQueue := udpJobQueueSize / workers
 	if perQueue < 64 {
 		perQueue = 64
 	}
 	udpJobQueues = make([]chan udpDatagramJob, workers)
-
-	proxyEnabled := false
-	if cfg := config.Get(); cfg != nil {
-		proxyEnabled = cfg.System.ProxyProtocol == "v2"
-	}
 
 	for i := 0; i < workers; i++ {
 		udpJobQueues[i] = make(chan udpDatagramJob, perQueue)
@@ -170,7 +216,7 @@ func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
 
 		packetData := base[:n]
 		realAddr := remoteAddr
-		if proxyEnabled {
+		if proxyEnabled && isTrustedProxySource(remoteAddr.IP) {
 			proxyInfo, payload, isProxy := ParseProxyProtocolV2(packetData)
 			if isProxy && proxyInfo != nil && proxyInfo.IsProxy {
 				realAddr = GetRealAddr(remoteAddr, proxyInfo)
@@ -206,6 +252,9 @@ func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
 	}
 }
 
+// udpDatagramShard 按 DraARLv1 报文固定偏移分片：data[6:38] 为 32 字节用户名、
+// data[50] 为 SSID。同 username+ssid 恒定映射到同一 worker，保证逐设备串行处理。
+// 【不变式】若协议头部偏移调整，此处分片分布会静默改变，改动协议时必须同步。
 func udpDatagramShard(data []byte, fallback *net.UDPAddr, shards int) int {
 	if shards <= 1 {
 		return 0

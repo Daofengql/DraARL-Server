@@ -3,7 +3,9 @@ package interconnect
 import "sync"
 
 const (
-	replayWindowBits  = 4096
+	// 【重放窗口加固】窗口从 4096 扩大到 16384（4x），显著降低大跨度消息后
+	// 整窗清空导致旧报文可重放的窗口；仍保留滑动窗口的下界拒绝语义。
+	replayWindowBits  = 16384
 	replayWindowWords = replayWindowBits / 64
 )
 

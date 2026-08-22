@@ -253,6 +253,10 @@ func (g *CenterGateway) activateDeviceSessionLocked(session *NodeSession, grant 
 	g.mu.Unlock()
 
 	if hadOld {
+		// 【可观测性】跨节点设备会话迁移告警：边缘节点均需长期凭据认证，
+		// 设备包始终携带密码/JWT 重认证，此处记录迁移来源以便运维发现异常漫游。
+		log.Printf("[INTERCONNECT] 设备会话跨节点迁移: identity=%s old_node=%s old_session=%d new_node=%s new_session=%d",
+			identity, oldOwner.NodeID, oldSessionID, session.NodeID, grant.SessionID)
 		g.notifyOwnerRevoke(oldOwner, "session_migrated")
 		g.sendDeviceSessionRevoke(oldOwner, "session_migrated")
 		if err := g.cluster.RemoveNodeRoute(oldOwner.NodeID, oldSessionID); err != nil {

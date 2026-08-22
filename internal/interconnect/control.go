@@ -35,12 +35,17 @@ const (
 	controlHello         = "node_enroll"
 	controlAuthOK        = "node_auth_ok"
 	controlAuthError     = "node_auth_error"
+	controlAuthInternalError = "node_auth_internal_error"
 	controlProtocolError = "node_protocol_error"
 	controlHeartbeat     = "node_heartbeat"
 )
 
 var ErrNodeAuthenticationRejected = errors.New("node authentication rejected")
 var ErrNodeProtocolIncompatible = errors.New("node protocol incompatible")
+// ErrNodeAuthInternalError 表示中心端认证过程中的瞬时内部错误（DB 抖动/行锁等）。
+// 【H3 安全修复】边缘端必须把它与"凭据被拒"区分开：内部错误应使用原凭据重试，
+// 绝不能触发一次性 bootstrap 令牌回退，否则中心一次瞬时 DB 错误会把边缘永久锁死。
+var ErrNodeAuthInternalError = errors.New("node authentication internal error")
 
 type NodeCapabilities struct {
 	MinProtocolVersion byte
@@ -366,6 +371,7 @@ type NodeServerProtection struct {
 	PendingRejected         atomic.Uint64
 	AuthRateRejected        atomic.Uint64
 	AuthFailed              atomic.Uint64
+	AuthInternalError       atomic.Uint64
 	MaxNodesRejected        atomic.Uint64
 	ProtocolRejected        atomic.Uint64
 	UnsupportedSubtypeDrops atomic.Uint64
@@ -377,6 +383,7 @@ type NodeServerProtectionSnapshot struct {
 	PendingRejected         uint64 `json:"pending_rejected"`
 	AuthRateRejected        uint64 `json:"auth_rate_rejected"`
 	AuthFailed              uint64 `json:"auth_failed"`
+	AuthInternalError       uint64 `json:"auth_internal_error"`
 	MaxNodesRejected        uint64 `json:"max_nodes_rejected"`
 	ProtocolRejected        uint64 `json:"protocol_rejected"`
 	UnsupportedSubtypeDrops uint64 `json:"unsupported_subtype_drops"`
@@ -418,6 +425,15 @@ func (s *NodeServer) Addr() net.Addr {
 	}
 	return s.listener.Addr()
 }
+// enableTCPKeepAlive 为控制面 TCP 连接启用 keepalive，避免节点掉电后
+// 中心/边缘会话挂到 OS 级 TCP 超时（可达数小时）才恢复。
+func enableTCPKeepAlive(conn net.Conn) {
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
+	}
+}
+
 func (s *NodeServer) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
@@ -435,6 +451,7 @@ func (s *NodeServer) acceptLoop() {
 			_ = conn.Close()
 			continue
 		}
+		enableTCPKeepAlive(conn)
 		go s.handleConn(conn)
 	}
 }
@@ -463,15 +480,28 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		return
 	}
 	rateRejected := false
+	internalError := false
 	if validHello {
-		if !s.attempts.allow(conn.RemoteAddr(), time.Now()) {
+		if !s.attempts.allow(conn.RemoteAddr(), hello.NodeID, time.Now()) {
 			rateRejected = true
 			s.protection.AuthRateRejected.Add(1)
 		} else if s.cfg.Authenticate != nil {
 			authentication, err = s.cfg.Authenticate(hello.NodeID, hello.Token)
+			// 【H3 安全修复】Authenticate 回调返回 error 视为中心内部瞬时错误
+			// （DB 抖动/行锁等），区别于凭据被拒（Accepted=false 且 err==nil）。
+			if err != nil {
+				internalError = true
+			}
 		} else if s.cfg.ValidateToken != nil {
 			authentication.Accepted = s.cfg.ValidateToken(hello.NodeID, hello.Token)
 		}
+	}
+	if internalError {
+		s.protection.AuthInternalError.Add(1)
+		s.emitAuthentication(NodeAuthenticationEvent{NodeID: hello.NodeID, RemoteAddr: conn.RemoteAddr().String(), Reason: "internal_error", Protocol: protocolVersion, Features: features})
+		_ = writeControlMessage(conn, ControlMessage{Kind: controlAuthInternalError, Error: "node authentication temporarily unavailable"})
+		_ = conn.Close()
+		return
 	}
 	if err != nil || !validHello || !authentication.Accepted {
 		if !rateRejected {
@@ -690,7 +720,7 @@ func (s *NodeServer) ProtectionSnapshot() NodeServerProtectionSnapshot {
 	return NodeServerProtectionSnapshot{
 		PendingHandshakes: s.pending.Load(), ActiveNodes: active,
 		PendingRejected: s.protection.PendingRejected.Load(), AuthRateRejected: s.protection.AuthRateRejected.Load(),
-		AuthFailed: s.protection.AuthFailed.Load(), MaxNodesRejected: s.protection.MaxNodesRejected.Load(),
+		AuthFailed: s.protection.AuthFailed.Load(), AuthInternalError: s.protection.AuthInternalError.Load(), MaxNodesRejected: s.protection.MaxNodesRejected.Load(),
 		ProtocolRejected: s.protection.ProtocolRejected.Load(), UnsupportedSubtypeDrops: s.protection.UnsupportedSubtypeDrops.Load(),
 	}
 }
@@ -799,6 +829,7 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	enableTCPKeepAlive(conn)
 	capabilities, err := cfg.Capabilities.normalized()
 	if err != nil {
 		_ = conn.Close()
@@ -825,6 +856,12 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	if response.Kind == controlProtocolError {
 		_ = conn.Close()
 		return nil, fmt.Errorf("%w: %s", ErrNodeProtocolIncompatible, response.Error)
+	}
+	if response.Kind == controlAuthInternalError {
+		// 【H3 安全修复】中心内部瞬时错误：返回独立错误类型，调用方按普通重试处理，
+		// 不触发一次性 bootstrap 令牌回退。
+		_ = conn.Close()
+		return nil, fmt.Errorf("%w: %s", ErrNodeAuthInternalError, response.Error)
 	}
 	if response.Kind != controlAuthOK {
 		_ = conn.Close()
@@ -972,7 +1009,7 @@ func NewSelfSignedTLSConfig(serverName string) (*tls.Config, *x509.CertPool, err
 		return nil, nil, err
 	}
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
-	tmpl := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: serverName}, DNSNames: []string{serverName, "localhost"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(24 * time.Hour), KeyUsage: x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true, IsCA: true}
+	tmpl := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: serverName}, DNSNames: []string{serverName, "localhost"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(3650 * 24 * time.Hour), KeyUsage: x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true, IsCA: true}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		return nil, nil, err

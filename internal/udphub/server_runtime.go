@@ -68,6 +68,16 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 			report(result)
 		}
 	}()
+	proxyEnabled := false
+	var proxyTrustedCIDRs []string
+	if cfg := config.TryGet(); cfg != nil {
+		proxyEnabled = cfg.System.ProxyProtocol == "v2"
+		proxyTrustedCIDRs = cfg.System.ProxyTrustedCIDRs
+	}
+	if err := setProxyTrustedCIDRs(proxyTrustedCIDRs); err != nil {
+		result = fmt.Errorf("configure UDP PROXY Protocol trust: %w", err)
+		return result
+	}
 	network := "udp"
 	host := ""
 	if cfg := config.TryGet(); cfg != nil {
@@ -155,8 +165,13 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 	// 域级接收者缓存
 	InitDomainReceiverCache()
 
+	// 【H5 安全修复】启动心跳异步认证 worker 池（bcrypt 移出数据面）
+	// 先建立认证准入，再启动 UDP ingress，避免启动窗口内的合法心跳
+	// 被误回 auth_busy。
+	startDeviceAuthWorkers()
+
 	// 单/少 reader + worker 池，避免多 goroutine 争抢同一 socket
-	startUDPPipeline(conn)
+	startUDPPipeline(conn, proxyEnabled)
 	report(nil)
 
 	// 等待关闭
@@ -185,6 +200,8 @@ func StopUDPServer() {
 
 		// 等待收包流水线退出
 		stopUDPPipeline()
+		// 【H5 安全修复】关闭心跳异步认证 worker 池
+		stopDeviceAuthWorkers()
 
 		globalConn = nil
 

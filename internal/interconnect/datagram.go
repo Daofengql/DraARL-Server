@@ -11,10 +11,9 @@ import (
 )
 
 type nodeDatagram struct {
-	session  *NodeSession
-	env      Envelope
-	addr     *net.UDPAddr
-	queuedAt time.Time
+	session *NodeSession
+	env     Envelope
+	addr    *net.UDPAddr
 }
 
 // NodeDatagramBridge authenticates and demultiplexes Type 0 packets received
@@ -87,16 +86,16 @@ func (p *NodeDatagramPeer) Handle(data []byte, _ *net.UDPAddr) bool {
 		p.session.resourceProtection().recordInvalidAuthTag()
 		return false
 	}
+	// SentAtMillis is a wall-clock protocol field and cannot be compared
+	// reliably across hosts with unsynchronised clocks. Keep the wire field
+	// for compatibility, but use the local receive timestamp for the short
+	// real-time data deadline. time.Now retains its monotonic component.
+	env.receivedAt = now
 	if env.SourceNodeID != "center" || env.NodeSessionID != p.session.SessionID || env.KeyEpoch != p.session.KeyEpoch {
 		p.session.resourceProtection().recordIdentityReject()
 		return false
 	}
 	p.Metrics.AddIn(len(data))
-	if env.Expired(now, 2*time.Second) {
-		p.session.resourceProtection().recordExpiredDrop()
-		p.Metrics.AddDrop()
-		return false
-	}
 	if !p.session.AcceptMessage(env.MessageID, now) {
 		p.session.resourceProtection().recordReplayDrop()
 		p.Metrics.AddDrop()
@@ -203,18 +202,15 @@ func (b *NodeDatagramBridge) Handle(data []byte, addr *net.UDPAddr) bool {
 		session.resourceProtection().recordInvalidAuthTag()
 		return false
 	}
+	// See NodeDatagramPeer.Handle: the cross-node wall clock is not a safe
+	// short-deadline source. Stamp receipt locally before any queueing.
+	env.receivedAt = now
 	if env.NodeSessionID != session.SessionID || env.KeyEpoch != session.KeyEpoch || env.SourceNodeID != session.NodeID {
 		b.invalid.Add(1)
 		session.resourceProtection().recordIdentityReject()
 		return false
 	}
 	session.DataMetrics.AddIn(len(data))
-	if env.Expired(now, b.maxAge) {
-		b.invalid.Add(1)
-		session.resourceProtection().recordExpiredDrop()
-		session.DataMetrics.AddDrop()
-		return false
-	}
 	if !session.AcceptMessage(env.MessageID, now) {
 		b.invalid.Add(1)
 		session.resourceProtection().recordReplayDrop()
@@ -249,7 +245,7 @@ func (b *NodeDatagramBridge) Handle(data []byte, addr *net.UDPAddr) bool {
 		protection.releaseQueue()
 		return true
 	}
-	item := nodeDatagram{session: session, env: env, addr: cloneUDPAddr(addr), queuedAt: now}
+	item := nodeDatagram{session: session, env: env, addr: cloneUDPAddr(addr)}
 	select {
 	case <-b.closed:
 		protection.releaseQueue()
@@ -257,11 +253,28 @@ func (b *NodeDatagramBridge) Handle(data []byte, addr *net.UDPAddr) bool {
 	case b.queue <- item:
 		return true
 	default:
-		protection.releaseQueue()
-		protection.recordQueueDrop()
-		b.globalQueueDrop.Add(1)
-		session.DataMetrics.AddDrop()
-		return true
+		// 【公平性修复】全局队列满时先丢弃最旧一条（释放其队列预留）再入队新帧，
+		// 避免慢节点占满全局队列后饿死其它正常节点。
+		select {
+		case old := <-b.queue:
+			if old.session != nil {
+				old.session.resourceProtection().releaseQueue()
+				old.session.resourceProtection().recordQueueDrop()
+				old.session.DataMetrics.AddDrop()
+			}
+			b.globalQueueDrop.Add(1)
+		default:
+		}
+		select {
+		case b.queue <- item:
+			return true
+		default:
+			protection.releaseQueue()
+			protection.recordQueueDrop()
+			b.globalQueueDrop.Add(1)
+			session.DataMetrics.AddDrop()
+			return true
+		}
 	}
 }
 
@@ -275,7 +288,11 @@ func (b *NodeDatagramBridge) worker() {
 			if item.session != nil {
 				protection := item.session.resourceProtection()
 				protection.releaseQueue()
-				if !item.queuedAt.IsZero() && time.Since(item.queuedAt) > b.limits.DataMaxQueueAge {
+				maxLocalAge := b.limits.DataMaxQueueAge
+				if b.maxAge > 0 && (maxLocalAge <= 0 || b.maxAge < maxLocalAge) {
+					maxLocalAge = b.maxAge
+				}
+				if !item.env.receivedAt.IsZero() && maxLocalAge > 0 && time.Since(item.env.receivedAt) > maxLocalAge {
 					protection.recordStaleDrop()
 					item.session.DataMetrics.AddDrop()
 					continue

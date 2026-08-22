@@ -61,16 +61,32 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	}
 
 	if dev == nil {
-		// 新设备，需要先认证
-		handleNewDraARLDevice(packet, realAddr, conn, protocol.GetUsernameSSID(packet.Username, packet.SSID), incomingMAC)
+		if packet.Type != protocol.DraARLTypeHeartbeat {
+			log.Printf("[AUTH] ignoring packet from unauthenticated device: %s, type: %d",
+				protocol.GetUsernameSSID(packet.Username, packet.SSID), packet.Type)
+			return
+		}
+		admission := queueDeviceAuthentication(packet, data, nil, conn, realAddr, incomingMAC, false)
+		if admission == deviceAuthRejected {
+			log.Printf("[AUTH] device authentication queue full, rejecting: %s", protocol.GetUsernameSSID(packet.Username, packet.SSID))
+			sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, "auth_busy")
+		}
 		return
 	}
 
 	// A runtime object may remain available for management while its current
 	// authoritative entry is an edge. It cannot be reused by an old centre UDP
 	// address until a heartbeat/JWT authentication takes ownership back.
-	remoteOwner := dev.CurrentEntryNodeID != "" && dev.CurrentEntryNodeID != "center"
+	devState := dev.RuntimeSnapshot()
+	remoteOwner := devState.CurrentEntryNodeID != "" && devState.CurrentEntryNodeID != "center"
 	if remoteOwner && packet.Type != protocol.DraARLTypeHeartbeat {
+		return
+	}
+
+	// 【S1 安全修复】普通设备语音/文本/配置报文必须来自设备已绑定源地址，
+	// 防止群内成员仅凭报文头 username+ssid 冒名注入（与幽灵设备 sameUDPAddr 校验一致）。
+	// 心跳包不走此校验：地址变化的心跳会在下方触发重认证并重新绑定地址。
+	if !isGhost && !enforceNormalDeviceEndpointBinding(dev, packet, realAddr) {
 		return
 	}
 
@@ -78,7 +94,6 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 	// 已存在设备的处理
 	// ==========================================
 	if packet.Type == protocol.DraARLTypeHeartbeat {
-		usernameSSID := protocol.GetUsernameSSID(packet.Username, packet.SSID)
 		currentAddr := ""
 		if packet.UDPAddr != nil {
 			currentAddr = packet.UDPAddr.String()
@@ -87,34 +102,33 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 		// 幽灵设备心跳处理：不验证密码，只更新状态
 		if isGhost {
 			// 幽灵设备已在 JWT 认证时验证过，心跳只更新活动状态
-			dev.LastPacketTime = packet.TimeStamp
-			dev.UDPAddr = packet.UDPAddr
+			dev.UpdateRuntime(func(current *models.Device) {
+				current.LastPacketTime = packet.TimeStamp
+				current.UDPAddr = packet.UDPAddr
+			})
 			// 继续后续处理
 		} else {
 			// 普通设备心跳：可能需要重新鉴权
 			// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
 			localSessionMissing := CenterInterconnectActive() && !CenterLocalDeviceAuthoritative(dev)
-			needsCenterActivation := remoteOwner || localSessionMissing || !dev.ISOnline || dev.CurrentEntryNodeID != "center"
-			if remoteOwner || localSessionMissing || !dev.ISOnline || dev.UDPAddr == nil || dev.UDPAddr.String() != currentAddr {
-				authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
-				if !authResult.Success {
-					log.Printf("[AUTH] Device re-authentication failed: %s, error: %s", usernameSSID, authResult.Error)
-					sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, authResult.Error)
+			needsCenterActivation := remoteOwner || localSessionMissing || !devState.ISOnline || devState.CurrentEntryNodeID != "center"
+			boundRealAddr := devState.RealUDPAddr
+			if boundRealAddr == nil {
+				boundRealAddr = devState.UDPAddr
+			}
+			currentRealAddr := realAddr
+			if currentRealAddr == nil {
+				currentRealAddr = packet.UDPAddr
+			}
+			if remoteOwner || localSessionMissing || !devState.ISOnline || boundRealAddr == nil || !sameUDPAddr(boundRealAddr, currentRealAddr) || devState.UDPAddr == nil || devState.UDPAddr.String() != currentAddr {
+				admission := queueDeviceAuthentication(packet, data, dev, conn, realAddr, incomingMAC, needsCenterActivation)
+				if admission == deviceAuthRejected {
+					// 认证队列已满：说明认证风暴超过容量，直接拒绝且不消耗 CPU
+					log.Printf("[AUTH] device re-authentication queue full, rejecting: %s", protocol.GetUsernameSSID(packet.Username, packet.SSID))
+					sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, "auth_busy")
 					return
 				}
-				if shouldRejectNormalDeviceConflictForModel(dev, packet.UDPAddr, incomingMAC, packet.DevModel) {
-					log.Printf("[AUTH] Device conflict rejected: owner_id=%d ssid=%d existing_addr=%v new_addr=%v",
-						dev.OwnerID, dev.SSID, dev.UDPAddr, packet.UDPAddr)
-					sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusDeviceConflictOnline, "device_conflict_online")
-					return
-				}
-				// 鉴权成功后，补全由于直接从 DB 加载可能缺失的呼号字段
-				dev.CallSign = authResult.CallSign
-				if authResult.User != nil {
-					dev.Username = authResult.User.Name
-					dev.Nickname = authResult.User.NickName
-				}
-				log.Printf("[AUTH] Device re-authenticated: %s (%s) from %v", usernameSSID, dev.CallSign, currentAddr)
+				return
 			}
 			if needsCenterActivation {
 				if err := activateAndPersistCenterDevice(dev); err != nil {
@@ -125,22 +139,40 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 			}
 		}
 		if incomingMAC != "" {
-			dev.MAC = incomingMAC
+			dev.UpdateRuntime(func(current *models.Device) {
+				current.MAC = incomingMAC
+			})
 		}
+	}
+	// 已存在设备的后续处理统一收敛到 continueDraARLPacket，
+	// 供同步路径与【H5】异步认证 worker 复用。
+	continueDraARLPacket(packet, data, dev, conn, realAddr, isGhost)
+}
+
+// continueDraARLPacket 处理已存在设备报文的公共尾部：更新状态并按群组
+// 分发给心跳/语音/文本/配置处理。同步路径（无需重认证）与异步认证
+// worker（重认证成功后）都会调用本函数。
+func continueDraARLPacket(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, realAddr *net.UDPAddr, isGhost bool) {
+	if packet == nil || dev == nil {
+		return
 	}
 	if (packet.Type == protocol.DraARLTypeTextMessage || packet.Type == protocol.DraARLTypeOpus16K) && !CenterLocalDeviceAuthoritative(dev) {
 		return
 	}
-	if isGhost && dev.GhostSessionID != "" {
-		GlobalUDPGhostManager.UpdateSessionActivity(dev.GhostSessionID, packet.TimeStamp)
+	devState := dev.RuntimeSnapshot()
+	if isGhost && devState.GhostSessionID != "" {
+		GlobalUDPGhostManager.UpdateSessionActivity(devState.GhostSessionID, packet.TimeStamp)
 	}
 
 	// 已存在的设备，更新状态
-	dev.LastPacketTime = packet.TimeStamp
-	dev.Traffic += int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
+	traffic := int64(protocol.DraARLv1HeaderSize + len(packet.DATA))
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.LastPacketTime = packet.TimeStamp
+		current.Traffic += traffic
+	})
 	atomicAddTraffic(int64(protocol.DraARLv1HeaderSize + len(packet.DATA)))
 
-	targetGroupID := dev.GroupID
+	targetGroupID := devState.GroupID
 	if targetGroupID == 0 {
 		// 未分组设备保持在线且允许心跳/配置管理，但不进入任何语音、文本
 		// 或互联转发域。绝不能再把 0 隐式映射成公共群组。

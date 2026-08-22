@@ -98,6 +98,6 @@ type CurrentConnPool struct {
 
 // rateLimitEntry 限速器条目
 type rateLimitEntry struct {
-	count     int
-	timestamp int64 // Unix 秒
+	tokens     float64
+	lastRefill time.Time
 }

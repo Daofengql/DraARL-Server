@@ -60,7 +60,7 @@ func runEdgeMode(configPath string) error {
 	fallbackNodeID, fallbackToken, _ := edgeCfg.RegistrationFallback()
 	runtime, err := interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{
 		NodeID: edgeCfg.Edge.NodeID, Token: edgeCfg.Edge.Token, FallbackNodeID: fallbackNodeID, FallbackToken: fallbackToken,
-		CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, TLSConfig: tlsCfg,
+		CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, ProxyTrustedCIDRs: append([]string(nil), edgeCfg.Edge.ProxyTrustedCIDRs...), TLSConfig: tlsCfg,
 		DeviceSessionTimeout: time.Duration(edgeCfg.Edge.DeviceSessionTimeoutSeconds) * time.Second,
 		GrantRenewBefore:     time.Duration(edgeCfg.Edge.GrantRenewBeforeSeconds) * time.Second,
 		DisconnectedGrace:    time.Duration(edgeCfg.Edge.DisconnectedLocalGraceSeconds) * time.Second,
@@ -136,8 +136,12 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		if validateStaticToken(nodeID, token) {
 			return interconnect.NodeAuthentication{Accepted: true}, nil
 		}
+		// 【H3 安全修复】凭据被拒以 Accepted=false + nil error 表达（区别于内部错误）。
+		// 中心 handleConn 据此区分：只有 nil error 且 Accepted=false 才回 controlAuthError，
+		// 边缘端才允许回退一次性 bootstrap 令牌；DB 抖动等瞬时错误保持 err != nil，
+		// 边缘端使用原凭据重试，避免被一次瞬时错误永久锁死。
 		if interconnect.CredentialNodeID(token) != nodeID {
-			return interconnect.NodeAuthentication{}, gormdb.ErrNodeCredentialInvalid
+			return interconnect.NodeAuthentication{}, nil
 		}
 		issuedCredential, err := interconnect.NewLongTermCredential(nodeID)
 		if err != nil {
@@ -146,8 +150,17 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 		result, err := gormdb.NewServerRepository().AuthenticateNode(
 			nodeID, interconnect.HashCredential(token), interconnect.HashCredential(issuedCredential), time.Now(),
 		)
-		if err != nil || !result.Accepted {
+		if err != nil {
+			if errors.Is(err, gormdb.ErrNodeNotFound) || errors.Is(err, gormdb.ErrNodeDisabled) ||
+				errors.Is(err, gormdb.ErrNodeCredentialInvalid) || errors.Is(err, gormdb.ErrNodeCredentialMissing) {
+				// 明确的凭据/节点拒绝：不视为内部错误
+				return interconnect.NodeAuthentication{}, nil
+			}
+			// 其余（连接、锁等待、超时等）为瞬时内部错误，交由边缘重试
 			return interconnect.NodeAuthentication{}, err
+		}
+		if !result.Accepted {
+			return interconnect.NodeAuthentication{}, nil
 		}
 		authentication := interconnect.NodeAuthentication{Accepted: true, CredentialEpoch: result.CredentialEpoch}
 		if result.IssueCredential {

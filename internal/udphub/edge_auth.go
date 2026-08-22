@@ -88,8 +88,11 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte, optionList ...Proxi
 	if !authResult.Success || authResult.User == nil {
 		return ProxiedDeviceAuthResult{Error: authResult.Error}
 	}
-	if existing := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); existing != nil && existing.CurrentEntryNodeID != "center" && shouldRejectNormalDeviceConflict(existing, packet.UDPAddr, "") {
-		return ProxiedDeviceAuthResult{Error: "device_conflict_online"}
+	if existing := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); existing != nil {
+		state := existing.RuntimeSnapshot()
+		if state.CurrentEntryNodeID != "center" && shouldRejectNormalDeviceConflict(existing, packet.UDPAddr, "") {
+			return ProxiedDeviceAuthResult{Error: "device_conflict_online"}
+		}
 	}
 	model := packet.DevModel
 	if !protocol.IsValidClientReportedDevModel(model) {
@@ -100,16 +103,23 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte, optionList ...Proxi
 	if err != nil || dev == nil {
 		return ProxiedDeviceAuthResult{Error: "device_registration_failed"}
 	}
-	dev.Username, dev.CallSign, dev.Nickname, dev.DevModel = authResult.User.Name, authResult.CallSign, authResult.User.NickName, model
-	if dev.GroupID > 0 {
-		if gp, ok := GetGroupFromCache(dev.GroupID); ok {
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.Username, current.CallSign, current.Nickname, current.DevModel = authResult.User.Name, authResult.CallSign, authResult.User.NickName, model
+	})
+	state := dev.RuntimeSnapshot()
+	if state.GroupID > 0 {
+		if gp, ok := GetGroupFromCache(state.GroupID); ok {
 			attachRuntimeDeviceToGroup(gp, dev)
 		}
 	}
 	response := protocol.EncodeHeartbeatResponse(packet, authResult.CallSign)
-	dev.ISOnline, dev.LastPacketTime, dev.OnlineTime = true, time.Now(), time.Now()
+	now := time.Now()
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.ISOnline, current.LastPacketTime, current.OnlineTime = true, now, now
+	})
+	state = dev.RuntimeSnapshot()
 	indexRuntimeDevice(dev)
-	return ProxiedDeviceAuthResult{Success: true, ResponsePacket: response, DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, SSID: dev.SSID, DevModel: dev.DevModel, DMRID: dev.DMRID, GroupID: dev.GroupID, DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv}
+	return ProxiedDeviceAuthResult{Success: true, ResponsePacket: response, DeviceID: state.ID, OwnerID: state.OwnerID, Username: state.Username, CallSign: state.CallSign, Nickname: state.Nickname, SSID: state.SSID, DevModel: state.DevModel, DMRID: state.DMRID, GroupID: state.GroupID, DisableSend: state.DisableSend, DisableRecv: state.DisableRecv}
 }
 
 func authenticateProxiedJWT(sourceIP string, packet *protocol.DraARLv1Packet, options ProxiedDeviceAuthOptions) ProxiedDeviceAuthResult {

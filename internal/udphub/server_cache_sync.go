@@ -141,8 +141,10 @@ func refreshGroupCache() {
 	// 原子替换缓存指针（RCU 模式）
 	globalGroupCacheAtomic.Store(newGroupCache)
 
-	// 同时更新 publicGroupMap 以保持向后兼容
+	// 同时更新 publicGroupMap 以保持向后兼容（与 API 增删改并发时加锁）
+	publicGroupMu.Lock()
 	publicGroupMap = newGroupCache
+	publicGroupMu.Unlock()
 	if receiverRoutingChanged {
 		resetDomainGroupReverseCache()
 		InvalidateDomainReceiverCache()
@@ -179,54 +181,68 @@ func refreshDeviceCache() {
 		if memDev == nil {
 			continue
 		}
+		state := memDev.RuntimeSnapshot()
 
 		if dbDev.OwnerID > 0 {
 			owner := userCache[dbDev.OwnerID]
 			if owner != nil {
-				if memDev.Username != owner.Name {
-					removeRuntimeUsernameKey(memDev, memDev.Username)
-					memDev.Username = owner.Name
+				if state.Username != owner.Name {
+					removeRuntimeUsernameKey(memDev, state.Username)
+					memDev.UpdateRuntime(func(current *models.Device) {
+						current.Username = owner.Name
+					})
 					indexRuntimeDevice(memDev)
+					state = memDev.RuntimeSnapshot()
 				}
-				if memDev.CallSign != owner.CallSign {
-					removeRuntimeCallSignKey(memDev, memDev.CallSign)
-					memDev.CallSign = owner.CallSign
+				if state.CallSign != owner.CallSign {
+					removeRuntimeCallSignKey(memDev, state.CallSign)
+					memDev.UpdateRuntime(func(current *models.Device) {
+						current.CallSign = owner.CallSign
+					})
 					indexRuntimeDevice(memDev)
+					state = memDev.RuntimeSnapshot()
 				}
-				memDev.Nickname = owner.NickName
+				memDev.UpdateRuntime(func(current *models.Device) {
+					current.Nickname = owner.NickName
+				})
+				state = memDev.RuntimeSnapshot()
 			}
 		}
 
 		// 群组变化必须走统一的 detach/attach 流程，不能只修改 GroupID 字段，
 		// 否则旧连接池仍会继续向该设备转发。
-		if memDev.GroupID != dbDev.GroupID {
+		if state.GroupID != dbDev.GroupID {
 			if _, err := changeDeviceGroup(memDev, dbDev.GroupID); err != nil {
-				log.Printf("[CACHE] 同步设备 %d 群组 %d -> %d 失败: %v", memDev.ID, memDev.GroupID, dbDev.GroupID, err)
+				log.Printf("[CACHE] 同步设备 %d 群组 %d -> %d 失败: %v", state.ID, state.GroupID, dbDev.GroupID, err)
 			} else {
 				receiverRoutingChanged = true
 				updatedCount++
+				state = memDev.RuntimeSnapshot()
 			}
 		}
-		if memDev.DisableSend != dbDev.DisableSend || memDev.DisableRecv != dbDev.DisableRecv || memDev.Priority != dbDev.Priority {
-			if memDev.DisableRecv != dbDev.DisableRecv {
+		if state.DisableSend != dbDev.DisableSend || state.DisableRecv != dbDev.DisableRecv || state.Priority != dbDev.Priority {
+			if state.DisableRecv != dbDev.DisableRecv {
 				receiverRoutingChanged = true
 			}
-			memDev.DisableSend = dbDev.DisableSend
-			memDev.DisableRecv = dbDev.DisableRecv
-			memDev.Priority = dbDev.Priority
+			memDev.UpdateRuntime(func(current *models.Device) {
+				current.DisableSend = dbDev.DisableSend
+				current.DisableRecv = dbDev.DisableRecv
+				current.Priority = dbDev.Priority
+			})
 			updatedCount++
+			state = memDev.RuntimeSnapshot()
 		}
 
-		onlineStateChanged := memDev.ISOnline != dbDev.ISOnline
-		lastOnlineIPChanged := memDev.LastOnlineIP != "" && memDev.LastOnlineIP != dbDev.LastOnlineIP
+		onlineStateChanged := state.ISOnline != dbDev.ISOnline
+		lastOnlineIPChanged := state.LastOnlineIP != "" && state.LastOnlineIP != dbDev.LastOnlineIP
 
 		// 在线状态与最近上线 IP 的变更都需要同步到数据库，并使缓存失效。
 		if onlineStateChanged || lastOnlineIPChanged {
 			onlineTime := ""
-			if onlineStateChanged && memDev.ISOnline && !memDev.OnlineTime.IsZero() {
-				onlineTime = memDev.OnlineTime.Format("2006-01-02 15:04:05")
+			if onlineStateChanged && state.ISOnline && !state.OnlineTime.IsZero() {
+				onlineTime = state.OnlineTime.Format("2006-01-02 15:04:05")
 			}
-			repo.UpdateDeviceOnlineStatus(memDev.OwnerID, uint8(memDev.SSID), memDev.ISOnline, onlineTime, memDev.LastOnlineIP)
+			repo.UpdateDeviceOnlineStatus(state.OwnerID, uint8(state.SSID), state.ISOnline, onlineTime, state.LastOnlineIP)
 			onlineSyncCount++
 
 			// 获取缓存接口实例
@@ -241,8 +257,8 @@ func refreshDeviceCache() {
 
 				// 3. 如果设备已经加入某个群组，还要失效该群组的设备列表缓存
 				// 确保前端 "群组内的设备列表" 也能立刻体现设备的上下线情况
-				if memDev.GroupID > 0 {
-					_ = deviceCache.InvalidateDevicesByGroup(ctx, memDev.GroupID)
+				if state.GroupID > 0 {
+					_ = deviceCache.InvalidateDevicesByGroup(ctx, state.GroupID)
 				}
 			}
 		}
@@ -271,9 +287,10 @@ func refreshDeviceCache() {
 			ctx := context.Background()
 			_ = deviceCache.InvalidateDeviceList(ctx)
 			for _, missingDev := range missingDevices {
-				_ = deviceCache.InvalidateDevice(ctx, missingDev.ID, missingDev.OwnerID, uint8(missingDev.SSID))
-				if missingDev.GroupID > 0 {
-					_ = deviceCache.InvalidateDevicesByGroup(ctx, missingDev.GroupID)
+				state := missingDev.RuntimeSnapshot()
+				_ = deviceCache.InvalidateDevice(ctx, state.ID, state.OwnerID, uint8(state.SSID))
+				if state.GroupID > 0 {
+					_ = deviceCache.InvalidateDevicesByGroup(ctx, state.GroupID)
 				}
 			}
 		}

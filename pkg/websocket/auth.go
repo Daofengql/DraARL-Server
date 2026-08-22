@@ -136,8 +136,8 @@ func RegisterAuthenticatedConnection(conn *websocket.Conn, manager *WSConnection
 	session = refreshed
 	device.SSID = session.SSID
 	device.DevModel = session.DevModel
-	device.GroupID = session.TxGroupID
-	device.RxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	// 【锁纪律修复】路由字段统一走 setRouting（routingMu 保护），不再直接写
+	device.setRouting(ghostsession.Routing{TxGroupID: session.TxGroupID, RxGroupIDs: session.RxGroupIDs})
 	if err := manager.RegisterGhostDevice(device, session.OwnerID, session.Username, session.CallSign, session.Nickname, session.SSID); err != nil {
 		ghostsession.Global.Remove(session.SessionID)
 		manager.UnregisterDevice(device)

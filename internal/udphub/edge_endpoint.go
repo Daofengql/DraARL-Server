@@ -2,6 +2,7 @@ package udphub
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"draarl/internal/config"
 	"draarl/internal/protocol"
 )
 
@@ -74,19 +76,21 @@ func (p *EdgeFanoutPlan) Len() int {
 // same single-reader, sharded-worker and parallel fan-out design as the
 // centre's udphub.
 type EdgeEndpoint struct {
-	conn            *net.UDPConn
-	handler         func([]byte, *net.UDPAddr, *net.UDPAddr)
-	proxyProtocolV2 bool
-	queues          []chan udpDatagramJob
-	readerWG        sync.WaitGroup
-	workerWG        sync.WaitGroup
-	closeOnce       sync.Once
-	closed          chan struct{}
-	sender          *FanoutSender
-	planGeneration  atomic.Uint64
+	conn                *net.UDPConn
+	handler             func([]byte, *net.UDPAddr, *net.UDPAddr)
+	proxyProtocolV2     bool
+	proxyTrustedCIDRs   []*net.IPNet
+	proxyTrustAllWarned atomic.Bool
+	queues              []chan udpDatagramJob
+	readerWG            sync.WaitGroup
+	workerWG            sync.WaitGroup
+	closeOnce           sync.Once
+	closed              chan struct{}
+	sender              *FanoutSender
+	planGeneration      atomic.Uint64
 }
 
-func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net.UDPAddr, *net.UDPAddr)) (*EdgeEndpoint, error) {
+func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net.UDPAddr, *net.UDPAddr), trustedCIDRLists ...[]string) (*EdgeEndpoint, error) {
 	if handler == nil {
 		return nil, errors.New("edge UDP handler is required")
 	}
@@ -96,6 +100,17 @@ func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net
 	}
 	if listenAddr == "" {
 		listenAddr = ":60050"
+	}
+	var trustedCIDRs []string
+	if len(trustedCIDRLists) > 0 {
+		trustedCIDRs = trustedCIDRLists[0]
+	}
+	proxyTrustedCIDRs, err := config.ParseProxyTrustedCIDRs(trustedCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("invalid edge proxy trusted CIDRs: %w", err)
+	}
+	if config.IsReleaseBuild() && proxyProtocol == "v2" && len(proxyTrustedCIDRs) == 0 {
+		return nil, errors.New("edge proxy trusted CIDRs must contain at least one CIDR when proxy protocol v2 is enabled in release builds")
 	}
 	addr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
@@ -112,7 +127,11 @@ func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net
 	if perQueue < 64 {
 		perQueue = 64
 	}
-	e := &EdgeEndpoint{conn: conn, handler: handler, proxyProtocolV2: proxyProtocol == "v2", queues: make([]chan udpDatagramJob, workers), closed: make(chan struct{})}
+	e := &EdgeEndpoint{
+		conn: conn, handler: handler, proxyProtocolV2: proxyProtocol == "v2",
+		proxyTrustedCIDRs: proxyTrustedCIDRs,
+		queues:            make([]chan udpDatagramJob, workers), closed: make(chan struct{}),
+	}
 	for i := range e.queues {
 		e.queues[i] = make(chan udpDatagramJob, perQueue)
 		e.workerWG.Add(1)
@@ -148,7 +167,7 @@ func (e *EdgeEndpoint) readLoop() {
 		}
 		packetData := base[:n]
 		realAddr := addr
-		if e.proxyProtocolV2 {
+		if e.proxyProtocolV2 && isTrustedProxySourceFor(addr.IP, e.proxyTrustedCIDRs, &e.proxyTrustAllWarned) {
 			proxyInfo, payload, parsed := ParseProxyProtocolV2(packetData)
 			if parsed {
 				packetData = payload
@@ -259,7 +278,7 @@ func (e *EdgeEndpoint) fanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID in
 			}
 		}
 	}
-	if e.sender.enqueue(fanoutFrameJob{
+	if e.sender != nil && e.sender.enqueue(fanoutFrameJob{
 		data: append([]byte(nil), data...), sourceGroupData: sourceGroupData, partitions: plan.partitions,
 		sourceID: sourceID, sourceUser: sourceUser, sourceSSID: sourceSSID, sourceSessionID: sourceSessionID,
 		enqueuedAt: time.Now(), snapshotGen: plan.generation, generation: &e.planGeneration,
@@ -269,6 +288,22 @@ func (e *EdgeEndpoint) fanoutPlan(data []byte, plan *EdgeFanoutPlan, sourceID in
 	}
 	if plan.generation != e.planGeneration.Load() {
 		return false
+	}
+	if e.sender != nil {
+		// A published sender rejected the frame because it is overloaded or
+		// stopping. Preserve UDP ingress latency: do not synchronously write
+		// the entire fan-out from this caller. The sender's normal path already
+		// accounts dropped partitions; complete this fallback with the same
+		// result for callers waiting on delivery accounting.
+		result := fanoutWriteResult{}
+		for i := range plan.entries {
+			if isSourceTarget(&plan.entries[i], sourceID, sourceUser, sourceSSID, sourceSessionID) {
+				continue
+			}
+			result.dropped++
+		}
+		complete(result)
+		return true
 	}
 	result := fanoutWriteResult{}
 	for i := range plan.entries {

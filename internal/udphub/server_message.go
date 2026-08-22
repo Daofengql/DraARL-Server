@@ -10,9 +10,15 @@ import (
 
 // handleDraARLConfig 处理 DraARLv1 设备配置
 func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
+	if packet == nil || dev == nil {
+		return
+	}
 	// 兼容旧的控制包格式（data[0] == 2 且长度 > 512）
 	if len(packet.DATA) > 512 && packet.DATA[0] == 2 {
-		dev.DeviceParm = decodeControlPacket(packet.DATA)
+		decoded := decodeControlPacket(packet.DATA)
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.DeviceParm = decoded
+		})
 		return
 	}
 
@@ -27,10 +33,12 @@ func handleDraARLConfig(packet *protocol.DraARLv1Packet, dev *models.Device) {
 		HandleDeviceConfigReport(dev, packet.DATA)
 	case ConfigTypeQuery:
 		// 查询请求通常由服务器发起，设备不应发送此类型
-		log.Printf("[CONFIG] 设备 %s-%d 发送了意外的查询请求", dev.CallSign, dev.SSID)
+		state := dev.RuntimeSnapshot()
+		log.Printf("[CONFIG] 设备 %s-%d 发送了意外的查询请求", state.CallSign, state.SSID)
 	case ConfigTypeTimeSync:
 		// 时间同步响应，通常不需要处理
-		log.Printf("[CONFIG] 设备 %s-%d 确认时间同步", dev.CallSign, dev.SSID)
+		state := dev.RuntimeSnapshot()
+		log.Printf("[CONFIG] 设备 %s-%d 确认时间同步", state.CallSign, state.SSID)
 	}
 }
 
@@ -39,6 +47,7 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 	if gp == nil || !canSendFromDevice(dev, gp.ID) {
 		return
 	}
+	state := dev.RuntimeSnapshot()
 	forwardDraARLMessage(packet, data, dev, conn, gp.ConnPool.(*CurrentConnPool), gp)
 
 	// 【文本消息记录】直接写入数据库
@@ -50,29 +59,30 @@ func handleDraARLTextMessage(packet *protocol.DraARLv1Packet, data []byte, dev *
 			groupID = &gid
 		}
 		// 从设备所有者获取用户ID（快照当时的归属关系）
-		if dev.OwnerID > 0 {
-			uid := uint(dev.OwnerID)
+		if state.OwnerID > 0 {
+			uid := uint(state.OwnerID)
 			userID = &uid
 		}
-		recordDeviceID := dev.ID
-		if protocol.IsGhostSSID(dev.SSID) {
+		recordDeviceID := state.ID
+		if protocol.IsGhostSSID(state.SSID) {
 			recordDeviceID = 0
 		}
-		sender := CommSenderSnapshot{Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname, DevModel: int(dev.DevModel)}
-		RecordTextMessage(recordDeviceID, uint8(dev.SSID), groupID, userID, sender, string(packet.DATA))
+		sender := CommSenderSnapshot{Username: state.Username, CallSign: state.CallSign, Nickname: state.Nickname, DevModel: int(state.DevModel)}
+		RecordTextMessage(recordDeviceID, uint8(state.SSID), groupID, userID, sender, string(packet.DATA))
 	}
 }
 
 // forwardDraARLMessage 转发 DraARLv1 文本消息
 func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, pool *CurrentConnPool, gp *models.Group) {
+	state := dev.RuntimeSnapshot()
 	refilledData := protocol.PrepareForwardPacket(
 		data,
-		dev.Username,
-		dev.CallSign,
-		dev.SSID,
+		state.Username,
+		state.CallSign,
+		state.SSID,
 		protocol.DraARLTypeTextMessage,
-		dev.DevModel,
-		dev.DMRID,
+		state.DevModel,
+		state.DMRID,
 		packet.DATA,
 	)
 
@@ -80,7 +90,7 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 	forwardVoiceDomain(dev, refilledData, gp.ID)
 	BroadcastTextFromUDPDomain(dev, refilledData, gp.ID)
 	if err := RelayCenterLocalDevice(dev, refilledData); err != nil {
-		log.Printf("[INTERCONNECT] relay centre text failed: device=%d err=%v", dev.ID, err)
+		log.Printf("[INTERCONNECT] relay centre text failed: device=%d err=%v", state.ID, err)
 	}
 	protocol.ReleaseForwardPacket(refilledData)
 }

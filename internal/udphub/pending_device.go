@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"log"
 	"sync"
 	"time"
@@ -67,15 +68,15 @@ func GetPendingDeviceManager() *PendingDeviceManager {
 }
 
 // generateDynamicCode 生成6位数字动态码
+// 【模偏差修复】改用 crypto/rand.Int（内部拒绝采样，均匀无偏差），
+// 避免 24-bit 取模导致部分 6 位码出现概率偏高。
 func generateDynamicCode() (string, error) {
-	bytes := make([]byte, 3)
-	if _, err := rand.Read(bytes); err != nil {
+	max := big.NewInt(1000000)
+	n, err := rand.Int(rand.Reader, max)
+	if err != nil {
 		return "", err
 	}
-	// 将3字节转换为6位数字
-	num := int(bytes[0])<<16 | int(bytes[1])<<8 | int(bytes[2])
-	code := num % 1000000
-	return fmt.Sprintf("%06d", code), nil
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 // RequestCode 请求生成动态码

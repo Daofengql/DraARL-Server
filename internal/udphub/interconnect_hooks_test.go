@@ -1,11 +1,36 @@
 package udphub
 
 import (
+	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
+	"draarl/internal/models"
 	"draarl/internal/protocol"
 )
+
+func TestActivateCenterLocalDeviceContextHonorsCancellation(t *testing.T) {
+	oldHooks := centerHooks()
+	called := atomic.Bool{}
+	SetCenterInterconnectHooks(CenterInterconnectHooks{
+		ActivateContext: func(ctx context.Context, _ *CenterLocalSource) error {
+			called.Store(true)
+			return ctx.Err()
+		},
+	})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := ActivateCenterLocalDeviceContext(ctx, &models.Device{ID: 1})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled activation error=%v, want context.Canceled", err)
+	}
+	if called.Load() {
+		t.Fatal("canceled activation invoked the interconnect hook")
+	}
+}
 
 func TestDeliverInterconnectPacketFansOutLocallyWithoutUpstreamLoop(t *testing.T) {
 	env := setupRouteTest(t, 9500, true)

@@ -34,24 +34,36 @@ func sameUDPAddr(a, b *net.UDPAddr) bool {
 }
 
 func isRecentlyActiveDevice(dev *models.Device) bool {
-	if dev == nil || !dev.ISOnline || dev.LastPacketTime.IsZero() {
+	if dev == nil {
 		return false
 	}
-	return time.Since(dev.LastPacketTime) <= runtimeDeviceActiveTimeout
+	state := dev.RuntimeSnapshot()
+	if !state.ISOnline || state.LastPacketTime.IsZero() {
+		return false
+	}
+	return time.Since(state.LastPacketTime) <= runtimeDeviceActiveTimeout
 }
 
 func shouldRejectNormalDeviceConflict(dev *models.Device, addr *net.UDPAddr, incomingMAC string) bool {
 	if dev == nil {
 		return false
 	}
-	return shouldRejectNormalDeviceConflictForModel(dev, addr, incomingMAC, dev.DevModel)
+	return shouldRejectNormalDeviceConflictForModel(dev, addr, incomingMAC, dev.RuntimeSnapshot().DevModel)
 }
 
 func shouldRejectNormalDeviceConflictForModel(dev *models.Device, addr *net.UDPAddr, incomingMAC string, incomingDevModel byte) bool {
-	if dev == nil || !isRecentlyActiveDevice(dev) || dev.UDPAddr == nil {
+	if dev == nil || !isRecentlyActiveDevice(dev) {
 		return false
 	}
-	if sameUDPAddr(dev.UDPAddr, addr) {
+	state := dev.RuntimeSnapshot()
+	boundAddr := state.RealUDPAddr
+	if boundAddr == nil {
+		boundAddr = state.UDPAddr
+	}
+	if boundAddr == nil {
+		return false
+	}
+	if sameUDPAddr(boundAddr, addr) {
 		return false
 	}
 
@@ -59,13 +71,13 @@ func shouldRejectNormalDeviceConflictForModel(dev *models.Device, addr *net.UDPA
 	// password-authenticated heartbeat is sufficient to take over a new NAT
 	// binding after a network switch. A supplied MAC remains checked below.
 	incomingMAC = protocol.NormalizeMAC(incomingMAC)
-	if incomingMAC == "" && (dev.DevModel == protocol.DraARLDevModelAndroid || incomingDevModel == protocol.DraARLDevModelAndroid) {
+	if incomingMAC == "" && (state.DevModel == protocol.DraARLDevModelAndroid || incomingDevModel == protocol.DraARLDevModelAndroid) {
 		return false
 	}
 	if incomingMAC != "" {
-		existingMAC := protocol.NormalizeMAC(dev.MAC)
+		existingMAC := protocol.NormalizeMAC(state.MAC)
 		if existingMAC == "" {
-			existingMAC = runtimeDeviceMACStore.Get(dev.OwnerID, dev.SSID)
+			existingMAC = runtimeDeviceMACStore.Get(state.OwnerID, state.SSID)
 		}
 		if existingMAC != "" && existingMAC == incomingMAC {
 			return false
@@ -79,25 +91,34 @@ func indexRuntimeDevice(dev *models.Device) {
 		return
 	}
 	runtimeIndexMu.Lock()
-	defer runtimeIndexMu.Unlock()
 	indexRuntimeDeviceLocked(dev)
+	runtimeIndexMu.Unlock()
+	// Redis is an external dependency and may stall during a failover. Keep
+	// that I/O outside the global runtime-index lock so one device cannot block
+	// lookups or indexing for every other device.
+	syncRuntimeDeviceMAC(dev)
 }
 
 func indexRuntimeDeviceLocked(dev *models.Device) {
 	if dev == nil {
 		return
 	}
-	if dev.OwnerID > 0 {
-		devOwnerSSIDMap[getOwnerSSIDKey(dev.OwnerID, dev.SSID)] = dev
+	state := dev.RuntimeSnapshot()
+	if state.OwnerID > 0 {
+		devOwnerSSIDMap[getOwnerSSIDKey(state.OwnerID, state.SSID)] = dev
 	}
-	if dev.Username != "" {
-		devUsernameSSIDMap[usernameSSIDKey(dev.Username, dev.SSID)] = dev
+	if state.Username != "" {
+		devUsernameSSIDMap[usernameSSIDKey(state.Username, state.SSID)] = dev
 	}
-	if dev.CallSign != "" {
-		dev.CallSignSSID = callsignSSIDKey(dev.CallSign, dev.SSID)
-		devCallsignSSIDMap[dev.CallSignSSID] = dev
+	if state.CallSign != "" {
+		callsignSSID := callsignSSIDKey(state.CallSign, state.SSID)
+		if state.CallSignSSID != callsignSSID {
+			dev.UpdateRuntime(func(current *models.Device) {
+				current.CallSignSSID = callsignSSID
+			})
+		}
+		devCallsignSSIDMap[callsignSSID] = dev
 	}
-	syncRuntimeDeviceMAC(dev)
 }
 
 func removeRuntimeUsernameKey(dev *models.Device, username string) {
@@ -105,7 +126,8 @@ func removeRuntimeUsernameKey(dev *models.Device, username string) {
 		return
 	}
 	runtimeIndexMu.Lock()
-	delete(devUsernameSSIDMap, usernameSSIDKey(username, dev.SSID))
+	state := dev.RuntimeSnapshot()
+	delete(devUsernameSSIDMap, usernameSSIDKey(username, state.SSID))
 	runtimeIndexMu.Unlock()
 }
 
@@ -114,7 +136,8 @@ func removeRuntimeCallSignKey(dev *models.Device, callsign string) {
 		return
 	}
 	runtimeIndexMu.Lock()
-	delete(devCallsignSSIDMap, callsignSSIDKey(callsign, dev.SSID))
+	state := dev.RuntimeSnapshot()
+	delete(devCallsignSSIDMap, callsignSSIDKey(callsign, state.SSID))
 	runtimeIndexMu.Unlock()
 }
 
@@ -139,10 +162,11 @@ func isSameRuntimeDevice(a, b *models.Device) bool {
 	if a == b {
 		return true
 	}
-	if a.OwnerID > 0 && b.OwnerID > 0 {
-		return a.OwnerID == b.OwnerID && a.SSID == b.SSID
+	aState, bState := a.RuntimeSnapshot(), b.RuntimeSnapshot()
+	if aState.OwnerID > 0 && bState.OwnerID > 0 {
+		return aState.OwnerID == bState.OwnerID && aState.SSID == bState.SSID
 	}
-	return a.Username != "" && a.Username == b.Username && a.SSID == b.SSID
+	return aState.Username != "" && aState.Username == bState.Username && aState.SSID == bState.SSID
 }
 
 func syncDeviceConnPool(pool *CurrentConnPool, dev *models.Device, addr *net.UDPAddr) {
@@ -295,8 +319,9 @@ func invalidateDeviceEntryCache(dev *models.Device) {
 	ctx := context.Background()
 	_ = deviceCache.InvalidateDevice(ctx, dev.ID, dev.OwnerID, dev.SSID)
 	_ = deviceCache.InvalidateDeviceList(ctx)
-	if dev.GroupID > 0 {
-		_ = deviceCache.InvalidateDevicesByGroup(ctx, dev.GroupID)
+	state := dev.RuntimeSnapshot()
+	if state.GroupID > 0 {
+		_ = deviceCache.InvalidateDevicesByGroup(ctx, state.GroupID)
 	}
 }
 
@@ -308,18 +333,22 @@ func SyncRuntimeDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64,
 	if dev == nil {
 		return
 	}
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.CurrentEntryNodeID = nodeID
+		current.CurrentEntrySessionID = sessionID
+		if nodeID != "" {
+			copyTime := seenAt
+			current.LastEntryNodeID = nodeID
+			current.LastEntryAt = &copyTime
+		}
+		current.EntryMode = mode
+		current.ISOnline = online
+	})
 	runtimeIndexMu.Lock()
-	dev.CurrentEntryNodeID = nodeID
-	dev.CurrentEntrySessionID = sessionID
-	if nodeID != "" {
-		dev.LastEntryNodeID = nodeID
-		copyTime := seenAt
-		dev.LastEntryAt = &copyTime
-	}
-	dev.EntryMode = mode
-	dev.ISOnline = online
 	if online {
-		dev.OnlineTime = seenAt
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.OnlineTime = seenAt
+		})
 		onlineDevMap[dev.ID] = dev
 		onlineDevMapDraARL[dev.ID] = dev
 	} else {
@@ -328,7 +357,10 @@ func SyncRuntimeDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64,
 	}
 	remote := nodeID != "center"
 	if remote || !online {
-		dev.UDPAddr = nil
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.UDPAddr = nil
+			current.RealUDPAddr = nil
+		})
 	}
 	runtimeIndexMu.Unlock()
 
@@ -347,14 +379,13 @@ func ClearRuntimeDeviceEntryIfSession(deviceID int, nodeID string, sessionID uin
 	if dev == nil {
 		return
 	}
-	runtimeIndexMu.RLock()
-	matches := dev.CurrentEntryNodeID == nodeID && dev.CurrentEntrySessionID == sessionID
-	runtimeIndexMu.RUnlock()
+	state := dev.RuntimeSnapshot()
+	matches := state.CurrentEntryNodeID == nodeID && state.CurrentEntrySessionID == sessionID
 	if !matches {
 		invalidateDeviceEntryCache(dev)
 		return
 	}
-	SyncRuntimeDeviceEntry(deviceID, "", dev.EntryMode, 0, false, time.Now())
+	SyncRuntimeDeviceEntry(deviceID, "", state.EntryMode, 0, false, time.Now())
 }
 
 func ClearRuntimeDeviceEntryIfNode(deviceID int, nodeID string) {
@@ -362,10 +393,9 @@ func ClearRuntimeDeviceEntryIfNode(deviceID int, nodeID string) {
 	if dev == nil {
 		return
 	}
-	runtimeIndexMu.RLock()
-	matches := dev.CurrentEntryNodeID == nodeID
-	mode := dev.EntryMode
-	runtimeIndexMu.RUnlock()
+	state := dev.RuntimeSnapshot()
+	matches := state.CurrentEntryNodeID == nodeID
+	mode := state.EntryMode
 	if !matches {
 		invalidateDeviceEntryCache(dev)
 		return
@@ -380,13 +410,14 @@ func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
 		return false
 	}
 
+	state := dev.RuntimeSnapshot()
 	runtimeIndexMu.Lock()
 	delete(devOwnerSSIDMap, getOwnerSSIDKey(ownerID, ssid))
-	if dev.Username != "" {
-		delete(devUsernameSSIDMap, usernameSSIDKey(dev.Username, dev.SSID))
+	if state.Username != "" {
+		delete(devUsernameSSIDMap, usernameSSIDKey(state.Username, state.SSID))
 	}
-	if dev.CallSign != "" {
-		delete(devCallsignSSIDMap, callsignSSIDKey(dev.CallSign, dev.SSID))
+	if state.CallSign != "" {
+		delete(devCallsignSSIDMap, callsignSSIDKey(state.CallSign, state.SSID))
 	}
 	delete(onlineDevMap, dev.ID)
 	delete(onlineDevMapDraARL, dev.ID)
@@ -394,8 +425,11 @@ func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
 
 	removeRuntimeDeviceMAC(dev)
 
-	dev.ISOnline = false
-	dev.UDPAddr = nil
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.ISOnline = false
+		current.UDPAddr = nil
+		current.RealUDPAddr = nil
+	})
 
 	for _, gp := range GetAllGroupsFromCache() {
 		removeDeviceFromGroupRuntime(gp, dev)
@@ -484,12 +518,16 @@ func SyncUserCallSignChange(ownerID int, username, oldCallSign, newCallSign stri
 
 	runtimeIndexMu.Lock()
 	for dev := range seen {
+		state := dev.RuntimeSnapshot()
 		if oldCallSign != "" {
-			delete(devCallsignSSIDMap, callsignSSIDKey(oldCallSign, dev.SSID))
+			delete(devCallsignSSIDMap, callsignSSIDKey(oldCallSign, state.SSID))
 		}
-		dev.CallSign = newCallSign
-		dev.CallSignSSID = callsignSSIDKey(newCallSign, dev.SSID)
-		devCallsignSSIDMap[dev.CallSignSSID] = dev
+		callsignSSID := callsignSSIDKey(newCallSign, state.SSID)
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.CallSign = newCallSign
+			current.CallSignSSID = callsignSSID
+		})
+		devCallsignSSIDMap[callsignSSID] = dev
 	}
 	runtimeIndexMu.Unlock()
 

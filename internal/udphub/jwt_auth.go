@@ -76,15 +76,19 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 
 	controller := ghostsession.Controller{
 		ApplyRouting: func(next ghostsession.Routing) error {
-			if device.GhostSessionID != "" && GlobalUDPGhostManager.GetSession(device.GhostSessionID) == device {
+			state := device.RuntimeSnapshot()
+			if state.GhostSessionID != "" && GlobalUDPGhostManager.GetSession(state.GhostSessionID) == device {
 				return applyAuthenticatedUDPGhostRouting(GlobalUDPGhostManager, device, next, ActivateCenterLocalDevice)
 			}
-			device.GroupID = next.TxGroupID
-			device.GhostRxGroupIDs = append([]int(nil), next.RxGroupIDs...)
+			device.UpdateRuntime(func(current *models.Device) {
+				current.GroupID = next.TxGroupID
+				current.GhostRxGroupIDs = append([]int(nil), next.RxGroupIDs...)
+			})
 			return nil
 		},
 		Disconnect: func(string) {
-			removed := GlobalUDPGhostManager.RemoveSession(device.GhostSessionID)
+			state := device.RuntimeSnapshot()
+			removed := GlobalUDPGhostManager.RemoveSession(state.GhostSessionID)
 			if removed != nil {
 				RevokeCenterLocalDevice(removed)
 			}
@@ -107,12 +111,14 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		sendJWTAuthResponse(packet, conn, false, "", code, message)
 		return
 	}
-	device.GhostSessionID = session.SessionID
-	device.GhostSessionTag = session.SessionTag
-	device.ClientInstanceID = session.ClientInstanceID
-	device.GhostCapabilities = append([]string(nil), session.Capabilities...)
-	device.GroupID = session.TxGroupID
-	device.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	device.UpdateRuntime(func(current *models.Device) {
+		current.GhostSessionID = session.SessionID
+		current.GhostSessionTag = session.SessionTag
+		current.ClientInstanceID = session.ClientInstanceID
+		current.GhostCapabilities = append([]string(nil), session.Capabilities...)
+		current.GroupID = session.TxGroupID
+		current.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	})
 
 	// Reload after registration so an API update racing with authentication
 	// cannot be overwritten by a stale pre-auth preference snapshot.
@@ -125,8 +131,10 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 		return
 	}
 	session = refreshed
-	device.GroupID = session.TxGroupID
-	device.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	device.UpdateRuntime(func(current *models.Device) {
+		current.GroupID = session.TxGroupID
+		current.GhostRxGroupIDs = append([]int(nil), session.RxGroupIDs...)
+	})
 
 	if _, err := GlobalUDPGhostManager.RegisterSession(device); err != nil {
 		ghostsession.Global.Remove(session.SessionID)
@@ -152,13 +160,14 @@ func HandleJWTAuthPacket(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr,
 }
 
 func applyAuthenticatedUDPGhostRouting(manager *UDPGhostManager, device *models.Device, next ghostsession.Routing, project func(*models.Device) error) error {
-	if manager == nil || device == nil || manager.GetSession(device.GhostSessionID) != device {
+	if manager == nil || device == nil || manager.GetSession(device.RuntimeSnapshot().GhostSessionID) != device {
 		return ghostsession.ErrSessionNotFound
 	}
+	state := device.RuntimeSnapshot()
 	previous := ghostsession.Routing{
-		TxGroupID: device.GroupID, RxGroupIDs: append([]int(nil), device.GhostRxGroupIDs...),
+		TxGroupID: state.GroupID, RxGroupIDs: append([]int(nil), state.GhostRxGroupIDs...),
 	}
-	if err := manager.SetSessionRouting(device.GhostSessionID, next); err != nil {
+	if err := manager.SetSessionRouting(state.GhostSessionID, next); err != nil {
 		return err
 	}
 	if project == nil {
@@ -169,7 +178,7 @@ func applyAuthenticatedUDPGhostRouting(manager *UDPGhostManager, device *models.
 		return nil
 	}
 
-	rollbackErr := manager.SetSessionRouting(device.GhostSessionID, previous)
+	rollbackErr := manager.SetSessionRouting(state.GhostSessionID, previous)
 	if rollbackErr == nil {
 		rollbackErr = project(device)
 	}

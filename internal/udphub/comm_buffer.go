@@ -71,9 +71,13 @@ type CommSettingsConfig struct {
 
 // NewCommBuffer 创建通信缓冲管理器
 func NewCommBuffer(config *CommSettingsConfig) *CommBuffer {
+	if config == nil {
+		config = &CommSettingsConfig{}
+	}
+	configCopy := *config
 	return &CommBuffer{
 		sessions: make(map[string]*AudioSession),
-		config:   config,
+		config:   &configCopy,
 	}
 }
 
@@ -143,7 +147,7 @@ func (cb *CommBuffer) AppendPacket(
 	deliveryGroupIDs []uint,
 	pcmData []byte,
 ) {
-	if cb == nil || !cb.config.Enabled {
+	if cb == nil {
 		return
 	}
 
@@ -151,6 +155,9 @@ func (cb *CommBuffer) AppendPacket(
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
+	if cb.config == nil || !cb.config.Enabled {
+		return
+	}
 
 	session, exists := cb.sessions[sessionKey]
 	now := time.Now()
@@ -276,6 +283,8 @@ func (cb *CommBuffer) CheckTimeout() {
 // SetOnSessionEnd 设置会话结束回调
 func (cb *CommBuffer) SetOnSessionEnd(callback func(*AudioSession)) {
 	if cb != nil {
+		cb.mu.Lock()
+		defer cb.mu.Unlock()
 		cb.onSessionEnd = callback
 	}
 }
@@ -295,7 +304,12 @@ func (cb *CommBuffer) UpdateConfig(config *CommSettingsConfig) {
 	if cb != nil {
 		cb.mu.Lock()
 		defer cb.mu.Unlock()
-		cb.config = config
+		if config == nil {
+			cb.config = &CommSettingsConfig{}
+			return
+		}
+		configCopy := *config
+		cb.config = &configCopy
 	}
 }
 

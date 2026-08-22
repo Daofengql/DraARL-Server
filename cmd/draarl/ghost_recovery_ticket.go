@@ -42,7 +42,13 @@ func newGhostRecoveryTicketSigner(secret string) (*ghostRecoveryTicketSigner, er
 	if len(secret) < 32 {
 		return nil, errors.New("ghost recovery ticket secret must contain at least 32 bytes")
 	}
-	return &ghostRecoveryTicketSigner{key: append([]byte(nil), secret...)}, nil
+	// 【安全修复】票据密钥与 Web API JWT 密钥做域分离：以
+	// HMAC-SHA256(secret, "draarl:ghost-recovery-ticket:v1") 派生独立密钥，
+	// API 侧 JWT 密钥泄露不再能直接伪造跨节点恢复票据。
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("draarl:ghost-recovery-ticket:v1"))
+	key := mac.Sum(nil)
+	return &ghostRecoveryTicketSigner{key: key}, nil
 }
 
 func (s *ghostRecoveryTicketSigner) Sign(session ghostsession.Session, nodeID string, controlSessionID uint64, expiresAt time.Time) (string, error) {

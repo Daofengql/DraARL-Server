@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
@@ -10,7 +11,42 @@ import (
 
 // UserCache 用户信息缓存管理器
 type UserCache struct {
-	cache *TwoLevelCache
+	cache      *TwoLevelCache
+	loadByID   func(context.Context, int) (*gormdb.User, error)
+	loadByName func(context.Context, string) (*gormdb.User, error)
+
+	// 【缓存击穿/穿透修复】singleflight 合并并发未命中的重复 DB 查询；
+	// 负缓存记录"不存在"的用户，短 TTL 内不再反复穿透数据库。
+	inflightMu sync.Mutex
+	inflight   map[string]*userInflight
+	negMu      sync.Mutex
+	neg        map[string]time.Time
+}
+
+// userInflight 表示一次进行中的数据库加载。
+type userInflight struct {
+	done chan struct{}
+	user *gormdb.User
+	err  error
+}
+
+// userNegativeTTL 负缓存有效期：防止攻击者用不存在用户名反复穿透 DB。
+const userNegativeTTL = 30 * time.Second
+
+const userLoadTimeout = 5 * time.Second
+
+func newUserCache(cache *TwoLevelCache) *UserCache {
+	return &UserCache{
+		cache: cache,
+		loadByID: func(ctx context.Context, id int) (*gormdb.User, error) {
+			return gormdb.NewUserRepository().GetUserByIDContext(ctx, id)
+		},
+		loadByName: func(ctx context.Context, name string) (*gormdb.User, error) {
+			return gormdb.NewUserRepository().GetUserByNameContext(ctx, name)
+		},
+		inflight: make(map[string]*userInflight),
+		neg:      make(map[string]time.Time),
+	}
 }
 
 // UserCacheConfig 用户缓存配置
@@ -37,7 +73,7 @@ func NewUserCache(config UserCacheConfig) (*UserCache, error) {
 		return nil, err
 	}
 
-	return &UserCache{cache: cache}, nil
+	return newUserCache(cache), nil
 }
 
 // 缓存键生成函数
@@ -57,7 +93,113 @@ func userRoleKey(userID int) string {
 	return fmt.Sprintf("user:role:%d", userID)
 }
 
-// GetUserByID 通过ID获取用户（带缓存）
+// isNegative 检查是否存在未过期的负缓存记录。
+func (c *UserCache) isNegative(key string) bool {
+	c.negMu.Lock()
+	defer c.negMu.Unlock()
+	exp, ok := c.neg[key]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(c.neg, key)
+		return false
+	}
+	return true
+}
+
+// markNegative 记录一次负缓存（短 TTL）。
+func (c *UserCache) markNegative(key string) {
+	c.negMu.Lock()
+	defer c.negMu.Unlock()
+	now := time.Now()
+	if len(c.neg) >= 16384 {
+		for candidate, expiresAt := range c.neg {
+			if !now.Before(expiresAt) {
+				delete(c.neg, candidate)
+			}
+		}
+	}
+	if len(c.neg) >= 16384 {
+		// 仍满时仅淘汰一个条目，避免攻击者用一个新 key 清空全部负缓存。
+		for candidate := range c.neg {
+			delete(c.neg, candidate)
+			break
+		}
+	}
+	c.neg[key] = now.Add(userNegativeTTL)
+}
+
+// clearNegative 删除负缓存记录。
+func (c *UserCache) clearNegative(key string) {
+	c.negMu.Lock()
+	delete(c.neg, key)
+	c.negMu.Unlock()
+}
+
+// coalesce 合并同一 key 的并发加载。等待者使用自己的 context，避免一个
+// 慢查询把已经取消的 HTTP 请求继续挂在内存中。
+func (c *UserCache) coalesce(ctx context.Context, key string, load func(context.Context) (*gormdb.User, error)) (*gormdb.User, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.inflightMu.Lock()
+	pending, exists := c.inflight[key]
+	if !exists {
+		pending = &userInflight{done: make(chan struct{})}
+		c.inflight[key] = pending
+	}
+	c.inflightMu.Unlock()
+
+	if !exists {
+		// No request owns the shared query after admission. Each caller may stop
+		// waiting independently, while the bounded load can still populate the
+		// cache for other callers and subsequent requests.
+		go func() {
+			loadCtx, cancel := context.WithTimeout(context.Background(), userLoadTimeout)
+			defer cancel()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					pending.err = fmt.Errorf("user cache loader panic: %v", recovered)
+				}
+				c.inflightMu.Lock()
+				delete(c.inflight, key)
+				c.inflightMu.Unlock()
+				close(pending.done)
+			}()
+			pending.user, pending.err = load(loadCtx)
+		}()
+	}
+
+	select {
+	case <-pending.done:
+		return cloneCachedUser(pending.user), pending.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func cloneCachedUser(user *gormdb.User) *gormdb.User {
+	if user == nil {
+		return nil
+	}
+	clone := *user
+	if user.ReviewerID != nil {
+		value := *user.ReviewerID
+		clone.ReviewerID = &value
+	}
+	if user.ReviewTime != nil {
+		value := *user.ReviewTime
+		clone.ReviewTime = &value
+	}
+	if user.LastLoginTime != nil {
+		value := *user.LastLoginTime
+		clone.LastLoginTime = &value
+	}
+	return &clone
+}
+
+// GetUserByID 通过ID获取用户（带缓存 + singleflight + 负缓存）
 func (c *UserCache) GetUserByID(ctx context.Context, id int) (*gormdb.User, error) {
 	key := userKey(id)
 
@@ -65,24 +207,45 @@ func (c *UserCache) GetUserByID(ctx context.Context, id int) (*gormdb.User, erro
 	if err := c.cache.Get(ctx, key, &user); err == nil {
 		return &user, nil
 	}
-
-	// 缓存未命中，从数据库查询
-	repo := gormdb.NewUserRepository()
-	dbUser, err := repo.GetUserByID(id)
-	if err != nil {
-		return nil, err
-	}
-	if dbUser == nil {
+	if c.isNegative(key) {
 		return nil, nil
 	}
 
-	// 写入缓存
-	_ = c.cache.Set(ctx, key, dbUser, 0)
-
+	dbUser, err := c.coalesce(ctx, key, func(loadCtx context.Context) (*gormdb.User, error) {
+		var cached gormdb.User
+		if err := c.cache.Get(loadCtx, key, &cached); err == nil {
+			return &cached, nil
+		}
+		if c.isNegative(key) {
+			return nil, nil
+		}
+		loaded, err := c.loadByID(loadCtx, id)
+		if err != nil {
+			return nil, err
+		}
+		if loaded == nil {
+			c.markNegative(key)
+			return nil, nil
+		}
+		c.clearNegative(key)
+		c.clearNegative(userByNameKey(loaded.Name))
+		if err := c.cache.Set(loadCtx, key, loaded, 0); err != nil {
+			return nil, err
+		}
+		if loaded.Name != "" {
+			if err := c.cache.Set(loadCtx, userByNameKey(loaded.Name), loaded, 0); err != nil {
+				return nil, err
+			}
+		}
+		return loaded, nil
+	})
+	if err != nil {
+		return nil, err
+	}
 	return dbUser, nil
 }
 
-// GetUserByName 通过用户名获取用户（带缓存）
+// GetUserByName 通过用户名获取用户（带缓存 + singleflight + 负缓存）
 func (c *UserCache) GetUserByName(ctx context.Context, name string) (*gormdb.User, error) {
 	key := userByNameKey(name)
 
@@ -90,21 +253,39 @@ func (c *UserCache) GetUserByName(ctx context.Context, name string) (*gormdb.Use
 	if err := c.cache.Get(ctx, key, &user); err == nil {
 		return &user, nil
 	}
-
-	// 缓存未命中，从数据库查询
-	repo := gormdb.NewUserRepository()
-	dbUser, err := repo.GetUserByName(name)
-	if err != nil {
-		return nil, err
-	}
-	if dbUser == nil {
+	if c.isNegative(key) {
 		return nil, nil
 	}
 
-	// 写入缓存（包括按名称和按ID两个键）
-	_ = c.cache.Set(ctx, key, dbUser, 0)
-	_ = c.cache.Set(ctx, userKey(dbUser.ID), dbUser, 0)
-
+	dbUser, err := c.coalesce(ctx, key, func(loadCtx context.Context) (*gormdb.User, error) {
+		var cached gormdb.User
+		if err := c.cache.Get(loadCtx, key, &cached); err == nil {
+			return &cached, nil
+		}
+		if c.isNegative(key) {
+			return nil, nil
+		}
+		loaded, err := c.loadByName(loadCtx, name)
+		if err != nil {
+			return nil, err
+		}
+		if loaded == nil {
+			c.markNegative(key)
+			return nil, nil
+		}
+		c.clearNegative(key)
+		c.clearNegative(userKey(loaded.ID))
+		if err := c.cache.Set(loadCtx, key, loaded, 0); err != nil {
+			return nil, err
+		}
+		if err := c.cache.Set(loadCtx, userKey(loaded.ID), loaded, 0); err != nil {
+			return nil, err
+		}
+		return loaded, nil
+	})
+	if err != nil {
+		return nil, err
+	}
 	return dbUser, nil
 }
 
@@ -116,6 +297,9 @@ func (c *UserCache) InvalidateUser(ctx context.Context, userID int, username str
 	}
 	if username != "" {
 		keys = append(keys, userByNameKey(username))
+	}
+	for _, key := range keys {
+		c.clearNegative(key)
 	}
 	return c.cache.Delete(ctx, keys...)
 }

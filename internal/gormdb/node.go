@@ -107,6 +107,12 @@ func (r *ServerRepository) RotateNodeCredential(id int, newHash string, now time
 		if node.Status != 1 {
 			return ErrNodeDisabled
 		}
+		// 【幂等】同一凭据哈希重复安装（如 ACK 超时后重试相同凭据）不推进
+		// epoch，避免轮换抖动导致凭据/宽限期不断推进。
+		if secureHashEqual(node.NodeTokenHash, newHash) || secureHashEqual(node.NodePreviousTokenHash, newHash) {
+			outcome = NodeCredentialRotation{CredentialEpoch: node.NodeCredentialEpoch, PreviousValidUntil: now.Add(grace)}
+			return nil
+		}
 		epoch := node.NodeCredentialEpoch + 1
 		validUntil := now.Add(grace)
 		updates := map[string]interface{}{

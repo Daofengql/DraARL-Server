@@ -1,6 +1,7 @@
 package gormdb
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -9,6 +10,15 @@ import (
 )
 
 func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
+	return r.UpdateDeviceEntryContext(context.Background(), deviceID, nodeID, mode, sessionID, online, now)
+}
+
+// UpdateDeviceEntryContext allows shutdown-aware callers to cancel the row
+// lock and transaction instead of waiting on the driver's default timeout.
+func (r *DeviceRepository) UpdateDeviceEntryContext(ctx context.Context, deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	updates := map[string]interface{}{
 		"current_entry_node_id":    nodeID,
 		"current_entry_session_id": sessionID,
@@ -20,7 +30,7 @@ func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, 
 	if online {
 		updates["online_time"] = now
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var device Device
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&device, deviceID).Error; err != nil {
 			return err
@@ -47,6 +57,35 @@ type DeviceRepository struct {
 	db *gorm.DB
 }
 
+// DeviceListFilter describes the optional predicates supported by the
+// paginated device-list query. Nil IsOnline means that both online and
+// offline devices are returned.
+type DeviceListFilter struct {
+	Keyword  string
+	CallSign string
+	GroupID  *int
+	OwnerID  int
+	IsOnline *bool
+}
+
+// NormalizeDevicePageOffset keeps pagination arithmetic valid without
+// imposing a list-size cap on internal callers such as the QTH snapshot path.
+func NormalizeDevicePageOffset(limit, page int) (int, int, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	// Compare page-1 after proving page is positive; writing this as
+	// maxInt/limit+1 overflows when limit is 1.
+	if page-1 > maxInt/limit {
+		return 0, 0, 0, errors.New("device page is too large")
+	}
+	return limit, page, (page - 1) * limit, nil
+}
+
 // NewDeviceRepository 创建设备仓库
 func NewDeviceRepository() *DeviceRepository {
 	return &DeviceRepository{db: Get()}
@@ -54,21 +93,49 @@ func NewDeviceRepository() *DeviceRepository {
 
 // ListDevices 获取设备列表
 func (r *DeviceRepository) ListDevices(limit, page int) ([]*Device, int64, error) {
-	var devices []*Device
+	return r.ListDevicesPaginated(DeviceListFilter{}, limit, page)
+}
+
+// ListDevicesPaginated applies all device-list predicates in SQL before
+// counting and slicing. Keeping filtering and pagination in one query avoids
+// incorrect totals and page holes caused by filtering an already paginated
+// result in memory.
+func (r *DeviceRepository) ListDevicesPaginated(filter DeviceListFilter, limit, page int) ([]*Device, int64, error) {
+	limit, _, offset, err := NormalizeDevicePageOffset(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	query := r.db.Model(&Device{})
+	if filter.Keyword != "" {
+		like := "%" + filter.Keyword + "%"
+		query = query.
+			Joins("LEFT JOIN users ON devices.owner_id = users.id").
+			Where("devices.name LIKE ? OR users.callsign LIKE ?", like, like)
+	} else if filter.CallSign != "" {
+		query = query.
+			Joins("JOIN users ON devices.owner_id = users.id").
+			Where("users.callsign = ?", filter.CallSign)
+	}
+	if filter.GroupID != nil {
+		query = query.Where("devices.group_id = ?", *filter.GroupID)
+	}
+	if filter.OwnerID > 0 {
+		query = query.Where("devices.owner_id = ?", filter.OwnerID)
+	}
+	if filter.IsOnline != nil {
+		query = query.Where("devices.is_online = ?", *filter.IsOnline)
+	}
+
 	var total int64
-
-	offset := (page - 1) * limit
-
-	// 获取总数
-	if err := r.db.Model(&Device{}).Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 获取分页数据
-	if err := r.db.Order("id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
+	var devices []*Device
+	if err := query.Select("devices.*").Order("devices.id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
 		return nil, 0, err
 	}
-
 	return devices, total, nil
 }
 
@@ -365,104 +432,20 @@ func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID in
 // ListDevicesByKeywordPaginated 按设备名称或所有者呼号模糊搜索并分页。
 // LEFT JOIN 保证历史上没有有效所有者关联的设备仍可按设备名称检索。
 func (r *DeviceRepository) ListDevicesByKeywordPaginated(keyword string, ownerID int, limit, page int) ([]*Device, int64, error) {
-	var devices []*Device
-	var total int64
-
-	offset := (page - 1) * limit
-	like := "%" + keyword + "%"
-	query := r.db.Model(&Device{}).
-		Joins("LEFT JOIN users ON devices.owner_id = users.id").
-		Where("devices.name LIKE ? OR users.callsign LIKE ?", like, like)
-
-	if ownerID > 0 {
-		query = query.Where("devices.owner_id = ?", ownerID)
-	}
-
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if err := query.Select("devices.*").Order("devices.id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
-		return nil, 0, err
-	}
-
-	return devices, total, nil
+	return r.ListDevicesPaginated(DeviceListFilter{Keyword: keyword, OwnerID: ownerID}, limit, page)
 }
 
 // ListDevicesByCallSignPaginated 按呼号搜索设备并分页（数据库层分页）
 func (r *DeviceRepository) ListDevicesByCallSignPaginated(callsign string, ownerID int, limit, page int) ([]*Device, int64, error) {
-	var devices []*Device
-	var total int64
-
-	offset := (page - 1) * limit
-
-	query := r.db.Model(&Device{}).
-		Select("devices.*").
-		Joins("JOIN users ON devices.owner_id = users.id").
-		Where("users.callsign = ?", callsign)
-
-	// 如果指定了 ownerID，则只查询该用户的设备
-	if ownerID > 0 {
-		query = query.Where("devices.owner_id = ?", ownerID)
-	}
-
-	// 获取总数
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	// 获取分页数据
-	if err := query.Order("devices.id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
-		return nil, 0, err
-	}
-
-	return devices, total, nil
+	return r.ListDevicesPaginated(DeviceListFilter{CallSign: callsign, OwnerID: ownerID}, limit, page)
 }
 
 // ListDevicesByGroupIDPaginated 按群组过滤设备并分页（数据库层分页）
 func (r *DeviceRepository) ListDevicesByGroupIDPaginated(groupID, ownerID int, limit, page int) ([]*Device, int64, error) {
-	var devices []*Device
-	var total int64
-
-	offset := (page - 1) * limit
-
-	query := r.db.Model(&Device{}).Where("group_id = ?", groupID)
-
-	// 如果指定了 ownerID，则只查询该用户的设备
-	if ownerID > 0 {
-		query = query.Where("owner_id = ?", ownerID)
-	}
-
-	// 获取总数
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	// 获取分页数据
-	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
-		return nil, 0, err
-	}
-
-	return devices, total, nil
+	return r.ListDevicesPaginated(DeviceListFilter{GroupID: &groupID, OwnerID: ownerID}, limit, page)
 }
 
 // ListDevicesByOwnerIDPaginated 按所有者查询设备并分页（数据库层分页）
 func (r *DeviceRepository) ListDevicesByOwnerIDPaginated(ownerID int, limit, page int) ([]*Device, int64, error) {
-	var devices []*Device
-	var total int64
-
-	offset := (page - 1) * limit
-
-	query := r.db.Model(&Device{}).Where("owner_id = ?", ownerID)
-
-	// 获取总数
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	// 获取分页数据
-	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&devices).Error; err != nil {
-		return nil, 0, err
-	}
-
-	return devices, total, nil
+	return r.ListDevicesPaginated(DeviceListFilter{OwnerID: ownerID}, limit, page)
 }

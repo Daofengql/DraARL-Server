@@ -2,6 +2,8 @@ package gormdb
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	broadcastmodel "draarl/internal/broadcast/model"
@@ -13,6 +15,22 @@ import (
 // GroupRepository 群组仓库
 type GroupRepository struct {
 	db *gorm.DB
+}
+
+// NormalizePageOffset applies compatibility defaults while protecting
+// all direct repository/cache callers from integer-overflowed SQL offsets.
+func NormalizePageOffset(limit, page int) (int, int, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if page <= 0 {
+		page = 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if page > maxInt/limit+1 {
+		return 0, 0, 0, errors.New("group page is too large")
+	}
+	return limit, page, (page - 1) * limit, nil
 }
 
 // NewGroupRepository 创建群组仓库
@@ -32,7 +50,10 @@ func (r *GroupRepository) ListGroupsPaginated(limit, page int) ([]*Group, int64,
 	var groups []*Group
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizePageOffset(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// 获取总数
 	if err := r.db.Model(&Group{}).Count(&total).Error; err != nil {
@@ -45,6 +66,17 @@ func (r *GroupRepository) ListGroupsPaginated(limit, page int) ([]*Group, int64,
 	}
 
 	return groups, total, nil
+}
+
+// ListGroupsPage 仅读取指定页，供已有总数缓存的调用方避免重复 Count。
+func (r *GroupRepository) ListGroupsPage(limit, page int) ([]*Group, error) {
+	limit, _, offset, err := NormalizePageOffset(limit, page)
+	if err != nil {
+		return nil, err
+	}
+	var groups []*Group
+	err = r.db.Order("id DESC").Limit(limit).Offset(offset).Find(&groups).Error
+	return groups, err
 }
 
 // GetGroupByID 通过ID获取群组
@@ -91,6 +123,18 @@ func (r *GroupRepository) UpdateGroup(group *Group) error {
 // UpdateGroupFields 更新群组指定字段
 func (r *GroupRepository) UpdateGroupFields(id int, fields map[string]interface{}) error {
 	return r.db.Model(&Group{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// UpgradeGroupPasswordIfUnchanged upgrades a legacy plaintext password only
+// when it still matches the value that was successfully verified. The
+// condition prevents a concurrent password change from being overwritten.
+func (r *GroupRepository) UpgradeGroupPasswordIfUnchanged(id int, legacyPassword, hashedPassword string) error {
+	if id <= 0 || legacyPassword == "" || hashedPassword == "" {
+		return nil
+	}
+	return r.db.Model(&Group{}).
+		Where("id = ? AND password = ?", id, legacyPassword).
+		Update("password", hashedPassword).Error
 }
 
 // DeleteGroup 删除群组（仅删除群组记录，不清理关联数据）
@@ -198,13 +242,58 @@ func (r *GroupRepository) GroupCount() (int64, error) {
 }
 
 // SearchGroups 搜索群组
+// 【性能修复】纯数字关键字走主键等值（sargable），避免 CAST(id AS CHAR) 全表扫描。
 func (r *GroupRepository) SearchGroups(keyword string) ([]*Group, error) {
 	var groups []*Group
 	like := "%" + keyword + "%"
-	err := r.db.
-		Where("(CAST(id AS CHAR) LIKE ? OR name LIKE ?) AND type IN ? AND (is_virtual = ? OR is_virtual IS NULL)", like, like, []int{1, 2}, false).
-		Find(&groups).Error
+	cond, args := groupKeywordCondition(keyword, like)
+	where := "(" + cond + ") AND type IN ? AND (is_virtual = ? OR is_virtual IS NULL)"
+	args = append(args, []int{1, 2}, false)
+	err := r.db.Where(where, args...).Find(&groups).Error
 	return groups, err
+}
+
+// SearchGroupsPaginatedVisible applies the same visibility rule as
+// groupaccess.CanReceiveGroup before pagination, so a large search result is
+// never materialized in the handler merely to discard private groups.
+func (r *GroupRepository) SearchGroupsPaginatedVisible(keyword string, userID int, admin bool, limit, page int) ([]*Group, int64, error) {
+	limit, _, offset, err := NormalizePageOffset(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
+	query := r.db.Model(&Group{}).
+		Where("type IN ? AND status = ? AND (is_virtual = ? OR is_virtual IS NULL)", []int{1, 2}, 1, false)
+	if !admin {
+		query = query.Where(`(
+			type = ? OR ower_id = ? OR EXISTS (
+				SELECT 1 FROM group_members gm
+				WHERE gm.group_id = public_groups.id AND gm.user_id = ? AND gm.is_verified = ?
+			)
+		)`, 1, userID, userID, true)
+	}
+	if strings.TrimSpace(keyword) != "" {
+		like := "%" + keyword + "%"
+		condition, args := groupKeywordCondition(keyword, like)
+		query = query.Where(condition, args...)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var groups []*Group
+	if err := query.Order("id DESC").Limit(limit).Offset(offset).Find(&groups).Error; err != nil {
+		return nil, 0, err
+	}
+	return groups, total, nil
+}
+
+// groupKeywordCondition 构造群组关键字条件：纯数字关键字用 id 等值（可走主键），
+// 否则回退到名称 LIKE；两者都兼容按名称模糊搜索。
+func groupKeywordCondition(keyword, like string) (string, []interface{}) {
+	if id, err := strconv.ParseUint(strings.TrimSpace(keyword), 10, 64); err == nil && id > 0 {
+		return "(id = ? OR name LIKE ?)", []interface{}{uint(id), like}
+	}
+	return "(CAST(id AS CHAR) LIKE ? OR name LIKE ?)", []interface{}{like, like}
 }
 
 // ListPublicGroups 获取公开群组列表（Type=1）
@@ -243,12 +332,16 @@ func (r *GroupRepository) ListPublicGroupsPaginated(limit, page int, keyword str
 	var groups []*Group
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizePageOffset(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 	query := r.db.Model(&Group{}).Where("type = ?", 1)
 
 	if keyword != "" {
 		like := "%" + keyword + "%"
-		query = query.Where("CAST(id AS CHAR) LIKE ? OR name LIKE ?", like, like)
+		cond, args := groupKeywordCondition(keyword, like)
+		query = query.Where(cond, args...)
 	}
 
 	// 获取总数
@@ -327,7 +420,10 @@ func (r *RelayRepository) ListRelaysPaginated(limit, page int) ([]*Relay, int64,
 	var relays []*Relay
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizePageOffset(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// 获取总数
 	if err := r.db.Model(&Relay{}).Count(&total).Error; err != nil {
@@ -416,7 +512,10 @@ func (r *ServerRepository) ListServersPaginated(limit, page int) ([]*Server, int
 	var servers []*Server
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizePageOffset(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// 获取总数
 	if err := r.db.Model(&Server{}).Count(&total).Error; err != nil {
@@ -476,6 +575,28 @@ type OperatorLogRepository struct {
 	db *gorm.DB
 }
 
+const maxOperatorLogPageSize = 100
+
+// NormalizeOperatorLogPagination keeps offset calculations bounded before a
+// caller can pass values to SQL. The handler and repository share this rule so
+// direct repository users cannot reintroduce a negative offset.
+func NormalizeOperatorLogPagination(limit, page int) (int, int, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > maxOperatorLogPageSize {
+		limit = maxOperatorLogPageSize
+	}
+	if page <= 0 {
+		page = 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if page > (maxInt/limit)+1 {
+		return 0, 0, 0, errors.New("operator log page is too large")
+	}
+	return limit, page, (page - 1) * limit, nil
+}
+
 // NewOperatorLogRepository 创建操作日志仓库
 func NewOperatorLogRepository() *OperatorLogRepository {
 	return &OperatorLogRepository{db: Get()}
@@ -486,7 +607,10 @@ func (r *OperatorLogRepository) ListLogs(limit, page int) ([]*OperatorLog, int64
 	var logs []*OperatorLog
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// 获取总数
 	if err := r.db.Model(&OperatorLog{}).Count(&total).Error; err != nil {
@@ -506,7 +630,10 @@ func (r *OperatorLogRepository) ListLogsByEventType(eventType string, limit, pag
 	var logs []*OperatorLog
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 	query := r.db.Model(&OperatorLog{})
 	if eventType != "" {
 		query = query.Where("event_type = ?", eventType)
@@ -530,7 +657,10 @@ func (r *OperatorLogRepository) ListLogsByOperator(operatorID int, limit, page i
 	var logs []*OperatorLog
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 	query := r.db.Model(&OperatorLog{}).Where("operator_id = ?", operatorID)
 
 	// 获取总数
@@ -576,7 +706,9 @@ func (r *OperatorLogRepository) GetLogStats() (map[string]int64, error) {
 
 	// 总数
 	var total int64
-	r.db.Model(&OperatorLog{}).Count(&total)
+	if err := r.db.Model(&OperatorLog{}).Count(&total).Error; err != nil {
+		return nil, err
+	}
 	stats["total"] = total
 
 	return stats, nil
@@ -606,7 +738,10 @@ func (r *OperatorLogRepository) Query(userID int, page, limit int, eventType str
 	var logs []*OperatorLog
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 	query := r.db.Model(&OperatorLog{})
 
 	if userID > 0 {
@@ -640,23 +775,26 @@ func (r *OperatorLogRepository) GetStats() (map[string]int64, error) {
 	}
 	stats["total"] = total
 
-	// 今日统计
+	// 今日统计（范围扫描，可利用 timestamp 索引，替代 DATE() 包裹列的全表扫描）
 	var today int64
-	if err := r.db.Model(&OperatorLog{}).Where("DATE(timestamp) = CURDATE()").Count(&today).Error; err != nil {
+	if err := r.db.Model(&OperatorLog{}).Where("timestamp >= ? AND timestamp < ?", startOfDay(time.Now()), startOfDay(time.Now()).Add(24*time.Hour)).Count(&today).Error; err != nil {
 		return nil, err
 	}
 	stats["today"] = today
 
-	// 本周统计
+	// 本周统计（周一为一周起点）
+	now := time.Now()
+	weekStart := startOfDay(now).AddDate(0, 0, -(int(now.Weekday())+6)%7)
 	var week int64
-	if err := r.db.Model(&OperatorLog{}).Where("YEARWEEK(timestamp, 1) = YEARWEEK(NOW(), 1)").Count(&week).Error; err != nil {
+	if err := r.db.Model(&OperatorLog{}).Where("timestamp >= ? AND timestamp < ?", weekStart, weekStart.AddDate(0, 0, 7)).Count(&week).Error; err != nil {
 		return nil, err
 	}
 	stats["this_week"] = week
 
 	// 本月统计
+	monthStart := startOfDay(now).AddDate(0, 0, -(now.Day() - 1))
 	var month int64
-	if err := r.db.Model(&OperatorLog{}).Where("YEAR(timestamp) = YEAR(NOW()) AND MONTH(timestamp) = MONTH(NOW())").Count(&month).Error; err != nil {
+	if err := r.db.Model(&OperatorLog{}).Where("timestamp >= ? AND timestamp < ?", monthStart, monthStart.AddDate(0, 1, 0)).Count(&month).Error; err != nil {
 		return nil, err
 	}
 	stats["this_month"] = month

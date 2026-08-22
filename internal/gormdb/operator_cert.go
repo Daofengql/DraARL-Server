@@ -1,10 +1,47 @@
 package gormdb
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+const (
+	defaultOperatorCertPageSize = 20
+	maxOperatorCertPageSize     = 100
+)
+
+// NormalizeOperatorCertPagination validates the page size and offset contract
+// used by both HTTP handlers and direct repository callers.
+func NormalizeOperatorCertPagination(limit, offset int) (int, int, error) {
+	if limit <= 0 {
+		limit = defaultOperatorCertPageSize
+	}
+	if limit > maxOperatorCertPageSize {
+		limit = maxOperatorCertPageSize
+	}
+	if offset < 0 {
+		return 0, 0, errors.New("operator certificate offset is negative")
+	}
+	return limit, offset, nil
+}
+
+// NormalizeOperatorCertPage converts a 1-based page into a bounded SQL offset.
+func NormalizeOperatorCertPage(limit, page int) (int, int, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	limit, _, err := NormalizeOperatorCertPagination(limit, 0)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if page-1 > maxInt/limit {
+		return 0, 0, 0, errors.New("operator certificate page is too large")
+	}
+	return limit, page, (page - 1) * limit, nil
+}
 
 // OperatorCertRepository 操作证仓储
 type OperatorCertRepository struct {
@@ -268,13 +305,18 @@ func (r *OperatorCertRepository) RejectCert(certID int, reviewerID int, note str
 func (r *OperatorCertRepository) ListPendingCerts(limit, page int) ([]*OperatorCert, int64, error) {
 	var certs []*OperatorCert
 	var total int64
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizeOperatorCertPage(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
-	// 获取总数
-	r.db.Model(&OperatorCert{}).Where("status = ?", 0).Count(&total)
+	// 获取总数（【错误检查修复】Count 失败不再静默返回 0）
+	if err := r.db.Model(&OperatorCert{}).Where("status = ?", 0).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	// 获取分页数据
-	err := r.db.Where("status = ?", 0).
+	err = r.db.Where("status = ?", 0).
 		Order("id DESC").
 		Limit(limit).
 		Offset(offset).
@@ -297,10 +339,16 @@ func (r *OperatorCertRepository) ListRejected(limit, offset int) ([]*UserWithCer
 func (r *OperatorCertRepository) ListByCertStatus(certStatus int, limit, offset int) ([]*UserWithCert, int64, error) {
 	var users []*User
 	var total int64
+	var err error
+	if limit, offset, err = NormalizeOperatorCertPagination(limit, offset); err != nil {
+		return nil, 0, err
+	}
 
-	// 获取有指定状态操作证的用户ID列表
+	// 获取有指定状态操作证的用户ID列表（【错误检查修复】Pluck 失败不再静默空列表）
 	var userIDs []int
-	r.db.Model(&OperatorCert{}).Where("status = ?", certStatus).Distinct("user_id").Pluck("user_id", &userIDs)
+	if err := r.db.Model(&OperatorCert{}).Where("status = ?", certStatus).Distinct("user_id").Pluck("user_id", &userIDs).Error; err != nil {
+		return nil, 0, err
+	}
 
 	if len(userIDs) == 0 {
 		return []*UserWithCert{}, 0, nil
@@ -310,7 +358,7 @@ func (r *OperatorCertRepository) ListByCertStatus(certStatus int, limit, offset 
 	total = int64(len(userIDs))
 
 	// 查询用户
-	err := r.db.Where("id IN ?", userIDs).
+	err = r.db.Where("id IN ?", userIDs).
 		Order("create_time DESC").
 		Limit(limit).
 		Offset(offset).
@@ -339,7 +387,9 @@ func (r *OperatorCertRepository) ListByCertStatus(certStatus int, limit, offset 
 		// 已拒绝：获取最新的拒绝证书
 		certQuery = certQuery.Where("status = ?", 2).Order("user_id, id DESC")
 	}
-	certQuery.Find(&allCerts)
+	if err := certQuery.Find(&allCerts).Error; err != nil {
+		return nil, 0, err
+	}
 
 	// 按用户ID分组，每个用户只取第一个（最新的）证书
 	userCertMap := make(map[int]*OperatorCert)
@@ -383,10 +433,16 @@ func (r *OperatorCertRepository) ListRejectedWithCerts(limit, offset int) ([]*Us
 func (r *OperatorCertRepository) ListByCertStatusWithAllCerts(certStatus int, limit, offset int) ([]*UserWithCerts, int64, error) {
 	var users []*User
 	var total int64
+	var err error
+	if limit, offset, err = NormalizeOperatorCertPagination(limit, offset); err != nil {
+		return nil, 0, err
+	}
 
-	// 获取有指定状态操作证的用户ID列表
+	// 获取有指定状态操作证的用户ID列表（【错误检查修复】Pluck 失败不再静默空列表）
 	var userIDs []int
-	r.db.Model(&OperatorCert{}).Where("status = ?", certStatus).Distinct("user_id").Pluck("user_id", &userIDs)
+	if err := r.db.Model(&OperatorCert{}).Where("status = ?", certStatus).Distinct("user_id").Pluck("user_id", &userIDs).Error; err != nil {
+		return nil, 0, err
+	}
 
 	if len(userIDs) == 0 {
 		return []*UserWithCerts{}, 0, nil
@@ -396,7 +452,7 @@ func (r *OperatorCertRepository) ListByCertStatusWithAllCerts(certStatus int, li
 	total = int64(len(userIDs))
 
 	// 查询用户
-	err := r.db.Where("id IN ?", userIDs).
+	err = r.db.Where("id IN ?", userIDs).
 		Order("create_time DESC").
 		Limit(limit).
 		Offset(offset).
@@ -414,7 +470,9 @@ func (r *OperatorCertRepository) ListByCertStatusWithAllCerts(certStatus int, li
 
 	// 批量获取这些用户的所有操作证（优化 N+1 查询）
 	var allCerts []*OperatorCert
-	r.db.Where("user_id IN ?", pagedUserIDs).Order("user_id, id DESC").Find(&allCerts)
+	if err := r.db.Where("user_id IN ?", pagedUserIDs).Order("user_id, id DESC").Find(&allCerts).Error; err != nil {
+		return nil, 0, err
+	}
 
 	// 按用户ID分组
 	userCertsMap := make(map[int][]*OperatorCert)
@@ -470,6 +528,10 @@ type CertificateApproval struct {
 func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, offset int) ([]*CertificateApproval, int64, error) {
 	var certs []*OperatorCert
 	var total int64
+	var err error
+	if limit, offset, err = NormalizeOperatorCertPagination(limit, offset); err != nil {
+		return nil, 0, err
+	}
 
 	query := r.db.Model(&OperatorCert{})
 
@@ -487,11 +549,13 @@ func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, off
 		}
 	}
 
-	// 获取总数
-	query.Count(&total)
+	// 获取总数（【错误检查修复】Count 失败不再静默返回 0）
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	// 获取分页数据
-	err := query.Order("id DESC").
+	err = query.Order("id DESC").
 		Limit(limit).
 		Offset(offset).
 		Find(&certs).Error
@@ -508,7 +572,9 @@ func (r *OperatorCertRepository) ListCertificateApprovals(status int, limit, off
 	// 查询用户信息
 	var users []*User
 	if len(userIDs) > 0 {
-		r.db.Where("id IN ?", userIDs).Find(&users)
+		if err := r.db.Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+			return nil, 0, err
+		}
 	}
 	userMap := make(map[int]*User)
 	for _, u := range users {

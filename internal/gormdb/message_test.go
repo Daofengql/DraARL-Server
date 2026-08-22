@@ -50,6 +50,21 @@ func TestMergeMessagePagesDeduplicatesDeliverySnapshots(t *testing.T) {
 	}
 }
 
+func TestChunkMessageGroupIDsBoundsBatchQueries(t *testing.T) {
+	groups := []int{1, 2, 3, 4, 5}
+	chunks := chunkMessageGroupIDs(groups, 2)
+	if len(chunks) != 3 || len(chunks[0]) != 2 || len(chunks[2]) != 1 {
+		t.Fatalf("unexpected chunks: %#v", chunks)
+	}
+	chunks[0][0] = 99
+	if groups[0] != 1 {
+		t.Fatal("chunk must not alias input group IDs")
+	}
+	if fallback := chunkMessageGroupIDs(groups, 0); len(fallback) != 1 || len(fallback[0]) != len(groups) {
+		t.Fatalf("unexpected default chunking: %#v", fallback)
+	}
+}
+
 func TestUniquePositiveGroupIDsPreservesFirstOccurrence(t *testing.T) {
 	got := uniquePositiveGroupIDs([]int{3, 0, 2, 3, -1, 2, 4})
 	want := []int{3, 2, 4}

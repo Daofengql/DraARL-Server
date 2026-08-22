@@ -3,9 +3,10 @@ package db
 import (
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"log"
 	"math/big"
+	"strings"
 	"time"
 
 	"draarl/internal/models"
@@ -18,6 +19,25 @@ type UserRepository struct {
 	db *sql.DB
 }
 
+// userSelectColumns is deliberately explicit and kept aligned with the
+// legacy scanner below.  This package is a compatibility SQL layer while the
+// canonical model has gained newer columns over time; SELECT * would make
+// every read depend on physical table order and column count.
+const userSelectColumns = `id, name, callsign, gird, phone, password,
+	birthday, sex, avatar, address, roles, introduction, alarm_msg, status,
+	update_time, last_login_time, login_err_times, create_time, openid,
+	nickname, pid, last_login_ip, dmrid, mdcid`
+
+const adminLookupQuery = "SELECT id FROM users WHERE name = ? LIMIT 1 FOR UPDATE"
+
+func userSelectQuery(predicate string) string {
+	query := "SELECT " + userSelectColumns + " FROM users"
+	if strings.TrimSpace(predicate) != "" {
+		query += " WHERE " + predicate
+	}
+	return query
+}
+
 // NewUserRepository 创建用户仓库
 func NewUserRepository() *UserRepository {
 	return &UserRepository{db: Get()}
@@ -25,10 +45,15 @@ func NewUserRepository() *UserRepository {
 
 // AddUser 添加用户
 func (r *UserRepository) AddUser(user *models.User) error {
+	// 【H1 安全修复】密码必须 bcrypt 哈希后落库，禁止明文存储
+	hashed, err := hashUserPassword(user.Password)
+	if err != nil {
+		return err
+	}
 	query := `INSERT INTO users (name, callsign, phone, password, roles, status, create_time, update_time)
 		VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
-	result, err := r.db.Exec(query, user.Name, user.CallSign, user.Phone, user.Password,
+	result, err := r.db.Exec(query, user.Name, user.CallSign, user.Phone, hashed,
 		serializeRoles(user.Roles), user.Status)
 	if err != nil {
 		return err
@@ -45,25 +70,25 @@ func (r *UserRepository) AddUser(user *models.User) error {
 
 // GetUser 获取用户
 func (r *UserRepository) GetUser(id int) (*models.User, error) {
-	query := `SELECT * FROM users WHERE id = ?`
+	query := userSelectQuery("id = ?")
 	return r.scanUser(r.db.QueryRow(query, id))
 }
 
 // GetUserByCallSign 通过呼号获取用户
 func (r *UserRepository) GetUserByCallSign(callsign string) (*models.User, error) {
-	query := `SELECT * FROM users WHERE callsign = ?`
+	query := userSelectQuery("callsign = ?")
 	return r.scanUser(r.db.QueryRow(query, callsign))
 }
 
 // GetUserByPhone 通过手机号获取用户
 func (r *UserRepository) GetUserByPhone(phone string) (*models.User, error) {
-	query := `SELECT * FROM users WHERE phone = ?`
+	query := userSelectQuery("phone = ?")
 	return r.scanUser(r.db.QueryRow(query, phone))
 }
 
 // GetUserByOpenID 通过OpenID获取用户
 func (r *UserRepository) GetUserByOpenID(openid string) (*models.User, error) {
-	query := `SELECT * FROM users WHERE openid = ?`
+	query := userSelectQuery("openid = ?")
 	return r.scanUser(r.db.QueryRow(query, openid))
 }
 
@@ -79,7 +104,7 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*models.User, int, error)
 	}
 
 	// 获取分页数据
-	query := `SELECT * FROM users ORDER BY id LIMIT ? OFFSET ?`
+	query := userSelectQuery("") + " ORDER BY id LIMIT ? OFFSET ?"
 	rows, err := r.db.Query(query, limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -90,10 +115,12 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*models.User, int, error)
 	for rows.Next() {
 		user, err := r.scanUserFromRows(rows)
 		if err != nil {
-			log.Printf("Error scanning user: %v", err)
-			continue
+			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate users: %w", err)
 	}
 
 	return users, total, nil
@@ -110,8 +137,13 @@ func (r *UserRepository) UpdateUser(user *models.User) error {
 
 // UpdateUserPassword 更新用户密码
 func (r *UserRepository) UpdateUserPassword(id int, password string) error {
+	// 【H1 安全修复】bcrypt 哈希后落库
+	hashed, err := hashUserPassword(password)
+	if err != nil {
+		return err
+	}
 	query := `UPDATE users SET password = ?, update_time = NOW() WHERE id = ?`
-	_, err := r.db.Exec(query, password, id)
+	_, err = r.db.Exec(query, hashed, id)
 	return err
 }
 
@@ -138,9 +170,14 @@ func (r *UserRepository) DeleteUser(id int) error {
 
 // VerifyPassword 验证用户密码
 func (r *UserRepository) VerifyPassword(phone, password string) (*models.User, error) {
-	query := `SELECT * FROM users WHERE phone = ? AND password = ?`
-	user, err := r.scanUser(r.db.QueryRow(query, phone, password))
+	// 【H1 安全修复】改为按 phone 取回哈希后用 bcrypt 恒定时间比较，
+	// 不再使用 SQL 明文比对；同时也消除对 scanUser 列数错位的依赖。
+	query := userSelectQuery("phone = ?") + " LIMIT 1"
+	user, err := r.scanUser(r.db.QueryRow(query, phone))
 	if err != nil {
+		return nil, fmt.Errorf("用户名或密码错误")
+	}
+	if !verifyUserPassword(user.Password, password) {
 		return nil, fmt.Errorf("用户名或密码错误")
 	}
 
@@ -165,12 +202,14 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
 	var sex sql.NullInt64
 	var alarmMsg sql.NullBool
+	var dmrid sql.NullInt64
+	var mdcid sql.NullString
 
 	err := row.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
 		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
 		&alarmMsg, &user.Status, &updateTime, &lastLoginTime, &user.LoginErrTimes,
 		&user.CreateTime, &openid, &user.NickName, &pid, &lastLoginIP,
-		new(int), new(string))
+		&dmrid, &mdcid)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found")
@@ -216,6 +255,12 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 	if lastLoginIP.Valid {
 		user.LastLoginIP = lastLoginIP.String
 	}
+	if dmrid.Valid {
+		user.DMRID = uint32(dmrid.Int64)
+	}
+	if mdcid.Valid {
+		user.MDCID = mdcid.String
+	}
 
 	user.Roles = deserializeRoles(rolesStr.String)
 	return user, nil
@@ -227,12 +272,14 @@ func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*models.User, error) 
 	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
 	var sex sql.NullInt64
 	var alarmMsg sql.NullBool
+	var dmrid sql.NullInt64
+	var mdcid sql.NullString
 
 	err := rows.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
 		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
 		&alarmMsg, &user.Status, &updateTime, &lastLoginTime, &user.LoginErrTimes,
 		&user.CreateTime, &openid, &user.NickName, &pid, &lastLoginIP,
-		new(int), new(string))
+		&dmrid, &mdcid)
 
 	if err != nil {
 		return nil, err
@@ -275,6 +322,12 @@ func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*models.User, error) 
 	if lastLoginIP.Valid {
 		user.LastLoginIP = lastLoginIP.String
 	}
+	if dmrid.Valid {
+		user.DMRID = uint32(dmrid.Int64)
+	}
+	if mdcid.Valid {
+		user.MDCID = mdcid.String
+	}
 
 	user.Roles = deserializeRoles(rolesStr.String)
 	return user, nil
@@ -298,14 +351,28 @@ func serializeRoles(roles []string) string {
 
 // deserializeRoles 反序列化角色数组
 func deserializeRoles(rolesStr string) []string {
+	rolesStr = strings.TrimSpace(rolesStr)
 	if rolesStr == "" {
 		return []string{"user"}
 	}
-	// 简化处理，实际应该使用JSON解析
-	if rolesStr[0] == '[' {
-		rolesStr = rolesStr[1 : len(rolesStr)-1]
+	if strings.HasPrefix(rolesStr, "[") {
+		var parsed []string
+		if err := json.Unmarshal([]byte(rolesStr), &parsed); err == nil {
+			roles := make([]string, 0, len(parsed))
+			for _, role := range parsed {
+				if role = strings.TrimSpace(role); role != "" {
+					roles = append(roles, role)
+				}
+			}
+			if len(roles) > 0 {
+				return roles
+			}
+			return []string{"user"}
+		}
+		// A malformed JSON-looking value must not become an arbitrary role.
+		return []string{"user"}
 	}
-	// 分割并清理引号
+	// Legacy comma-separated values remain supported for old databases.
 	roles := []string{}
 	for _, r := range splitAndTrim(rolesStr, ",") {
 		if len(r) > 0 {
@@ -349,7 +416,7 @@ func splitAndTrim(s, sep string) []string {
 
 // GetUserByUsername 通过用户名获取用户（使用 name 字段）
 func GetUserByUsername(username string) (*models.User, error) {
-	query := `SELECT * FROM users WHERE name = ? LIMIT 1`
+	query := userSelectQuery("name = ?") + " LIMIT 1"
 	return scanUserDirect(Get().QueryRow(query, username))
 }
 
@@ -363,7 +430,12 @@ func CreateUser(user *models.User) error {
 	if len(user.Roles) > 0 {
 		roles = serializeRoles(user.Roles)
 	}
-	result, err := Get().Exec(query, user.Name, user.Password, user.NickName, user.Status, roles, now, now)
+	// 【H1 安全修复】bcrypt 哈希后落库
+	hashed, err := hashUserPassword(user.Password)
+	if err != nil {
+		return err
+	}
+	result, err := Get().Exec(query, user.Name, hashed, user.NickName, user.Status, roles, now, now)
 	if err != nil {
 		return err
 	}
@@ -395,12 +467,14 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 	var rolesStr, callSign, gird, phone, birthday, avatar, address, introduction, openid, pid, lastLoginIP, updateTime, lastLoginTime sql.NullString
 	var sex sql.NullInt64
 	var alarmMsg sql.NullBool
+	var dmrid sql.NullInt64
+	var mdcid sql.NullString
 
 	err := row.Scan(&user.ID, &user.Name, &callSign, &gird, &phone, &user.Password,
 		&birthday, &sex, &avatar, &address, &rolesStr, &introduction,
 		&alarmMsg, &user.Status, &updateTime, &lastLoginTime, &user.LoginErrTimes,
 		&user.CreateTime, &openid, &user.NickName, &pid, &lastLoginIP,
-		new(int), new(string))
+		&dmrid, &mdcid)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found")
@@ -446,6 +520,12 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 	if lastLoginIP.Valid {
 		user.LastLoginIP = lastLoginIP.String
 	}
+	if dmrid.Valid {
+		user.DMRID = uint32(dmrid.Int64)
+	}
+	if mdcid.Valid {
+		user.MDCID = mdcid.String
+	}
 
 	// 解析角色
 	user.Roles = deserializeRoles(rolesStr.String)
@@ -453,18 +533,50 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 	return user, nil
 }
 
+// hashUserPassword 对用户密码做 bcrypt 哈希；空密码保持为空（允许无密码账号）。
+func hashUserPassword(password string) (string, error) {
+	if password == "" {
+		return "", nil
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("密码哈希失败: %w", err)
+	}
+	return string(hashed), nil
+}
+
+// verifyUserPassword 使用 bcrypt 恒定时间比较校验密码哈希。
+func verifyUserPassword(hashed, plain string) bool {
+	if hashed == "" {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hashed), []byte(plain)) == nil
+}
+
 // ==================== 初始化管理员 ====================
 
 // InitAdminUser 初始化管理员用户（如果不存在）
 func InitAdminUser() (string, string, error) {
-	// 检查名为 "admin" 的用户是否已存在
-	var count int
-	err := Get().QueryRow("SELECT COUNT(*) FROM users WHERE name = 'admin'").Scan(&count)
+	// Keep the existence check and insert on one transaction/connection.  A
+	// process can otherwise pass a COUNT check concurrently with another
+	// startup and turn a normal idempotent initialization into a duplicate-key
+	// failure (or duplicate admins on an old schema without the unique index).
+	tx, err := Get().Begin()
 	if err != nil {
-		return "", "", fmt.Errorf("检查管理员用户失败: %w", err)
+		return "", "", fmt.Errorf("开启管理员初始化事务失败: %w", err)
 	}
-	if count > 0 {
+	defer func() { _ = tx.Rollback() }()
+
+	var existingID int
+	err = tx.QueryRow(adminLookupQuery, "admin").Scan(&existingID)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return "", "", fmt.Errorf("确认管理员已存在失败: %w", err)
+		}
 		return "", "", nil // 已存在 admin 用户，无需创建
+	}
+	if err != sql.ErrNoRows {
+		return "", "", fmt.Errorf("检查管理员用户失败: %w", err)
 	}
 
 	// 生成随机密码
@@ -484,9 +596,12 @@ func InitAdminUser() (string, string, error) {
 	// 审核状态设为 1（已通过）
 	query := `INSERT INTO users (name, password, nickname, status, roles, approval_status, create_time, update_time)
 		VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW())`
-	_, err = Get().Exec(query, "admin", string(hashedPassword), "系统管理员", 1, "admin")
+	_, err = tx.Exec(query, "admin", string(hashedPassword), "系统管理员", 1, "admin")
 	if err != nil {
 		return "", "", fmt.Errorf("创建管理员失败: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("提交管理员初始化失败: %w", err)
 	}
 
 	return "admin", password, nil

@@ -21,17 +21,61 @@ func newUUID() string {
 	return uuid.New().String()
 }
 
+// maxImageDimension 防止解压炸弹：单边像素上限。
+const maxImageDimension = 12000
+
+// decodeImageConfigSafe 先用 image.DecodeConfig 读取图片头部并校验像素尺寸，
+// 避免小体积大尺寸 PNG 在 image.Decode 全量解码时耗尽数百 MB 内存。
+func decodeImageConfigSafe(r io.Reader) (image.Config, error) {
+	cfg, _, err := image.DecodeConfig(r)
+	if err != nil {
+		return image.Config{}, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImageDimension || cfg.Height > maxImageDimension {
+		return image.Config{}, fmt.Errorf("图片尺寸超限: %dx%d (上限 %d)", cfg.Width, cfg.Height, maxImageDimension)
+	}
+	return cfg, nil
+}
+
 // ProcessAvatar 处理头像：限制 2000、中心裁切正方形、JPEG 编码。
 func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	return ProcessAvatarContext(context.Background(), fileHeader)
+}
+
+// ProcessAvatarContext processes an avatar while honoring request cancellation.
+func ProcessAvatarContext(ctx context.Context, fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	file, err := fileHeader.Open()
 	if err != nil {
 		return nil, "", fmt.Errorf("打开文件失败: %w", err)
 	}
 	defer file.Close()
 
-	img, _, err := image.Decode(file)
+	// 解压炸弹防护：先校验像素尺寸再全量解码
+	if _, err := decodeImageConfigSafe(&contextReader{ctx: ctx, reader: file}); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, "", ctxErr
+		}
+		return nil, "", err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, "", fmt.Errorf("重置文件流失败: %w", err)
+	}
+
+	img, _, err := image.Decode(&contextReader{ctx: ctx, reader: file})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, "", ctxErr
+		}
 		return nil, "", fmt.Errorf("解码图片失败: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 
 	bounds := img.Bounds()
@@ -46,6 +90,9 @@ func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 		width = bounds.Dx()
 		height = bounds.Dy()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 
 	var cropped image.Image
 	if width != height {
@@ -58,6 +105,9 @@ func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 		cropped = imaging.Crop(img, image.Rect(x, y, x+size, y+size))
 	} else {
 		cropped = img
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 
 	var buf bytes.Buffer
@@ -73,18 +123,59 @@ func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 
 // GenerateThumbnail 从存储读取原图并生成缩略图数据。
 func GenerateThumbnail(originalObject string, width, height int, ext string) (string, []byte, error) {
+	return GenerateThumbnailContext(context.Background(), originalObject, width, height, ext)
+}
+
+// GenerateThumbnailContext generates a thumbnail while honoring cancellation.
+func GenerateThumbnailContext(ctx context.Context, originalObject string, width, height int, ext string) (string, []byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
 	thumbObjectName := "thumb/" + originalObject
-	reader, err := Open(context.Background(), originalObject)
+	reader, err := Open(ctx, originalObject)
 	if err != nil {
 		return "", nil, fmt.Errorf("下载原图片失败: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
-	img, _, err := image.Decode(reader)
+	// 解压炸弹防护：先校验像素尺寸再全量解码
+	if _, err := decodeImageConfigSafe(&contextReader{ctx: ctx, reader: reader}); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", nil, ctxErr
+		}
+		return "", nil, err
+	}
+	if seeker, ok := reader.(io.Seeker); ok {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return "", nil, fmt.Errorf("重置文件流失败: %w", err)
+		}
+	} else {
+		// 不支持 Seek 的 reader 重新打开
+		again, reopenErr := Open(ctx, originalObject)
+		if reopenErr != nil {
+			return "", nil, fmt.Errorf("重新下载原图片失败: %w", reopenErr)
+		}
+		_ = reader.Close()
+		reader = again
+	}
+
+	img, _, err := image.Decode(&contextReader{ctx: ctx, reader: reader})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", nil, ctxErr
+		}
 		return "", nil, fmt.Errorf("解码图片失败: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
 	thumbnail := imaging.Resize(img, width, height, imaging.Lanczos)
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
 
 	var buf bytes.Buffer
 	switch strings.ToLower(ext) {
@@ -103,6 +194,17 @@ func GenerateThumbnail(originalObject string, width, height int, ext string) (st
 
 // ProcessLogo 处理 Logo：限制 500x500，输出 PNG。
 func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	return ProcessLogoContext(context.Background(), fileHeader)
+}
+
+// ProcessLogoContext processes a logo while honoring request cancellation.
+func ProcessLogoContext(ctx context.Context, fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	file, err := fileHeader.Open()
 	if err != nil {
 		return nil, "", fmt.Errorf("打开文件失败: %w", err)
@@ -110,7 +212,7 @@ func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 	defer file.Close()
 
 	buf := make([]byte, fileHeader.Size)
-	_, err = io.ReadFull(file, buf)
+	_, err = io.ReadFull(&contextReader{ctx: ctx, reader: file}, buf)
 	if err != nil && err != io.ErrUnexpectedEOF {
 		return nil, "", fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -119,6 +221,13 @@ func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 	var format string
 	var decodeErr error
 
+	// 解压炸弹防护：先校验像素尺寸再全量解码
+	if _, cfgErr := decodeImageConfigSafe(&contextReader{ctx: ctx, reader: bytes.NewReader(buf)}); cfgErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, "", ctxErr
+		}
+		return nil, "", cfgErr
+	}
 	reader := bytes.NewReader(buf)
 	img, format, decodeErr = image.Decode(reader)
 	if decodeErr != nil {
@@ -139,6 +248,9 @@ func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 		}
 	}
 	_ = format
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 
 	bounds := img.Bounds()
 	width := bounds.Dx()
@@ -153,6 +265,9 @@ func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 			scale = scaleY
 		}
 		img = imaging.Resize(img, int(float64(width)*scale), int(float64(height)*scale), imaging.Lanczos)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 
 	var outputBuf bytes.Buffer

@@ -1,6 +1,8 @@
 package gormdb
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"draarl/internal/accesspoint"
 	broadcastmodel "draarl/internal/broadcast/model"
 
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -38,9 +41,9 @@ type User struct {
 	LastLoginTime  *time.Time `gorm:"type:datetime;column:last_login_time" json:"last_login_time"`
 	LoginErrTimes  int        `gorm:"type:int;default:0;column:login_err_times" json:"login_err_times"`
 	CreateTime     time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	OpenID         string     `gorm:"type:varchar(255);index;column:openid" json:"openid"`
+	OpenID         string     `gorm:"type:varchar(255);index;column:openid" json:"-"` // SSO 绑定标识，不外泄
 	NickName       string     `gorm:"type:varchar(255);column:nickname" json:"nickname"`
-	PID            string     `gorm:"type:varchar(255);column:pid" json:"pid"`
+	PID            string     `gorm:"type:varchar(255);column:pid" json:"-"` // 个人证件号，不外泄
 	LastLoginIP    string     `gorm:"type:varchar(64);column:last_login_ip" json:"last_login_ip"`
 	DMRID          int        `gorm:"type:int;default:0;column:dmrid" json:"dmrid"`
 	MDCID          string     `gorm:"type:varchar(255);default:'';column:mdcid" json:"mdcid"`
@@ -167,7 +170,7 @@ type Server struct {
 	ID                         int        `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name                       string     `gorm:"type:varchar(255)" json:"name"`
 	ServerType                 int        `gorm:"type:int" json:"server_type"`
-	JoinKey                    string     `gorm:"type:varchar(255)" json:"join_key"`
+	JoinKey                    string     `gorm:"type:varchar(255)" json:"-"` // 节点接入密钥，不外泄
 	CPUType                    string     `gorm:"type:varchar(255)" json:"cpu_type"`
 	MemSize                    string     `gorm:"type:varchar(255)" json:"mem_size"`
 	InputRate                  int        `gorm:"type:int" json:"input_rate"`
@@ -261,12 +264,12 @@ func (r *Relay) String() string {
 
 // OperatorLog 操作日志模型
 type OperatorLog struct {
-	ID         int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Timestamp  time.Time `gorm:"autoCreateTime" json:"timestamp"`
+	ID         int       `gorm:"primaryKey;autoIncrement;index:idx_operator_log_event_id,priority:2;index:idx_operator_log_operator_id,priority:2" json:"id"`
+	Timestamp  time.Time `gorm:"autoCreateTime;index" json:"timestamp"` // 统计/清理按时间范围查询，加索引避免全表扫描
 	Content    string    `gorm:"type:text" json:"content"`
-	EventType  string    `gorm:"type:varchar(255);index" json:"event_type"`
+	EventType  string    `gorm:"type:varchar(255);index:idx_operator_log_event_id,priority:1" json:"event_type"`
 	Operator   string    `gorm:"type:varchar(255)" json:"operator"`
-	OperatorID int       `gorm:"type:int;index" json:"operator_id"`
+	OperatorID int       `gorm:"type:int;index:idx_operator_log_operator_id,priority:1" json:"operator_id"`
 	IPAddress  string    `gorm:"type:varchar(64);column:ip_address" json:"ip_address,omitempty"`
 }
 
@@ -678,63 +681,194 @@ func (ClientResourceArtifactTarget) TableName() string {
 // 2. 移除重复数据，为唯一索引的建立扫除障碍。
 // 3. 将最终的约束控制权完全交接给 GORM。
 func AutoMigrate() error {
+	return AutoMigrateContext(context.Background())
+}
+
+// AutoMigrateContext is the cancellation-aware migration entry point. The
+// legacy AutoMigrate API remains available to existing startup callers.
+func AutoMigrateContext(ctx context.Context) error {
 	db := Get()
+	return withMigrationLock(ctx, db, autoMigrateLocked)
+}
+
+func autoMigrateLocked(db *gorm.DB) error {
+	// 【H12 安全修复】迁移版本化：数据清洗/索引重建等一次性高风险步骤只在
+	// 首次（或版本升级后）执行并记录 schema_migrations；日常启动仅做幂等的
+	// GORM schema 同步与轻量归一化，避免大表 ALTER 锁库与全表扫描重复执行。
+	version, versionErr := appliedMigrationVersion(db)
+	if versionErr != nil {
+		return versionErr
+	}
+	if version < CurrentMigrationVersion {
+		if version < 1 {
+			if err := startMigrationVersion(db, 1); err != nil {
+				return err
+			}
+			if err := migrateSchemaV1(db); err != nil {
+				return err
+			}
+			if err := completeMigrationVersion(db, 1); err != nil {
+				return err
+			}
+			version = 1
+		}
+		if version < 2 {
+			if err := startMigrationVersion(db, 2); err != nil {
+				return err
+			}
+			if err := migrateSchemaV2(db); err != nil {
+				return err
+			}
+			if err := completeMigrationVersion(db, 2); err != nil {
+				return err
+			}
+			version = 2
+		}
+		log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
+		return nil
+	}
+	// 已迁移：仅执行幂等 schema 同步与轻量归一化（GORM 只在结构差异时发 ALTER）
 	if err := dropEmptyLegacyClientReleaseTables(db); err != nil {
 		return err
 	}
-
-	// ==========================================
-	// 阶段一：数据清洗 (Data Cleansing)
-	// ==========================================
-
-	// 1. 清理 users 表中的重复记录 (保留 ID 较小的记录)
-	// 原理：使用内连接查找手机号相同且 ID 较大的冗余行进行删除
-	cleanupDupUserSQL := `
-		DELETE u1 FROM users u1
-		INNER JOIN users u2
-		WHERE u1.id > u2.id AND u1.phone = u2.phone AND u1.phone != ''
-	`
-	if err := db.Exec(cleanupDupUserSQL).Error; err != nil {
-		log.Printf("[Migration Warning] 清理重复用户数据失败: %v", err)
+	if err := normalizeLegacyServerEmptyIDs(db); err != nil {
+		return err
 	}
-
-	// 1.1 在建立唯一索引前巡检呼号重复数据
-	logDuplicateCallSigns(db)
-	logDuplicateOwnerSSIDs(db)
-
-	// 2. 清理各大子表中的"孤儿数据" (Orphaned Records)
-	// 原理：子表的关联 ID 如果在主表 (如 users, public_groups) 中找不到了，就必须被抹除
-	cleanups := []struct {
-		Desc string
-		SQL  string
-	}{
-		{"操作证孤儿记录", "DELETE FROM operator_certs WHERE user_id NOT IN (SELECT id FROM users)"},
-		{"组成员(无群组)", "DELETE FROM group_members WHERE group_id NOT IN (SELECT id FROM public_groups)"},
-		{"组成员(无用户)", "DELETE FROM group_members WHERE user_id NOT IN (SELECT id FROM users)"},
-		{"群互联(源群丢失)", "DELETE FROM group_links WHERE link_group_id NOT IN (SELECT id FROM public_groups)"},
-		{"群互联(目标丢失)", "DELETE FROM group_links WHERE target_group_id NOT IN (SELECT id FROM public_groups)"},
-		{"群互联(目标重复)", "DELETE gl1 FROM group_links gl1 INNER JOIN group_links gl2 ON gl1.target_group_id = gl2.target_group_id AND gl1.id > gl2.id"},
-		{"设备(无所有者)", "DELETE FROM devices WHERE owner_id NOT IN (SELECT id FROM users)"},
-		{"日志(无所有者)", "DELETE FROM logbooks WHERE user_id NOT IN (SELECT id FROM users)"},
-		{"设备配置(无设备)", "DELETE FROM device_configs WHERE device_id NOT IN (SELECT id FROM devices)"},
-		{"电台预设(无用户)", "DELETE FROM user_radio_presets WHERE user_id NOT IN (SELECT id FROM users)"},
-		{"设备偏好(无用户)", "DELETE FROM user_device_preferences WHERE user_id NOT IN (SELECT id FROM users)"},
-		// 自引用约束的孤儿数据需要特殊处理：使用临时表避免 MySQL 不支持在同一查询中删除和查询同一表
-		{"资产(孤儿文件)", "DELETE FROM assets WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM (SELECT id FROM assets) AS tmp)"},
+	log.Println("[Migration Info] 正在执行幂等 schema 同步...")
+	if err := migrateCoreSchema(db); err != nil {
+		return err
 	}
+	if err := pruneLegacyGroupMemberColumns(db); err != nil {
+		return err
+	}
+	if err := dropLegacyGroupCallSignColumn(db); err != nil {
+		return err
+	}
+	if err := dropLegacyGroupAllowCallSignSSIDColumn(db); err != nil {
+		return err
+	}
+	log.Printf("[Migration Success] 数据库 schema 已同步（迁移版本 %d）", CurrentMigrationVersion)
+	return nil
+}
 
-	for _, task := range cleanups {
-		res := db.Exec(task.SQL)
-		if res.Error != nil {
-			log.Printf("[Migration Warning] %s 清理异常: %v", task.Desc, res.Error)
-		} else if res.RowsAffected > 0 {
-			log.Printf("[Migration Info] %s: 成功清理 %d 条脏数据", task.Desc, res.RowsAffected)
+// migrateSchemaV2 upgrades legacy plaintext private-group passwords without
+// re-running the destructive v1 cleanup. Keyset pagination keeps memory and
+// lock duration bounded; the conditional update avoids overwriting a password
+// changed concurrently by an administrator.
+func migrateSchemaV2(db *gorm.DB) error {
+	const batchSize = 200
+	var afterID int
+	for {
+		var rows []struct {
+			ID       int
+			Password string
+		}
+		if err := db.Table(Group{}.TableName()).
+			Select("id, password").
+			Where("id > ? AND type = ? AND password <> ''", afterID, 2).
+			Order("id ASC").Limit(batchSize).Find(&rows).Error; err != nil {
+			return fmt.Errorf("list legacy private group passwords: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		for _, row := range rows {
+			afterID = row.ID
+			if isBcryptPasswordHash(row.Password) {
+				continue
+			}
+			hashed, migratable, err := hashLegacyPrivateGroupPassword(row.Password)
+			if err != nil {
+				return fmt.Errorf("hash legacy private group password id=%d: %w", row.ID, err)
+			}
+			if !migratable {
+				// bcrypt deliberately rejects passwords longer than 72 bytes. Keep
+				// those legacy values usable through the compatibility verifier and
+				// let the administrator rotate them later instead of making the
+				// entire service fail to start during migration.
+				log.Printf("[Migration Warning] private group password id=%d exceeds bcrypt's 72-byte limit; retaining legacy value for manual rotation", row.ID)
+				continue
+			}
+			result := db.Model(&Group{}).
+				Where("id = ? AND type = ? AND password = ?", row.ID, 2, row.Password).
+				Update("password", string(hashed))
+			if result.Error != nil {
+				return fmt.Errorf("upgrade legacy private group password id=%d: %w", row.ID, result.Error)
+			}
+		}
+		if len(rows) < batchSize {
+			return nil
 		}
 	}
+}
 
-	// Legacy server rows predate edge NodeID. Empty strings must become NULL
-	// before GORM creates the unique index; MySQL permits multiple NULL values
-	// but would reject multiple historical empty strings.
+// hashLegacyPrivateGroupPassword returns migratable=false for legacy values
+// that bcrypt cannot represent. Such values remain supported by the legacy
+// constant-time verifier until an administrator changes the password.
+func hashLegacyPrivateGroupPassword(value string) (hashed string, migratable bool, err error) {
+	if len([]byte(value)) > 72 {
+		return "", false, nil
+	}
+	hashedBytes, err := bcrypt.GenerateFromPassword([]byte(value), bcrypt.DefaultCost)
+	if err != nil {
+		if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return string(hashedBytes), true, nil
+}
+
+func isBcryptPasswordHash(value string) bool {
+	if len(value) != 60 || (!strings.HasPrefix(value, "$2a$") && !strings.HasPrefix(value, "$2b$") && !strings.HasPrefix(value, "$2y$")) {
+		return false
+	}
+	for _, ch := range value[7:] {
+		if ch != '.' && ch != '/' && !(ch >= 'A' && ch <= 'Z') && !(ch >= 'a' && ch <= 'z') && !(ch >= '0' && ch <= '9') {
+			return false
+		}
+	}
+	_, err := bcrypt.Cost([]byte(value))
+	return err == nil
+}
+
+// migrateCoreSchema 执行幂等的 GORM schema 同步（仅在结构差异时发 ALTER）。
+func migrateCoreSchema(db *gorm.DB) error {
+	return db.AutoMigrate(
+		&User{},
+		&Device{},
+		&Group{},
+		&GroupLink{},
+		&Server{},
+		&Relay{},
+		&OperatorLog{},
+		&OperatorCert{},
+		&SiteConfig{},
+		&GroupMember{},
+		&CommRecord{},
+		&CommRecordDeliveryGroup{},
+		&Asset{},
+		&UserDevicePreference{},
+		&GhostClientPreference{},
+		&GhostClientSubscription{},
+		&DeviceConfig{},
+		&Logbook{},
+		&UserRadioPreset{},
+		&FirmwareRelease{},
+		&ClientResource{},
+		&ClientResourceRelease{},
+		&ClientResourceArtifact{},
+		&ClientResourceArtifactTarget{},
+		&broadcastmodel.BroadcastAudio{},
+		&broadcastmodel.BroadcastSchedule{},
+		&broadcastmodel.VirtualGroupBroadcastPolicy{},
+		&broadcastmodel.BroadcastRun{},
+	)
+}
+
+// normalizeLegacyServerEmptyIDs 将 servers 表历史空串 node_id/public_access_id 归一化为 NULL，
+// 供唯一索引安全建立（幂等，仅影响仍为空的旧数据）。
+func normalizeLegacyServerEmptyIDs(db *gorm.DB) error {
 	if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "node_id") {
 		if err := db.Model(&Server{}).Where("node_id = ?", "").Update("node_id", nil).Error; err != nil {
 			return fmt.Errorf("normalize legacy empty server node IDs: %w", err)
@@ -745,6 +879,90 @@ func AutoMigrate() error {
 			return fmt.Errorf("normalize empty server public access IDs: %w", err)
 		}
 	}
+	return nil
+}
+
+// migrateSchemaV1 一次性完整迁移：数据清洗 -> schema -> 回填 -> 索引/遗留列下线。
+func migrateSchemaV1(db *gorm.DB) error {
+	if err := dropEmptyLegacyClientReleaseTables(db); err != nil {
+		return err
+	}
+	tables, err := db.Migrator().GetTables()
+	if err != nil {
+		return fmt.Errorf("inspect schema before version 1 migration: %w", err)
+	}
+	applicationEmpty := applicationSchemaIsEmpty(tables)
+
+	// ==========================================
+	// 阶段一：数据清洗 (Data Cleansing)
+	// ==========================================
+	if applicationEmpty {
+		log.Println("[Migration Info] 检测到业务表为空，跳过历史数据清洗")
+	} else {
+
+		// 1. 清理 users 表中的重复记录 (保留 ID 较小的记录)
+		// 原理：使用内连接查找手机号相同且 ID 较大的冗余行进行删除
+		cleanupDupUserSQL := `
+		DELETE u1 FROM users u1
+		INNER JOIN users u2
+		WHERE u1.id > u2.id AND u1.phone = u2.phone AND u1.phone != ''
+	`
+		if err := db.Exec(cleanupDupUserSQL).Error; err != nil {
+			return fmt.Errorf("cleanup duplicate users: %w", err)
+		}
+
+		// 1.1 在建立唯一索引前巡检呼号重复数据
+		if err := logDuplicateCallSigns(db); err != nil {
+			return err
+		}
+		if err := logDuplicateOwnerSSIDs(db); err != nil {
+			return err
+		}
+
+		// 2. 清理各大子表中的"孤儿数据" (Orphaned Records)
+		// 原理：子表的关联 ID 如果在主表 (如 users, public_groups) 中找不到了，就必须被抹除
+		cleanups := []struct {
+			Desc string
+			SQL  string
+		}{
+			{"操作证孤儿记录", "DELETE FROM operator_certs WHERE user_id NOT IN (SELECT id FROM users)"},
+			{"组成员(无群组)", "DELETE FROM group_members WHERE group_id NOT IN (SELECT id FROM public_groups)"},
+			{"组成员(无用户)", "DELETE FROM group_members WHERE user_id NOT IN (SELECT id FROM users)"},
+			{"群互联(源群丢失)", "DELETE FROM group_links WHERE link_group_id NOT IN (SELECT id FROM public_groups)"},
+			{"群互联(目标丢失)", "DELETE FROM group_links WHERE target_group_id NOT IN (SELECT id FROM public_groups)"},
+			{"群互联(目标重复)", "DELETE gl1 FROM group_links gl1 INNER JOIN group_links gl2 ON gl1.target_group_id = gl2.target_group_id AND gl1.id > gl2.id"},
+			{"设备(无所有者)", "DELETE FROM devices WHERE owner_id NOT IN (SELECT id FROM users)"},
+			{"日志(无所有者)", "DELETE FROM logbooks WHERE user_id NOT IN (SELECT id FROM users)"},
+			{"设备配置(无设备)", "DELETE FROM device_configs WHERE device_id NOT IN (SELECT id FROM devices)"},
+			{"电台预设(无用户)", "DELETE FROM user_radio_presets WHERE user_id NOT IN (SELECT id FROM users)"},
+			{"设备偏好(无用户)", "DELETE FROM user_device_preferences WHERE user_id NOT IN (SELECT id FROM users)"},
+			// 自引用约束的孤儿数据需要特殊处理：使用临时表避免 MySQL 不支持在同一查询中删除和查询同一表
+			{"资产(孤儿文件)", "DELETE FROM assets WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM (SELECT id FROM assets) AS tmp)"},
+		}
+
+		for _, task := range cleanups {
+			res := db.Exec(task.SQL)
+			if res.Error != nil {
+				return fmt.Errorf("%s: %w", task.Desc, res.Error)
+			} else if res.RowsAffected > 0 {
+				log.Printf("[Migration Info] %s: 成功清理 %d 条脏数据", task.Desc, res.RowsAffected)
+			}
+		}
+
+		// Legacy server rows predate edge NodeID. Empty strings must become NULL
+		// before GORM creates the unique index; MySQL permits multiple NULL values
+		// but would reject multiple historical empty strings.
+		if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "node_id") {
+			if err := db.Model(&Server{}).Where("node_id = ?", "").Update("node_id", nil).Error; err != nil {
+				return fmt.Errorf("normalize legacy empty server node IDs: %w", err)
+			}
+		}
+		if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "public_access_id") {
+			if err := db.Model(&Server{}).Where("public_access_id = ?", "").Update("public_access_id", nil).Error; err != nil {
+				return fmt.Errorf("normalize empty server public access IDs: %w", err)
+			}
+		}
+	}
 
 	// ==========================================
 	// 阶段二：执行 GORM 标准化迁移 (Schema Mapping)
@@ -752,7 +970,7 @@ func AutoMigrate() error {
 	// GORM 底层会进行计算，比对现有数据库结构与代码中的结构体。
 	// 只有在缺失表、缺失字段、或缺失外键时，才会发送 ALTER TABLE 语句，非常安全。
 	log.Println("[Migration Info] 正在启动 GORM 核心迁移机制，建立级联外键约束...")
-	err := db.AutoMigrate(
+	err = db.AutoMigrate(
 		&User{},
 		&Device{},
 		&Group{},
@@ -800,7 +1018,9 @@ func AutoMigrate() error {
 	}
 
 	// 阶段三：下线 group_members 历史设备级字段（仅保留成员资格语义）
-	pruneLegacyGroupMemberColumns(db)
+	if err := pruneLegacyGroupMemberColumns(db); err != nil {
+		return err
+	}
 	if err := ensureExpectedUniqueIndexes(db); err != nil {
 		return err
 	}
@@ -812,7 +1032,6 @@ func AutoMigrate() error {
 	if err := dropLegacyGroupAllowCallSignSSIDColumn(db); err != nil {
 		return err
 	}
-
 	log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 	return nil
 }
@@ -1056,7 +1275,7 @@ func quotedColumns(columns []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-func logDuplicateCallSigns(db *gorm.DB) {
+func logDuplicateCallSigns(db *gorm.DB) error {
 	var rows []struct {
 		CallSign string `gorm:"column:callsign"`
 		Count    int64  `gorm:"column:cnt"`
@@ -1070,17 +1289,17 @@ func logDuplicateCallSigns(db *gorm.DB) {
 		HAVING COUNT(*) > 1
 	`
 	if err := db.Raw(sql).Scan(&rows).Error; err != nil {
-		log.Printf("[Migration Warning] 巡检重复 callsign 失败: %v", err)
-		return
+		return fmt.Errorf("inspect duplicate callsigns: %w", err)
 	}
 
 	for _, row := range rows {
 		log.Printf("[Migration Warning] users.callsign 重复: callsign=%q count=%d user_ids=%s",
 			row.CallSign, row.Count, row.UserIDs)
 	}
+	return nil
 }
 
-func logDuplicateOwnerSSIDs(db *gorm.DB) {
+func logDuplicateOwnerSSIDs(db *gorm.DB) error {
 	var rows []struct {
 		OwnerID int    `gorm:"column:owner_id"`
 		SSID    uint8  `gorm:"column:ssid"`
@@ -1095,23 +1314,23 @@ func logDuplicateOwnerSSIDs(db *gorm.DB) {
 		HAVING COUNT(*) > 1
 	`
 	if err := db.Raw(sql).Scan(&rows).Error; err != nil {
-		log.Printf("[Migration Warning] 巡检重复 owner_id + ssid 失败: %v", err)
-		return
+		return fmt.Errorf("inspect duplicate device owner/ssid pairs: %w", err)
 	}
 
 	for _, row := range rows {
 		log.Printf("[Migration Warning] devices(owner_id, ssid) 重复: owner_id=%d ssid=%d count=%d device_ids=%s",
 			row.OwnerID, row.SSID, row.Count, row.DevIDs)
 	}
+	return nil
 }
 
 // pruneLegacyGroupMemberColumns 安全下线 group_members 历史字段：
 // - device_id
 // - disable_send
 // - disable_recv
-func pruneLegacyGroupMemberColumns(db *gorm.DB) {
+func pruneLegacyGroupMemberColumns(db *gorm.DB) error {
 	if !db.Migrator().HasTable(&GroupMember{}) {
-		return
+		return nil
 	}
 
 	legacyColumns := []string{"device_id", "disable_send", "disable_recv"}
@@ -1121,39 +1340,44 @@ func pruneLegacyGroupMemberColumns(db *gorm.DB) {
 		}
 
 		// device_id 可能存在历史外键，先按信息架构查询并移除约束
-		if col == "device_id" {
+		if col == "device_id" && strings.EqualFold(db.Dialector.Name(), "mysql") {
 			var dbName string
-			if err := db.Raw("SELECT DATABASE()").Scan(&dbName).Error; err == nil && dbName != "" {
-				var rows []struct {
-					ConstraintName string `gorm:"column:constraint_name"`
+			if err := db.Raw("SELECT DATABASE()").Scan(&dbName).Error; err != nil {
+				return fmt.Errorf("inspect database for group_members.device_id foreign keys: %w", err)
+			}
+			if dbName == "" {
+				return errors.New("current database is empty while pruning group_members.device_id")
+			}
+			var rows []struct {
+				ConstraintName string `gorm:"column:constraint_name"`
+			}
+			fkSQL := `
+				SELECT DISTINCT constraint_name
+				FROM information_schema.key_column_usage
+				WHERE table_schema = ?
+				  AND table_name = 'group_members'
+				  AND column_name = 'device_id'
+				  AND referenced_table_name IS NOT NULL
+			`
+			if err := db.Raw(fkSQL, dbName).Scan(&rows).Error; err != nil {
+				return fmt.Errorf("inspect group_members.device_id foreign keys: %w", err)
+			}
+			for _, row := range rows {
+				if row.ConstraintName == "" {
+					continue
 				}
-				fkSQL := `
-					SELECT DISTINCT constraint_name
-					FROM information_schema.key_column_usage
-					WHERE table_schema = ?
-					  AND table_name = 'group_members'
-					  AND column_name = 'device_id'
-					  AND referenced_table_name IS NOT NULL
-				`
-				if err := db.Raw(fkSQL, dbName).Scan(&rows).Error; err == nil {
-					for _, row := range rows {
-						if row.ConstraintName == "" {
-							continue
-						}
-						if err := dropGroupMemberDeviceForeignKey(db, row.ConstraintName); err != nil {
-							log.Printf("[Migration Warning] 删除 group_members.%s 外键 %s 失败: %v", col, row.ConstraintName, err)
-						}
-					}
+				if err := dropGroupMemberDeviceForeignKey(db, row.ConstraintName); err != nil {
+					return fmt.Errorf("drop group_members.device_id foreign key %s: %w", row.ConstraintName, err)
 				}
 			}
 		}
 
 		if err := db.Migrator().DropColumn(&GroupMember{}, col); err != nil {
-			log.Printf("[Migration Warning] 删除 group_members.%s 失败: %v", col, err)
-			continue
+			return fmt.Errorf("drop legacy group_members.%s: %w", col, err)
 		}
 		log.Printf("[Migration Info] 已删除遗留字段 group_members.%s", col)
 	}
+	return nil
 }
 
 // dropGroupMemberDeviceForeignKey 删除 group_members.device_id 的历史外键。

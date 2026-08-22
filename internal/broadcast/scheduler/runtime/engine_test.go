@@ -207,6 +207,24 @@ func engineFixture(t *testing.T) (*Engine, *fakeRuntimeRepository, *media.Contai
 	return engine, repo, container
 }
 
+func TestHealthUsesCompletedScanTimestamp(t *testing.T) {
+	engine, _, _ := engineFixture(t)
+	now := time.Now().UTC()
+	engine.now = func() time.Time { return now }
+	engine.started = true
+	engine.operationalEnabled = true
+	engine.metrics.scanStarted(now)
+	engine.metrics.scanFinished(true, now.Add(-time.Second))
+
+	health, err := engine.Health(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Healthy {
+		t.Fatalf("health remained healthy with stale completed scan: %#v", health)
+	}
+}
+
 func waitFinished(t *testing.T, repo *fakeRuntimeRepository) finishedRun {
 	t.Helper()
 	select {

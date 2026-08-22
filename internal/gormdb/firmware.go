@@ -68,6 +68,10 @@ func GetFirmwareRepo() *FirmwareRepository {
 func (r *FirmwareRepository) ListByDevModel(devModel int, page, pageSize int) ([]*FirmwareRelease, int64, error) {
 	var list []*FirmwareRelease
 	var total int64
+	pageSize, page, offset, err := NormalizePageOffset(pageSize, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	query := r.db.Model(&FirmwareRelease{})
 	if devModel > 0 {
@@ -78,7 +82,6 @@ func (r *FirmwareRepository) ListByDevModel(devModel int, page, pageSize int) ([
 		return nil, 0, err
 	}
 
-	offset := (page - 1) * pageSize
 	if err := query.Order("create_time DESC").Offset(offset).Limit(pageSize).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}

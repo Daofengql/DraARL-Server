@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ type Config struct {
 	MaxIdleConns int
 	MaxLifetime  int
 	LogLevel     string
+	// Timezone is the same IANA timezone used by the MySQL DSN. Empty/Local
+	// preserves legacy Go local-time behavior.
+	Timezone string
 }
 
 // Init 初始化 GORM 数据库连接
@@ -61,10 +65,18 @@ func Init(cfg *Config) error {
 		gormLogger = logger.Default.LogMode(logger.Error)
 	}
 
+	location := time.Local
+	if timezone := strings.TrimSpace(cfg.Timezone); timezone != "" && !strings.EqualFold(timezone, "Local") {
+		loaded, loadErr := time.LoadLocation(timezone)
+		if loadErr != nil {
+			return fmt.Errorf("invalid database timezone %q: %w", timezone, loadErr)
+		}
+		location = loaded
+	}
 	newDB, err := gorm.Open(mysql.Open(cfg.DSN), &gorm.Config{
 		Logger: gormLogger,
 		NowFunc: func() time.Time {
-			return time.Now()
+			return time.Now().In(location)
 		},
 	})
 	if err != nil {

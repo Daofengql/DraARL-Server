@@ -46,20 +46,14 @@ type MessageRepository struct {
 	db *gorm.DB
 }
 
+const messageGroupQueryChunkSize = 64
+
 func NewMessageRepository() *MessageRepository {
 	return &MessageRepository{db: Get()}
 }
 
 func (r *MessageRepository) baseQuery(groupIDs []int) *gorm.DB {
 	return r.messageQuery("comm_record_delivery_groups dg", groupIDs)
-}
-
-func (r *MessageRepository) listQuery(groupID int, messageType *uint8) *gorm.DB {
-	indexName := "idx_delivery_group_cursor"
-	if messageType != nil {
-		indexName = "idx_delivery_group_type_cursor"
-	}
-	return r.messageQuery("comm_record_delivery_groups dg FORCE INDEX ("+indexName+")", []int{groupID})
 }
 
 func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB {
@@ -90,36 +84,50 @@ func (r *MessageRepository) List(query MessageQuery) ([]MessageRecord, bool, err
 	}
 
 	groupIDs := uniquePositiveGroupIDs(query.GroupIDs)
-	pageCapacity := len(groupIDs)
-	if query.BeforeTime != nil {
-		pageCapacity *= 2
-	}
-	pages := make([][]MessageRecord, 0, pageCapacity)
-	for _, groupID := range groupIDs {
-		newPageQuery := func() *gorm.DB {
-			db := r.listQuery(groupID, query.Type)
-			if query.Type != nil {
-				db = db.Where("dg.message_type = ? AND cr.message_type = ?", *query.Type, *query.Type)
-			}
-			return db
+	groupChunks := chunkMessageGroupIDs(groupIDs, messageGroupQueryChunkSize)
+	pages := make([][]MessageRecord, 0, len(groupChunks))
+	for _, groupChunk := range groupChunks {
+		// 每个 chunk 最多从每个群组取 limit 条，再多取一条用于 hasMore；
+		// 之后由 mergeMessagePages 统一去重、排序和截断。
+		pageLimit := limit*len(groupChunk) + 1
+		db := r.messageQuery(messageDeliveryTableWithIndex(query.Type), groupChunk)
+		if query.Type != nil {
+			db = db.Where("dg.message_type = ? AND cr.message_type = ?", *query.Type, *query.Type)
 		}
-		queries := []*gorm.DB{newPageQuery()}
 		if query.BeforeTime != nil {
-			queries = []*gorm.DB{
-				newPageQuery().Where("dg.start_time = ? AND dg.record_id < ?", *query.BeforeTime, query.BeforeID),
-				newPageQuery().Where("dg.start_time < ?", *query.BeforeTime),
-			}
+			// 等价于原先“同一时间且 ID 更小”或“时间更早”的两次查询。
+			db = db.Where("(dg.start_time < ?) OR (dg.start_time = ? AND dg.record_id < ?)", *query.BeforeTime, *query.BeforeTime, query.BeforeID)
 		}
-
-		for _, pageQuery := range queries {
-			var records []MessageRecord
-			if err := pageQuery.Order("dg.start_time DESC").Order("dg.record_id DESC").Limit(limit + 1).Scan(&records).Error; err != nil {
-				return nil, false, err
-			}
-			pages = append(pages, records)
+		var records []MessageRecord
+		if err := db.Order("dg.start_time DESC").Order("dg.record_id DESC").Limit(pageLimit).Scan(&records).Error; err != nil {
+			return nil, false, err
 		}
+		pages = append(pages, records)
 	}
 	return mergeMessagePages(pages, limit)
+}
+
+func messageDeliveryTableWithIndex(messageType *uint8) string {
+	indexName := "idx_delivery_group_cursor"
+	if messageType != nil {
+		indexName = "idx_delivery_group_type_cursor"
+	}
+	return "comm_record_delivery_groups dg FORCE INDEX (" + indexName + ")"
+}
+
+func chunkMessageGroupIDs(groupIDs []int, chunkSize int) [][]int {
+	if chunkSize <= 0 {
+		chunkSize = messageGroupQueryChunkSize
+	}
+	chunks := make([][]int, 0, (len(groupIDs)+chunkSize-1)/chunkSize)
+	for start := 0; start < len(groupIDs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(groupIDs) {
+			end = len(groupIDs)
+		}
+		chunks = append(chunks, append([]int(nil), groupIDs[start:end]...))
+	}
+	return chunks
 }
 
 func uniquePositiveGroupIDs(groupIDs []int) []int {

@@ -3,12 +3,16 @@ package gormdb
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
+	"strings"
 	"sync"
 
 	"draarl/internal/common"
+	"draarl/pkg/crypto"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // SiteConfigRepository 站点配置仓储
@@ -31,6 +35,123 @@ func GetSiteConfigRepo() *SiteConfigRepository {
 
 // SiteConfigValue 配置值接口
 type SiteConfigValue interface{}
+
+const encryptedSiteConfigPrefix = "enc:v1:"
+
+// IsSensitiveSiteConfigKey reports whether a site-config value is a secret.
+// Keep this policy in the repository so every write path (generic, batch and
+// typed SMTP settings) applies the same at-rest protection.
+func IsSensitiveSiteConfigKey(key string) bool {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	for _, marker := range []string{"password", "secret", "apikey", "api_key", "token", "privatekey", "private_key"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sealSiteConfigValue(key, value string) (string, error) {
+	if !IsSensitiveSiteConfigKey(key) || value == "" {
+		return value, nil
+	}
+	ciphertext, err := crypto.Encrypt(value)
+	if err != nil {
+		return "", fmt.Errorf("加密站点敏感配置 %q 失败: %w", key, err)
+	}
+	return encryptedSiteConfigPrefix + ciphertext, nil
+}
+
+func unsealSiteConfigValue(key, value string) (string, error) {
+	if !IsSensitiveSiteConfigKey(key) || value == "" || !strings.HasPrefix(value, encryptedSiteConfigPrefix) {
+		return value, nil
+	}
+	plaintext, err := crypto.Decrypt(strings.TrimPrefix(value, encryptedSiteConfigPrefix))
+	if err != nil {
+		return "", fmt.Errorf("解密站点敏感配置 %q 失败: %w", key, err)
+	}
+	return plaintext, nil
+}
+
+func unsealSiteConfig(config *SiteConfig) error {
+	if config == nil {
+		return nil
+	}
+	plaintext, err := unsealSiteConfigValue(config.Key, config.Value)
+	if err != nil {
+		return err
+	}
+	config.Value = plaintext
+	return nil
+}
+
+func unsealSiteConfigs(configs []SiteConfig) error {
+	for i := range configs {
+		if err := unsealSiteConfig(&configs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isLegacyPlainSensitiveSiteConfig(key, value string) bool {
+	return IsSensitiveSiteConfigKey(key) && value != "" && !strings.HasPrefix(value, encryptedSiteConfigPrefix)
+}
+
+// unsealAndMigrateSiteConfig keeps legacy plaintext readable while
+// opportunistically replacing it with the current versioned AES-GCM format.
+// A short row-locking transaction compares the old value in Go, preventing a
+// concurrent administrator update from being overwritten without placing the
+// plaintext in a SQL predicate (and therefore in SQL error/slow-query logs).
+// Migration is deliberately best-effort: failure must not make an existing
+// SMTP configuration unusable during an upgrade, and warnings never include
+// the secret value.
+func (r *SiteConfigRepository) unsealAndMigrateSiteConfig(config *SiteConfig) error {
+	if config == nil {
+		return nil
+	}
+	storedValue := config.Value
+	if err := unsealSiteConfig(config); err != nil {
+		return err
+	}
+	if r == nil || r.db == nil || config.ID == 0 || !isLegacyPlainSensitiveSiteConfig(config.Key, storedValue) {
+		return nil
+	}
+
+	sealedValue, err := sealSiteConfigValue(config.Key, storedValue)
+	if err != nil {
+		log.Printf("[WARN] 站点敏感配置 %q 历史明文惰性加密失败: %v", config.Key, err)
+		return nil
+	}
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		var current SiteConfig
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("id", "config_value").
+			Where("id = ?", config.ID).
+			First(&current).Error; err != nil {
+			return err
+		}
+		if current.Value != storedValue {
+			return nil
+		}
+		return tx.Model(&SiteConfig{}).
+			Where("id = ?", config.ID).
+			Update("config_value", sealedValue).Error
+	})
+	if err != nil {
+		log.Printf("[WARN] 站点敏感配置 %q 历史明文惰性加密写库失败: %v", config.Key, err)
+	}
+	return nil
+}
+
+func (r *SiteConfigRepository) unsealAndMigrateSiteConfigs(configs []SiteConfig) error {
+	for i := range configs {
+		if err := r.unsealAndMigrateSiteConfig(&configs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // ConfigCategory 配置分类
 const (
@@ -123,6 +244,12 @@ func (r *SiteConfigRepository) GetAll() ([]SiteConfig, error) {
 	}
 	var configs []SiteConfig
 	err := r.db.Find(&configs).Error
+	if err != nil {
+		return nil, err
+	}
+	if err := r.unsealAndMigrateSiteConfigs(configs); err != nil {
+		return nil, err
+	}
 	return configs, err
 }
 
@@ -133,6 +260,12 @@ func (r *SiteConfigRepository) GetByCategory(category string) ([]SiteConfig, err
 	}
 	var configs []SiteConfig
 	err := r.db.Where("category = ?", category).Find(&configs).Error
+	if err != nil {
+		return nil, err
+	}
+	if err := r.unsealAndMigrateSiteConfigs(configs); err != nil {
+		return nil, err
+	}
 	return configs, err
 }
 
@@ -141,6 +274,9 @@ func (r *SiteConfigRepository) GetByKey(key string) (*SiteConfig, error) {
 	var config SiteConfig
 	err := r.db.Where("config_key = ?", key).First(&config).Error
 	if err != nil {
+		return nil, err
+	}
+	if err := r.unsealAndMigrateSiteConfig(&config); err != nil {
 		return nil, err
 	}
 	return &config, nil
@@ -157,11 +293,15 @@ func (r *SiteConfigRepository) GetValue(key string) (string, error) {
 
 // Set 设置配置（如果不存在则创建，存在则更新）
 func (r *SiteConfigRepository) Set(key, value, category, description string) error {
+	sealedValue, err := sealSiteConfigValue(key, value)
+	if err != nil {
+		return err
+	}
 	// 使用 map 来确保零值（空字符串）也能被更新
 	// 注意：必须使用数据库列名，而不是结构体字段名
 	updateData := map[string]interface{}{
 		"config_key":   key,
-		"config_value": value,
+		"config_value": sealedValue,
 		"category":     category,
 		"description":  description,
 	}
@@ -176,7 +316,7 @@ func (r *SiteConfigRepository) Set(key, value, category, description string) err
 	if result.RowsAffected == 0 {
 		config := SiteConfig{
 			Key:         key,
-			Value:       value,
+			Value:       sealedValue,
 			Category:    category,
 			Description: description,
 		}
@@ -190,7 +330,13 @@ func (r *SiteConfigRepository) Set(key, value, category, description string) err
 func (r *SiteConfigRepository) SetBatch(configs []SiteConfig) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for i := range configs {
-			if err := tx.Where("config_key = ?", configs[i].Key).Assign(configs[i]).FirstOrCreate(&configs[i]).Error; err != nil {
+			stored := configs[i]
+			sealedValue, err := sealSiteConfigValue(stored.Key, stored.Value)
+			if err != nil {
+				return err
+			}
+			stored.Value = sealedValue
+			if err := tx.Where("config_key = ?", stored.Key).Assign(stored).FirstOrCreate(&stored).Error; err != nil {
 				return err
 			}
 		}

@@ -19,7 +19,11 @@ import (
 )
 
 const (
-	RunLeaseDuration      = 5 * time.Second
+	// 【H14 安全修复】租约从 5s 加宽到 15s（续租仍按 1s 周期执行），
+	// 消除"DB 抖动/锁等待超过 5s 即把仍在正常播音的广播误判为失联"的问题。
+	// 播放中实例每报文/1s 续租一次，15s 租约提供约 14 倍容错余量；
+	// 实例真正掉线后至多延迟 15s 才会被回收标记，属于可接受的失败恢复代价。
+	RunLeaseDuration      = 15 * time.Second
 	RunValidationInterval = 1 * time.Second
 	finalizeTimeout       = 5 * time.Second
 )
@@ -159,9 +163,12 @@ func (e *Engine) scanOnce(ctx context.Context) error {
 		return nil
 	}
 
+	// 【性能修复】不把长 DB 事务包在 operationalMu 锁内：锁只保护
+	// operationalEnabled 的短读，避免慢扫描阻塞管理员运行态切换。
 	e.operationalMu.RLock()
-	defer e.operationalMu.RUnlock()
-	if !e.operationalEnabled {
+	enabled = e.operationalEnabled
+	e.operationalMu.RUnlock()
+	if !enabled {
 		succeeded = true
 		return nil
 	}
@@ -186,6 +193,15 @@ func (e *Engine) scanOnce(ctx context.Context) error {
 		}
 		claimed = append(claimed, due...)
 	}
+	// 领取完成后、启动前再次确认运行态（DB 事务内的 operational_enabled
+	// 条件更新已保证关闭状态下不会领取，此处双保险）
+	e.operationalMu.RLock()
+	enabled = e.operationalEnabled
+	e.operationalMu.RUnlock()
+	if !enabled {
+		succeeded = true
+		return nil
+	}
 	for index := range claimed {
 		e.metrics.observeClaim(claimed[index], index < len(recovered), now)
 		e.launch(claimed[index])
@@ -208,8 +224,11 @@ func (e *Engine) launchReserved(run model.BroadcastRun) {
 	done := make(chan struct{})
 	e.activeMu.Lock()
 	if _, exists := e.active[run.ID]; exists {
+		// 【误杀修复】重复领取同一 run（多实例竞争残留）只跳过本次启动，
+		// 释放本次新建的 ctx（cancel）后返回，不影响已存在的运行。
 		e.activeMu.Unlock()
-		cancel(ErrSchedulerStopped)
+		cancel(context.Canceled)
+		log.Printf("[BROADCAST] duplicate launch skipped: run_id=%d", run.ID)
 		<-e.slots
 		return
 	}
@@ -605,7 +624,10 @@ func (e *Engine) Health(ctx context.Context) (HealthSnapshot, error) {
 	}
 	metrics := e.metrics.snapshot()
 	healthy := started && !stopped && metrics.ConsecutiveScanErrors < 3
-	if metrics.LastScanAt != nil && e.now().Sub(*metrics.LastScanAt) > 3*time.Duration(e.config.ScanIntervalMS)*time.Millisecond {
+	// LastScanAt records when a scan began. Health freshness must use the
+	// completion timestamp; a scan blocked on a database lock must eventually
+	// become unhealthy even though its start timestamp is recent.
+	if metrics.LastSuccessfulScanAt != nil && e.now().Sub(*metrics.LastSuccessfulScanAt) > 3*time.Duration(e.config.ScanIntervalMS)*time.Millisecond {
 		healthy = false
 	}
 	return HealthSnapshot{

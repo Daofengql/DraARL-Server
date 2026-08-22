@@ -20,6 +20,23 @@ func TestMediaProcessLimitsHaveSafeDefaults(t *testing.T) {
 	}
 }
 
+func TestRunCommandInstallsLimitsBeforeExec(t *testing.T) {
+	path := t.TempDir() + "/limits.txt"
+	command := exec.Command("/bin/sh", "-c", `awk '/Max address space|Max cpu time/ {print}' /proc/self/limits > "$1"`, "probe", path)
+	processor := &Processor{config: config.BroadcastConfig{TranscodeMemoryLimitMB: 768, TranscodeCPULimitSeconds: 17}}
+	if err := processor.runCommand(command); err != nil {
+		t.Fatal(err)
+	}
+	limits, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(limits)
+	if !linuxLimitValue(text, "Max address space", "805306368") || !linuxLimitValue(text, "Max cpu time", "17") {
+		t.Fatalf("exec-time rlimits missing expected values: %s", text)
+	}
+}
+
 func TestApplyMediaProcessLimitsUpdatesChildRlimits(t *testing.T) {
 	command := exec.Command("/bin/sh", "-c", "sleep 5")
 	if err := command.Start(); err != nil {

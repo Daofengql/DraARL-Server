@@ -91,7 +91,11 @@ func (r *LogbookRepository) List(params LogbookQueryParams) ([]*Logbook, int64, 
 	var logbooks []*Logbook
 	var total int64
 
-	offset := (params.Page - 1) * params.PageSize
+	pageSize, page, offset, err := NormalizePageOffset(params.PageSize, params.Page)
+	if err != nil {
+		return nil, 0, err
+	}
+	params.Page, params.PageSize = page, pageSize
 
 	// 如果需要按用户名搜索，需要 JOIN users 表
 	if params.Username != "" {
@@ -136,7 +140,11 @@ func (r *LogbookRepository) ListByUser(params LogbookQueryParams) ([]*Logbook, i
 	var logbooks []*Logbook
 	var total int64
 
-	offset := (params.Page - 1) * params.PageSize
+	pageSize, page, offset, err := NormalizePageOffset(params.PageSize, params.Page)
+	if err != nil {
+		return nil, 0, err
+	}
+	params.Page, params.PageSize = page, pageSize
 	query := r.db.Model(&Logbook{}).Where("user_id = ?", params.UserID)
 
 	// 应用筛选条件
@@ -170,11 +178,13 @@ func (r *LogbookRepository) applyFilters(query *gorm.DB, params LogbookQueryPara
 		query = query.Where("callsign LIKE ?", "%"+params.CallSign+"%")
 	}
 	if params.Frequency > 0 {
-		// 频率匹配，允许 1kHz 容差
+		// 频率匹配，允许 1kHz 容差（范围形式，可走索引）
 		tolerance := 0.001
+		low := params.Frequency - tolerance
+		high := params.Frequency + tolerance
 		query = query.Where(
-			"ABS(tx_frequency - ?) <= ? OR ABS(rx_frequency - ?) <= ?",
-			params.Frequency, tolerance, params.Frequency, tolerance,
+			"(tx_frequency BETWEEN ? AND ?) OR (rx_frequency BETWEEN ? AND ?)",
+			low, high, low, high,
 		)
 	}
 	if params.Mode != "" {

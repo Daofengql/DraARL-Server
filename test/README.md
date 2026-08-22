@@ -17,8 +17,11 @@ python -m pip install -r test/simulator/requirements.txt
 python test/simulator/main.py
 ```
 
-模拟器界面的服务地址、用户名、设备密码和 JWT 密钥必须按测试环境填写。不要在共享或
-生产环境使用示例凭据。UDP 幽灵模拟器用于当前 Session 协议，不兼容旧 raw-JWT 认证。
+模拟器界面的服务地址、用户名、设备密码和 JWT 密钥必须按测试环境填写。JWT 测试密钥
+可通过界面的“测试JWT密钥”输入，也可预先设置 `DRAARL_TEST_JWT_SECRET` 环境变量；
+密钥至少 32 个字符，模拟器不会再使用公开弱默认值。动态绑定助手和幽灵群组操作会
+直接用该测试 key 签发 access JWT，不调用需要图片验证码的 `/api/auth/login`。不要在共享
+或生产环境使用测试密钥。UDP 幽灵模拟器用于当前 Session 协议，不兼容旧 raw-JWT 认证。
 
 ## UDP fan-out benchmark
 

@@ -2,6 +2,7 @@
 Python 模拟客户端的 JWT Token 生成工具
 """
 
+import os
 import time
 import hmac
 import hashlib
@@ -10,8 +11,25 @@ import json
 from typing import Optional, List
 
 
-# 默认密钥（与服务器一致）
-DEFAULT_SECRET = "nrl1234"
+# Never ship a signing secret in the simulator.  The service rejects the old
+# public development key, so test callers must provide the key configured for
+# their isolated test instance explicitly or through this environment value.
+TEST_SECRET_ENV = "DRAARL_TEST_JWT_SECRET"
+MIN_SECRET_LENGTH = 32
+
+
+def resolve_test_secret(secret: Optional[str] = None) -> str:
+    """Return an explicit test signing key and reject unsafe implicit values."""
+    value = (secret if secret is not None else os.getenv(TEST_SECRET_ENV, "")).strip()
+    if not value:
+        raise ValueError(
+            f"JWT test key is required; pass secret=... or set {TEST_SECRET_ENV}"
+        )
+    if len(value) < MIN_SECRET_LENGTH:
+        raise ValueError(
+            f"JWT test key must be at least {MIN_SECRET_LENGTH} characters"
+        )
+    return value
 
 
 def base64url_encode(data: bytes) -> str:
@@ -30,7 +48,7 @@ def base64url_decode(data: str) -> bytes:
 def generate_jwt(
     username: str,
     roles: Optional[List[str]] = None,
-    secret: str = DEFAULT_SECRET,
+    secret: Optional[str] = None,
     expire_days: int = 30
 ) -> str:
     """
@@ -45,6 +63,9 @@ def generate_jwt(
     Returns:
         JWT Token 字符串
     """
+    if not username.strip():
+        raise ValueError("JWT username is required")
+    secret = resolve_test_secret(secret)
     if roles is None:
         roles = ["user"]
 
@@ -82,7 +103,7 @@ def generate_jwt(
     return f"{header_b64}.{payload_b64}.{signature_b64}"
 
 
-def parse_jwt(token: str, secret: str = DEFAULT_SECRET) -> Optional[dict]:
+def parse_jwt(token: str, secret: Optional[str] = None) -> Optional[dict]:
     """
     解析并验证 JWT Token
 
@@ -94,6 +115,7 @@ def parse_jwt(token: str, secret: str = DEFAULT_SECRET) -> Optional[dict]:
         解析后的 Payload，验证失败返回 None
     """
     try:
+        secret = resolve_test_secret(secret)
         parts = token.split('.')
         if len(parts) != 3:
             return None
@@ -125,7 +147,7 @@ def parse_jwt(token: str, secret: str = DEFAULT_SECRET) -> Optional[dict]:
         return None
 
 
-def get_username_from_token(token: str, secret: str = DEFAULT_SECRET) -> Optional[str]:
+def get_username_from_token(token: str, secret: Optional[str] = None) -> Optional[str]:
     """从 Token 获取用户名"""
     payload = parse_jwt(token, secret)
     if payload:
@@ -134,7 +156,7 @@ def get_username_from_token(token: str, secret: str = DEFAULT_SECRET) -> Optiona
 
 
 if __name__ == "__main__":
-    # 测试
+    # Manual smoke test: DRAARL_TEST_JWT_SECRET must be set explicitly.
     token = generate_jwt("admin", ["admin", "user"])
     print(f"Token: {token}")
     print(f"Payload: {parse_jwt(token)}")

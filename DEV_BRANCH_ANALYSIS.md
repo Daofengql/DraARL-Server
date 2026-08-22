@@ -1,393 +1,226 @@
-# DraARL Server dev 分支代码分析报告
-
-- **分析对象**：`d:/Projects/DraARL/DraARL-Server`，分支 `dev`（当前与 master 同为 v2.0.0-alpha13 / commit 346a458）
-- **代码规模**：368 个 `.go` 文件，约 93,320 行
-- **技术栈**：Go 1.25 · Gin · GORM · MySQL（原生 database/sql 并存）· Redis · gorilla/websocket · minio-go · ffmpeg 子进程
-- **分析方法**：纯静态代码层面审查（未运行测试、未执行构建）。按 8 个子系统逐文件通读，从 **安全 / 性能 / 逻辑** 三个维度记录问题。
-- **严重度定义**：严重=可被外部利用直接危害系统或数据；高=明确风险但需一定前提或影响有限；中=局部缺陷或特定场景风险；低=健壮性/最佳实践。
-
----
-
-## 一、总体结论
-
-项目整体工程质量较高：GORM 层普遍使用行锁/条件更新、缓存有 TTL 抖动与两级结构、UDP 数据面有分片限速与内存池、refresh token 轮换有 Redis WATCH + 重放检测、存储层路径穿越防护（`..`/反斜杠/`EvalSymlinks`）做得很扎实，多处已化解常见 N+1（设备列表批量取用户）。
-
-但仍存在 **3 个严重级安全/可靠性缺陷** 和一批高优先级问题，集中在：
-
-1. **UDP 数据面身份伪造**（严重）：普通设备转发路径不校验源地址与设备绑定，群内成员可冒名注入语音/文本。
-2. **缓存系统数据污染 + 内存泄漏**（严重）：`sync.Pool` 缓冲复用导致缓存数据被覆盖；LRU 淘汰机制失效导致缓存无界增长。
-3. **站点密钥越权读取**（严重）：任何已登录（甚至未审核）用户可读取 SMTP 邮箱授权码明文（OpenAI 配置已于 2026-08-16 删除，风险面相应缩小）。
-4. 另有多处 **密钥明文落库/进日志**、**数据面 DoS**、**竞态与锁滥用** 问题，详见下文。
-
----
-
-## 二、严重问题（必须优先处理）
-
-### S1. UDP 数据面源地址未绑定 → 身份伪造注入语音/文本 【安全】
-- **位置**：`internal/udphub/server_packet.go:49,63-67,131-164`；`server_device_session.go:21-28`
-- **描述**：普通设备由 `getDeviceFromMemory` 仅按报文头部的 `username+ssid` 查找会话，后续 voice/text 转发路径**完全不校验包源地址是否等于设备绑定地址**（只有 heartbeat 在地址变化时才触发重认证）。攻击者只要知道任一在线设备的 username+ssid（群内所有成员都能从报文头读到），即可从任意地址伪造 DraARLv1 语音/文本包，以受害者身份进入其群组转发域。
-- **影响**：语音信道冒名注入、文本欺骗；半双工仲裁期间可抢占/干扰合法发言。
-- **判断**：⚠️ **设计特性候选**（用户：若源地址强绑定会影响多平台幽灵客户端接收，则保留此设计）。若确认是特性，建议至少增加防伪措施（如来源 IP 变化时的频次限制/二次认证），详见报告 4.1。
-- **建议（若判定非特性）**：`parseDraARL` 对 voice/text/config 也做 `sameUDPAddr(dev.UDPAddr, packet.UDPAddr)` 绑定校验（与 ghost 路径一致），不匹配即丢弃。
-
-### S2. 缓存系统：`sync.Pool` 数据污染 + 淘汰失效内存泄漏 【安全/性能】
-- **位置**：`pkg/cache/cache.go:84-100`（Set 用 `buf.Bytes()` 存引用后 `bufferPool.Put` 归还）；`cache.go:186-240,142-148`（`lru.items` 从未被填充，`evict()` 恒为空操作）
-- **描述**：
-  - `Set()` 从 `sync.Pool` 取出 `*bytes.Buffer` 序列化，`data := buf.Bytes()` 得到的是**底层数组切片**，随后 `defer bufferPool.Put(buf)` 将缓冲归还池中；下一次 `Set` 复用同一 buffer 做 `Reset()` 会**覆盖已缓存的数据**，并发时还会产生 data race。
-  - `lru.items` 初始化后没有任何 `Set` 路径往其中追加 key，`evict()` 因 `len==0` 恒为空操作 → `MaxSize` 淘汰完全失效，`items` map 无界增长；`Get` 命中过期项只返回 false 也不删除。
-- **影响**：所有经 TwoLevelCache 缓存的数据（用户/设备/群组/配置）可能返回错误或被撕裂的数据且难排查；任何持续增长 key 空间的场景会打满内存。
-- **建议**：`Set` 时深拷贝（`append([]byte(nil), buf.Bytes()...)`）；正确维护 LRU/改用有界淘汰；`Get` 过期时惰性删除。
-
-### S3. 站点配置密钥越权读取 【安全】
-- **位置**：`internal/handler/site_config.go:74-111`（`GetConfigsByCategory`）；路由 `internal/server/server.go:377` `GET /api/config/category/:category` 仅挂在 `protected`（AuthMiddleware），无 admin 校验
-- **描述**：`GetByCategory` 返回原始 `site_configs` 行（key/value 明文、无脱敏）。密钥按分类明文存储：`smtp.password`（OpenAI 配置系统已于 2026-08-16 随"删除预留功能"一并移除，`openai.api_key` 不再存在）。**任何已登录用户**（含 ApprovalStatus=0 的未审核账号）直接请求 `/config/category/smtp` 即可拿到 SMTP 邮箱授权码明文。
-- **影响**：SMTP 授权码泄露，攻击者可伪造邮件发送（钓鱼）。（OpenAI 配额冒用面已随功能删除而消除）
-- **建议**：该接口改为仅管理员可用，或按分类白名单 + 对 `password`/`api_key` 类字段脱敏后返回。
-
----
-
-## 三、高优先级问题
-
-### H1. 原生 database/sql 层为失效死代码，且存明文密码比对 【安全】
-- **位置**：`internal/db/user.go:27-44,112-116,140-151,357-376`
-- **描述**：该层 `SELECT * FROM users WHERE phone = ? AND password = ?` 为**明文密码比对**；`AddUser`/`UpdateUserPassword`/`CreateUser` 均以明文直接写库。当前生产入口已迁至 GORM 层，此层仅 `db.InitAdminUser()` 仍被 main.go 调用，但一旦被任何入口重新接线即出现凭据泄露。
-- **影响**：任意账号凭据泄露 + 时序撞库；且 `scanUser` 固定扫描 23 列与当前约 31 列的表结构不匹配，函数实际已失效或列错位。
-- **建议**：删除该死代码层，统一走 gormdb（bcrypt/AES 可逆）。
-
-### H2. WebSocket 无 `SetReadLimit` → 超大帧内存耗尽 【安全】
-- **位置**：`pkg/websocket/server.go:163`
-- **描述**：全仓库无任何 `SetReadLimit` 调用，`ReadMessage` 依赖 gorilla 默认上限 0（无上限），恶意客户端发超大帧会被完整缓冲进内存后才进 `DecodeWSPacket`。
-- **影响**：多连接即可拖垮进程。
-- **建议**：Upgrade 后立即 `conn.SetReadLimit`（如 256KB）。
-
-### H3. 边缘节点认证失败误判 → 永久离线 【逻辑/可用性】
-- **位置**：`internal/interconnect/runtime.go:307-321`；`cmd/draarl/interconnect_mode.go:135-157`
-- **描述**：`connectWithFallback` 只要 `connectOnce` 返回 `ErrNodeAuthenticationRejected` 就丢弃已持久化凭据、改用一次性 bootstrap 注册令牌重连；而 `authenticateNode` 在中心 DB 瞬时故障（行锁/连接错误）时同样返回该错误。结果中心一次瞬时 DB 错误被边缘当成"凭据被拒"，边缘从此用已消费的一次性令牌重连，**永久锁死**。
-- **建议**：区分"凭据校验失败"与"中心内部错误"（加原因码），仅凭据被拒才启用 fallback。
-
-### H4. 边缘端 `InsecureSkipVerify` 生产环境无护栏 【安全】
-- **位置**：`cmd/draarl/interconnect_mode.go:59`
-- **描述**：边缘 TLS 直接透传 `Edge.InsecureSkipVerify`，配置层无生产环境拦截（中心端 `site_config.go:1011` 有 `IsProduction()` 保护，边缘侧缺失）。一条 YAML 即可让生产边缘完全跳过证书校验。
-- **影响**：中间人对 TLS 明文获取长期节点凭据，可永久冒充节点、接管其全部设备会话与路由。
-- **建议**：在 `EdgeConfig.Validate()` 中对生产模式拒绝 `InsecureSkipVerify`。
-
-### H5. 心跳重认证在数据面 worker 上同步执行 bcrypt + DB 查询 【性能/安全】
-- **位置**：`internal/udphub/server_packet.go:96-125`
-- **描述**：心跳只要地址变化或设备离线即调用 `AuthenticateDevice` → `GetUserByName`（MySQL）+ `crypto.VerifyDevicePassword`（bcrypt ~50-100ms CPU）。攻击者伪造不同地址的心跳即可驱动每秒数百次 bcrypt+DB 查询。
-- **影响**：worker 池（≤16）被 bcrypt 打满，合法设备语音/心跳被延迟；`isBlocked` 同一 ip:username 3 次失败封禁可被换 username 绕过。
-- **建议**：bcrypt 校验移出数据面 worker（异步认证队列/认证专用 worker）；对失败心跳做独立计数与 CPU 代价分摊。
-
-### H6. Fanout 单 dispatcher 串行化所有域语音分发 【性能】
-- **位置**：`internal/udphub/fanout_sender.go:267-287,305-334,506-530`
-- **描述**：`dispatchFrame` 同步执行：一帧必须等所有 writer 写完才处理下一帧，且 writer 队列无缓冲；慢/大 fanout 阻塞所有其它域。队列满时回退为在 ingress worker 线程内同步 `WriteToUDPAddrPort`。
-- **影响**：高并发多域语音吞吐被单 dispatcher 锁死；UDP 发送缓冲打满时级联延迟丢帧。
-- **建议**：dispatcher 异步化（每 writer 带缓冲队列、并行派发不等待）；回退改为丢弃而非同步写。
-
-### H7. `*models.Device` 共享可变字段无锁读写 → 系统性数据竞争 【并发】
-- **位置**：`internal/udphub/server_voice.go:139-141`；`server_device_session.go:321-326,391`；`device.go:383-472`；`domain_receiver_cache.go:115-127`
-- **描述**：ingress worker 无锁写 `dev.LastPacketTime/UDPAddr/ISOnline/VoiceTime/Traffic/MAC`，而 `checkDeviceOnline`（持 pool.mu）、`buildDomainReceiverSnap`（无锁读）、`refreshDeviceCache`、ghost manager、WS 路由线程同时读写，锁纪律不一致。
-- **影响**：`-race` 下大量报告；`time.Time` 撕裂读导致在线/离线判定抖动、快照读到半更新地址。
-- **建议**：热点字段收敛为原子/单写者访问，或统一走同一把锁。
-
-### H8. 认证中间件每个请求查一次数据库 【性能】
-- **位置**：`internal/middleware/auth.go:56-57`；`group_permission.go:39,112,195`
-- **描述**：`AuthMiddleware` 每请求 `GetUserByName` 查库（未用 `pkg/cache` 用户缓存）；`RequireGroupOwner`/`RequireGroupMember`/`RequireAdminOrOwner` 又在已持有 `user` 后二次查库、三次查群组。单个鉴权请求最多打 3 次 DB。
-- **影响**：DB 成为所有 Web 请求的串行瓶颈，高并发下直接拖垮。
-- **建议**：复用 context 中的 `user`；用户查询走 `UserCache`。
-
-### H9. 群组密码明文存储与明文比较 【安全】
-- **位置**：`internal/handler/group_admin.go:63`（`CreateGroup` 直接存 `req.Password`）；`group_membership.go:65`（`group.Password != req.Password` 明文比较）；`internal/gormdb/models.go:128`
-- **描述**：任何能读库者（含运维/备份泄露）可加入任意私有群；加入请求无速率限制，可离线爆破群组密码。
-- **建议**：对群组密码做 bcrypt/argon2 哈希存储与恒定时间比较。
-
-### H10. 广播启动恢复队列溢出 → 整个服务无法启动 【逻辑/可用性】
-- **位置**：`internal/broadcast/media/processor.go:60-72,96-109`
-- **描述**：`Start()` 先 `ListProcessingAudios(1000)` 再逐个 `Enqueue`，而 `jobs` 通道容量仅 128 且 `Enqueue` 非阻塞（`default:` 返回错误）。崩溃重启时遗留 processing 记录 >128 条即报 "queue is full"，`Start()` 返回错误 → `InitProcessor` 失败 → `log.Fatalf` **服务无法启动**；即使启动也只恢复前 128 条。
-- **建议**：启动恢复时阻塞分发或扩大队列；队满降级为告警而非致命。
-
-### H11. 通用配置更新把密钥明文写入审计日志 【安全】
-- **位置**：`internal/handler/site_config.go:238-245`（`"更新站点配置: %s = %s"`）
-- **描述**：管理员走通用 `PUT /config` 设置 `smtp.password` 时，密钥明文落入 `operator_logs` 表。（OpenAI 配置系统已于 2026-08-16 删除，`openai.api_key` 不再可写）
-- **建议**：对含 `password`/`key`/`secret` 的 key 在审计日志中脱敏。
-
-### H12. AutoMigrate 非幂等，大表 ALTER 锁库 【性能/逻辑】
-- **位置**：`internal/gormdb/models.go:692-733,984-1049,831-885`
-- **描述**：`AutoMigrate` 无版本记录、非幂等：每次显式 `-auto-migrate` 都重放 users 去重 DELETE、约 10 条 `NOT IN` 孤儿清理、comm_records 两遍全表分批扫描；`ensureMySQLUniqueIndex` 对 devices/users 大表执行 `ALTER TABLE ... DROP INDEX, ADD UNIQUE INDEX`（表重建 + 元数据写锁）。
-- **影响**：升级期锁表、大表下分钟级不可写。
-- **建议**：迁移版本化（记录已跑版本），清理与建索引拆为一次性小步并离线执行。
-
-### H13. 存储型 XSS：通用上传无 MIME/扩展名白名单 【安全】
-- **位置**：`pkg/storage/upload.go:28-37`（`UploadMultipartFile` 信任客户端 Content-Type）；`internal/handler/upload.go:66,148-159`（`file_type` 任意无校验）；`internal/handler/storage.go:164-194`
-- **描述**：任意登录用户可上传任意扩展名/Content-Type 文件。local 驱动下 `uploads/other/...` 经 `/api/storage/get` 与应用同源内联输出，`http.ServeContent` 按扩展名给 `image/svg+xml`，`nosniff` 不阻止 SVG 脚本执行，且该路由无 `/files` 的 sandbox CSP。
-- **影响**：共享 15 分钟 token URL 即可在应用源执行脚本，窃取同源 cookie/JWT。
-- **建议**：上传前内容嗅探 + 白名单；`StorageDirectGet` 对非图片强制 `attachment` 并加 sandbox CSP。
-
-### H14. 广播租约误判：1s 续租 vs 5s 租约 【逻辑】
-- **位置**：`internal/broadcast/repository/repository.go:424-431,717-754`
-- **描述**：`RecoverExpiredRuns` 对 `status='playing' AND lease_until<=now` 做无逐行锁的批量 UPDATE 置 failed。租约仅 5s 而续租周期 1s，DB 抖动/锁等待使某实例续租延迟超 5s 时，**仍在正常播音的广播会被另一实例标记 failed** 并触发 `run_lease_lost` 中断。
-- **建议**：加宽租约/缩短续租间隔，或恢复判定前先做 `lease_until` CAS 复核。
-
----
-
-## 四、按子系统的详细发现
-
-### 4.1 UDP 实时数据平面（`internal/udphub`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 严重 | 安全 | server_packet.go:49,63-67 | **身份伪造**：voice/text 转发不校验源地址绑定，群内成员可冒名注入（见 S1） |
-| 高 | 性能/安全 | server_packet.go:96-125 | 心跳重认证在 worker 上同步 bcrypt + DB，可被伪造地址驱动 DoS（见 H5） |
-| 高 | 性能 | fanout_sender.go:267-287 | 单 dispatcher 串行分发所有域；队满回退为 worker 同步写 UDP（见 H6） |
-| 高 | 并发 | server_voice.go:139-141 等 | `*models.Device` 共享字段无锁读写，系统性 data race（见 H7） |
-| 中 | 并发/安全 | auth.go:59-91 | `recordFailure` 在锁外 `FailCount++`/改 `BlockedUntil`，并发失败丢失计数→封禁可被绕过；应把 Get+自增+Set 合并为持锁读改写 |
-| 中 | 并发 | group.go:57-64,97,130 | `publicGroupMap` 无锁读写（原地增删 + 每 10s 整体替换 + 直接返回内部 map），API 建/删群与 WS 列群并发触发 fatal concurrent map write |
-| 中 | 性能 | domain_receiver_cache.go:191-219 | 域接收者快照在首个语音包时于 ingress worker 同步构建，且持全局构建锁；大群组首帧毫秒级延迟 |
-| 中 | 性能 | fanout_sender.go:416-431 | 所有域/帧入队被单一 `submitMu` 串行化，且每帧多次堆分配（data 拷贝、resultCh、重编码） |
-| 中 | 性能 | comm_recorder.go:317；comm_uploader.go:90-97 | 每语音帧同步 `SnapshotDeliveryGroupIDs` + 唯一 recorder worker 串行写；上传 `resultChan<-` 阻塞会卡死定时器协程 |
-| 中 | 性能 | server_device_session.go:326,360-363 | 心跳同步回包、首上线 `SyncDeviceConfig`（多次 DB 查询 + 逐包下发）、geoip、型号落库均在 worker 上同步执行 |
-| 中 | 安全 | rate_limit.go:42,48-65 | 限速按 Unix 秒粒度：秒内允许 4x 突发、跨秒重置；`cleanupRateLimiter` 每 10s 持锁遍历 32 分片全表，热路径阻塞尖峰 |
-| 中 | 安全 | proxy_protocol.go:50-138 | PROXY Protocol v2 无条件信任，`realAddr` 被攻击者伪造（应仅当源地址属于受信代理前缀才解析） |
-| 中 | 安全 | pending_device.go:70-79 | 6 位动态码用 24-bit 取模（模偏差 + 空间仅 1e6），5 分钟内可在线穷举；若绑定接口无独立限速即被爆破 |
-| 低 | 性能 | udp_pipeline.go:183-186 | Type0 handler 在单 reader 上、且位于普通设备限速前同步执行，伪造 Type0 包拖慢整条数据面 |
-| 低 | 性能 | udp_pipeline.go:104-207 | 单 reader 读侧无法多核扩展；按源地址哈希分片使单设备（含 FRP 汇聚点）固定单 worker 串行 |
-| 低 | 逻辑 | server_voice.go:89-114 | 语音时长统计依赖客户端可控时间戳，篡改时间戳产生失真统计 |
-| 低 | 逻辑 | comm_syncer.go:49-64 | `resultChan`(1000) + `pending` 切片持续 append，长期存储/DB 故障时内存无界增长 → OOM 风险 |
-| 低 | 性能 | server_voice.go:167-173 | 每个语音帧多次枚举连通域群组并分配 slice |
-| 低 | 逻辑 | device.go:623 | `decodeControlPacket` 先访问 `data[0]` 再判长度（当前有 `len>512` 前置保护，属脆弱） |
-| 低 | 逻辑 | udp_pipeline.go:209-232 | 分片哈希依赖头部固定字节偏移，协议调整会静默改变分片分布 |
-
-**优点**：RCU 群组缓存、atomic.Value 连接池快照、分片限速/半双工、内存池复用、异步录制、并行 FD fanout 设计扎实。
-
-### 4.2 中心/边缘互联子系统（`internal/interconnect`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 高 | 逻辑 | runtime.go:307-321 | 中心瞬时 DB 错误被当"凭据被拒"，边缘永久锁死（见 H3） |
-| 高 | 安全 | cmd/draarl/interconnect_mode.go:59 | 边缘 `InsecureSkipVerify` 生产无护栏（见 H4） |
-| 中-高 | 逻辑/HA | control.go:524 | 认证后 `SetDeadline(time.Time{})` 清除读超时且无 TCP keepalive，节点掉电后中心会话与路由挂到 OS TCP 超时（~2h）才恢复 |
-| 中-高 | 安全 | replay_window.go:32-41 | 消息 ID 来自跨会话/跨平面的全局计数器；`delta>=4096` 时整窗清空（旧 ID 全遗忘），UDP 数据面仅有 HMAC 无 TLS，可被路径攻击者抓包重放 |
-| 中 | 逻辑/HA | protocol.go:270-276；datagram.go:95,212 | UDP 数据面用墙钟做 2s 过期（单调时钟字段未使用），中心/边缘时钟偏差>2s 时**全部 UDP 中继静默丢弃**，系统看似健康数据面实际全死 |
-| 中 | 安全 | center_gateway.go:262-283 | 边缘 `DeviceAuthRequest` 携带任意 SourceIP，中心不校验设备物理连接点即迁移会话，恶意边缘可抢走别处设备会话 |
-| 中 | 逻辑 | runtime.go:374-424 | 凭据被永久拒绝时无限静默重试（5s 退避），运营无告警 |
-| 中 | 性能 | cluster.go:371,403,461 | 每次路由变更触发 `rebuildDomainNodesLocked` 全局重建（遍历全部节点×路由），复杂度 O(总路由) |
-| 中 | 性能 | protocol.go:257-258；cluster.go:650-668 | 中继转发每帧 7-9 次分配/拷贝，且对每个目标节点重新 HMAC，单帧 N 目标在单 datagram worker 内串行 |
-| 中-低 | 资源 | control.go:451-475 | 握手限速在 TLS 握手 + hello 读取后才生效且按 IP；NAT 后多节点共享 IP 会被单个异常节点限速 |
-| 中-低 | 资源 | datagram.go:244-265 | 全局数据队列(4096)可被慢节点各占满 512 后饿死其他正常节点 |
-| 中-低 | 逻辑 | runtime.go:284-286 | 凭据轮换 ACK 超时后重试导致轮换抖动（凭据/宽限期不断推进） |
-| 中-低 | 逻辑 | edge_gateway.go:136-149 | 每次重连清空 speaker/待认证状态，本地进行中的 PTT 租约与设备认证全部作废 |
-| 低 | 安全 | cmd/draarl/ghost_recovery_ticket.go:41 | 恢复票据 HMAC 复用 Web API JWT 密钥，API 侧密钥泄露即可伪造跨节点票据 |
-| 低 | 逻辑 | runtime.go:969-993 | 自签名 TLS 证书 24h 过期且 IsCA=true，`AllowSelfSigned` 生产部署超过 24h 控制面失效 |
-
-**优点**：控制面 HMAC+SourceNodeID/SessionID/KeyEpoch 三重校验、UDP 源地址防伪造（challenge 经 TLS 下发）、路由增量 BaseVersion 强校验、文本/记录写库均异步有界，均验证到位。
-
-### 4.3 WebSocket 与长连接（`pkg/websocket`, `pkg/tcp`, `internal/ghostsession`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 严重 | 安全 | server.go:163 | 无 `SetReadLimit`，超大帧完整缓冲进内存（见 H2） |
-| 高 | 性能 | server.go:161；connection.go:345 | 认证后清空读超时、无任何写超时；慢/死对端让 writer 卡死到心跳 30s 后 `Close()` 才解阻塞 |
-| 高 | 逻辑 | server.go:172,182-184；adapter.go:161-166 | 心跳判活纯应用层：`LastPacketTime` 只在二进制包解码成功后更新，客户端 Ping/Pong 帧被 `continue` 且无 `SetPongHandler`——ws ping 纯装饰，健康但静默的客户端会被误踢 |
-| 高 | 逻辑 | adapter.go:216；message_router.go:116 | 语音/PTT 租约每帧双重 acquire（WS 侧 + 互联侧）且流式发包期间从不释放，单个客户端可持续讲话饿死同组其他发话人 |
-| 中 | 性能 | adapter.go:48-107 | `BroadcastToGroups` 持全局群组索引 RLock 期间遍历全部设备并逐设备取锁，与路由变更互斥 |
-| 中 | 逻辑 | connection.go:612,626,644 | `connMap` 以 `RemoteAddr` 为键：同地址重连覆盖旧条目，旧设备注销被相等守卫跳过 → 可能返回已死设备 |
-| 中 | 资源 | connection.go:628 | 无全局连接数上限、无上行限速；每连接 3 goroutine + 64 槽通道 + 每语音帧一次 DB 录制写 |
-| 中 | 逻辑 | connection.go:448-450 | `WritePing` 只在入队失败时返回 false，连接已死但通道未满时无法感知，持续空转 |
-| 中 | 逻辑 | connection.go:433-445 | `StopWriter` 直接 close 通道，最多 64 个已排队 writeRequest 的共享 payload 引用滞留 |
-| 低 | 安全 | server.go:51 | 空 Origin 一律放行（非浏览器设计）；白名单过宽则 HttpOnly ws_token cookie 可被跨源重放 |
-| 低 | 逻辑 | auth.go:139-140 | 直接写 `device.GroupID/RxGroupIDs` 绕过 routingMu |
-| 低 | 逻辑 | protocol.go:51,81-83 | `DecodeWSPacket` 解析 16 位 Length 却不与 `len(data)` 校验 |
-| 低 | 性能 | adapter.go:154-169 | 心跳检查器每 30s 全量遍历所有在线设备并多次取锁，O(N) 锁抖动 |
-| 低 | 逻辑 | pkg/tcp/client.go:82,152-163 | TCP 客户端无读写超时/keepalive，半开连接永久阻塞且 `connected=true` 不失效；读错误不关连接不重连；`ReadBytes('\n')` 无行大小上限 |
-| 低 | 逻辑 | server.go:202-204 | `auth_success`/`routing_updated` 帧在通道满时被丢弃，客户端可能认为认证失败而服务器视为在线 |
-
-**优点**：writer 单 goroutine 串行写无写锁竞争；`UnregisterDevice` CAS 幂等；共享 payload refcount fan-out 正确。
-
-### 4.4 HTTP Handler 层（`internal/handler`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 严重 | 安全 | site_config.go:74-111 | 任何登录用户可读 OpenAI Key / SMTP 密码（见 S3） |
-| 高 | 安全 | group_admin.go:63；group_membership.go:65 | 群组密码明文存储 + 明文比较（见 H9） |
-| 高 | 安全 | site_config.go:238-245 | 密钥明文写入审计日志（见 H11） |
-| 中 | 安全 | middleware/auth.go:75-82 | 只校验 `Status==1` 不校验 ApprovalStatus，未审核用户可访问全部 protected 路由（含 `/config/category`、`/storage/presign-put`、`/upload/*`） |
-| 中 | 安全 | email_auth.go:72-104；auth_login.go:76-125 | register/login/reset 对"邮箱已注册/未注册"、"用户名/呼号已存在"返回差异化响应 → 账号/邮箱枚举 |
-| 中 | 安全 | auth_login.go:300-318 | 登录失败只累加 `LoginErrTimes` 从不读取做锁定，弱密码用户可被暴力破解（仅有图片验证码） |
-| 中 | 安全 | device_bind.go:196-197,216-280 | 设备动态码明文打日志；`ConfirmBind` 无需 JWT 仅凭 MAC 返回 username/device_password/dmr_id 明文（MAC 非机密，可轮询窃取） |
-| 中 | 安全 | auth_profile.go:66-68,198-200 | `GetUserPublicInfo` 向任意登录用户泄露 phone/address PII |
-| 中 | 性能/逻辑 | keycloak.go:150,203 | 每次 `saveState`/`saveLoginCode` 启动清理 goroutine（堆积），state/loginCode map 无界；`rand.Read` 错误被忽略 → state 可预测 |
-| 中 | 性能 | logbook.go:565-567 | `AdminGetLogbooks` 每行 `GetUserByID`，N+1 查询 |
-| 中 | 性能 | group_link.go:261-262 | `GetVirtualGroups` 循环内逐组 `GetLinkCount`，N+1 |
-| 中 | 逻辑 | group_link.go:716-750 | `AddGroupLinkTarget` 先检查后写入（TOCTOU），无事务/唯一约束兜底，并发下破坏"一实体组只入一个虚拟组"约束 |
-| 中 | 安全 | device_config.go:149-247 | 设备配置值（rx_freq/sql_level/power_level 等）无范围/枚举校验原样入库下发，非法值可致设备异常 |
-| 低 | 性能 | operatorlog.go:19-29；group_query.go:252-303 | limit 无上限 / 全量列表接口，大表响应缓慢内存膨胀 |
-| 低 | 性能 | broadcast.go:420-427 | `ListBroadcastRuns` page_size 在 SQL 前未截断（可传 999999999） |
-| 低 | 安全 | logbook.go:214；comm_records.go:543；preset.go:75 | 绑定错误信息回显 `err.Error()` 内部细节 |
-| 低 | 逻辑 | auth_login.go:63-254 | Register 无速率限制，可批量注册垃圾账号 |
-| 低 | 安全 | auth_login.go:383-393 | 设备密码生成 `rand.Read` 错误忽略 + `int(byte)%len(charset)` 模偏差；密码仅 8 位小字符集 |
-
-**优点**：`RequireAdminOrOwner` 中间件 + handler 内 `canManageGroup` 二次校验可靠，未发现可绕过的 IDOR/越权；ffmpeg/ffprobe 用参数数组 `exec.CommandContext` 无 shell，未发现命令注入；comm_records/logbook/preset/device/broadcast 均按归属/成员校验。
-
-### 4.5 认证、JWT 与中间件（`internal/auth`, `internal/middleware`, `pkg/jwt`, `pkg/crypto`, `internal/captcha`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 高 | 安全 | pkg/jwt/jwt.go:24 | `var jwtSecret = []byte("nrl1234")` 硬编码弱默认密钥，仅靠 main.go initJWTSecret 覆盖兜底；绕过初始化流程的入口即用公开密钥伪造 token。⚠️ **用户决定：修** —— 项目已从 nrl fork 魔改并近乎重构，应移除 nrl 相关硬编码内容（改为：删除弱默认值 + 未初始化即 fail-fast） |
-| 高 | 逻辑 | pkg/jwt/jwt.go:24,41 | `jwtSecret` 可变全局量，`SetSecret` 无锁赋值与并发读构成 data race（修复硬编码密钥时可一并改为原子/锁保护） |
-| 高 | 性能 | middleware/auth.go:56-57 | 每请求查库（见 H8） |
-| 高 | 安全 | middleware/device_rate_limit.go:141-173 | 限速 map 无上限仅 60s ticker 清理；pre-check/request-code 的 MAC 键直接取自请求体可任意伪造 |
-| 高 | 安全 | pkg/crypto/aes.go:176 | `VerifyDevicePassword` 用 `decrypted == plainInput` 非常数时间比较，且经 UDP 未认证路径暴露为网络口令校验 oracle；AES-vs-bcrypt 两格式耗时/格式可区分 |
-| 高 | 逻辑 | internal/auth/refresh_token_store.go:60-65 | Redis 初始化失败静默降级内存存储：多实例不一致、进程重启后全部 14 天会话静默丢失 |
-| 中 | 性能 | middleware/access_discovery.go:25 | 高吞吐发现接口每请求查库一次 |
-| 中 | 性能 | pkg/cache/cache.go:70-78 | 缓存未命中无 singleflight（缓存击穿），且对不存在用户不写负缓存（攻击者可刷不存在用户名造成 DB 穿透） |
-| 中 | 性能 | pkg/cache/group_cache.go:119-133 | `GetGroupList` 缓存未命中时全表加载再内存分页 |
-| 中 | 逻辑 | middleware/message_api.go:41-56 | 条目 ≥100000 时先全 map O(n) 扫描再对新 key 硬拒 1 分钟；大量唯一 IP 填满后合法新用户全被 429，限速器本身成为 DoS 杠杆 |
-| 中 | 安全 | pkg/jwt/jwt.go:98,116 | `ParseToken` 未用 `WithValidMethods`、未校验 iat；`claims.TokenUse != ""` 判断使无 token_use 声明的旧 token 仍可按 access 放行 |
-| 低 | 逻辑 | internal/captcha/captcha.go:53-57 | 惰性 `Init()` 无锁，首个并发请求可能重复初始化 |
-| 低 | 逻辑 | pkg/jwt/jwt.go:150-156 | `RefreshToken` 无状态续期函数（不查 store 不轮换），任何有效 access token 可无限续期；当前为死代码但风险存在于未来接入 |
-
-**优点**：refresh token 轮换用 Redis WATCH 原子化 + 重放检测吊销全用户 token；captcha 验证 clear=true 无重放；`ParseToken` 校验了签名算法与 issuer；Redis 各 key 均设 TTL。
-
-### 4.6 数据层（`internal/gormdb`, `internal/db`, `internal/models`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 严重 | 安全 | internal/db/user.go:140-151 | 明文密码入库 + SQL 明文比对（见 H1） |
-| 高 | 逻辑 | internal/db/user.go:163-222,393-454 | `scanUser` `SELECT *` + 固定 23 列 Scan，与当前 ~31 列表结构不匹配 → 列错位或报错，层已失效 |
-| 高 | 性能/逻辑 | models.go:692-733,984-1049 | AutoMigrate 非幂等，大表 ALTER 锁库（见 H12） |
-| 高 | 安全 | site_config.go:552-563 | SiteConfig（含 openai.api_key/smtp.password）明文 TEXT 存储 |
-| 高 | 性能 | models.go:343-361 | comm_records 约 12 个索引（含 4 个复合），高写表写入放大严重 |
-| 中 | 逻辑 | config.go:433；gorm.go:66-68 | DSN `loc=Local` + `NowFunc` 本地时间，注释却称 UTC；`gorm.Expr("NOW()")` 取 MySQL 会话时区与 Go 时间混用 → 跨时区时间错乱 |
-| 中 | 性能 | logbook.go:170；device.go:336-352；user.go:526-544；node.go:270-277 | `LIKE '%x%'`、`ABS(tx_frequency-?)`、`CAST(id AS CHAR) LIKE`、`<> ''` 等非 sargable 条件 → 全表扫描族 |
-| 中 | 性能/逻辑 | user.go:281-421 | `DeleteUserWithCascade` 单事务跨约 15 张表；reassign 逐组发 3~4 条 UPDATE（N+1），群组多时锁库数秒阻塞在线设备写路径 |
-| 中 | 逻辑 | user.go:171-181；repositories.go:87-89 | GORM `.Updates(user)` 传 struct：零值字段被静默忽略（清空 Avatar/Note 不生效）；若带入 Roles 可改写角色 |
-| 中 | 逻辑 | operator_cert.go:274,303,389,491 | Count/Pluck/Find 错误未检查，失败静默返回 0/空列表，审批界面显示失真数据 |
-| 中 | 性能 | models.go:263-271；repositories.go:554-665 | operator_log 无保留策略、Timestamp 无索引；`DATE()/YEARWEEK()/YEAR()` 包裹列 → 统计接口 3~4 次全表扫描 |
-| 中 | 性能 | message.go:83-123 | 消息列表对每个群组单独 1~2 条 SQL，用户在 N 个群组放大 N 倍往返 |
-| 低 | 安全 | models.go:170；models.go:22-46 | `Server.JoinKey json:"join_key"`、User 的 OpenID/PID/Phone/LastLoginIP 均无 `json:"-"`，一旦直返实体即泄露凭据/PII |
-| 低 | 性能 | gorm.go:155-178 | `GetDB` 每次新建 session（Background 上下文 + PrepareStmt:false），请求取消无法中断 SQL、每条 SQL 重复解析 |
-| 低 | 安全 | main.go:193；db/user.go:300-319 | ~~首次启动明文打印管理员密码到 stdout~~ ✅ **设计特性**（用户确认：首次启动打印初始管理员密码为刻意设计）；`deserializeRoles` 对值恰为 `"["` 时 `rolesStr[1:0]` 越界 panic（此项仍建议修） |
-
-**优点**：GORM 层行锁/条件更新/批量缓存意识到位。
-
-### 4.7 存储与上传（`pkg/storage`, `pkg/minio`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 高 | 安全 | upload.go:28-37；handler/upload.go:66,148-159 | 通用上传无 MIME/扩展名白名单 → 存储型 XSS（见 H13） |
-| 中 | 安全 | image.go:32,123,83 | `image.Decode` 解码前不检查像素尺寸（`DecodeConfig`），小体积大尺寸 PNG 可耗尽数百 MB 内存；`ProcessLogo` 还 `make([]byte, Size)` 整读 |
-| 中 | 逻辑 | migrate.go:91-99,166-173 | 迁移删源仅按 size 校验不比对内容 hash，源/目标同 size 内容损坏时 `DeleteSource=true` 删掉正确源端 |
-| 中 | 逻辑 | local.go:182-187 | `Put` 先 `os.Remove` 再 `os.Rename`：目标瞬时缺失；Windows 下被占用时 Remove 失败；Go 的 Rename 本身原子覆盖，前置删除多余 |
-| 中 | 逻辑 | grant.go:86-103；local.go:217-257 | 直传 Promote 成功后被重试会报错/孤儿对象（staging 已删、final 无 DB 引用、不进清理），成功上传表现为失败 |
-| 中 | 性能 | migrate.go:74-122,146-174 | 迁移单 goroutine 串行客户端复制，无并发；S3→S3 未用服务端 CopyObject |
-| 低 | 安全 | minio.go:366-373 | S3 `Promote` 先 Stat 后 CopyObject（TOCTOU），CopyObject 无条件覆盖，违背"不可变"承诺（local 用原子 os.Link 无此问题） |
-| 低 | 安全 | upload.go:107-139；local.go:386-394 | favicon/logo SVG 原样存储且公开 `/files` 可达，S3 下无 CSP 可执行脚本 |
-| 低 | 安全 | handler/storage.go:235-245 | `publicAPIBase` 信任 `c.Request.Host`/`X-Forwarded-Proto`，Host 头投毒可伪造签名 URL 前缀 |
-| 低 | 逻辑 | local.go:492-494 | 直传 token 的 Content-Type 绑定在 contentType 为空时跳过 → 落盘类型与授权不符 |
-| 低 | 逻辑 | minio.go:93-108 | `BucketExists`+`MakeBucket` 竞态，`BucketAlreadyOwnedByYou` 使 Init/迁移直接失败 |
-| 低 | 逻辑 | local.go:245-250 | `Promote` 用 `os.Link` 硬链接，FAT32/exFAT/跨卷返回 EPERM/EXDEV，无可退路径 |
-| 低 | 逻辑 | minio.go:453-481 | 预签名 URL 的 host/path 重写会使 SigV4 签名失效（签名覆盖 Host 与规范路径）→ 合法配置 403 |
-| 低 | 逻辑 | local.go:479-523 | token 校验读全局配置密钥，驱动签名用初始化时密钥；JWT 密钥轮换后所有在途签名 URL 立即失效 |
-| 低 | 性能 | upload.go:34,86,100,143 | 上传未接请求上下文，客户端断连后 S3 仍继续传完整对象 |
-
-**优点**：`resolvePath` 的 `..`/反斜杠/`EvalSymlinks` 防护、直传 token 绑定 key/size、大小校验总体扎实；local 驱动公开范围收窄到 avatar/logo/favicon/frontend。
-
-### 4.8 广播调度与媒体（`internal/broadcast`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 高 | 逻辑 | media/processor.go:60-72,96-109 | 启动恢复 >128 记录 → 服务无法启动（见 H10） |
-| 高 | 性能 | repository.go:717-754 | 每播报每秒一个 4+ 行加锁事务（run/schedule/audio 三行 FOR UPDATE + 政策 join），最多 20 并发播报争锁 |
-| 高 | 逻辑 | repository.go:424-431 | 租约 5s/续租 1s，DB 抖动即误杀正常播音（见 H14） |
-| 中 | 安全 | process_limits_other.go:5-7；processor.go:308-318 | 非 Linux 平台内存/CPU 限制为空操作；Linux `RLIMIT_AS` 限地址空间非常驻内存，且 Prlimit 在 Start 后设置存在竞态窗口 |
-| 中 | 逻辑 | repository.go:357,386-403 | `ClaimDue` 整批 schedule 在同一事务内循环，任一 schedule 报错即回滚整批，本周期所有到期播报全部错过 |
-| 中 | 逻辑 | repository.go:354-379,524-540 | `advanceClaimedSchedule` 推进 next_run_at 后再 `OnConflict{DoNothing}` 插 run，毫秒级冲突 RowsAffected=0 时到期静默丢弃 |
-| 中 | 性能 | model/models.go:153,161 | `RecoverExpiredRuns` 按 `(status, lease_until)` 过滤 ORDER BY scheduled_for，缺复合索引需回表 + 文件排序 |
-| 中 | 性能 | operations.go:245-275 | `PersistedMetrics` 对整张 broadcast_runs GROUP BY + SUM，随表增长全表扫描 |
-| 中 | 性能 | processor.go:45,111-123 | 转码单 worker 严格串行（最坏 1 个/90s），128 队满即 503，失败任务无持久化重试 |
-| 中 | 性能 | engine.go:162-188 | `scanOnce` 持 operationalMu.RLock 执行长事务，慢扫描阻塞管理操作 |
-| 中 | 逻辑 | engine.go:142-146,608 | `Health().LastScanAt` 在事务开始前打点，扫描卡死锁等待时判活条件不触发，健康检查漏报 |
-| 低 | 性能 | repository.go:258-275 | `ListRuns` 每次 COUNT 全表 + OFFSET 深分页 |
-| 低 | 逻辑 | engine.go:409-425 | `finish` 用 Background + 5s 超时，停机时仍发起 DB 事务；失败不重试 |
-| 低 | 安全 | processor.go:243-306 | ffmpeg/ffprobe 无沙箱（无 seccomp/cgroup/受限用户/noexec 临时目录），恶意样本仍是资源耗尽与解码器漏洞攻击面 |
-| 低 | 逻辑 | engine.go:210-214 | `launchReserved` 重复 ID 分支 `cancel(ErrSchedulerStopped)` 会误杀已存在运行 |
-
-**优点**：多实例重复领取由 entity-group 行锁 + 唯一键保障，未发现双播漏洞；ffmpeg/ffprobe 命令参数为程序拼接固定参数，未发现命令注入；上传校验（签名/大小/计数/SHA256）完备。
-
-### 4.9 缓存层（`pkg/cache`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 严重 | 安全/性能 | cache.go:84-100 | sync.Pool 缓冲复用污染缓存数据（见 S2） |
-| 严重 | 性能 | cache.go:186-240 | LRU 淘汰失效，map 无界增长 + 过期项不清（见 S2） |
-| 中 | 性能 | cache.go:70-78 | 无 singleflight、无负缓存（缓存击穿/穿透） |
-| 低 | 逻辑 | cache.go:232-240 | `evict()` 用 FIFO 语义但从不维护列表 |
-
-### 4.10 配置与密钥（`internal/config`, `cmd/draarl`）
-
-| 严重度 | 类型 | 位置 | 问题 |
-|---|---|---|---|
-| 中 | 安全 | config.go:822 | AES 密钥生成用 `hex.EncodeToString(bytes)[:keyLen]` 截断：生成 32 字节 hex 再取前 32 字符 → **实际只有 16 字节熵**（应为 64 字符 hex 全保留，或直接 `string(bytes)`）。⚠️ **用户决策：不改** —— 改动会影响现有系统数据（已存储密文的解密依赖当前密钥派生方式），保留现状 |
-| 低 | 安全 | config.go:765 | `SaveToFile` 写 `0644` 明文密钥（JWT/AES 密钥自动生成后写回配置文件），同机其他用户可读 |
-| 低 | 安全 | main.go:193 | ~~首次启动明文打印管理员密码到 stdout~~ ✅ **设计特性**（用户确认） |
-| 低 | 逻辑 | main.go:26-61 | `-auto-migrate` 参数语义与配置校验分离，空库自动迁移依赖 `IsSchemaEmpty` 判断 |
-
----
-
-## 五、性能优化专题汇总
-
-1. **DB 热点**：
-   - 认证/权限中间件每请求 1-3 次 DB 查询（H8）——改缓存 + 复用 context user。
-   - comm_records 12 索引写入放大、operator_log 无保留策略 + 无索引统计全表扫、全表扫描族（LIKE %x% / 函数条件）——收敛索引、加覆盖索引、定时归档。
-   - `DeleteUserWithCascade` 单事务跨 15 表 + 逐组 UPDATE N+1——拆分事务/异步化。
-   - 消息列表 N 群组 N 次查询——合并 IN/UNION。
-2. **UDP 数据面**：
-   - fanout 单 dispatcher 串行 + submitMu 全局锁（H6 + fanout_sender.go:416）——按域/writer 分片锁 + 异步派发。
-   - 心跳/首上线/geoip/型号落库在 worker 同步——异步化/延迟合并。
-   - 单 reader 多核扩展受限、Type0 伪造包在 reader 解密——按需下沉 worker。
-   - 每帧 3 次域枚举 + 多次堆分配——快照复用、池化。
-3. **存储**：迁移串行复制——并发 worker + S3 服务端复制；上传未接请求 context——断连即取消。
-4. **广播**：1s 全量 eligibility 事务（H14）——降到 5-10s；转码单 worker——并发 2-4 + 失败落表重试；PersistedMetrics 全表扫描——物化统计/分区。
-5. **缓存**：singleflight + 负缓存 + 修复淘汰（S2）后，列表缓存分页下沉 SQL（group_cache.go）。
-6. **互联**：路由变更全局重建 O(总路由)——按受影响 route/domain 增量维护；中继每帧 7-9 次拷贝 + 每目标 HMAC——sync.Pool 复用、单次 HMAC。
-
-## 六、安全专题汇总（按攻击面）
-
-- **身份/会话**：UDP 数据面身份伪造（S1，最高优先）；边缘 InsecureSkipVerify（H4）；跨节点设备会话可被接管；ghost 恢复票据复用 JWT 密钥；WebSocket 无读上限（H2）；空 Origin 放行。
-- **凭据/密钥**：站点密钥越权读取（S3）；原生 DB 明文密码（H1）；群组密码明文（H9）；密钥写审计日志（H11）；SiteConfig 明文存储；JWT 硬编码默认密钥 `nrl1234`（用户已确认要修）；AES 密钥熵减半（特性，不改）；配置文件 0644；动态码明文日志；ConfirmBind 无鉴权返回凭据。
-- **注入**：存储型 XSS（H13，SVG 内联）；favicon SVG；PROXY Protocol v2 伪造源 IP；Host 头投毒伪造 URL。
-- **拒绝服务**：心跳 bcrypt 放大（H5）；限速 map 无界 + MAC 可伪造；图片解压炸弹；消息限速器自伤（message_api）；WebSocket 超大帧；comm pending 无界；广播启动失败即崩溃（H10）；缓存淘汰失效内存泄漏（S2）。
-- **枚举/爆破**：账号/邮箱枚举；登录无锁定；动态码空间 1e6 可穷举；设备密码 8 位 + 模偏差。
-
-## 七、逻辑正确性专题汇总
-
-- 边缘认证失败误判永久锁死（H3）；UDP 数据面墙钟过期时钟偏差全死；重放窗口大跳变清空；广播租约误杀（H14）；广播 ClaimDue 整批事务连坐；OnConflict 静默丢弃；互联重连清空 PTT 状态；WebSocket 心跳判活不对称误踢；connMap RemoteAddr 键；时区来源不一致；GORM 零值更新失效；group_link TOCTOU；路由变更全局重建。
-
----
-
-## 八、建议的修复优先级
-
-**P0（发布前必须）**
-1. S1 UDP 数据面源地址绑定校验
-2. S2 缓存 sync.Pool 深拷贝 + 淘汰机制修复
-3. S3 站点密钥接口收敛为管理员 + 脱敏
-4. H1 下线原生 db 明文密码层
-5. H2 WebSocket `SetReadLimit`
-6. H3 边缘认证失败原因码区分
-
-**P1（尽快）**
-7. H4 边缘 `InsecureSkipVerify` 生产拦截
-8. H5 心跳 bcrypt 移出数据面 worker
-9. H9 群组密码哈希化
-10. H10 广播启动恢复不因队满崩溃
-11. H11 审计日志密钥脱敏
-12. H12 AutoMigrate 版本化
-13. H13 上传 MIME/扩展名白名单 + 下载 attachment
-14. H14 广播租约/续租策略调整
-
-**P2（持续改进）**
-15. H6/H7/H8 性能与并发修复
-16. 上表全部中/低优先级项
-
----
-
-*本报告基于静态代码层面分析，未执行测试或构建。行号指向分析时的 dev 分支（v2.0.0-alpha13 / 346a458），代码演进后可能偏移。*
+# DraARL Server `dev` 分支增量代码复核报告
+
+- **复核对象**：`dev` 分支，HEAD `86cf4cc`；当前工作区包含大量未提交改动，均视为用户已有改动并保留。
+- **复核时间**：2026-08-22（Asia/Shanghai），本轮针对最新 Git 差异做再次增量重分析；除操作日志和消息/群组查询闭环外，共享 Redis 登录/注册/验证码发送保护已完成接入和 Ubuntu 专项验证，并补齐兼容原生 SQL 用户/中继/服务器/操作日志查询、用户管理分页和设备列表分页的稳定投影、启动初始化锁、分页边界和扫描错误传播，本报告按当前实际证据重新标记，所有改动仍未提交。
+- **复核方法**：静态阅读当前工作区与 `origin/dev`/HEAD 差异；Windows 仅执行 Git、文本和格式检查；Go 测试、竞态测试和 `go vet` 仅在 Hyper-V Ubuntu 的 Go 1.25.5 环境执行。
+- **范围约束**：本轮不提交 Git、不回滚或清理用户改动；代码优化和测试文件允许保持未提交。Windows 不运行 Go 测试/构建/vet，Go 验证仅在 Hyper-V Ubuntu 执行；真实设备、FRP/PROXY v2、生产 MySQL、真实 S3、ffmpeg、容量和语音质量证据不能由单元测试替代。
+
+## 一、当前结论
+
+本轮已将已经形成“代码修复 + 对应专项验证 + 无已知剩余边界”的项目从当前风险清单移除。当前仍保留 24 条报告记录（S1 与表格中的“PROXY v2 配置”重复，按独立主题约 23 项）。其中约 5--6 项仍有明确代码/设计工作，约 10--12 项主要缺真实部署或生产规模证据，其余主要是协议、配置和运维决策边界；不能把全部记录都视为尚未修复的代码缺陷。当前发布前仍需关注：
+
+1. **S1：UDP 双地址身份绑定已完成 release 配置 fail-closed，仍需真实 FRP/PROXY v2 验收**。代码已分离代理回包地址与可信真实源地址；release 构建启用 PROXY v2 时若未配置非空可信网段会拒绝启动，开发/测试构建才保留兼容性“信任所有来源”模式。
+2. **H5：认证池与失败状态内存边界已部分修复，小规模真实设备接入已通过，容量和拓扑边界仍待验证**。Ubuntu 真实 UDP benchmark 已完成 50/100 个设备首次认证和语音接收；NAT 端口变化、FRP 批量重连、队列满载及生产 DB 慢响应仍没有实测证据。
+3. **H6：fanout 已解除运行中同步回退，并补齐目标级丢帧统计；小规模真实 socket 验证零丢包，但过载仍会丢旧帧**。需要更大规模真实语音容量、丢帧率和端到端通话质量门槛。
+4. **H9/H12：代码、专项测试和专用 MySQL 验证已通过，但生产旧库边界仍需保留**。H9 的设备切组 bcrypt 回归、历史明文惰性升级和限速已通过 Ubuntu HTTP E2E；H12 在全新专用 MySQL 库已验证首次迁移写入连续版本 `1,2`、重复启动幂等同步，并通过版本记账故障注入验证有界重试和独立回读确认。两项仍保留“部分修复”：历史超长群密码需要人工轮换，既有生产库升级、迁移失败恢复、DDL 锁等待和 EXPLAIN 尚未在生产规模验收，迁移步骤与版本记录之间也没有统一事务回滚。
+5. **历史数据与部署边界**：历史 SVG/favicon、历史私有群密码、历史 `openai.*` 配置行不会被所有新代码自动清理；SiteConfig 敏感明文已在读取时尽力惰性加密，但生产密钥轮换和失败恢复仍需运维演练；release 已对 refresh-token 和登录/注册保护的 Redis 初始化失败 fail-closed，开发/测试仍允许内存兼容回退。登录/注册共享状态代码级和 Redis 双实例专项已闭环，但真实生产 Redis 高可用、网络故障和账号/邮箱响应策略仍需验收；S3/CDN 响应头、时区、ffmpeg 部署沙箱和生产容量仍需运维或专项处理。
+
+状态含义：
+
+- `⚠️ 待验证`：代码路径已有实现和测试，但缺真实目标环境证据。
+- `⚠️ 部分修复`：主路径已改善，仍存在可达边界或明确容量/兼容风险。
+- `⚠️ 评估/设计边界`：当前行为可能是部署或协议设计，需要产品/拓扑确认。
+- `❌ 仍存在`：本轮确认问题尚未消除。
+
+## 二、保留的高风险专题
+
+### S1. UDP 数据面源地址与身份绑定
+
+- **状态**：⚠️ **部分修复**。
+- **现状**：普通设备运行时已分离 `RealUDPAddr` 与代理回包用的 `UDPAddr`；voice/text/config 身份校验、心跳地址迁移和冲突判断使用真实地址。中心和独立边缘分别使用 `System.ProxyTrustedCIDRs`、`Edge.ProxyTrustedCIDRs`；非法 CIDR fail-closed，解析失败不覆盖已有有效快照。新增中心配置、边缘配置和 `NewEdgeEndpoint` 三层一致校验：release 构建启用 v2 时必须配置非空可信网段，否则拒绝启动。设备 MAC 冲突缓存现在有 10 分钟惰性 TTL、100,000 条本地硬上限和 500ms Redis 操作截止时间；运行时索引先释放全局锁，再执行 Redis 写入。
+- **验证证据**：Ubuntu `internal/config`、`internal/interconnect`、`internal/udphub` 10 轮 `go test -race` 通过；全仓 `go test -race ./... -count=1` 和 `go vet ./...` 通过。测试覆盖 release 空网段拒绝、合法网段接受、开发/测试空网段兼容、未授权代理来源不解析和直连数据报兼容。
+- **剩余边界**：尚无真实 FRP/PROXY v2 批量设备回归；白名单漏配会使合法设备报文无法解包，必须按实际代理出口分别配置中心和边缘网段。开发/测试构建仍允许空列表信任所有来源，仅用于兼容和本地测试，不应部署到生产。Redis 故障或本地 MAC 缓存满载时按 fail-closed 处理，跨实例地址迁移可能等待后续心跳重试。
+- **接入影响**：直连设备的代理地址和真实地址相同，协议和密码不变；release 生产启用 v2 的部署需要先配置非空代理网段，否则服务会在启动时明确失败而不会带着不安全默认值运行。共享 FRP/NAT 必须核对实际代理出口，否则合法设备可能无法接入。MAC 缓存边界只可能延迟/拒绝异常地址接管，不放宽合法设备的源地址校验。
+
+### H5. 心跳重认证与认证池
+
+- **状态**：⚠️ **部分修复**。
+- **已完成**：bcrypt/DB 查询已移出 UDP 数据面 worker；首次认证和重认证进入专用队列；同一 `username+ssid` 合并；失败状态、队列满载、停机排空、停止中禁止新 generation、单任务 panic 隔离和 context 传播均有测试。认证 worker generation Context 在停止时先取消进行中的认证任务，再关闭并排空队列；认证查询、密码校验后的迁移写库和成功返回前均检查取消状态，worker 在更新设备运行时状态前也检查 generation Context，避免服务停止后继续清理失败状态或发布认证结果。认证失败表现在 16 个分片内采用全局 100,000 条硬上限；满载时只在最多 128 条候选内淘汰已过期/已解除封禁记录，活跃封禁保留，找不到安全候选则拒绝新增状态。
+- **验证证据**：Ubuntu `internal/udphub` 的有界表/认证专项 race 50 轮、包级 race/vet、全仓 `go test -race ./... -count=1` 和全仓 `go vet ./...` 均通过；测试覆盖全局容量、活跃封禁不被淘汰和并发更新不丢计数。既有 50、100 个设备档位首次心跳认证和语音 fanout benchmark 均 `loss_pct=0`；这证明正常低规模设备接入路径可用，但不覆盖共享 NAT/FRP。
+- **剩余边界**：认证异步期间语音、文本和配置帧会丢弃；队列满时返回 `auth_busy`，依赖后续心跳重试；5 秒后端截止时间可以中断数据库等待，但 bcrypt 本身不可被 Context 中途取消，停止延迟仍受单次密码校验耗时影响。NAT 端口变化、FRP 批量重连、队列满载和生产 DB 慢响应仍未验证。
+- **接入影响**：不改变 DraARLv1 报文、设备密码、失败码或地址绑定；新设备/地址变化重认证的可见变化是短暂等待和可能的 `auth_busy`，需设备端确认会重试。停止取消只发生在服务关闭路径，不影响正常运行中的设备接入。
+
+### H6. Fanout 过载与语音质量
+
+- **状态**：⚠️ **部分修复**。
+- **已完成**：dispatcher 不再等待 writer；中心和边缘 sender 入队失败不再回退到 ingress 线程同步写 UDP；移除 `submitMu` 后多域可并发入队；慢 writer 队列满时采用 latest-wins，淘汰旧分片并计入指标。本轮新增 `targets_dropped`，统一覆盖 frame 淘汰、writer 淘汰、过期帧、关闭/过载拒绝和分片投递失败，避免只看 frame/event 数而低估实际受影响设备数；底层 `WriteToUDPAddrPort` 错误仍单独计入 `write_errors`，广播回调将其并入业务侧目标丢弃统计。通信录音上传队列新增 4,096 个会话硬上限，满载淘汰最旧会话并暴露 `dropped_uploads`，消除存储故障期间的无界上传队列增长（✅ 已验证修复）。
+- **验证证据**：Ubuntu 专用 MySQL/真实 UDP socket benchmark 的 50、100 设备档位均零丢包；100 设备档位约 825 output pps、平均延迟 0.62 ms。测试数据和录音残留已自动清理。
+- **剩余边界**：过载时仍会丢帧，`FrameQueueSize` 和 writer 缓冲只是有界背压，不是质量保证；本次仅验证低规模单入口、单群组，单 reader、FRP 汇聚点串行化、录音单 worker 和高基数 fanout 容量尚未做生产压测。
+- **接入影响**：正常低负载设备接入条件和报文未变；高负载或慢接收端可能出现局部丢音，需结合 `writer_evictions`、`targets_dropped`、socket errors 和端到端 MOS/丢帧指标验收。统计字段只增加观测能力，不改变发送策略。
+
+### H9. 私有群组密码历史迁移与消费路径兼容
+
+- **状态**：⚠️ **部分修复**。
+- **已完成**：新建/更新私有群组使用 bcrypt；Web 加入和设备切组统一使用 bcrypt/历史明文兼容校验；两条路径共享用户/IP 密码尝试限速；历史明文验证成功后用旧值条件更新惰性升级。schema migration v2 按 keyset 分页升级历史明文密码，条件更新避免覆盖并发修改；迁移仅筛选 `type=2`、非空密码，并用完整 bcrypt 结构校验避免损坏哈希被误判为已完成。
+- **验证证据**：Ubuntu 已通过 handler/gormdb/middleware 包级 `go test -race`、H9 专项 20/50 轮和 `go vet`；2026-08-22 在 Docker MySQL 8.4 的专用库 `draarl_test_codex_h9_20260822` 执行 HTTP E2E 通过，覆盖 bcrypt 设备切组、错误密码、已验证成员免密码、历史明文惰性升级和设备切组/加入限速。测试使用代码直接签发 JWT，没有经过验证码流程。
+- **剩余边界**：迁移在启动路径同步执行；超过 bcrypt 72 字节的历史密码现在保留原值、输出告警并继续完成版本迁移，不再阻止服务启动，但这些值仍是历史明文兼容债务，必须安排管理员人工轮换。生产旧库历史数据清理、失败恢复和大规模迁移性能仍待验收；专用库 E2E 不能替代生产备份和维护窗口验证。
+- **接入影响**：不改变 UDP 实体设备认证、DraARLv1 报文或设备密码；修复后普通用户可用正确密码通过 Web 切换到已哈希私有群。公开群、管理员和已验证成员不增加密码校验；错误密码仍按 401/限速返回。
+
+### H12. 版本化 AutoMigrate 与旧库 DDL
+
+- **状态**：⚠️ **部分修复**。
+- **已完成**：`schema_migrations` 避免已记录版本重复清洗；版本记录现在要求从 1 开始连续且拒绝高于当前版本的账本，避免跳号或旧程序误连新库后静默跳过迁移；只有迁移账本表的全新业务库会跳过历史清洗后正常建表；已有业务库的重复巡检、孤儿清理、遗留列删除和外键清理失败会 fail-closed，不再记录迁移完成；MySQL 使用连接级 `GET_LOCK` 防止跨实例同时迁移，等待有 30 秒和 context 取消边界；迁移账本增加 `running/completed` 状态，迁移步骤开始前先持久化 running，完成后才切换 completed，旧版本空状态按 completed 兼容；版本写入和状态切换均有 3 次有界重试与独立回读确认。
+- **验证证据**：2026-08-22 在 Docker MySQL 8.4 的全新专用库 `draarl_test_codex_h12_20260822` 启动当前代码 `-auto-migrate` 成功，`schema_migrations` 写入连续版本 `1,2`，服务正常启动并可优雅退出；第二次启动记录为幂等 schema 同步，版本账本保持 `1,2`，未重复执行 v1/v2 清洗迁移。新增迁移 running/completed 状态恢复与 `retryMigrationVersionRecord` 测试；独立 MySQL 8.4 故障注入和状态 E2E 20 轮通过，验证首次写前失败会重试、写后模糊提交只需一次有效写入、running 状态不计入完成版本且可被后续启动重新执行；随后全仓 race 和 vet 均通过。
+- **剩余边界**：状态账本缩小了“迁移已开始但进程崩溃后无法识别”的窗口，但 DDL、数据回填和版本状态切换仍没有统一事务回滚；进程可能在任意 DDL/回填中途退出，恢复仍依赖步骤幂等性。没有版本记录的既有库首次升级仍可能执行用户去重、孤儿清理、记录回填和 DDL；GORM 结构差异仍可能锁表。生产规模 MySQL 锁等待、备份恢复、失败重试和旧库数据兼容演练尚未完成。
+- **接入影响**：不改变设备协议；启动/升级窗口可能影响 HTTP/DB 可用性，必须备份、预检查和固定维护窗口。
+
+## 三、其他仍需保留的风险与设计边界
+
+| 子系统 | 状态 | 当前结论与剩余工作 |
+|---|---|---|
+| 设备模型运行时快照 | ⚠️ 设计边界/待容量验证 | 当前生产调用方已改用 `DeviceRuntimeSnapshot`/`UpdateRuntime` 并通过 race；`models.Device` 字段仍公开可变，未来绕过 API 会重新引入竞态；深拷贝和锁开销尚无容量数据。 |
+| PROXY v2 配置 | ⚠️ 部分修复 | 中心/边缘白名单已分离、非法 CIDR fail-closed；release 构建启用 v2 且空列表时拒绝启动，开发/测试构建仍保留空列表兼容模式。 |
+| 互联 UDP 时效 | ⚠️ 待验证 | 已移除跨节点墙钟过期判断，改用本地接收时间和 monotonic 排队年龄；真实时钟偏差、网络延迟、旧节点互通仍未回归。 |
+| 跨节点设备会话 | ⚠️ 评估/设计边界 | 长期节点凭据、设备包重认证和在线冲突检查已降低抢占风险；物理连接点强绑定取决于部署拓扑，需专项确认。 |
+| 互联重连 PTT | ⚠️ 评估/设计边界 | 旧控制会话的待认证/控制请求必须清理；当前重连会清空本地 speaker 状态，正确恢复需要协议级租约重同步。 |
+| WebSocket Origin | ⚠️ 设计边界 | 空 Origin 继续允许非浏览器设备；生产应收窄 `AllowedOrigins`，否则 HttpOnly `ws_token` 的跨源重放风险取决于部署。 |
+| HTTP 登录/注册防护 | ⚠️ 部分修复（共享 Redis 已接入，生产边界待验收） | 已有账号失败锁定、未知账号来源 IP 20 次/10 分钟锁定、注册 IP 每小时 5 次、验证码发送 IP 每分钟 5 次和固定 bcrypt dummy 校验均有界；四条路径现由 `cmd/draarl/main.go` 初始化的共享 Redis 执行跨实例 Lua 原子计数，key 使用 SHA-256，不记录用户名/IP 明文。验证码 IP 预算在邮箱存在性查询前消费，未知邮箱探测不能绕过限速；IP 使用标准格式、邮箱冷却忽略大小写和首尾空格。Redis 初始化失败在 release fail-closed，development/test 回退内存；运行期错误 fail-closed，密码登录、邮箱验证码登录和密码重置成功都会清除账号失败窗口。验证码使用均匀 `crypto/rand.Int`，会话 ID 使用 128 位 CSPRNG，随机源失败不发送邮件。Ubuntu 真实 Redis 双实例已验证账号/未知 IP 锁定、跨实例 Clear、注册和验证码发送总额；email/handler/cmd race、全仓 race/vet 通过。仍需真实生产 Redis 高可用/故障切换、代理来源 IP 配置、账号/邮箱差异响应和长期容量验收。 |
+| ConfirmBind | ⚠️ 设计边界 | 动态码日志已不再输出明文；`ConfirmBind` 仍可凭 MAC 返回用户名、设备密码和 DMR ID，现依赖接口限速，这是现有设备协议设计的敏感边界。 |
+| SiteConfig 密钥 | ⚠️ 部分修复 | 敏感 key 的新写入统一使用带 `enc:v1:` 版本前缀的 AES-GCM 密文；仓储读取透明解密，并对历史敏感明文执行带行锁和并发保护的惰性加密，handler/审计日志继续脱敏。专用 MySQL 惰性迁移已通过；历史 `openai.*` 行、生产密钥轮换、旧密文备份恢复和迁移失败演练仍待处理。 |
+| AES 密钥熵 | ⚠️ 用户决策保留 | 当前生成方式有效熵约 128 bit；改动会影响既有密文解密，用户明确选择不改，作为已知设计债务记录。 |
+| 消息/群组查询 | ⚠️ 部分修复 | 消息列表已分块 `IN` 并使用快照游标索引；群组搜索在 SQL 层执行可见性分页，群组列表设备统计改为只聚合当前页群组，分页页码增加整数溢出保护，普通用户不再列出禁用群组。Ubuntu 已通过百万行消息 `EXPLAIN ANALYZE`/游标、消息 HTTP E2E、群组统计/权限分页 MySQL E2E、包级 race 和全仓 race/vet；生产规模群组表的实际 EXPLAIN、索引选择和长期分页容量仍待验收。 |
+| 数据层索引/级联 | ⚠️ 评估 | `comm_records` 多索引写入放大、`DeleteUserWithCascade` 跨表大事务仍需生产数据评估；不能仅凭 SQLite/单元测试决定删索引或拆事务。 |
+| 时间语义 | ⚠️ 部分修复 | 新增 `Database.Timezone`：默认 `Local` 完全保持旧部署行为；显式 IANA 时区（如 `UTC`/`Asia/Shanghai`）同时写入 MySQL DSN 的 `loc` 与 session `time_zone`，并让 GORM `NowFunc` 使用同一 `Location`，避免 Go 解码、GORM 写入和 SQL `NOW()` 分裂。跨时区生产旧数据解释、MySQL 时区表可用性和完整链路仍需真实数据库验收。 |
+| 存储迁移 | ⚠️ 部分修复 | `Workers=0` 现在真正默认 4 个 worker（负数/1 为串行，上限 16）；对象级 `Put`/删除和瞬态哈希读取采用可取消的有界重试（默认 3 次、上限 5 次），默认情况下同尺寸目标对象做 SHA-256 校验，哈希不一致按永久完整性失败处理并直接重新复制，不重复读取大对象；只有显式设置 `SkipExistingVerification` 才跳过该读取（`DeleteSource` 仍强制校验）。迁移 CLI 现支持 `-migrate-max-bytes-per-second`，所有 worker 共享同一个可取消字节令牌预算，默认 0 不限速，不会因提高 worker 数放大源端读取压力。S3 服务端 CopyObject、真实对象规模和跨云故障场景仍待专项。 |
+| S3 预签名 URL | ⚠️ 配置/代理契约 | `DownloadURLPrefix` 是反向代理入口，不是任意静态 URL 重写：代理必须把请求还原到签名时的原始 S3 host/path，并原样转发查询串。现有 contract test 已覆盖该代理模式；直接把签名查询串挂到不还原 host/path 的 CDN/域名仍会 SigV4 403，需在真实 MinIO/CDN 配置下验收。 |
+| 历史 SVG/favicon | ⚠️ 运维待处理 | 新上传已按正文/签名限制为安全格式，历史 SVG 对象不会自动删除；S3/CDN 仍需 CSP、下载响应头，管理员需主动替换历史对象。 |
+| 广播媒体容量 | ⚠️ 待验证 | 恢复分页、重复入队去重、状态条件回写已完成；生产 MySQL/ffmpeg backlog、转码资源、持久化重试和并发容量仍需验收。 |
+| ffmpeg 沙箱 | ⚠️ 评估/部署加固 | Linux 转码/探测命令现在由 wrapper 在 `exec` 目标前设置继承式 `RLIMIT_AS`/`RLIMIT_CPU`，消除原先 `Start` 后 `prlimit` 的窗口；非 Linux 仍仅告警。受限用户、seccomp/cgroup、noexec 临时目录和生产容量仍属于部署加固项。 |
+| 操作日志/指标 | ⚠️ 部分修复 | 操作日志按事件类型/操作人增加 `(filter,id)` 复合索引，分页参数统一做上限和整数溢出保护，兼容统计接口现在传播总数查询错误；保留清理仍按时间索引有界批量执行。Ubuntu 已通过新库 AutoMigrate、索引列/EXPLAIN、事件/操作人分页与统计 E2E、包级 race 和全仓 race/vet；生产日志规模、真实索引选择和统计接口耗时仍待验收。 |
+
+## 四、最新增量变更复核
+
+### 1. 头像资料更新失败回滚（新增）
+
+`internal/handler/upload.go` 新增头像引用持久化边界：头像对象上传成功后，若 `UpdateUserAvatar` 失败，使用独立 5 秒后台 Context 删除本次新对象并返回 500；即使原请求已取消，回滚仍可执行。旧头像不删除，避免破坏仍可能被引用的历史对象。缩略图 URL 仅在缩略图对象上传成功后返回。
+
+专项测试覆盖“DB 更新失败必回滚”和“DB 成功不误删”，与 handler/storage 及全仓 race/vet 证据一致。该改动只影响 Web 头像对象与用户资料的一致性，不改变设备密码、UDP/DraARLv1、WebSocket、设备地址绑定或既有设备接入条件。
+
+增量横向检查已将资产新增/覆盖、资产直传、操作证 multipart/直传、固件发布、广播音频、通信记录及资源删除相关的对象回滚/清理统一改为独立且有界的补偿 Context；取消的 HTTP 请求不再直接阻断这些补偿动作。该项已完成代码级闭环并通过 Ubuntu 专项、包级、全仓 race/vet，故不再作为当前风险项保留。历史对象迁移和清理策略仍按各专题单独记录。
+
+### 2. 上传 Context 与资产 MIME
+
+头像读取/处理/缩略图、Logo、favicon、操作证、资产新增/覆盖和通用 multipart 均已传递 `c.Request.Context()`；旧无 Context API 保留，避免外部编译兼容破坏。资产数据库 `mime_type` 现在复用正文嗅探出的规范 MIME，不再信任客户端 Header。
+
+### 3. 其他已核对的增量
+
+- 设备准入密码生成器保持 CSPRNG 均匀取样且随机源失败即 fail-closed，不再使用时间戳/计数器降级；本轮将自动生成长度恢复为历史 8 位，服务端手动设置仍保留 6–10 位兼容。既有设备密码、密文和在线会话不会被改写，新注册/重建密码也不再放大旧客户端硬编码 8 位的兼容风险；Ubuntu VM 已通过定向 50 轮 race、handler 包级 race 和 handler vet。
+- 无状态 JWT 续期保留导出符号但对有效 access token 明确拒绝，不再绕过 refresh-token store 签发新 token。
+- SSO OAuth `state` 和一次性登录交换码生成统一改为 CSPRNG fail-closed；随机源失败时不再用时间戳/计数器降级签发可预测 state，登录 URL、绑定 URL 和交换码保存路径都会返回错误。Ubuntu VM 已通过 SSO/设备密码生成定向 50 轮 race、handler 包级 race 和 handler vet。
+- `86cf4cc` 删除 OpenAI 配置系统后，运行时代码已无该配置的读写调用；旧数据库历史行不会自动清理。
+- H9 增量优化已让 `ChangeDeviceGroup` 与 Web 加入路径共享 bcrypt/历史明文校验、惰性升级和密码尝试限速；2026-08-22 Ubuntu Docker MySQL 专用库 HTTP E2E 通过，测试 JWT 直接签发，不经过验证码。
+- 密码变更/重置成功后吊销目标用户 refresh session；已有 access/WS JWT 仍按其最长 3 小时 TTL 自然失效。
+- refresh-token Redis store 的所有操作现同时受单命令读写超时和总 Context 截止时间约束；`RevokeAllByUser` 由逐 token 顺序 N+1 往返改为批量读取和批量更新。登录/注册保护现由主程序初始化共享 Redis，release 初始化和运行期错误均 fail-closed，development/test 保留内存兼容；该共享状态只用于 Web 登录/注册，不进入设备认证或 UDP 数据面。
+- HTTP 登录本轮增加未知账号来源 IP 保护：确认查询成功但无用户时，按单 IP 20 次/10 分钟锁定 10 分钟，状态表上限 100,000 且有界淘汰；不存在用户路径执行固定有效 bcrypt dummy 校验，减少账号/邮箱枚举的密码计算时序差异。数据库查询错误不计入未知账号状态，避免 DB 故障期间误锁合法来源；已存在账号仍走原有账号级失败锁定，密码登录、邮箱验证码登录和密码重置成功后都会清理该账号的失败窗口。该改动只影响 Web 登录，不改变设备 JWT、设备密码、DraARLv1/UDP 或既有设备接入。
+- 验证码发送限速本轮改为原子检查/消费：release 使用共享 Redis、development/test 可回退互斥保护的有界内存 map，最多保留 100,000 个来源；IP 预算在合法用途解析后、邮箱存在性查询前消费，避免未注册邮箱探测绕过限速，数据库查询错误返回 503 而不是误判不存在。IP 标准化合并等价 IPv6 表示；邮箱 60 秒冷却改为原子预留并对大小写/首尾空格归一化，限制 100,000 个唯一邮箱条目，SMTP 或 CSPRNG 失败只释放本次预留。验证码改用均匀 `crypto/rand.Int`，会话 ID 使用 128 位 CSPRNG；会话验证串行保护 `Attempts`/`VerifiedAt`，成功后立即一次性消费。该改动只影响验证码发送和验证，不改变设备认证或设备接入。
+- refresh-token 本轮收紧 Redis 信任边界：release 构建初始化失败直接返回错误并阻止启动，开发/测试继续降级内存；新增 release fail-closed 和开发 fallback race 测试 50 轮。该改动只影响 Web refresh-token 会话存储，不改变设备 JWT、设备密码、DraARLv1/UDP 或既有设备接入。
+- S1/H5 本轮收紧设备 MAC 运行时缓存：本地条目惰性 TTL 和全局容量上限防止唯一 owner/SSID 组合造成内存增长；Redis Set/Get/Del 均使用 500ms Context 截止时间，初始化会关闭旧客户端；`indexRuntimeDevice` 不再持有运行时索引全局锁执行外部 Redis I/O。Ubuntu `internal/udphub` 专项 50 轮、包级 race/vet、全仓 race/vet 通过；该改动不改变 DraARLv1、设备密码或正常设备接入协议。
+- SiteConfig 仓储现对 `password/secret/api_key/token/private_key` 类 key 的新写入统一 AES-GCM 加密并加 `enc:v1:` 前缀，读取透明解密；历史敏感明文首次读取时在独立短事务中按主键加行锁、比较旧值后惰性加密，AES 未初始化或写库失败只告警且保留可读值，避免升级后 SMTP 突然不可用；密文损坏仍显式返回错误，不静默返回不可用值。
+- 存储迁移本轮增加对象级有界重试和同尺寸目标完整性保护：瞬态 `Put`、删除和哈希读取失败按默认 3 次、200ms 间隔重试，最多 5 次；默认对目标端同尺寸对象做 SHA-256 校验，哈希不一致会自动重新复制；`SkipExistingVerification` 仅作为显式性能开关，`DeleteSource` 时仍强制校验。该改动只影响运维迁移工具，不改变普通对象上传、下载、预签名 URL 或设备接入路径。
+- 兼容原生 SQL 的 `internal/db` 用户仓储本轮移除了 `SELECT *`：`GetUser`、按呼号/手机号/OpenID 查询、密码校验、分页列表和用户名查询统一使用稳定的显式列清单，并将 `dmrid`/`mdcid` 正确回填；分页扫描错误和 `rows.Err()` 不再被静默忽略。新增查询构造回归测试，Ubuntu `internal/db` race 100 轮、包级 vet、受影响 `cmd/draarl`/`internal/handler` race/vet 及全仓 race/vet 均通过。该兼容层不进入 UDP 数据面，也不改变 DraARLv1、设备密码或既有设备接入协议；真实生产旧库仍需确认列存在和数据兼容。
+- `InitAdminUser` 本轮改为在同一数据库事务中执行 `SELECT ... FOR UPDATE` 后再创建，已存在管理员时幂等返回，避免多实例首次启动同时通过 COUNT 检查后出现重复键启动失败；新增锁定查询回归检查，Ubuntu `internal/db` race 100 轮、全仓 race/vet 通过。该改动只影响首次启动初始化，不改变已存在管理员、设备认证或正常设备接入。
+- 兼容原生 SQL 的 `ListRelays` 本轮移除 `SELECT *`，固定按当前旧表契约列出中继字段、稳定按 ID 排序，并将单行扫描/迭代错误向上传播；新增查询回归检查，Ubuntu `internal/db` race 100 轮、全仓 race/vet 通过。`internal/db` 的 `ServerRepository` 仍与当前 GORM 节点模型存在历史字段/类型差异，当前无生产调用证据，保留为待旧库/调用方确认的兼容边界，未强行重写。
+- `internal/db` 的 `ListServers` 本轮进一步移除 `SELECT *`，只投影该旧接口实际返回的 `id/name/dns_name/is_online/create_time/update_time`，在线值统一转换为兼容模型的 `0/1`，扫描及迭代错误向上传播；新增查询回归检查，Ubuntu `internal/db` race 100 轮、全仓 race/vet 通过。服务器创建/更新/单条读取仍保留历史类型契约，未在没有调用证据时重写；当前服务实际使用 `internal/gormdb`，不改变互联节点或设备接入。
+- `internal/db/operatorlog.go` 本轮补齐原生操作日志分页边界：默认页大小 20、最大 100，极大页码在整数溢出前拒绝；日志行扫描错误不再静默跳过，避免返回条数与总数不一致。新增分页默认/上限/溢出测试，Ubuntu `internal/db` race 100 轮、`cmd/draarl`/`internal/log` race/vet、全仓 race/vet 通过。该兼容仓储只影响管理日志查询，不改变 UDP、DraARLv1 或设备接入。
+- 用户管理列表、关键字搜索和待审核列表本轮统一使用 `gormdb.NormalizeUserPagination`：默认页大小 20、上限 100、极大页码拒绝溢出；HTTP 管理接口对该错误返回 400，直接仓储调用也在 SQL 前失败。新增 gormdb/handler 分页回归测试，Ubuntu 两包 race 100 轮、包级 vet、全仓 race/vet 通过。正常页码、用户数据、设备认证和设备接入条件不变。
+### 4. 消息与群组查询增量优化
+
+`internal/handler/group_query.go` 现在先执行可见群组分页，再按当前页的群组 ID 聚合设备在线/总数，避免原先每次请求对整张 `devices` 表做派生表分组；普通用户列表增加 `status=1` 约束，与群组访问授权规则一致。`GetGroups` 和 `SearchGroups` 共用分页规范化，页码乘页大小溢出时返回 400，不会向数据库传递负 offset。该改动只影响 Web 群组列表/搜索，不改变 UDP、DraARLv1、设备密码或设备接入协议。
+
+消息查询当前代码在专用 MySQL 8.4 库完成百万行普通/类型游标 `EXPLAIN ANALYZE` 和四群组联查；群组查询完成统计、禁用群组过滤、权限分页 HTTP E2E。Ubuntu `internal/handler`、`internal/gormdb`、`internal/middleware` race 20 轮、相关 MySQL E2E 20 轮、全仓 `go test -race ./... -count=1` 和 `go vet ./...` 均通过。生产规模群组表的真实计划、索引选择及极端深分页仍保留为待验收边界。
+
+### 5. 操作日志查询增量优化
+
+`OperatorLog` 新增事件类型/操作人到 ID 的复合索引定义，保留旧库已有单列索引，不执行破坏性删索引；按事件类型和操作人查询可以同时利用过滤与倒序分页键。`NormalizeOperatorLogPagination` 统一限制页大小并拒绝会溢出整数的页码，HTTP handler 对非法数字参数返回 400；仓储层直接调用也执行同一边界检查。兼容的 `GetLogStats` 现在不再忽略总数查询错误。
+
+Ubuntu Docker MySQL 8.4 专用库已通过新表 AutoMigrate、复合索引结构/EXPLAIN、事件类型与操作人分页、统计结果 E2E 20 轮；handler/gormdb race 20 轮、全仓 `go test -race ./... -count=1` 和 `go vet ./...` 均通过。该改动只影响 Web 管理日志查询、统计和后台清理，不改变 UDP、DraARLv1、设备密码或现有设备接入。
+
+### 6. 操作证、通联日志与固件分页边界（✅ 已验证修复）
+
+操作证待审核/审批仓储新增统一的页大小、非负 offset 和页码溢出校验；管理员待审核、已拒绝、已通过和逐条审批接口统一使用该边界，极大页码在 SQL 前返回 400。用户审核列表的 Count、操作证批量查询和操作证审批用户查询错误不再被静默忽略。固件列表及用户/管理员通联日志查询复用有界分页计算，避免 `(page-1)*limit` 溢出为负 offset；正常分页返回结构和排序保持不变。
+
+Ubuntu `internal/gormdb`、`internal/handler` 定向 `-race` 3 轮、包级回归和全仓 `go test -race ./... -count=1`、`go vet ./...` 均通过；新增 `NormalizeOperatorCertPagination`/`NormalizeOperatorCertPage` 回归测试。该项已完成代码级闭环，故不再作为当前风险项保留。
+
+### 7. APRS TCP 客户端停止与拨号生命周期（✅ 已验证修复）
+
+`pkg/tcp.Client` 的拨号现在绑定停止信号和 10 秒拨号超时；停止期间取消中的拨号不会把连接安装回客户端，已安装连接关闭后也会保持 `connected=false`。读消息和读错误回调先在锁内取快照再调用，避免 `SetOnError`/回调读取的竞态；超时、行长度上限和 keepalive 行为保持不变。
+
+Ubuntu `pkg/tcp` `-race` 3 轮、全仓 `go test -race ./... -count=1` 和 `go vet ./...` 均通过，新增停止前不拨号、连接关闭后状态收敛回归测试。该项仅影响 APRS/TCP 辅助连接，不改变 UDP、DraARLv1、WebSocket、设备密码或既有设备接入。
+
+### 8. 通信录音上传队列内存边界（✅ 已验证修复）
+
+`CommUploader.pendingQueue` 新增 4,096 个已完成会话的硬上限，满载时淘汰最旧会话、释放其音频缓冲引用并累计 `dropped_uploads` 统计；最新录音优先保留，存储长期故障不再导致上传队列无界增长。该项只收敛故障时的内存风险，过载下的录音完整性和生产容量仍归 H6 的待验收边界。
+
+Ubuntu `internal/udphub` 录音专项 `go test -race` 5 轮、全仓 `go test -race ./... -count=1` 和 `go vet ./...` 均通过，新增队列边界与最新会话保留回归测试。该项已完成代码级闭环，故不从 H6 的整体容量风险中删除，仅标注该子项已验证。
+
+## 五、既有设备接入兼容性判断
+
+| 场景 | 判断 |
+|---|---|
+| 直连 UDP 设备 | 当前改动未改变 DraARLv1 报文、设备密码、认证失败码或直连地址语义；H5 异步认证会带来首次上线/地址变化的短暂等待，需确认设备会重试。 |
+| 共享 NAT/FRP | S1 的真实源绑定提高了防伪性；release 构建启用 v2 必须分别配置中心/边缘实际代理出口网段，漏配会在启动时失败，错误网段仍会导致合法设备无法接入。 |
+| WebSocket/幽灵客户端 | WebSocket 帧上限、Pong 活跃刷新、PTT lease 和连接回收已完成代码级验证；空 Origin、重连租约恢复仍是设计/部署边界。 |
+| 设备配置 | 普通/管理员入口现拒绝非法频率、数值、NaN/Inf 和未知 tone mode；历史合法别名保留。旧客户端若依赖服务端自动归一化越界值会收到 400，但不影响正常设备接入。 |
+| Web 设备切换群组 | H9 代码级和专用 MySQL HTTP E2E 已通过：正确 bcrypt/历史明文密码可切组，已验证成员和管理员免密码；错误密码仍 401 并受用户/IP 限速。生产旧库兼容仍需验收。 |
+| 资源/头像/资产上传 | 只影响 Web 上传格式、取消传播、对象回滚和 MIME 元数据；不触及设备接入路径。历史对象按兼容原则保留，需运维主动迁移。 |
+| 服务升级/重启 | H10 恢复已后台分页，H12 首次旧库迁移仍可能长时间占用 DB；H9 历史超长群密码会保留兼容值并告警，不再阻止启动，但需后续人工轮换。升级必须安排维护窗口、备份和迁移前数据预检。 |
+
+## 六、发布前建议顺序
+
+1. 在安全的 `draarl_test_*` MySQL 库继续执行旧库密码迁移、失败恢复和 H12 DDL 锁等待/EXPLAIN；H9 HTTP E2E 与 H12 全新库/重复启动验证已完成。
+2. 在真实 FRP/PROXY v2 拓扑中验证 S1 双地址绑定，确认中心与每个边缘的非空白名单。
+3. 用真实设备完成 H5 首次上线、NAT 端口变化、批量重连、队列满载和 DB 慢响应测试。
+4. 为 H6 建立 writer eviction、dropped、端到端丢帧/音质和录音完整性门槛。
+5. 配置 Redis 共享登录/注册/设备限速状态，收敛 WebSocket Origin、S3/CDN CSP/attachment 和 ffmpeg 运行沙箱。
+6. 单独规划历史私有群密码、历史 SVG/favicon、历史 `openai.*` 配置行的备份后清理/替换。
+
+## 七、本轮检查记录
+
+- 前一轮已修改对象补偿相关 handler、`internal/auth/refresh_token_store_redis.go` 及回归测试；本轮未提交或回滚任何工作区改动。Windows 仅执行 Git、文本检查与 `git diff --check`，无空白错误。
+- Ubuntu 已通过专项 `go test -race ./internal/handler -run 'Test(PersistAvatarReference|DeleteStoredObject)' -count=100`、handler/storage 包级 `-race`、全仓 `go test -race ./... -count=1` 和 `go vet ./...`；本地与 Ubuntu 三个相关文件 SHA-256 一致。
+- 本轮扩大后的七个 handler 文件与测试文件 SHA-256 已与 Ubuntu 副本核对一致；对象补偿 Context 仅影响 Web/后台对象生命周期，不改变设备密码、DraARLv1/UDP/WebSocket 报文、设备地址绑定或既有设备接入条件。
+- refresh-store 专项 `-race` 100 轮、auth/handler 包级、全仓 `-race` 与 `go vet` 已在 Ubuntu 通过，相关两文件 SHA-256 一致；改动不改变 JWT/refresh token 格式、Cookie 名称、设备 JWT 或设备接入协议。
+- SiteConfig 加密专项 `-race` 100 轮、gormdb/handler/config 包级、全仓 `-race` 与 `go vet` 已在 Ubuntu 通过，相关三文件 SHA-256 一致；改动只影响站点敏感配置落库格式，不改变设备密码密文、设备认证、UDP/DraARLv1 或既有设备接入。
+- H9 本轮完成设备切组密码路径优化：`ChangeDeviceGroup` 与 `JoinGroup` 统一 bcrypt/历史明文校验、条件升级和用户/IP 限速；Ubuntu 受影响包 race、H9 专项 20/50 轮及 vet 通过。2026-08-22 在 Docker MySQL 8.4 专用库执行 HTTP E2E 通过，测试 JWT 直接签发，不经过验证码；生产旧库历史轮换和失败恢复仍保留边界。
+- H12 本轮增强迁移账本连续性、未来版本拒绝、空业务库判定和清洗/遗留列失败 fail-closed；Ubuntu gormdb 专项 100 轮、包级 race、全仓 race 和全仓 vet 通过。2026-08-22 专用 MySQL 8.4 全新库首次迁移及重复启动幂等同步通过；生产旧库 DDL/回滚仍未验收。
+- H9 本轮新增历史群密码迁移兼容分支：bcrypt 不可表示的超长旧值不再使 AutoMigrate 失败，继续保留历史验证路径并记录告警；正常长度旧值仍升级为 bcrypt。Ubuntu gormdb 专项 100 轮、handler/middleware/gormdb 包级 race、全仓 race 和全仓 vet 均通过。
+- H5 本轮新增认证 worker generation Context：`StopDeviceAuthWorkers` 先取消进行中的认证任务，再关闭队列并等待已接收任务退出；Ubuntu H5 专项 50 轮、`internal/udphub` 包级 race/vet、全仓 race 和全仓 vet 均通过。改动仅影响关闭路径，不改变设备协议或正常认证结果。
+- H5 本轮增量复核确认取消保护闭环：`AuthenticateDeviceContext` 在数据库查询、密码校验、历史迁移写库后检查 Context，`processDeviceAuthJob` 在认证成功后、更新设备运行时状态前再次检查 generation Context；取消后不会清除失败记录、返回认证成功或继续更新设备。Ubuntu H5 专项 race、`internal/udphub` 包级 race/vet、全仓 `go test -race ./... -count=1` 和全仓 `go vet ./...` 均通过，五个关键文件与 Ubuntu 副本 SHA-256 一致。2026-08-22 真实 UDP benchmark 50/100 设备首次认证通过且零丢包；bcrypt 计算不可抢占，生产停机延迟仍需实测。
+- H5 本轮新增认证失败状态表硬上限：`ShardedAuthMap` 全局最多 100,000 条，满载时限制淘汰扫描并只淘汰过期/已解除封禁项，避免唯一 `IP+username` 攻击造成无界内存增长或长时间持锁扫描；Ubuntu 有界表专项 race 50 轮、`internal/udphub` 包级 race/vet、全仓 race 和全仓 vet 均通过。该项不改变正常认证、设备密码、DraARLv1 报文或设备接入条件；共享 NAT/FRP 批量重连和生产容量仍待实测。
+- H6 本轮补齐 fanout 目标级丢弃统计：frame 队列淘汰、writer 淘汰、过期帧及关闭/过载拒绝都会累计 `targets_dropped`，并新增整帧淘汰/stale 回归测试；Ubuntu H6 专项 50 轮、`internal/udphub` 包级 race/vet、全仓 race 和全仓 vet 均通过。未改变正常发送路径或设备接入协议。
+- H6 本轮增量复核确认异步 writer 完成回调对正常广播和过载路径均有终点：已接收分片、writer 淘汰、关闭竞争拒绝和过期整帧都会完成 collector，`targets_dropped` 与 `write_errors` 不重复计数；Ubuntu 全仓 race/vet 通过。2026-08-22 真实 UDP benchmark 50/100 设备档位零丢包，100 设备约 825 output pps、平均延迟 0.62 ms；真实多 writer 过载、MOS、录音完整性仍未验收。
+- S1 本轮收紧 PROXY v2 信任边界：中心 `Configuration.SetDefaults`、边缘 `EdgeConfig.Validate` 和 `NewEdgeEndpoint` 均在 release 构建拒绝空 `ProxyTrustedCIDRs`，开发/测试构建保留兼容模式；新增中心/边缘/endpoint 回归测试。Ubuntu 相关包 10 轮 race、全仓 race 和全仓 vet 通过；真实 FRP/PROXY v2 拓扑及白名单配置仍需验收。
+- SiteConfig 本轮新增历史敏感明文惰性 AES-GCM 迁移：读取保持明文兼容，迁移事务使用主键行锁和 Go 内旧值比较，避免把秘密放进 SQL 条件或覆盖并发管理员更新；AES/写库失败只告警不阻断 SMTP。新增检测、并发保护和专用 MySQL E2E，Ubuntu gormdb 专项 20 轮 race、专用 MySQL E2E 20 轮 race、全仓 race 和全仓 vet 均通过，测试库已清理。
+- H12 本轮增量补齐迁移版本记账的有界重试与独立回读确认：Ubuntu `internal/gormdb` 逻辑 race 20 轮、专用 MySQL 8.4 故障注入 E2E 20 轮、全仓 race 和全仓 vet 均通过；该改动仅降低迁移完成后版本行写入不确定导致的重复风险，不改变设备协议或正常设备接入路径。生产旧库迁移与记账之间仍非原子，必须保留备份、维护窗口和失败恢复演练。
+- H12 本轮进一步增加迁移执行状态记账：`schema_migrations.state` 记录 `running/completed`，启动前写入 running，成功后切换 completed；Ubuntu `internal/gormdb` race/vet、MySQL 故障注入与 running 状态恢复 E2E 20 轮、全仓 race/vet 均通过。该改动只增强迁移崩溃后的识别和重试，不改变设备协议或正常设备接入；DDL/数据回填仍非原子，生产旧库失败恢复和锁等待演练仍需完成。
+- HTTP 登录防护本轮增量验证：Ubuntu `internal/handler` 未知账号/账号锁定/注册限速专项 race 50 轮、handler 包级 race/vet、全仓 race 和全仓 vet 均通过；新增未知账号 IP 阈值与满表 fail-closed、固定 bcrypt hash 有效性测试，并确认数据库错误路径不写入未知账号状态。该改动只影响 Web 登录，不改变设备协议或正常设备接入。
+- 最新共享 Redis 登录/注册/验证码发送保护已接入 `cmd/draarl/main.go`，并在 Ubuntu 真实 Redis 容器中完成双实例 E2E：账号 5 次失败后跨实例锁定、跨实例 Clear、未知账号 IP 20 次锁定、注册 IP 每小时总计 5 次、验证码发送 IP 每分钟总计 5 次；另有 release 初始化失败、development fallback、运行期 Redis 错误 fail-closed、IPv4/IPv6 规范化和非法策略参数测试。相关 email/handler/cmd race、全仓 race 和全仓 vet 通过。该项仍保留生产 Redis 高可用、故障切换和容量边界。
+- 本轮补齐邮箱验证码登录和邮箱重置密码成功后的账号失败窗口清理，避免旧密码失败计数阻断已经完成第二因素认证或密码重置的用户；Ubuntu handler race/vet 通过。该改动只影响 Web 认证状态，不改变设备认证、UDP/DraARLv1 或既有设备接入。
+- 本轮将验证码发送 IP 额度前移到邮箱存在性查询之前，并接入共享 Redis；数据库查询错误不再被忽略。验证码/会话 ID 改为 CSPRNG 错误 fail-closed，验证码消除取模偏差，等价 IPv6 和大小写不同的同一邮箱不能绕过 IP/邮箱冷却。Ubuntu 真实 Redis 双实例专项 20 轮、email/handler 受影响包 race、全仓 race/vet 均通过。
+- 验证码限速/冷却/会话本轮增量验证：Ubuntu `internal/email` 原子 IP 消费、IP/邮箱满表边界、邮箱冷却预留和验证码单次消费 race 30/50 轮、email/handler 包级 race/vet、全仓 race 和全仓 vet 均通过；并发 100 个发送请求在每分钟 5 次规则下严格只放行 5 次，并发 32 个同邮箱冷却预留只有一次成功，同一验证码只有一次验证成功。此前一次全仓 interconnect E2E 受共享 VM 并发影响偶发失败，单测 5 轮和随后全仓 race 重跑均通过。该改动只影响 Web 验证码发送/验证，不改变设备协议或正常设备接入。
+- 存储迁移本轮增量验证：Ubuntu `pkg/storage` 瞬态失败/取消/并发迁移/哈希保护专项 race 30 轮、包级 race/vet、全仓 race 和全仓 vet 均通过；新增同尺寸损坏目标自动修复测试，确认默认不会把“大小相同但内容错误”的对象误计为 `Skipped`；Windows 仅执行 `gofmt`、Git 和文本检查。测试覆盖前两次目标写入失败后第三次成功、取消后不等待重试、DeleteSource 内容不一致时保留源对象。
+- 存储迁移本轮进一步修正并验证 worker 与哈希重试语义：`Workers=0` 按文档实际使用 4 个 worker，负数/1 保持串行且上限 16；SHA-256 内容不一致视为永久完整性失败，不再对同一大对象重复读取最多五次，真正的 Open/Read 瞬态错误仍按有界策略重试。Ubuntu `pkg/storage` 定向 race 50 轮、包级 race、全仓 race 和全仓 vet 通过；该专题仍因 S3 CopyObject、限速、真实对象规模和跨云故障边界保留“部分修复”。
+- 存储迁移本轮补齐全局限速：新增 `-migrate-max-bytes-per-second`（默认 `0` 不限速），令牌预算在迁移运行内由全部 worker 共享，低速大块读取分段等待且 Context 取消会立即停止，不会按每个 worker 各自放行一份带宽。Ubuntu `TestMigrateRateLimiter*` 与既有迁移专项 `-race` 20 轮、`pkg/storage` 包级 race/vet、全仓 `go test -race ./... -count=1` 和 `go vet ./...` 均通过；无配置时的普通迁移、普通对象上传/下载、预签名 URL 和设备接入路径不变。存储迁移仍保留 S3 服务端 CopyObject、真实对象规模和跨云故障验收边界。
+- 时间语义本轮完成兼容式统一入口：新增 `Database.Timezone`，空值默认归一为 `Local`；显式 IANA 时区会同时生成 DSN `loc`/`time_zone`、配置 GORM `NowFunc`，原生 SQL 与 GORM 的当前时间来源一致，非法时区在启动前拒绝。配置专项 race 20 轮、全仓 `go test -race ./... -count=1` 和全仓 `go vet ./...` 通过；默认 `Local` 不改变既有库或设备接入。仍需在 UTC、Asia/Shanghai、夏令时和生产旧 DATETIME 数据上做真实 MySQL 全链路验收。
+- ffmpeg 沙箱本轮消除 Linux fork 后限额窗口：`runCommand` 在 `Start` 前将 ffprobe/ffmpeg 包装为 `ulimit -v`/`ulimit -t` 后立即 `exec` 原命令，目标进程从第一条指令即继承地址空间和 CPU 限额；新增 `/proc/self/limits` 回归测试，并保留原 `prlimit` 单元测试兼容接口。Ubuntu 媒体专项 race 20 轮、包级 race/vet、全仓 race/vet 通过；该改动不改变正常音频处理、设备协议或设备接入。非 Linux 限制仍依赖部署编排，seccomp/cgroup/noexec 与生产转码容量继续保留边界。
+- 2026-08-22 Ubuntu 验证：测试副本 `/home/daofeng/draarl-s1-cidr.Ab1X83` 使用 Go 1.25.5 执行全仓 `go test -race ./... -count=1`，退出码 0；随后执行全仓 `go vet ./...`，退出码 0。Windows 仅执行 `git diff --check`（通过），未运行 Go 测试、构建或 vet。
+- 2026-08-22 关键文件一致性：`internal/udphub/auth.go`、`internal/udphub/auth_job.go`、`internal/udphub/auth_job_test.go`、`internal/udphub/fanout_sender.go`、`internal/udphub/fanout_sender_test.go` 与 Ubuntu 测试副本 SHA-256 全部一致；报告文件在测试副本中未同步，故不将报告哈希列为代码验证证据。
+- 本轮 H5 有界失败表文件一致性：`internal/udphub/sharded_map.go`、`internal/udphub/auth.go`、`internal/udphub/auth_job_test.go` 与 Ubuntu 测试副本 SHA-256 全部一致；Windows 仅执行 `gofmt`、Git 和文本检查。
+- 本轮存储迁移文件一致性：`pkg/storage/migrate.go`、`pkg/storage/migrate_verify_test.go` 与 Ubuntu 测试副本 SHA-256 全部一致。
+- 本轮 refresh-token 文件一致性：`internal/auth/refresh_token_store.go`、`internal/auth/refresh_token_store_test.go` 与 Ubuntu 测试副本 SHA-256 全部一致。
+- 本轮设备 MAC 缓存文件一致性：`internal/udphub/device_mac_store.go`、`internal/udphub/device_mac_store_test.go`、`internal/udphub/runtime_index.go` 与 Ubuntu 测试副本 SHA-256 全部一致。
+- 本轮增量重分析未发现可将 S1/H5/H6/H9/H12 完全标记为“完成”的新证据：S1 的 release 配置 fail-closed 已通过代码和 Ubuntu 验证，但仍缺真实 FRP/PROXY v2 拓扑；H5 仍缺 NAT/FRP 批量重连和容量验收，H6 仍有高负载丢帧边界，H9 仍有历史明文轮换和生产旧库失败恢复边界，H12 仍有生产旧库迁移非原子失败恢复风险；SiteConfig 专用 MySQL 惰性迁移已通过，但生产密钥轮换、旧密文备份恢复和历史 `openai.*` 清理仍未完成；H5/H6 小规模真实 UDP benchmark、H9 专用 MySQL HTTP E2E 与 H12 专用 MySQL 首次/重复/旧密码迁移验证均已通过。
+- 本轮消息/群组查询优化已完成代码级闭环：群组列表设备统计从全表派生聚合改为当前页定向聚合，普通用户过滤禁用群组，群组分页页码增加溢出保护；消息百万行游标计划、消息 HTTP E2E、群组统计/权限分页 MySQL E2E、handler/gormdb/middleware race 20 轮及全仓 race/vet 均通过。该专题仍标记“部分修复”，仅保留生产规模群组 EXPLAIN、索引选择和极端深分页容量边界。
+- 本轮操作日志优化已完成代码级闭环：事件类型/操作人复合索引在新库 AutoMigrate 和 MySQL EXPLAIN 中生效，分页溢出与非法参数被拒绝，兼容统计接口传播总数查询错误；专用 MySQL E2E 20 轮、handler/gormdb race 20 轮、全仓 race/vet 均通过。该专题仍标记“部分修复”，仅保留生产日志规模、真实索引选择和统计耗时边界。
+- 本轮只检查了当前工作区与报告后的 Git 差异，未执行 Windows Go 测试/构建/vet，未提交、回滚或清理任何用户改动；`git diff --check` 通过。
+- 本轮完成共享 Redis 登录/注册/验证码发送保护接入：`main.go` 初始化并 defer 关闭 store；Redis Lua 计数、SHA-256 key、请求超时、运行期 fail-closed、IPv4/IPv6 来源规范化和非法策略参数均有测试。Ubuntu 真实 Redis 双实例专项 20 轮、email/handler/cmd race、全仓 race 和全仓 vet 通过。该改动只作用于 Web 认证，不改变设备 UDP、DraARLv1、设备密码校验或正常设备接入；自动生成设备密码已恢复历史 8 位长度，仍由 CSPRNG 均匀生成并在随机源失败时 fail-closed。
+- 本轮设备准入密码兼容性收口：`generateDevicePasswordFromReader` 的固定长度从 10 位恢复为历史 8 位，测试契约同步更新；Ubuntu VM 独立目录 `/home/daofeng/draarl-devicepass.y82scn` 已通过 `go test -race ./internal/handler -run TestGenerateDevicePassword -count=50`、`go test -race ./internal/handler -count=1` 和 `go vet ./internal/handler`。该改动只影响新生成/重生成的 Web 设备准入密码，不改变 DraARLv1/WebSocket 可接受的 6–10 位协议范围、既有密码密文、JWT 或 UDP 数据面。
+- 本轮 SSO state 随机源失败处理收口：`generateStateFromReader` 使用 `io.ReadFull` 读取 128 bit CSPRNG，失败时向调用方返回错误，SSO 登录 URL、绑定 URL 和登录交换码保存不再降级为时间戳/计数器；Ubuntu VM 独立目录 `/home/daofeng/draarl-devicepass.y82scn` 已通过 `go test -race ./internal/handler -run "TestGenerate(State|DevicePassword)" -count=50`、`go test -race ./internal/handler -count=1` 和 `go vet ./internal/handler`。该改动只影响 Web SSO CSRF state/交换码生成，不改变普通账号密码登录、设备 JWT、DraARLv1、WebSocket 或 UDP 数据面。
+- 报告状态已按“只保留未闭环项”重标：完全闭环的 S2/S3/H1-H4/H8/H11/H14 等专题不再作为当前风险章节；H7/H10/H13 等只保留其公开接口、历史对象或真实环境边界。
+- 本次补偿 Context 改动只影响 Web 对象生命周期，不改变设备密码、DraARLv1/UDP/WebSocket 报文、设备地址绑定或既有设备接入条件；本轮仍未将真实设备、FRP、生产 MySQL 或容量测试缺失的项目标为完成。
+- 本轮操作证/审批、通联日志和固件分页边界统一收口：仓储与 handler 在 SQL 前拒绝负 offset/极大页码，操作证批量查询、用户 Count 和审批用户查询错误向上传播；Ubuntu `internal/gormdb`/`internal/handler` 定向 race 3 轮、全仓 `go test -race ./... -count=1`、`go vet ./...` 均通过。该项已标记 `✅ 已验证修复`，不改变设备协议或设备接入。
+- 本轮修复 `pkg/tcp.Client` 的停止竞态和回调读取竞态：拨号绑定 stop Context，停止后不安装新连接，读/错回调采用锁内快照；Ubuntu `pkg/tcp` race 3 轮、全仓 race/vet 均通过。该项已标记 `✅ 已验证修复`，只影响 APRS 辅助 TCP 连接。
+- 本轮测试 JWT 路径复核完成：Ubuntu `test/simulator/utils` Python 单测 5 项全部通过，`HTTPClient.authenticate_with_test_key` 使用显式 `DRAARL_TEST_JWT_SECRET`/传入 key 直接签发 access JWT，不调用验证码或密码登录接口；缺少或短 key 仍 fail-closed。该项继续保持为已验证测试能力，不加入保留风险。
+- 本轮通信录音上传队列收口：`CommUploader` 增加 4,096 会话硬上限、最旧淘汰和 `dropped_uploads` 监控；Ubuntu `internal/udphub` 录音专项 race 5 轮、全仓 race/vet 均通过。该子项标记 `✅ 已验证修复`；H6 整体仍保留真实过载、录音完整性和生产容量边界。
+
+*行号仅作增量复核参考，会随当前未提交工作区继续演进；本报告不替代真实设备、生产数据库和容量验收。*

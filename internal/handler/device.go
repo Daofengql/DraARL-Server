@@ -10,6 +10,7 @@ import (
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
+	"draarl/internal/middleware"
 	"draarl/internal/routesync"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
@@ -57,6 +58,24 @@ type DeviceInfo struct {
 	EntrySeenAt          string `json:"entry_seen_at,omitempty"`
 }
 
+func parseOptionalBoolQuery(c *gin.Context, name string) (*bool, error) {
+	raw, exists := c.GetQuery(name)
+	if !exists {
+		return nil, nil
+	}
+	raw = strings.TrimSpace(raw)
+	switch strings.ToLower(raw) {
+	case "true":
+		value := true
+		return &value, nil
+	case "false":
+		value := false
+		return &value, nil
+	default:
+		return nil, fmt.Errorf("%s must be true or false", name)
+	}
+}
+
 // GetDevices 获取设备列表
 func GetDevices(c *gin.Context) {
 	// 获取查询参数
@@ -65,7 +84,14 @@ func GetDevices(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	callsign := strings.TrimSpace(c.Query("callsign"))
 	groupID := c.Query("group_id")
-	_ = c.Query("isonline") == "true" // TODO: 实现在线状态过滤
+	isOnline, onlineErr := parseOptionalBoolQuery(c, "isonline")
+	if onlineErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "无效的在线状态参数",
+		})
+		return
+	}
 
 	if limit <= 0 {
 		limit = 20
@@ -75,6 +101,15 @@ func GetDevices(c *gin.Context) {
 	if page <= 0 {
 		page = 1
 	}
+	normalizedLimit, normalizedPage, _, paginationErr := gormdb.NormalizeDevicePageOffset(limit, page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "分页参数过大",
+		})
+		return
+	}
+	limit, page = normalizedLimit, normalizedPage
 
 	ctx := c.Request.Context()
 	deviceCache := cache.GetDeviceCache()
@@ -97,14 +132,12 @@ func GetDevices(c *gin.Context) {
 	var err error
 
 	repo := gormdb.NewDeviceRepository()
-
-	// 根据查询条件选择不同的查询方法（全部使用数据库分页）
+	filter := gormdb.DeviceListFilter{OwnerID: ownerID, IsOnline: isOnline}
 	if keyword != "" {
 		// 后台搜索框按设备名称或所有者呼号模糊匹配，并保持数据库层分页。
-		devices, total, err = repo.ListDevicesByKeywordPaginated(keyword, ownerID, limit, page)
+		filter.Keyword = keyword
 	} else if callsign != "" {
-		// 按呼号搜索（数据库层分页）
-		devices, total, err = repo.ListDevicesByCallSignPaginated(callsign, ownerID, limit, page)
+		filter.CallSign = callsign
 	} else if groupID != "" {
 		// 按群组过滤（数据库层分页）
 		gid, parseErr := strconv.Atoi(groupID)
@@ -115,20 +148,19 @@ func GetDevices(c *gin.Context) {
 			})
 			return
 		}
-		devices, total, err = repo.ListDevicesByGroupIDPaginated(gid, ownerID, limit, page)
-	} else {
-		// 普通用户只获取自己的设备，管理员获取所有设备
-		if ownerID == 0 {
-			// 管理员获取所有设备（使用缓存）
-			if deviceCache != nil {
-				devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)
-			} else {
-				devices, total, err = repo.ListDevices(limit, page)
-			}
+		filter.GroupID = &gid
+	}
+
+	// 只有管理员的无过滤列表可以使用旧缓存；在线过滤必须走数据库，
+	// 否则旧缓存的总数和分页内容无法区分 online/offline 维度。
+	if filter.Keyword == "" && filter.CallSign == "" && filter.GroupID == nil && filter.IsOnline == nil && ownerID == 0 {
+		if deviceCache != nil {
+			devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)
 		} else {
-			// 普通用户获取自己的设备（数据库层分页）
-			devices, total, err = repo.ListDevicesByOwnerIDPaginated(currentUser.ID, limit, page)
+			devices, total, err = repo.ListDevicesPaginated(filter, limit, page)
 		}
+	} else {
+		devices, total, err = repo.ListDevicesPaginated(filter, limit, page)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -775,8 +807,9 @@ func ChangeDeviceGroup(c *gin.Context) {
 	}
 
 	var group *gormdb.Group
+	var groupRepo *gormdb.GroupRepository
 	if targetGroupID > 0 {
-		groupRepo := gormdb.NewGroupRepository()
+		groupRepo = gormdb.NewGroupRepository()
 		group, err = groupRepo.GetGroupByID(targetGroupID)
 		if err != nil || group == nil {
 			c.JSON(http.StatusNotFound, gin.H{
@@ -821,8 +854,12 @@ func ChangeDeviceGroup(c *gin.Context) {
 				return
 			}
 
-			// 验证密码
-			if req.Password != group.Password {
+			// 设备切组与群组加入共享密码验证及限速语义，避免 bcrypt
+			// 上线后仍按明文比较，也避免该兼容接口成为爆破旁路。
+			if !middleware.CheckGroupJoinPasswordRateLimit(c) {
+				return
+			}
+			if !verifyGroupPassword(group.Password, req.Password) {
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"code":    401,
 					"message": "密码错误",
@@ -830,6 +867,13 @@ func ChangeDeviceGroup(c *gin.Context) {
 				return
 			}
 			usedGroupPassword = true
+			if !isBcryptGroupPassword(group.Password) {
+				if hashedPassword, hashErr := hashGroupPassword(req.Password); hashErr != nil {
+					log.Printf("upgrade legacy group password during device group change id=%d: %v", group.ID, hashErr)
+				} else if err := groupRepo.UpgradeGroupPasswordIfUnchanged(group.ID, group.Password, hashedPassword); err != nil {
+					log.Printf("upgrade legacy group password during device group change id=%d: %v", group.ID, err)
+				}
+			}
 
 			// 密码验证成功，创建 GroupMember 记录
 			if err := memberRepo.CreateMember(&gormdb.GroupMember{

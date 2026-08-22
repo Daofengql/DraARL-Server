@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -16,23 +17,29 @@ func GetOperatorLogs(c *gin.Context) {
 	if limitStr == "" {
 		limitStr = c.DefaultQuery("limit", "20")
 	}
-	limit, _ := strconv.Atoi(limitStr)
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的日志分页大小"})
+		return
+	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的日志页码"})
+		return
+	}
 	eventType := c.Query("event_type")
 
-	if limit <= 0 {
-		limit = 20
-	}
-	if page <= 0 {
-		page = 1
+	limit, page, _, err = gormdb.NormalizeOperatorLogPagination(limit, page)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": fmt.Sprintf("无效的日志分页参数: %v", err)})
+		return
 	}
 
 	repo := gormdb.NewOperatorLogRepository()
 
 	var logs []*gormdb.OperatorLog
 	var total int64
-	var err error
 
 	// 根据是否指定事件类型选择不同的查询方法
 	if eventType != "" {

@@ -32,6 +32,15 @@ func GetUsers(c *gin.Context) {
 	if page <= 0 {
 		page = 1
 	}
+	normalizedLimit, normalizedPage, _, paginationErr := gormdb.NormalizeUserPagination(limit, page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "分页参数过大",
+		})
+		return
+	}
+	limit, page = normalizedLimit, normalizedPage
 
 	// 检查用户是否为管理员
 	username, _ := c.Get("username")

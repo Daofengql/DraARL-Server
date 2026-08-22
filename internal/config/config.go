@@ -5,12 +5,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -107,12 +109,14 @@ type FirmwareDownloadConfig struct {
 }
 
 type UDPConfig struct {
-	SendWorkers      int `yaml:"SendWorkers" json:"send_workers"`
-	IngressWorkers   int `yaml:"IngressWorkers" json:"ingress_workers"`
-	FrameQueueSize   int `yaml:"FrameQueueSize" json:"frame_queue_size"`
-	MaxFrameAgeMS    int `yaml:"MaxFrameAgeMS" json:"max_frame_age_ms"`
-	ReadBufferBytes  int `yaml:"ReadBufferBytes" json:"read_buffer_bytes"`
-	WriteBufferBytes int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
+	SendWorkers         int `yaml:"SendWorkers" json:"send_workers"`
+	IngressWorkers      int `yaml:"IngressWorkers" json:"ingress_workers"`
+	DeviceAuthWorkers   int `yaml:"DeviceAuthWorkers" json:"device_auth_workers"`
+	DeviceAuthQueueSize int `yaml:"DeviceAuthQueueSize" json:"device_auth_queue_size"`
+	FrameQueueSize      int `yaml:"FrameQueueSize" json:"frame_queue_size"`
+	MaxFrameAgeMS       int `yaml:"MaxFrameAgeMS" json:"max_frame_age_ms"`
+	ReadBufferBytes     int `yaml:"ReadBufferBytes" json:"read_buffer_bytes"`
+	WriteBufferBytes    int `yaml:"WriteBufferBytes" json:"write_buffer_bytes"`
 }
 
 // GhostSessionConfig controls the per-owner and per-session bounds for the
@@ -164,6 +168,7 @@ const (
 	DefaultBroadcastMaxUploadBytes      = 20 * 1024 * 1024
 	DefaultBroadcastTranscodeMemoryMB   = 512
 	DefaultBroadcastTranscodeCPUSeconds = 60
+	DefaultBroadcastTranscodeWorkers    = 2
 )
 
 type BroadcastConfig struct {
@@ -174,6 +179,7 @@ type BroadcastConfig struct {
 	TranscodeTimeoutSeconds  int    `yaml:"TranscodeTimeoutSeconds" json:"transcode_timeout_seconds"`
 	TranscodeMemoryLimitMB   int    `yaml:"TranscodeMemoryLimitMB" json:"transcode_memory_limit_mb"`
 	TranscodeCPULimitSeconds int    `yaml:"TranscodeCPULimitSeconds" json:"transcode_cpu_limit_seconds"`
+	TranscodeWorkers         int    `yaml:"TranscodeWorkers" json:"transcode_workers"` // 转码并发 worker 数（默认 2，范围 1-4）
 	ScanIntervalMS           int    `yaml:"ScanIntervalMS" json:"scan_interval_ms"`
 	RecoveryWindowSeconds    int    `yaml:"RecoveryWindowSeconds" json:"recovery_window_seconds"`
 	ClaimBatchSize           int    `yaml:"ClaimBatchSize" json:"claim_batch_size"`
@@ -217,6 +223,12 @@ func (c *BroadcastConfig) SetDefaults() error {
 	}
 	if c.TranscodeCPULimitSeconds < 1 || c.TranscodeCPULimitSeconds > 300 {
 		return fmt.Errorf("Broadcast.TranscodeCPULimitSeconds must be between 1 and 300")
+	}
+	if c.TranscodeWorkers == 0 {
+		c.TranscodeWorkers = DefaultBroadcastTranscodeWorkers
+	}
+	if c.TranscodeWorkers < 1 || c.TranscodeWorkers > 4 {
+		return fmt.Errorf("Broadcast.TranscodeWorkers must be between 1 and 4")
 	}
 	if c.ScanIntervalMS == 0 {
 		c.ScanIntervalMS = 1000
@@ -347,6 +359,10 @@ type Configuration struct {
 		LogPath       string `yaml:"LogPath" json:"log_path"`
 		IPFile        string `yaml:"IPfile" json:"ipfile"`
 		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
+		// ProxyTrustedCIDRs 允许解析 PROXY Protocol 的代理源地址前缀。
+		// 开发/测试构建中为空时保持旧兼容行为并告警；release 构建要求显式配置，
+		// 仅来自这些前缀的连接才会解析 PROXY 头，防止伪造源 IP。
+		ProxyTrustedCIDRs []string `yaml:"ProxyTrustedCIDRs" json:"proxy_trusted_cidrs"`
 	} `yaml:"System" json:"system"`
 
 	UDP           UDPConfig          `yaml:"UDP" json:"udp"`
@@ -363,6 +379,9 @@ type Configuration struct {
 		DBName   string `yaml:"DBName" json:"dbname"`
 		Charset  string `yaml:"Charset" json:"charset"`
 		Collate  string `yaml:"Collate" json:"collate"`
+		// Local preserves the legacy behavior. Explicit IANA names also set the
+		// MySQL session timezone, making Go and SQL timestamps deterministic.
+		Timezone string `yaml:"Timezone" json:"timezone"`
 
 		// 连接池配置
 		MaxOpenConns int `yaml:"MaxOpenConns" json:"max_open_conns"`
@@ -430,14 +449,22 @@ func (c *Configuration) GetDSN() string {
 	if collate == "" {
 		collate = "utf8mb4_unicode_ci"
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&collation=%s&parseTime=true&loc=Local",
+	timezone := strings.TrimSpace(c.Database.Timezone)
+	if timezone == "" {
+		timezone = "Local"
+	}
+	query := fmt.Sprintf("charset=%s&collation=%s&parseTime=true&loc=%s",
+		url.QueryEscape(charset), url.QueryEscape(collate), url.QueryEscape(timezone))
+	if !strings.EqualFold(timezone, "Local") {
+		query += "&time_zone=" + url.QueryEscape("'"+timezone+"'")
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s",
 		c.Database.User,
 		c.Database.Password,
 		c.Database.Host,
 		c.Database.Port,
 		c.Database.DBName,
-		charset,
-		collate,
+		query,
 	)
 }
 
@@ -478,9 +505,42 @@ func Load(configPath string) (*Configuration, error) {
 	return cfg, nil
 }
 
+// ParseProxyTrustedCIDRs validates and parses a proxy source allowlist.
+// An empty list is accepted here for backwards-compatible development/test
+// configurations; callers that enable PROXY Protocol in a release build must
+// reject it before starting the endpoint.
+func ParseProxyTrustedCIDRs(cidrs []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for index, raw := range cidrs {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return nil, fmt.Errorf("entry %d is empty", index)
+		}
+		_, ipNet, err := net.ParseCIDR(value)
+		if err != nil {
+			return nil, fmt.Errorf("entry %d %q is not a valid CIDR: %w", index, value, err)
+		}
+		if ipNet == nil {
+			return nil, fmt.Errorf("entry %d %q did not produce a network", index, value)
+		}
+		nets = append(nets, ipNet)
+	}
+	return nets, nil
+}
+
 // SetDefaults 设置默认配置值
 func (c *Configuration) SetDefaults() error {
 	c.migrateLegacyStorageConfig()
+	c.System.ProxyProtocol = strings.ToLower(strings.TrimSpace(c.System.ProxyProtocol))
+	if c.System.ProxyProtocol != "" && c.System.ProxyProtocol != "v1" && c.System.ProxyProtocol != "v2" {
+		return fmt.Errorf("System.ProxyProtocol must be empty, v1 or v2")
+	}
+	if _, err := ParseProxyTrustedCIDRs(c.System.ProxyTrustedCIDRs); err != nil {
+		return fmt.Errorf("System.ProxyTrustedCIDRs: %w", err)
+	}
+	if IsReleaseBuild() && c.System.ProxyProtocol == "v2" && len(c.System.ProxyTrustedCIDRs) == 0 {
+		return fmt.Errorf("System.ProxyTrustedCIDRs must contain at least one CIDR when System.ProxyProtocol=v2 in release builds")
+	}
 	if err := c.GhostSessions.SetDefaults(); err != nil {
 		return err
 	}
@@ -499,6 +559,16 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.UDP.IngressWorkers < 0 {
 		c.UDP.IngressWorkers = 0
+	}
+	if c.UDP.DeviceAuthWorkers <= 0 {
+		c.UDP.DeviceAuthWorkers = 4
+	} else if c.UDP.DeviceAuthWorkers > 16 {
+		c.UDP.DeviceAuthWorkers = 16
+	}
+	if c.UDP.DeviceAuthQueueSize <= 0 {
+		c.UDP.DeviceAuthQueueSize = 512
+	} else if c.UDP.DeviceAuthQueueSize > 2048 {
+		c.UDP.DeviceAuthQueueSize = 2048
 	}
 	if c.UDP.FrameQueueSize <= 0 {
 		c.UDP.FrameQueueSize = 64
@@ -582,6 +652,13 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if c.Database.Charset == "" {
 		c.Database.Charset = "utf8mb4"
+	}
+	if strings.TrimSpace(c.Database.Timezone) == "" {
+		c.Database.Timezone = "Local"
+	} else if !strings.EqualFold(strings.TrimSpace(c.Database.Timezone), "Local") {
+		if _, err := time.LoadLocation(strings.TrimSpace(c.Database.Timezone)); err != nil {
+			return fmt.Errorf("Database.Timezone must be Local or a valid IANA timezone: %w", err)
+		}
 	}
 	if c.Database.MaxOpenConns == 0 {
 		c.Database.MaxOpenConns = 25
@@ -757,12 +834,14 @@ func GenerateJWTSecret() (string, error) {
 }
 
 // SaveToFile 保存配置到文件
+// 【权限收紧】配置文件含 JWT/AES 密钥，写入权限从 0644 收紧为 0600，
+// 避免同机其它用户可读。
 func (c *Configuration) SaveToFile(configPath string) error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("序列化配置失败: %w", err)
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return os.WriteFile(configPath, data, 0600)
 }
 
 // MustLoad 加载配置文件，失败则panic

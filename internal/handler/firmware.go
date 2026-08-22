@@ -159,7 +159,9 @@ func UploadFirmware(c *gin.Context) {
 	}
 	finalKey := firmwareObjectKey(devModel, version, fileHash, fileName)
 	if err := promoteFirmwareObject(c.Request.Context(), stagingKey, finalKey, fileSize, fileHash); err != nil {
-		_ = storage.Delete(c.Request.Context(), stagingKey)
+		if deleteErr := deleteStoredObjectWithIndependentContext(stagingKey, storage.Delete); deleteErr != nil {
+			log.Printf("清理固件暂存对象失败: object=%s err=%v", stagingKey, deleteErr)
+		}
 		status := http.StatusInternalServerError
 		message := "固件文件上传失败"
 		if errors.Is(err, storage.ErrFinalObjectAlreadyExists) {
@@ -184,7 +186,7 @@ func UploadFirmware(c *gin.Context) {
 
 	if err := repo.Create(fw); err != nil {
 		// 回滚 MinIO 文件
-		if delErr := storage.Delete(c.Request.Context(), finalKey); delErr != nil {
+		if delErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); delErr != nil {
 			log.Printf("回滚删除 MinIO 固件文件失败: %v", delErr)
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
@@ -210,6 +212,12 @@ func ListFirmware(c *gin.Context) {
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
+	normalizedPageSize, normalizedPage, _, paginationErr := gormdb.NormalizePageOffset(pageSize, page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
+		return
+	}
+	page, pageSize = normalizedPage, normalizedPageSize
 
 	repo := gormdb.GetFirmwareRepo()
 	list, total, err := repo.ListByDevModel(devModel, page, pageSize)
@@ -356,7 +364,9 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		CreatedBy:    user.ID,
 	}
 	if err := repo.Create(fw); err != nil {
-		_ = storage.Delete(c.Request.Context(), finalKey)
+		if deleteErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); deleteErr != nil {
+			log.Printf("回滚删除 MinIO 固件文件失败: %v", deleteErr)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
 		return
 	}
@@ -380,7 +390,7 @@ func DeleteFirmware(c *gin.Context) {
 	}
 
 	// 删除 MinIO 文件（失败不影响数据库删除结果）
-	if err := storage.Delete(c.Request.Context(), fw.MinioPath); err != nil {
+	if err := deleteStoredObjectWithIndependentContext(fw.MinioPath, storage.Delete); err != nil {
 		log.Printf("删除 MinIO 固件文件失败 (path=%s): %v", fw.MinioPath, err)
 	}
 
@@ -630,7 +640,9 @@ func promoteFirmwareObject(ctx context.Context, stagedKey, finalKey string, expe
 	}
 	actualSize, actualDigest, err := storage.HashObjectSHA256(ctx, finalKey, maxFirmwareSize)
 	if err != nil || actualSize != expectedSize || actualDigest != expectedDigest {
-		_ = storage.Delete(ctx, finalKey)
+		if deleteErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); deleteErr != nil {
+			log.Printf("清理校验失败固件对象失败: object=%s err=%v", finalKey, deleteErr)
+		}
 		if err != nil {
 			return fmt.Errorf("verify promoted firmware: %w", err)
 		}

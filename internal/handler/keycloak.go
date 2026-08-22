@@ -128,11 +128,19 @@ func FindUserBySSOID(provider, ssoID string) *gormdb.User {
 
 // ============== State 管理 ==============
 
-// generateState 生成随机state
-func generateState() string {
+// generateState 生成随机 state
+// 【安全修复】OAuth state 必须来自 CSPRNG；随机源失败时 fail-closed，
+// 避免用时间戳/计数器签发可预测 state。
+func generateState() (string, error) {
+	return generateStateFromReader(rand.Reader)
+}
+
+func generateStateFromReader(reader io.Reader) (string, error) {
 	bytes := make([]byte, 16)
-	rand.Read(bytes)
-	return hex.EncodeToString(bytes)
+	if _, err := io.ReadFull(reader, bytes); err != nil {
+		return "", fmt.Errorf("read SSO state random source: %w", err)
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 // saveState 保存state
@@ -146,8 +154,8 @@ func saveState(state string, action string, userID int) {
 		ExpiresAt: time.Now().Add(10 * time.Minute),
 	}
 
-	// 清理过期state
-	go cleanExpiredStates()
+	// 清理过期 state（同步执行，map 小且有 TTL，避免每次保存启动 goroutine 堆积）
+	cleanExpiredStates()
 }
 
 // consumeState 消费state（验证后删除）
@@ -189,7 +197,10 @@ func saveLoginCode(userID int, userData gin.H) (string, error) {
 		return "", err
 	}
 
-	code := generateState()
+	code, err := generateState()
+	if err != nil {
+		return "", err
+	}
 
 	loginCodeMutex.Lock()
 	defer loginCodeMutex.Unlock()
@@ -200,7 +211,7 @@ func saveLoginCode(userID int, userData gin.H) (string, error) {
 		ExpiresAt: time.Now().Add(2 * time.Minute),
 	}
 
-	go cleanExpiredLoginCodes()
+	cleanExpiredLoginCodes()
 
 	return code, nil
 }
@@ -278,7 +289,15 @@ func GetSSOLoginURL(c *gin.Context) {
 	}
 
 	cfg := getKeycloakConfig()
-	state := generateState()
+	state, err := generateState()
+	if err != nil {
+		log.Printf("生成 SSO state 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "生成SSO登录状态失败",
+		})
+		return
+	}
 
 	// 保存state用于登录
 	saveState(state, "login", 0)
@@ -794,7 +813,15 @@ func SSOBind(c *gin.Context) {
 	}
 
 	cfg := getKeycloakConfig()
-	state := generateState()
+	state, err := generateState()
+	if err != nil {
+		log.Printf("生成 SSO 绑定 state 失败: %v", err)
+		c.JSON(http.StatusInternalServerError, Response{
+			Code:    http.StatusInternalServerError,
+			Message: "生成SSO绑定状态失败",
+		})
+		return
+	}
 
 	// 保存state用于绑定
 	saveState(state, "bind", user.ID)

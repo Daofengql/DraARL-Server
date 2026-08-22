@@ -257,9 +257,20 @@ func GetVirtualGroups(c *gin.Context) {
 		return
 	}
 
+	// 批量加载目标群组计数（单条 GROUP BY，消除 N+1）
+	virtualGroupIDsAll := make([]int, 0, len(virtualGroups))
+	for _, vg := range virtualGroups {
+		virtualGroupIDsAll = append(virtualGroupIDsAll, vg.ID)
+	}
+	linkCounts, err := linkRepo.GetLinkCounts(virtualGroupIDsAll)
+	if err != nil {
+		writeVirtualGroupRepositoryError(c, err)
+		return
+	}
+
 	result := make([]virtualGroupWithCount, 0, len(virtualGroups))
 	for _, vg := range virtualGroups {
-		count, _ := linkRepo.GetLinkCount(vg.ID)
+		count := linkCounts[vg.ID]
 		policy := policySummaries[vg.ID]
 		result = append(result, virtualGroupWithCount{
 			Group: vg, TargetCount: count, BroadcastPolicy: policy,

@@ -199,7 +199,7 @@ func UploadBroadcastAudio(c *gin.Context) {
 		return
 	}
 	if counter.count != fileHeader.Size || counter.count > maxBytes {
-		_ = storage.Delete(context.WithoutCancel(c.Request.Context()), objectKey)
+		_ = deleteStoredObjectWithIndependentContext(objectKey, storage.Delete)
 		writeBroadcastError(c, http.StatusBadRequest, "broadcast_audio_size_mismatch", "音频文件大小校验失败")
 		return
 	}
@@ -210,13 +210,13 @@ func UploadBroadcastAudio(c *gin.Context) {
 	}
 	repo := repository.Default()
 	if err := repo.CreateAudio(c.Request.Context(), audio); err != nil {
-		_ = storage.Delete(context.WithoutCancel(c.Request.Context()), objectKey)
+		_ = deleteStoredObjectWithIndependentContext(objectKey, storage.Delete)
 		writeBroadcastRepositoryError(c, err)
 		return
 	}
 	if err := media.Enqueue(audio.ID); err != nil {
 		_, _, _, _ = repo.DeleteAudio(context.WithoutCancel(c.Request.Context()), groupID, audio.ID)
-		_ = storage.Delete(context.WithoutCancel(c.Request.Context()), objectKey)
+		_ = deleteStoredObjectWithIndependentContext(objectKey, storage.Delete)
 		writeBroadcastError(c, http.StatusServiceUnavailable, "broadcast_media_queue_unavailable", "音频处理服务暂不可用")
 		return
 	}
@@ -288,7 +288,7 @@ func DeleteBroadcastAudio(c *gin.Context) {
 		if recordReferences > 0 {
 			continue
 		}
-		if err := storage.Delete(context.WithoutCancel(c.Request.Context()), key); err != nil {
+		if err := deleteStoredObjectWithIndependentContext(key, storage.Delete); err != nil {
 			cleanupPending = true
 			log.Printf("[BROADCAST] cleanup deleted audio object key=%s failed: %v", key, err)
 		}
@@ -418,7 +418,11 @@ func ListBroadcastRuns(c *gin.Context) {
 		return
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	pageSize = normalizeBroadcastPageSize(pageSize)
 	runs, total, err := repository.Default().ListRuns(c.Request.Context(), groupID, page, pageSize)
 	if err != nil {
 		writeBroadcastError(c, http.StatusInternalServerError, "broadcast_run_list_failed", "读取播报执行历史失败")

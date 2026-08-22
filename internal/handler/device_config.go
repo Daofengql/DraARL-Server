@@ -2,8 +2,10 @@ package handler
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
@@ -216,6 +218,15 @@ func UpdateDeviceConfig(c *gin.Context) {
 		return
 	}
 
+	// 【配置校验】非法值原样入库并下发会导致设备异常
+	if err := validateDeviceConfigValues(configs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "配置值不合法: " + err.Error(),
+		})
+		return
+	}
+
 	// 保存配置到数据库（如果设备在线会自动下发）
 	if err := udphub.SaveDeviceConfigsToDB(deviceID, configs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -360,4 +371,88 @@ func getDeviceConfigAuditOperator(c *gin.Context, fallbackUserID int) (int, stri
 	}
 
 	return user.ID, user.Name, user.CallSign
+}
+
+// validateDeviceConfigValues 校验设备配置值范围/枚举，防止非法值入库下发导致设备异常。
+func validateDeviceConfigValues(configs map[string]string) error {
+	if len(configs) == 0 {
+		return nil
+	}
+	for key, value := range configs {
+		value = strings.TrimSpace(value)
+		switch key {
+		case "rx_freq", "tx_freq":
+			// 频率（Hz，整数）；覆盖 VHF/UHF/900M/业余频段并留有余量
+			if _, ok := parseUintInRange(value, 100000, 10000000000); !ok {
+				return fmt.Errorf("%s 必须是 100kHz-10GHz 之间的整数频率(Hz)", key)
+			}
+		case udphub.ConfigKeyRxToneMode, udphub.ConfigKeyTxToneMode:
+			if !isSupportedToneMode(value) {
+				return fmt.Errorf("%s 音调模式不受支持", key)
+			}
+		case "sql_level":
+			if v, ok := parseUintInRange(value, 0, 15); !ok {
+				return fmt.Errorf("%s 必须是 0-15 之间的整数", key)
+			} else {
+				_ = v
+			}
+		case "power_level":
+			if v, ok := parseUintInRange(value, 0, 15); !ok {
+				return fmt.Errorf("%s 必须是 0-15 之间的整数", key)
+			} else {
+				_ = v
+			}
+		case "tx_bandwidth":
+			if _, ok := parseUintInRange(value, 0, 3); !ok {
+				return fmt.Errorf("%s 必须是 0-3 之间的整数", key)
+			}
+		case udphub.ConfigKeyRFGuardEnabled, udphub.ConfigKeySQLActiveHigh, udphub.ConfigKeyPTTActiveHigh:
+			if _, ok := parseUintInRange(value, 0, 1); !ok {
+				return fmt.Errorf("%s 必须是 0 或 1", key)
+			}
+		case udphub.ConfigKeyRFGuardSingleTxLimitS, udphub.ConfigKeyRFGuardWindowS, udphub.ConfigKeyRFGuardMaxTxInWindowS:
+			if _, ok := parseUintInRange(value, 1, 3600); !ok {
+				return fmt.Errorf("%s 必须是 1-3600 之间的整数秒", key)
+			}
+		case udphub.ConfigKeyADCGainDB:
+			if _, ok := parseUintInRange(value, 0, 24); !ok {
+				return fmt.Errorf("%s 必须是 0-24 之间的整数(dB)", key)
+			}
+		case udphub.ConfigKeyADCVolume, udphub.ConfigKeyDACVolume:
+			if _, ok := parseUintInRange(value, 0, 100); !ok {
+				return fmt.Errorf("%s 必须是 0-100 之间的整数", key)
+			}
+		case "rx_ctcss", "tx_ctcss":
+			f, err := strconv.ParseFloat(value, 64)
+			if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 300 {
+				return fmt.Errorf("%s 必须是 0-300 之间的亚音频率", key)
+			}
+		}
+	}
+	return nil
+}
+
+// parseUintInRange 将字符串解析为 [min,max] 范围内的整数。
+func parseUintInRange(value string, min, max uint64) (uint64, bool) {
+	v, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if v < min || v > max {
+		return 0, false
+	}
+	return v, true
+}
+
+// isSupportedToneMode mirrors radio_config's accepted canonical values and
+// historical aliases. Unknown values must not silently normalize to OFF.
+func isSupportedToneMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", udphub.ToneModeOff, udphub.ToneModeCTCSS,
+		udphub.ToneModeCDCSSN, udphub.ToneModeCDCSSI,
+		"cdcss-n", "cdcss-i", "cdcssn", "cdcssi", "dcsn", "dcsi":
+		return true
+	default:
+		return false
+	}
 }

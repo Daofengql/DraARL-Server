@@ -29,6 +29,29 @@ type SendCodeResponse struct {
 	ExpiresIn int    `json:"expires_in"` // 秒
 }
 
+type verificationEmailLookup func(string) (*gormdb.User, error)
+
+func checkVerificationRecipient(purpose email.Purpose, address string, lookup verificationEmailLookup) (int, string, error) {
+	if purpose == email.PurposeChangeEmail {
+		return 0, "", nil
+	}
+	user, err := lookup(address)
+	if err != nil {
+		return http.StatusServiceUnavailable, "服务暂时不可用，请稍后再试", err
+	}
+	switch purpose {
+	case email.PurposeRegister:
+		if user != nil {
+			return http.StatusConflict, "该邮箱已被注册", nil
+		}
+	case email.PurposeLogin, email.PurposeResetPassword:
+		if user == nil {
+			return http.StatusNotFound, "该邮箱未注册", nil
+		}
+	}
+	return 0, "", nil
+}
+
 // SendVerificationCode 发送邮箱验证码
 func SendVerificationCode(c *gin.Context) {
 	var req SendCodeRequest
@@ -52,9 +75,29 @@ func SendVerificationCode(c *gin.Context) {
 	// 获取客户端 IP
 	clientIP := c.ClientIP()
 
-	// IP 频率限制检查
 	mgr := email.GetVerificationManager()
-	if allowed, _, errMsg := mgr.CheckIPRateLimit(clientIP); !allowed {
+	// 验证 purpose
+	var purpose email.Purpose
+	switch req.Purpose {
+	case "register":
+		purpose = email.PurposeRegister
+	case "login":
+		purpose = email.PurposeLogin
+	case "reset_password":
+		purpose = email.PurposeResetPassword
+	case "change_email":
+		purpose = email.PurposeChangeEmail
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的验证码用途",
+		})
+		return
+	}
+
+	// Consume the source-IP budget before account-existence checks. Otherwise an
+	// attacker can enumerate registered addresses without paying the send limit.
+	if allowed, errMsg := allowVerificationEmailSend(mgr, clientIP); !allowed {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"code":    429,
 			"message": errMsg,
@@ -62,54 +105,14 @@ func SendVerificationCode(c *gin.Context) {
 		return
 	}
 
-	// 验证 purpose
-	var purpose email.Purpose
-	switch req.Purpose {
-	case "register":
-		purpose = email.PurposeRegister
-		// 检查邮箱是否已被注册
-		repo := gormdb.NewUserRepository()
-		user, _ := repo.GetUserByEmail(req.Email)
-		if user != nil {
-			c.JSON(http.StatusConflict, gin.H{
-				"code":    409,
-				"message": "该邮箱已被注册",
-			})
-			return
+	// Account checks deliberately happen after the IP budget is consumed so
+	// register/login/reset probing is subject to the same bounded policy.
+	repo := gormdb.NewUserRepository()
+	if status, message, err := checkVerificationRecipient(purpose, req.Email, repo.GetUserByEmail); status != 0 {
+		if err != nil {
+			log.Printf("查询验证码邮箱失败: purpose=%s err=%v", purpose, err)
 		}
-	case "login":
-		purpose = email.PurposeLogin
-		// 检查邮箱是否存在
-		repo := gormdb.NewUserRepository()
-		user, _ := repo.GetUserByEmail(req.Email)
-		if user == nil {
-			c.JSON(http.StatusNotFound, gin.H{
-				"code":    404,
-				"message": "该邮箱未注册",
-			})
-			return
-		}
-	case "reset_password":
-		purpose = email.PurposeResetPassword
-		// 检查邮箱是否存在
-		repo := gormdb.NewUserRepository()
-		user, _ := repo.GetUserByEmail(req.Email)
-		if user == nil {
-			c.JSON(http.StatusNotFound, gin.H{
-				"code":    404,
-				"message": "该邮箱未注册",
-			})
-			return
-		}
-	case "change_email":
-		purpose = email.PurposeChangeEmail
-		// 修改邮箱不需要检查邮箱是否存在，因为可能是新邮箱
-		// 在实际修改时会检查
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的验证码用途",
-		})
+		c.JSON(status, gin.H{"code": status, "message": message})
 		return
 	}
 
@@ -122,9 +125,6 @@ func SendVerificationCode(c *gin.Context) {
 		})
 		return
 	}
-
-	// 记录 IP 发送（用于频率限制统计）
-	mgr.RecordIPSend(clientIP)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -192,6 +192,10 @@ func EmailLogin(c *gin.Context) {
 		})
 		return
 	}
+	// Successful email authentication also proves control of the account. Clear
+	// password-failure state so an earlier brute-force window cannot block the
+	// user after a valid second-factor login.
+	loginGuardClear(user.Name)
 
 	// 更新最后登录时间
 	clientIP := c.ClientIP()
@@ -247,7 +251,7 @@ func EmailLogin(c *gin.Context) {
 type ResetPasswordRequest struct {
 	SessionID   string `json:"session_id" binding:"required"`
 	Code        string `json:"code" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required,min=6"`
+	NewPassword string `json:"new_password" binding:"required"`
 }
 
 // ResetPassword 重置密码
@@ -258,6 +262,10 @@ func ResetPassword(c *gin.Context) {
 			"code":    400,
 			"message": "请求参数错误",
 		})
+		return
+	}
+	if err := validateNewUserPassword(req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
@@ -310,6 +318,10 @@ func ResetPassword(c *gin.Context) {
 		})
 		return
 	}
+	loginGuardClear(user.Name)
+	revokeUserRefreshSessions(user.ID, "password_reset")
+	clearRefreshTokenCookie(c)
+	clearWSTokenCookie(c)
 
 	// 使用户缓存失效
 	if userCache := cache.GetUserCache(); userCache != nil {

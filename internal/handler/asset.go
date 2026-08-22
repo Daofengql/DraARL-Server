@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -346,20 +347,21 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 	}
 
 	// 上传文件到 MinIO
-	objectName, fileSize, err := minio.UploadMultipartFile(fileHeader, int(userModel.ID), "assets")
+	objectName, fileSize, mimeType, err := minio.UploadMultipartFileWithContentTypeContext(c.Request.Context(), fileHeader, int(userModel.ID), "assets")
 	if err != nil {
 		log.Printf("上传文件到MinIO失败: %v", err)
+		if errors.Is(err, storage.ErrFileTypeNotAllowed) {
+			c.JSON(http.StatusBadRequest, Response{
+				Code:    http.StatusBadRequest,
+				Message: "文件类型不被允许",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
 			Message: "上传文件失败",
 		})
 		return
-	}
-
-	// 获取 MIME 类型
-	mimeType := fileHeader.Header.Get("Content-Type")
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
 	}
 
 	// 创建资源记录
@@ -375,7 +377,9 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 
 	if err := h.repo.Create(asset); err != nil {
 		// 回滚：删除已上传的文件
-		minio.DeleteFile(c.Request.Context(), objectName)
+		if deleteErr := deleteStoredObjectWithIndependentContext(objectName, minio.DeleteFile); deleteErr != nil {
+			log.Printf("回滚未提交资源对象失败: object=%s err=%v", objectName, deleteErr)
+		}
 		log.Printf("创建资源记录失败: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -721,20 +725,21 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 	oldPath := asset.Path
 
 	// 上传新文件到 MinIO
-	objectName, fileSize, err := minio.UploadMultipartFile(fileHeader, int(userModel.ID), "assets")
+	objectName, fileSize, mimeType, err := minio.UploadMultipartFileWithContentTypeContext(c.Request.Context(), fileHeader, int(userModel.ID), "assets")
 	if err != nil {
 		log.Printf("上传文件到MinIO失败: %v", err)
+		if errors.Is(err, storage.ErrFileTypeNotAllowed) {
+			c.JSON(http.StatusBadRequest, Response{
+				Code:    http.StatusBadRequest,
+				Message: "文件类型不被允许",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
 			Message: "上传文件失败",
 		})
 		return
-	}
-
-	// 获取 MIME 类型
-	mimeType := fileHeader.Header.Get("Content-Type")
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
 	}
 
 	// 更新资源记录
@@ -745,7 +750,9 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 	}
 	if err := h.repo.UpdatePartial(uint(id), updates); err != nil {
 		// 回滚：删除新上传的文件
-		minio.DeleteFile(c.Request.Context(), objectName)
+		if deleteErr := deleteStoredObjectWithIndependentContext(objectName, minio.DeleteFile); deleteErr != nil {
+			log.Printf("回滚未提交资源覆盖对象失败: asset_id=%d object=%s err=%v", id, objectName, deleteErr)
+		}
 		log.Printf("更新资源记录失败: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
@@ -755,7 +762,9 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 	}
 
 	// 删除旧文件
-	minio.DeleteFile(c.Request.Context(), oldPath)
+	if deleteErr := deleteStoredObjectWithIndependentContext(oldPath, minio.DeleteFile); deleteErr != nil {
+		log.Printf("清理已替换资源旧对象失败: asset_id=%d object=%s err=%v", id, oldPath, deleteErr)
+	}
 
 	// 记录操作日志
 	oplog.AddLog(
@@ -865,7 +874,7 @@ func (h *AssetHandler) DeleteAsset(c *gin.Context) {
 
 	// 从 MinIO 删除所有文件
 	for _, path := range filePaths {
-		if err := minio.DeleteFile(c.Request.Context(), path); err != nil {
+		if err := deleteStoredObjectWithIndependentContext(path, minio.DeleteFile); err != nil {
 			log.Printf("删除MinIO文件失败: %s, %v", path, err)
 			// 不中断流程，继续删除其他文件
 		}
@@ -1205,7 +1214,9 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 		Remark:   req.Remark,
 	}
 	if err := h.repo.Create(asset); err != nil {
-		_ = storage.Delete(c.Request.Context(), finalKey)
+		if deleteErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); deleteErr != nil {
+			log.Printf("回滚未提交直传资源对象失败: object=%s err=%v", finalKey, deleteErr)
+		}
 		log.Printf("创建资源记录失败: %v", err)
 		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "上传文件失败"})
 		return

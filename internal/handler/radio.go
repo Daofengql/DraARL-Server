@@ -166,27 +166,31 @@ func GetRadioGroupDevices(c *gin.Context) {
 	// 1. 获取 UDP 设备
 	udpDevices := udphub.GetOnlineDevicesByGroup(groupID)
 	for _, dev := range udpDevices {
-		key := fmt.Sprintf("udp-%d", dev.ID)
+		if dev == nil {
+			continue
+		}
+		state := dev.RuntimeSnapshot()
+		key := fmt.Sprintf("udp-%d", state.ID)
 		if seenDevices[key] {
 			continue
 		}
 		seenDevices[key] = true
 
 		devices = append(devices, RadioDeviceResponse{
-			ID:           dev.ID,
-			UserID:       dev.OwnerID,
-			Username:     dev.Username,
-			CallSign:     dev.CallSign,
-			SSID:         int(dev.SSID),
-			Nickname:     dev.Nickname,
-			DeviceName:   dev.Name,
-			DevModel:     int(dev.DevModel),
-			GroupID:      dev.GroupID,
+			ID:           state.ID,
+			UserID:       state.OwnerID,
+			Username:     state.Username,
+			CallSign:     state.CallSign,
+			SSID:         int(state.SSID),
+			Nickname:     state.Nickname,
+			DeviceName:   state.Name,
+			DevModel:     int(state.DevModel),
+			GroupID:      state.GroupID,
 			IsGhost:      false,
-			DisableSend:  dev.DisableSend,
-			DisableRecv:  dev.DisableRecv,
-			ConnectTime:  dev.OnlineTime.Format("2006-01-02 15:04:05"),
-			LastActivity: dev.LastPacketTime.Format("2006-01-02 15:04:05"),
+			DisableSend:  state.DisableSend,
+			DisableRecv:  state.DisableRecv,
+			ConnectTime:  state.OnlineTime.Format("2006-01-02 15:04:05"),
+			LastActivity: state.LastPacketTime.Format("2006-01-02 15:04:05"),
 		})
 	}
 
@@ -194,30 +198,34 @@ func GetRadioGroupDevices(c *gin.Context) {
 	// 连接池中，必须从 Session 接收索引读取，否则多端设备不会出现在
 	// 群组在线列表里。
 	for _, dev := range udphub.GlobalUDPGhostManager.GetByGroup(groupID) {
-		if dev == nil || !dev.ISOnline {
+		if dev == nil {
 			continue
 		}
-		key := "udp-ghost-" + dev.GhostSessionID
+		state := dev.RuntimeSnapshot()
+		if !state.ISOnline {
+			continue
+		}
+		key := "udp-ghost-" + state.GhostSessionID
 		if seenDevices[key] {
 			continue
 		}
 		seenDevices[key] = true
 		devices = append(devices, RadioDeviceResponse{
 			ID:           0,
-			Username:     dev.Username,
-			CallSign:     dev.CallSign,
-			SSID:         int(dev.SSID),
-			Nickname:     dev.Nickname,
-			DevModel:     int(dev.DevModel),
-			GroupID:      dev.GroupID,
+			Username:     state.Username,
+			CallSign:     state.CallSign,
+			SSID:         int(state.SSID),
+			Nickname:     state.Nickname,
+			DevModel:     int(state.DevModel),
+			GroupID:      state.GroupID,
 			IsGhost:      true,
-			DisableSend:  dev.DisableSend,
-			DisableRecv:  dev.DisableRecv,
-			ConnectTime:  dev.OnlineTime.Format("2006-01-02 15:04:05"),
-			LastActivity: dev.LastPacketTime.Format("2006-01-02 15:04:05"),
-			SessionID:    dev.GhostSessionID,
-			TxGroupID:    dev.GroupID,
-			RxGroupIDs:   append([]int(nil), dev.GhostRxGroupIDs...),
+			DisableSend:  state.DisableSend,
+			DisableRecv:  state.DisableRecv,
+			ConnectTime:  state.OnlineTime.Format("2006-01-02 15:04:05"),
+			LastActivity: state.LastPacketTime.Format("2006-01-02 15:04:05"),
+			SessionID:    state.GhostSessionID,
+			TxGroupID:    state.GroupID,
+			RxGroupIDs:   append([]int(nil), state.GhostRxGroupIDs...),
 		})
 	}
 

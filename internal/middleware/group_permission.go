@@ -12,8 +12,7 @@ import (
 // RequireGroupOwner 要求群组创建者权限的中间件
 func RequireGroupOwner() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		username, exists := c.Get("username")
-		if !exists {
+		if _, exists := c.Get("username"); !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "未认证",
@@ -34,10 +33,9 @@ func RequireGroupOwner() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户信息
-		userRepo := gormdb.NewUserRepository()
-		currentUser, err := userRepo.GetUserByName(username.(string))
-		if err != nil || currentUser == nil {
+		// 【H8 性能修复】复用 AuthMiddleware 已加载的用户，避免二次查库
+		currentUser := userFromContext(c)
+		if currentUser == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "用户不存在",
@@ -85,8 +83,7 @@ func RequireGroupOwner() gin.HandlerFunc {
 // RequireGroupMember 要求已验证群组成员权限的中间件
 func RequireGroupMember() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		username, exists := c.Get("username")
-		if !exists {
+		if _, exists := c.Get("username"); !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "未认证",
@@ -107,10 +104,9 @@ func RequireGroupMember() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户信息
-		userRepo := gormdb.NewUserRepository()
-		currentUser, err := userRepo.GetUserByName(username.(string))
-		if err != nil || currentUser == nil {
+		// 【H8 性能修复】复用 AuthMiddleware 已加载的用户，避免二次查库
+		currentUser := userFromContext(c)
+		if currentUser == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "用户不存在",
@@ -168,8 +164,7 @@ func RequireGroupMember() gin.HandlerFunc {
 // RequireAdminOrOwner 要求管理员或群组创建者权限的中间件
 func RequireAdminOrOwner() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		username, exists := c.Get("username")
-		if !exists {
+		if _, exists := c.Get("username"); !exists {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "未认证",
@@ -190,10 +185,9 @@ func RequireAdminOrOwner() gin.HandlerFunc {
 			return
 		}
 
-		// 获取用户信息
-		userRepo := gormdb.NewUserRepository()
-		currentUser, err := userRepo.GetUserByName(username.(string))
-		if err != nil || currentUser == nil {
+		// 【H8 性能修复】复用 AuthMiddleware 已加载的用户，避免二次查库
+		currentUser := userFromContext(c)
+		if currentUser == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"code":    401,
 				"message": "用户不存在",

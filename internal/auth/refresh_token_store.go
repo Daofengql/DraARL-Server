@@ -44,6 +44,7 @@ var (
 	storeMu           sync.RWMutex
 	refreshTokenStore RefreshTokenStore
 	refreshStoreClose storeCloser
+	redisStoreFactory = newRedisRefreshTokenStore
 )
 
 // InitRefreshTokenStore 初始化刷新令牌存储。
@@ -57,8 +58,12 @@ func InitRefreshTokenStore(cfg *config.Configuration) error {
 		refreshStoreClose = nil
 	}
 
-	redisStore, err := newRedisRefreshTokenStore(cfg)
+	redisStore, err := redisStoreFactory(cfg)
 	if err != nil {
+		if config.IsReleaseBuild() {
+			refreshTokenStore = nil
+			return fmt.Errorf("release build requires Redis refresh-token storage: %w", err)
+		}
 		log.Printf("[AUTH] Redis 不可用，refresh token 降级到内存存储: %v", err)
 		refreshTokenStore = newMemoryRefreshTokenStore()
 		return nil

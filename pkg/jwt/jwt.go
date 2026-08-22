@@ -3,6 +3,7 @@ package jwt
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -21,9 +22,28 @@ const (
 	EdgeDiscoveryTokenTTL = 5 * time.Minute
 )
 
-var jwtSecret = []byte("nrl1234")
+// jwtSecret 由 SetSecret 初始化（main.go 启动时调用）。
+// 【安全修复】移除 nrl fork 遗留的公开弱默认密钥 "nrl1234"：未初始化即
+// fail-fast，任何绕过初始化流程的入口都无法用公开密钥伪造 token。
+var jwtSecret struct {
+	sync.RWMutex
+	value []byte
+}
 
+// ErrInvalidToken 无效令牌错误。
 var ErrInvalidToken = errors.New("invalid token")
+
+// secret 返回当前 JWT 密钥；未初始化返回 nil。
+func secret() []byte {
+	jwtSecret.RLock()
+	defer jwtSecret.RUnlock()
+	return jwtSecret.value
+}
+
+// isSecretInitialized 判断 JWT 密钥是否已初始化。
+func isSecretInitialized() bool {
+	return len(secret()) > 0
+}
 
 // Claims JWT声明
 type Claims struct {
@@ -38,7 +58,9 @@ func SetSecret(secret string) error {
 	if len(secret) < SecretMinLength {
 		return fmt.Errorf("JWT密钥长度不足，当前%d字符，最少需要%d字符", len(secret), SecretMinLength)
 	}
-	jwtSecret = []byte(secret)
+	jwtSecret.Lock()
+	jwtSecret.value = []byte(secret)
+	jwtSecret.Unlock()
 	return nil
 }
 
@@ -58,8 +80,11 @@ func GenerateToken(username string, roles []string) (string, error) {
 		},
 	}
 
+	if !isSecretInitialized() {
+		return "", errors.New("JWT密钥未初始化，禁止签发令牌")
+	}
 	tokenClaims := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	token, err := tokenClaims.SignedString(jwtSecret)
+	token, err := tokenClaims.SignedString(secret())
 
 	return token, err
 }
@@ -84,18 +109,24 @@ func GenerateEdgeDiscoveryToken(username string, ttl time.Duration) (string, tim
 			Subject:   username,
 		},
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)
+	if !isSecretInitialized() {
+		return "", time.Time{}, errors.New("JWT密钥未初始化，禁止签发令牌")
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret())
 	return token, expiresAt, err
 }
 
 // ParseToken 解析JWT令牌
 func ParseToken(token string) (*Claims, error) {
+	if !isSecretInitialized() {
+		return nil, errors.New("JWT密钥未初始化，禁止解析令牌")
+	}
 	tokenClaims, err := jwt.ParseWithClaims(token, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if token.Method != jwt.SigningMethodHS256 {
 			return nil, errors.New("unexpected JWT signing method")
 		}
-		return jwtSecret, nil
-	}, jwt.WithIssuer("draarl"), jwt.WithExpirationRequired())
+		return secret(), nil
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer("draarl"), jwt.WithIssuedAt(), jwt.WithExpirationRequired())
 
 	if tokenClaims != nil {
 		if claims, ok := tokenClaims.Claims.(*Claims); ok && tokenClaims.Valid {
@@ -146,13 +177,16 @@ func GetUsername(tokenString string) (string, error) {
 	return claims.Username, nil
 }
 
-// RefreshToken 刷新令牌
+// RefreshToken 保留旧导出符号，但禁止无状态续期。
+//
+// Refresh 必须通过 internal/handler 的 refresh-token endpoint 完成，该
+// endpoint 会校验服务端 session、轮换令牌并执行重放检测。保留此函数
+// 仅为避免旧的编译依赖在升级时突然失效；它永远不会签发新令牌。
 func RefreshToken(tokenString string) (string, error) {
-	claims, err := ValidateAccessToken(tokenString)
-	if err != nil {
+	if _, err := ValidateAccessToken(tokenString); err != nil {
 		return "", err
 	}
-	return GenerateToken(claims.Username, claims.Roles)
+	return "", errors.New("stateless token refresh is disabled; use the refresh-token endpoint")
 }
 
 // MustParseToken 强制解析令牌（兼容函数）。

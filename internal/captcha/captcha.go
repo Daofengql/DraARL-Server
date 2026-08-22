@@ -1,6 +1,7 @@
 package captcha
 
 import (
+	"sync"
 	"time"
 
 	"github.com/mojocn/base64Captcha"
@@ -23,37 +24,39 @@ type CaptchaService struct {
 var (
 	// 全局验证码服务实例
 	captchaService *CaptchaService
+	// captchaOnce 保证惰性初始化只执行一次（sync.Once 提供 happens-before）
+	captchaOnce sync.Once
 )
 
-// Init 初始化验证码服务
+// Init 初始化验证码服务（幂等；并发首次调用也只会执行一次）
 func Init() {
-	// 创建内存存储（验证码过期时间300秒，GC间隔60秒）
-	store := base64Captcha.NewMemoryStore(300, 60)
+	captchaOnce.Do(func() {
+		// 创建内存存储（验证码过期时间300秒，GC间隔60秒）
+		store := base64Captcha.NewMemoryStore(300, 60)
 
-	// 创建驱动配置
-	driver := &base64Captcha.DriverString{
-		Height:          64,
-		Width:           180,
-		NoiseCount:      1,
-		ShowLineOptions: base64Captcha.OptionShowSineLine,
-		Length:          5,
-		Source:          "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-		BgColor:         nil, // 使用默认背景色
-		Fonts:           nil, // 使用默认字体
-	}
+		// 创建驱动配置
+		driver := &base64Captcha.DriverString{
+			Height:          64,
+			Width:           180,
+			NoiseCount:      1,
+			ShowLineOptions: base64Captcha.OptionShowSineLine,
+			Length:          5,
+			Source:          "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+			BgColor:         nil, // 使用默认背景色
+			Fonts:           nil, // 使用默认字体
+		}
 
-	captchaService = &CaptchaService{
-		store:  store,
-		driver: driver,
-		expire: 5 * time.Minute,
-	}
+		captchaService = &CaptchaService{
+			store:  store,
+			driver: driver,
+			expire: 5 * time.Minute,
+		}
+	})
 }
 
 // Generate 生成验证码
 func Generate() (*CaptchaResult, error) {
-	if captchaService == nil {
-		Init()
-	}
+	Init()
 
 	// 创建验证码
 	captcha := base64Captcha.NewCaptcha(captchaService.driver.ConvertFonts(), captchaService.store)
@@ -72,8 +75,6 @@ func Generate() (*CaptchaResult, error) {
 // Verify 验证验证码
 // clear: 验证成功后是否清除
 func Verify(id, answer string, clear bool) bool {
-	if captchaService == nil {
-		Init()
-	}
+	Init()
 	return captchaService.store.Verify(id, answer, clear)
 }

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +29,32 @@ type UploadResponse struct {
 	MinioPath    string `json:"minio_path"`
 	FileURL      string `json:"file_url"`
 	ThumbnailURL string `json:"thumbnail_url,omitempty"` // 缩略图URL
+}
+
+type avatarReferenceUpdater interface {
+	UpdateUserAvatar(id int, avatar string) error
+}
+
+const storedObjectCleanupTimeout = 5 * time.Second
+
+// deleteStoredObjectWithIndependentContext runs compensating object deletion
+// independently from the HTTP request. Once an object has been uploaded, a
+// canceled client request must not prevent rollback after a database failure
+// or cleanup after a committed reference replacement.
+func deleteStoredObjectWithIndependentContext(objectName string, deleteObject func(context.Context, string) error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), storedObjectCleanupTimeout)
+	defer cancel()
+	return deleteObject(cleanupCtx, objectName)
+}
+
+func persistAvatarReference(updater avatarReferenceUpdater, userID int, avatarPath, objectName string, deleteObject func(context.Context, string) error) error {
+	if err := updater.UpdateUserAvatar(userID, avatarPath); err != nil {
+		if deleteErr := deleteStoredObjectWithIndependentContext(objectName, deleteObject); deleteErr != nil {
+			log.Printf("回滚未提交头像对象失败: user_id=%d object=%s err=%v", userID, objectName, deleteErr)
+		}
+		return err
+	}
+	return nil
 }
 
 func hasMeaningfulCallSignChange(current, submitted string) bool {
@@ -94,7 +122,7 @@ func UploadFile(c *gin.Context) {
 	// 处理头像上传：验证格式、尺寸、裁切、重新编码
 	if fileType == "avatar" {
 		// 处理头像图片：裁切为正方形、限制2000x2000、重新编码
-		avatarData, ext, err := minio.ProcessAvatar(fileHeader)
+		avatarData, ext, err := minio.ProcessAvatarContext(c.Request.Context(), fileHeader)
 		if err != nil {
 			log.Printf("处理头像图片失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -105,7 +133,7 @@ func UploadFile(c *gin.Context) {
 		}
 
 		// 上传处理后的头像
-		objectName, finalFileSize, err = minio.UploadAvatar(user.ID, avatarData, ext)
+		objectName, finalFileSize, err = minio.UploadAvatarContext(c.Request.Context(), user.ID, avatarData, ext)
 		if err != nil {
 			log.Printf("上传头像失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -124,8 +152,16 @@ func UploadFile(c *gin.Context) {
 			}
 		}
 
-		// 更新用户头像字段（只存储相对路径）
-		userRepo.UpdateUserAvatar(user.ID, avatarRelativePath)
+		// 更新用户头像字段（只存储相对路径）。数据库更新失败时删除刚上传
+		// 的对象，避免接口返回成功但用户资料仍指向旧头像并留下孤儿文件。
+		if err := persistAvatarReference(userRepo, user.ID, avatarRelativePath, objectName, minio.DeleteFile); err != nil {
+			log.Printf("更新用户头像失败: user_id=%d object=%s err=%v", user.ID, objectName, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    http.StatusInternalServerError,
+				"message": "更新用户头像失败",
+			})
+			return
+		}
 
 		// 使缓存失效
 		if userCache := cache.GetUserCache(); userCache != nil {
@@ -133,23 +169,31 @@ func UploadFile(c *gin.Context) {
 		}
 
 		// 生成240x240缩略图
-		thumbObjectName, thumbData, err := minio.GenerateThumbnail(objectName, 240, 240, ".jpg")
+		thumbObjectName, thumbData, err := minio.GenerateThumbnailContext(c.Request.Context(), objectName, 240, 240, ".jpg")
 		if err != nil {
 			log.Printf("生成缩略图失败: %v", err)
 			// 缩略图生成失败不影响，继续处理
 		} else {
 			contentType := "image/jpeg"
-			if err := minio.UploadThumbnail(thumbObjectName, thumbData, contentType); err != nil {
+			if err := minio.UploadThumbnailContext(c.Request.Context(), thumbObjectName, thumbData, contentType); err != nil {
 				log.Printf("上传缩略图失败: %v", err)
+			} else {
+				// 缩略图 URL 只在对象确认上传成功后返回。
+				thumbnailURL = minio.GetFileURL(thumbObjectName)
 			}
-			// 缩略图URL通过后端动态拼接，不再单独存储到数据库
-			thumbnailURL = minio.GetFileURL(thumbObjectName)
 		}
 	} else {
 		// 其他文件类型：直接上传
-		objectName, finalFileSize, err = minio.UploadMultipartFile(fileHeader, user.ID, fileType)
+		objectName, finalFileSize, err = minio.UploadMultipartFileContext(c.Request.Context(), fileHeader, user.ID, fileType)
 		if err != nil {
 			log.Printf("上传文件失败: %v", err)
+			if errors.Is(err, storage.ErrFileTypeNotAllowed) {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"code":    400,
+					"message": "文件类型不被允许",
+				})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "上传文件失败",
@@ -282,7 +326,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 			return
 		}
 		contentType = detectedContentType
-		objectName, fileSize, err = minio.UploadMultipartFile(fileHeader, user.ID, "operator_cert")
+		objectName, fileSize, err = minio.UploadMultipartFileContext(c.Request.Context(), fileHeader, user.ID, "operator_cert")
 		if err != nil {
 			log.Printf("上传操作证失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -324,7 +368,9 @@ func UploadOperatorCertificate(c *gin.Context) {
 		}
 		detectedContentType, err := storage.DetectObjectContentType(c.Request.Context(), objectName)
 		if err != nil || !storage.IsAllowedContentType(detectedContentType, allowedTypes) {
-			_ = storage.Delete(c.Request.Context(), objectName)
+			if deleteErr := deleteStoredObjectWithIndependentContext(objectName, storage.Delete); deleteErr != nil {
+				log.Printf("清理非法操作证直传对象失败: user_id=%d object=%s err=%v", user.ID, objectName, deleteErr)
+			}
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的文件类型，只支持图片和PDF",
@@ -380,7 +426,9 @@ func UploadOperatorCertificate(c *gin.Context) {
 		cert, err = certRepo.UpdatePendingCert(pendingCert.ID, requestedCallSign, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
 			if uploadedNewObject {
-				_ = minio.DeleteFile(c.Request.Context(), objectName)
+				if deleteErr := deleteStoredObjectWithIndependentContext(objectName, minio.DeleteFile); deleteErr != nil {
+					log.Printf("回滚未提交操作证对象失败: user_id=%d object=%s err=%v", user.ID, objectName, deleteErr)
+				}
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -390,13 +438,17 @@ func UploadOperatorCertificate(c *gin.Context) {
 		}
 		// 如果上传了新文件，清理掉被替换的旧待审核文件
 		if oldPendingMinioPath != "" && oldPendingMinioPath != objectName {
-			_ = minio.DeleteFile(c.Request.Context(), oldPendingMinioPath)
+			if deleteErr := deleteStoredObjectWithIndependentContext(oldPendingMinioPath, minio.DeleteFile); deleteErr != nil {
+				log.Printf("清理已替换操作证旧对象失败: user_id=%d object=%s err=%v", user.ID, oldPendingMinioPath, deleteErr)
+			}
 		}
 	} else {
 		cert, err = certRepo.CreatePendingCert(user.ID, requestedCallSign, fileName, bucket, objectName, fileSize, contentType)
 		if err != nil {
 			if uploadedNewObject {
-				_ = minio.DeleteFile(c.Request.Context(), objectName)
+				if deleteErr := deleteStoredObjectWithIndependentContext(objectName, minio.DeleteFile); deleteErr != nil {
+					log.Printf("回滚未提交操作证对象失败: user_id=%d object=%s err=%v", user.ID, objectName, deleteErr)
+				}
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"code":    500,
@@ -589,7 +641,7 @@ func UploadLogo(c *gin.Context) {
 	}
 
 	// 处理 logo 图片：限制宽度为500px，保持原始比例
-	logoData, ext, err := minio.ProcessLogo(fileHeader)
+	logoData, ext, err := minio.ProcessLogoContext(c.Request.Context(), fileHeader)
 	if err != nil {
 		log.Printf("处理logo图片失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -600,7 +652,7 @@ func UploadLogo(c *gin.Context) {
 	}
 
 	// 上传处理后的 logo
-	objectName, finalFileSize, err := minio.UploadLogo(logoData, ext)
+	objectName, finalFileSize, err := minio.UploadLogoContext(c.Request.Context(), logoData, ext)
 	if err != nil {
 		log.Printf("上传logo失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -681,26 +733,18 @@ func UploadFavicon(c *gin.Context) {
 		return
 	}
 
-	// 检查文件类型（支持 ico, png, svg）
-	allowedTypes := map[string]bool{
-		"image/x-icon":             true,
-		"image/vnd.microsoft.icon": true,
-		"image/png":                true,
-		"image/svg+xml":            true,
-	}
-	contentType := fileHeader.Header.Get("Content-Type")
-	if !allowedTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "非法的文件类型，只支持 .ico, .png, .svg 格式",
-		})
-		return
-	}
-
-	// 上传 favicon（不做处理，直接上传）
-	objectName, finalFileSize, err := minio.UploadFavicon(fileHeader)
+	// UploadFavicon 在存储层按文件签名校验，只接受真实 PNG/ICO，避免
+	// 通过伪造 multipart Content-Type 上传可执行 SVG。
+	objectName, finalFileSize, err := minio.UploadFaviconContext(c.Request.Context(), fileHeader)
 	if err != nil {
 		log.Printf("上传favicon失败: %v", err)
+		if errors.Is(err, storage.ErrFileTypeNotAllowed) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"code":    400,
+				"message": "非法的Favicon文件，只支持真实 PNG 或 ICO",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "上传favicon失败",
@@ -786,6 +830,14 @@ func GetPendingApprovals(c *gin.Context) {
 	if page <= 0 {
 		page = 1
 	}
+	limit, page, offset, paginationErr := gormdb.NormalizeOperatorCertPage(limit, page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "分页参数过大",
+		})
+		return
+	}
 
 	// 获取状态参数：0=待审核, 1=已通过, 2=已拒绝
 	status, _ := strconv.Atoi(c.DefaultQuery("status", "0"))
@@ -797,7 +849,7 @@ func GetPendingApprovals(c *gin.Context) {
 
 	if status == 0 {
 		// 待审核：从用户表获取所有 approval_status=0 的用户
-		userList, err := userRepo.ListByApprovalStatus(0, limit, (page-1)*limit)
+		userList, err := userRepo.ListByApprovalStatus(0, limit, offset)
 		if err != nil {
 			log.Printf("获取待审批用户失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -808,7 +860,15 @@ func GetPendingApprovals(c *gin.Context) {
 		}
 
 		// 获取总数
-		count, _ := userRepo.CountByApprovalStatus(0)
+		count, err := userRepo.CountByApprovalStatus(0)
+		if err != nil {
+			log.Printf("获取待审批用户总数失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "获取待审批用户总数失败",
+			})
+			return
+		}
 		total = count
 
 		// 【性能优化】收集用户 ID 并批量查询证书
@@ -820,7 +880,14 @@ func GetPendingApprovals(c *gin.Context) {
 		// 利用 IN 语句批量查询所有用户的证书
 		var allCerts []*gormdb.OperatorCert
 		if len(userIDs) > 0 {
-			gormdb.Get().Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts)
+			if err := gormdb.Get().Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts).Error; err != nil {
+				log.Printf("获取待审批用户操作证失败: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取待审批用户操作证失败",
+				})
+				return
+			}
 		}
 
 		// 在内存中按 userID 进行映射组装
@@ -839,7 +906,7 @@ func GetPendingApprovals(c *gin.Context) {
 		}
 	} else if status == 2 {
 		// 已拒绝：有被拒绝操作证的用户
-		userWithCerts, total, err = certRepo.ListRejectedWithCerts(limit, (page-1)*limit)
+		userWithCerts, total, err = certRepo.ListRejectedWithCerts(limit, offset)
 		if err != nil {
 			log.Printf("获取已拒绝用户失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -850,7 +917,7 @@ func GetPendingApprovals(c *gin.Context) {
 		}
 	} else {
 		// 已通过：获取账户已通过的用户（从user表查询）
-		userList, err := userRepo.ListByApprovalStatus(1, limit, (page-1)*limit)
+		userList, err := userRepo.ListByApprovalStatus(1, limit, offset)
 		if err != nil {
 			log.Printf("获取已通过用户失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -861,7 +928,15 @@ func GetPendingApprovals(c *gin.Context) {
 		}
 
 		// 获取总数
-		count, _ := userRepo.CountByApprovalStatus(1)
+		count, err := userRepo.CountByApprovalStatus(1)
+		if err != nil {
+			log.Printf("获取已通过用户总数失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "获取已通过用户总数失败",
+			})
+			return
+		}
 		total = count
 
 		// 【性能优化 步骤1】收集当前这一批查询结果的所有用户 ID
@@ -873,7 +948,14 @@ func GetPendingApprovals(c *gin.Context) {
 		// 【性能优化 步骤2】利用 IN 语句，使用 1 条 SQL 查出所有用户的证书
 		var allCerts []*gormdb.OperatorCert
 		if len(userIDs) > 0 {
-			gormdb.Get().Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts)
+			if err := gormdb.Get().Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts).Error; err != nil {
+				log.Printf("获取已通过用户操作证失败: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"code":    500,
+					"message": "获取已通过用户操作证失败",
+				})
+				return
+			}
 		}
 
 		// 【性能优化 步骤3】在内存中按 userID 进行映射组装
@@ -1348,7 +1430,15 @@ func GetCertificateApprovals(c *gin.Context) {
 	status, _ := strconv.Atoi(c.DefaultQuery("status", "-1"))
 
 	certRepo := gormdb.NewOperatorCertRepository()
-	approvals, total, err := certRepo.ListCertificateApprovals(status, limit, (page-1)*limit)
+	limit, page, offset, paginationErr := gormdb.NormalizeOperatorCertPage(limit, page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "分页参数过大",
+		})
+		return
+	}
+	approvals, total, err := certRepo.ListCertificateApprovals(status, limit, offset)
 	if err != nil {
 		log.Printf("获取操作证审批列表失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{

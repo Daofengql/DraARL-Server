@@ -55,12 +55,25 @@ func CreateGroup(c *gin.Context) {
 		})
 		return
 	}
+	if err := validateGroupPasswordRequirement(groupType, req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "私有群组必须设置密码"})
+		return
+	}
 
+	// 【H9 安全修复】群组密码 bcrypt 哈希后落库，禁止明文存储
+	hashedPassword, err := hashGroupPassword(req.Password)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "群组密码加密失败",
+		})
+		return
+	}
 	repo := gormdb.NewGroupRepository()
 	group := &gormdb.Group{
 		Name:     req.Name,
 		Type:     groupType,
-		Password: req.Password,
+		Password: hashedPassword,
 		OwerID:   currentUser.ID,
 		Note:     req.Note,
 		Status:   1,
@@ -178,13 +191,26 @@ func UpdateGroup(c *gin.Context) {
 		group.Type = req.Type
 	}
 	if req.Password != "" {
-		group.Password = req.Password
+		// 【H9 安全修复】更新群组密码同样 bcrypt 哈希后落库
+		hashedPassword, hashErr := hashGroupPassword(req.Password)
+		if hashErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "群组密码加密失败",
+			})
+			return
+		}
+		group.Password = hashedPassword
 	}
 	if req.Note != nil {
 		group.Note = *req.Note
 	}
 	if req.Status != nil {
 		group.Status = *req.Status
+	}
+	if err := validateGroupPasswordRequirement(group.Type, group.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "私有群组必须设置密码"})
+		return
 	}
 
 	if err := repo.UpdateGroup(group); err != nil {

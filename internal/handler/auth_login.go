@@ -3,8 +3,11 @@ package handler
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"log"
+	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 
 	"draarl/internal/email"
@@ -18,6 +21,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// A fixed valid bcrypt hash equalizes the expensive password-check path when
+// the username/email lookup returns no account. It is not used for storage or
+// authentication and contains no application secret.
+const unknownLoginDummyPasswordHash = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
 func buildLoginUserData(user *gormdb.User) gin.H {
 	roles := user.GetRoles()
@@ -66,6 +74,19 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
+		})
+		return
+	}
+	if err := validateNewUserPassword(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		return
+	}
+	// Consume the registration budget before database lookups or password work.
+	// This bounds both enumeration and expensive registration attempts per IP.
+	if !allowRegistration(c.ClientIP()) {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"code":    http.StatusTooManyRequests,
+			"message": "注册请求过于频繁，请稍后再试",
 		})
 		return
 	}
@@ -184,7 +205,15 @@ func Register(c *gin.Context) {
 	}
 
 	// 生成设备准入密码
-	devicePassword := generateDevicePassword()
+	devicePassword, err := generateDevicePassword()
+	if err != nil {
+		log.Printf("生成设备密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    http.StatusInternalServerError,
+			"message": "设备密码生成失败",
+		})
+		return
+	}
 	encryptedDevicePassword, err := appcrypto.Encrypt(devicePassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -228,6 +257,11 @@ func Register(c *gin.Context) {
 			"message": "创建用户失败",
 		})
 		return
+	}
+	if userCache := cache.GetUserCache(); userCache != nil {
+		// 注册前的用户名存在性检查可能已经留下负缓存；创建成功后立即清除，
+		// 避免新用户在负缓存 TTL 内被认证中间件误判为不存在。
+		_ = userCache.InvalidateUser(c.Request.Context(), user.ID, user.Name)
 	}
 
 	// 记录审计日志
@@ -275,11 +309,46 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
-
 	// 使用 GORM 查询用户（支持用户名或邮箱）
 	repo := gormdb.NewUserRepository()
 	user, err := repo.GetUserByNameOrEmail(req.Username)
-	if err != nil || user == nil {
+	if err != nil {
+		// A backend failure is not evidence of an unknown account. Do not charge
+		// the source-IP guard or lock out legitimate users during a DB outage.
+		log.Printf("查询用户失败: %v", err)
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户名或密码错误",
+		})
+		return
+	}
+	if user == nil {
+		if locked, retryAfter := unknownLoginIPGuardCheck(c.ClientIP()); locked {
+			retrySeconds := int(retryAfter / time.Second)
+			if retryAfter%time.Second != 0 {
+				retrySeconds++
+			}
+			if retrySeconds < 1 {
+				retrySeconds = 1
+			}
+			c.Header("Retry-After", strconv.Itoa(retrySeconds))
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":    http.StatusTooManyRequests,
+				"message": "登录请求过于频繁，请稍后再试",
+			})
+			return
+		}
+		// Keep unknown-account attempts bounded by source IP and perform a
+		// dummy bcrypt check so account enumeration is not timing-trivial.
+		_ = bcrypt.CompareHashAndPassword([]byte(unknownLoginDummyPasswordHash), []byte(req.Password))
+		if !unknownLoginIPGuardRecordFailure(c.ClientIP()) {
+			log.Printf("未知账号登录保护状态表已满，拒绝来源: %s", c.ClientIP())
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":    http.StatusTooManyRequests,
+				"message": "登录请求过于频繁，请稍后再试",
+			})
+			return
+		}
 		log.Printf("用户不存在: %s", req.Username)
 		// 记录登录失败审计日志（用户不存在）
 		oplog.AddLog(
@@ -296,9 +365,35 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
+	// 【暴力破解防护】连续失败锁定检查（验证码已通过，消耗成本高）
+	if locked, retryAfter := loginGuardCheck(user.Name); locked {
+		log.Printf("登录失败次数过多，账号 %s 已临时锁定", user.Name)
+		retrySeconds := int(retryAfter / time.Second)
+		if retryAfter%time.Second != 0 {
+			retrySeconds++
+		}
+		if retrySeconds < 1 {
+			retrySeconds = 1
+		}
+		c.Header("Retry-After", strconv.Itoa(retrySeconds))
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"code":    429,
+			"message": "登录失败次数过多，账号已临时锁定，请稍后再试",
+		})
+		return
+	}
+
 	// 验证密码（仅支持 bcrypt）
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		log.Printf("密码验证失败: %v", err)
+		if !loginGuardRecordFailure(user.Name) {
+			log.Printf("登录失败保护状态表已满，拒绝新账号尝试: %s", user.Name)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"code":    http.StatusTooManyRequests,
+				"message": "登录请求过于频繁，请稍后再试",
+			})
+			return
+		}
 		if err := repo.IncrementLoginError(user.ID); err != nil {
 			log.Printf("增加登录错误次数失败: %v", err)
 		}
@@ -326,6 +421,10 @@ func Login(c *gin.Context) {
 		})
 		return
 	}
+	// A verified password is sufficient to reset the brute-force window. Do not
+	// retain a stale lock merely because the best-effort last-login audit write
+	// is temporarily unavailable.
+	loginGuardClear(user.Name)
 
 	// 更新最后登录时间
 	clientIP := c.ClientIP()
@@ -380,16 +479,25 @@ func Login(c *gin.Context) {
 
 // getRoleName 从角色列表中获取主要角色名称
 
-func generateDevicePassword() string {
+func generateDevicePassword() (string, error) {
+	return generateDevicePasswordFromReader(rand.Reader)
+}
+
+func generateDevicePasswordFromReader(reader io.Reader) (string, error) {
+	// crypto/rand.Int uses rejection sampling, so every character is uniform.
+	// Credential generation fails closed if the OS CSPRNG is unavailable.
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 8)
-	// 使用 crypto/rand 生成安全的随机数
-	randBytes := make([]byte, 8)
-	rand.Read(randBytes)
+	const length = 8
+	max := big.NewInt(int64(len(charset)))
+	b := make([]byte, length)
 	for i := range b {
-		b[i] = charset[int(randBytes[i])%len(charset)]
+		n, err := rand.Int(reader, max)
+		if err != nil {
+			return "", fmt.Errorf("read cryptographic random source: %w", err)
+		}
+		b[i] = charset[n.Int64()]
 	}
-	return string(b)
+	return string(b), nil
 }
 
 // LoginRequest 登录请求

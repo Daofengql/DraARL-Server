@@ -8,6 +8,9 @@ import (
 )
 
 func TestValidateDiscoveryAuthorizationAcceptsOnlyAccessOrDiscoveryTokens(t *testing.T) {
+	if err := appjwt.SetSecret("middleware-test-secret-0123456789abcdef0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
 	accessToken, err := appjwt.GenerateToken("web-user", []string{"user"})
 	if err != nil {
 		t.Fatal(err)

@@ -27,7 +27,10 @@ func revealDevicePassword(repo *gormdb.UserRepository, user *gormdb.User) (passw
 		}
 	}
 
-	password = generateDevicePassword()
+	password, err = generateDevicePassword()
+	if err != nil {
+		return "", false, err
+	}
 	encryptedPassword, err := crypto.Encrypt(password)
 	if err != nil {
 		return "", false, err
@@ -124,7 +127,15 @@ func GetDevicePassword(c *gin.Context) {
 
 	// 如果设备密码为空，生成一个新的
 	if user.DevicePassword == "" {
-		devicePassword := generateDevicePassword()
+		devicePassword, err := generateDevicePassword()
+		if err != nil {
+			log.Printf("生成设备密码失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "设备密码生成失败",
+			})
+			return
+		}
 		encryptedPassword, err := crypto.Encrypt(devicePassword)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -166,7 +177,15 @@ func GetDevicePassword(c *gin.Context) {
 		return
 	}
 	if legacyPassword || devicePassword == "" {
-		devicePassword = generateDevicePassword()
+		devicePassword, err = generateDevicePassword()
+		if err != nil {
+			log.Printf("迁移历史设备密码时生成新密码失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "设备密码迁移失败",
+			})
+			return
+		}
 		encryptedPassword, encErr := crypto.Encrypt(devicePassword)
 		if encErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -300,7 +319,15 @@ func RegenerateDevicePassword(c *gin.Context) {
 	}
 
 	// 生成新的设备密码
-	devicePassword := generateDevicePassword()
+	devicePassword, err := generateDevicePassword()
+	if err != nil {
+		log.Printf("重新生成设备密码失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "设备密码生成失败",
+		})
+		return
+	}
 	encryptedPassword, err := crypto.Encrypt(devicePassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

@@ -72,7 +72,7 @@ func CreateRadioPreset(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "请求参数错误: " + err.Error(),
+			"message": "请求参数错误",
 		})
 		return
 	}

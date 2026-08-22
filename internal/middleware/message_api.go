@@ -25,29 +25,34 @@ type messageAPIWindow struct {
 }
 
 type messageAPIWindowLimiter struct {
-	mu      sync.Mutex
-	entries map[string]messageAPIWindow
-	checks  uint64
+	mu            sync.Mutex
+	entries       map[string]messageAPIWindow
+	order         []string
+	orderIndex    map[string]int
+	cleanupCursor int
+	checks        uint64
 }
 
 func newMessageAPIWindowLimiter() *messageAPIWindowLimiter {
-	return &messageAPIWindowLimiter{entries: make(map[string]messageAPIWindow)}
+	return &messageAPIWindowLimiter{entries: make(map[string]messageAPIWindow), orderIndex: make(map[string]int)}
 }
 
 func (l *messageAPIWindowLimiter) allow(key string, limit int, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.checks++
-	if l.checks%256 == 0 || len(l.entries) >= maxMessageAPIRateLimitKeys {
-		for entryKey, entry := range l.entries {
-			if !entry.expiresAt.After(now) {
-				delete(l.entries, entryKey)
-			}
-		}
+	// 【限速器 DoS 修复】清理改为有界：每次至多扫描 64 个条目，避免满表时
+	// 每个请求都全表 O(n) 扫描（100k 条目）阻塞热路径。
+	if l.checks%256 == 0 {
+		l.pruneExpired(now, 64)
 	}
 	entry, exists := l.entries[key]
 	if !exists && len(l.entries) >= maxMessageAPIRateLimitKeys {
-		return false, time.Minute
+		// 表满且是新 key：尝试清理过期条目腾位，腾不出才拒绝，
+		// 避免大量唯一 IP 把合法新用户全部 429。
+		if !l.pruneExpired(now, 64) {
+			return false, time.Minute
+		}
 	}
 	if entry.expiresAt.IsZero() || !entry.expiresAt.After(now) {
 		entry = messageAPIWindow{expiresAt: now.Add(time.Minute)}
@@ -56,8 +61,62 @@ func (l *messageAPIWindowLimiter) allow(key string, limit int, now time.Time) (b
 		return false, entry.expiresAt.Sub(now)
 	}
 	entry.count++
+	if !exists {
+		l.orderIndex[key] = len(l.order)
+		l.order = append(l.order, key)
+	}
 	l.entries[key] = entry
 	return true, 0
+}
+
+// deleteEntryLocked removes a limiter key from the ordered cleanup index in
+// O(1). The caller must hold l.mu.
+func (l *messageAPIWindowLimiter) deleteEntryLocked(key string) {
+	delete(l.entries, key)
+	idx, ok := l.orderIndex[key]
+	if !ok {
+		return
+	}
+	last := len(l.order) - 1
+	if idx != last {
+		lastKey := l.order[last]
+		l.order[idx] = lastKey
+		l.orderIndex[lastKey] = idx
+	}
+	l.order = l.order[:last]
+	delete(l.orderIndex, key)
+	if l.cleanupCursor > idx {
+		l.cleanupCursor--
+	}
+	if l.cleanupCursor >= len(l.order) {
+		l.cleanupCursor = 0
+	}
+}
+
+// pruneExpired 删除至多 max 个已过期条目，返回是否删除到至少一个。
+// 持续游标保证有界清理最终覆盖所有 key，不依赖 map 随机迭代顺序。
+// 仅在持锁时调用。
+func (l *messageAPIWindowLimiter) pruneExpired(now time.Time, max int) bool {
+	removed := false
+	for scanned := 0; scanned < max && len(l.order) > 0; {
+		if l.cleanupCursor >= len(l.order) {
+			l.cleanupCursor = 0
+		}
+		entryKey := l.order[l.cleanupCursor]
+		entry, exists := l.entries[entryKey]
+		if !exists {
+			l.deleteEntryLocked(entryKey)
+			continue
+		}
+		scanned++
+		if !entry.expiresAt.After(now) {
+			l.deleteEntryLocked(entryKey)
+			removed = true
+			continue
+		}
+		l.cleanupCursor++
+	}
+	return removed
 }
 
 type MessageAPIGuard struct {

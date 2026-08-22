@@ -80,6 +80,50 @@ func TestDynamicCodeRateLimitDefaults(t *testing.T) {
 	}
 }
 
+func TestGroupJoinPasswordRateLimitDefaults(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	for name, want := range map[string]RateLimitRule{
+		"group-join-password-ip":   {Key: "ip", Limit: 30, Window: time.Minute},
+		"group-join-password-user": {Key: "user", Limit: 10, Window: time.Minute},
+	} {
+		got, ok := limiter.rules[name]
+		if !ok || got.Key != want.Key || got.Limit != want.Limit || got.Window != want.Window {
+			t.Fatalf("rule %q = %#v, want %#v", name, got, want)
+		}
+	}
+}
+
+func TestCheckGroupJoinPasswordRateLimitChargesAuthenticatedUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLimiter := deviceRateLimiter
+	defer func() { deviceRateLimiter = oldLimiter }()
+	deviceRateLimiter = newDeviceRateLimiter()
+
+	for i := 0; i < 10; i++ {
+		context, recorder := newGroupPasswordRateLimitContext("alice", "192.0.2.40:10000")
+		if !CheckGroupJoinPasswordRateLimit(context) {
+			t.Fatalf("attempt %d was unexpectedly rejected with status %d", i+1, recorder.Code)
+		}
+	}
+	context, recorder := newGroupPasswordRateLimitContext("alice", "192.0.2.40:10000")
+	if CheckGroupJoinPasswordRateLimit(context) {
+		t.Fatal("eleventh password attempt for one user was allowed")
+	}
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limit status=%d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+}
+
+func newGroupPasswordRateLimitContext(username, remoteAddr string) (*gin.Context, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/groups/1/join", nil)
+	request.RemoteAddr = remoteAddr
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = request
+	context.Set("username", username)
+	return context, recorder
+}
+
 func TestPublicClientResourceRateLimitDefaults(t *testing.T) {
 	limiter := newDeviceRateLimiter()
 	rule, ok := limiter.rules["public-client-resource-ip"]
@@ -97,22 +141,65 @@ func TestAccessDiscoveryTokenLimiterSupportsSharedNATButCapsEachUser(t *testing.
 		t.Fatalf("normalized discovery principal = %q", got)
 	}
 	for i := 0; i < 50; i++ {
-		if allowed, _ := limiter.checkLimit("access-discovery-token-ip-burst", "203.0.113.10"); !allowed {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-ip-burst", "203.0.113.10", "203.0.113.10"); !allowed {
 			t.Fatalf("shared NAT was blocked at distinct request %d", i+1)
 		}
-		if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "user-"+intToStr(i))); !allowed {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "user-"+intToStr(i)), "203.0.113.10"); !allowed {
 			t.Fatalf("distinct user %d under shared NAT was blocked", i)
 		}
 	}
 	for i := 0; i < 10; i++ {
-		if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "one-user")); !allowed {
+		if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "one-user"), "203.0.113.10"); !allowed {
 			t.Fatalf("one user was blocked before configured limit at %d", i+1)
 		}
 	}
-	if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "one-user")); allowed {
+	if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("203.0.113.10", "one-user"), "203.0.113.10"); allowed {
 		t.Fatal("one user exceeded the configured minute limit")
 	}
-	if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("198.51.100.20", "one-user")); !allowed {
+	if allowed, _ := limiter.checkLimit("access-discovery-token-user", accessDiscoveryTokenPrincipalKey("198.51.100.20", "one-user"), "198.51.100.20"); !allowed {
 		t.Fatal("one source IP exhausted another source IP's unauthenticated username bucket")
+	}
+}
+
+func TestDeviceRateLimiterCleanupAdvancesAcrossBoundedBatches(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	now := time.Now()
+	limiter.mu.Lock()
+	for i := 0; i < 65; i++ {
+		key := "stale:" + intToStr(i)
+		limiter.limits[key] = &RateLimitEntry{ExpiresAt: now.Add(-time.Second)}
+		limiter.orderIndex[key] = len(limiter.order)
+		limiter.order = append(limiter.order, key)
+	}
+	limiter.pruneExpiredLocked(now, 64)
+	if len(limiter.limits) != 1 {
+		limiter.mu.Unlock()
+		t.Fatalf("first bounded cleanup entries=%d, want 1", len(limiter.limits))
+	}
+	limiter.pruneExpiredLocked(now, 64)
+	remaining := len(limiter.limits)
+	limiter.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("second bounded cleanup entries=%d, want 0", remaining)
+	}
+}
+
+func TestInitDeviceRateLimiterStopsPreviousCleanup(t *testing.T) {
+	previous := deviceRateLimiter
+	first := newDeviceRateLimiter()
+	deviceRateLimiter = first
+	InitDeviceRateLimiter()
+	current := deviceRateLimiter
+	t.Cleanup(func() {
+		current.stop()
+		deviceRateLimiter = previous
+	})
+	if current == first {
+		t.Fatal("device rate limiter was not replaced")
+	}
+	select {
+	case <-first.stopCh:
+	default:
+		t.Fatal("previous device rate limiter cleanup was not stopped")
 	}
 }

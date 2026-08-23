@@ -36,6 +36,9 @@ func DecodeWSPacket(data []byte) (*WSPacket, error) {
 	if len(data) < protocol.DraARLv1HeaderSize {
 		return nil, errors.New("packet too short, minimum 90 bytes required")
 	}
+	if len(data) > protocol.DraARLv1MaxPacketSize {
+		return nil, fmt.Errorf("packet too large: maximum %d bytes", protocol.DraARLv1MaxPacketSize)
+	}
 
 	packet := &WSPacket{
 		Timestamp: time.Now(),
@@ -49,6 +52,10 @@ func DecodeWSPacket(data []byte) (*WSPacket, error) {
 
 	// 解析 Length (4-5)
 	packet.Length = binary.BigEndian.Uint16(data[4:6])
+	// 【长度校验】Length 必须与报文实际长度一致，防止声明长度与内容不符
+	if int(packet.Length) != len(data) {
+		return nil, fmt.Errorf("invalid packet length: header=%d actual=%d", packet.Length, len(data))
+	}
 
 	// 解析 Username (6-37)
 	packet.Username = string(bytes.TrimRight(data[6:38], "\x00"))

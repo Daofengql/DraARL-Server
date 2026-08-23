@@ -2,14 +2,17 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"syscall"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"draarl/internal/config"
@@ -19,6 +22,54 @@ type localStorage struct {
 	root    string
 	baseURL string
 	secret  string
+}
+
+// localSigningSecrets 记录 local 驱动用于签名 URL 的密钥集合（当前 + 最近轮换前），
+// 供 token 校验兼容在途 URL。有界保留最近 3 个，防止轮换多次后无限增长。
+var (
+	localSecretsMu sync.RWMutex
+	localSecrets   = make(map[string]struct{})
+)
+
+func registerLocalSecret(secret string) {
+	if secret == "" {
+		return
+	}
+	localSecretsMu.Lock()
+	defer localSecretsMu.Unlock()
+	localSecrets[secret] = struct{}{}
+	for len(localSecrets) > 3 {
+		for k := range localSecrets {
+			delete(localSecrets, k)
+			break
+		}
+	}
+}
+
+// verifyWithAnyLocalSecret 依次用当前密钥与注册的历史签名密钥校验 token，
+// 兼容 JWT 密钥轮换后仍有效的在途签名 URL。
+func verifyWithAnyLocalSecret(token string, grant interface{}) bool {
+	current := ""
+	if cfg := config.Get(); cfg != nil {
+		current = cfg.JWT.Secret
+	}
+	secrets := []string{current}
+	localSecretsMu.RLock()
+	for k := range localSecrets {
+		if k != "" && k != current {
+			secrets = append(secrets, k)
+		}
+	}
+	localSecretsMu.RUnlock()
+	for _, s := range secrets {
+		if s == "" {
+			continue
+		}
+		if err := verifyToken(s, token, grant); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func newLocalStorage(cfg *config.Configuration) (Storage, error) {
@@ -54,6 +105,7 @@ func newLocalStorageWithConfig(local config.LocalStorageConfig, secret string) (
 		baseURL = "/files"
 	}
 
+	registerLocalSecret(secret)
 	if secret == "" {
 		return nil, fmt.Errorf("JWT Secret 为空，无法初始化本地存储签名")
 	}
@@ -179,11 +231,15 @@ func (s *localStorage) Put(ctx context.Context, key string, r io.Reader, size in
 		return fmt.Errorf("设置文件权限失败: %w", err)
 	}
 	// Staging uploads may be retried with the same signed URL.
-	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("替换旧文件失败: %w", err)
-	}
+	// 【原子写修复】os.Rename 在 Unix 上原子覆盖目标，前置 os.Remove 反而
+	// 造成目标瞬时缺失；仅当 Windows 上目标已存在导致 Rename 失败时才回退。
 	if err := os.Rename(tmpName, filePath); err != nil {
-		return fmt.Errorf("提交文件失败: %w", err)
+		if removeErr := os.Remove(filePath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("替换旧文件失败: %w", removeErr)
+		}
+		if retryErr := os.Rename(tmpName, filePath); retryErr != nil {
+			return fmt.Errorf("提交文件失败: %w", retryErr)
+		}
 	}
 	return nil
 }
@@ -246,7 +302,19 @@ func (s *localStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 		if os.IsExist(err) {
 			return fmt.Errorf("%w: %s", ErrFinalObjectAlreadyExists, finalKey)
 		}
-		return fmt.Errorf("promote staging object: %w", err)
+		// 【跨卷/文件系统回退】FAT32/exFAT/跨卷不支持硬链接（EPERM/EXDEV）：
+		// 退化为"排他创建 + 拷贝"，保持目标不可被覆盖的承诺。
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EXDEV) ||
+			errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) {
+			if copyErr := copyFileExclusive(source, destination); copyErr != nil {
+				if os.IsExist(copyErr) {
+					return fmt.Errorf("%w: %s", ErrFinalObjectAlreadyExists, finalKey)
+				}
+				return fmt.Errorf("promote staging object: %w", copyErr)
+			}
+		} else {
+			return fmt.Errorf("promote staging object: %w", err)
+		}
 	}
 	// The final object is already atomically committed. Leave a duplicate
 	// staging object for scheduled cleanup if removal is temporarily unavailable.
@@ -254,6 +322,31 @@ func (s *localStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 		log.Printf("[STORAGE] final object promoted but local staging cleanup failed key=%s err=%v", stagedKey, err)
 	}
 	return nil
+}
+
+// copyFileExclusive 以 O_EXCL 排他创建目标并拷贝源文件内容；目标已存在时
+// 返回错误（保持已发布对象不可覆盖的不可变承诺）。
+func copyFileExclusive(source, destination string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(destination)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(destination)
+		return err
+	}
+	return out.Close()
 }
 
 func (s *localStorage) CleanupStaging(ctx context.Context, olderThan time.Time) error {
@@ -476,29 +569,35 @@ func (s *localStorage) signGetToken(key string, exp time.Time) (string, error) {
 }
 
 // VerifyLocalPutToken 校验 local 直传 token。
-func VerifyLocalPutToken(token, key, contentType string) (int64, error) {
+// 【类型绑定修复】请求未提供 Content-Type 时返回 token 绑定的类型作为生效
+// 类型，避免"落盘类型与授权不符"；已提供时强制与绑定类型一致。
+func VerifyLocalPutToken(token, key, contentType string) (int64, string, error) {
 	cfg := config.Get()
 	secret := cfg.JWT.Secret
 	if secret == "" {
-		return 0, fmt.Errorf("storage signing secret is empty")
+		return 0, "", fmt.Errorf("storage signing secret is empty")
 	}
 	var grant localPutGrant
-	if err := verifyToken(secret, token, &grant); err != nil {
-		return 0, fmt.Errorf("无效 token")
+	if !verifyWithAnyLocalSecret(token, &grant) {
+		return 0, "", fmt.Errorf("无效 token")
 	}
 	if grant.ObjectKey != key {
-		return 0, fmt.Errorf("token 与 key 不匹配")
+		return 0, "", fmt.Errorf("token 与 key 不匹配")
 	}
-	if contentType != "" && grant.ContentType != "" && grant.ContentType != contentType {
-		return 0, fmt.Errorf("content-type 不匹配")
+	effective := contentType
+	if effective == "" {
+		effective = grant.ContentType
+	}
+	if grant.ContentType != "" && effective != grant.ContentType {
+		return 0, "", fmt.Errorf("content-type 不匹配")
 	}
 	if time.Now().Unix() > grant.ExpiresAt {
-		return 0, fmt.Errorf("token 已过期")
+		return 0, "", fmt.Errorf("token 已过期")
 	}
 	if grant.Size <= 0 {
-		return 0, fmt.Errorf("token 文件大小无效")
+		return 0, "", fmt.Errorf("token 文件大小无效")
 	}
-	return grant.Size, nil
+	return grant.Size, effective, nil
 }
 
 // VerifyLocalGetToken validates a short-lived local download URL. Unlike the
@@ -510,7 +609,7 @@ func VerifyLocalGetToken(token, key string) error {
 		return fmt.Errorf("storage signing secret is empty")
 	}
 	var grant localGetGrant
-	if err := verifyToken(cfg.JWT.Secret, token, &grant); err != nil {
+	if !verifyWithAnyLocalSecret(token, &grant) {
 		return fmt.Errorf("无效 token")
 	}
 	if grant.ObjectKey != strings.TrimLeft(filepath.ToSlash(key), "/") {

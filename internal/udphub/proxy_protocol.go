@@ -131,7 +131,9 @@ func GetRealAddr(remoteAddr *net.UDPAddr, proxyInfo *ProxyProtocolInfo) *net.UDP
 	}
 
 	return &net.UDPAddr{
-		IP:   proxyInfo.SourceIP,
+		// SourceIP points into the pooled datagram buffer; copy it before the
+		// buffer is returned so runtime endpoint bindings cannot be corrupted.
+		IP:   append(net.IP(nil), proxyInfo.SourceIP...),
 		Port: int(proxyInfo.SourcePort),
 		Zone: "",
 	}

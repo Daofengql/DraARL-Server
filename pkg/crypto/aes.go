@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -173,7 +174,7 @@ func VerifyDevicePassword(stored, plainInput string) (match bool, legacy bool, e
 	// 先尝试 AES 解密（新格式）
 	decrypted, decErr := Decrypt(stored)
 	if decErr == nil {
-		return decrypted == plainInput, false, nil
+		return subtle.ConstantTimeCompare([]byte(decrypted), []byte(plainInput)) == 1, false, nil
 	}
 
 	// 兼容历史 bcrypt（旧格式）

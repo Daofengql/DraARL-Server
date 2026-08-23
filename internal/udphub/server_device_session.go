@@ -43,22 +43,27 @@ func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (
 		return nil, false
 	}
 	device := GlobalUDPGhostManager.FindBySessionTag(tag)
-	if device == nil || device.GhostSessionTag != tag {
+	if device == nil {
 		ghostPacketInvalidTags.Add(1)
 		return nil, false
 	}
-	if device.Username != packet.Username || device.SSID != packet.SSID || device.DevModel != packet.DevModel {
+	state := device.RuntimeSnapshot()
+	if state.GhostSessionTag != tag {
+		ghostPacketInvalidTags.Add(1)
+		return nil, false
+	}
+	if state.Username != packet.Username || state.SSID != packet.SSID || state.DevModel != packet.DevModel {
 		ghostPacketIdentityRejects.Add(1)
 		return nil, false
 	}
-	if !sameUDPAddr(device.UDPAddr, udpAddr) {
+	if !sameUDPAddr(state.UDPAddr, udpAddr) {
 		ghostPacketEndpointRejects.Add(1)
 		return nil, false
 	}
 	session, exists := ghostsession.Global.FindByTag(tag)
 	if !exists || !session.Connected || session.Transport != ghostsession.TransportUDP ||
-		session.SessionID != device.GhostSessionID || session.OwnerID != device.OwnerID ||
-		session.Username != device.Username || session.SSID != device.SSID || session.DevModel != device.DevModel {
+		session.SessionID != state.GhostSessionID || session.OwnerID != state.OwnerID ||
+		session.Username != state.Username || session.SSID != state.SSID || session.DevModel != state.DevModel {
 		ghostPacketRegistryRejects.Add(1)
 		return nil, false
 	}
@@ -73,77 +78,57 @@ func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
 	if dev == nil {
 		return
 	}
+	state := dev.RuntimeSnapshot()
 	if !protocol.IsValidClientReportedDevModel(reportedDevModel) {
 		log.Printf("[DEV_MODEL] 忽略非法设备型号上报: device_id=%d username=%s ssid=%d reported=%d",
-			dev.ID, dev.Username, dev.SSID, reportedDevModel)
+			state.ID, state.Username, state.SSID, reportedDevModel)
 		return
 	}
-	if dev.DevModel == reportedDevModel {
+	if state.DevModel == reportedDevModel {
 		return
 	}
 
-	oldModel := dev.DevModel
-	dev.DevModel = reportedDevModel
-	if dev.ID <= 0 {
+	oldModel := state.DevModel
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.DevModel = reportedDevModel
+	})
+	if state.ID <= 0 {
 		return
 	}
 
 	repo := gormdb.NewDeviceRepository()
-	if err := repo.UpdateDeviceFields(dev.ID, map[string]interface{}{
+	if err := repo.UpdateDeviceFields(state.ID, map[string]interface{}{
 		"dev_model": int(reportedDevModel),
 	}); err != nil {
 		log.Printf("[DEV_MODEL] 持久化设备型号失败: device_id=%d old=%d new=%d err=%v",
-			dev.ID, oldModel, reportedDevModel, err)
+			state.ID, oldModel, reportedDevModel, err)
 		return
 	}
 
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 		ctx := context.Background()
-		_ = deviceCache.InvalidateDevice(ctx, dev.ID, dev.OwnerID, uint8(dev.SSID))
+		_ = deviceCache.InvalidateDevice(ctx, state.ID, state.OwnerID, uint8(state.SSID))
 		_ = deviceCache.InvalidateDeviceList(ctx)
-		if dev.GroupID > 0 {
-			_ = deviceCache.InvalidateDevicesByGroup(ctx, dev.GroupID)
+		if state.GroupID > 0 {
+			_ = deviceCache.InvalidateDevicesByGroup(ctx, state.GroupID)
 		}
 	}
 
 	log.Printf("[DEV_MODEL] 设备型号已更新: device_id=%d old=%d new=%d",
-		dev.ID, oldModel, reportedDevModel)
+		state.ID, oldModel, reportedDevModel)
 }
 
-// handleNewDraARLDevice 处理新 DraARLv1 设备
-// realAddr: 真实客户端地址（用于识别设备和日志）
-func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, usernameSSID string, incomingMAC string) {
-	// 心跳包需要进行认证
-	if packet.Type != protocol.DraARLTypeHeartbeat {
-		// 非心跳包，忽略未认证设备
-		log.Printf("[AUTH] Ignoring packet from unauthenticated device: %s, type: %d", usernameSSID, packet.Type)
+// registerAuthenticatedDraARLDevice creates or restores a normal UDP device
+// after the dedicated authentication pool has verified its credentials.
+func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, authResult *DeviceAuthResult, incomingMAC string) {
+	if packet == nil || authResult == nil || !authResult.Success || authResult.User == nil {
 		return
 	}
 
-	// 【安全校验】幽灵设备保留 SSID (100-105) 只能通过 JWT 认证
-	// 普通设备不允许使用这些 SSID
-	if protocol.IsReservedSSID(packet.SSID) {
-		log.Printf("[AUTH] Device rejected: SSID %d is reserved for ghost devices (use JWT auth), device: %s", packet.SSID, usernameSSID)
-		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusReservedSSID, "reserved_ssid")
-		return
-	}
-
-	// 认证设备（使用真实 IP）
-	authResult := AuthenticateDevice(realAddr.IP.String(), packet.Username, packet.DevicePassword)
-	if !authResult.Success {
-		// 认证失败，不创建设备
-		log.Printf("[AUTH] Device authentication failed: %s, error: %s", usernameSSID, authResult.Error)
-		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, authResult.Error)
-		return
-	}
-	if authResult.User == nil {
-		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusAuthFailed, "user_not_found")
-		return
-	}
-
-	if existingDev := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflictForModel(existingDev, packet.UDPAddr, incomingMAC, packet.DevModel) {
+	if existingDev := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflictForModel(existingDev, normalDeviceConflictAddr(existingDev, packet.UDPAddr, realAddr), incomingMAC, packet.DevModel) {
+		existingState := existingDev.RuntimeSnapshot()
 		log.Printf("[AUTH] Device conflict rejected: owner_id=%d ssid=%d existing_addr=%v new_addr=%v",
-			authResult.User.ID, packet.SSID, existingDev.UDPAddr, packet.UDPAddr)
+			authResult.User.ID, packet.SSID, existingState.UDPAddr, packet.UDPAddr)
 		sendHeartbeatReject(conn, packet, protocol.HeartbeatStatusDeviceConflictOnline, "device_conflict_online")
 		return
 	}
@@ -183,27 +168,31 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 
 	if dev != nil {
 		applyClientReportedDevModel(dev, packet.DevModel)
-
-		if dev.CallSign == "" {
-			dev.CallSign = authResult.CallSign
-		}
-		if dev.Username == "" && authResult.User != nil {
-			dev.Username = authResult.User.Name
-		}
-		if authResult.User != nil {
-			dev.Nickname = authResult.User.NickName
-		}
-		if incomingMAC != "" {
-			dev.MAC = incomingMAC
-		}
-		dev.CallSignSSID = fmt.Sprintf("%s-%d", dev.CallSign, dev.SSID)
-
-		// UDPAddr 存储 frp 转发地址（用于发送响应）
-		dev.UDPAddr = packet.UDPAddr
-		dev.ISOnline = true
-		dev.LastPacketTime = packet.TimeStamp
-		dev.OnlineTime = packet.TimeStamp
-		dev.LastOnlineIP = realAddr.IP.String()
+		dev.UpdateRuntime(func(current *models.Device) {
+			if current.CallSign == "" {
+				current.CallSign = authResult.CallSign
+			}
+			if current.Username == "" && authResult.User != nil {
+				current.Username = authResult.User.Name
+			}
+			if authResult.User != nil {
+				current.Nickname = authResult.User.NickName
+			}
+			if incomingMAC != "" {
+				current.MAC = incomingMAC
+			}
+			current.CallSignSSID = fmt.Sprintf("%s-%d", current.CallSign, current.SSID)
+			// UDPAddr 存储 frp 转发地址（用于发送响应）
+			current.UDPAddr = packet.UDPAddr
+			current.RealUDPAddr = realAddr
+			current.ISOnline = true
+			current.LastPacketTime = packet.TimeStamp
+			current.OnlineTime = packet.TimeStamp
+			if realAddr != nil && realAddr.IP != nil {
+				current.LastOnlineIP = realAddr.IP.String()
+			}
+		})
+		state := dev.RuntimeSnapshot()
 		indexRuntimeDevice(dev)
 		if dev.ID > 0 {
 			if err := activateAndPersistCenterDevice(dev); err != nil {
@@ -214,16 +203,16 @@ func handleNewDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAdd
 		}
 
 		// 默认群组为空时只登记并保持在线，不进入任何转发池。
-		if gp, ok := GetGroupFromCache(dev.GroupID); dev.GroupID > 0 && ok {
+		if gp, ok := GetGroupFromCache(state.GroupID); state.GroupID > 0 && ok {
 			attachRuntimeDeviceToGroup(gp, dev)
 			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, 群组: %d)",
-				packet.Username, dev.Name, realAddr, dev.GroupID)
-		} else if dev.GroupID == 0 {
+				packet.Username, state.Name, realAddr, state.GroupID)
+		} else if state.GroupID == 0 {
 			log.Printf("[ONLINE] %s 的设备 %d 已登记为未分组状态，不参与转发", packet.Username, dev.ID)
 		} else {
 			// 已有设备可能在群组缓存切换的极短窗口内重连。保持在线并响应
 			// 心跳，但在目标群组可用前不把它挂入任何转发池。
-			log.Printf("[ONLINE] 设备 %d 的群组 %d 暂不在运行时缓存中，本次不参与转发", dev.ID, dev.GroupID)
+			log.Printf("[ONLINE] 设备 %d 的群组 %d 暂不在运行时缓存中，本次不参与转发", dev.ID, state.GroupID)
 		}
 
 		// 登记成功与是否已加入转发池无关；三种状态都必须响应首个心跳。
@@ -291,9 +280,24 @@ func resolveNewDeviceDefaultGroup(user *gormdb.User) int {
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
 // isGhost: 是否为 UDP 幽灵设备
 func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
-	wasOnline := dev.ISOnline
-	currentAddr := packet.UDPAddr.String()
-	addrChanged := dev.UDPAddr != nil && dev.UDPAddr.String() != currentAddr
+	if packet == nil || dev == nil {
+		return
+	}
+	state := dev.RuntimeSnapshot()
+	wasOnline := state.ISOnline
+	currentAddr := ""
+	if packet.UDPAddr != nil {
+		currentAddr = packet.UDPAddr.String()
+	}
+	boundRealAddr := state.RealUDPAddr
+	if boundRealAddr == nil {
+		boundRealAddr = state.UDPAddr
+	}
+	currentRealAddr := realAddr
+	if currentRealAddr == nil {
+		currentRealAddr = packet.UDPAddr
+	}
+	addrChanged := !sameUDPAddr(boundRealAddr, currentRealAddr)
 	realIP := ""
 	if realAddr != nil && realAddr.IP != nil {
 		realIP = realAddr.IP.String()
@@ -309,45 +313,56 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		if lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 {
 			if lat != 0 || lon != 0 {
 				log.Printf("[GPS] %s-%d: lat=%.6f, lon=%.6f, alt=%.1fm",
-					dev.Username, dev.SSID, lat, lon, alt)
+					state.Username, state.SSID, lat, lon, alt)
 			}
 		} else {
 			log.Printf("[GPS] %s-%d: 无效坐标 lat=%.6f, lon=%.6f (超出范围)",
-				dev.Username, dev.SSID, lat, lon)
+				state.Username, state.SSID, lat, lon)
 		}
 	}
 
-	// 更新设备地址和时间（UDPAddr 存储 frp 转发地址，用于发送响应）
-	dev.UDPAddr = packet.UDPAddr
-	dev.LastPacketTime = packet.TimeStamp
-	if realIP != "" {
-		dev.LastOnlineIP = realIP
-	}
+	// 更新设备地址和时间（UDPAddr 存储 frp 转发地址，用于发送响应）。
+	// 所有已发布设备的动态状态都通过同一把 runtimeMu 更新，避免与
+	// 接收者快照、在线检查和管理线程交叉读写。
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.UDPAddr = packet.UDPAddr
+		current.RealUDPAddr = currentRealAddr
+		current.LastPacketTime = packet.TimeStamp
+		if realIP != "" {
+			current.LastOnlineIP = realIP
+		}
+	})
 	applyClientReportedDevModel(dev, packet.DevModel)
 
 	// 检测重连
 	if addrChanged && wasOnline {
 		log.Printf("[RECONNECT] DraARLv1 device %s-%d reconnected from %v to %v",
-			dev.Username, dev.SSID, dev.PreviousUDPAddr, currentAddr)
-		dev.ReconnectCount++
-		dev.PreviousUDPAddr = currentAddr
-		dev.IsReconnecting = true
-	} else if !wasOnline && !dev.LastDisconnectTime.IsZero() {
-		timeOffline := packet.TimeStamp.Sub(dev.LastDisconnectTime)
+			state.Username, state.SSID, state.PreviousUDPAddr, currentAddr)
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.ReconnectCount++
+			current.PreviousUDPAddr = currentAddr
+			current.IsReconnecting = true
+		})
+	} else if !wasOnline && !state.LastDisconnectTime.IsZero() {
+		timeOffline := packet.TimeStamp.Sub(state.LastDisconnectTime)
 		log.Printf("[RECOVER] DraARLv1 device %s-%d back online after %v",
-			dev.Username, dev.SSID, timeOffline)
-		dev.IsReconnecting = false
+			state.Username, state.SSID, timeOffline)
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.IsReconnecting = false
+		})
 	}
 
 	// 记录日志（非幽灵设备才记录）
-	if !isGhost && !dev.Loged && packet.TimeStamp.Sub(dev.LastVoiceEndTime).Milliseconds() > 200 {
+	if !isGhost && !state.Loged && packet.TimeStamp.Sub(state.LastVoiceEndTime).Milliseconds() > 200 {
 		select {
 		case logBuffer <- dev:
 		default:
 			// A saturated audit queue must not delay heartbeat responses.
 			log.Printf("[LOG] device activity log queue full: device=%d", dev.ID)
 		}
-		dev.Loged = true
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.Loged = true
+		})
 	}
 
 	// 未分组设备没有连接池，但仍需正常响应心跳并保持在线可管理。
@@ -357,18 +372,26 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	}
 
 	// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
-	response := protocol.EncodeHeartbeatResponse(packet, dev.CallSign)
+	state = dev.RuntimeSnapshot()
+	response := protocol.EncodeHeartbeatResponse(packet, state.CallSign)
 	if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
-		log.Printf("[HEARTBEAT] response send failed: device=%d addr=%v err=%v", dev.ID, packet.UDPAddr, err)
+		log.Printf("[HEARTBEAT] response send failed: device=%d addr=%v err=%v", state.ID, packet.UDPAddr, err)
 	}
 
-	if !dev.ISOnline {
+	if !wasOnline {
 		// 新设备上线
-		dev.OnlineTime = packet.TimeStamp
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.OnlineTime = packet.TimeStamp
+			current.ISOnline = true
+		})
 
 		// QTH 查询使用真实 IP
 		if realAddr != nil && realAddr.IP != nil {
-			dev.QTH = getQTH(realAddr.IP.String())
+			qth := getQTH(realAddr.IP.String())
+			dev.UpdateRuntime(func(current *models.Device) {
+				current.QTH = qth
+			})
+			state.QTH = qth
 		}
 
 		// 日志区分幽灵设备和普通设备
@@ -378,29 +401,53 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		}
 		if isGhost {
 			log.Printf("[ONLINE] UDP幽灵设备 %s-%d 已上线 (地址: %v, 群组: %d, 型号: %d)",
-				dev.Username, dev.SSID, realAddr, groupID, dev.DevModel)
+				state.Username, state.SSID, realAddr, groupID, state.DevModel)
 		} else {
 			log.Printf("[ONLINE] %s的-%s 已上线 (地址: %v, QTH: %v, 群组: %d, 型号: %d)",
-				dev.Username, dev.Name, realAddr, dev.QTH, groupID, dev.DevModel)
+				state.Username, state.Name, realAddr, state.QTH, groupID, state.DevModel)
 
-			// 【配置同步】普通设备上线时同步配置
-			// 仅对普通 UDP 设备进行配置同步（幽灵设备使用 WebSocket API）
-			SyncDeviceConfig(dev)
+			// 【配置同步】普通设备上线时同步配置（幽灵设备使用 WebSocket API）
+			// 【性能修复】配置同步含多次 DB 查询 + 逐包下发，异步化避免阻塞
+			// 数据面 worker 的心跳处理；dev 字段在注册后稳定，读取安全。
+			syncDev := dev
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[CONFIG] 异步配置同步 panic: %v", r)
+					}
+				}()
+				SyncDeviceConfig(syncDev)
+			}()
 		}
 
-		dev.ISOnline = true
 	}
 }
 
 func activateAndPersistCenterDevice(dev *models.Device) error {
+	return activateAndPersistCenterDeviceContext(context.Background(), dev)
+}
+
+func activateAndPersistCenterDeviceContext(ctx context.Context, dev *models.Device) error {
 	if dev == nil || dev.ID <= 0 {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if CenterInterconnectActive() {
-		return ActivateCenterLocalDevice(dev)
+		if err := ActivateCenterLocalDeviceContext(ctx, dev); err != nil {
+			return err
+		}
+		return ctx.Err()
 	}
 	now := time.Now()
-	if err := gormdb.NewDeviceRepository().UpdateDeviceEntry(dev.ID, "center", "center", 0, true, now); err != nil {
+	if err := gormdb.NewDeviceRepository().UpdateDeviceEntryContext(ctx, dev.ID, "center", "center", 0, true, now); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)

@@ -40,12 +40,6 @@ export interface AccessDiscoveryConfig {
   }
 }
 
-export interface OpenAIConfig {
-  base_url: string
-  api_key: string
-  engine: string
-}
-
 export interface CommSettingsConfig {
   enabled: boolean
   retention_days: number
@@ -71,7 +65,6 @@ export interface SiteConfigs {
   systemInfo: SystemInfoConfig
   accessDiscovery: AccessDiscoveryConfig
   aprs: APRSConfig
-  openai: OpenAIConfig
   commSettings: CommSettingsConfig
   registration: RegistrationConfig
   smtp: SMTPConfig
@@ -124,7 +117,6 @@ export const DEFAULT_SITE_CONFIGS: SiteConfigs = {
     longitude: 0,
     altitude: '',
   },
-  openai: { base_url: '', api_key: '', engine: '' },
   commSettings: {
     enabled: false,
     retention_days: 30,

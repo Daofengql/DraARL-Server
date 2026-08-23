@@ -3,7 +3,6 @@ import { Alert, Box, Paper, Tab, Tabs, Typography } from '@mui/material'
 import { AccessDiscoveryTab } from './AccessDiscoveryTab'
 import { AprsTab } from './AprsTab'
 import { CommSettingsTab } from './CommSettingsTab'
-import { OpenAITab } from './OpenAITab'
 import { OperatorLogsTab } from './OperatorLogsTab'
 import { RegistrationTab } from './RegistrationTab'
 import { SmtpTab } from './SmtpTab'
@@ -34,7 +33,6 @@ export function SiteConfigPage() {
           <Tab label="系统信息" />
           <Tab label="接入点" />
           <Tab label="APRS" />
-          <Tab label="OpenAI" />
           <Tab label="通信设置" />
           <Tab label="SMTP配置" />
           <Tab label="注册设置" />
@@ -64,13 +62,6 @@ export function SiteConfigPage() {
           loading={siteConfig.loading}
           onSave={siteConfig.handleSaveAPRS}
           showMessage={siteConfig.showMessage}
-        />
-        <OpenAITab
-          value={tabValue}
-          config={siteConfig.openai}
-          setConfig={siteConfig.setOpenAI}
-          loading={siteConfig.loading}
-          onSave={siteConfig.handleSaveOpenAI}
         />
         <CommSettingsTab
           value={tabValue}

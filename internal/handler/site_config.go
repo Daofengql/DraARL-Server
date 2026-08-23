@@ -30,6 +30,36 @@ func NewSiteConfigHandler() *SiteConfigHandler {
 	}
 }
 
+// isSensitiveConfigKey 判断站点配置键是否属于密钥类（password/secret/key/token）。
+// 用于列表/分类读取与审计日志的脱敏，避免 SMTP 授权码等明文泄露。
+func isSensitiveConfigKey(key string) bool {
+	return gormdb.IsSensitiveSiteConfigKey(key)
+}
+
+// maskConfigValue 对密钥类配置值脱敏：保留首尾 2 位，中间以 **** 代替；
+// 长度不足 4 位时整体替换为 ****。空值原样返回。
+func maskConfigValue(value string) string {
+	if value == "" {
+		return value
+	}
+	if len(value) > 4 {
+		return value[:2] + "****" + value[len(value)-2:]
+	}
+	return "****"
+}
+
+// maskSensitiveConfigs 返回脱敏后的配置副本；非密钥键保持原值。
+func maskSensitiveConfigs(configs []gormdb.SiteConfig) []gormdb.SiteConfig {
+	out := make([]gormdb.SiteConfig, len(configs))
+	for i, cfg := range configs {
+		out[i] = cfg
+		if isSensitiveConfigKey(cfg.Key) {
+			out[i].Value = maskConfigValue(cfg.Value)
+		}
+	}
+	return out
+}
+
 // GetAllConfigs 获取所有配置（管理员）
 func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
@@ -66,11 +96,11 @@ func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "获取成功",
-		Data:    configs,
+		Data:    maskSensitiveConfigs(configs),
 	})
 }
 
-// GetConfigsByCategory 根据分类获取配置（已登录用户可读取）
+// GetConfigsByCategory 根据分类获取配置（【S3 安全修复】仅管理员，且密钥类值脱敏）
 func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 	_, exists := c.Get("username")
 	if !exists {
@@ -81,7 +111,7 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 		return
 	}
 
-	// 任何已登录用户都可以读取配置
+	// 路由已通过 RequireAdmin 中间件；此处仅按分类读取并统一脱敏
 	category := c.Param("category")
 
 	ctx := c.Request.Context()
@@ -106,7 +136,7 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 	c.JSON(http.StatusOK, Response{
 		Code:    200,
 		Message: "获取成功",
-		Data:    configs,
+		Data:    maskSensitiveConfigs(configs),
 	})
 }
 
@@ -234,9 +264,13 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 		}
 	}
 
-	// 记录审计日志
+	// 记录审计日志（【H11 安全修复】密钥类值脱敏，防止明文落入 operator_logs）
+	logValue := req.Value
+	if isSensitiveConfigKey(req.Key) {
+		logValue = maskConfigValue(req.Value)
+	}
 	oplog.AddLog(
-		fmt.Sprintf("更新站点配置: %s = %s (分类: %s)", req.Key, req.Value, req.Category),
+		fmt.Sprintf("更新站点配置: %s = %s (分类: %s)", req.Key, logValue, req.Category),
 		"config_update",
 		userModel.ID,
 		userModel.Name,
@@ -562,58 +596,6 @@ func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*go
 	return &result, nil
 }
 
-// UpdateOpenAIConfig 更新OpenAI配置（管理员）
-func (h *SiteConfigHandler) UpdateOpenAIConfig(c *gin.Context) {
-	user, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
-		return
-	}
-
-	userModel := user.(*gormdb.User)
-
-	var req gormdb.OpenAIConfig
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
-		return
-	}
-
-	if err := h.repo.SetOpenAIConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新OpenAI配置失败",
-		})
-		return
-	}
-
-	// 使OpenAI配置缓存失效
-	if configCache := cache.GetConfigCache(); configCache != nil {
-		_ = configCache.InvalidateOpenAIConfig(c.Request.Context())
-	}
-
-	// 记录审计日志
-	oplog.AddLog(
-		fmt.Sprintf("更新OpenAI配置: BaseURL=%s, Engine=%s", req.BaseURL, req.Engine),
-		"config_update",
-		userModel.ID,
-		userModel.Name,
-		userModel.CallSign,
-		c.ClientIP(),
-	)
-
-	c.JSON(http.StatusOK, Response{
-		Code:    200,
-		Message: "更新成功",
-	})
-}
-
 // GetAPRSConfig 获取APRS配置（管理员）
 func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 	user, exists := c.Get("user")
@@ -642,45 +624,6 @@ func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, Response{
 			Code:    500,
 			Message: "获取APRS配置失败",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, Response{
-		Code:    200,
-		Message: "获取成功",
-		Data:    config,
-	})
-}
-
-// GetOpenAIConfig 获取OpenAI配置（管理员）
-func (h *SiteConfigHandler) GetOpenAIConfig(c *gin.Context) {
-	user, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
-		return
-	}
-
-	_ = user // 路由已通过 RequireAdmin 中间件验证权限
-
-	ctx := c.Request.Context()
-	configCache := cache.GetConfigCache()
-
-	var config *gormdb.OpenAIConfig
-	var err error
-
-	if configCache != nil {
-		config, err = configCache.GetOpenAIConfig(ctx)
-	} else {
-		config, err = h.repo.GetOpenAIConfig()
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取OpenAI配置失败",
 		})
 		return
 	}

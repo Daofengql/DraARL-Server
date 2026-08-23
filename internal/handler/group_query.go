@@ -4,6 +4,7 @@ import (
 	gormdb "draarl/internal/gormdb"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
@@ -25,14 +26,10 @@ func getGroups(c *gin.Context, adminView bool) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	keyword := c.Query("keyword")
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
+	page, pageSize, offset, err := normalizeGroupPagination(page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		return
 	}
 
 	currentUser, ok := requireCurrentUser(c)
@@ -49,14 +46,14 @@ func getGroups(c *gin.Context, adminView bool) {
 
 	uid := currentUser.ID
 	likeKeyword := "%" + keyword + "%"
-	offset := (page - 1) * pageSize
 
 	countQuery := gormdb.Get().Table("public_groups g").
 		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
 		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
 	if !adminView {
-		countQuery = countQuery.Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
+		countQuery = countQuery.Where("g.status = ?", 1).
+			Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
 	}
 	if keyword != "" {
 		countQuery = countQuery.Where("CAST(g.id AS CHAR) LIKE ? OR g.name LIKE ?", likeKeyword, likeKeyword)
@@ -93,8 +90,6 @@ func getGroups(c *gin.Context, adminView bool) {
 		Select(`
 			g.id, g.name, g.type, g.ower_id, g.master_server, g.slave_server, g.status, g.note, g.create_time, g.update_time,
 			COALESCE(u.callsign, '') AS owner_callsign,
-			COALESCE(stats.online_count, 0) AS online_count,
-			COALESCE(stats.total_count, 0) AS total_count,
 			CASE
 				WHEN g.type = 1 THEN true
 				WHEN g.ower_id = ? THEN true
@@ -104,19 +99,11 @@ func getGroups(c *gin.Context, adminView bool) {
 		`, uid).
 		Joins("LEFT JOIN users u ON u.id = g.ower_id").
 		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
-		Joins(`
-			LEFT JOIN (
-				SELECT group_id,
-					SUM(CASE WHEN is_online = 1 THEN 1 ELSE 0 END) AS online_count,
-					COUNT(1) AS total_count
-				FROM devices
-				GROUP BY group_id
-			) stats ON stats.group_id = g.id
-		`).
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
 		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
 	if !adminView {
-		dataQuery = dataQuery.Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
+		dataQuery = dataQuery.Where("g.status = ?", 1).
+			Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
 	}
 	if keyword != "" {
 		dataQuery = dataQuery.Where("CAST(g.id AS CHAR) LIKE ? OR g.name LIKE ?", likeKeyword, likeKeyword)
@@ -132,6 +119,40 @@ func getGroups(c *gin.Context, adminView bool) {
 			"message": "查询群组列表失败",
 		})
 		return
+	}
+
+	// Aggregate device counts only for the page that will be returned. The old
+	// derived table grouped every device on every request, making a small page
+	// scale with the entire devices table.
+	if len(rows) > 0 {
+		groupIDs := make([]int, 0, len(rows))
+		for _, row := range rows {
+			groupIDs = append(groupIDs, row.ID)
+		}
+		type deviceStats struct {
+			GroupID     int `gorm:"column:group_id"`
+			OnlineCount int `gorm:"column:online_count"`
+			TotalCount  int `gorm:"column:total_count"`
+		}
+		stats := make([]deviceStats, 0, len(groupIDs))
+		if err := gormdb.Get().Table("devices").
+			Select("group_id, SUM(CASE WHEN is_online = 1 THEN 1 ELSE 0 END) AS online_count, COUNT(1) AS total_count").
+			Where("group_id IN ?", groupIDs).
+			Group("group_id").
+			Scan(&stats).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备统计失败"})
+			return
+		}
+		byGroupID := make(map[int]deviceStats, len(stats))
+		for _, stat := range stats {
+			byGroupID[stat.GroupID] = stat
+		}
+		for i := range rows {
+			if stat, exists := byGroupID[rows[i].ID]; exists {
+				rows[i].OnlineCount = stat.OnlineCount
+				rows[i].TotalCount = stat.TotalCount
+			}
+		}
 	}
 
 	uniqueRows := make([]groupListRow, 0, len(rows))
@@ -325,19 +346,16 @@ func SearchGroups(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请输入搜索关键词"})
 		return
 	}
-	page := req.Page
-	if page <= 0 {
-		page = 1
-	}
-	pageSize := req.PageSize
-	if pageSize <= 0 {
-		pageSize = 20
-	} else if pageSize > 100 {
-		pageSize = 100
+	page, pageSize, _, err := normalizeGroupPagination(req.Page, req.PageSize)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		return
 	}
 
+	// 搜索、计数和分页在同一个 SQL 可见性条件中完成，避免先加载所有
+	// 匹配群组再在 Go 内存中过滤私有群组。
 	repo := gormdb.NewGroupRepository()
-	groups, err := repo.SearchGroups(keyword)
+	groups, total, err := repo.SearchGroupsPaginatedVisible(keyword, currentUser.ID, isAdminUser(currentUser), pageSize, page)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -346,37 +364,17 @@ func SearchGroups(c *gin.Context) {
 		return
 	}
 
-	memberRepo := gormdb.NewGroupMemberRepository()
 	verifiedGroupIDs := make(map[int]bool)
-	if !isAdminUser(currentUser) {
-		members, err := memberRepo.ListGroupsByUser(currentUser.ID)
+	if candidates := searchMembershipCandidateIDs(groups, currentUser.ID); len(candidates) > 0 && !isAdminUser(currentUser) {
+		ids, err := gormdb.NewGroupMemberRepository().ListVerifiedGroupIDsByUser(currentUser.ID, candidates)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组成员关系失败"})
 			return
 		}
-		for _, member := range members {
-			verifiedGroupIDs[member.GroupID] = true
+		for _, groupID := range ids {
+			verifiedGroupIDs[groupID] = true
 		}
 	}
-
-	// 搜索与普通列表、详情使用完全相同的可见性规则，避免通过旧搜索
-	// 接口枚举未加入私有群组的名称和备注。
-	visibleGroups := make([]*gormdb.Group, 0, len(groups))
-	for _, group := range groups {
-		if canViewGroup(currentUser, group, verifiedGroupIDs[group.ID]) {
-			visibleGroups = append(visibleGroups, group)
-		}
-	}
-	total := len(visibleGroups)
-	start := (page - 1) * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-	groups = visibleGroups[start:end]
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
@@ -435,6 +433,41 @@ func SearchGroups(c *gin.Context) {
 			"page_size": pageSize,
 		},
 	})
+}
+
+func searchMembershipCandidateIDs(groups []*gormdb.Group, userID int) []int {
+	seen := make(map[int]struct{}, len(groups))
+	result := make([]int, 0, len(groups))
+	for _, group := range groups {
+		if group == nil || group.ID <= 0 || group.Type != groupTypePrivate || group.OwerID == userID {
+			continue
+		}
+		if _, exists := seen[group.ID]; exists {
+			continue
+		}
+		seen[group.ID] = struct{}{}
+		result = append(result, group.ID)
+	}
+	return result
+}
+
+const maxGroupPageSize = 100
+
+func normalizeGroupPagination(page, pageSize int) (int, int, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > maxGroupPageSize {
+		pageSize = maxGroupPageSize
+	}
+	maxInt := int(^uint(0) >> 1)
+	if page > (maxInt/pageSize)+1 {
+		return 0, 0, 0, fmt.Errorf("分页页码过大")
+	}
+	return page, pageSize, (page - 1) * pageSize, nil
 }
 
 // JoinGroupRequest 加入群组请求

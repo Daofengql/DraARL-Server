@@ -507,6 +507,26 @@ func TestDetectContentTypeAndAllowedList(t *testing.T) {
 	}
 }
 
+func TestDetectFaviconContentRejectsSVGAndSpoofedHeaders(t *testing.T) {
+	png := append([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}, []byte("payload")...)
+	if contentType, ext, ok := detectFaviconContent(png); !ok || contentType != "image/png" || ext != ".png" {
+		t.Fatalf("PNG detection = %q, %q, %t", contentType, ext, ok)
+	}
+	ico := []byte{0, 0, 1, 0, 1, 0}
+	if contentType, ext, ok := detectFaviconContent(ico); !ok || contentType != "image/x-icon" || ext != ".ico" {
+		t.Fatalf("ICO detection = %q, %q, %t", contentType, ext, ok)
+	}
+	for _, data := range [][]byte{
+		[]byte("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>"),
+		[]byte("not an image"),
+		{0, 0, 1, 0, 0, 0},
+	} {
+		if contentType, ext, ok := detectFaviconContent(data); ok {
+			t.Fatalf("unsafe favicon accepted as %q/%q: %x", contentType, ext, data)
+		}
+	}
+}
+
 func TestKnownDrivers(t *testing.T) {
 	drivers := KnownDrivers()
 	found := map[string]bool{}
@@ -655,13 +675,13 @@ func TestLocalPutToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if size, err := VerifyLocalPutToken(token, key, "application/octet-stream"); err != nil || size != 13 {
+	if size, _, err := VerifyLocalPutToken(token, key, "application/octet-stream"); err != nil || size != 13 {
 		t.Fatalf("valid token rejected: %v", err)
 	}
-	if _, err := VerifyLocalPutToken(token, "other-key", "application/octet-stream"); err == nil {
+	if _, _, err := VerifyLocalPutToken(token, "other-key", "application/octet-stream"); err == nil {
 		t.Fatal("wrong key should fail")
 	}
-	if _, err := VerifyLocalPutToken("", key, "application/octet-stream"); err == nil {
+	if _, _, err := VerifyLocalPutToken("", key, "application/octet-stream"); err == nil {
 		t.Fatal("empty token should fail")
 	}
 	// expired
@@ -669,7 +689,7 @@ func TestLocalPutToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyLocalPutToken(expToken, key, "application/octet-stream"); err == nil {
+	if _, _, err := VerifyLocalPutToken(expToken, key, "application/octet-stream"); err == nil {
 		t.Fatal("expired token should fail")
 	}
 }

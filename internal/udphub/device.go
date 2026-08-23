@@ -308,8 +308,9 @@ func attachRuntimeDeviceToGroup(gp *models.Group, dev *models.Device) {
 		gp.DevList = append(gp.DevList, dev.ID)
 	}
 	groupRuntimeMu.Unlock()
-	if dev.ISOnline && dev.UDPAddr != nil {
-		syncDeviceConnPool(getGroupConnPool(gp), dev, dev.UDPAddr)
+	state := dev.RuntimeSnapshot()
+	if state.ISOnline && state.UDPAddr != nil {
+		syncDeviceConnPool(getGroupConnPool(gp), dev, state.UDPAddr)
 	}
 }
 
@@ -332,10 +333,13 @@ func changeDeviceGroup(dev *models.Device, groupID int) (string, error) {
 		}
 	}
 
-	if oldGroup, ok := GetGroupFromCache(dev.GroupID); ok {
+	state := dev.RuntimeSnapshot()
+	if oldGroup, ok := GetGroupFromCache(state.GroupID); ok {
 		detachRuntimeDeviceFromGroup(oldGroup, dev)
 	}
-	dev.GroupID = groupID
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.GroupID = groupID
+	})
 	if targetGroup == nil {
 		InvalidateDomainReceiverCache()
 		return "未分组", nil
@@ -388,19 +392,22 @@ func checkDeviceOnline() {
 			if pool != nil {
 				pool.mu.Lock()
 				for addrStr, dev := range pool.DevConnMap {
+					state := dev.RuntimeSnapshot()
 					// 255 设备不参与在线统计
-					if dev.DevModel == models.DevModelFullNet || dev.SSID == models.SSIDServerMax {
+					if state.DevModel == models.DevModelFullNet || state.SSID == models.SSIDServerMax {
 						continue
 					}
 
 					// 检查地址变化（重连检测）
-					if dev.UDPAddr != nil && addrStr != dev.UDPAddr.String() {
+					if state.UDPAddr != nil && addrStr != state.UDPAddr.String() {
 						log.Printf("[RECONNECT] Device %v-%v address changed from %v to %v",
-							dev.CallSign, dev.SSID, addrStr, dev.UDPAddr.String())
+							state.CallSign, state.SSID, addrStr, state.UDPAddr.String())
 
 						// 保存旧地址
-						if dev.PreviousUDPAddr == "" {
-							dev.PreviousUDPAddr = addrStr
+						if state.PreviousUDPAddr == "" {
+							dev.UpdateRuntime(func(current *models.Device) {
+								current.PreviousUDPAddr = addrStr
+							})
 						}
 
 						delete(pool.DevConnMap, addrStr)
@@ -409,20 +416,20 @@ func checkDeviceOnline() {
 					}
 
 					// 计算最后包时间
-					timeSinceLastPacket := t.Sub(dev.LastPacketTime)
+					timeSinceLastPacket := t.Sub(state.LastPacketTime)
 
 					// 设备超时检测
 					if timeSinceLastPacket > offlineTimeout {
-						if dev.ISOnline {
+						if state.ISOnline {
 							// 检查是否在重连宽限期内
-							timeSinceDisconnect := t.Sub(dev.LastDisconnectTime)
-							isGracePeriod := !dev.LastDisconnectTime.IsZero() && timeSinceDisconnect < reconnectGrace
+							timeSinceDisconnect := t.Sub(state.LastDisconnectTime)
+							isGracePeriod := !state.LastDisconnectTime.IsZero() && timeSinceDisconnect < reconnectGrace
 
 							if isGracePeriod {
 								// 在宽限期内，延长超时时间
 								if timeSinceLastPacket < offlineTimeout+reconnectGrace {
 									log.Printf("[GRACE] Device %v-%v in reconnection grace period, waiting... (%v since last packet)",
-										dev.CallSign, dev.SSID, timeSinceLastPacket)
+									state.CallSign, state.SSID, timeSinceLastPacket)
 									groupOnlineCount++
 									onlineMap[dev.ID] = dev
 									continue
@@ -431,11 +438,13 @@ func checkDeviceOnline() {
 
 							// 确认离线
 							log.Printf("[OFFLINE] %s的-%s 已下线 (群组: %d, 地址: %s, 超时: %v)",
-								dev.Username, dev.Name, dev.GroupID, dev.UDPAddr, timeSinceLastPacket)
+								state.Username, state.Name, state.GroupID, state.UDPAddr, timeSinceLastPacket)
 
-							dev.LastDisconnectTime = t
-							dev.ISOnline = false
-							dev.ReconnectCount++
+							dev.UpdateRuntime(func(current *models.Device) {
+								current.LastDisconnectTime = t
+								current.ISOnline = false
+								current.ReconnectCount++
+							})
 							removeRuntimeDeviceMAC(dev)
 							offlineLocal[dev.ID] = dev
 
@@ -446,7 +455,7 @@ func checkDeviceOnline() {
 					}
 
 					// 设备在线
-					if dev.ISOnline {
+					if state.ISOnline {
 						groupOnlineCount++
 						onlineMap[dev.ID] = dev
 					}
@@ -482,28 +491,31 @@ func checkDeviceOnline() {
 					change := false
 					pool.mu.Lock()
 					for addrStr, dev := range pool.DevConnMap {
+						state := dev.RuntimeSnapshot()
 						// 跳过特殊设备
-						if dev.DevModel == models.DevModelFullNet || dev.SSID == models.SSIDServerMax {
+						if state.DevModel == models.DevModelFullNet || state.SSID == models.SSIDServerMax {
 							continue
 						}
 
 						// 检查地址变化
-						if dev.UDPAddr != nil && addrStr != dev.UDPAddr.String() {
+						if state.UDPAddr != nil && addrStr != state.UDPAddr.String() {
 							delete(pool.DevConnMap, addrStr)
 							change = true
 							continue
 						}
 
-						timeSinceLastPacket := t.Sub(dev.LastPacketTime)
+						timeSinceLastPacket := t.Sub(state.LastPacketTime)
 
 						if timeSinceLastPacket > offlineTimeout {
-							if dev.ISOnline {
+							if state.ISOnline {
 								log.Printf("[OFFLINE] Private group device %v-%v group %v timed out (addr: %v)",
-									dev.CallSign, dev.SSID, dev.GroupID, dev.UDPAddr)
+									state.CallSign, state.SSID, state.GroupID, state.UDPAddr)
 
-								dev.LastDisconnectTime = t
-								dev.ISOnline = false
-								dev.ReconnectCount++
+								dev.UpdateRuntime(func(current *models.Device) {
+									current.LastDisconnectTime = t
+									current.ISOnline = false
+									current.ReconnectCount++
+								})
 								removeRuntimeDeviceMAC(dev)
 								offlineLocal[dev.ID] = dev
 
@@ -513,7 +525,7 @@ func checkDeviceOnline() {
 							}
 						}
 
-						if dev.ISOnline {
+						if state.ISOnline {
 							groupOnlineCount++
 							onlineMap[dev.ID] = dev
 						}
@@ -592,7 +604,7 @@ func finalizeCenterLocalOffline(dev *models.Device) {
 	if dev == nil || dev.ID <= 0 {
 		return
 	}
-	sessionID := dev.InterconnectSessionID
+	sessionID := dev.RuntimeSnapshot().InterconnectSessionID
 	RevokeCenterLocalDevice(dev)
 	cleared, err := gormdb.NewDeviceRepository().ClearDeviceEntryIfSession(dev.ID, "center", sessionID)
 	if err != nil {
@@ -611,8 +623,9 @@ func processLogBuffer() {
 			continue
 		}
 		// TODO: 记录设备操作日志
+		state := dev.RuntimeSnapshot()
 		log.Printf("Device activity: %v-%v, voice: %dms, control: %dms",
-			dev.CallSign, dev.SSID, dev.LastVoiceDuration, dev.LastCtlDuration)
+			state.CallSign, state.SSID, state.LastVoiceDuration, state.LastCtlDuration)
 	}
 }
 
@@ -620,7 +633,8 @@ func processLogBuffer() {
 func decodeControlPacket(data []byte) map[string]string {
 	result := make(map[string]string)
 
-	if data[0] == 2 && len(data) > 512 {
+	// 【健壮性】先判长度再访问下标，避免空/短切片越界 panic
+	if len(data) > 512 && data[0] == 2 {
 		// 解析设备配置参数
 		result["dcd_select"] = strconv.Itoa(int(data[1]))
 		result["ptt_enable"] = strconv.Itoa(int(data[2]))
@@ -681,10 +695,16 @@ func getQTH(ip string) string {
 
 // SetDeviceOnline 设置设备在线状态
 func SetDeviceOnline(dev *models.Device, online bool) {
-	dev.ISOnline = online
-	if online {
-		dev.OnlineTime = time.Now()
+	if dev == nil {
+		return
 	}
+	now := time.Now()
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.ISOnline = online
+		if online {
+			current.OnlineTime = now
+		}
+	})
 }
 
 // GetDevice 根据 CallSign 和 SSID 获取设备（公开函数，供 websocket 包使用）
@@ -784,7 +804,7 @@ func ChangeDeviceGroupByID(deviceID int, newGroupID int) error {
 		return err
 	}
 
-	log.Printf("[GROUP] Device %s (ID: %d) changed to group %d", dev.CallSign, deviceID, newGroupID)
+	log.Printf("[GROUP] Device %s (ID: %d) changed to group %d", dev.RuntimeSnapshot().CallSign, deviceID, newGroupID)
 	return nil
 }
 
@@ -802,8 +822,10 @@ func SyncDeviceCommControlByID(deviceID int, disableSend, disableRecv bool) {
 			return
 		}
 		seen[dev] = struct{}{}
-		dev.DisableSend = disableSend
-		dev.DisableRecv = disableRecv
+		dev.UpdateRuntime(func(current *models.Device) {
+			current.DisableSend = disableSend
+			current.DisableRecv = disableRecv
+		})
 		updated++
 	}
 

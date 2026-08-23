@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -95,11 +96,20 @@ func (r *Repository) GetAudioByID(ctx context.Context, audioID uint) (*model.Bro
 }
 
 func (r *Repository) ListProcessingAudios(ctx context.Context, limit int) ([]model.BroadcastAudio, error) {
+	return r.ListProcessingAudiosAfter(ctx, 0, limit)
+}
+
+// ListProcessingAudiosAfter returns processing audios in ascending primary-key
+// order. Keyset pagination keeps recovery bounded and avoids OFFSET scanning
+// when a deployment has accumulated a large backlog.
+func (r *Repository) ListProcessingAudiosAfter(ctx context.Context, afterID uint, limit int) ([]model.BroadcastAudio, error) {
 	if limit < 1 || limit > 1000 {
 		limit = 100
 	}
 	var audios []model.BroadcastAudio
-	err := r.db.WithContext(ctx).Where("status = ?", model.AudioStatusProcessing).Order("id ASC").Limit(limit).Find(&audios).Error
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND id > ?", model.AudioStatusProcessing, afterID).
+		Order("id ASC").Limit(limit).Find(&audios).Error
 	return audios, err
 }
 
@@ -138,10 +148,12 @@ func (r *Repository) MarkAudioReady(ctx context.Context, audioID uint, playbackK
 }
 
 func (r *Repository) MarkAudioFailed(ctx context.Context, audioID uint, safeMessage string) error {
-	result := r.db.WithContext(ctx).Model(&model.BroadcastAudio{}).Where("id = ?", audioID).Updates(map[string]any{
-		"status":        model.AudioStatusFailed,
-		"error_message": truncate(strings.TrimSpace(safeMessage), 500),
-	})
+	result := r.db.WithContext(ctx).Model(&model.BroadcastAudio{}).
+		Where("id = ? AND status = ?", audioID, model.AudioStatusProcessing).
+		Updates(map[string]any{
+			"status":        model.AudioStatusFailed,
+			"error_message": truncate(strings.TrimSpace(safeMessage), 500),
+		})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -355,7 +367,10 @@ func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy stri
 			schedule := &schedules[index]
 			scheduledFor := schedule.NextRunAt.UTC()
 			if err := advanceClaimedSchedule(tx, schedule, now); err != nil {
-				return err
+				// 【整批连坐修复】单个 schedule 推进失败（如无效调度/无未来时刻）
+				// 只跳过该条并告警，不再回滚本周期全部到期播报；失败项下轮继续尝试。
+				log.Printf("[BROADCAST] ClaimDue 推进 schedule %d 失败，跳过该条: %v", schedule.ID, err)
+				continue
 			}
 			run := model.BroadcastRun{
 				ScheduleID: schedule.ID, AudioID: schedule.AudioID, SourceGroupID: schedule.GroupID,
@@ -374,7 +389,13 @@ func (r *Repository) ClaimDue(ctx context.Context, now time.Time, claimedBy stri
 			if result.Error != nil {
 				return result.Error
 			}
-			if result.RowsAffected == 1 && run.Status == model.RunStatusClaimed {
+			if result.RowsAffected == 0 {
+				// 【静默丢弃修复】毫秒级唯一键冲突：另一实例已领取同一发生时刻，
+				// 记录告警而非完全静默，便于排查偶发丢失。
+				log.Printf("[BROADCAST] ClaimDue 与现有运行冲突，跳过: schedule_id=%d scheduled_for=%s", schedule.ID, scheduledFor.Format(time.RFC3339Nano))
+				continue
+			}
+			if run.Status == model.RunStatusClaimed {
 				claimed = append(claimed, run)
 			}
 		}

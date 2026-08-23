@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"sync"
@@ -41,6 +42,7 @@ type CenterLocalSource struct {
 
 type CenterInterconnectHooks struct {
 	Activate             func(*CenterLocalSource) error
+	ActivateContext      func(context.Context, *CenterLocalSource) error
 	Authorize            func(CenterLocalSource) bool
 	AcquireVoice         func(CenterLocalSource) bool
 	AcquireBroadcast     func(runID uint, domainID uint64, now time.Time) bool
@@ -74,22 +76,23 @@ func centerHooks() CenterInterconnectHooks {
 
 func CenterInterconnectActive() bool {
 	hooks := centerHooks()
-	return hooks.Activate != nil
+	return hooks.Activate != nil || hooks.ActivateContext != nil
 }
 
 func centerSourceFromDevice(dev *models.Device) CenterLocalSource {
 	if dev == nil {
 		return CenterLocalSource{}
 	}
+	state := dev.RuntimeSnapshot()
 	return CenterLocalSource{
-		SessionID: dev.InterconnectSessionID, SessionEpoch: dev.InterconnectSessionEpoch,
-		DeviceID: dev.ID, OwnerID: dev.OwnerID, Username: dev.Username, CallSign: dev.CallSign, Nickname: dev.Nickname,
-		SSID: dev.SSID, DevModel: dev.DevModel, DMRID: dev.DMRID, GroupID: dev.GroupID,
-		DomainID:   GetActiveCommunicationDomainID(dev.GroupID),
-		RxGroupIDs: append([]int(nil), dev.GhostRxGroupIDs...), RxDomainIDs: GetActiveCommunicationDomainIDs(dev.GhostRxGroupIDs),
-		GhostSessionID: dev.GhostSessionID, ClientInstanceID: dev.ClientInstanceID, SessionTag: dev.GhostSessionTag,
-		GhostProtocolVersion: dev.GhostProtocolVersion, SourceGroupV1: dev.GhostSessionID != "",
-		DisableSend: dev.DisableSend, DisableRecv: dev.DisableRecv,
+		SessionID: state.InterconnectSessionID, SessionEpoch: state.InterconnectSessionEpoch,
+		DeviceID: state.ID, OwnerID: state.OwnerID, Username: state.Username, CallSign: state.CallSign, Nickname: state.Nickname,
+		SSID: state.SSID, DevModel: state.DevModel, DMRID: state.DMRID, GroupID: state.GroupID,
+		DomainID:   GetActiveCommunicationDomainID(state.GroupID),
+		RxGroupIDs: append([]int(nil), state.GhostRxGroupIDs...), RxDomainIDs: GetActiveCommunicationDomainIDs(state.GhostRxGroupIDs),
+		GhostSessionID: state.GhostSessionID, ClientInstanceID: state.ClientInstanceID, SessionTag: state.GhostSessionTag,
+		GhostProtocolVersion: state.GhostProtocolVersion, SourceGroupV1: state.GhostSessionID != "",
+		DisableSend: state.DisableSend, DisableRecv: state.DisableRecv,
 	}
 }
 
@@ -97,19 +100,43 @@ func centerSourceFromDevice(dev *models.Device) CenterLocalSource {
 // local device can send. The assigned session is retained on the runtime
 // device so every subsequent frame can be checked against the same epoch.
 func ActivateCenterLocalDevice(dev *models.Device) error {
+	return ActivateCenterLocalDeviceContext(context.Background(), dev)
+}
+
+// ActivateCenterLocalDeviceContext is the cancellation-aware form used by
+// bounded UDP authentication jobs. Activate remains the compatibility hook
+// for existing callers and test integrations.
+func ActivateCenterLocalDeviceContext(ctx context.Context, dev *models.Device) error {
 	if dev == nil {
 		return errors.New("nil centre-local device")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hooks := centerHooks()
-	if hooks.Activate == nil {
+	if hooks.Activate == nil && hooks.ActivateContext == nil {
 		return nil
 	}
 	source := centerSourceFromDevice(dev)
-	if err := hooks.Activate(&source); err != nil {
+	var err error
+	if hooks.ActivateContext != nil {
+		err = hooks.ActivateContext(ctx, &source)
+	} else {
+		err = hooks.Activate(&source)
+	}
+	if err != nil {
 		return err
 	}
-	dev.InterconnectSessionID = source.SessionID
-	dev.InterconnectSessionEpoch = source.SessionEpoch
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.InterconnectSessionID = source.SessionID
+		current.InterconnectSessionEpoch = source.SessionEpoch
+	})
 	return nil
 }
 
@@ -121,7 +148,7 @@ func RelayCenterLocalDevice(dev *models.Device, data []byte) error {
 	if dev == nil || len(data) == 0 {
 		return errors.New("invalid centre-local relay")
 	}
-	if dev.InterconnectSessionID == 0 {
+	if dev.RuntimeSnapshot().InterconnectSessionID == 0 {
 		if err := ActivateCenterLocalDevice(dev); err != nil {
 			return err
 		}
@@ -142,7 +169,7 @@ func AcquireCenterLocalDeviceVoice(dev *models.Device) bool {
 	if hooks.AcquireVoice == nil {
 		return true
 	}
-	if dev == nil || dev.InterconnectSessionID == 0 {
+	if dev == nil || dev.RuntimeSnapshot().InterconnectSessionID == 0 {
 		return false
 	}
 	source := centerSourceFromDevice(dev)
@@ -153,12 +180,14 @@ func AcquireCenterLocalDeviceVoice(dev *models.Device) bool {
 }
 
 func RevokeCenterLocalDevice(dev *models.Device) {
-	if dev == nil || dev.InterconnectSessionID == 0 {
+	if dev == nil || dev.RuntimeSnapshot().InterconnectSessionID == 0 {
 		return
 	}
 	hooks := centerHooks()
 	source := centerSourceFromDevice(dev)
-	dev.InterconnectSessionID, dev.InterconnectSessionEpoch = 0, 0
+	dev.UpdateRuntime(func(current *models.Device) {
+		current.InterconnectSessionID, current.InterconnectSessionEpoch = 0, 0
+	})
 	if hooks.Revoke != nil {
 		hooks.Revoke(source)
 	}
@@ -167,24 +196,36 @@ func RevokeCenterLocalDevice(dev *models.Device) {
 func RevokeCenterLocalSession(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64) bool {
 	revoked := false
 	if deviceID > 0 {
-		if dev := GetDeviceByID(deviceID); dev != nil && dev.InterconnectSessionID == sessionID && dev.InterconnectSessionEpoch == sessionEpoch {
-			dev.InterconnectSessionID, dev.InterconnectSessionEpoch = 0, 0
-			for _, group := range GetAllGroupsFromCache() {
-				removeDeviceConnectionFromGroup(group, dev)
+		if dev := GetDeviceByID(deviceID); dev != nil {
+			state := dev.RuntimeSnapshot()
+			if state.InterconnectSessionID == sessionID && state.InterconnectSessionEpoch == sessionEpoch {
+				dev.UpdateRuntime(func(current *models.Device) {
+					current.InterconnectSessionID, current.InterconnectSessionEpoch = 0, 0
+				})
+				for _, group := range GetAllGroupsFromCache() {
+					removeDeviceConnectionFromGroup(group, dev)
+				}
+				revoked = true
 			}
-			revoked = true
 		}
 	}
+
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		if GlobalMessageRouter.wsManager.RevokeInterconnectSession(ownerID, ssid, sessionID, sessionEpoch) {
 			revoked = true
 		}
 	}
 	for _, ghost := range GlobalUDPGhostManager.GetAll() {
-		if ghost != nil && ghost.OwnerID == ownerID && ghost.SSID == ssid && ghost.InterconnectSessionID == sessionID && ghost.InterconnectSessionEpoch == sessionEpoch {
-			ghost.InterconnectSessionID, ghost.InterconnectSessionEpoch = 0, 0
-			GlobalUDPGhostManager.RemoveSession(ghost.GhostSessionID)
-			ghostsession.Global.Remove(ghost.GhostSessionID)
+		if ghost == nil {
+			continue
+		}
+		state := ghost.RuntimeSnapshot()
+		if state.OwnerID == ownerID && state.SSID == ssid && state.InterconnectSessionID == sessionID && state.InterconnectSessionEpoch == sessionEpoch {
+			ghost.UpdateRuntime(func(current *models.Device) {
+				current.InterconnectSessionID, current.InterconnectSessionEpoch = 0, 0
+			})
+			GlobalUDPGhostManager.RemoveSession(state.GhostSessionID)
+			ghostsession.Global.Remove(state.GhostSessionID)
 			revoked = true
 		}
 	}
@@ -279,7 +320,10 @@ func sendRemoteDeviceConfig(deviceID int, packet []byte, timeout time.Duration) 
 	return hooks.SendConfig(deviceID, packet, timeout)
 }
 
-var domainGroupReverseCache sync.Map // domain ID -> representative active group ID
+var (
+	domainGroupReverseCache   sync.Map // domain ID -> representative active group ID
+	domainGroupReverseCacheMu sync.RWMutex
+)
 
 func GetActiveCommunicationDomainIDs(groupIDs []int) []uint64 {
 	set := make(map[uint64]struct{}, len(groupIDs))
@@ -297,7 +341,12 @@ func GetActiveCommunicationDomainIDs(groupIDs []int) []uint64 {
 }
 
 func resetDomainGroupReverseCache() {
-	domainGroupReverseCache = sync.Map{}
+	domainGroupReverseCacheMu.Lock()
+	domainGroupReverseCache.Range(func(key, _ any) bool {
+		domainGroupReverseCache.Delete(key)
+		return true
+	})
+	domainGroupReverseCacheMu.Unlock()
 }
 
 // GetActiveGroupIDForCommunicationDomain resolves an edge frame's opaque
@@ -307,7 +356,10 @@ func GetActiveGroupIDForCommunicationDomain(domainID uint64) int {
 	if domainID == 0 {
 		return 0
 	}
-	if value, ok := domainGroupReverseCache.Load(domainID); ok {
+	domainGroupReverseCacheMu.RLock()
+	value, ok := domainGroupReverseCache.Load(domainID)
+	domainGroupReverseCacheMu.RUnlock()
+	if ok {
 		return value.(int)
 	}
 	for _, group := range GetAllGroupsFromCache() {
@@ -315,7 +367,9 @@ func GetActiveGroupIDForCommunicationDomain(domainID uint64) int {
 			continue
 		}
 		if GetActiveCommunicationDomainID(group.ID) == domainID {
+			domainGroupReverseCacheMu.Lock()
 			domainGroupReverseCache.Store(domainID, group.ID)
+			domainGroupReverseCacheMu.Unlock()
 			return group.ID
 		}
 	}

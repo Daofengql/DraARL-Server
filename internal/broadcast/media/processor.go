@@ -32,17 +32,26 @@ var (
 
 type Processor struct {
 	config  config.BroadcastConfig
-	repo    *repository.Repository
+	repo    processorRepository
 	jobs    chan uint
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+	jobMu   sync.Mutex
+	active  map[uint]struct{}
 	metrics processorMetrics
+}
+
+type processorRepository interface {
+	ListProcessingAudiosAfter(context.Context, uint, int) ([]model.BroadcastAudio, error)
+	GetAudioByID(context.Context, uint) (*model.BroadcastAudio, error)
+	MarkAudioFailed(context.Context, uint, string) error
+	MarkAudioReady(context.Context, uint, string, int64, string, int64, int, int) error
 }
 
 func NewProcessor(cfg config.BroadcastConfig, repo *repository.Repository) *Processor {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Processor{config: cfg, repo: repo, jobs: make(chan uint, 128), ctx: ctx, cancel: cancel}
+	return &Processor{config: cfg, repo: repo, jobs: make(chan uint, 128), ctx: ctx, cancel: cancel, active: make(map[uint]struct{})}
 }
 
 func (p *Processor) Start() error {
@@ -55,23 +64,111 @@ func (p *Processor) Start() error {
 	if _, err := exec.LookPath(p.config.FFprobePath); err != nil {
 		return fmt.Errorf("find ffprobe: %w", err)
 	}
-	p.wg.Add(1)
-	go p.worker()
-	audios, err := p.repo.ListProcessingAudios(p.ctx, 1000)
-	if err != nil {
-		p.cancel()
-		p.wg.Wait()
-		return fmt.Errorf("recover processing broadcast audios: %w", err)
+	// 【转码并发修复】多 worker 并行转码（默认 2，可配 1-4），
+	// 避免单 worker 严格串行（最坏 1 个/90s）拖慢广播发布。
+	workers := p.config.TranscodeWorkers
+	if workers < 1 {
+		workers = 2
 	}
-	for _, audio := range audios {
-		if err := p.Enqueue(audio.ID); err != nil {
-			p.cancel()
-			p.wg.Wait()
-			return err
+	if workers > 4 {
+		workers = 4
+	}
+	for i := 0; i < workers; i++ {
+		p.wg.Add(1)
+		go p.worker()
+	}
+	log.Printf("[BROADCAST] 媒体转码 worker 池启动: workers=%d", workers)
+	p.metrics.running.Store(true)
+	p.metrics.recoveryRunning.Store(true)
+	p.wg.Add(1)
+	go p.recoverProcessingAudios()
+	return nil
+}
+
+const (
+	processingAudioRecoveryPageSize = 100
+	processingAudioRecoveryRetryMin = 100 * time.Millisecond
+	processingAudioRecoveryRetryMax = 5 * time.Second
+)
+
+// recoverProcessingAudios replays stale processing rows without holding up
+// server startup. The keyset cursor is advanced only after a job is admitted,
+// so a bounded jobs channel provides backpressure without dropping IDs.
+func (p *Processor) recoverProcessingAudios() {
+	defer p.wg.Done()
+	defer p.metrics.recoveryRunning.Store(false)
+	var lastID uint
+	backoff := processingAudioRecoveryRetryMin
+	for {
+		audios, err := p.repo.ListProcessingAudiosAfter(p.ctx, lastID, processingAudioRecoveryPageSize)
+		if err != nil {
+			if p.ctx.Err() != nil {
+				return
+			}
+			p.metrics.recoveryErrors.Add(1)
+			log.Printf("[BROADCAST] processing audio recovery query failed after id=%d: %v; retrying in %s", lastID, err, backoff)
+			if !waitForRecoveryRetry(p.ctx, backoff) {
+				return
+			}
+			if backoff < processingAudioRecoveryRetryMax {
+				backoff *= 2
+				if backoff > processingAudioRecoveryRetryMax {
+					backoff = processingAudioRecoveryRetryMax
+				}
+			}
+			continue
+		}
+		backoff = processingAudioRecoveryRetryMin
+		if len(audios) == 0 {
+			return
+		}
+		for _, audio := range audios {
+			if audio.ID <= lastID {
+				p.metrics.recoveryErrors.Add(1)
+				log.Printf("[BROADCAST] processing audio recovery stopped on non-increasing id=%d after id=%d", audio.ID, lastID)
+				return
+			}
+			if err := p.enqueueBlocking(audio.ID); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					p.metrics.recoveryErrors.Add(1)
+					log.Printf("[BROADCAST] processing audio recovery stopped at id=%d: %v", audio.ID, err)
+				}
+				return
+			}
+			lastID = audio.ID
+			p.metrics.recoveryScanned.Add(1)
+			p.metrics.recoveryLastID.Store(uint64(lastID))
 		}
 	}
-	p.metrics.running.Store(true)
-	return nil
+}
+
+func waitForRecoveryRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// enqueueBlocking 阻塞式入队（启动恢复专用），仅在停机时返回错误。
+func (p *Processor) enqueueBlocking(audioID uint) error {
+	if p == nil || audioID == 0 {
+		return fmt.Errorf("invalid broadcast audio job")
+	}
+	if !p.reserveAudioJob(audioID) {
+		return nil
+	}
+	select {
+	case p.jobs <- audioID:
+		p.metrics.enqueued.Add(1)
+		return nil
+	case <-p.ctx.Done():
+		p.releaseAudioJob(audioID)
+		return p.ctx.Err()
+	}
 }
 
 func (p *Processor) Stop(ctx context.Context) error {
@@ -87,6 +184,7 @@ func (p *Processor) Stop(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
+		p.clearAudioJobs()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -97,15 +195,48 @@ func (p *Processor) Enqueue(audioID uint) error {
 	if p == nil || audioID == 0 {
 		return fmt.Errorf("invalid broadcast audio job")
 	}
+	if !p.reserveAudioJob(audioID) {
+		return nil
+	}
 	select {
 	case p.jobs <- audioID:
 		p.metrics.enqueued.Add(1)
 		return nil
 	case <-p.ctx.Done():
+		p.releaseAudioJob(audioID)
 		return p.ctx.Err()
 	default:
+		p.releaseAudioJob(audioID)
 		return fmt.Errorf("broadcast audio queue is full")
 	}
+}
+
+// reserveAudioJob makes enqueue idempotent across recovery, HTTP uploads and
+// multiple workers. The map is initialized lazily for tests and legacy
+// callers that construct Processor literals directly.
+func (p *Processor) reserveAudioJob(audioID uint) bool {
+	p.jobMu.Lock()
+	defer p.jobMu.Unlock()
+	if p.active == nil {
+		p.active = make(map[uint]struct{})
+	}
+	if _, exists := p.active[audioID]; exists {
+		return false
+	}
+	p.active[audioID] = struct{}{}
+	return true
+}
+
+func (p *Processor) releaseAudioJob(audioID uint) {
+	p.jobMu.Lock()
+	delete(p.active, audioID)
+	p.jobMu.Unlock()
+}
+
+func (p *Processor) clearAudioJobs() {
+	p.jobMu.Lock()
+	p.active = nil
+	p.jobMu.Unlock()
 }
 
 func (p *Processor) worker() {
@@ -115,10 +246,15 @@ func (p *Processor) worker() {
 		case <-p.ctx.Done():
 			return
 		case audioID := <-p.jobs:
-			if err := p.ProcessAudio(p.ctx, audioID); err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("[BROADCAST] process audio id=%d failed: %v", audioID, err)
-			}
+			p.processQueuedAudio(audioID)
 		}
+	}
+}
+
+func (p *Processor) processQueuedAudio(audioID uint) {
+	defer p.releaseAudioJob(audioID)
+	if err := p.ProcessAudio(p.ctx, audioID); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("[BROADCAST] process audio id=%d failed: %v", audioID, err)
 	}
 }
 
@@ -143,8 +279,13 @@ func (p *Processor) ProcessAudio(parent context.Context, audioID uint) error {
 		return err
 	}
 	if err := p.repo.MarkAudioReady(parent, audio.ID, playbackKey, metadata.Size, recordKey, recordSize, metadata.DurationMS, metadata.PacketCount); err != nil {
-		_ = storage.Delete(context.WithoutCancel(parent), playbackKey)
-		_ = storage.Delete(context.WithoutCancel(parent), recordKey)
+		// A conditional state update can report not-found when another lifecycle
+		// transition already committed. Retain deterministic objects in that case:
+		// deleting them could remove media referenced by the committed row.
+		if !errors.Is(err, repository.ErrNotFound) {
+			_ = storage.Delete(context.WithoutCancel(parent), playbackKey)
+			_ = storage.Delete(context.WithoutCancel(parent), recordKey)
+		}
 		return fmt.Errorf("commit broadcast playback metadata: %w", err)
 	}
 	succeeded = true
@@ -306,12 +447,10 @@ func (p *Processor) transcode(ctx context.Context, inputPath, outputPath string)
 }
 
 func (p *Processor) runCommand(command *exec.Cmd) error {
-	if err := command.Start(); err != nil {
+	if err := prepareMediaCommand(command, p.config.TranscodeMemoryLimitMB, p.config.TranscodeCPULimitSeconds); err != nil {
 		return err
 	}
-	if err := applyMediaProcessLimits(command.Process.Pid, p.config.TranscodeMemoryLimitMB, p.config.TranscodeCPULimitSeconds); err != nil {
-		_ = command.Process.Kill()
-		_ = command.Wait()
+	if err := command.Start(); err != nil {
 		return err
 	}
 	return command.Wait()

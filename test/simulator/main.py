@@ -201,7 +201,11 @@ class ClientPanel(ttk.LabelFrame):
         username = "admin"
         if hasattr(self, 'username_var'):
             username = self.username_var.get() or "admin"
-        token = generate_jwt(username, ["user"])
+        try:
+            token = generate_jwt(username, ["user"], secret=self.app.get_test_jwt_secret())
+        except ValueError as error:
+            self.log(f"[Token] {error}")
+            return
         self.token_var.set(token)
         self.log(f"[Token] 已生成: {token[:50]}...")
 
@@ -366,7 +370,8 @@ class ClientPanel(ttk.LabelFrame):
             token = self.token_var.get()
 
         if not token:
-            token = generate_jwt("admin", ["user"])
+            self.log("[错误] 请先生成或输入 JWT Token")
+            return
 
         http.set_token(token)
 
@@ -727,7 +732,6 @@ class ClientPanel(ttk.LabelFrame):
         form.pack(fill=tk.X)
 
         bind_username_var = tk.StringVar(value=self.username_var.get() or "admin")
-        bind_password_var = tk.StringVar(value="")
         bind_mac_var = tk.StringVar(value=self.mac_var.get() if hasattr(self, 'mac_var') else self._generate_random_mac())
         bind_device_password_var = tk.StringVar(value=self.password_var.get())
         bind_ssid_var = tk.StringVar(value=self.ssid_var.get() or "1")
@@ -738,8 +742,10 @@ class ClientPanel(ttk.LabelFrame):
         ttk.Label(form, text="账号用户名:").grid(row=0, column=0, sticky=tk.W, pady=2)
         ttk.Entry(form, textvariable=bind_username_var, width=16).grid(row=0, column=1, sticky=tk.W, padx=4, pady=2)
 
-        ttk.Label(form, text="账号密码:").grid(row=0, column=2, sticky=tk.W, pady=2)
-        ttk.Entry(form, textvariable=bind_password_var, width=16, show="*").grid(row=0, column=3, sticky=tk.W, padx=4, pady=2)
+        ttk.Label(form, text="认证方式:").grid(row=0, column=2, sticky=tk.W, pady=2)
+        ttk.Label(form, text="直接签发测试JWT（无需验证码）", foreground="green").grid(
+            row=0, column=3, sticky=tk.W, padx=4, pady=2
+        )
 
         ttk.Label(form, text="设备MAC:").grid(row=1, column=0, sticky=tk.W, pady=2)
         ttk.Entry(form, textvariable=bind_mac_var, width=18).grid(row=1, column=1, sticky=tk.W, padx=4, pady=2)
@@ -851,17 +857,21 @@ class ClientPanel(ttk.LabelFrame):
 
         def do_bind():
             username = bind_username_var.get().strip()
-            password = bind_password_var.get().strip()
             code = bind_code_var.get().strip()
-            if not username or not password:
-                bind_log("[绑定错误] 请输入账号用户名和密码")
+            if not username:
+                bind_log("[绑定错误] 请输入账号用户名")
                 return None
             if not code:
                 bind_log("[绑定错误] 请先获取动态码")
                 return None
 
             http = build_http_client()
-            if not http.login(username, password):
+            try:
+                http.authenticate_with_test_key(
+                    username, roles=["user"], secret=self.app.get_test_jwt_secret()
+                )
+            except ValueError as error:
+                bind_log(f"[测试JWT错误] {error}")
                 return None
 
             result = http.bind_device(code)
@@ -871,16 +881,20 @@ class ClientPanel(ttk.LabelFrame):
 
         def do_submit():
             username = bind_username_var.get().strip()
-            password = bind_password_var.get().strip()
             target_ssid = parse_target_ssid()
-            if not username or not password:
-                bind_log("[提交错误] 请输入账号用户名和密码")
+            if not username:
+                bind_log("[提交错误] 请输入账号用户名")
                 return None
             if target_ssid is None:
                 return None
 
             http = build_http_client()
-            if not http.login(username, password):
+            try:
+                http.authenticate_with_test_key(
+                    username, roles=["user"], secret=self.app.get_test_jwt_secret()
+                )
+            except ValueError as error:
+                bind_log(f"[测试JWT错误] {error}")
                 return None
 
             result = http.submit_device_config(bind_mac_var.get().strip(), target_ssid)
@@ -957,6 +971,10 @@ class DebugClientApp:
         self.panels = []
         self._build_ui()
 
+    def get_test_jwt_secret(self) -> str:
+        """Return the test key entered in the UI, never a built-in default."""
+        return self.test_jwt_secret.get().strip()
+
     def _build_ui(self):
         """构建 UI"""
         # 顶部：服务器配置
@@ -975,8 +993,12 @@ class DebugClientApp:
         self.http_port = tk.StringVar(value="9002")
         ttk.Entry(server_frame, textvariable=self.http_port, width=6).grid(row=0, column=5, padx=5)
 
-        ttk.Button(server_frame, text="全部连接", command=self.connect_all).grid(row=0, column=6, padx=10)
-        ttk.Button(server_frame, text="全部断开", command=self.disconnect_all).grid(row=0, column=7, padx=5)
+        ttk.Label(server_frame, text="测试JWT密钥:").grid(row=0, column=6, sticky=tk.W, padx=(10, 0))
+        self.test_jwt_secret = tk.StringVar(value=os.getenv("DRAARL_TEST_JWT_SECRET", ""))
+        ttk.Entry(server_frame, textvariable=self.test_jwt_secret, width=28, show="*").grid(row=0, column=7, padx=5)
+
+        ttk.Button(server_frame, text="全部连接", command=self.connect_all).grid(row=0, column=8, padx=10)
+        ttk.Button(server_frame, text="全部断开", command=self.disconnect_all).grid(row=0, column=9, padx=5)
 
         # 中部：三个客户端面板
         panels_frame = ttk.Frame(self.root)

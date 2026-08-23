@@ -1,10 +1,122 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaultConfigFileName(t *testing.T) {
 	if DefaultConfigFileName != "config.yaml" {
 		t.Fatalf("default config file = %q, want config.yaml", DefaultConfigFileName)
+	}
+}
+
+func TestDatabaseTimezoneDefaultsAndDSN(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.Database.Charset = "utf8mb4"
+	cfg.Database.Collate = "utf8mb4_unicode_ci"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.Timezone != "Local" || strings.Contains(cfg.GetDSN(), "time_zone=") {
+		t.Fatalf("legacy timezone behavior changed: timezone=%q dsn=%q", cfg.Database.Timezone, cfg.GetDSN())
+	}
+
+	cfg.Database.Timezone = "Asia/Shanghai"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	dsn := cfg.GetDSN()
+	if !strings.Contains(dsn, "loc=Asia%2FShanghai") || !strings.Contains(dsn, "time_zone=%27Asia%2FShanghai%27") {
+		t.Fatalf("explicit timezone missing from DSN: %q", dsn)
+	}
+}
+
+func TestDatabaseTimezoneRejectsInvalidValue(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.Database.Timezone = "not/a-real-zone"
+	if err := cfg.SetDefaults(); err == nil || !strings.Contains(err.Error(), "Database.Timezone") {
+		t.Fatalf("invalid timezone accepted: %v", err)
+	}
+}
+
+func TestParseProxyTrustedCIDRsRejectsConfiguredInvalidEntries(t *testing.T) {
+	nets, err := ParseProxyTrustedCIDRs([]string{" 192.0.2.0/24 ", "2001:db8::/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nets) != 2 || !nets[0].Contains([]byte{192, 0, 2, 10}) {
+		t.Fatalf("unexpected parsed proxy networks: %v", nets)
+	}
+	for _, cidrs := range [][]string{{""}, {"not-a-cidr"}, {"192.0.2.0/24", "bad"}} {
+		if _, err := ParseProxyTrustedCIDRs(cidrs); err == nil {
+			t.Fatalf("invalid proxy trusted CIDRs were accepted: %q", cidrs)
+		}
+	}
+	if nets, err := ParseProxyTrustedCIDRs(nil); err != nil || len(nets) != 0 {
+		t.Fatalf("empty compatibility list failed: nets=%v err=%v", nets, err)
+	}
+}
+
+func TestConfigurationRejectsInvalidSystemProxyTrustedCIDR(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.System.ProxyProtocol = "v2"
+	cfg.System.ProxyTrustedCIDRs = []string{"not-a-cidr"}
+	if err := cfg.SetDefaults(); err == nil || !strings.Contains(err.Error(), "System.ProxyTrustedCIDRs") {
+		t.Fatalf("unexpected System.ProxyTrustedCIDRs validation error: %v", err)
+	}
+}
+
+func TestConfigurationRequiresProxyTrustedCIDRsForReleaseV2(t *testing.T) {
+	previousRelease := IsReleaseBuild()
+	SetReleaseBuild(true)
+	t.Cleanup(func() {
+		SetReleaseBuild(previousRelease)
+	})
+
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.System.ProxyProtocol = " V2 "
+	if err := cfg.SetDefaults(); err == nil || !strings.Contains(err.Error(), "ProxyTrustedCIDRs") {
+		t.Fatalf("expected release v2 trust-boundary validation error, got %v", err)
+	}
+
+	cfg.System.ProxyTrustedCIDRs = []string{"192.0.2.0/24"}
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatalf("valid release v2 configuration rejected: %v", err)
+	}
+	if cfg.System.ProxyProtocol != "v2" {
+		t.Fatalf("ProxyProtocol was not normalized: %q", cfg.System.ProxyProtocol)
+	}
+}
+
+func TestConfigurationKeepsEmptyProxyTrustForDevelopmentV2(t *testing.T) {
+	previousRelease := IsReleaseBuild()
+	SetReleaseBuild(false)
+	t.Cleanup(func() {
+		SetReleaseBuild(previousRelease)
+	})
+
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.System.ProxyProtocol = " V2 "
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatalf("development v2 compatibility configuration rejected: %v", err)
+	}
+}
+
+func TestConfigurationKeepsLegacyV1ValueCompatible(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	cfg.System.ProxyProtocol = " V1 "
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatalf("legacy v1 configuration rejected: %v", err)
+	}
+	if cfg.System.ProxyProtocol != "v1" {
+		t.Fatalf("ProxyProtocol was not normalized: %q", cfg.System.ProxyProtocol)
 	}
 }
 
@@ -96,6 +208,7 @@ func TestBroadcastConfigDefaultsAndBounds(t *testing.T) {
 		cfg.MaxUploadBytes != 20*1024*1024 || cfg.ScanIntervalMS != 1000 ||
 		cfg.TranscodeMemoryLimitMB != DefaultBroadcastTranscodeMemoryMB ||
 		cfg.TranscodeCPULimitSeconds != DefaultBroadcastTranscodeCPUSeconds ||
+		cfg.TranscodeWorkers != DefaultBroadcastTranscodeWorkers ||
 		cfg.FFmpegPath != "ffmpeg" || cfg.FFprobePath != "ffprobe" {
 		t.Fatalf("unexpected broadcast defaults: %#v", cfg)
 	}
@@ -115,6 +228,26 @@ func TestBroadcastConfigDefaultsAndBounds(t *testing.T) {
 	invalid = BroadcastConfig{TranscodeCPULimitSeconds: 301}
 	if err := invalid.SetDefaults(); err == nil {
 		t.Fatal("transcode CPU limit above bound was accepted")
+	}
+}
+
+func TestDeviceAuthConfigDefaultsAndBounds(t *testing.T) {
+	cfg := &Configuration{}
+	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UDP.DeviceAuthWorkers != 4 || cfg.UDP.DeviceAuthQueueSize != 512 {
+		t.Fatalf("unexpected device auth defaults: workers=%d queue=%d", cfg.UDP.DeviceAuthWorkers, cfg.UDP.DeviceAuthQueueSize)
+	}
+
+	cfg.UDP.DeviceAuthWorkers = 17
+	cfg.UDP.DeviceAuthQueueSize = 2049
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UDP.DeviceAuthWorkers != 16 || cfg.UDP.DeviceAuthQueueSize != 2048 {
+		t.Fatalf("unexpected device auth clamps: workers=%d queue=%d", cfg.UDP.DeviceAuthWorkers, cfg.UDP.DeviceAuthQueueSize)
 	}
 }
 

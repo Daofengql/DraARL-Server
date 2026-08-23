@@ -147,10 +147,10 @@ type BroadcastRun struct {
 	ScheduleID       uint       `gorm:"not null;uniqueIndex:uk_broadcast_run_occurrence,priority:1;index;column:schedule_id" json:"schedule_id"`
 	AudioID          uint       `gorm:"not null;index;column:audio_id" json:"audio_id"`
 	SourceGroupID    int        `gorm:"not null;index;column:source_group_id" json:"source_group_id"`
-	ScheduledFor     time.Time  `gorm:"type:datetime(3);not null;uniqueIndex:uk_broadcast_run_occurrence,priority:2;column:scheduled_for" json:"scheduled_for"`
+	ScheduledFor     time.Time  `gorm:"type:datetime(3);not null;uniqueIndex:uk_broadcast_run_occurrence,priority:2;index:idx_broadcast_run_status_lease_sched,priority:3;column:scheduled_for" json:"scheduled_for"`
 	DomainKey        string     `gorm:"type:varchar(255);column:domain_key" json:"domain_key"`
 	DomainGroupIDs   []int      `gorm:"serializer:json;type:json;column:domain_group_ids" json:"domain_group_ids"`
-	Status           string     `gorm:"type:varchar(48);not null;index;column:status" json:"status"`
+	Status           string     `gorm:"type:varchar(48);not null;index;index:idx_broadcast_run_status_lease_sched,priority:1;column:status" json:"status"`
 	LastVoiceAt      *time.Time `gorm:"type:datetime(3);column:last_voice_at" json:"last_voice_at,omitempty"`
 	StartedAt        *time.Time `gorm:"type:datetime(3);column:started_at" json:"started_at,omitempty"`
 	EndedAt          *time.Time `gorm:"type:datetime(3);column:ended_at" json:"ended_at,omitempty"`
@@ -158,7 +158,7 @@ type BroadcastRun struct {
 	SentPackets      int        `gorm:"type:int;column:sent_packets" json:"sent_packets"`
 	DroppedPackets   int        `gorm:"type:int;column:dropped_packets" json:"dropped_packets"`
 	ClaimedBy        string     `gorm:"type:varchar(128);column:claimed_by" json:"claimed_by,omitempty"`
-	LeaseUntil       *time.Time `gorm:"type:datetime(3);index;column:lease_until" json:"lease_until,omitempty"`
+	LeaseUntil       *time.Time `gorm:"type:datetime(3);index;index:idx_broadcast_run_status_lease_sched,priority:2;column:lease_until" json:"lease_until,omitempty"`
 	ErrorCode        string     `gorm:"type:varchar(64);column:error_code" json:"error_code,omitempty"`
 	ErrorMessage     string     `gorm:"type:varchar(500);column:error_message" json:"error_message,omitempty"`
 	CreatedAt        time.Time  `gorm:"autoCreateTime;column:created_at" json:"created_at"`

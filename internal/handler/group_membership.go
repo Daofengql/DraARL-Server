@@ -61,15 +61,14 @@ func JoinGroup(c *gin.Context) {
 		return
 	}
 
-	// 验证密码是否正确
-	if group.Password != req.Password {
-		c.JSON(http.StatusBadRequest, gin.H{
+	// 验证密码是否正确。历史明文在验证成功后用条件更新升级，避免长期保留。
+	if !verifyGroupPassword(group.Password, req.Password) {
+		c.JSON(http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "密码错误",
 		})
 		return
 	}
-
 	// 检查群组是否被禁用
 	if group.Status != 1 {
 		c.JSON(http.StatusForbidden, gin.H{
@@ -97,6 +96,13 @@ func JoinGroup(c *gin.Context) {
 			"message": "用户不存在",
 		})
 		return
+	}
+	if !isBcryptGroupPassword(group.Password) {
+		if hashedPassword, hashErr := hashGroupPassword(req.Password); hashErr != nil {
+			log.Printf("upgrade legacy group password id=%d: %v", group.ID, hashErr)
+		} else if err := repo.UpgradeGroupPasswordIfUnchanged(group.ID, group.Password, hashedPassword); err != nil {
+			log.Printf("upgrade legacy group password id=%d: %v", group.ID, err)
+		}
 	}
 
 	memberRepo := gormdb.NewGroupMemberRepository()

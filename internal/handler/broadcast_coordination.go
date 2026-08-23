@@ -125,10 +125,6 @@ func prepareEntityGroupBroadcastDeletion(c *gin.Context, userID, groupID int) ([
 
 func cleanupDeletedBroadcastObjects(c *gin.Context, objectKeys []string) bool {
 	cleanupPending := false
-	ctx := context.Background()
-	if c != nil && c.Request != nil {
-		ctx = context.WithoutCancel(c.Request.Context())
-	}
 	for _, key := range objectKeys {
 		if key == "" {
 			continue
@@ -142,7 +138,7 @@ func cleanupDeletedBroadcastObjects(c *gin.Context, objectKeys []string) bool {
 		if recordReferences > 0 {
 			continue
 		}
-		if err := storage.Delete(ctx, key); err != nil {
+		if err := deleteStoredObjectWithIndependentContext(key, storage.Delete); err != nil {
 			cleanupPending = true
 			log.Printf("[BROADCAST] cleanup deleted group audio object failed: %v", err)
 		}

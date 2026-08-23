@@ -225,22 +225,26 @@ func TestNodeDatagramQueueIsolatesNodesAndBoundsGlobalWork(t *testing.T) {
 			t.Fatalf("only delivered %#v", got)
 		}
 	}
-	if got["edge-a"] != 2 || got["edge-b"] != 1 || got["edge-c"] != 0 {
+	// 【公平性修复后行为】全局队列满时按"丢最旧"让路：edge-c 通过挤掉
+	// edge-a 的旧帧入队，而非被整体拒绝，避免慢节点占满全局队列饿死其它节点。
+	if got["edge-a"] != 1 || got["edge-b"] != 1 || got["edge-c"] != 1 {
 		t.Fatalf("queue isolation result=%#v", got)
 	}
-	if sessions["edge-a"].ProtectionSnapshot().DataQueueDrops != 1 {
+	// edge-a：1 条按节点队列上限丢弃（edge-a:3），1 条被全局队列"丢最旧"挤掉（edge-a:2）
+	if sessions["edge-a"].ProtectionSnapshot().DataQueueDrops != 2 {
 		t.Fatal("per-node queue drop was not recorded")
 	}
-	if got := sessions["edge-a"].DataMetrics.Snapshot(); got.InPackets != 3 || got.Drops != 1 || got.Errors != 0 {
+	if got := sessions["edge-a"].DataMetrics.Snapshot(); got.InPackets != 3 || got.Drops != 2 || got.Errors != 0 {
 		t.Fatalf("edge-a queue metrics=%#v", got)
 	}
 	if got := sessions["edge-b"].DataMetrics.Snapshot(); got.InPackets != 1 || got.Drops != 0 || got.Errors != 0 {
 		t.Fatalf("edge-b queue metrics=%#v", got)
 	}
-	if got := sessions["edge-c"].DataMetrics.Snapshot(); got.InPackets != 1 || got.Drops != 1 || got.Errors != 0 {
+	// edge-c 现在成功入队并被送达
+	if got := sessions["edge-c"].DataMetrics.Snapshot(); got.InPackets != 1 || got.Drops != 0 || got.Errors != 0 {
 		t.Fatalf("edge-c queue metrics=%#v", got)
 	}
-	if got := sessions["edge-c"].ProtectionSnapshot().DataQueueDrops; got != 1 {
+	if got := sessions["edge-c"].ProtectionSnapshot().DataQueueDrops; got != 0 {
 		t.Fatalf("edge-c global queue attribution=%d", got)
 	}
 	if bridge.ProtectionSnapshot().GlobalQueueDrops != 1 {

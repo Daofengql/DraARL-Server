@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -123,4 +124,25 @@ func TestMessageAPIPageLimitsFallback(t *testing.T) {
 	if defaultPageSize != config.DefaultMessageAPIPageSize || maxPageSize != config.DefaultMessageAPIMaxPageSize {
 		t.Fatalf("fallback limits=(%d,%d)", defaultPageSize, maxPageSize)
 	}
+}
+
+func TestMessageAPILimiterCleanupAdvancesAcrossBoundedBatches(t *testing.T) {
+	limiter := newMessageAPIWindowLimiter()
+	now := time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC)
+	limiter.mu.Lock()
+	for i := 0; i < 65; i++ {
+		key := fmt.Sprintf("stale:%d", i)
+		limiter.entries[key] = messageAPIWindow{expiresAt: now.Add(-time.Second)}
+		limiter.orderIndex[key] = len(limiter.order)
+		limiter.order = append(limiter.order, key)
+	}
+	if !limiter.pruneExpired(now, 64) || len(limiter.entries) != 1 {
+		limiter.mu.Unlock()
+		t.Fatalf("first bounded cleanup entries=%d, want 1", len(limiter.entries))
+	}
+	if !limiter.pruneExpired(now, 64) || len(limiter.entries) != 0 {
+		limiter.mu.Unlock()
+		t.Fatalf("second bounded cleanup entries=%d, want 0", len(limiter.entries))
+	}
+	limiter.mu.Unlock()
 }

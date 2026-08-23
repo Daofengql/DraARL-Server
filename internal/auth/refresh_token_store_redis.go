@@ -13,9 +13,12 @@ import (
 )
 
 type redisRefreshTokenStore struct {
-	client *redis.Client
-	prefix string
+	client           *redis.Client
+	prefix           string
+	operationTimeout time.Duration
 }
+
+const defaultRefreshStoreOperationTimeout = 10 * time.Second
 
 func newRedisRefreshTokenStore(cfg *config.Configuration) (*redisRefreshTokenStore, error) {
 	if cfg == nil {
@@ -30,6 +33,10 @@ func newRedisRefreshTokenStore(cfg *config.Configuration) (*redisRefreshTokenSto
 		ReadTimeout:  time.Duration(cfg.Redis.ReadTimeoutSec) * time.Second,
 		WriteTimeout: time.Duration(cfg.Redis.WriteTimeoutSec) * time.Second,
 		PoolSize:     cfg.Redis.PoolSize,
+		// Store methods use a total operation deadline in addition to per-command
+		// read/write timeouts. Respecting the context prevents multi-command flows
+		// such as RevokeAllByUser from accumulating one socket timeout per token.
+		ContextTimeoutEnabled: true,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Redis.DialTimeoutSec)*time.Second)
@@ -40,9 +47,33 @@ func newRedisRefreshTokenStore(cfg *config.Configuration) (*redisRefreshTokenSto
 	}
 
 	return &redisRefreshTokenStore{
-		client: client,
-		prefix: normalizeStorePrefix(cfg.Redis.Prefix),
+		client:           client,
+		prefix:           normalizeStorePrefix(cfg.Redis.Prefix),
+		operationTimeout: refreshStoreOperationTimeout(cfg),
 	}, nil
+}
+
+func refreshStoreOperationTimeout(cfg *config.Configuration) time.Duration {
+	if cfg == nil {
+		return defaultRefreshStoreOperationTimeout
+	}
+	dialTimeout := time.Duration(cfg.Redis.DialTimeoutSec) * time.Second
+	readTimeout := time.Duration(cfg.Redis.ReadTimeoutSec) * time.Second
+	writeTimeout := time.Duration(cfg.Redis.WriteTimeoutSec) * time.Second
+	commandTimeout := max(readTimeout, writeTimeout)
+	total := dialTimeout + 4*commandTimeout
+	if total < defaultRefreshStoreOperationTimeout {
+		return defaultRefreshStoreOperationTimeout
+	}
+	return total
+}
+
+func (r *redisRefreshTokenStore) operationContext() (context.Context, context.CancelFunc) {
+	timeout := r.operationTimeout
+	if timeout <= 0 {
+		timeout = defaultRefreshStoreOperationTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 func (r *redisRefreshTokenStore) Close() error {
@@ -57,7 +88,8 @@ func (r *redisRefreshTokenStore) Create(token *RefreshTokenRecord) error {
 		return nil
 	}
 
-	ctx := context.Background()
+	ctx, cancel := r.operationContext()
+	defer cancel()
 	tokenKey := r.tokenKey(token.TokenHash)
 	userSetKey := r.userSetKey(token.UserID)
 
@@ -76,7 +108,8 @@ func (r *redisRefreshTokenStore) GetByTokenHash(hash string) (*RefreshTokenRecor
 		return nil, nil
 	}
 
-	ctx := context.Background()
+	ctx, cancel := r.operationContext()
+	defer cancel()
 	tokenKey := r.tokenKey(hash)
 	values, err := r.client.HGetAll(ctx, tokenKey).Result()
 	if err != nil {
@@ -108,7 +141,8 @@ func (r *redisRefreshTokenStore) Rotate(oldTokenHash string, newToken *RefreshTo
 		return ErrRefreshTokenNotActive
 	}
 
-	ctx := context.Background()
+	ctx, cancel := r.operationContext()
+	defer cancel()
 	oldTokenKey := r.tokenKey(oldTokenHash)
 	newTokenKey := r.tokenKey(newToken.TokenHash)
 	userSetKey := r.userSetKey(newToken.UserID)
@@ -170,7 +204,8 @@ func (r *redisRefreshTokenStore) RevokeByTokenHash(hash, reason string, now time
 		return nil
 	}
 
-	ctx := context.Background()
+	ctx, cancel := r.operationContext()
+	defer cancel()
 	tokenKey := r.tokenKey(hash)
 	values, err := r.client.HGetAll(ctx, tokenKey).Result()
 	if err != nil {
@@ -204,7 +239,8 @@ func (r *redisRefreshTokenStore) RevokeAllByUser(userID int, reason string, now 
 		return nil
 	}
 
-	ctx := context.Background()
+	ctx, cancel := r.operationContext()
+	defer cancel()
 	userSetKey := r.userSetKey(userID)
 	members, err := r.client.SMembers(ctx, userSetKey).Result()
 	if err != nil {
@@ -214,67 +250,66 @@ func (r *redisRefreshTokenStore) RevokeAllByUser(userID int, reason string, now 
 		return nil
 	}
 
-	nowUnix := strconv.FormatInt(now.Unix(), 10)
-	stale := make([]any, 0)
+	fetchPipe := r.client.Pipeline()
+	recordCommands := make(map[string]*redis.MapStringStringCmd, len(members))
 	for _, hash := range members {
 		hash = strings.TrimSpace(hash)
 		if hash == "" {
 			continue
 		}
+		recordCommands[hash] = fetchPipe.HGetAll(ctx, r.tokenKey(hash))
+	}
+	if len(recordCommands) == 0 {
+		return r.client.Del(ctx, userSetKey).Err()
+	}
+	if _, err := fetchPipe.Exec(ctx); err != nil {
+		return err
+	}
 
+	nowUnix := strconv.FormatInt(now.Unix(), 10)
+	remainingMembers := 0
+	updatePipe := r.client.Pipeline()
+	for hash, command := range recordCommands {
 		tokenKey := r.tokenKey(hash)
-		values, getErr := r.client.HGetAll(ctx, tokenKey).Result()
-		if getErr != nil {
-			return getErr
-		}
+		values := command.Val()
 		if len(values) == 0 {
-			stale = append(stale, hash)
+			updatePipe.SRem(ctx, userSetKey, hash)
 			continue
 		}
 
 		record, parseErr := parseRecordFields(hash, values)
 		if parseErr != nil {
-			stale = append(stale, hash)
+			updatePipe.Del(ctx, tokenKey)
+			updatePipe.SRem(ctx, userSetKey, hash)
 			continue
 		}
 
-		if time.Now().After(record.ExpiresAt.Add(expiredTokenRetention)) {
-			stale = append(stale, hash)
-			_ = r.client.Del(ctx, tokenKey).Err()
+		if now.After(record.ExpiresAt.Add(expiredTokenRetention)) {
+			updatePipe.Del(ctx, tokenKey)
+			updatePipe.SRem(ctx, userSetKey, hash)
 			continue
 		}
+		remainingMembers++
 
 		if strings.TrimSpace(values["revoked_at"]) != "" {
 			continue
 		}
 
-		pipe := r.client.Pipeline()
-		pipe.HSet(ctx, tokenKey, map[string]any{
+		updatePipe.HSet(ctx, tokenKey, map[string]any{
 			"revoked_at":    nowUnix,
 			"revoke_reason": strings.TrimSpace(reason),
 			"last_used_at":  nowUnix,
 		})
-		pipe.ExpireAt(ctx, tokenKey, record.ExpiresAt.Add(expiredTokenRetention))
-		if _, execErr := pipe.Exec(ctx); execErr != nil {
-			return execErr
-		}
+		updatePipe.ExpireAt(ctx, tokenKey, record.ExpiresAt.Add(expiredTokenRetention))
 	}
 
-	if len(stale) > 0 {
-		if err := r.client.SRem(ctx, userSetKey, stale...).Err(); err != nil {
-			return err
-		}
+	if remainingMembers == 0 {
+		updatePipe.Del(ctx, userSetKey)
+	} else {
+		updatePipe.Expire(ctx, userSetKey, userSetTTL(now.Add(expiredTokenRetention)))
 	}
-
-	card, err := r.client.SCard(ctx, userSetKey).Result()
-	if err != nil {
-		return err
-	}
-	if card == 0 {
-		return r.client.Del(ctx, userSetKey).Err()
-	}
-
-	return r.client.Expire(ctx, userSetKey, userSetTTL(now.Add(expiredTokenRetention))).Err()
+	_, err = updatePipe.Exec(ctx)
+	return err
 }
 
 func (r *redisRefreshTokenStore) tokenKey(hash string) string {

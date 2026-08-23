@@ -3,7 +3,10 @@ package websocket
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"draarl/internal/ghostsession"
 	"draarl/internal/protocol"
@@ -68,4 +71,44 @@ func TestValidateGhostPreAuthRequiresVersionedSessionProtocol(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWSDeviceVoiceRateLimitBoundsBurstAndRefill(t *testing.T) {
+	device := &WSDevice{}
+	now := time.Unix(1_000, 0)
+	var accepted atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				if device.allowVoiceFrame(now) {
+					accepted.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if got := accepted.Load(); got != int64(wsVoiceRateBurst) {
+		t.Fatalf("accepted burst=%d want=%d", got, int64(wsVoiceRateBurst))
+	}
+	if got := device.voiceRateLimitedCount(); got != 650 {
+		t.Fatalf("dropped=%d want=650", got)
+	}
+	if !device.allowVoiceFrame(now.Add(time.Second)) {
+		t.Fatal("expected token refill after one second")
+	}
+}
+
+func TestWSDeviceWriterStopSignalIsImmediateAndIdempotent(t *testing.T) {
+	device := &WSDevice{closeCh: make(chan struct{})}
+	stop := device.writerStopChannel()
+	device.signalWriterStop(device.closeCh)
+	select {
+	case <-stop:
+	default:
+		t.Fatal("writer stop signal was not closed")
+	}
+	device.signalWriterStop(device.closeCh)
 }

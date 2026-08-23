@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	authstore "draarl/internal/auth"
 	"draarl/internal/gormdb"
 	"draarl/internal/models"
 	"draarl/pkg/crypto"
@@ -52,6 +54,21 @@ func TestCanViewGroup(t *testing.T) {
 				t.Fatalf("canViewGroup() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSearchMembershipCandidateIDsOnlyIncludesForeignPrivateGroups(t *testing.T) {
+	groups := []*gormdb.Group{
+		nil,
+		{ID: 1, Type: groupTypePublic, OwerID: 9},
+		{ID: 2, Type: groupTypePrivate, OwerID: 7},
+		{ID: 3, Type: groupTypePrivate, OwerID: 9},
+		{ID: 3, Type: groupTypePrivate, OwerID: 9},
+		{ID: 0, Type: groupTypePrivate, OwerID: 9},
+	}
+	got := searchMembershipCandidateIDs(groups, 7)
+	if len(got) != 1 || got[0] != 3 {
+		t.Fatalf("membership candidates=%v, want [3]", got)
 	}
 }
 
@@ -165,6 +182,78 @@ func TestCanAdminSwitchLogin(t *testing.T) {
 	}
 	if canAdminSwitchLogin(nil, activeUser) || canAdminSwitchLogin(admin, nil) {
 		t.Fatal("missing actor or target must be denied")
+	}
+}
+
+func TestMustVerifyCurrentPassword(t *testing.T) {
+	admin := &gormdb.User{ID: 1, Roles: "admin"}
+	ordinary := &gormdb.User{ID: 2, Roles: "user"}
+	other := &gormdb.User{ID: 3, Roles: "user"}
+
+	if !mustVerifyCurrentPassword(admin, admin) {
+		t.Fatal("administrator changing their own password must verify the current password")
+	}
+	if !mustVerifyCurrentPassword(ordinary, ordinary) {
+		t.Fatal("ordinary user changing their own password must verify the current password")
+	}
+	if mustVerifyCurrentPassword(admin, other) {
+		t.Fatal("administrator resetting another account must not require that account's current password")
+	}
+	if mustVerifyCurrentPassword(nil, other) || mustVerifyCurrentPassword(admin, nil) {
+		t.Fatal("missing actor or target must not be treated as a self-service password change")
+	}
+}
+
+func TestValidateNewUserPassword(t *testing.T) {
+	tests := []struct {
+		name     string
+		password string
+		wantErr  bool
+	}{
+		{name: "minimum ASCII", password: "123456"},
+		{name: "minimum Unicode", password: "密码安全测试"},
+		{name: "bcrypt byte boundary", password: strings.Repeat("a", 72)},
+		{name: "multibyte byte boundary", password: strings.Repeat("密", 24)},
+		{name: "too short", password: "12345", wantErr: true},
+		{name: "too many bytes", password: strings.Repeat("a", 73), wantErr: true},
+		{name: "multibyte too many bytes", password: strings.Repeat("密", 25), wantErr: true},
+		{name: "invalid UTF-8", password: string([]byte{0xff, 0xfe, 0xfd, '1', '2', '3'}), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateNewUserPassword(tt.password); (err != nil) != tt.wantErr {
+				t.Fatalf("validateNewUserPassword() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRevokeUserRefreshSessions(t *testing.T) {
+	authstore.CloseRefreshTokenStore()
+	t.Cleanup(authstore.CloseRefreshTokenStore)
+	store := authstore.GetRefreshTokenStore()
+
+	now := time.Now()
+	for _, record := range []*authstore.RefreshTokenRecord{
+		{UserID: 44, TokenHash: "session-a", ExpiresAt: now.Add(time.Hour)},
+		{UserID: 44, TokenHash: "session-b", ExpiresAt: now.Add(time.Hour)},
+		{UserID: 45, TokenHash: "other-user", ExpiresAt: now.Add(time.Hour)},
+	} {
+		if err := store.Create(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	revokeUserRefreshSessions(44, "password_changed")
+	for _, hash := range []string{"session-a", "session-b"} {
+		record, err := store.GetByTokenHash(hash)
+		if err != nil || record == nil || record.RevokedAt == nil || record.RevokeReason != "password_changed" {
+			t.Fatalf("session %q not revoked: record=%+v err=%v", hash, record, err)
+		}
+	}
+	other, err := store.GetByTokenHash("other-user")
+	if err != nil || other == nil || other.RevokedAt != nil {
+		t.Fatalf("other user's session was revoked: record=%+v err=%v", other, err)
 	}
 }
 

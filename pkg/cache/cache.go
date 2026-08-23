@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 )
@@ -78,7 +77,9 @@ func (c *TwoLevelCache) Get(ctx context.Context, key string, dest interface{}) e
 }
 
 // Set 设置缓存 (写入L1)
-// 性能优化：添加 TTL 抖动防止缓存雪崩，使用缓冲区池减少内存分配
+// 性能优化：添加 TTL 抖动防止缓存雪崩，使用缓冲区池减少内存分配。
+// 【S2 安全修复】序列化结果必须深拷贝后再入池归还，否则下一个 Set 复用
+// 同一 buffer 覆盖底层数组会污染已缓存数据（并发时还会造成数据竞争）。
 func (c *TwoLevelCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
 	// 性能优化：使用缓冲区池进行 JSON 序列化
 	buf := bufferPool.Get().(*bytes.Buffer)
@@ -89,7 +90,8 @@ func (c *TwoLevelCache) Set(ctx context.Context, key string, value interface{}, 
 	if err := encoder.Encode(value); err != nil {
 		return err
 	}
-	data := buf.Bytes()
+	// 深拷贝：encoder.Encode 会在末尾追加 '\n'，与旧行为保持一致（Get 反序列化容忍）
+	data := append([]byte(nil), buf.Bytes()...)
 
 	// 写入本地缓存 (L1) - 使用抖动后的 TTL
 	localTTL := ttl
@@ -120,123 +122,6 @@ func (c *TwoLevelCache) Clear(ctx context.Context) error {
 func (c *TwoLevelCache) DeletePrefix(ctx context.Context, prefix string) error {
 	c.local.DeletePrefix(prefix)
 	return nil
-}
-
-// localCache 本地内存缓存
-type localCache struct {
-	mu      sync.RWMutex
-	items   map[string]*cacheItem
-	lru     *lruList
-	maxSize int
-}
-
-type cacheItem struct {
-	data      interface{}
-	expiredAt time.Time
-}
-
-type lruList struct {
-	items []string
-}
-
-func newLocalCache(maxSize int) *localCache {
-	return &localCache{
-		items:   make(map[string]*cacheItem),
-		lru:     &lruList{items: make([]string, 0, maxSize)},
-		maxSize: maxSize,
-	}
-}
-
-func (lc *localCache) Get(key string, dest interface{}) bool {
-	lc.mu.RLock()
-	defer lc.mu.RUnlock()
-
-	item, ok := lc.items[key]
-	if !ok {
-		return false
-	}
-
-	// 检查是否过期
-	if time.Now().After(item.expiredAt) {
-		return false
-	}
-
-	// 类型断言
-	switch v := dest.(type) {
-	case *[]byte:
-		if data, ok := item.data.([]byte); ok {
-			*v = data
-			return true
-		}
-	case *string:
-		if str, ok := item.data.(string); ok {
-			*v = str
-			return true
-		}
-	default:
-		// 尝试JSON反序列化
-		if data, ok := item.data.([]byte); ok {
-			return json.Unmarshal(data, dest) == nil
-		}
-	}
-
-	return false
-}
-
-func (lc *localCache) Set(key string, value interface{}, ttl time.Duration) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	expiredAt := time.Now().Add(ttl)
-	if ttl == 0 {
-		expiredAt = time.Now().Add(5 * time.Minute)
-	}
-
-	// 检查是否需要淘汰
-	if len(lc.items) >= lc.maxSize {
-		lc.evict()
-	}
-
-	lc.items[key] = &cacheItem{
-		data:      value,
-		expiredAt: expiredAt,
-	}
-}
-
-func (lc *localCache) Delete(key string) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	delete(lc.items, key)
-}
-
-func (lc *localCache) Clear() {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	lc.items = make(map[string]*cacheItem)
-	lc.lru.items = make([]string, 0, lc.maxSize)
-}
-
-// DeletePrefix 本地缓存按前缀删除
-// 遍历 Map，发现前缀匹配的直接 delete
-func (lc *localCache) DeletePrefix(prefix string) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	for key := range lc.items {
-		if strings.HasPrefix(key, prefix) {
-			delete(lc.items, key)
-		}
-	}
-}
-
-func (lc *localCache) evict() {
-	if len(lc.lru.items) == 0 {
-		return
-	}
-	// 简单的FIFO淘汰
-	key := lc.lru.items[0]
-	lc.lru.items = lc.lru.items[1:]
-	delete(lc.items, key)
 }
 
 // ErrCacheMiss 缓存未命中错误

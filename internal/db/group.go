@@ -156,6 +156,10 @@ type RelayRepository struct {
 	db *sql.DB
 }
 
+const relayListQuery = `SELECT id, name, up_freq, down_freq, send_ctss, recive_ctss,
+	ower_callsign, create_time, update_time, status, note
+	FROM relay WHERE status = 1 ORDER BY id`
+
 // NewRelayRepository 创建中继台仓库
 func NewRelayRepository() *RelayRepository {
 	return &RelayRepository{db: Get()}
@@ -163,7 +167,7 @@ func NewRelayRepository() *RelayRepository {
 
 // ListRelays 列出所有中继台
 func (r *RelayRepository) ListRelays() ([]models.Relay, error) {
-	query := `SELECT * FROM relay WHERE status = 1`
+	query := relayListQuery
 	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -177,10 +181,12 @@ func (r *RelayRepository) ListRelays() ([]models.Relay, error) {
 			&relay.SendCTSS, &relay.ReceiveCTSS, &relay.OwerCallSign,
 			&relay.CreateTime, &relay.UpdateTime, &relay.Status, &relay.Note)
 		if err != nil {
-			log.Printf("Error scanning relay: %v", err)
-			continue
+			return nil, err
 		}
 		relays = append(relays, relay)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return relays, nil
@@ -242,6 +248,9 @@ type ServerRepository struct {
 	db *sql.DB
 }
 
+const serverListQuery = `SELECT id, name, dns_name, is_online, create_time, update_time
+	FROM servers WHERE status = 1 ORDER BY id`
+
 // NewServerRepository 创建服务器仓库
 func NewServerRepository() *ServerRepository {
 	return &ServerRepository{db: Get()}
@@ -249,7 +258,7 @@ func NewServerRepository() *ServerRepository {
 
 // ListServers 列出所有服务器
 func (r *ServerRepository) ListServers() ([]*models.Server, error) {
-	query := `SELECT * FROM servers WHERE status = 1`
+	query := serverListQuery
 	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -260,19 +269,22 @@ func (r *ServerRepository) ListServers() ([]*models.Server, error) {
 	for rows.Next() {
 		server := &models.Server{}
 		var dnsName sql.NullString
-		err := rows.Scan(&server.ID, &server.Name, new(int), new(string), new(string),
-			new(string), new(int), new(int), new(string), new(int),
-			new(string), &dnsName, new(int), new(string),
-			new(bool), &server.Online, &server.CreateTime, &server.UpdateTime,
-			new(string), new(int))
+		var online sql.NullBool
+		err := rows.Scan(&server.ID, &server.Name, &dnsName, &online,
+			&server.CreateTime, &server.UpdateTime)
 		if err != nil {
-			log.Printf("Error scanning server: %v", err)
-			continue
+			return nil, err
 		}
 		if dnsName.Valid {
 			server.Host = dnsName.String
 		}
+		if online.Valid && online.Bool {
+			server.Online = 1
+		}
 		servers = append(servers, server)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	return servers, nil

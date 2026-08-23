@@ -26,6 +26,9 @@ type UploadResult struct {
 	Error     error
 }
 
+const uploadResultEnqueueTimeout = 500 * time.Millisecond
+const maxPendingUploadSessions = 4096
+
 // CommUploader 批量上传器
 type CommUploader struct {
 	pendingQueue []*PendingUpload
@@ -34,6 +37,7 @@ type CommUploader struct {
 	config       *CommSettingsConfig
 	ctx          context.Context
 	cancel       context.CancelFunc
+	droppedCount uint64
 }
 
 // NewCommUploader 创建批量上传器
@@ -50,13 +54,24 @@ func NewCommUploader(config *CommSettingsConfig, resultChan chan *UploadResult) 
 
 // AddToQueue 添加到上传队列
 func (cu *CommUploader) AddToQueue(session *AudioSession) {
-	if cu == nil {
+	if cu == nil || session == nil {
 		return
 	}
 
 	cu.mu.Lock()
 	defer cu.mu.Unlock()
 
+	if len(cu.pendingQueue) >= maxPendingUploadSessions {
+		// 存储长期不可用时保留最新会话，避免录音上传队列无限增长。
+		// 原地左移并清空尾指针，避免故障期间反复分配大切片。
+		copy(cu.pendingQueue, cu.pendingQueue[1:])
+		cu.pendingQueue[len(cu.pendingQueue)-1] = nil
+		cu.pendingQueue = cu.pendingQueue[:len(cu.pendingQueue)-1]
+		cu.droppedCount++
+		if cu.droppedCount == 1 || cu.droppedCount%100 == 0 {
+			log.Printf("[COMM_UPLOADER] 待上传队列满载，丢弃最旧录音会话（累计 %d）", cu.droppedCount)
+		}
+	}
 	cu.pendingQueue = append(cu.pendingQueue, &PendingUpload{
 		Session:   session,
 		CreatedAt: time.Now(),
@@ -88,12 +103,12 @@ func (cu *CommUploader) ProcessBatch() {
 		audioPath, audioSize, err := cu.uploadAudio(item.Session)
 
 		if cu.resultChan != nil {
-			cu.resultChan <- &UploadResult{
+			cu.publishResult(&UploadResult{
 				Session:   item.Session,
 				AudioPath: audioPath,
 				AudioSize: audioSize,
 				Error:     err,
-			}
+			})
 		}
 
 		if err != nil {
@@ -107,6 +122,36 @@ func (cu *CommUploader) ProcessBatch() {
 	if successCount > 0 || failCount > 0 {
 		log.Printf("[COMM_UPLOADER] 批量上传完成: 成功 %d, 失败 %d", successCount, failCount)
 	}
+}
+
+// publishResult prevents a stopped or stalled database syncer from blocking
+// the upload timer (and the recorder shutdown path) indefinitely. Normal
+// consumers still receive results synchronously; only a full channel waits
+// for a bounded interval or cancellation before dropping the bookkeeping
+// result with an explicit warning.
+func (cu *CommUploader) publishResult(result *UploadResult) bool {
+	if cu == nil || cu.resultChan == nil {
+		return false
+	}
+	timer := time.NewTimer(uploadResultEnqueueTimeout)
+	defer timer.Stop()
+	select {
+	case cu.resultChan <- result:
+		return true
+	case <-cu.ctx.Done():
+		log.Printf("[COMM_UPLOADER] 结果通道已停止，丢弃上传结果: %v", cu.ctx.Err())
+		return false
+	case <-timer.C:
+		log.Printf("[COMM_UPLOADER] 结果通道满载，丢弃上传结果（会话: %s）", uploadResultSessionID(result))
+		return false
+	}
+}
+
+func uploadResultSessionID(result *UploadResult) string {
+	if result == nil || result.Session == nil {
+		return "<nil>"
+	}
+	return result.Session.SessionID
 }
 
 // RawOpusHeader 原始 Opus 数据文件头格式
@@ -178,6 +223,17 @@ func (cu *CommUploader) GetPendingCount() int {
 	cu.mu.Lock()
 	defer cu.mu.Unlock()
 	return len(cu.pendingQueue)
+}
+
+// GetDroppedCount returns the number of completed recording sessions evicted
+// because the storage upload queue reached its hard bound.
+func (cu *CommUploader) GetDroppedCount() uint64 {
+	if cu == nil {
+		return 0
+	}
+	cu.mu.Lock()
+	defer cu.mu.Unlock()
+	return cu.droppedCount
 }
 
 // UpdateConfig 更新配置

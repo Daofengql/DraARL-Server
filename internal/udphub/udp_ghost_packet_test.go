@@ -94,6 +94,22 @@ func TestModernUDPGhostPacketRequiresExactSessionBinding(t *testing.T) {
 	}
 }
 
+func TestGhostPacketWithMissingSessionDeviceIsRejected(t *testing.T) {
+	previousManager := GlobalUDPGhostManager
+	manager := newUDPGhostManager()
+	manager.sessionTags[77] = "removed-session"
+	GlobalUDPGhostManager = manager
+	t.Cleanup(func() { GlobalUDPGhostManager = previousManager })
+
+	packet := &protocol.DraARLv1Packet{
+		Username: "alice", SSID: protocol.SSIDGhostAndroid, DevModel: protocol.DraARLDevModelAndroid,
+		Reserved: []byte{0, 0, 0, 77},
+	}
+	if device, isGhost := getDeviceForPacket(packet, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 32077}); device != nil || isGhost {
+		t.Fatalf("missing session resolved unexpectedly: device=%v ghost=%t", device, isGhost)
+	}
+}
+
 func TestSourceExclusionUsesExactGhostSession(t *testing.T) {
 	exact := domainReceiverEntry{username: "alice", ssid: protocol.SSIDGhostAndroid, sessionID: "session-a"}
 	sibling := domainReceiverEntry{username: "alice", ssid: protocol.SSIDGhostAndroid, sessionID: "session-b"}

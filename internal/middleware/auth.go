@@ -53,8 +53,8 @@ func AuthMiddleware() gin.HandlerFunc {
 		c.Set("username", claims.Username)
 		c.Set("roles", claims.Roles)
 
-		repo := gormdb.NewUserRepository()
-		user, err := repo.GetUserByName(claims.Username)
+		// 【H8 性能修复】用户查询走两级缓存（2 分钟 TTL，变更主动失效）
+		user, err := loadUserByName(c.Request.Context(), claims.Username)
 		if err != nil {
 			log.Printf("获取用户信息失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{

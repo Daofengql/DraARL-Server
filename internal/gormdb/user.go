@@ -1,8 +1,10 @@
 package gormdb
 
 import (
+	"context"
 	"errors"
 	"sort"
+	"time"
 
 	broadcastmodel "draarl/internal/broadcast/model"
 	"draarl/internal/models"
@@ -15,6 +17,41 @@ type UserRepository struct {
 	db *gorm.DB
 }
 
+const maxUserPageSize = 100
+
+func normalizeUserOffset(limit, offset int) (int, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > maxUserPageSize {
+		limit = maxUserPageSize
+	}
+	if offset < 0 {
+		return 0, 0, errors.New("user offset is negative")
+	}
+	return limit, offset, nil
+}
+
+// NormalizeUserPagination bounds user-management page arithmetic before it
+// reaches SQL.  Repository callers are not all HTTP handlers, so this check
+// must live at the repository boundary as well.
+func NormalizeUserPagination(limit, page int) (int, int, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > maxUserPageSize {
+		limit = maxUserPageSize
+	}
+	if page <= 0 {
+		page = 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if page > maxInt/limit+1 {
+		return 0, 0, 0, errors.New("user page is too large")
+	}
+	return limit, page, (page - 1) * limit, nil
+}
+
 // NewUserRepository 创建用户仓库
 func NewUserRepository() *UserRepository {
 	return &UserRepository{db: Get()}
@@ -25,7 +62,10 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizeUserPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// 获取总数
 	if err := r.db.Model(&User{}).Count(&total).Error; err != nil {
@@ -42,8 +82,16 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*User, int64, error) {
 
 // GetUserByID 通过ID获取用户
 func (r *UserRepository) GetUserByID(id int) (*User, error) {
+	return r.GetUserByIDContext(context.Background(), id)
+}
+
+// GetUserByIDContext 使用调用方上下文查询用户，允许请求取消中断数据库等待。
+func (r *UserRepository) GetUserByIDContext(ctx context.Context, id int) (*User, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var user User
-	err := r.db.First(&user, id).Error
+	err := r.db.WithContext(ctx).First(&user, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -55,8 +103,17 @@ func (r *UserRepository) GetUserByID(id int) (*User, error) {
 
 // GetUserByName 通过用户名获取用户
 func (r *UserRepository) GetUserByName(name string) (*User, error) {
+	return r.GetUserByNameContext(context.Background(), name)
+}
+
+// GetUserByNameContext performs the authentication lookup with the caller's
+// cancellation/deadline so a stalled database cannot pin a data-plane worker.
+func (r *UserRepository) GetUserByNameContext(ctx context.Context, name string) (*User, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var user User
-	err := r.db.Where("name = ?", name).First(&user).Error
+	err := r.db.WithContext(ctx).Where("name = ?", name).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -167,13 +224,38 @@ func (r *UserRepository) CreateUser(user *User) error {
 	return err
 }
 
-// UpdateUser 更新用户基本信息
+// UpdateUser 更新用户基本信息。
+// 【零值修复】改用显式字段 map：GORM 对 struct 的 Updates 会静默忽略零值
+// 字段（清空 Avatar/Introduction 不生效），map 方式可正确写入零值；同时
+// 明确排除 password / device_password，杜绝调用方无意改写凭据。
 func (r *UserRepository) UpdateUser(user *User) error {
-	if user != nil {
-		user.CallSign = NormalizeCallSign(user.CallSign)
+	if user == nil || user.ID <= 0 {
+		return errors.New("invalid user for update")
 	}
-
-	err := r.db.Model(user).Updates(user).Error
+	user.CallSign = NormalizeCallSign(user.CallSign)
+	fields := map[string]interface{}{
+		"name":            user.Name,
+		"nickname":        user.NickName,
+		"email":           user.Email,
+		"email_verified":  user.EmailVerified,
+		"callsign":        user.CallSign,
+		"phone":           user.Phone,
+		"birthday":        user.Birthday,
+		"sex":             user.Sex,
+		"avatar":          user.Avatar,
+		"address":         user.Address,
+		"roles":           user.Roles,
+		"introduction":    user.Introduction,
+		"alarm_msg":       user.AlarmMsg,
+		"status":          user.Status,
+		"approval_status": user.ApprovalStatus,
+		"openid":          user.OpenID,
+		"pid":             user.PID,
+		"dmrid":           user.DMRID,
+		"mdcid":           user.MDCID,
+		"update_time":     time.Now(),
+	}
+	err := r.db.Model(&User{}).Where("id = ?", user.ID).Updates(fields).Error
 	if IsDuplicateColumnError(err, "callsign") {
 		return ErrCallSignConflict
 	}
@@ -446,34 +528,33 @@ func collectDeletedGroupBroadcastObjectKeys(tx *gorm.DB, groupIDs []int, objectK
 	return nil
 }
 
+// reassignSurvivingBroadcastUserReferences 把被删除用户创建/编辑的广播资源
+// 重新归属到其所在存续群组的当前所有者。
+// 【性能修复】原实现遍历所有存续群组逐组发 3~4 条 UPDATE（N+1），
+// 改为 4 条 UPDATE...JOIN 批量完成，避免群组多时锁库数秒。
 func reassignSurvivingBroadcastUserReferences(tx *gorm.DB, userID int) error {
-	var groups []Group
-	if err := tx.Where("ower_id <> ?", userID).Find(&groups).Error; err != nil {
-		return err
+	statements := []struct {
+		table string
+		col   string
+	}{
+		{"broadcast_audios", "created_by"},
+		{"broadcast_schedules", "created_by"},
+		{"broadcast_schedules", "updated_by"},
 	}
-	for _, group := range groups {
-		if err := tx.Unscoped().Model(&broadcastmodel.BroadcastAudio{}).
-			Where("group_id = ? AND created_by = ?", group.ID, userID).
-			Update("created_by", group.OwerID).Error; err != nil {
+	for _, st := range statements {
+		if err := tx.Exec(
+			"UPDATE "+st.table+" a INNER JOIN public_groups g ON g.id = a.group_id AND g.ower_id <> ? SET a."+st.col+" = g.ower_id WHERE a."+st.col+" = ?",
+			userID, userID,
+		).Error; err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Model(&broadcastmodel.BroadcastSchedule{}).
-			Where("group_id = ? AND created_by = ?", group.ID, userID).
-			Update("created_by", group.OwerID).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Model(&broadcastmodel.BroadcastSchedule{}).
-			Where("group_id = ? AND updated_by = ?", group.ID, userID).
-			Update("updated_by", group.OwerID).Error; err != nil {
-			return err
-		}
-		if group.IsVirtual {
-			if err := tx.Model(&broadcastmodel.VirtualGroupBroadcastPolicy{}).
-				Where("virtual_group_id = ? AND updated_by = ?", group.ID, userID).
-				Update("updated_by", group.OwerID).Error; err != nil {
-				return err
-			}
-		}
+	}
+	// 虚拟互联组策略的更新者同样批量重归属
+	if err := tx.Exec(
+		"UPDATE virtual_group_broadcast_policies p INNER JOIN public_groups g ON g.id = p.virtual_group_id AND g.is_virtual = 1 AND g.ower_id <> ? SET p.updated_by = g.ower_id WHERE p.updated_by = ?",
+		userID, userID,
+	).Error; err != nil {
+		return err
 	}
 	return nil
 }
@@ -493,14 +574,18 @@ func (r *UserRepository) UserCount() (int64, error) {
 // AdminUserCount 获取管理员用户数量
 func (r *UserRepository) AdminUserCount() (int64, error) {
 	var count int64
-	err := r.db.Model(&User{}).Where("roles LIKE ?", "%admin%").Count(&count).Error
+	err := r.db.Model(&User{}).Where("roles = ?", "admin").Count(&count).Error
 	return count, err
 }
 
 // ListByApprovalStatus 根据审核状态获取用户列表
 func (r *UserRepository) ListByApprovalStatus(status int, limit, offset int) ([]*User, error) {
 	var users []*User
-	err := r.db.Where("approval_status = ?", status).
+	var err error
+	if limit, offset, err = normalizeUserOffset(limit, offset); err != nil {
+		return nil, err
+	}
+	err = r.db.Where("approval_status = ?", status).
 		Order("id DESC").
 		Limit(limit).
 		Offset(offset).
@@ -527,7 +612,10 @@ func (r *UserRepository) SearchUsers(keyword string, limit, page int) ([]*User, 
 	var users []*User
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizeUserPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 	query := r.db.Model(&User{}).Where("name LIKE ? OR callsign LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
 
 	// 获取总数
@@ -559,7 +647,10 @@ func (r *UserRepository) GetPendingUsers(limit, page int) ([]*User, int64, error
 	var users []*User
 	var total int64
 
-	offset := (page - 1) * limit
+	limit, _, offset, err := NormalizeUserPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	// 获取总数
 	if err := r.db.Model(&User{}).Where("approval_status = ?", 0).Count(&total).Error; err != nil {
@@ -580,7 +671,16 @@ func (r *UserRepository) GetPendingUsers(limit, page int) ([]*User, int64, error
 
 // UpdateUserDevicePassword 更新用户设备准入密码
 func (r *UserRepository) UpdateUserDevicePassword(id int, devicePassword string) error {
-	return r.db.Model(&User{}).Where("id = ?", id).Update("device_password", devicePassword).Error
+	return r.UpdateUserDevicePasswordContext(context.Background(), id, devicePassword)
+}
+
+// UpdateUserDevicePasswordContext keeps legacy password migration bounded by
+// the same authentication request context as the lookup.
+func (r *UserRepository) UpdateUserDevicePasswordContext(ctx context.Context, id int, devicePassword string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).Update("device_password", devicePassword).Error
 }
 
 // GetUserDevicePassword 获取用户设备密码存储值（AES 密文；兼容历史 bcrypt）

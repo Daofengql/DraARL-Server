@@ -13,6 +13,8 @@ System:
 UDP:
     SendWorkers: 0             # 并发发送 FD 数，自动值最多 8；手动值范围 1-32
     IngressWorkers: 0          # 按设备身份分片的处理 worker，自动值最多 16
+    DeviceAuthWorkers: 4       # 独立认证 worker，限制同时 bcrypt/DB 认证数；范围 1-16
+    DeviceAuthQueueSize: 512   # 每个认证 worker 的排队上限；共享 NAT/FRP 批量重连不受单 IP 硬拒绝
     FrameQueueSize: 64         # 发送队列按完整帧计数；满时淘汰最旧帧
     MaxFrameAgeMS: 120         # 超过该排队时间的实时帧不再发送
     ReadBufferBytes: 4194304   # 请求的 UDP 接收缓冲（实际值以启动日志/指标为准）
@@ -75,6 +77,7 @@ Edge:
     NodeID: ""                 # 可由注册凭据携带，通常无需手填
     Listen: ":60050"           # 边缘普通设备与 Type 0 共用双向 socket；远程中心场景不要绑定 127.0.0.1
     ProxyProtocol: ""          # 设为 v2 时解析 FRP PROXY Protocol v2；应使用防火墙仅允许受信代理访问
+    ProxyTrustedCIDRs: []       # 受信代理源网段，例如 ["127.0.0.0/8", "10.0.0.0/8"]；release 构建启用 v2 时必须配置非空网段
     TLSCAFile: ""              # 中心证书 CA；使用公共 CA 时可留空
     TLSServerName: "center.example.com"
     InsecureSkipVerify: false     # 仅本地测试可临时开启
@@ -92,13 +95,15 @@ Database:
     DBName: "draarl"
     Charset: "utf8mb4"
     Collate: "utf8mb4_unicode_ci"
+    # Local 保持历史行为；新部署建议显式使用 UTC 或 IANA 时区，使 Go/GORM/MySQL session 一致
+    Timezone: "Local"
 
     # 连接池配置
     MaxOpenConns: 25           # 最大打开连接数
     MaxIdleConns: 5            # 最大空闲连接数
     MaxLifetime: 300           # 连接最大存活时间(秒)
 
-# Redis 配置（refresh token 优先使用 Redis；不可用时自动降级到内存存储）
+# Redis 配置（release 构建必需；development/test 构建不可用时可降级到内存存储）
 Redis:
     Host: "127.0.0.1"
     Port: 6379
@@ -127,6 +132,7 @@ Broadcast:
     TranscodeTimeoutSeconds: 90   # ffprobe + ffmpeg 单任务总超时
     TranscodeMemoryLimitMB: 512   # Linux 子进程地址空间上限；容器还受 /tmp 64 MiB 限制
     TranscodeCPULimitSeconds: 60  # Linux 子进程累计 CPU 时间上限；ffmpeg 固定单线程
+    TranscodeWorkers: 2            # 转码并发 worker 数（1-4，注意与内存/CPU 上限配合）
     ScanIntervalMS: 1000          # 到期计划扫描间隔
     RecoveryWindowSeconds: 10     # 重启后允许认领的短暂到期窗口
     ClaimBatchSize: 20            # 每轮最多认领任务数

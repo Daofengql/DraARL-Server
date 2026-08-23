@@ -140,6 +140,13 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 		})
 		return
 	}
+	if err := validateDeviceConfigValues(configs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "配置值不合法: " + err.Error(),
+		})
+		return
+	}
 
 	// 保存配置到数据库（如果设备在线会自动下发）
 	if err := udphub.SaveDeviceConfigsToDB(deviceID, configs); err != nil {

@@ -18,12 +18,19 @@ type dbRecord struct {
 }
 
 // CommSyncer 通信记录数据库同步器
+// maxPendingCommRecords 待写入通信记录上限，防止长期 DB 故障时内存无界增长。
+const maxPendingCommRecords = 20000
+
 type CommSyncer struct {
-	db         *gorm.DB
-	pending    []*dbRecord
-	resultChan chan *UploadResult
-	mu         sync.Mutex
-	running    bool
+	db           *gorm.DB
+	pending      []*dbRecord
+	resultChan   chan *UploadResult
+	stopChan     chan struct{}
+	listenerDone chan struct{}
+	mu           sync.Mutex
+	running      bool
+	stopClosed   bool
+	droppedCount int
 }
 
 // NewCommSyncer 创建数据库同步器
@@ -32,6 +39,7 @@ func NewCommSyncer(resultChan chan *UploadResult) *CommSyncer {
 		db:         gormdb.Get(),
 		pending:    make([]*dbRecord, 0),
 		resultChan: resultChan,
+		stopChan:   make(chan struct{}),
 	}
 }
 
@@ -41,25 +49,61 @@ func (cs *CommSyncer) Start() {
 		return
 	}
 
+	cs.mu.Lock()
+	if cs.running {
+		cs.mu.Unlock()
+		return
+	}
+	if cs.stopChan == nil || cs.stopClosed {
+		cs.stopChan = make(chan struct{})
+		cs.stopClosed = false
+	}
 	cs.running = true
-	go cs.listenResults()
+	stopChan := cs.stopChan
+	listenerDone := make(chan struct{})
+	cs.listenerDone = listenerDone
+	cs.mu.Unlock()
+	go func() {
+		defer close(listenerDone)
+		cs.listenResults(stopChan)
+	}()
 }
 
 // listenResults 监听上传结果
-func (cs *CommSyncer) listenResults() {
-	for result := range cs.resultChan {
-		if !cs.running {
+func (cs *CommSyncer) listenResults(stopChan <-chan struct{}) {
+	for {
+		select {
+		case <-stopChan:
 			return
-		}
+		case result, ok := <-cs.resultChan:
+			if !ok {
+				return
+			}
+			cs.mu.Lock()
+			if !cs.running {
+				cs.mu.Unlock()
+				return
+			}
 
-		cs.mu.Lock()
-		cs.pending = append(cs.pending, &dbRecord{
-			Session:   result.Session,
-			AudioPath: result.AudioPath,
-			AudioSize: result.AudioSize,
-			Error:     result.Error,
-		})
-		cs.mu.Unlock()
+			// 【有界修复】长期 DB/存储故障时 pending 无界增长会 OOM；
+			// 超过上限先丢弃最旧 10% 为新记录腾位。
+			if len(cs.pending) >= maxPendingCommRecords {
+				drop := len(cs.pending) / 10
+				if drop < 1 {
+					drop = 1
+				}
+				cs.pending = append(cs.pending[:0], cs.pending[drop:]...)
+				cs.droppedCount += drop
+				log.Printf("[COMM_SYNCER] 待写入记录超限，丢弃最旧 %d 条（累计 %d）", drop, cs.droppedCount)
+			}
+			cs.pending = append(cs.pending, &dbRecord{
+				Session:   result.Session,
+				AudioPath: result.AudioPath,
+				AudioSize: result.AudioSize,
+				Error:     result.Error,
+			})
+			cs.mu.Unlock()
+		}
 	}
 }
 
@@ -143,7 +187,17 @@ func (cs *CommSyncer) GetPendingCount() int {
 // Stop 停止同步器
 func (cs *CommSyncer) Stop() {
 	if cs != nil {
+		cs.mu.Lock()
 		cs.running = false
+		listenerDone := cs.listenerDone
+		if cs.stopChan != nil && !cs.stopClosed {
+			close(cs.stopChan)
+			cs.stopClosed = true
+		}
+		cs.mu.Unlock()
+		if listenerDone != nil {
+			<-listenerDone
+		}
 		// 处理剩余数据
 		cs.SyncToDatabase()
 	}

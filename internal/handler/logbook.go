@@ -95,6 +95,12 @@ func GetLogbooks(c *gin.Context) {
 	if req.PageSize == 0 {
 		req.PageSize = 10
 	}
+	normalizedPageSize, normalizedPage, _, paginationErr := gormdb.NormalizePageOffset(req.PageSize, req.Page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
+		return
+	}
+	req.Page, req.PageSize = normalizedPage, normalizedPageSize
 
 	// 构建查询参数
 	params := gormdb.LogbookQueryParams{
@@ -211,7 +217,7 @@ func CreateLogbook(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "请求参数错误: " + err.Error(),
+			"message": "请求参数错误",
 		})
 		return
 	}
@@ -513,6 +519,12 @@ func AdminGetLogbooks(c *gin.Context) {
 	if req.PageSize == 0 {
 		req.PageSize = 10
 	}
+	normalizedPageSize, normalizedPage, _, paginationErr := gormdb.NormalizePageOffset(req.PageSize, req.Page)
+	if paginationErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
+		return
+	}
+	req.Page, req.PageSize = normalizedPage, normalizedPageSize
 
 	// 构建查询参数
 	params := gormdb.LogbookQueryParams{
@@ -560,10 +572,26 @@ func AdminGetLogbooks(c *gin.Context) {
 		return
 	}
 
-	// 转换为响应格式
+	// 转换为响应格式（批量加载用户名，消除逐行 GetUserByID 的 N+1 查询）
+	userIDs := make([]int, 0, len(logbooks))
+	for i := range logbooks {
+		if logbooks[i].UserID > 0 {
+			userIDs = append(userIDs, int(logbooks[i].UserID))
+		}
+	}
+	userNames := make(map[uint]string, len(userIDs))
+	if len(userIDs) > 0 {
+		if users, err := gormdb.NewUserRepository().GetUsersByIDs(userIDs); err == nil {
+			for _, u := range users {
+				if u != nil {
+					userNames[uint(u.ID)] = u.Name
+				}
+			}
+		}
+	}
 	items := make([]gin.H, 0, len(logbooks))
 	for _, lb := range logbooks {
-		items = append(items, logbookToJSONWithUser(lb))
+		items = append(items, logbookToJSONWithUserNames(lb, userNames))
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -833,14 +861,22 @@ func logbookToJSON(lb *gormdb.Logbook) gin.H {
 	}
 }
 
-// logbookToJSONWithUser 转换为JSON响应格式（包含用户名）
+// logbookToJSONWithUser 单条转换（兼容单条详情接口，仅一次用户查询）
 func logbookToJSONWithUser(lb *gormdb.Logbook) gin.H {
-	// 获取用户名
-	userRepo := gormdb.NewUserRepository()
-	user, _ := userRepo.GetUserByID(int(lb.UserID))
+	userNames := map[uint]string{}
+	if lb != nil && lb.UserID > 0 {
+		if user, err := gormdb.NewUserRepository().GetUserByID(int(lb.UserID)); err == nil && user != nil {
+			userNames[uint(lb.UserID)] = user.Name
+		}
+	}
+	return logbookToJSONWithUserNames(lb, userNames)
+}
+
+// logbookToJSONWithUserNames 转换为JSON响应格式（包含用户名，使用预加载的用户名映射）
+func logbookToJSONWithUserNames(lb *gormdb.Logbook, userNames map[uint]string) gin.H {
 	username := ""
-	if user != nil {
-		username = user.Name
+	if userNames != nil {
+		username = userNames[uint(lb.UserID)]
 	}
 
 	return gin.H{

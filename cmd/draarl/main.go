@@ -23,6 +23,7 @@ import (
 	"draarl/internal/db"
 	"draarl/internal/ghostsession"
 	gormdb "draarl/internal/gormdb"
+	"draarl/internal/handler"
 	"draarl/internal/interconnect"
 	oplog "draarl/internal/log"
 	"draarl/internal/middleware"
@@ -58,6 +59,7 @@ func main() {
 	migrateStorage := flag.String("migrate-storage", "", "迁移存储驱动或 profile，格式 from:to（如 minio:local 或 minio-prod:r2-prod），不启动主服务")
 	migrateDelete := flag.Bool("migrate-delete-source", false, "迁移成功并校验后删除源端对象（默认保留源端）")
 	migrateDryRun := flag.Bool("migrate-dry-run", false, "仅统计迁移计划，不实际写入目标端")
+	migrateMaxBytesPerSecond := flag.Int64("migrate-max-bytes-per-second", 0, "迁移源端读取总速率上限（字节/秒，<=0 不限速）")
 	flag.Parse()
 	if *edgeMode || *interconnectMode {
 		if err := runEdgeMode(*configPath); err != nil {
@@ -79,7 +81,7 @@ func main() {
 
 	// 存储迁移：纯命令行，不启动主服务
 	if *migrateStorage != "" {
-		migrateStorageEngine(*migrateStorage, *configPath, *migrateDelete, *migrateDryRun)
+		migrateStorageEngine(*migrateStorage, *configPath, *migrateDelete, *migrateDryRun, *migrateMaxBytesPerSecond)
 		os.Exit(0)
 	}
 
@@ -105,6 +107,10 @@ func main() {
 		stdlog.Fatalf("初始化 refresh token 存储失败: %v", err)
 	}
 	defer authstore.CloseRefreshTokenStore()
+	if err := handler.InitLoginGuardStore(cfg); err != nil {
+		stdlog.Fatalf("初始化登录/注册保护存储失败: %v", err)
+	}
+	defer handler.CloseLoginGuardStore()
 
 	// 初始化 AES 加密器（用于设备密码加密）
 	if err := crypto.InitAES(cfg.DeviceAuth.AESKey); err != nil {
@@ -152,6 +158,7 @@ func main() {
 		MaxIdleConns: cfg.Database.MaxIdleConns,
 		MaxLifetime:  cfg.Database.MaxLifetime,
 		LogLevel:     gormLogLevel,
+		Timezone:     cfg.Database.Timezone,
 	}
 	if err := gormdb.Init(gormCfg); err != nil {
 		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
@@ -214,6 +221,9 @@ func main() {
 		}
 	}
 
+	// 操作日志保留清理（默认 180 天）
+	gormdb.StartOperatorLogRetention(0)
+
 	// 获取 UDP 端口号
 	udpPort := 60050
 	if cfg.System.Port != "" {
@@ -261,6 +271,20 @@ func main() {
 			Activate: func(source *udphub.CenterLocalSource) error {
 				grant := localSourceGrant(source)
 				if err := centerRuntime.Gateway.ActivateLocalDevice(&grant); err != nil {
+					return err
+				}
+				source.SessionID, source.SessionEpoch = grant.SessionID, grant.SessionEpoch
+				return nil
+			},
+			ActivateContext: func(ctx context.Context, source *udphub.CenterLocalSource) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				grant := localSourceGrant(source)
+				if err := centerRuntime.Gateway.ActivateLocalDevice(&grant); err != nil {
+					return err
+				}
+				if err := ctx.Err(); err != nil {
 					return err
 				}
 				source.SessionID, source.SessionEpoch = grant.SessionID, grant.SessionEpoch
@@ -394,6 +418,7 @@ func resetAdminPassword(newPassword, configPath string) {
 		MaxIdleConns: cfg.Database.MaxIdleConns,
 		MaxLifetime:  cfg.Database.MaxLifetime,
 		LogLevel:     "silent",
+		Timezone:     cfg.Database.Timezone,
 	}
 	if err := gormdb.Init(gormCfg); err != nil {
 		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
@@ -441,7 +466,7 @@ func resetAdminPassword(newPassword, configPath string) {
 }
 
 // migrateStorageEngine 在源/目标存储引擎间迁移对象（纯命令行，不启动主服务）。
-func migrateStorageEngine(spec, configPath string, deleteSource, dryRun bool) {
+func migrateStorageEngine(spec, configPath string, deleteSource, dryRun bool, maxBytesPerSecond int64) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
 		stdlog.Fatalf("迁移参数格式错误，应为 from:to（如 minio:local 或 minio-prod:r2-prod），已注册驱动: %v", storage.KnownDrivers())
@@ -457,7 +482,10 @@ func migrateStorageEngine(spec, configPath string, deleteSource, dryRun bool) {
 
 	fmt.Println("========================================")
 	fmt.Printf("存储迁移: %s -> %s\n", from, to)
-	fmt.Printf("模式: dry_run=%t, delete_source=%t\n", dryRun, deleteSource)
+	if maxBytesPerSecond < 0 {
+		stdlog.Fatalf("迁移限速必须为非负字节/秒")
+	}
+	fmt.Printf("模式: dry_run=%t, delete_source=%t, max_bytes_per_second=%d\n", dryRun, deleteSource, maxBytesPerSecond)
 	fmt.Println("========================================")
 
 	ctx, cancel := storage.MigrateBackgroundContext()
@@ -473,8 +501,9 @@ func migrateStorageEngine(spec, configPath string, deleteSource, dryRun bool) {
 	}()
 
 	res, err := storage.Migrate(ctx, cfg, from, to, storage.MigrateOptions{
-		DryRun:       dryRun,
-		DeleteSource: deleteSource,
+		DryRun:            dryRun,
+		DeleteSource:      deleteSource,
+		MaxBytesPerSecond: maxBytesPerSecond,
 	})
 	if res != nil {
 		fmt.Println("========================================")

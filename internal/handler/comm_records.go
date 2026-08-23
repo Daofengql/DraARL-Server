@@ -482,7 +482,7 @@ func DeleteCommRecord(c *gin.Context) {
 		if recordErr != nil || broadcastErr != nil {
 			log.Printf("[COMM_RECORD] count audio references failed: path=%s record_err=%v broadcast_err=%v", record.AudioPath, recordErr, broadcastErr)
 		} else if recordReferences == 0 && broadcastReferences == 0 {
-			if err := storage.Delete(c.Request.Context(), record.AudioPath); err != nil {
+			if err := deleteStoredObjectWithIndependentContext(record.AudioPath, storage.Delete); err != nil {
 				log.Printf("[COMM_RECORD] cleanup unreferenced audio failed: path=%s err=%v", record.AudioPath, err)
 			}
 		}
@@ -540,7 +540,7 @@ func UpdateCommSettings(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "参数错误: " + err.Error(),
+			"message": "参数错误",
 		})
 		return
 	}

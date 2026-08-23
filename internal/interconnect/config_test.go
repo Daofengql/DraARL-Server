@@ -53,12 +53,15 @@ func TestEdgeCustomSharedUDPPortIsPreserved(t *testing.T) {
 }
 
 func TestEdgeProxyProtocolV2IsNormalized(t *testing.T) {
-	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: " V2 "}}
+	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: " V2 ", ProxyTrustedCIDRs: []string{"192.0.2.0/24"}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Edge.ProxyProtocol != "v2" {
 		t.Fatalf("ProxyProtocol=%q want=v2", cfg.Edge.ProxyProtocol)
+	}
+	if len(cfg.Edge.ProxyTrustedCIDRs) != 1 || cfg.Edge.ProxyTrustedCIDRs[0] != "192.0.2.0/24" {
+		t.Fatalf("ProxyTrustedCIDRs=%v", cfg.Edge.ProxyTrustedCIDRs)
 	}
 }
 
@@ -66,5 +69,35 @@ func TestEdgeRejectsUnsupportedProxyProtocol(t *testing.T) {
 	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: "v1"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyProtocol") {
 		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestEdgeRejectsInvalidProxyTrustedCIDR(t *testing.T) {
+	cfg := &EdgeConfig{Edge: EdgeSettings{
+		Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token",
+		ProxyProtocol: "v2", ProxyTrustedCIDRs: []string{"not-a-cidr"},
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyTrustedCIDRs") {
+		t.Fatalf("unexpected trusted CIDR validation error: %v", err)
+	}
+}
+
+func TestEdgeRequiresProxyTrustedCIDRsForReleaseV2(t *testing.T) {
+	previousRelease := config.IsReleaseBuild()
+	config.SetReleaseBuild(true)
+	t.Cleanup(func() {
+		config.SetReleaseBuild(previousRelease)
+	})
+
+	cfg := &EdgeConfig{Edge: EdgeSettings{
+		Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: "v2",
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyTrustedCIDRs") {
+		t.Fatalf("expected release v2 trust-boundary validation error, got %v", err)
+	}
+
+	cfg.Edge.ProxyTrustedCIDRs = []string{"192.0.2.0/24"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid release v2 edge configuration rejected: %v", err)
 	}
 }

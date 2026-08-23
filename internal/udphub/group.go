@@ -5,11 +5,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"draarl/internal/gormdb"
 	"draarl/internal/models"
 )
+
+// publicGroupMu 保护 publicGroupMap：缓存同步 goroutine 整体替换与 API 增删改
+// 并发执行会导致 fatal concurrent map write。
+var publicGroupMu sync.RWMutex
 
 func newConnPool() *CurrentConnPool {
 	pool := &CurrentConnPool{DevConnMap: make(map[string]*models.Device)}
@@ -19,6 +24,8 @@ func newConnPool() *CurrentConnPool {
 
 // initPublicGroups 初始化公共群组
 func initPublicGroups() {
+	publicGroupMu.Lock()
+	defer publicGroupMu.Unlock()
 	// 创建全网通群组 999
 	publicGroupMap[models.GroupIDPublicMin] = &models.Group{
 		ID:         models.GroupIDPublicMin,
@@ -54,13 +61,21 @@ func initPublicGroups() {
 
 // GetPublicGroup 获取公共群组
 func GetPublicGroup(id int) (*models.Group, bool) {
+	publicGroupMu.RLock()
+	defer publicGroupMu.RUnlock()
 	gp, ok := publicGroupMap[id]
 	return gp, ok
 }
 
-// GetAllPublicGroups 获取所有公共群组
+// GetAllPublicGroups 获取所有公共群组（返回副本，避免调用方与内部 map 并发读写）
 func GetAllPublicGroups() map[int]*models.Group {
-	return publicGroupMap
+	publicGroupMu.RLock()
+	defer publicGroupMu.RUnlock()
+	out := make(map[int]*models.Group, len(publicGroupMap))
+	for id, gp := range publicGroupMap {
+		out[id] = gp
+	}
+	return out
 }
 
 // CreatePublicGroup 创建公共群组
@@ -94,7 +109,9 @@ func CreatePublicGroup(gp *models.Group) error {
 		DevMap:       make(map[int]*models.Device),
 	}
 
+	publicGroupMu.Lock()
 	publicGroupMap[newGroup.ID] = newGroup
+	publicGroupMu.Unlock()
 
 	return nil
 }
@@ -108,6 +125,7 @@ func UpdatePublicGroup(gp *models.Group) error {
 		return err
 	}
 
+	publicGroupMu.Lock()
 	if existing, ok := publicGroupMap[gp.ID]; ok {
 		existing.Name = gp.Name
 		existing.Type = gp.Type
@@ -115,6 +133,7 @@ func UpdatePublicGroup(gp *models.Group) error {
 		existing.Note = gp.Note
 		existing.UpdateTime = time.Now().Format("2006-01-02 15:04:05")
 	}
+	publicGroupMu.Unlock()
 
 	return nil
 }
@@ -127,7 +146,9 @@ func DeletePublicGroup(id int) error {
 		return err
 	}
 
+	publicGroupMu.Lock()
 	delete(publicGroupMap, id)
+	publicGroupMu.Unlock()
 	return nil
 }
 
@@ -156,7 +177,7 @@ func GetOnlineDevicesByGroup(groupID int) []*models.Device {
 	if gp, ok := GetGroupFromCache(groupID); ok && gp != nil {
 		groupRuntimeMu.RLock()
 		for _, dev := range gp.DevMap {
-			if dev.ISOnline {
+			if dev != nil && dev.RuntimeSnapshot().ISOnline {
 				devices = append(devices, dev)
 			}
 		}

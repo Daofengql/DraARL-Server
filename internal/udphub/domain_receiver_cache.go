@@ -34,9 +34,11 @@ var (
 	domainReceiverCache       sync.Map // domainKey -> *domainReceiverSnap
 	domainReceiverLifecycleMu sync.Mutex
 	domainReceiverBuildMu     sync.Mutex
+	domainReceiverPrewarmMu   sync.Mutex
 	domainReceiverStopCh      chan struct{}
 	domainReceiverWg          sync.WaitGroup
 	domainReceiverRunning     bool
+	domainReceiverPrewarming  bool
 	domainReceiverHits        int64
 	domainReceiverMisses      int64
 	domainReceiverRebuilds    int64
@@ -98,6 +100,68 @@ func StopDomainReceiverCache() {
 
 func InvalidateDomainReceiverCache() {
 	atomic.AddUint64(&domainReceiverGen, 1)
+	// Only a running cache owns a lifecycle. Coalesce invalidations into one
+	// bounded prewarm job so topology churn cannot create untracked goroutines.
+	domainReceiverLifecycleMu.Lock()
+	if !domainReceiverRunning || domainReceiverStopCh == nil {
+		domainReceiverLifecycleMu.Unlock()
+		return
+	}
+	stopCh := domainReceiverStopCh
+	domainReceiverPrewarmMu.Lock()
+	if domainReceiverPrewarming {
+		domainReceiverPrewarmMu.Unlock()
+		domainReceiverLifecycleMu.Unlock()
+		return
+	}
+	domainReceiverPrewarming = true
+	domainReceiverWg.Add(1)
+	domainReceiverPrewarmMu.Unlock()
+	domainReceiverLifecycleMu.Unlock()
+
+	go func() {
+		defer domainReceiverWg.Done()
+		defer func() {
+			domainReceiverPrewarmMu.Lock()
+			domainReceiverPrewarming = false
+			domainReceiverPrewarmMu.Unlock()
+		}()
+		prewarmDomainReceiverSnapshots(stopCh)
+	}()
+}
+
+// prewarmDomainReceiverSnapshots 后台重建当前缓存中的域接收者快照（持全局
+// 构建锁与 ingress 路径互斥；仅重建已缓存域，避免为从未发声的域浪费构建）。
+func prewarmDomainReceiverSnapshots(stopCh <-chan struct{}) {
+	select {
+	case <-stopCh:
+		return
+	default:
+	}
+	domains := ActiveHalfDuplexDomainGroups()
+	if len(domains) == 0 {
+		return
+	}
+	gen := atomic.LoadUint64(&domainReceiverGen)
+	workers := currentFanoutWorkerCount()
+	domainReceiverBuildMu.Lock()
+	defer domainReceiverBuildMu.Unlock()
+	for domainKey, groupIDs := range domains {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+		if len(groupIDs) == 0 {
+			continue
+		}
+		if _, ok := domainReceiverCache.Load(domainKey); !ok {
+			continue
+		}
+		snap := buildDomainReceiverSnap(groupIDs[0], gen, workers)
+		domainReceiverCache.Store(domainKey, snap)
+		atomic.AddInt64(&domainReceiverRebuilds, 1)
+	}
 }
 
 func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domainReceiverSnap {
@@ -112,19 +176,20 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 	deduplicated := int64(0)
 
 	addDev := func(dev *models.Device, expectedGroupID int) {
-		if dev == nil || !dev.ISOnline || dev.UDPAddr == nil {
+		state := dev.RuntimeSnapshot()
+		if dev == nil || !state.ISOnline || state.UDPAddr == nil {
 			return
 		}
 		// Physical devices use a one-group receive route; ghost sessions use
 		// their projected multi-group receive route.
-		rxGroupIDs := dev.GhostRxGroupIDs
-		if dev.GhostSessionID == "" {
-			rxGroupIDs = []int{dev.GroupID}
+		rxGroupIDs := state.GhostRxGroupIDs
+		if state.GhostSessionID == "" {
+			rxGroupIDs = []int{state.GroupID}
 		}
-		if !groupaccess.CanReceiveRoute(dev.DisableRecv, rxGroupIDs, expectedGroupID) {
+		if !groupaccess.CanReceiveRoute(state.DisableRecv, rxGroupIDs, expectedGroupID) {
 			return
 		}
-		addr, ok := udpAddrPort(dev.UDPAddr)
+		addr, ok := udpAddrPort(state.UDPAddr)
 		if !ok {
 			return
 		}
@@ -135,9 +200,9 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 		}
 		seen[addr] = struct{}{}
 		entries = append(entries, domainReceiverEntry{
-			addr: addr, deviceID: dev.ID, username: dev.Username, ssid: dev.SSID,
-			sessionID:     dev.GhostSessionID,
-			sourceGroupV1: dev.GhostSessionID != "",
+			addr: addr, deviceID: state.ID, username: state.Username, ssid: state.SSID,
+			sessionID:     state.GhostSessionID,
+			sourceGroupV1: state.GhostSessionID != "",
 		})
 	}
 
@@ -151,7 +216,7 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 				// UDP ghost delivery is governed exclusively by the session receive
 				// index below. A routing change can leave the shared device pointer
 				// in its former physical-group pool until the process is restarted.
-				if dev != nil && dev.GhostSessionID != "" {
+				if dev != nil && dev.RuntimeSnapshot().GhostSessionID != "" {
 					continue
 				}
 				addDev(dev, gid)
@@ -226,7 +291,8 @@ func forwardVoiceDomain(source *models.Device, data []byte, sourceGroupID int) {
 	if source == nil || len(data) == 0 {
 		return
 	}
-	writeUDPDomain(data, getDomainReceiverSnap(sourceGroupID), source.ID, source.Username, source.SSID, source.GhostSessionID, sourceGroupID)
+	state := source.RuntimeSnapshot()
+	writeUDPDomain(data, getDomainReceiverSnap(sourceGroupID), state.ID, state.Username, state.SSID, state.GhostSessionID, sourceGroupID)
 }
 
 func GetDomainReceiverCacheStats() map[string]int64 {

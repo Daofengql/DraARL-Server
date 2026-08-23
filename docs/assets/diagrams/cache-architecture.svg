@@ -61,7 +61,7 @@
   <rect x="270" y="320" width="180" height="40" fill="#ffebee" rx="4"/>
   <text x="360" y="345" text-anchor="middle" fill="#333" font-size="11">会话数据</text>
   
-  <text x="265" y="385" text-anchor="middle" fill="#666" font-size="10">降级策略: Redis不可用时自动降级到内存存储</text>
+  <text x="265" y="385" text-anchor="middle" fill="#666" font-size="10">release 必须 Redis；development/test 可降级到内存</text>
 
   <!-- L2 MySQL -->
   <rect x="520" y="275" width="430" height="130" fill="white" rx="12" filter="url(#shadow)" stroke="#2196f3" stroke-width="2"/>

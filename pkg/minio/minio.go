@@ -39,6 +39,15 @@ func UploadFile(ctx context.Context, _ string, objectName string, reader io.Read
 	return storage.Put(ctx, objectName, reader, size, contentType)
 }
 
+// UploadMultipartFileContext 兼容（带请求上下文）。
+func UploadMultipartFileContext(ctx context.Context, fileHeader *multipart.FileHeader, userID int, fileType string) (string, int64, error) {
+	return storage.UploadMultipartFileContext(ctx, fileHeader, userID, fileType)
+}
+
+func UploadMultipartFileWithContentTypeContext(ctx context.Context, fileHeader *multipart.FileHeader, userID int, fileType string) (string, int64, string, error) {
+	return storage.UploadMultipartFileWithContentTypeContext(ctx, fileHeader, userID, fileType)
+}
+
 // UploadMultipartFile 兼容。
 func UploadMultipartFile(fileHeader *multipart.FileHeader, userID int, fileType string) (string, int64, error) {
 	return storage.UploadMultipartFile(fileHeader, userID, fileType)
@@ -79,9 +88,17 @@ func GenerateThumbnail(originalObject string, width, height int, ext string) (st
 	return storage.GenerateThumbnail(originalObject, width, height, ext)
 }
 
+func GenerateThumbnailContext(ctx context.Context, originalObject string, width, height int, ext string) (string, []byte, error) {
+	return storage.GenerateThumbnailContext(ctx, originalObject, width, height, ext)
+}
+
 // ProcessAvatar 兼容。
 func ProcessAvatar(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 	return storage.ProcessAvatar(fileHeader)
+}
+
+func ProcessAvatarContext(ctx context.Context, fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	return storage.ProcessAvatarContext(ctx, fileHeader)
 }
 
 // UploadAvatar 兼容。
@@ -89,9 +106,17 @@ func UploadAvatar(userID int, imageData []byte, ext string) (string, int64, erro
 	return storage.UploadAvatar(userID, imageData, ext)
 }
 
+func UploadAvatarContext(ctx context.Context, userID int, imageData []byte, ext string) (string, int64, error) {
+	return storage.UploadAvatarContext(ctx, userID, imageData, ext)
+}
+
 // UploadThumbnail 兼容。
 func UploadThumbnail(objectName string, data []byte, contentType string) error {
 	return storage.UploadThumbnail(objectName, data, contentType)
+}
+
+func UploadThumbnailContext(ctx context.Context, objectName string, data []byte, contentType string) error {
+	return storage.UploadThumbnailContext(ctx, objectName, data, contentType)
 }
 
 // ProcessLogo 兼容。
@@ -99,12 +124,24 @@ func ProcessLogo(fileHeader *multipart.FileHeader) ([]byte, string, error) {
 	return storage.ProcessLogo(fileHeader)
 }
 
+func ProcessLogoContext(ctx context.Context, fileHeader *multipart.FileHeader) ([]byte, string, error) {
+	return storage.ProcessLogoContext(ctx, fileHeader)
+}
+
 // UploadLogo 兼容。
 func UploadLogo(imageData []byte, ext string) (string, int64, error) {
 	return storage.UploadLogo(imageData, ext)
 }
 
+func UploadLogoContext(ctx context.Context, imageData []byte, ext string) (string, int64, error) {
+	return storage.UploadLogoContext(ctx, imageData, ext)
+}
+
 // UploadFavicon 兼容。
 func UploadFavicon(fileHeader *multipart.FileHeader) (string, int64, error) {
 	return storage.UploadFavicon(fileHeader)
+}
+
+func UploadFaviconContext(ctx context.Context, fileHeader *multipart.FileHeader) (string, int64, error) {
+	return storage.UploadFaviconContext(ctx, fileHeader)
 }

@@ -89,6 +89,11 @@ func PromoteStagedUpload(ctx context.Context, grant *UploadGrant) (string, error
 	}
 	finalKey := NewObjectKey(grant.FileType, ExtFromFilename(grant.ObjectKey))
 	if err := Promote(ctx, grant.ObjectKey, finalKey); err != nil {
+		// 【幂等修复】重试场景：staging 已被前一次 Promote 消费，若 final 已存在
+		// 且大小一致则视为成功，避免"成功上传表现为失败"或产生孤儿对象。
+		if finalSize, _, statErr := Stat(ctx, finalKey); statErr == nil && finalSize == grant.Size {
+			return finalKey, nil
+		}
 		return "", err
 	}
 	size, _, err := Stat(ctx, finalKey)

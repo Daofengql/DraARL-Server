@@ -71,7 +71,7 @@ func TestNodeDatagramBridgeMetricsAttributeAuthenticatedDropsExactly(t *testing.
 	bound := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 32100}
 	other := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 32101}
 	session.BindDataAddr(bound)
-	delivered := make(chan struct{}, 1)
+	delivered := make(chan struct{}, 2)
 	bridge, err := NewNodeDatagramBridge(
 		func(nodeID string, sessionID uint64) *NodeSession {
 			if nodeID == session.NodeID && sessionID == session.SessionID {
@@ -110,9 +110,14 @@ func TestNodeDatagramBridgeMetricsAttributeAuthenticatedDropsExactly(t *testing.
 	if bridge.Handle(accepted, bound) {
 		t.Fatal("replayed datagram received a rate-limit exemption")
 	}
-	expired := marshal(2, now.Add(-time.Second), "expired")
-	if bridge.Handle(expired, bound) {
-		t.Fatal("expired datagram received a rate-limit exemption")
+	skewed := marshal(2, now.Add(-30*time.Minute), "clock-skewed")
+	if !bridge.Handle(skewed, bound) {
+		t.Fatal("authenticated datagram was rejected because of remote clock skew")
+	}
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("clock-skewed datagram was not delivered")
 	}
 	unbound := marshal(3, time.Now(), "unbound")
 	if !bridge.Handle(unbound, other) {
@@ -120,17 +125,17 @@ func TestNodeDatagramBridgeMetricsAttributeAuthenticatedDropsExactly(t *testing.
 	}
 
 	metrics := session.DataMetrics.Snapshot()
-	wantBytes := uint64(len(accepted)*2 + len(expired) + len(unbound))
-	if metrics.InPackets != 4 || metrics.InBytes != wantBytes || metrics.OutPackets != 0 || metrics.OutBytes != 0 || metrics.Drops != 3 || metrics.Errors != 0 {
-		t.Fatalf("datagram metrics=%#v want in=4/%d drops=3", metrics, wantBytes)
+	wantBytes := uint64(len(accepted)*2 + len(skewed) + len(unbound))
+	if metrics.InPackets != 4 || metrics.InBytes != wantBytes || metrics.OutPackets != 0 || metrics.OutBytes != 0 || metrics.Drops != 2 || metrics.Errors != 0 {
+		t.Fatalf("datagram metrics=%#v want in=4/%d drops=2", metrics, wantBytes)
 	}
 	protection := session.ProtectionSnapshot()
-	if protection.ReplayDrops != 1 || protection.ExpiredDrops != 1 || protection.UnboundAddressDrops != 1 ||
+	if protection.ReplayDrops != 1 || protection.ExpiredDrops != 0 || protection.UnboundAddressDrops != 1 ||
 		protection.DataHardLimitDrops != 0 || protection.DataQueueDrops != 0 || protection.DataStaleDrops != 0 || protection.InvalidAuthTags != 0 || protection.IdentityRejects != 0 {
 		t.Fatalf("drop cause attribution=%#v", protection)
 	}
 	bridgeMetrics := bridge.ProtectionSnapshot()
-	if bridgeMetrics.InvalidType0 != 2 || bridgeMetrics.UnauthenticatedType0 != 0 || bridgeMetrics.GlobalQueueDrops != 0 {
+	if bridgeMetrics.InvalidType0 != 1 || bridgeMetrics.UnauthenticatedType0 != 0 || bridgeMetrics.GlobalQueueDrops != 0 {
 		t.Fatalf("bridge protection metrics=%#v", bridgeMetrics)
 	}
 }
@@ -138,7 +143,7 @@ func TestNodeDatagramBridgeMetricsAttributeAuthenticatedDropsExactly(t *testing.
 func TestNodeDatagramPeerMetricsAttributeAuthenticatedDropsExactly(t *testing.T) {
 	key := []byte("datagram-key-123")
 	session := &NodeSession{NodeID: "edge-peer", SessionID: 61, KeyEpoch: 4, Key: key}
-	delivered := make(chan struct{}, 1)
+	delivered := make(chan struct{}, 2)
 	peer, err := NewNodeDatagramPeer("127.0.0.1:60050", session, func(Envelope) { delivered <- struct{}{} })
 	if err != nil {
 		t.Fatal(err)
@@ -167,17 +172,22 @@ func TestNodeDatagramPeerMetricsAttributeAuthenticatedDropsExactly(t *testing.T)
 	if peer.Handle(accepted, nil) {
 		t.Fatal("replayed center datagram was accepted")
 	}
-	expired := marshal(2, now.Add(-3*time.Second), "expired")
-	if peer.Handle(expired, nil) {
-		t.Fatal("expired center datagram was accepted")
+	skewed := marshal(2, now.Add(30*time.Minute), "clock-skewed")
+	if !peer.Handle(skewed, nil) {
+		t.Fatal("authenticated center datagram was rejected because of remote clock skew")
+	}
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("clock-skewed center datagram was not delivered")
 	}
 	metrics := peer.Metrics.Snapshot()
-	wantBytes := uint64(len(accepted)*2 + len(expired))
-	if metrics != (MetricsSnapshot{InPackets: 3, InBytes: wantBytes, Drops: 2}) {
-		t.Fatalf("edge peer metrics=%#v want in=3/%d drops=2", metrics, wantBytes)
+	wantBytes := uint64(len(accepted)*2 + len(skewed))
+	if metrics != (MetricsSnapshot{InPackets: 3, InBytes: wantBytes, Drops: 1}) {
+		t.Fatalf("edge peer metrics=%#v want in=3/%d drops=1", metrics, wantBytes)
 	}
 	protection := session.ProtectionSnapshot()
-	if protection.ReplayDrops != 1 || protection.ExpiredDrops != 1 || protection.IdentityRejects != 0 || protection.InvalidAuthTags != 0 {
+	if protection.ReplayDrops != 1 || protection.ExpiredDrops != 0 || protection.IdentityRejects != 0 || protection.InvalidAuthTags != 0 {
 		t.Fatalf("edge peer drop attribution=%#v", protection)
 	}
 }

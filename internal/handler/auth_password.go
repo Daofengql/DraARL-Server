@@ -23,6 +23,10 @@ func ChangeOwnPassword(c *gin.Context) {
 		})
 		return
 	}
+	if err := validateNewUserPassword(req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		return
+	}
 
 	username, _ := c.Get("username")
 	repo := gormdb.NewUserRepository()
@@ -63,6 +67,9 @@ func ChangeOwnPassword(c *gin.Context) {
 		})
 		return
 	}
+	revokeUserRefreshSessions(user.ID, "password_changed")
+	clearRefreshTokenCookie(c)
+	clearWSTokenCookie(c)
 
 	// 使用户缓存失效
 	if userCache := cache.GetUserCache(); userCache != nil {
@@ -85,6 +92,10 @@ func ChangeOwnPassword(c *gin.Context) {
 	})
 }
 
+func mustVerifyCurrentPassword(currentUser, targetUser *gormdb.User) bool {
+	return currentUser != nil && targetUser != nil && currentUser.ID == targetUser.ID
+}
+
 func UpdateUserPassword(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -102,6 +113,10 @@ func UpdateUserPassword(c *gin.Context) {
 			"code":    400,
 			"message": "请求参数错误",
 		})
+		return
+	}
+	if err := validateNewUserPassword(req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
@@ -140,8 +155,9 @@ func UpdateUserPassword(c *gin.Context) {
 		return
 	}
 
-	// 如果是修改自己的密码，需要验证旧密码
-	if isSelf && !isAdmin {
+	// 任何账号修改自身密码都必须验证旧密码。管理员仅在重置其他账号时
+	// 可以免旧密码，避免被盗的管理员会话直接接管管理员本人账号。
+	if mustVerifyCurrentPassword(currentUser, targetUser) {
 		if err := bcrypt.CompareHashAndPassword([]byte(currentUser.Password), []byte(req.OldPassword)); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
@@ -169,6 +185,11 @@ func UpdateUserPassword(c *gin.Context) {
 			"message": "密码修改失败",
 		})
 		return
+	}
+	revokeUserRefreshSessions(targetUser.ID, "password_reset")
+	if isSelf {
+		clearRefreshTokenCookie(c)
+		clearWSTokenCookie(c)
 	}
 
 	// 使用户缓存失效

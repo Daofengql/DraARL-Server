@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"time"
 )
@@ -9,6 +10,28 @@ import (
 // OperatorLogRepository 操作日志数据访问层
 type OperatorLogRepository struct {
 	db *sql.DB
+}
+
+const (
+	defaultOperatorLogPageSize = 20
+	maxOperatorLogPageSize     = 100
+)
+
+func normalizeOperatorLogPagination(limit, page int) (int, int, int, error) {
+	if limit <= 0 {
+		limit = defaultOperatorLogPageSize
+	}
+	if limit > maxOperatorLogPageSize {
+		limit = maxOperatorLogPageSize
+	}
+	if page <= 0 {
+		page = 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if page > maxInt/limit+1 {
+		return 0, 0, 0, fmt.Errorf("operator log page is too large")
+	}
+	return limit, page, (page - 1) * limit, nil
 }
 
 // NewOperatorLogRepository 创建操作日志仓库
@@ -68,7 +91,10 @@ func (r *OperatorLogRepository) BatchCreate(logs []*OperatorLog) error {
 
 // Query 查询操作日志（分页）
 func (r *OperatorLogRepository) Query(userID int, page, limit int, operation string) ([]*OperatorLog, int, error) {
-	offset := (page - 1) * limit
+	limit, page, offset, err := normalizeOperatorLogPagination(limit, page)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	where := "WHERE 1=1"
 	args := make([]interface{}, 0, 2)
@@ -93,8 +119,7 @@ func (r *OperatorLogRepository) Query(userID int, page, limit int, operation str
 	for rows.Next() {
 		l := &OperatorLog{}
 		if err := rows.Scan(&l.ID, &l.Timestamp, &l.Content, &l.EventType, &l.Operator, &l.OperatorID); err != nil {
-			log.Println("select operator_log err:", err)
-			continue
+			return nil, 0, fmt.Errorf("scan operator log: %w", err)
 		}
 		logs = append(logs, l)
 	}

@@ -14,6 +14,7 @@ import (
 type EdgeGateway struct {
 	listenAddr         string
 	proxyProtocol      string
+	proxyTrustedCIDRs  []string
 	endpoint           *udphub.EdgeEndpoint
 	control            atomic.Pointer[edgeControlLink]
 	disconnectedAt     atomic.Int64
@@ -109,8 +110,19 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 	return gateway, nil
 }
 
+// SetProxyTrustedCIDRs supplies the edge-local proxy source allowlist. It is
+// intentionally separate from the centre UDP global setting because an edge
+// can run as a standalone process and must not inherit another endpoint's
+// trust state.
+func (g *EdgeGateway) SetProxyTrustedCIDRs(cidrs []string) {
+	if g == nil {
+		return
+	}
+	g.proxyTrustedCIDRs = append([]string(nil), cidrs...)
+}
+
 func (g *EdgeGateway) Start() error {
-	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.proxyProtocol, g.handleInbound)
+	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.proxyProtocol, g.handleInbound, g.proxyTrustedCIDRs)
 	if err != nil {
 		return err
 	}

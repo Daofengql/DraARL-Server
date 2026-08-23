@@ -5,6 +5,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -130,10 +131,14 @@ func StorageDirectPut(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 token 或 key"})
 		return
 	}
-	expectedSize, err := storage.VerifyLocalPutToken(token, key, contentType)
+	expectedSize, effectiveContentType, err := storage.VerifyLocalPutToken(token, key, contentType)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": err.Error()})
 		return
+	}
+	// 请求未提供 Content-Type 时采用 token 绑定类型落盘
+	if contentType == "" && effectiveContentType != "" {
+		contentType = effectiveContentType
 	}
 	if c.Request.ContentLength >= 0 && c.Request.ContentLength != expectedSize {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传内容大小与凭证不匹配"})
@@ -185,11 +190,17 @@ func StorageDirectGet(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	if strings.HasPrefix(key, "client-resources/") || strings.HasPrefix(key, "firmware/") || strings.HasPrefix(key, "uploads/firmware/") {
+	// 【H13 安全修复】非图片内容一律强制 attachment 下载，图片也加上
+	// sandbox CSP，避免 SVG/HTML 在应用同源内联执行造成存储型 XSS。
+	detectedCT, detectErr := storage.DetectObjectContentType(c.Request.Context(), key)
+	if detectErr == nil && !strings.HasPrefix(strings.ToLower(detectedCT), "image/") {
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(key)}))
+	} else if strings.HasPrefix(key, "client-resources/") || strings.HasPrefix(key, "firmware/") || strings.HasPrefix(key, "uploads/firmware/") {
 		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(key)}))
 	}
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'")
 	c.File(fullPath)
 }
 
@@ -233,6 +244,13 @@ func ServeLocalFile(c *gin.Context) {
 }
 
 func publicAPIBase(c *gin.Context) string {
+	// 【Host 头投毒修复】优先使用配置的对外地址（Web.FrontendURL）Origin 作为
+	// 签名 URL 前缀；未配置时才回退请求 Host（兼容旧部署，生产已要求必填）。
+	if cfg := config.TryGet(); cfg != nil && strings.TrimSpace(cfg.Web.FrontendURL) != "" {
+		if parsed, err := url.Parse(cfg.Web.FrontendURL); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			return parsed.Scheme + "://" + parsed.Host
+		}
+	}
 	scheme := "http"
 	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
 		scheme = "https"

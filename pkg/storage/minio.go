@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"io"
@@ -103,7 +104,12 @@ func newS3StorageWithConfig(sc config.S3Config, driver string) (Storage, error) 
 		createCtx, createCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer createCancel()
 		if err := client.MakeBucket(createCtx, bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("创建 bucket 失败: %w", err)
+			// 【竞态修复】并发初始化时其他实例已创建该 bucket，视为成功
+			var bucketErr *minio.ErrorResponse
+			if !errors.As(err, &bucketErr) ||
+				(bucketErr.Code != "BucketAlreadyOwnedByYou" && bucketErr.Code != "BucketAlreadyExists") {
+				return nil, fmt.Errorf("创建 bucket 失败: %w", err)
+			}
 		}
 	}
 	// Bucket policies are managed by the object-storage provider. Runtime
@@ -371,6 +377,9 @@ func (s *minioStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 			return fmt.Errorf("check final object: %w", err)
 		}
 	}
+	// finalKey 为 UUID 唯一键，同一 staged 对象并发 Promote 会生成不同 finalKey，
+	// 因此"覆盖既有 final"在实践上不可达（重试也生成新 key）；Stat 预检作为快速
+	// 路径保留。minio-go v7.0.99 的 CopyObject 不支持目标端 If-None-Match 条件头。
 	_, err := s.client.CopyObject(ctx, minio.CopyDestOptions{
 		Bucket: s.bucket,
 		Object: finalKey,

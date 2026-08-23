@@ -27,12 +27,42 @@ type fanoutFrameJob struct {
 	validateGen     bool
 	generation      *atomic.Uint64
 	onComplete      func(fanoutWriteResult)
+	collect         *fanoutCollector // 【H6】异步完成收集器（onComplete 帧使用）
 }
 
 type fanoutWorkerJob struct {
 	frame   fanoutFrameJob
 	targets []domainReceiverEntry
-	result  chan<- fanoutWriteResult
+}
+
+// fanoutCollector 聚合各 writer 分片的写入结果，最后一个完成的分片负责
+// 触发 onComplete，使 dispatcher 无需等待所有 writer 即可处理下一帧。
+type fanoutCollector struct {
+	remaining  atomic.Int64
+	onComplete func(fanoutWriteResult)
+	mu         sync.Mutex
+	result     fanoutWriteResult
+}
+
+// finishPartition 累加一个分片的写入结果；当全部分片完成时调用 onComplete。
+// remaining 为原子计数，恰好一个分片会在减到 0 时触发回调。
+func (c *fanoutCollector) finishPartition(result fanoutWriteResult) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.result.attempted += result.attempted
+	c.result.sent += result.sent
+	c.result.dropped += result.dropped
+	c.result.errors += result.errors
+	c.result.noBuffer += result.noBuffer
+	c.result.wouldBlock += result.wouldBlock
+	c.result.tooLarge += result.tooLarge
+	total := c.result
+	c.mu.Unlock()
+	if c.remaining.Add(-1) == 0 && c.onComplete != nil {
+		c.onComplete(total)
+	}
 }
 
 type fanoutWriteResult struct {
@@ -59,7 +89,6 @@ type FanoutSender struct {
 	wg      sync.WaitGroup
 
 	lifecycleMu sync.RWMutex
-	submitMu    sync.Mutex
 	running     bool
 	maxFrameAge time.Duration
 	queueSize   int
@@ -70,10 +99,12 @@ type FanoutSender struct {
 	framesStale      int64
 	targetsAttempted int64
 	sent             int64
+	targetsDropped   int64
 	writeErrors      int64
 	noBufferErrors   int64
 	wouldBlockErrors int64
 	tooLargeErrors   int64
+	writerEvictions  int64
 	dispatchNanos    int64
 	maxDispatchNanos int64
 }
@@ -174,12 +205,23 @@ func newFanoutSenderWithMaxAge(conn *net.UDPConn, workers, queueSize int, maxFra
 		maxFrameAge: maxFrameAge,
 		queueSize:   queueSize,
 	}
+	// 【H6】writer 队列改为有界缓冲，dispatcher 无需等 writer 就绪即可投递。
+	// 缓冲上限按帧队列容量均摊：在正常负载下整条帧队列都能进入 writer 缓冲
+	// 而不丢帧；仅当 writer 实际处理能力落后超过一个帧队列（真实过载）时才
+	// 触发丢弃，避免单 dispatcher 被慢 writer 锁死拖垮所有域。
+	writerQueueBuffer := queueSize / workers
+	if writerQueueBuffer < 2 {
+		writerQueueBuffer = 2
+	}
+	if writerQueueBuffer > 256 {
+		writerQueueBuffer = 256
+	}
 	if conn != nil {
-		s.writers = append(s.writers, fanoutWriter{conn: conn, queue: make(chan fanoutWorkerJob)})
+		s.writers = append(s.writers, fanoutWriter{conn: conn, queue: make(chan fanoutWorkerJob, writerQueueBuffer)})
 	}
 	duplicates, duplicateErr := duplicateUDPConns(conn, workers-len(s.writers))
 	for _, dup := range duplicates {
-		s.writers = append(s.writers, fanoutWriter{conn: dup, owned: true, queue: make(chan fanoutWorkerJob)})
+		s.writers = append(s.writers, fanoutWriter{conn: dup, owned: true, queue: make(chan fanoutWorkerJob, writerQueueBuffer)})
 	}
 	if duplicateErr != nil {
 		log.Printf("[UDP] fan-out writer duplication stopped at %d/%d: %v", len(s.writers), workers, duplicateErr)
@@ -267,18 +309,19 @@ func (s *FanoutSender) dispatcher() {
 	for frame := range s.frames {
 		generationStale := frame.generation != nil && frame.snapshotGen != frame.generation.Load()
 		if s.frameExpired(frame) || generationStale || (frame.validateGen && frame.snapshotGen != atomic.LoadUint64(&domainReceiverGen)) {
+			dropped := countFrameTargets(frame)
 			atomic.AddInt64(&s.framesStale, 1)
 			atomic.AddInt64(&s.framesDropped, 1)
+			s.addWriteResult(fanoutWriteResult{dropped: dropped})
 			if frame.onComplete != nil {
-				frame.onComplete(fanoutWriteResult{dropped: countFrameTargets(frame)})
+				frame.onComplete(fanoutWriteResult{dropped: dropped})
 			}
 			continue
 		}
 		started := time.Now()
-		result := s.dispatchFrame(frame)
-		if frame.onComplete != nil {
-			frame.onComplete(result)
-		}
+		// 【H6】异步派发：只做非阻塞投递，不等待 writer 完成；onComplete 由
+		// fanoutCollector 在最后一个分片完成后触发。
+		s.dispatchFrame(frame)
 		elapsed := time.Since(started).Nanoseconds()
 		atomic.AddInt64(&s.dispatchNanos, elapsed)
 		updateMaxInt64(&s.maxDispatchNanos, elapsed)
@@ -302,35 +345,102 @@ func (s *FanoutSender) frameExpired(frame fanoutFrameJob) bool {
 	return s.maxFrameAge > 0 && time.Since(frame.enqueuedAt) > s.maxFrameAge
 }
 
-func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) fanoutWriteResult {
-	resultCh := make(chan fanoutWriteResult, len(s.writers))
-	jobs := 0
+// dispatchFrame 异步派发一帧：向各 writer 队列非阻塞投递分片，队列满时
+// 丢弃该分片（不阻塞 dispatcher、不回退为同步写）。onComplete 帧通过
+// fanoutCollector 由最后一个完成的分片触发回调。
+func (s *FanoutSender) dispatchFrame(frame fanoutFrameJob) {
+	var collect *fanoutCollector
+	if frame.onComplete != nil {
+		planned := 0
+		for index, targets := range frame.partitions {
+			if index < len(s.writers) && partitionHasTarget(targets, frame.sourceID, frame.sourceUser, frame.sourceSSID, frame.sourceSessionID) {
+				planned++
+			}
+		}
+		if planned == 0 {
+			// 无可投递分片：立即完成，避免 onComplete 永不触发
+			frame.onComplete(fanoutWriteResult{})
+			return
+		}
+		collect = &fanoutCollector{onComplete: frame.onComplete}
+		collect.remaining.Store(int64(planned))
+		frame.collect = collect
+	}
+
 	for index, targets := range frame.partitions {
 		if index >= len(s.writers) || !partitionHasTarget(targets, frame.sourceID, frame.sourceUser, frame.sourceSSID, frame.sourceSessionID) {
 			continue
 		}
-		jobs++
-		s.writers[index].queue <- fanoutWorkerJob{frame: frame, targets: targets, result: resultCh}
+		job := fanoutWorkerJob{frame: frame, targets: targets}
+		accepted, evicted := enqueueLatestWorkerJob(s.writers[index].queue, job)
+		if evicted != nil {
+			s.dropWorkerJob(*evicted)
+		}
+		if !accepted {
+			// The queue can only reject after a concurrent close during shutdown.
+			dropped := countPartitionTargets(targets, frame.sourceID, frame.sourceUser, frame.sourceSSID, frame.sourceSessionID)
+			s.addWriteResult(fanoutWriteResult{dropped: dropped})
+			if collect != nil {
+				collect.finishPartition(fanoutWriteResult{dropped: dropped})
+			}
+		}
 	}
+}
 
-	var total fanoutWriteResult
-	for i := 0; i < jobs; i++ {
-		result := <-resultCh
-		total.attempted += result.attempted
-		total.sent += result.sent
-		total.dropped += result.dropped
-		total.errors += result.errors
-		total.noBuffer += result.noBuffer
-		total.wouldBlock += result.wouldBlock
-		total.tooLarge += result.tooLarge
+// enqueueLatestWorkerJob keeps a bounded writer queue fresh under overload.
+// It evicts the oldest frame rather than dropping the newest voice frame.
+func enqueueLatestWorkerJob(queue chan fanoutWorkerJob, job fanoutWorkerJob) (accepted bool, evicted *fanoutWorkerJob) {
+	select {
+	case queue <- job:
+		return true, nil
+	default:
 	}
-	atomic.AddInt64(&s.targetsAttempted, total.attempted)
-	atomic.AddInt64(&s.sent, total.sent)
-	atomic.AddInt64(&s.writeErrors, total.errors)
-	atomic.AddInt64(&s.noBufferErrors, total.noBuffer)
-	atomic.AddInt64(&s.wouldBlockErrors, total.wouldBlock)
-	atomic.AddInt64(&s.tooLargeErrors, total.tooLarge)
-	return total
+	select {
+	case old := <-queue:
+		evicted = &old
+	default:
+		return false, nil
+	}
+	select {
+	case queue <- job:
+		return true, evicted
+	default:
+		return false, evicted
+	}
+}
+
+func (s *FanoutSender) dropWorkerJob(job fanoutWorkerJob) {
+	dropped := countPartitionTargets(job.targets, job.frame.sourceID, job.frame.sourceUser, job.frame.sourceSSID, job.frame.sourceSessionID)
+	s.addWriteResult(fanoutWriteResult{dropped: dropped})
+	atomic.AddInt64(&s.writerEvictions, 1)
+	if job.frame.collect != nil {
+		job.frame.collect.finishPartition(fanoutWriteResult{dropped: dropped})
+	}
+}
+
+// addWriteResult 累加一次写入统计到全局指标。
+func (s *FanoutSender) addWriteResult(result fanoutWriteResult) {
+	if s == nil {
+		return
+	}
+	atomic.AddInt64(&s.targetsAttempted, result.attempted)
+	atomic.AddInt64(&s.sent, result.sent)
+	atomic.AddInt64(&s.targetsDropped, result.dropped)
+	atomic.AddInt64(&s.writeErrors, result.errors)
+	atomic.AddInt64(&s.noBufferErrors, result.noBuffer)
+	atomic.AddInt64(&s.wouldBlockErrors, result.wouldBlock)
+	atomic.AddInt64(&s.tooLargeErrors, result.tooLarge)
+}
+
+// countPartitionTargets 统计一个分片中非源目标的接收者数量。
+func countPartitionTargets(targets []domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string) int64 {
+	var count int64
+	for i := range targets {
+		if !isSourceTarget(&targets[i], sourceID, sourceUser, sourceSSID, sourceSessionID) {
+			count++
+		}
+	}
+	return count
 }
 
 func partitionHasTarget(targets []domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string) bool {
@@ -389,7 +499,11 @@ func (s *FanoutSender) worker(writer *fanoutWriter) {
 				}
 			}
 		}
-		job.result <- result
+		// 【H6】writer 直接累加全局指标，并通知（可能的）完成收集器
+		s.addWriteResult(result)
+		if job.frame.collect != nil {
+			job.frame.collect.finishPartition(result)
+		}
 	}
 }
 
@@ -413,13 +527,16 @@ func (s *FanoutSender) enqueue(job fanoutFrameJob) bool {
 		return false
 	}
 
-	s.submitMu.Lock()
-	defer s.submitMu.Unlock()
+	// Channel send/receive operations are safe for concurrent callers. Do not
+	// serialize all domains behind a global mutex; lifecycleMu above keeps the
+	// channel from being closed while this non-blocking admission runs.
 	accepted, evicted := enqueueLatestFrame(s.frames, job)
 	if evicted != nil {
+		dropped := countFrameTargets(*evicted)
 		atomic.AddInt64(&s.framesDropped, 1)
+		s.addWriteResult(fanoutWriteResult{dropped: dropped})
 		if evicted.onComplete != nil {
-			evicted.onComplete(fanoutWriteResult{dropped: countFrameTargets(*evicted)})
+			evicted.onComplete(fanoutWriteResult{dropped: dropped})
 		}
 	}
 	if accepted {
@@ -427,6 +544,7 @@ func (s *FanoutSender) enqueue(job fanoutFrameJob) bool {
 		return true
 	}
 	atomic.AddInt64(&s.framesDropped, 1)
+	s.addWriteResult(fanoutWriteResult{dropped: countFrameTargets(job)})
 	return false
 }
 
@@ -507,7 +625,11 @@ func writeUDPDomain(data []byte, snap *domainReceiverSnap, sourceID int, sourceU
 	if len(data) == 0 || snap == nil || len(snap.entries) == 0 {
 		return
 	}
-	if s := getFanoutSender(); s != nil && s.enqueueDomainFrame(data, snap, sourceID, sourceUser, sourceSSID, sourceSessionID, sourceGroupID) {
+	if s := getFanoutSender(); s != nil {
+		// Once the asynchronous sender is published, a rejected enqueue means
+		// shutdown or overload. Never turn that condition into a synchronous
+		// UDP write on the ingress worker; dropping the frame preserves latency.
+		_ = s.enqueueDomainFrame(data, snap, sourceID, sourceUser, sourceSSID, sourceSessionID, sourceGroupID)
 		return
 	}
 	var sourceGroupData []byte
@@ -552,10 +674,12 @@ func GetFanoutSenderStats() map[string]int64 {
 		"frames_stale":         atomic.LoadInt64(&s.framesStale),
 		"targets_attempted":    atomic.LoadInt64(&s.targetsAttempted),
 		"sent":                 atomic.LoadInt64(&s.sent),
+		"targets_dropped":      atomic.LoadInt64(&s.targetsDropped),
 		"write_errors":         atomic.LoadInt64(&s.writeErrors),
 		"enobufs":              atomic.LoadInt64(&s.noBufferErrors),
 		"would_block":          atomic.LoadInt64(&s.wouldBlockErrors),
 		"message_too_large":    atomic.LoadInt64(&s.tooLargeErrors),
+		"writer_evictions":     atomic.LoadInt64(&s.writerEvictions),
 		"dispatch_ns":          atomic.LoadInt64(&s.dispatchNanos),
 		"max_dispatch_ns":      atomic.LoadInt64(&s.maxDispatchNanos),
 		"queued":               s.queued(),

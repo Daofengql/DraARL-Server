@@ -20,33 +20,40 @@ type commRecordJob struct {
 }
 
 var (
+	commRecordMu       sync.Mutex
 	commRecordQueue    chan commRecordJob
-	commRecordOnce     sync.Once
-	commRecordStopOnce sync.Once
 	commRecordStopCh   chan struct{}
+	commRecordRunning  bool
 	commRecordWg       sync.WaitGroup
 	commRecordDrops    int64
 	commRecordEnqueued int64
 )
 
 func ensureCommRecordWorker() {
-	commRecordOnce.Do(func() {
-		commRecordQueue = make(chan commRecordJob, commRecordQueueSize)
-		commRecordStopCh = make(chan struct{})
-		commRecordWg.Add(1)
-		go commRecordWorker()
-	})
+	commRecordMu.Lock()
+	if commRecordRunning {
+		commRecordMu.Unlock()
+		return
+	}
+	queue := make(chan commRecordJob, commRecordQueueSize)
+	stopCh := make(chan struct{})
+	commRecordQueue = queue
+	commRecordStopCh = stopCh
+	commRecordRunning = true
+	commRecordWg.Add(1)
+	commRecordMu.Unlock()
+	go commRecordWorker(queue, stopCh)
 }
 
-func commRecordWorker() {
+func commRecordWorker(queue <-chan commRecordJob, stopCh <-chan struct{}) {
 	defer commRecordWg.Done()
 	for {
 		select {
-		case <-commRecordStopCh:
+		case <-stopCh:
 			// 排空剩余任务
 			for {
 				select {
-				case job := <-commRecordQueue:
+				case job := <-queue:
 					if globalCommRecorder != nil {
 						globalCommRecorder.RecordPacket(job.sourceKey, job.deviceID, job.deviceSSID, job.groupID, job.userID, job.sender, job.deliveryGroupIDs, job.audioData)
 					}
@@ -54,7 +61,7 @@ func commRecordWorker() {
 					return
 				}
 			}
-		case job, ok := <-commRecordQueue:
+		case job, ok := <-queue:
 			if !ok {
 				return
 			}
@@ -99,6 +106,12 @@ func enqueueCommRecord(sourceKey string, deviceID int, deviceSSID uint8, groupID
 		audioData:        payload,
 	}
 
+	commRecordMu.Lock()
+	defer commRecordMu.Unlock()
+	if !commRecordRunning || commRecordQueue == nil {
+		atomic.AddInt64(&commRecordDrops, 1)
+		return
+	}
 	select {
 	case commRecordQueue <- job:
 		atomic.AddInt64(&commRecordEnqueued, 1)
@@ -110,20 +123,32 @@ func enqueueCommRecord(sourceKey string, deviceID int, deviceSSID uint8, groupID
 
 // stopCommRecordWorker 在录制器停止时调用，排空队列。
 func stopCommRecordWorker() {
-	commRecordStopOnce.Do(func() {
-		if commRecordStopCh != nil {
-			close(commRecordStopCh)
-		}
-	})
+	commRecordMu.Lock()
+	if !commRecordRunning || commRecordStopCh == nil {
+		commRecordMu.Unlock()
+		return
+	}
+	commRecordRunning = false
+	stopCh := commRecordStopCh
+	close(stopCh)
+	commRecordMu.Unlock()
 	commRecordWg.Wait()
+	commRecordMu.Lock()
+	if commRecordStopCh == stopCh {
+		commRecordQueue = nil
+		commRecordStopCh = nil
+	}
+	commRecordMu.Unlock()
 }
 
 // GetCommRecordQueueStats 监控统计。
 func GetCommRecordQueueStats() map[string]int64 {
 	qlen := int64(0)
-	if commRecordQueue != nil {
+	commRecordMu.Lock()
+	if commRecordQueue != nil && commRecordRunning {
 		qlen = int64(len(commRecordQueue))
 	}
+	commRecordMu.Unlock()
 	return map[string]int64{
 		"enqueued": atomic.LoadInt64(&commRecordEnqueued),
 		"drops":    atomic.LoadInt64(&commRecordDrops),

@@ -7,6 +7,10 @@ import (
 
 type MetricsSnapshot struct {
 	Running          bool   `json:"running"`
+	RecoveryRunning  bool   `json:"recovery_running"`
+	RecoveryScanned  uint64 `json:"recovery_scanned"`
+	RecoveryErrors   uint64 `json:"recovery_errors"`
+	RecoveryLastID   uint64 `json:"recovery_last_id"`
 	QueueDepth       int    `json:"queue_depth"`
 	QueueCapacity    int    `json:"queue_capacity"`
 	Enqueued         uint64 `json:"enqueued"`
@@ -22,6 +26,10 @@ type MetricsSnapshot struct {
 
 type processorMetrics struct {
 	running         atomic.Bool
+	recoveryRunning atomic.Bool
+	recoveryScanned atomic.Uint64
+	recoveryErrors  atomic.Uint64
+	recoveryLastID  atomic.Uint64
 	enqueued        atomic.Uint64
 	started         atomic.Uint64
 	succeeded       atomic.Uint64
@@ -63,7 +71,9 @@ func (p *Processor) Metrics() MetricsSnapshot {
 		return MetricsSnapshot{}
 	}
 	return MetricsSnapshot{
-		Running: p.metrics.running.Load(), QueueDepth: len(p.jobs), QueueCapacity: cap(p.jobs),
+		Running: p.metrics.running.Load(), RecoveryRunning: p.metrics.recoveryRunning.Load(),
+		RecoveryScanned: p.metrics.recoveryScanned.Load(), RecoveryErrors: p.metrics.recoveryErrors.Load(),
+		RecoveryLastID: p.metrics.recoveryLastID.Load(), QueueDepth: len(p.jobs), QueueCapacity: cap(p.jobs),
 		Enqueued: p.metrics.enqueued.Load(), Started: p.metrics.started.Load(),
 		Succeeded: p.metrics.succeeded.Load(), Failed: p.metrics.failed.Load(), Current: p.metrics.current.Load(),
 		TranscodeSamples: p.metrics.durationSamples.Load(), TranscodeTotalMS: p.metrics.durationTotalMS.Load(),

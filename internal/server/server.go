@@ -268,7 +268,7 @@ func (s *Server) setupRoutes() {
 				approved.POST("/group/create", handler.CreateGroup) // 兼容旧接口
 				approved.POST("/groups/search", handler.SearchGroups)
 				// 加入群组
-				approved.POST("/groups/:id/join", handler.JoinGroup)
+				approved.POST("/groups/:id/join", middleware.GroupJoinPasswordRateLimit(), handler.JoinGroup)
 				// 获取群组成员列表
 				approved.GET("/groups/:id/members", handler.GetGroupMembers)
 				// 离开群组
@@ -373,8 +373,8 @@ func (s *Server) setupRoutes() {
 
 			// 站点配置管理（读取需要登录，修改需要管理员权限）
 			configHandler := handler.NewSiteConfigHandler()
-			// 读取路由（已登录用户可访问）
-			protected.GET("/config/category/:category", configHandler.GetConfigsByCategory)
+			// 【S3 安全修复】站点配置含密钥（SMTP 授权码等），分类读取收敛为管理员 + 脱敏
+			admin.GET("/config/category/:category", configHandler.GetConfigsByCategory)
 			// 修改路由（需要管理员权限）
 			admin.PUT("/config", configHandler.UpdateConfig)
 			admin.PUT("/config/icp", configHandler.UpdateICPConfig)
@@ -382,13 +382,11 @@ func (s *Server) setupRoutes() {
 			admin.PUT("/config/aprs", configHandler.UpdateAPRSConfig)
 			admin.GET("/config/access-discovery", configHandler.GetAccessDiscoveryConfig)
 			admin.PUT("/config/access-discovery", configHandler.UpdateAccessDiscoveryConfig)
-			admin.PUT("/config/openai", configHandler.UpdateOpenAIConfig)
 			admin.GET("/config/registration", configHandler.GetRegistrationConfig)
 			admin.PUT("/config/registration", configHandler.UpdateRegistrationConfig)
 			admin.GET("/config/all", configHandler.GetAllConfigs)
 			admin.GET("/config/system", configHandler.GetSystemInfoConfig)
 			admin.GET("/config/aprs", configHandler.GetAPRSConfig)
-			admin.GET("/config/openai", configHandler.GetOpenAIConfig)
 			admin.GET("/config/aprs/logs", configHandler.GetAPRSLogs)
 			// SMTP 配置（需要管理员权限）
 			admin.GET("/config/smtp", configHandler.GetSMTPConfig)
@@ -489,9 +487,6 @@ func initSiteConfigs(cfg *config.Configuration) {
 		"000000",             // 海拔
 		0,                    // 纬度
 		0,                    // 经度
-		"",                   // OpenAI BaseURL
-		"",                   // OpenAI APIKey
-		"",                   // OpenAI Engine
 	); err != nil {
 		log.Printf("初始化站点配置失败: %v", err)
 		return

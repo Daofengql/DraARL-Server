@@ -64,6 +64,20 @@ func (r *GroupMemberRepository) ListGroupsByUser(userID int) ([]*GroupMember, er
 	return members, err
 }
 
+// ListVerifiedGroupIDsByUser 只返回给定候选中的已验证成员关系，供分页
+// 列表避免为计算当前页 is_joined 而加载用户的全部群组成员记录。
+func (r *GroupMemberRepository) ListVerifiedGroupIDsByUser(userID int, groupIDs []int) ([]int, error) {
+	if userID <= 0 || len(groupIDs) == 0 {
+		return []int{}, nil
+	}
+	var ids []int
+	err := r.db.Model(&GroupMember{}).
+		Where("user_id = ? AND group_id IN ? AND is_verified = ?", userID, groupIDs, true).
+		Distinct("group_id").
+		Pluck("group_id", &ids).Error
+	return ids, err
+}
+
 // CreateMember 创建群组成员记录
 func (r *GroupMemberRepository) CreateMember(member *GroupMember) error {
 	return r.db.Create(member).Error

@@ -26,8 +26,13 @@ type RateLimitEntry struct {
 
 // DeviceRateLimiter 设备接口限速器
 type DeviceRateLimiter struct {
-	mu     sync.RWMutex
-	limits map[string]*RateLimitEntry // key: limitType:value -> entry
+	mu            sync.RWMutex
+	limits        map[string]*RateLimitEntry // key: limitType:value -> entry
+	order         []string
+	orderIndex    map[string]int
+	cleanupCursor int
+	stopCh        chan struct{}
+	stopOnce      sync.Once
 
 	// 预定义的限速规则
 	rules map[string]RateLimitRule
@@ -38,7 +43,9 @@ var deviceRateLimiter *DeviceRateLimiter
 
 func newDeviceRateLimiter() *DeviceRateLimiter {
 	return &DeviceRateLimiter{
-		limits: make(map[string]*RateLimitEntry),
+		limits:     make(map[string]*RateLimitEntry),
+		orderIndex: make(map[string]int),
+		stopCh:     make(chan struct{}),
 		rules: map[string]RateLimitRule{
 			"pre-check-ip": {
 				Key:         "ip",
@@ -121,15 +128,26 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 			"access-discovery-list-user": {
 				Key: "user", Limit: 30, Window: time.Minute, Description: "同一用户每分钟 30 次",
 			},
+			"group-join-password-ip": {
+				Key: "ip", Limit: 30, Window: time.Minute, Description: "同一 IP 每分钟 30 次私有群组密码验证",
+			},
+			"group-join-password-user": {
+				Key: "user", Limit: 10, Window: time.Minute, Description: "同一用户每分钟 10 次私有群组密码验证",
+			},
 		},
 	}
 }
 
 // InitDeviceRateLimiter 初始化设备接口限速器
 func InitDeviceRateLimiter() {
-	deviceRateLimiter = newDeviceRateLimiter()
+	previous := deviceRateLimiter
+	current := newDeviceRateLimiter()
+	deviceRateLimiter = current
+	if previous != nil {
+		previous.stop()
+	}
 	// 启动清理协程
-	go deviceRateLimiter.cleanup()
+	go current.cleanup()
 }
 
 // GetDeviceRateLimiter 获取全局限速器
@@ -137,10 +155,22 @@ func GetDeviceRateLimiter() *DeviceRateLimiter {
 	return deviceRateLimiter
 }
 
-// checkLimit 检查是否超过限速
-func (r *DeviceRateLimiter) checkLimit(ruleName, value string) (allowed bool, retryAfter time.Duration) {
+// maxDeviceRateLimitKeys 限速条目上限，防止唯一键无限增长造成内存泄漏。
+const maxDeviceRateLimitKeys = 100_000
+
+// checkLimit 检查是否超过限速。
+// 【MAC 伪造修复】rule.Key=="mac" 时把来源 IP 并入限速键，客户端伪造任意
+// MAC 也无法绕过"同一 IP"的约束。map 有上限：满表时先清理过期条目腾位，
+// 腾不出才拒绝，避免无界增长。
+func (r *DeviceRateLimiter) checkLimit(ruleName, value, sourceIP string) (allowed bool, retryAfter time.Duration) {
 	rule, exists := r.rules[ruleName]
 	if !exists {
+		return true, 0
+	}
+	if rule.Key == "mac" && sourceIP != "" {
+		value = value + "@" + sourceIP
+	}
+	if value == "" {
 		return true, 0
 	}
 
@@ -148,16 +178,30 @@ func (r *DeviceRateLimiter) checkLimit(ruleName, value string) (allowed bool, re
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureOrderIndexLocked()
 
 	now := time.Now()
 	entry, exists := r.limits[key]
 
-	if !exists || now.After(entry.ExpiresAt) {
-		// 不存在或已过期，创建新条目
+	if !exists {
+		if len(r.limits) >= maxDeviceRateLimitKeys {
+			r.pruneExpiredLocked(now, 64)
+		}
+		if len(r.limits) >= maxDeviceRateLimitKeys {
+			return false, rule.Window
+		}
 		r.limits[key] = &RateLimitEntry{
 			Count:     1,
 			ExpiresAt: now.Add(rule.Window),
 		}
+		r.orderIndex[key] = len(r.order)
+		r.order = append(r.order, key)
+		return true, 0
+	}
+
+	if now.After(entry.ExpiresAt) {
+		entry.Count = 1
+		entry.ExpiresAt = now.Add(rule.Window)
 		return true, 0
 	}
 
@@ -172,21 +216,91 @@ func (r *DeviceRateLimiter) checkLimit(ruleName, value string) (allowed bool, re
 	return true, 0
 }
 
-// cleanup 定期清理过期的限速条目
+// ensureOrderIndexLocked lazily builds the cleanup index for callers/tests
+// that construct a DeviceRateLimiter with only the legacy fields.
+func (r *DeviceRateLimiter) ensureOrderIndexLocked() {
+	if r.orderIndex != nil {
+		return
+	}
+	r.orderIndex = make(map[string]int, len(r.limits))
+	r.order = make([]string, 0, len(r.limits))
+	for key := range r.limits {
+		r.orderIndex[key] = len(r.order)
+		r.order = append(r.order, key)
+	}
+}
+
+// deleteLimitEntryLocked removes a key from the ordered cleanup index in
+// O(1). The caller must hold r.mu.
+func (r *DeviceRateLimiter) deleteLimitEntryLocked(key string) {
+	delete(r.limits, key)
+	idx, ok := r.orderIndex[key]
+	if !ok {
+		return
+	}
+	last := len(r.order) - 1
+	if idx != last {
+		lastKey := r.order[last]
+		r.order[idx] = lastKey
+		r.orderIndex[lastKey] = idx
+	}
+	r.order = r.order[:last]
+	delete(r.orderIndex, key)
+	if r.cleanupCursor > idx {
+		r.cleanupCursor--
+	}
+	if r.cleanupCursor >= len(r.order) {
+		r.cleanupCursor = 0
+	}
+}
+
+// pruneExpiredLocked 删除至多 max 个已过期条目（持锁时调用）。持续游标
+// 确保有界清理最终覆盖所有 key，不依赖 map 随机迭代顺序。
+func (r *DeviceRateLimiter) pruneExpiredLocked(now time.Time, max int) {
+	r.ensureOrderIndexLocked()
+	for scanned := 0; scanned < max && len(r.order) > 0; {
+		if r.cleanupCursor >= len(r.order) {
+			r.cleanupCursor = 0
+		}
+		key := r.order[r.cleanupCursor]
+		entry, exists := r.limits[key]
+		if !exists {
+			r.deleteLimitEntryLocked(key)
+			continue
+		}
+		scanned++
+		if now.After(entry.ExpiresAt) {
+			r.deleteLimitEntryLocked(key)
+			continue
+		}
+		r.cleanupCursor++
+	}
+}
+
+// cleanup 定期清理过期的限速条目。
+// 【修复】每次 tick 有界清理（至多 4096 条），避免大表时整表扫描长时间持锁
+// 阻塞热路径；多次 tick 自然收敛。
 func (r *DeviceRateLimiter) cleanup() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		r.mu.Lock()
-		now := time.Now()
-		for key, entry := range r.limits {
-			if now.After(entry.ExpiresAt) {
-				delete(r.limits, key)
-			}
+	for {
+		select {
+		case <-ticker.C:
+			r.mu.Lock()
+			r.pruneExpiredLocked(time.Now(), 4096)
+			r.mu.Unlock()
+		case <-r.stopCh:
+			return
 		}
-		r.mu.Unlock()
 	}
+}
+
+func (r *DeviceRateLimiter) stop() {
+	if r == nil || r.stopCh == nil {
+		return
+	}
+	r.stopOnce.Do(func() { close(r.stopCh) })
 }
 
 // DeviceRateLimit 设备接口限速中间件
@@ -214,7 +328,7 @@ func DeviceRateLimit(ruleNames []string, keyExtractor func(*gin.Context) map[str
 				continue
 			}
 
-			allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value)
+			allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value, c.ClientIP())
 			if !allowed {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"code":    429,
@@ -258,7 +372,7 @@ func PreCheckRateLimit() gin.HandlerFunc {
 		if err := c.ShouldBindBodyWith(&req, binding.JSON); err == nil {
 			// 检查 MAC 限速
 			if req.MAC != "" {
-				allowed, retryAfter := deviceRateLimiter.checkLimit("pre-check-mac", req.MAC)
+				allowed, retryAfter := deviceRateLimiter.checkLimit("pre-check-mac", req.MAC, c.ClientIP())
 				if !allowed {
 					c.JSON(http.StatusTooManyRequests, gin.H{
 						"code":    429,
@@ -274,7 +388,7 @@ func PreCheckRateLimit() gin.HandlerFunc {
 		}
 
 		// 检查 IP 限速
-		allowed, retryAfter := deviceRateLimiter.checkLimit("pre-check-ip", c.ClientIP())
+		allowed, retryAfter := deviceRateLimiter.checkLimit("pre-check-ip", c.ClientIP(), c.ClientIP())
 		if !allowed {
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"code":    429,
@@ -304,7 +418,7 @@ func RequestCodeRateLimit() gin.HandlerFunc {
 		if err := c.ShouldBindBodyWith(&req, binding.JSON); err == nil {
 			// 检查 MAC 限速
 			if req.MAC != "" {
-				allowed, retryAfter := deviceRateLimiter.checkLimit("request-code-mac", req.MAC)
+				allowed, retryAfter := deviceRateLimiter.checkLimit("request-code-mac", req.MAC, c.ClientIP())
 				if !allowed {
 					c.JSON(http.StatusTooManyRequests, gin.H{
 						"code":    429,
@@ -320,7 +434,7 @@ func RequestCodeRateLimit() gin.HandlerFunc {
 		}
 
 		// 检查 IP 限速
-		allowed, retryAfter := deviceRateLimiter.checkLimit("request-code-ip", c.ClientIP())
+		allowed, retryAfter := deviceRateLimiter.checkLimit("request-code-ip", c.ClientIP(), c.ClientIP())
 		if !allowed {
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"code":    429,
@@ -350,7 +464,7 @@ func ConfirmBindRateLimit() gin.HandlerFunc {
 		if err := c.ShouldBindBodyWith(&req, binding.JSON); err == nil {
 			// 检查 MAC 限速
 			if req.MAC != "" {
-				allowed, retryAfter := deviceRateLimiter.checkLimit("confirm-bind-mac", req.MAC)
+				allowed, retryAfter := deviceRateLimiter.checkLimit("confirm-bind-mac", req.MAC, c.ClientIP())
 				if !allowed {
 					c.JSON(http.StatusTooManyRequests, gin.H{
 						"code":    429,
@@ -381,7 +495,7 @@ func BindRateLimit() gin.HandlerFunc {
 		userKey := toString(username)
 
 		if userKey != "" {
-			allowed, retryAfter := deviceRateLimiter.checkLimit("bind-user", userKey)
+			allowed, retryAfter := deviceRateLimiter.checkLimit("bind-user", userKey, c.ClientIP())
 			if !allowed {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"code":    429,
@@ -411,7 +525,7 @@ func SubmitConfigRateLimit() gin.HandlerFunc {
 		userKey := toString(username)
 
 		if userKey != "" {
-			allowed, retryAfter := deviceRateLimiter.checkLimit("submit-config-user", userKey)
+			allowed, retryAfter := deviceRateLimiter.checkLimit("submit-config-user", userKey, c.ClientIP())
 			if !allowed {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"code":    429,
@@ -438,7 +552,7 @@ func PublicRelaySearchRateLimit() gin.HandlerFunc {
 		}
 
 		clientIP := c.ClientIP()
-		allowed, retryAfter := deviceRateLimiter.checkLimit("public-relay-search-ip", clientIP)
+		allowed, retryAfter := deviceRateLimiter.checkLimit("public-relay-search-ip", clientIP, clientIP)
 		if !allowed {
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"code":    429,
@@ -464,7 +578,7 @@ func PublicClientResourceRateLimit() gin.HandlerFunc {
 			return
 		}
 
-		allowed, retryAfter := deviceRateLimiter.checkLimit("public-client-resource-ip", c.ClientIP())
+		allowed, retryAfter := deviceRateLimiter.checkLimit("public-client-resource-ip", c.ClientIP(), c.ClientIP())
 		if !allowed {
 			c.Header("Retry-After", intToStr(maxInt(1, int(retryAfter.Seconds()))))
 			c.JSON(http.StatusTooManyRequests, gin.H{
@@ -536,10 +650,40 @@ func AccessDiscoveryListUserRateLimit() gin.HandlerFunc {
 	}
 }
 
+// GroupJoinPasswordRateLimit limits private-group password attempts by both
+// source IP and authenticated user. The endpoint is authenticated, but a
+// leaked account must not be able to make unbounded online password guesses.
+func GroupJoinPasswordRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if CheckGroupJoinPasswordRateLimit(c) {
+			c.Next()
+		}
+	}
+}
+
+// CheckGroupJoinPasswordRateLimit applies the shared private-group password
+// budget without advancing the Gin handler chain. Mixed-path handlers can
+// charge only requests that actually attempt password verification.
+func CheckGroupJoinPasswordRateLimit(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	username, _ := c.Get("username")
+	return checkRateLimitRules(c, []string{"group-join-password-ip", "group-join-password-user"}, map[string]string{
+		"ip":   c.ClientIP(),
+		"user": strings.ToLower(toString(username)),
+	})
+}
+
 func applyRateLimitRules(c *gin.Context, ruleNames []string, keys map[string]string) {
-	if deviceRateLimiter == nil {
+	if checkRateLimitRules(c, ruleNames, keys) {
 		c.Next()
-		return
+	}
+}
+
+func checkRateLimitRules(c *gin.Context, ruleNames []string, keys map[string]string) bool {
+	if deviceRateLimiter == nil {
+		return true
 	}
 	for _, ruleName := range ruleNames {
 		rule, exists := deviceRateLimiter.rules[ruleName]
@@ -550,15 +694,15 @@ func applyRateLimitRules(c *gin.Context, ruleNames []string, keys map[string]str
 		if value == "" {
 			continue
 		}
-		allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value)
+		allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value, c.ClientIP())
 		if !allowed {
 			c.Header("Retry-After", intToStr(maxInt(1, int(retryAfter.Seconds()))))
 			c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "请求过于频繁，请稍后重试", "data": gin.H{"retry_after": maxInt(1, int(retryAfter.Seconds()))}})
 			c.Abort()
-			return
+			return false
 		}
 	}
-	c.Next()
+	return true
 }
 
 func maxInt(a, b int) int {

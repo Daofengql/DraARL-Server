@@ -193,7 +193,8 @@ func RequestCode(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[DEVICE] 生成动态码: MAC=%s, Code=%s", mac, device.Code)
+	// 【安全修复】动态码不再明文打日志，防止日志泄露后被离线利用
+	log.Printf("[DEVICE] 生成动态码: MAC=%s, 有效期=%s", mac, time.Until(device.CodeExpires).Round(time.Second))
 	expiresIn := int((time.Until(device.CodeExpires) + time.Second - 1) / time.Second)
 	if expiresIn < 0 {
 		expiresIn = 0
@@ -647,7 +648,15 @@ func SubmitDeviceConfig(c *gin.Context) {
 	}
 
 	if user.DevicePassword == "" || legacyPassword || devicePassword == "" {
-		devicePassword = generateDevicePassword()
+		devicePassword, err = generateDevicePassword()
+		if err != nil {
+			log.Printf("[DEVICE] 生成设备密码失败: user=%s err=%v", user.Name, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"code":    500,
+				"message": "生成设备密码失败",
+			})
+			return
+		}
 		encryptedPassword, encErr := crypto.Encrypt(devicePassword)
 		if encErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{

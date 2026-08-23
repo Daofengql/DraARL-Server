@@ -10,7 +10,10 @@ import (
 
 // GroupCache 群组信息缓存管理器
 type GroupCache struct {
-	cache *TwoLevelCache
+	cache               *TwoLevelCache
+	listGroupsPaginated func(limit, page int) ([]*gormdb.Group, int64, error)
+	listGroupsPage      func(limit, page int) ([]*gormdb.Group, error)
+	countGroups         func() (int64, error)
 }
 
 // GroupCacheConfig 群组缓存配置
@@ -37,7 +40,19 @@ func NewGroupCache(config GroupCacheConfig) (*GroupCache, error) {
 		return nil, err
 	}
 
-	return &GroupCache{cache: cache}, nil
+	return &GroupCache{
+		cache: cache,
+		// 延迟创建仓储，保持缓存管理器可在 GORM 初始化之前安全构造。
+		listGroupsPaginated: func(limit, page int) ([]*gormdb.Group, int64, error) {
+			return gormdb.NewGroupRepository().ListGroupsPaginated(limit, page)
+		},
+		listGroupsPage: func(limit, page int) ([]*gormdb.Group, error) {
+			return gormdb.NewGroupRepository().ListGroupsPage(limit, page)
+		},
+		countGroups: func() (int64, error) {
+			return gormdb.NewGroupRepository().GroupCount()
+		},
+	}, nil
 }
 
 // 缓存键生成函数
@@ -99,6 +114,12 @@ func (c *GroupCache) GetGroupByID(ctx context.Context, id int) (*gormdb.Group, e
 
 // GetGroupList 获取群组列表（带缓存，列表使用短TTL被动过期）
 func (c *GroupCache) GetGroupList(ctx context.Context, page, pageSize int) ([]*gormdb.Group, int64, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
 	itemsKey := groupListKey(page, pageSize)
 	totalKey := groupListTotalKey()
 
@@ -114,34 +135,45 @@ func (c *GroupCache) GetGroupList(ctx context.Context, page, pageSize int) ([]*g
 		return groups, total, nil
 	}
 
-	// 缓存未命中，从数据库查询
-	repo := gormdb.NewGroupRepository()
-	dbGroups, err := repo.ListGroups()
+	// 只查询缺失的视图：完整 miss 使用一次分页+Count；总数已命中时
+	// 只查当前页；分页项已命中时只补 Count。任何路径都不再加载整张表。
+	if !itemsHit && !totalHit {
+		groups, loadedTotal, err := c.listGroupsPaginated(pageSize, page)
+		if err != nil {
+			return nil, 0, err
+		}
+		if groups == nil {
+			groups = make([]*gormdb.Group, 0)
+		}
+		if err := c.cache.Set(ctx, itemsKey, groups, time.Minute); err != nil {
+			return nil, 0, err
+		}
+		if err := c.cache.Set(ctx, totalKey, loadedTotal, 2*time.Minute); err != nil {
+			return nil, 0, err
+		}
+		return groups, loadedTotal, nil
+	}
+	if !itemsHit {
+		groups, err := c.listGroupsPage(pageSize, page)
+		if err != nil {
+			return nil, 0, err
+		}
+		if groups == nil {
+			groups = make([]*gormdb.Group, 0)
+		}
+		if err := c.cache.Set(ctx, itemsKey, groups, time.Minute); err != nil {
+			return nil, 0, err
+		}
+		return groups, total, nil
+	}
+	loadedTotal, err := c.countGroups()
 	if err != nil {
 		return nil, 0, err
 	}
-
-	// 计算总数和分页
-	total = int64(len(dbGroups))
-	offset := (page - 1) * pageSize
-	if int64(offset) >= total {
-		dbGroups = []*gormdb.Group{}
-	} else if offset+pageSize > int(total) {
-		dbGroups = dbGroups[offset:]
-	} else {
-		dbGroups = dbGroups[offset : offset+pageSize]
+	if err := c.cache.Set(ctx, totalKey, loadedTotal, 2*time.Minute); err != nil {
+		return nil, 0, err
 	}
-
-	// 缓存穿透保护
-	if dbGroups == nil {
-		dbGroups = make([]*gormdb.Group, 0)
-	}
-
-	// 写入缓存（列表 1 分钟，总数 2 分钟）
-	_ = c.cache.Set(ctx, itemsKey, dbGroups, time.Minute)
-	_ = c.cache.Set(ctx, totalKey, total, 2*time.Minute)
-
-	return dbGroups, total, nil
+	return groups, loadedTotal, nil
 }
 
 // GetPublicGroups 获取公开群组列表（带缓存）

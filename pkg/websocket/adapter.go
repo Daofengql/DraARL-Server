@@ -213,10 +213,6 @@ func handleVoice(device *WSDevice, packet *WSPacket, rawData []byte) {
 	if !udphub.AuthorizeCenterLocalWS(device, txGroupID) {
 		return
 	}
-	if !udphub.AcquireCenterLocalWSVoice(device, txGroupID) {
-		return
-	}
-
 	// 2. 通信录制：记录 WebSocket 客户端的上行语音数据
 	if len(packet.DATA) > 0 {
 		var groupID *uint

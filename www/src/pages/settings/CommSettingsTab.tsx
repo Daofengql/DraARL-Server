@@ -17,7 +17,7 @@ interface CommSettingsTabProps {
 
 export function CommSettingsTab({ value, config, setConfig, loading, onSave }: CommSettingsTabProps) {
   return (
-    <TabPanel value={value} index={4}>
+    <TabPanel value={value} index={3}>
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card><CardContent>
           <Typography variant="h6" gutterBottom>通信设置</Typography>

@@ -30,6 +30,16 @@ func TestDiscoveryTokenCannotBeUsedAsAccessTokenOrRefreshed(t *testing.T) {
 	}
 }
 
+func TestAccessTokenCannotBeRefreshedStatelessly(t *testing.T) {
+	token, err := GenerateToken("web-user", []string{"user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed, err := RefreshToken(token); err == nil || refreshed != "" {
+		t.Fatalf("stateless refresh succeeded: token=%q err=%v", refreshed, err)
+	}
+}
+
 func TestAccessTokenCannotBeUsedAsDiscoveryToken(t *testing.T) {
 	token, err := GenerateToken("web-user", []string{"user"})
 	if err != nil {
@@ -54,7 +64,7 @@ func TestAccessTokenRequiresExpiryButKeepsLegacyTokenUseCompatibility(t *testing
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
 		},
 	}
-	legacy, err := jwt.NewWithClaims(jwt.SigningMethodHS256, legacyClaims).SignedString(jwtSecret)
+	legacy, err := jwt.NewWithClaims(jwt.SigningMethodHS256, legacyClaims).SignedString([]byte(testJWTSecret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +74,7 @@ func TestAccessTokenRequiresExpiryButKeepsLegacyTokenUseCompatibility(t *testing
 
 	withoutExpiry := legacyClaims
 	withoutExpiry.ExpiresAt = nil
-	invalid, err := jwt.NewWithClaims(jwt.SigningMethodHS256, withoutExpiry).SignedString(jwtSecret)
+	invalid, err := jwt.NewWithClaims(jwt.SigningMethodHS256, withoutExpiry).SignedString([]byte(testJWTSecret))
 	if err != nil {
 		t.Fatal(err)
 	}

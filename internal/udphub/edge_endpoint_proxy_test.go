@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	"draarl/internal/config"
 )
 
 type edgeEndpointPacket struct {
@@ -124,9 +127,113 @@ func TestEdgeEndpointProxyV2KeepsUnwrappedDatagramsCompatible(t *testing.T) {
 	}
 }
 
+func TestEdgeEndpointProxyV2UsesEndpointLocalTrustedCIDRs(t *testing.T) {
+	received := make(chan edgeEndpointPacket, 1)
+	// The actual test sender is 127.0.0.1, which is intentionally outside the
+	// configured proxy network. The header must therefore remain opaque data.
+	endpoint, err := NewEdgeEndpoint("127.0.0.1:0", "v2", func(data []byte, remoteAddr, realAddr *net.UDPAddr) {
+		received <- edgeEndpointPacket{data: append([]byte(nil), data...), remoteAddr: cloneTestUDPAddr(remoteAddr), realAddr: cloneTestUDPAddr(realAddr)}
+	}, []string{"192.0.2.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endpoint.Close()
+	sender, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	clientAddr := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 27), Port: 23456}
+	payload := []byte("untrusted-proxy-payload")
+	wire := encodeProxyV2UDP(t, clientAddr, endpoint.Addr().(*net.UDPAddr), payload)
+	if _, err := sender.WriteToUDP(wire, endpoint.Addr().(*net.UDPAddr)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case packet := <-received:
+		if !bytes.Equal(packet.data, wire) {
+			t.Fatalf("untrusted source was unwrapped: data=%q", packet.data)
+		}
+		if !udpAddrTestEqual(packet.remoteAddr, packet.realAddr) {
+			t.Fatalf("untrusted source changed real address: remote=%v real=%v", packet.remoteAddr, packet.realAddr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("edge endpoint did not receive untrusted PROXY datagram")
+	}
+}
+
 func TestEdgeEndpointRejectsUnsupportedProxyProtocol(t *testing.T) {
 	if _, err := NewEdgeEndpoint("127.0.0.1:0", "v1", func([]byte, *net.UDPAddr, *net.UDPAddr) {}); err == nil {
 		t.Fatal("expected unsupported edge proxy protocol to be rejected")
+	}
+}
+
+func TestEdgeEndpointRejectsInvalidProxyTrustedCIDR(t *testing.T) {
+	endpoint, err := NewEdgeEndpoint("127.0.0.1:0", "v2", func([]byte, *net.UDPAddr, *net.UDPAddr) {}, []string{"not-a-cidr"})
+	if endpoint != nil {
+		_ = endpoint.Close()
+		t.Fatal("invalid trusted CIDR returned a live edge endpoint")
+	}
+	if err == nil {
+		t.Fatal("invalid edge proxy trusted CIDR was accepted")
+	}
+}
+
+func TestEdgeEndpointRequiresProxyTrustedCIDRsForReleaseV2(t *testing.T) {
+	previousRelease := config.IsReleaseBuild()
+	config.SetReleaseBuild(true)
+	t.Cleanup(func() {
+		config.SetReleaseBuild(previousRelease)
+	})
+
+	if _, err := NewEdgeEndpoint("127.0.0.1:0", "v2", func([]byte, *net.UDPAddr, *net.UDPAddr) {}); err == nil || !strings.Contains(err.Error(), "trusted CIDRs") {
+		t.Fatalf("expected release v2 trust-boundary validation error, got %v", err)
+	}
+
+	endpoint, err := NewEdgeEndpoint("127.0.0.1:0", "v2", func([]byte, *net.UDPAddr, *net.UDPAddr) {}, []string{"192.0.2.0/24"})
+	if err != nil {
+		t.Fatalf("valid release v2 endpoint rejected: %v", err)
+	}
+	endpoint.Close()
+}
+
+func TestEdgeEndpointFanoutDoesNotSynchronouslyFallbackWhenSenderStops(t *testing.T) {
+	endpoint, err := NewEdgeEndpoint("127.0.0.1:0", "", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer endpoint.Close()
+	receiver, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	target, ok := NewEdgeFanoutTarget(receiver.LocalAddr().(*net.UDPAddr), 2, "receiver", 1)
+	if !ok {
+		t.Fatal("failed to create fanout target")
+	}
+	plan := endpoint.PrepareFanout([]EdgeFanoutTarget{target})
+	if plan == nil {
+		t.Fatal("failed to prepare fanout plan")
+	}
+	endpoint.sender.stop()
+	completed := make(chan EdgeFanoutResult, 1)
+	if !endpoint.FanoutPlan([]byte("voice"), plan, 1, "source", 1, func(result EdgeFanoutResult) {
+		completed <- result
+	}) {
+		t.Fatal("fanout should account a dropped frame after sender stop")
+	}
+	select {
+	case result := <-completed:
+		if result.Attempted != 0 || result.Sent != 0 || result.Dropped != 1 || result.Errors != 0 {
+			t.Fatalf("unexpected dropped fanout result: %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fanout completion was not reported")
+	}
+	_ = receiver.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, _, err := receiver.ReadFromUDP(make([]byte, 32)); err == nil {
+		t.Fatal("stopped sender synchronously wrote a fallback datagram")
 	}
 }
 

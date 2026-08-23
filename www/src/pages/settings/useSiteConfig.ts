@@ -4,7 +4,6 @@ import {
   saveAccessDiscovery,
   saveAPRS,
   saveCommSettings,
-  saveOpenAI,
   saveRegistration,
   saveSMTP,
   saveSystemInfo,
@@ -18,7 +17,6 @@ export function useSiteConfig() {
   const [systemInfo, setSystemInfo] = useState(defaults.systemInfo)
   const [accessDiscovery, setAccessDiscovery] = useState(defaults.accessDiscovery)
   const [aprs, setAPRS] = useState(defaults.aprs)
-  const [openai, setOpenAI] = useState(defaults.openai)
   const [commSettings, setCommSettings] = useState(defaults.commSettings)
   const [registration, setRegistration] = useState(defaults.registration)
   const [smtp, setSMTP] = useState(defaults.smtp)
@@ -42,7 +40,6 @@ export function useSiteConfig() {
       setSystemInfo(configs.systemInfo)
       setAccessDiscovery(configs.accessDiscovery)
       setAPRS(configs.aprs)
-      setOpenAI(configs.openai)
       setCommSettings(configs.commSettings)
       setRegistration(configs.registration)
       setSMTP(configs.smtp)
@@ -96,7 +93,6 @@ export function useSiteConfig() {
     await runSave(() => saveAPRS(aprs), 'APRS配置保存成功', '保存APRS配置失败')
   }
 
-  const handleSaveOpenAI = () => runSave(() => saveOpenAI(openai), 'OpenAI配置保存成功', '保存OpenAI配置失败')
   const handleSaveCommSettings = () => runSave(
     () => saveCommSettings(commSettings), '通信设置保存成功', '保存通信设置失败',
   )
@@ -112,13 +108,12 @@ export function useSiteConfig() {
     systemInfo, setSystemInfo,
     accessDiscovery, setAccessDiscovery,
     aprs, setAPRS,
-    openai, setOpenAI,
     commSettings, setCommSettings,
     registration, setRegistration,
     smtp, setSMTP,
     message, setMessage, showMessage,
     loading, loadConfigs,
-    handleSaveSystemInfo, handleSaveAccessDiscovery, handleSaveAPRS, handleSaveOpenAI,
+    handleSaveSystemInfo, handleSaveAccessDiscovery, handleSaveAPRS,
     handleSaveCommSettings, handleSaveRegistration, handleSaveSMTP,
   }
 }

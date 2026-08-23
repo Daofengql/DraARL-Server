@@ -262,6 +262,117 @@ func TestEnqueueLatestFrameEvictsWholeOldestFrame(t *testing.T) {
 	}
 }
 
+func TestFanoutEnqueueConcurrentDoesNotSerializeDomains(t *testing.T) {
+	sender := &FanoutSender{
+		frames:  make(chan fanoutFrameJob, 8),
+		writers: []fanoutWriter{{}},
+		running: true,
+	}
+	t.Cleanup(sender.stop)
+
+	partitions := [][]domainReceiverEntry{{{deviceID: 99}}}
+	var accepted atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				if sender.enqueue(fanoutFrameJob{
+					data:       []byte{1},
+					partitions: partitions,
+					enqueuedAt: time.Now(),
+					sourceID:   1,
+					sourceUser: "source",
+				}) {
+					accepted.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if accepted.Load() == 0 || len(sender.frames) > cap(sender.frames) {
+		t.Fatalf("concurrent enqueue accepted=%d queued=%d", accepted.Load(), len(sender.frames))
+	}
+}
+
+func TestEnqueueLatestWorkerJobEvictsOldestPartition(t *testing.T) {
+	queue := make(chan fanoutWorkerJob, 1)
+	old := fanoutWorkerJob{frame: fanoutFrameJob{data: []byte{1}}, targets: []domainReceiverEntry{{deviceID: 1}}}
+	newJob := fanoutWorkerJob{frame: fanoutFrameJob{data: []byte{2}}, targets: []domainReceiverEntry{{deviceID: 2}}}
+	queue <- old
+	accepted, evicted := enqueueLatestWorkerJob(queue, newJob)
+	if !accepted || evicted == nil || evicted.frame.data[0] != 1 {
+		t.Fatalf("accepted=%v evicted=%v, want newest accepted and oldest evicted", accepted, evicted)
+	}
+	if got := (<-queue).frame.data[0]; got != 2 {
+		t.Fatalf("queued frame=%d, want newest frame 2", got)
+	}
+}
+
+func TestDropWorkerJobCompletesEvictedPartition(t *testing.T) {
+	sender := &FanoutSender{}
+	completed := make(chan fanoutWriteResult, 1)
+	collector := &fanoutCollector{onComplete: func(result fanoutWriteResult) { completed <- result }}
+	collector.remaining.Store(1)
+	sender.dropWorkerJob(fanoutWorkerJob{
+		frame:   fanoutFrameJob{sourceID: 9, collect: collector},
+		targets: []domainReceiverEntry{{deviceID: 10}},
+	})
+	select {
+	case result := <-completed:
+		if result.dropped != 1 {
+			t.Fatalf("dropped=%d, want 1", result.dropped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("evicted partition did not complete its collector")
+	}
+	if got := atomic.LoadInt64(&sender.writerEvictions); got != 1 {
+		t.Fatalf("writer evictions=%d, want 1", got)
+	}
+	if got := atomic.LoadInt64(&sender.targetsDropped); got != 1 {
+		t.Fatalf("dropped targets=%d, want 1", got)
+	}
+}
+
+func TestFanoutFrameQueueEvictionCountsDroppedTargets(t *testing.T) {
+	sender := &FanoutSender{
+		frames:    make(chan fanoutFrameJob, 1),
+		writers:   []fanoutWriter{{}},
+		running:   true,
+		queueSize: 1,
+	}
+	defer sender.stop()
+
+	firstCompleted := make(chan fanoutWriteResult, 1)
+	first := fanoutFrameJob{
+		data:       []byte{1},
+		partitions: [][]domainReceiverEntry{{{deviceID: 10}, {deviceID: 11}}},
+		onComplete: func(result fanoutWriteResult) { firstCompleted <- result },
+	}
+	second := fanoutFrameJob{
+		data:       []byte{2},
+		partitions: [][]domainReceiverEntry{{{deviceID: 12}}},
+	}
+	if !sender.enqueue(first) || !sender.enqueue(second) {
+		t.Fatal("latest-wins frame admission unexpectedly rejected")
+	}
+	select {
+	case result := <-firstCompleted:
+		if result.dropped != 2 {
+			t.Fatalf("evicted frame dropped=%d, want 2", result.dropped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("evicted frame completion was not reported")
+	}
+	if got := atomic.LoadInt64(&sender.framesDropped); got != 1 {
+		t.Fatalf("dropped frames=%d, want 1", got)
+	}
+	if got := atomic.LoadInt64(&sender.targetsDropped); got != 2 {
+		t.Fatalf("dropped targets=%d, want 2", got)
+	}
+}
+
 func TestFanoutCompletionCountsOnlySuccessfulSocketWrites(t *testing.T) {
 	senderConn, receiverConn, receiverAddr := newUDPTestPair(t)
 	sender := newFanoutSender(senderConn, 2, 8)
@@ -312,5 +423,8 @@ func TestStaleFanoutCompletionReportsDroppedTargets(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("stale fan-out completion was not reported")
+	}
+	if got := atomic.LoadInt64(&sender.targetsDropped); got != 1 {
+		t.Fatalf("stale dropped targets=%d, want 1", got)
 	}
 }

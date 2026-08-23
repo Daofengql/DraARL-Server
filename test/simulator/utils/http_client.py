@@ -3,9 +3,14 @@ Python 模拟客户端的 HTTP API 客户端
 用于群组切换、动态绑定等操作
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import requests
+
+try:
+    from .jwt_gen import generate_jwt
+except ImportError:  # direct module loading during unittest discovery
+    from jwt_gen import generate_jwt
 
 
 class HTTPClient:
@@ -36,6 +41,22 @@ class HTTPClient:
             self.session.headers.update({
                 'Authorization': f'Bearer {token}'
             })
+
+    def authenticate_with_test_key(
+        self,
+        username: str,
+        roles: Optional[List[str]] = None,
+        secret: Optional[str] = None,
+    ) -> str:
+        """Authenticate test calls without invoking CAPTCHA/password login.
+
+        This is intentionally a client-side helper for isolated test instances;
+        the server still validates the signed access token and its user state.
+        """
+        token = generate_jwt(username, roles or ["user"], secret=secret)
+        self.set_token(token)
+        self.log(f"[测试JWT] 已签发并设置 {username} 的直接测试令牌")
+        return token
 
     def _request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         """发送请求"""

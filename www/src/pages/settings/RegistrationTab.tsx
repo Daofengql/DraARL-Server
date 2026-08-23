@@ -14,7 +14,7 @@ interface RegistrationTabProps {
 
 export function RegistrationTab({ value, config, setConfig, loading, onSave }: RegistrationTabProps) {
   return (
-    <TabPanel value={value} index={6}>
+    <TabPanel value={value} index={5}>
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card><CardContent>
           <Typography variant="h6" gutterBottom>注册设置</Typography>

@@ -9,6 +9,8 @@ import { TabPanel } from '../../components/common/TabPanel'
 import { getOperatorLogs } from './api'
 import { EVENT_TYPE_COLORS, EVENT_TYPES, formatOperatorTimestamp, getEventTypeLabel } from './eventTypes'
 
+const operatorLogsTabIndex = 6
+
 export function OperatorLogsTab({ value }: { value: number }) {
   const [logs, setLogs] = useState<OperatorLog[]>([])
   const [total, setTotal] = useState(0)
@@ -32,11 +34,11 @@ export function OperatorLogsTab({ value }: { value: number }) {
   }, [eventType, page, rowsPerPage])
 
   useEffect(() => {
-    if (value === 7) void loadLogs()
+    if (value === operatorLogsTabIndex) void loadLogs()
   }, [loadLogs, value])
 
   return (
-    <TabPanel value={value} index={7}>
+    <TabPanel value={value} index={operatorLogsTabIndex}>
       <Box sx={{ px: 2 }}>
         <Card><CardContent>
           <Typography variant="h6" gutterBottom>操作日志</Typography>

@@ -64,8 +64,7 @@ func GetUserPublicInfo(c *gin.Context) {
 			"avatar":       minio.GetAvatarURL(user.Avatar),
 			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"callsign":     user.CallSign,
-			"phone":        user.Phone,
-			"address":      user.Address,
+			// 【PII 修复】公开资料不返回手机号/住址等敏感信息
 			"created_at":   user.CreateTime,
 			"status":       user.Status,
 		},
@@ -196,8 +195,7 @@ func GetUserPublicInfoByName(c *gin.Context) {
 			"avatar":       minio.GetAvatarURL(user.Avatar),
 			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"callsign":     user.CallSign,
-			"phone":        user.Phone,
-			"address":      user.Address,
+			// 【PII 修复】公开资料不返回手机号/住址等敏感信息
 			"created_at":   user.CreateTime,
 			"status":       user.Status,
 		},

@@ -106,6 +106,11 @@ type WSDevice struct {
 	VoiceTime   int64
 	PacketCount int64
 
+	voiceRateMu       sync.Mutex
+	voiceRateTokens   float64
+	voiceRateLastFill time.Time
+	voiceRateDrops    atomic.Int64
+
 	interconnectSessionID    atomic.Uint64
 	interconnectSessionEpoch atomic.Uint64
 
@@ -117,6 +122,7 @@ type WSDevice struct {
 	closeCh              chan struct{}      // 关闭信号
 	writeMu              sync.Mutex         // 保护 writeCh 的访问
 	writeOnce            sync.Once          // 确保 writer 只启动一次
+	closeOnce            sync.Once          // 确保 writer 关闭信号只发送一次
 	unregistered         atomic.Bool
 	connectionRegistered bool
 }
@@ -174,6 +180,47 @@ func (p *sharedWritePayload) release() {
 }
 
 const writeChSize = 64 // 写通道缓冲大小，约 4 秒的音频帧 (63ms * 64 ≈ 4s)
+
+const (
+	wsVoiceRatePerSecond = 150.0
+	wsVoiceRateBurst     = 150.0
+)
+
+// allowVoiceFrame applies a per-connection token bucket to upstream Opus
+// frames. Heartbeats and text/control packets are intentionally unaffected.
+// The burst and refill rate match the UDP ingress ceiling and leave ample
+// headroom for normal WebSocket clients while bounding fanout/recording work.
+func (d *WSDevice) allowVoiceFrame(now time.Time) bool {
+	if d == nil {
+		return false
+	}
+	d.voiceRateMu.Lock()
+	defer d.voiceRateMu.Unlock()
+	if d.voiceRateLastFill.IsZero() {
+		d.voiceRateLastFill = now
+		d.voiceRateTokens = wsVoiceRateBurst
+	}
+	if elapsed := now.Sub(d.voiceRateLastFill).Seconds(); elapsed > 0 {
+		d.voiceRateTokens += elapsed * wsVoiceRatePerSecond
+		if d.voiceRateTokens > wsVoiceRateBurst {
+			d.voiceRateTokens = wsVoiceRateBurst
+		}
+		d.voiceRateLastFill = now
+	}
+	if d.voiceRateTokens < 1 {
+		d.voiceRateDrops.Add(1)
+		return false
+	}
+	d.voiceRateTokens--
+	return true
+}
+
+func (d *WSDevice) voiceRateLimitedCount() int64 {
+	if d == nil {
+		return 0
+	}
+	return d.voiceRateDrops.Load()
+}
 
 // GetIdentifier 获取设备唯一标识
 func (d *WSDevice) GetIdentifier() string {
@@ -329,6 +376,23 @@ func (d *WSDevice) StartWriter() {
 	})
 }
 
+func (d *WSDevice) writerStopChannel() <-chan struct{} {
+	if d == nil {
+		return nil
+	}
+	d.writeMu.Lock()
+	stop := d.closeCh
+	d.writeMu.Unlock()
+	return stop
+}
+
+func (d *WSDevice) signalWriterStop(stop chan struct{}) {
+	if d == nil || stop == nil {
+		return
+	}
+	d.closeOnce.Do(func() { close(stop) })
+}
+
 // writerLoop writer goroutine 主循环
 // 所有写操作都通过此 goroutine 串行执行，避免写锁竞争
 func (d *WSDevice) writerLoop(writeCh chan *writeRequest, closeCh <-chan struct{}) {
@@ -341,6 +405,10 @@ func (d *WSDevice) writerLoop(writeCh chan *writeRequest, closeCh <-chan struct{
 			}
 			if req == nil || req.payload == nil {
 				continue
+			}
+			// 【写超时】慢/死对端写缓冲打满时不再无限阻塞 writer
+			if err := d.Conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+				return
 			}
 			err := d.Conn.WriteMessage(req.messageType, req.payload.data)
 			req.payload.release()
@@ -356,6 +424,10 @@ func (d *WSDevice) writerLoop(writeCh chan *writeRequest, closeCh <-chan struct{
 }
 
 func (d *WSDevice) finishWriter(writeCh chan *writeRequest) {
+	d.writeMu.Lock()
+	stop := d.closeCh
+	d.writeMu.Unlock()
+	d.signalWriterStop(stop)
 	d.writeMu.Lock()
 	if d.writeCh == writeCh {
 		close(writeCh)
@@ -390,6 +462,33 @@ func (d *WSDevice) AsyncWrite(messageType int, data []byte) bool {
 	accepted := d.asyncWriteShared(messageType, payload)
 	payload.release()
 	return accepted
+}
+
+// AsyncWriteBlocking 阻塞式投递关键控制帧（如 auth_success / routing_updated）：
+// 在超时窗口内等待写队列腾位，避免通道满时关键帧被静默丢弃导致客户端误判。
+func (d *WSDevice) AsyncWriteBlocking(messageType int, data []byte, timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	payload := newSharedWritePayload(data)
+	defer payload.release()
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if d.writeCh == nil || payload == nil {
+		return false
+	}
+	payload.retain()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case d.writeCh <- &writeRequest{messageType: messageType, payload: payload}:
+		wsWritesQueued.Add(1)
+		return true
+	case <-timer.C:
+		payload.release()
+		wsWritesDropped.Add(1)
+		return false
+	}
 }
 
 func (d *WSDevice) asyncWriteShared(messageType int, payload *sharedWritePayload) bool {
@@ -435,10 +534,14 @@ func (d *WSDevice) StopWriter() {
 	defer d.writeMu.Unlock()
 
 	if d.closeCh != nil {
-		close(d.closeCh)
+		d.signalWriterStop(d.closeCh)
 		d.closeCh = nil
 	}
 	if d.writeCh != nil {
+		// 【引用滞留修复】先同步排空已排队请求并释放共享 payload，
+		// 避免 writer 阻塞在死连接写操作时 64 个 writeRequest 的 payload
+		// 引用长期滞留内存。
+		drainWriteRequests(d.writeCh)
 		close(d.writeCh)
 		d.writeCh = nil
 	}
@@ -458,10 +561,10 @@ const shardCount = 32 // 分片数量，应为 2 的幂次方
 // connShard 连接分片，每个分片有独立的锁
 type connShard struct {
 	mu           sync.RWMutex
-	ghostDevices map[string]*WSDevice         // 幽灵设备 (key: sessionID)
-	ownerDevices map[int]map[string]*WSDevice // 用户在线幽灵会话
-	connMap      map[string]*WSDevice         // 连接索引 (key: conn.RemoteAddr().String())
-	groupDevices map[int]map[string]*WSDevice // 群组索引
+	ghostDevices map[string]*WSDevice          // 幽灵设备 (key: sessionID)
+	ownerDevices map[int]map[string]*WSDevice  // 用户在线幽灵会话
+	connMap      map[*websocket.Conn]*WSDevice // 连接索引 (key: 唯一连接指针)
+	groupDevices map[int]map[string]*WSDevice  // 群组索引
 }
 
 // WSConnectionManager WebSocket 连接管理器（优化版）
@@ -529,7 +632,7 @@ func NewWSConnectionManager() *WSConnectionManager {
 		m.shards[i] = &connShard{
 			ghostDevices: make(map[string]*WSDevice),
 			ownerDevices: make(map[int]map[string]*WSDevice),
-			connMap:      make(map[string]*WSDevice),
+			connMap:      make(map[*websocket.Conn]*WSDevice),
 			groupDevices: make(map[int]map[string]*WSDevice),
 		}
 	}
@@ -609,8 +712,7 @@ func (m *WSConnectionManager) removeFromGlobalGroupIndexLocked(groupID int, key 
 
 // RegisterConnection 注册新连接
 func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice {
-	addr := conn.RemoteAddr().String()
-	shard := m.getShardByAddr(addr)
+	shard := m.getShardByAddr(conn.RemoteAddr().String())
 
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
@@ -623,10 +725,12 @@ func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice
 		GroupID:              models.GroupIDPublicMin, // 默认群组
 		connectionRegistered: true,
 	}
-	shard.connMap[addr] = device
+	// 【键修复】connMap 以唯一连接指针为键：同 RemoteAddr 的多个连接
+	// 不再互相覆盖，旧连接注销时也不会误删新连接。
+	shard.connMap[conn] = device
 
 	atomic.AddInt64(&m.totalConnections, 1)
-	log.Printf("[WS] New connection registered: %s", addr)
+	log.Printf("[WS] New connection registered: %s", conn.RemoteAddr().String())
 	return device
 }
 
@@ -638,11 +742,10 @@ func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
 
 	var addrShard *connShard
 	if device.Conn != nil {
-		addr := device.Conn.RemoteAddr().String()
-		addrShard = m.getShardByAddr(addr)
+		addrShard = m.getShardByAddr(device.Conn.RemoteAddr().String())
 		addrShard.mu.Lock()
-		if addrShard.connMap[addr] == device {
-			delete(addrShard.connMap, addr)
+		if addrShard.connMap[device.Conn] == device {
+			delete(addrShard.connMap, device.Conn)
 		}
 		addrShard.mu.Unlock()
 	}
@@ -702,13 +805,12 @@ func (m *WSConnectionManager) DisconnectDevice(device *WSDevice) {
 
 // GetDeviceByConn 通过连接获取设备
 func (m *WSConnectionManager) GetDeviceByConn(conn *websocket.Conn) (*WSDevice, bool) {
-	addr := conn.RemoteAddr().String()
-	shard := m.getShardByAddr(addr)
+	shard := m.getShardByAddr(conn.RemoteAddr().String())
 
 	shard.mu.RLock()
 	defer shard.mu.RUnlock()
 
-	device, exists := shard.connMap[addr]
+	device, exists := shard.connMap[conn]
 	return device, exists
 }
 

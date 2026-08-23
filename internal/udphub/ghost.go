@@ -84,11 +84,12 @@ func ghostReceiveGroups(device *models.Device) []int {
 	if device == nil {
 		return nil
 	}
-	if len(device.GhostRxGroupIDs) > 0 {
-		return device.GhostRxGroupIDs
+	state := device.RuntimeSnapshot()
+	if len(state.GhostRxGroupIDs) > 0 {
+		return state.GhostRxGroupIDs
 	}
-	if device.GroupID > 0 {
-		return []int{device.GroupID}
+	if state.GroupID > 0 {
+		return []int{state.GroupID}
 	}
 	return nil
 }
@@ -104,14 +105,18 @@ func validateUDPGhostRouting(routing ghostsession.Routing) error {
 
 // RegisterSession publishes one exact authenticated UDP ghost session.
 func (m *UDPGhostManager) RegisterSession(device *models.Device) (*models.Device, error) {
-	if device == nil || strings.TrimSpace(device.GhostSessionID) == "" {
+	if device == nil {
 		return nil, errUDPGhostSessionRequired
 	}
-	if device.GhostSessionTag == 0 {
+	state := device.RuntimeSnapshot()
+	if strings.TrimSpace(state.GhostSessionID) == "" {
+		return nil, errUDPGhostSessionRequired
+	}
+	if state.GhostSessionTag == 0 {
 		return nil, errUDPGhostSessionTag
 	}
 	routing, err := ghostsession.NormalizeRouting(ghostsession.Routing{
-		TxGroupID: device.GroupID, RxGroupIDs: device.GhostRxGroupIDs,
+		TxGroupID: state.GroupID, RxGroupIDs: state.GhostRxGroupIDs,
 	}, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return nil, err
@@ -119,37 +124,40 @@ func (m *UDPGhostManager) RegisterSession(device *models.Device) (*models.Device
 	if err := validateUDPGhostRouting(routing); err != nil {
 		return nil, err
 	}
-	addr, addrOK := udpAddrPort(device.UDPAddr)
+	addr, addrOK := udpAddrPort(state.UDPAddr)
 	if !addrOK {
 		return nil, errors.New("udp ghost endpoint is required")
 	}
-	device.GroupID = routing.TxGroupID
-	device.GhostRxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
-	key := sessionDeviceKey(device.GhostSessionID)
+	device.UpdateRuntime(func(current *models.Device) {
+		current.GroupID = routing.TxGroupID
+		current.GhostRxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	})
+	state = device.RuntimeSnapshot()
+	key := sessionDeviceKey(state.GhostSessionID)
 
 	m.mu.Lock()
 	m.ensureMapsLocked()
-	if otherSessionID := m.sessionTags[device.GhostSessionTag]; otherSessionID != "" && otherSessionID != device.GhostSessionID {
+	if otherSessionID := m.sessionTags[state.GhostSessionTag]; otherSessionID != "" && otherSessionID != state.GhostSessionID {
 		m.mu.Unlock()
 		return nil, errUDPGhostSessionTag
 	}
-	if otherSessionID := m.addressSessions[addr]; otherSessionID != "" && otherSessionID != device.GhostSessionID {
+	if otherSessionID := m.addressSessions[addr]; otherSessionID != "" && otherSessionID != state.GhostSessionID {
 		m.mu.Unlock()
 		return nil, errUDPGhostEndpointInUse
 	}
-	if existing := m.sessions[device.GhostSessionID]; existing != nil {
-		m.removeSessionLocked(device.GhostSessionID)
+	if existing := m.sessions[state.GhostSessionID]; existing != nil {
+		m.removeSessionLocked(state.GhostSessionID)
 	}
-	m.sessions[device.GhostSessionID] = device
-	m.sessionTags[device.GhostSessionTag] = device.GhostSessionID
-	m.addressSessions[addr] = device.GhostSessionID
-	for _, groupID := range device.GhostRxGroupIDs {
+	m.sessions[state.GhostSessionID] = device
+	m.sessionTags[state.GhostSessionTag] = state.GhostSessionID
+	m.addressSessions[addr] = state.GhostSessionID
+	for _, groupID := range state.GhostRxGroupIDs {
 		addGhostToGroupIndex(m.groupDevices, groupID, key, device)
 	}
 	m.mu.Unlock()
 	InvalidateDomainReceiverCache()
 	log.Printf("[UDP-GHOST] session registered: session=%s user=%d tx=%d rx=%v",
-		ghostsession.ShortID(device.GhostSessionID), device.OwnerID, device.GroupID, device.GhostRxGroupIDs)
+		ghostsession.ShortID(state.GhostSessionID), state.OwnerID, state.GroupID, state.GhostRxGroupIDs)
 	return device, nil
 }
 
@@ -174,7 +182,7 @@ func (m *UDPGhostManager) GetByUsername(username string) []*models.Device {
 	m.mu.RLock()
 	result := make([]*models.Device, 0)
 	for _, device := range m.sessions {
-		if device != nil && device.Username == username {
+		if device != nil && device.RuntimeSnapshot().Username == username {
 			result = append(result, device)
 		}
 	}
@@ -187,7 +195,7 @@ func (m *UDPGhostManager) GetByGroup(groupID int) []*models.Device {
 	group := m.groupDevices[groupID]
 	result := make([]*models.Device, 0, len(group))
 	for _, device := range group {
-		if device != nil && device.ISOnline {
+		if device != nil && device.RuntimeSnapshot().ISOnline {
 			result = append(result, device)
 		}
 	}
@@ -201,7 +209,7 @@ func (m *UDPGhostManager) ForEachOnlineByGroup(groupID int, fn func(*models.Devi
 	}
 	m.mu.RLock()
 	for _, device := range m.groupDevices[groupID] {
-		if device != nil && device.ISOnline {
+		if device != nil && device.RuntimeSnapshot().ISOnline {
 			fn(device)
 		}
 	}
@@ -214,10 +222,11 @@ func (m *UDPGhostManager) removeSessionLocked(sessionID string) *models.Device {
 		return nil
 	}
 	delete(m.sessions, sessionID)
-	if m.sessionTags[device.GhostSessionTag] == sessionID {
-		delete(m.sessionTags, device.GhostSessionTag)
+	state := device.RuntimeSnapshot()
+	if m.sessionTags[state.GhostSessionTag] == sessionID {
+		delete(m.sessionTags, state.GhostSessionTag)
 	}
-	if addr, ok := udpAddrPort(device.UDPAddr); ok && m.addressSessions[addr] == sessionID {
+	if addr, ok := udpAddrPort(state.UDPAddr); ok && m.addressSessions[addr] == sessionID {
 		delete(m.addressSessions, addr)
 	}
 	key := sessionDeviceKey(sessionID)
@@ -234,7 +243,7 @@ func (m *UDPGhostManager) RemoveSession(sessionID string) *models.Device {
 	m.mu.Unlock()
 	if removed != nil {
 		InvalidateDomainReceiverCache()
-		log.Printf("[UDP-GHOST] session removed: session=%s user=%d", ghostsession.ShortID(sessionID), removed.OwnerID)
+		log.Printf("[UDP-GHOST] session removed: session=%s user=%d", ghostsession.ShortID(sessionID), removed.RuntimeSnapshot().OwnerID)
 	}
 	return removed
 }
@@ -244,7 +253,8 @@ func (m *UDPGhostManager) RemoveByUDPAddr(addr string) {
 	m.mu.Lock()
 	m.ensureMapsLocked()
 	for sessionID, device := range m.sessions {
-		if device != nil && device.UDPAddr != nil && device.UDPAddr.String() == addr {
+		state := device.RuntimeSnapshot()
+		if device != nil && state.UDPAddr != nil && state.UDPAddr.String() == addr {
 			removed = append(removed, m.removeSessionLocked(sessionID))
 		}
 	}
@@ -254,7 +264,7 @@ func (m *UDPGhostManager) RemoveByUDPAddr(addr string) {
 			continue
 		}
 		RevokeCenterLocalDevice(device)
-		ghostsession.Global.Remove(device.GhostSessionID)
+		ghostsession.Global.Remove(device.RuntimeSnapshot().GhostSessionID)
 	}
 	if len(removed) > 0 {
 		InvalidateDomainReceiverCache()
@@ -284,7 +294,8 @@ func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 	m.mu.Lock()
 	m.ensureMapsLocked()
 	for sessionID, device := range m.sessions {
-		if device != nil && now.Sub(device.LastPacketTime) > timeout {
+		state := device.RuntimeSnapshot()
+		if device != nil && now.Sub(state.LastPacketTime) > timeout {
 			expired = append(expired, m.removeSessionLocked(sessionID))
 		}
 	}
@@ -293,9 +304,10 @@ func (m *UDPGhostManager) CheckTimeout(timeout time.Duration) {
 		if device == nil {
 			continue
 		}
-		log.Printf("[UDP-GHOST] session timed out: session=%s user=%d", ghostsession.ShortID(device.GhostSessionID), device.OwnerID)
+		state := device.RuntimeSnapshot()
+		log.Printf("[UDP-GHOST] session timed out: session=%s user=%d", ghostsession.ShortID(state.GhostSessionID), state.OwnerID)
 		RevokeCenterLocalDevice(device)
-		ghostsession.Global.Remove(device.GhostSessionID)
+		ghostsession.Global.Remove(state.GhostSessionID)
 	}
 	if len(expired) > 0 {
 		InvalidateDomainReceiverCache()
@@ -309,7 +321,9 @@ func (m *UDPGhostManager) UpdateSessionActivity(sessionID string, now time.Time)
 	m.mu.Lock()
 	device := m.sessions[sessionID]
 	if device != nil {
-		device.LastPacketTime = now
+	device.UpdateRuntime(func(current *models.Device) {
+		current.LastPacketTime = now
+	})
 	}
 	m.mu.Unlock()
 	if device != nil {
@@ -337,8 +351,10 @@ func (m *UDPGhostManager) SetSessionRouting(sessionID string, routing ghostsessi
 	for _, groupID := range ghostReceiveGroups(device) {
 		removeGhostFromGroupIndex(m.groupDevices, groupID, key)
 	}
-	device.GroupID = routing.TxGroupID
-	device.GhostRxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	device.UpdateRuntime(func(current *models.Device) {
+		current.GroupID = routing.TxGroupID
+		current.GhostRxGroupIDs = append([]int(nil), routing.RxGroupIDs...)
+	})
 	for _, groupID := range routing.RxGroupIDs {
 		addGhostToGroupIndex(m.groupDevices, groupID, key, device)
 	}
@@ -348,7 +364,7 @@ func (m *UDPGhostManager) SetSessionRouting(sessionID string, routing ghostsessi
 }
 
 func IsGhostDevice(device *models.Device) bool {
-	return device != nil && protocol.IsGhostDevModel(device.DevModel)
+	return device != nil && protocol.IsGhostDevModel(device.RuntimeSnapshot().DevModel)
 }
 
 func (m *UDPGhostManager) GetStats() (total int, online int) {
@@ -357,8 +373,9 @@ func (m *UDPGhostManager) GetStats() (total int, online int) {
 		if device == nil {
 			continue
 		}
+		state := device.RuntimeSnapshot()
 		total++
-		if device.ISOnline {
+		if state.ISOnline {
 			online++
 		}
 	}
@@ -372,11 +389,14 @@ func (m *UDPGhostManager) UpdateUserCallSign(ownerID int, username, newCallSign 
 	}
 	m.mu.Lock()
 	for _, device := range m.sessions {
-		if device == nil || (ownerID > 0 && device.OwnerID != ownerID) || (ownerID <= 0 && device.Username != username) {
+		state := device.RuntimeSnapshot()
+		if device == nil || (ownerID > 0 && state.OwnerID != ownerID) || (ownerID <= 0 && state.Username != username) {
 			continue
 		}
-		device.CallSign = newCallSign
-		device.CallSignSSID = protocol.GetCallSignSSID(newCallSign, device.SSID)
+		device.UpdateRuntime(func(current *models.Device) {
+			current.CallSign = newCallSign
+			current.CallSignSSID = protocol.GetCallSignSSID(newCallSign, current.SSID)
+		})
 	}
 	m.mu.Unlock()
 }

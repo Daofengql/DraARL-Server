@@ -110,6 +110,29 @@ func (r *GroupLinkRepository) GetLinkCount(linkGroupID int) (int64, error) {
 	return count, err
 }
 
+// GetLinkCounts 批量获取多个互联组的目标群组数量（单条 GROUP BY，避免 N+1）。
+func (r *GroupLinkRepository) GetLinkCounts(linkGroupIDs []int) (map[int]int64, error) {
+	out := make(map[int]int64, len(linkGroupIDs))
+	if len(linkGroupIDs) == 0 {
+		return out, nil
+	}
+	rows := make([]struct {
+		LinkGroupID int
+		Cnt         int64
+	}, 0)
+	if err := r.db.Model(&GroupLink{}).
+		Select("link_group_id, COUNT(*) AS cnt").
+		Where("link_group_id IN ?", linkGroupIDs).
+		Group("link_group_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.LinkGroupID] = row.Cnt
+	}
+	return out, nil
+}
+
 // GetLinkWithGroupInfo 获取互联关系及目标群组信息
 func (r *GroupLinkRepository) GetLinkWithGroupInfo(linkGroupID int) ([]map[string]interface{}, error) {
 	var results []map[string]interface{}

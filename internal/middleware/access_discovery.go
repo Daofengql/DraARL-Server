@@ -7,7 +7,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"draarl/internal/gormdb"
 	appjwt "draarl/pkg/jwt"
 )
 
@@ -22,7 +21,8 @@ func AccessDiscoveryAuth() gin.HandlerFunc {
 			return
 		}
 
-		user, err := gormdb.NewUserRepository().GetUserByName(claims.Username)
+		// 【性能】高吞吐发现接口走用户缓存，避免每请求查库
+		user, err := loadUserByName(c.Request.Context(), claims.Username)
 		if err != nil {
 			log.Printf("查询接入点发现用户失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证服务暂时不可用"})

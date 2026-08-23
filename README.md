@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 当前版本 | `v2.0.0-alpha13`（以根目录 `VERSION` 和 Release 页面为准） |
+| 当前版本 | `v2.0.0-alpha14`（以根目录 `VERSION` 和 Release 页面为准） |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
@@ -54,7 +54,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 层级 | 技术 |
 |------|------|
 | 后端 | Go 1.25、Gin、GORM、Gorilla WebSocket |
-| 数据 | MySQL/MariaDB、Redis（可选）、local 或 S3 兼容对象存储（可选） |
+| 数据 | MySQL/MariaDB、Redis（release 构建必需；development/test 可降级）、local 或 S3 兼容对象存储（可选） |
 | 前端 | React 19、TypeScript 5.9、Vite 7、Material UI 7、React Router 7 |
 | 通信 | UDP DraARLv1、WebSocket、Opus、APRS |
 | 文档 | MkDocs、MkDocs Material |
@@ -68,7 +68,7 @@ DraARL-Server/
 ├── internal/
 │   ├── aprs/                # APRS 连接、配置和日志
 │   ├── accesspoint/         # 中心/边缘公开接入点发现与短期凭证
-│   ├── auth/                # refresh token 存储，支持 Redis 与内存降级
+│   ├── auth/                # refresh token 存储，release 要求 Redis，development/test 可内存降级
 │   ├── captcha/             # 图形验证码
 │   ├── config/              # YAML 配置、默认值、Origin 校验
 │   ├── db/                  # 兼容旧逻辑的原生 SQL 数据访问
@@ -96,7 +96,7 @@ DraARL-Server/
 - Go 1.25+
 - Node.js 20+
 - MySQL 5.7+ 或 MariaDB 10.3+
-- Redis 6.0+（推荐；不可用时 refresh token 会降级到内存存储）
+- Redis 6.0+（release 构建必需；development/test 构建不可用时可降级到内存存储）
 - local 或 S3 兼容对象存储（可选；用于资源、头像、通信录音和固件）
 - Keycloak（可选，用于 SSO）
 - Python 3.11+（仅本地预览/构建 MkDocs 文档时需要）
@@ -145,7 +145,7 @@ cp config.yaml.example config.yaml
 至少需要检查以下配置：
 
 - `Database`：MySQL/MariaDB 连接信息。
-- `Redis`：refresh token 存储配置，生产环境建议启用。
+- `Redis`：release 构建的 refresh token、登录失败和注册/验证码保护存储，生产环境必需。
 - `Web.Port`：后端 HTTP API 和前端静态资源端口。
 - `Web.FrontendURL` 与 `Web.AllowedOrigins`：登录回调、CORS 和 WebSocket Origin 白名单。
 - `JWT.Secret`：至少 32 字符；不符合要求时程序会自动生成并写回配置。

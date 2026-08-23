@@ -103,7 +103,7 @@ Database:
     MaxIdleConns: 5            # 最大空闲连接数
     MaxLifetime: 300           # 连接最大存活时间(秒)
 
-# Redis 配置（refresh token 优先使用 Redis；不可用时自动降级到内存存储）
+# Redis 配置（release 构建必需；development/test 构建不可用时可降级到内存存储）
 Redis:
     Host: "127.0.0.1"
     Port: 6379

@@ -48,7 +48,7 @@ var (
 )
 
 // InitRefreshTokenStore 初始化刷新令牌存储。
-// 优先使用 Redis，连接失败时自动降级为内存存储。
+// release 构建要求 Redis 可用；development/test 构建连接失败时降级到内存存储。
 func InitRefreshTokenStore(cfg *config.Configuration) error {
 	storeMu.Lock()
 	defer storeMu.Unlock()

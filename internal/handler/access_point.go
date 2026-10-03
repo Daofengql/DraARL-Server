@@ -70,7 +70,6 @@ func ListAccessPoints(c *gin.Context) {
 		return
 	}
 	now := time.Now()
-	healthTTL := time.Duration(settings.EdgeHealthTTLSeconds) * time.Second
 	items := make([]publicAccessPoint, 0)
 	if settings.Center.Enabled {
 		if item, ok := centerAccessPoint(
@@ -84,22 +83,6 @@ func ListAccessPoints(c *gin.Context) {
 			now,
 		); ok {
 			items = append(items, item)
-		}
-	}
-	nodes, err := gormdb.NewServerRepository().ListDiscoverableNodes()
-	if err != nil {
-		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询设备接入点失败"})
-		return
-	}
-	if runtime := interconnect.ActiveCenterRuntime(); runtime != nil {
-		for _, node := range nodes {
-			if node.NodeID == nil {
-				continue
-			}
-			if item, ok := publishedEdgeAccessPoint(node, runtime.Cluster.NodeStatus(*node.NodeID), now, healthTTL); ok {
-				items = append(items, item)
-			}
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {

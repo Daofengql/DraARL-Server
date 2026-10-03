@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"draarl/internal/config"
 	"draarl/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
@@ -50,10 +52,27 @@ func shouldUseSecureCookie(c *gin.Context) bool {
 		return true
 	}
 
-	if proto := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")); strings.EqualFold(proto, "https") {
-		return true
+	if c.Request == nil || !strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https") {
+		return false
 	}
-
+	cfg := config.TryGet()
+	if cfg == nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	networks, err := config.ParseProxyTrustedCIDRs(cfg.System.HTTPTrustedProxyCIDRs)
+	if err != nil || ip == nil {
+		return false
+	}
+	for _, network := range networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
 	return false
 }
 

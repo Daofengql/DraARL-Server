@@ -92,6 +92,7 @@ type benchClient struct {
 }
 
 type benchData struct {
+	adminID   int64
 	groupIDs  []int64
 	deviceIDs []int64
 }
@@ -596,7 +597,7 @@ func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int, adminOwn
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &benchData{groupIDs: groupIDs, deviceIDs: deviceIDs}, nil
+	return &benchData{adminID: userIDs[0], groupIDs: groupIDs, deviceIDs: deviceIDs}, nil
 }
 
 func cleanupBenchData(db *sql.DB) error {

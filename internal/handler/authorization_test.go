@@ -285,7 +285,7 @@ func TestIssuedSwitchLoginTokenUsesTargetIdentity(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
 	context.Request = httptest.NewRequest(http.MethodPost, "/api/auth/switch-login/20", nil)
-	target := &gormdb.User{ID: 20, Name: "target-user", Roles: "user", Status: 1}
+	target := &gormdb.User{ID: 20, Name: "target-user", Roles: "user", Status: 1, SessionVersion: 1}
 
 	issued, err := issueAuthTokens(context, target)
 	if err != nil {

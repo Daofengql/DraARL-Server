@@ -54,7 +54,7 @@ func IssueDeviceAccessPointToken(c *gin.Context) {
 		return
 	}
 	ttl := time.Duration(settings.TokenTTLSeconds) * time.Second
-	token, expiresAt, err := appjwt.GenerateEdgeDiscoveryToken(result.User.Name, ttl)
+	token, expiresAt, err := appjwt.GenerateEdgeDiscoveryToken(result.User.ID, result.User.Name, result.User.SessionVersion, ttl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "签发发现凭证失败"})
 		return

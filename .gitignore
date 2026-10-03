@@ -81,6 +81,7 @@ dist/
 
 # Development notes
 TODO*.md
+!todo.md
 bugs.md
 
 .claude/

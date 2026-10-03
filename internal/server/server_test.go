@@ -1,6 +1,9 @@
 package server
 
 import (
+	"draarl/internal/config"
+	"draarl/internal/middleware"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -8,6 +11,47 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestHTTPForwardedHeadersRespectTrustedProxyBoundary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name    string
+		proxies []string
+		want    string
+	}{
+		{"direct", nil, "192.0.2.5"},
+		{"untrusted", []string{"10.0.0.0/8"}, "192.0.2.5"},
+		{"trusted", []string{"192.0.2.0/24"}, "198.51.100.10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Configuration{}
+			cfg.System.HTTPTrustedProxyCIDRs = tc.proxies
+			engine := newHTTPEngine(cfg)
+			engine.GET("/ip", func(c *gin.Context) { c.String(200, c.ClientIP()) })
+			req := httptest.NewRequest("GET", "/ip", nil)
+			req.RemoteAddr = "192.0.2.5:1234"
+			req.Header.Set("X-Forwarded-For", "198.51.100.10")
+			out := httptest.NewRecorder()
+			engine.ServeHTTP(out, req)
+			if out.Body.String() != tc.want {
+				t.Fatalf("client IP=%q want=%q", out.Body, tc.want)
+			}
+		})
+	}
+	engine := newHTTPEngine(&config.Configuration{})
+	middleware.InitDeviceRateLimiter()
+	engine.GET("/captcha", middleware.CaptchaRateLimit(), func(c *gin.Context) { c.Status(200) })
+	for i := 0; i < 8; i++ {
+		req := httptest.NewRequest("GET", "/captcha", nil)
+		req.RemoteAddr = "192.0.2.222:1234"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
+		out := httptest.NewRecorder()
+		engine.ServeHTTP(out, req)
+		if i >= 5 && out.Code != http.StatusTooManyRequests {
+			t.Fatalf("forged XFF bypassed limiter: status=%d", out.Code)
+		}
+	}
+}
 
 func TestLegacyGhostRoutesAreNotRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)

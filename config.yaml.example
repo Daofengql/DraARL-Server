@@ -8,6 +8,7 @@ System:
     LogPath: ""                # 日志文件路径，空则不输出文件
     IPfile: ./ipinfo.ipdb      # IP数据库文件路径
     ProxyProtocol: ""          # PROXY Protocol 版本: "v2" 启用, 留空禁用。启用后可从 frp 等代理获取真实客户端 IP
+    HTTPTrustedProxyCIDRs: []  # HTTP 反代来源；直连保持空。仅列出实际代理 IP/CIDR，控制 X-Forwarded-For/Proto 信任
 
 # UDP 转发性能配置。SendWorkers/IngressWorkers 为 0 时按 CPU 自动选择。
 UDP:

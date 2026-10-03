@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
@@ -36,25 +39,65 @@ type LogbookCreateRequest struct {
 
 // LogbookUpdateRequest 更新通联日志请求
 type LogbookUpdateRequest struct {
-	MyCallSign   string  `json:"my_callsign"`
-	TimeUTC      string  `json:"time_utc"`
-	TxFrequency  float64 `json:"tx_frequency"`
-	RxFrequency  float64 `json:"rx_frequency"`
-	CQZone       int     `json:"cq_zone"`
-	ITUZone      int     `json:"itu_zone"`
-	Mode         string  `json:"mode"`
-	CallSign     string  `json:"callsign"`
-	TheirRST     string  `json:"their_rst"`
-	TheirPower   *int    `json:"their_power"`
-	TheirQTH     string  `json:"their_qth"`
-	TheirRadio   string  `json:"their_radio"`
-	TheirAntenna string  `json:"their_antenna"`
-	MyRST        string  `json:"my_rst"`
-	MyPower      *int    `json:"my_power"`
-	MyQTH        string  `json:"my_qth"`
-	MyRadio      string  `json:"my_radio"`
-	MyAntenna    string  `json:"my_antenna"`
-	Notes        string  `json:"notes"`
+	MyCallSign   *string              `json:"my_callsign"`
+	TimeUTC      *string              `json:"time_utc"`
+	TxFrequency  *float64             `json:"tx_frequency"`
+	RxFrequency  *float64             `json:"rx_frequency"`
+	CQZone       *int                 `json:"cq_zone"`
+	ITUZone      *int                 `json:"itu_zone"`
+	Mode         *string              `json:"mode"`
+	CallSign     *string              `json:"callsign"`
+	TheirRST     *string              `json:"their_rst"`
+	TheirPower   optionalLogbookPower `json:"their_power"`
+	TheirQTH     *string              `json:"their_qth"`
+	TheirRadio   *string              `json:"their_radio"`
+	TheirAntenna *string              `json:"their_antenna"`
+	MyRST        *string              `json:"my_rst"`
+	MyPower      optionalLogbookPower `json:"my_power"`
+	MyQTH        *string              `json:"my_qth"`
+	MyRadio      *string              `json:"my_radio"`
+	MyAntenna    *string              `json:"my_antenna"`
+	Notes        *string              `json:"notes"`
+}
+
+// A JSON null explicitly clears power, while an omitted property preserves it.
+type optionalLogbookPower struct {
+	Present bool
+	Value   *int
+}
+
+func (p *optionalLogbookPower) UnmarshalJSON(data []byte) error {
+	p.Present = true
+	return json.Unmarshal(data, &p.Value)
+}
+
+func validateLogbookUpdate(req LogbookUpdateRequest) error {
+	for _, field := range []*string{req.MyCallSign, req.CallSign, req.Mode} {
+		if field != nil && strings.TrimSpace(*field) == "" {
+			return errors.New("必填字段不能为空")
+		}
+	}
+	if req.TimeUTC != nil {
+		if _, err := time.Parse("2006-01-02 15:04:05", *req.TimeUTC); err != nil {
+			return errors.New("时间格式错误，应为：2006-01-02 15:04:05")
+		}
+	}
+	for _, frequency := range []*float64{req.TxFrequency, req.RxFrequency} {
+		if frequency != nil && *frequency <= 0 {
+			return errors.New("频率必须大于 0")
+		}
+	}
+	for _, zone := range []*int{req.CQZone, req.ITUZone} {
+		if zone != nil && *zone < 0 {
+			return errors.New("分区不能为负数")
+		}
+	}
+	for _, power := range []optionalLogbookPower{req.TheirPower, req.MyPower} {
+		if power.Value != nil && *power.Value < 0 {
+			return errors.New("功率不能为负数")
+		}
+	}
+	return nil
 }
 
 // LogbookQueryRequest 查询参数
@@ -327,66 +370,70 @@ func UpdateLogbook(c *gin.Context) {
 		return
 	}
 
-	// 更新字段
-	if req.MyCallSign != "" {
-		logbook.MyCallSign = req.MyCallSign
+	if err := validateLogbookUpdate(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
-	if req.TimeUTC != "" {
-		t, err := time.Parse("2006-01-02 15:04:05", req.TimeUTC)
+	// 更新字段
+	if req.MyCallSign != nil {
+		logbook.MyCallSign = *req.MyCallSign
+	}
+	if req.TimeUTC != nil {
+		t, err := time.Parse("2006-01-02 15:04:05", *req.TimeUTC)
 		if err == nil {
 			logbook.TimeUTC = t
 		}
 	}
-	if req.TxFrequency > 0 {
-		logbook.TxFrequency = req.TxFrequency
+	if req.TxFrequency != nil {
+		logbook.TxFrequency = *req.TxFrequency
 	}
-	if req.RxFrequency > 0 {
-		logbook.RxFrequency = req.RxFrequency
+	if req.RxFrequency != nil {
+		logbook.RxFrequency = *req.RxFrequency
 	}
-	if req.CQZone > 0 {
-		logbook.CQZone = req.CQZone
+	if req.CQZone != nil {
+		logbook.CQZone = *req.CQZone
 	}
-	if req.ITUZone > 0 {
-		logbook.ITUZone = req.ITUZone
+	if req.ITUZone != nil {
+		logbook.ITUZone = *req.ITUZone
 	}
-	if req.Mode != "" {
-		logbook.Mode = req.Mode
+	if req.Mode != nil {
+		logbook.Mode = *req.Mode
 	}
-	if req.CallSign != "" {
-		logbook.CallSign = req.CallSign
+	if req.CallSign != nil {
+		logbook.CallSign = *req.CallSign
 	}
-	if req.TheirRST != "" {
-		logbook.TheirRST = req.TheirRST
+	if req.TheirRST != nil {
+		logbook.TheirRST = *req.TheirRST
 	}
-	if req.TheirPower != nil {
-		logbook.TheirPower = req.TheirPower
+	if req.TheirPower.Present {
+		logbook.TheirPower = req.TheirPower.Value
 	}
-	if req.TheirQTH != "" {
-		logbook.TheirQTH = req.TheirQTH
+	if req.TheirQTH != nil {
+		logbook.TheirQTH = *req.TheirQTH
 	}
-	if req.TheirRadio != "" {
-		logbook.TheirRadio = req.TheirRadio
+	if req.TheirRadio != nil {
+		logbook.TheirRadio = *req.TheirRadio
 	}
-	if req.TheirAntenna != "" {
-		logbook.TheirAntenna = req.TheirAntenna
+	if req.TheirAntenna != nil {
+		logbook.TheirAntenna = *req.TheirAntenna
 	}
-	if req.MyRST != "" {
-		logbook.MyRST = req.MyRST
+	if req.MyRST != nil {
+		logbook.MyRST = *req.MyRST
 	}
-	if req.MyPower != nil {
-		logbook.MyPower = req.MyPower
+	if req.MyPower.Present {
+		logbook.MyPower = req.MyPower.Value
 	}
-	if req.MyQTH != "" {
-		logbook.MyQTH = req.MyQTH
+	if req.MyQTH != nil {
+		logbook.MyQTH = *req.MyQTH
 	}
-	if req.MyRadio != "" {
-		logbook.MyRadio = req.MyRadio
+	if req.MyRadio != nil {
+		logbook.MyRadio = *req.MyRadio
 	}
-	if req.MyAntenna != "" {
-		logbook.MyAntenna = req.MyAntenna
+	if req.MyAntenna != nil {
+		logbook.MyAntenna = *req.MyAntenna
 	}
-	if req.Notes != "" {
-		logbook.Notes = req.Notes
+	if req.Notes != nil {
+		logbook.Notes = *req.Notes
 	}
 
 	if err := repo.Update(logbook); err != nil {
@@ -684,66 +731,70 @@ func AdminUpdateLogbook(c *gin.Context) {
 		return
 	}
 
-	// 更新字段
-	if req.MyCallSign != "" {
-		logbook.MyCallSign = req.MyCallSign
+	if err := validateLogbookUpdate(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
-	if req.TimeUTC != "" {
-		t, err := time.Parse("2006-01-02 15:04:05", req.TimeUTC)
+	// 更新字段
+	if req.MyCallSign != nil {
+		logbook.MyCallSign = *req.MyCallSign
+	}
+	if req.TimeUTC != nil {
+		t, err := time.Parse("2006-01-02 15:04:05", *req.TimeUTC)
 		if err == nil {
 			logbook.TimeUTC = t
 		}
 	}
-	if req.TxFrequency > 0 {
-		logbook.TxFrequency = req.TxFrequency
+	if req.TxFrequency != nil {
+		logbook.TxFrequency = *req.TxFrequency
 	}
-	if req.RxFrequency > 0 {
-		logbook.RxFrequency = req.RxFrequency
+	if req.RxFrequency != nil {
+		logbook.RxFrequency = *req.RxFrequency
 	}
-	if req.CQZone > 0 {
-		logbook.CQZone = req.CQZone
+	if req.CQZone != nil {
+		logbook.CQZone = *req.CQZone
 	}
-	if req.ITUZone > 0 {
-		logbook.ITUZone = req.ITUZone
+	if req.ITUZone != nil {
+		logbook.ITUZone = *req.ITUZone
 	}
-	if req.Mode != "" {
-		logbook.Mode = req.Mode
+	if req.Mode != nil {
+		logbook.Mode = *req.Mode
 	}
-	if req.CallSign != "" {
-		logbook.CallSign = req.CallSign
+	if req.CallSign != nil {
+		logbook.CallSign = *req.CallSign
 	}
-	if req.TheirRST != "" {
-		logbook.TheirRST = req.TheirRST
+	if req.TheirRST != nil {
+		logbook.TheirRST = *req.TheirRST
 	}
-	if req.TheirPower != nil {
-		logbook.TheirPower = req.TheirPower
+	if req.TheirPower.Present {
+		logbook.TheirPower = req.TheirPower.Value
 	}
-	if req.TheirQTH != "" {
-		logbook.TheirQTH = req.TheirQTH
+	if req.TheirQTH != nil {
+		logbook.TheirQTH = *req.TheirQTH
 	}
-	if req.TheirRadio != "" {
-		logbook.TheirRadio = req.TheirRadio
+	if req.TheirRadio != nil {
+		logbook.TheirRadio = *req.TheirRadio
 	}
-	if req.TheirAntenna != "" {
-		logbook.TheirAntenna = req.TheirAntenna
+	if req.TheirAntenna != nil {
+		logbook.TheirAntenna = *req.TheirAntenna
 	}
-	if req.MyRST != "" {
-		logbook.MyRST = req.MyRST
+	if req.MyRST != nil {
+		logbook.MyRST = *req.MyRST
 	}
-	if req.MyPower != nil {
-		logbook.MyPower = req.MyPower
+	if req.MyPower.Present {
+		logbook.MyPower = req.MyPower.Value
 	}
-	if req.MyQTH != "" {
-		logbook.MyQTH = req.MyQTH
+	if req.MyQTH != nil {
+		logbook.MyQTH = *req.MyQTH
 	}
-	if req.MyRadio != "" {
-		logbook.MyRadio = req.MyRadio
+	if req.MyRadio != nil {
+		logbook.MyRadio = *req.MyRadio
 	}
-	if req.MyAntenna != "" {
-		logbook.MyAntenna = req.MyAntenna
+	if req.MyAntenna != nil {
+		logbook.MyAntenna = *req.MyAntenna
 	}
-	if req.Notes != "" {
-		logbook.Notes = req.Notes
+	if req.Notes != nil {
+		logbook.Notes = *req.Notes
 	}
 
 	if err := repo.Update(logbook); err != nil {

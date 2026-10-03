@@ -649,7 +649,7 @@ export function ApprovalsPage() {
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
-                                  bgcolor: 'grey.100',
+                                  bgcolor: 'action.hover',
                                   borderRadius: 1,
                                   color: 'text.secondary',
                                 }}

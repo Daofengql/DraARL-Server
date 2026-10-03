@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -38,9 +39,19 @@ func (r *recoveryTestRepository) MarkAudioReady(context.Context, uint, string, i
 func newRecoveryTestProcessor(repo processorRepository) *Processor {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Processor{
-		config: config.BroadcastConfig{FFmpegPath: "true", FFprobePath: "true", TranscodeWorkers: 1},
+		// These recovery tests only need existing executables for Start's path
+		// validation. Use the test binary itself so they work on Windows too.
+		config: config.BroadcastConfig{FFmpegPath: recoveryTestExecutable(), FFprobePath: recoveryTestExecutable(), TranscodeWorkers: 1},
 		repo:   repo, jobs: make(chan uint, 1), ctx: ctx, cancel: cancel,
 	}
+}
+
+func recoveryTestExecutable() string {
+	path, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	return path
 }
 
 func waitForRecovery(t *testing.T, processor *Processor, want uint64) {

@@ -79,7 +79,10 @@ func RefreshToken(c *gin.Context) {
 	if stored.RevokedAt != nil {
 		// 令牌重放：发现替换链，吊销该用户所有有效 refresh token。
 		if stored.ReplacedByHash != "" {
-			_ = store.RevokeAllByUser(stored.UserID, "reuse_detected", now)
+			if err := store.RevokeAllByUser(stored.UserID, "reuse_detected", now); err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新会话吊销失败"})
+				return
+			}
 		}
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
@@ -103,7 +106,7 @@ func RefreshToken(c *gin.Context) {
 
 	userRepo := gormdb.NewUserRepository()
 	user, err := userRepo.GetUserByID(stored.UserID)
-	if err != nil || user == nil || user.Status != 1 || user.ApprovalStatus != 1 {
+	if err != nil || user == nil || user.Status != 1 || user.ApprovalStatus != 1 || stored.SessionVersion != user.SessionVersion {
 		_ = store.RevokeAllByUser(stored.UserID, "user_invalid", now)
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
@@ -116,6 +119,24 @@ func RefreshToken(c *gin.Context) {
 
 	issued, err := rotateAuthTokens(c, user, stored)
 	if err != nil {
+		if errors.Is(err, authstore.ErrRefreshTokenNotActive) {
+			// A concurrent request may have rotated/revoked this token after the read.
+			latest, lookupErr := store.GetByTokenHash(tokenHash)
+			if lookupErr != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新令牌校验失败"})
+				return
+			}
+			if latest != nil && latest.ReplacedByHash != "" {
+				if revokeErr := store.RevokeAllByUser(stored.UserID, "reuse_detected", time.Now()); revokeErr != nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新会话吊销失败"})
+					return
+				}
+			}
+			clearRefreshTokenCookie(c)
+			clearWSTokenCookie(c)
+			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "refresh_token_revoked"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "刷新登录态失败",
@@ -141,7 +162,7 @@ func RefreshToken(c *gin.Context) {
 }
 
 func issueAuthTokens(c *gin.Context, user *gormdb.User) (*issuedAuthTokens, error) {
-	accessToken, err := jwt.GenerateToken(user.Name, user.GetRoles())
+	accessToken, err := jwt.GenerateTokenForUser(user.ID, user.Name, user.GetRoles(), user.SessionVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -154,11 +175,12 @@ func issueAuthTokens(c *gin.Context, user *gormdb.User) (*issuedAuthTokens, erro
 	now := time.Now()
 	store := authstore.GetRefreshTokenStore()
 	if err := store.Create(&authstore.RefreshTokenRecord{
-		UserID:    user.ID,
-		TokenHash: refreshHash,
-		ExpiresAt: now.Add(refreshTokenTTL),
-		CreatedIP: c.ClientIP(),
-		UserAgent: trimUserAgent(c.Request.UserAgent()),
+		UserID:         user.ID,
+		SessionVersion: user.SessionVersion,
+		TokenHash:      refreshHash,
+		ExpiresAt:      now.Add(refreshTokenTTL),
+		CreatedIP:      c.ClientIP(),
+		UserAgent:      trimUserAgent(c.Request.UserAgent()),
 	}); err != nil {
 		return nil, err
 	}
@@ -175,7 +197,7 @@ func issueAuthTokens(c *gin.Context, user *gormdb.User) (*issuedAuthTokens, erro
 }
 
 func rotateAuthTokens(c *gin.Context, user *gormdb.User, oldToken *authstore.RefreshTokenRecord) (*issuedAuthTokens, error) {
-	accessToken, err := jwt.GenerateToken(user.Name, user.GetRoles())
+	accessToken, err := jwt.GenerateTokenForUser(user.ID, user.Name, user.GetRoles(), user.SessionVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -187,11 +209,12 @@ func rotateAuthTokens(c *gin.Context, user *gormdb.User, oldToken *authstore.Ref
 
 	now := time.Now()
 	newRecord := &authstore.RefreshTokenRecord{
-		UserID:    user.ID,
-		TokenHash: newHash,
-		ExpiresAt: now.Add(refreshTokenTTL),
-		CreatedIP: c.ClientIP(),
-		UserAgent: trimUserAgent(c.Request.UserAgent()),
+		UserID:         user.ID,
+		SessionVersion: user.SessionVersion,
+		TokenHash:      newHash,
+		ExpiresAt:      now.Add(refreshTokenTTL),
+		CreatedIP:      c.ClientIP(),
+		UserAgent:      trimUserAgent(c.Request.UserAgent()),
 	}
 
 	store := authstore.GetRefreshTokenStore()

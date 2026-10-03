@@ -80,12 +80,12 @@ func NewUserCache(config UserCacheConfig) (*UserCache, error) {
 
 // userKey 用户基本信息缓存键
 func userKey(userID int) string {
-	return fmt.Sprintf("user:info:%d", userID)
+	return fmt.Sprintf("user:info:v2:%d", userID)
 }
 
 // userByNameKey 通过用户名查询的缓存键
 func userByNameKey(username string) string {
-	return fmt.Sprintf("user:name:%s", username)
+	return fmt.Sprintf("user:name:v2:%s", username)
 }
 
 // userRoleKey 用户角色缓存键

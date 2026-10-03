@@ -8,6 +8,7 @@ import (
 
 	"draarl/internal/broadcast/model"
 	"draarl/internal/gormdb"
+	drivermysql "github.com/go-sql-driver/mysql"
 )
 
 func TestBroadcastAudioEffectiveRecordObjectKey(t *testing.T) {
@@ -29,15 +30,29 @@ func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 	if dsn == "" {
 		t.Fatal("DRAARL_TEST_MYSQL_DSN is required")
 	}
+	parsed, err := drivermysql.ParseDSN(dsn)
+	if err != nil || !strings.HasPrefix(parsed.DBName, "draarl_test_") {
+		t.Fatal("a disposable draarl_test_ database is required")
+	}
 	if err := gormdb.Init(&gormdb.Config{DSN: dsn, MaxOpenConns: 5, MaxIdleConns: 1, MaxLifetime: 60, LogLevel: "error"}); err != nil {
 		t.Fatalf("initialize mysql: %v", err)
 	}
 	t.Cleanup(func() { _ = gormdb.Close() })
 
-	if err := gormdb.AutoMigrate(); err != nil {
-		t.Fatalf("initial migration: %v", err)
-	}
 	db := gormdb.Get()
+	empty, err := gormdb.IsSchemaEmpty()
+	if err != nil || !empty {
+		t.Fatal("legacy migration fixture requires a fresh empty test database")
+	}
+	// Insert legacy rows before the versioned migration, whose data backfill
+	// intentionally runs once rather than on every schema synchronization.
+	if err := db.AutoMigrate(
+		&gormdb.User{}, &gormdb.Group{}, &gormdb.Device{}, &gormdb.GroupLink{},
+		&gormdb.OperatorCert{}, &gormdb.GroupMember{}, &gormdb.Logbook{},
+		&gormdb.DeviceConfig{}, &gormdb.UserRadioPreset{}, &gormdb.UserDevicePreference{}, &gormdb.Asset{},
+	); err != nil {
+		t.Fatal(err)
+	}
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
 	user := &gormdb.User{Name: "broadcast-schema-owner-" + suffix, Email: "broadcast-schema-" + suffix + "@example.invalid", CallSign: "BC" + suffix[len(suffix)-6:], Roles: "admin", Status: 1}
 	if err := db.Create(user).Error; err != nil {
@@ -52,6 +67,9 @@ func TestBroadcastSchemaMigrationMySQL(t *testing.T) {
 		_ = db.Delete(&gormdb.User{}, user.ID).Error
 	})
 
+	if err := gormdb.AutoMigrate(); err != nil {
+		t.Fatalf("legacy migration: %v", err)
+	}
 	if err := gormdb.AutoMigrate(); err != nil {
 		t.Fatalf("repeat migration: %v", err)
 	}

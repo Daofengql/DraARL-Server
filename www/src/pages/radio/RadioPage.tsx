@@ -189,6 +189,7 @@ export const RadioPage: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState(false) // 加载更多状态
   const [routingUpdating, setRoutingUpdating] = useState(false)
   const [takenOver, setTakenOver] = useState(false)
+	const secureAudioAvailable = typeof window !== 'undefined' && window.isSecureContext && Boolean(navigator.mediaDevices)
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
@@ -426,13 +427,14 @@ export const RadioPage: React.FC = () => {
 
   // PTT 按下
   const handlePTTDown = useCallback(() => {
+    if (!secureAudioAvailable) return
     if (!ownsRadioTabRef.current || takenOver) return
     if (connectionState !== 'online') return
     if (voiceState !== 'idle') return
 
     setIsPTTDown(true)
     radioService.startVoice()
-  }, [connectionState, voiceState, radioService, takenOver])
+  }, [connectionState, voiceState, radioService, takenOver, secureAudioAvailable])
 
   // PTT 松开
   const handlePTTUp = useCallback(() => {
@@ -445,6 +447,7 @@ export const RadioPage: React.FC = () => {
   // 键盘事件
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
       if (e.code === 'Space' && !e.repeat && inputMode === 'voice') {
         e.preventDefault()
         handlePTTDown()
@@ -587,6 +590,12 @@ export const RadioPage: React.FC = () => {
         </Alert>
       )}
 
+      {!secureAudioAvailable && (
+        <Alert severity="warning">
+          当前页面不是安全连接，浏览器不会开放麦克风。请使用 HTTPS（或本机 localhost）后重新打开此页面。
+        </Alert>
+      )}
+
       {/* 错误提示 */}
       {error && (
         <Alert severity="error" onClose={() => setError(null)}>
@@ -601,6 +610,7 @@ export const RadioPage: React.FC = () => {
           messages={messages}
           currentCallsign={user?.callsign || ''}
           currentSSID={105}
+          voiceInputAvailable={secureAudioAvailable}
           currentUser={user}
           hasMore={activeGroupId > 0 && messageSyncService.hasMore(activeGroupId)}
           isLoadingMore={isLoadingMore}
@@ -622,7 +632,7 @@ export const RadioPage: React.FC = () => {
       <Box sx={styles.inputArea}>
         <Box sx={styles.inputRow}>
           {/* 模式切换 */}
-          <IconButton onClick={toggleInputMode} color="primary">
+          <IconButton onClick={toggleInputMode} color="primary" aria-label={inputMode === 'voice' ? '切换为文字输入' : '切换为语音输入'}>
             {inputMode === 'voice' ? <KeyboardIcon /> : <MicIcon />}
           </IconButton>
 
@@ -642,6 +652,7 @@ export const RadioPage: React.FC = () => {
               />
               <IconButton
                 color="primary"
+                aria-label="发送消息"
                 onClick={handleSendText}
                 disabled={!textInput.trim() || connectionState !== 'online'}
               >
@@ -658,14 +669,14 @@ export const RadioPage: React.FC = () => {
                 onMouseLeave={handlePTTUp}
                 onTouchStart={handlePTTDown}
                 onTouchEnd={handlePTTUp}
-                disabled={connectionState !== 'online' || voiceState === 'receiving'}
+                disabled={connectionState !== 'online' || voiceState === 'receiving' || !secureAudioAvailable}
                 fullWidth
               />
             </Box>
           )}
 
           {/* 音量控制 */}
-          <IconButton onClick={toggleMute} color={config.muted ? 'error' : 'default'}>
+          <IconButton onClick={toggleMute} color={config.muted ? 'error' : 'default'} aria-label={config.muted ? '取消静音' : '静音'}>
             {config.muted ? <VolumeOffIcon /> : <VolumeUpIcon />}
           </IconButton>
         </Box>
@@ -673,7 +684,7 @@ export const RadioPage: React.FC = () => {
         {/* PTT 提示 */}
         {inputMode === 'voice' && (
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', textAlign: 'center' }}>
-            按住 PTT 或空格键说话
+            {secureAudioAvailable ? '按住 PTT 或空格键说话' : '麦克风需要 HTTPS，可切换为文字输入'}
           </Typography>
         )}
       </Box>

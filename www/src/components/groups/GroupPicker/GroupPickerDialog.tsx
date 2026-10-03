@@ -13,6 +13,8 @@ import {
   Tabs,
   Tab,
   Stack,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import Search from '@mui/icons-material/Search'
 import type { Group, Device } from '../../../types'
@@ -45,6 +47,8 @@ export function GroupPickerDialog({
   onSelect,
   title = '选择群组',
 }: GroupPickerDialogProps) {
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const [tabValue, setTabValue] = useState(0)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [searchResults, setSearchResults] = useState<Group[]>([])
@@ -127,7 +131,7 @@ export function GroupPickerDialog({
 
   return (
     <>
-      <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
+      <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>{title}</DialogTitle>
         <DialogContent>
           {device && (
@@ -162,7 +166,9 @@ export function GroupPickerDialog({
           <Tabs
             value={tabValue}
             onChange={(_, v) => setTabValue(v)}
-            sx={{ borderBottom: 1, borderColor: 'divider' }}
+            variant="fullWidth"
+            aria-label="群组查找方式"
+            sx={{ borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minWidth: 0, px: 1 } }}
           >
             <Tab label={adminMode ? '私有群组' : '已验证群组'} />
             <Tab label="公开群组" />
@@ -229,6 +235,7 @@ export function GroupPickerDialog({
                     fullWidth
                     size="small"
                     placeholder="输入群组ID或名称搜索"
+                    sx={{ minWidth: 0 }}
                     value={searchKeyword}
                     onChange={(e) => setSearchKeyword(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -238,6 +245,8 @@ export function GroupPickerDialog({
                     startIcon={<Search />}
                     onClick={handleSearch}
                     disabled={searchLoading}
+                    aria-label="搜索群组"
+                    sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
                   >
                     搜索
                   </Button>

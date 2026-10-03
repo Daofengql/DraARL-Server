@@ -59,7 +59,9 @@ type UpdateProfileRequest struct {
 }
 
 type UpdateUserPasswordRequest struct {
-	OldPassword string `json:"old_password" binding:"required"`
+	// Administrators resetting another account do not know its old password.
+	// Self-service changes validate this field after identifying the target.
+	OldPassword string `json:"old_password"`
 	NewPassword string `json:"new_password" binding:"required"`
 }
 

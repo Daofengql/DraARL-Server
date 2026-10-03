@@ -205,7 +205,7 @@ export function AdminLayout() {
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="h6" sx={{ fontWeight: 600, color: '#1565C0' }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
           后台管理
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -248,9 +248,9 @@ export function AdminLayout() {
                     mx: 1,
                     borderRadius: 2,
                     '&.Mui-selected': {
-                      bgcolor: '#E3F2FD',
-                      '&:hover': { bgcolor: '#BBDEFB' },
-                      '& .MuiListItemIcon-root': { color: '#1565C0' },
+                      bgcolor: 'action.selected',
+                      '&:hover': { bgcolor: 'action.hover' },
+                      '& .MuiListItemIcon-root': { color: 'primary.main' },
                     },
                     '&:hover': { bgcolor: 'action.hover' },
                   }}
@@ -289,9 +289,9 @@ export function AdminLayout() {
                             mx: 1,
                             borderRadius: 2,
                             '&.Mui-selected': {
-                              bgcolor: '#E3F2FD',
-                              '&:hover': { bgcolor: '#BBDEFB' },
-                              '& .MuiListItemIcon-root': { color: '#1565C0' },
+                              bgcolor: 'action.selected',
+                              '&:hover': { bgcolor: 'action.hover' },
+                              '& .MuiListItemIcon-root': { color: 'primary.main' },
                             },
                             '&:hover': { bgcolor: 'action.hover' },
                           }}
@@ -367,7 +367,7 @@ export function AdminLayout() {
   )
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'grey.50' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
       {/* 顶部导航栏 - 复用公共 Header */}
       <PublicHeader onMenuClick={handleDrawerToggle} />
 
@@ -406,7 +406,7 @@ export function AdminLayout() {
               height: 'calc(100vh - 64px)',
               zIndex: (theme) => theme.zIndex.drawer - 1,
               borderRight: '1px solid',
-              borderColor: 'grey.200',
+              borderColor: 'divider',
             },
           }}
           open

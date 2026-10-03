@@ -66,7 +66,7 @@ export function AutoRefresh({
       </FormControl>
       <Tooltip title="立即刷新">
         <span>
-          <IconButton onClick={onRefresh} disabled={loading} size={size}>
+          <IconButton onClick={onRefresh} disabled={loading} size={size} aria-label="立即刷新">
             {loading ? <CircularProgress size={20} /> : <Refresh />}
           </IconButton>
         </span>

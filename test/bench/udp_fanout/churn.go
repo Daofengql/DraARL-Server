@@ -69,7 +69,7 @@ type edgeSafetySnapshot struct {
 	receiverRebuild uint64
 }
 
-func newChurnAPI(baseURL, secret, username string) (*churnAPI, error) {
+func newChurnAPI(baseURL, secret, username string, userID int, sessionVersion uint64) (*churnAPI, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -78,7 +78,7 @@ func newChurnAPI(baseURL, secret, username string) (*churnAPI, error) {
 	if err := appjwt.SetSecret(secret); err != nil {
 		return nil, fmt.Errorf("set benchmark JWT secret: %w", err)
 	}
-	token, err := appjwt.GenerateToken(username, []string{"admin"})
+	token, err := appjwt.GenerateTokenForUser(userID, username, []string{"admin"}, sessionVersion)
 	if err != nil {
 		return nil, fmt.Errorf("generate benchmark admin token: %w", err)
 	}
@@ -166,7 +166,7 @@ func runChurnSoak(clients []*benchClient, data *benchData, opts options, jwtSecr
 	if data == nil || len(data.groupIDs) != opts.groups || len(data.deviceIDs) < len(clients) {
 		return "", errors.New("benchmark row metadata is incomplete")
 	}
-	api, err := newChurnAPI(opts.apiBase, jwtSecret, usernameForUser(0))
+	api, err := newChurnAPI(opts.apiBase, jwtSecret, usernameForUser(0), int(data.adminID), 1)
 	if err != nil {
 		return "", err
 	}

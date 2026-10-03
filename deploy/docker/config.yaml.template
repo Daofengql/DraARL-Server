@@ -1,4 +1,5 @@
 System:
+    HTTPTrustedProxyCIDRs: [] # 使用 HTTPS 反代时，在持久化 config.yaml 中填入实际代理 IP/CIDR
   Host: ""
   Port: "60050"
   LogPath: ""

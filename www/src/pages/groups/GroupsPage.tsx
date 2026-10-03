@@ -425,7 +425,7 @@ export function GroupsPage() {
 
       {/* 公开群组表格 */}
       <Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', mb: 1, overflow: 'hidden' }}>
-        <Box sx={{ bgcolor: 'primary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ bgcolor: 'action.selected', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
             <Typography variant="subtitle1" fontWeight={600}>公开群组</Typography>

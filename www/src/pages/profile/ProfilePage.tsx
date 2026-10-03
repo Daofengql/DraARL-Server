@@ -880,7 +880,7 @@ export function ProfilePage() {
                       sx={{
                         width: 400,
                         height: 400,
-                        bgcolor: 'grey.100',
+                        bgcolor: 'action.hover',
                         borderRadius: 1,
                         overflow: 'hidden',
                         position: 'relative',

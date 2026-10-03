@@ -238,7 +238,7 @@ export function AdminDevicePage() {
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
         <Table sx={{ minWidth: 1020, tableLayout: 'fixed' }}>
-          <TableHead sx={{ bgcolor: 'grey.50' }}>
+          <TableHead sx={{ bgcolor: 'background.default' }}>
             <TableRow>
               <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
               <TableCell align="center">名称</TableCell>

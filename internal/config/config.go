@@ -363,6 +363,9 @@ type Configuration struct {
 		// 开发/测试构建中为空时保持旧兼容行为并告警；release 构建要求显式配置，
 		// 仅来自这些前缀的连接才会解析 PROXY 头，防止伪造源 IP。
 		ProxyTrustedCIDRs []string `yaml:"ProxyTrustedCIDRs" json:"proxy_trusted_cidrs"`
+		// HTTPTrustedProxyCIDRs controls HTTP forwarded headers only. Empty means
+		// direct connections: X-Forwarded-For from clients is ignored.
+		HTTPTrustedProxyCIDRs []string `yaml:"HTTPTrustedProxyCIDRs" json:"http_trusted_proxy_cidrs"`
 	} `yaml:"System" json:"system"`
 
 	UDP           UDPConfig          `yaml:"UDP" json:"udp"`
@@ -537,6 +540,9 @@ func (c *Configuration) SetDefaults() error {
 	}
 	if _, err := ParseProxyTrustedCIDRs(c.System.ProxyTrustedCIDRs); err != nil {
 		return fmt.Errorf("System.ProxyTrustedCIDRs: %w", err)
+	}
+	if _, err := ParseProxyTrustedCIDRs(c.System.HTTPTrustedProxyCIDRs); err != nil {
+		return fmt.Errorf("System.HTTPTrustedProxyCIDRs: %w", err)
 	}
 	if IsReleaseBuild() && c.System.ProxyProtocol == "v2" && len(c.System.ProxyTrustedCIDRs) == 0 {
 		return fmt.Errorf("System.ProxyTrustedCIDRs must contain at least one CIDR when System.ProxyProtocol=v2 in release builds")

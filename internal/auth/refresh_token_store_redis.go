@@ -20,6 +20,20 @@ type redisRefreshTokenStore struct {
 
 const defaultRefreshStoreOperationTimeout = 10 * time.Second
 
+// An older token must never shorten the index lifetime of newer sessions.
+// EVAL is also queued inside MULTI so the comparison and update are atomic.
+const extendUserSetTTLScript = `
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl < tonumber(ARGV[1]) then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return 0
+`
+
+func extendUserSetTTL(ctx context.Context, pipe redis.Pipeliner, key string, expiresAt time.Time) {
+	pipe.Eval(ctx, extendUserSetTTLScript, []string{key}, userSetTTL(expiresAt).Milliseconds())
+}
+
 func newRedisRefreshTokenStore(cfg *config.Configuration) (*redisRefreshTokenStore, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -93,11 +107,11 @@ func (r *redisRefreshTokenStore) Create(token *RefreshTokenRecord) error {
 	tokenKey := r.tokenKey(token.TokenHash)
 	userSetKey := r.userSetKey(token.UserID)
 
-	pipe := r.client.Pipeline()
+	pipe := r.client.TxPipeline()
 	pipe.HSet(ctx, tokenKey, buildRecordFields(token))
 	pipe.ExpireAt(ctx, tokenKey, token.ExpiresAt.Add(expiredTokenRetention))
 	pipe.SAdd(ctx, userSetKey, token.TokenHash)
-	pipe.Expire(ctx, userSetKey, userSetTTL(token.ExpiresAt))
+	extendUserSetTTL(ctx, pipe, userSetKey, token.ExpiresAt)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -170,6 +184,10 @@ func (r *redisRefreshTokenStore) Rotate(oldTokenHash string, newToken *RefreshTo
 				return err
 			}
 			oldExpiry := time.Unix(oldExpiresUnix, 0)
+			oldVersion, err := strconv.ParseUint(values["session_version"], 10, 64)
+			if err != nil || oldVersion != newToken.SessionVersion || !now.Before(oldExpiry) {
+				return ErrRefreshTokenNotActive
+			}
 			nowUnix := strconv.FormatInt(now.Unix(), 10)
 
 			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
@@ -183,7 +201,7 @@ func (r *redisRefreshTokenStore) Rotate(oldTokenHash string, newToken *RefreshTo
 				pipe.HSet(ctx, newTokenKey, buildRecordFields(newToken))
 				pipe.ExpireAt(ctx, newTokenKey, newToken.ExpiresAt.Add(expiredTokenRetention))
 				pipe.SAdd(ctx, userSetKey, oldTokenHash, newToken.TokenHash)
-				pipe.Expire(ctx, userSetKey, userSetTTL(newToken.ExpiresAt))
+				extendUserSetTTL(ctx, pipe, userSetKey, newToken.ExpiresAt)
 				return nil
 			})
 			return err
@@ -207,31 +225,29 @@ func (r *redisRefreshTokenStore) RevokeByTokenHash(hash, reason string, now time
 	ctx, cancel := r.operationContext()
 	defer cancel()
 	tokenKey := r.tokenKey(hash)
-	values, err := r.client.HGetAll(ctx, tokenKey).Result()
-	if err != nil {
+	return r.watchWithRetry(ctx, []string{tokenKey}, func(tx *redis.Tx) error {
+		values, err := tx.HGetAll(ctx, tokenKey).Result()
+		if err != nil {
+			return err
+		}
+		if len(values) == 0 || strings.TrimSpace(values["revoked_at"]) != "" {
+			return nil
+		}
+		record, err := parseRecordFields(hash, values)
+		if err != nil {
+			return err
+		}
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.HSet(ctx, tokenKey, map[string]any{
+				"revoked_at": now.Unix(), "revoke_reason": strings.TrimSpace(reason), "last_used_at": now.Unix(),
+			})
+			pipe.ExpireAt(ctx, tokenKey, record.ExpiresAt.Add(expiredTokenRetention))
+			pipe.SAdd(ctx, r.userSetKey(record.UserID), hash)
+			extendUserSetTTL(ctx, pipe, r.userSetKey(record.UserID), record.ExpiresAt)
+			return nil
+		})
 		return err
-	}
-	if len(values) == 0 || strings.TrimSpace(values["revoked_at"]) != "" {
-		return nil
-	}
-
-	record, err := parseRecordFields(hash, values)
-	if err != nil {
-		return err
-	}
-
-	nowUnix := strconv.FormatInt(now.Unix(), 10)
-	pipe := r.client.Pipeline()
-	pipe.HSet(ctx, tokenKey, map[string]any{
-		"revoked_at":    nowUnix,
-		"revoke_reason": strings.TrimSpace(reason),
-		"last_used_at":  nowUnix,
 	})
-	pipe.ExpireAt(ctx, tokenKey, record.ExpiresAt.Add(expiredTokenRetention))
-	pipe.SAdd(ctx, r.userSetKey(record.UserID), hash)
-	pipe.Expire(ctx, r.userSetKey(record.UserID), userSetTTL(record.ExpiresAt))
-	_, err = pipe.Exec(ctx)
-	return err
 }
 
 func (r *redisRefreshTokenStore) RevokeAllByUser(userID int, reason string, now time.Time) error {
@@ -242,74 +258,70 @@ func (r *redisRefreshTokenStore) RevokeAllByUser(userID int, reason string, now 
 	ctx, cancel := r.operationContext()
 	defer cancel()
 	userSetKey := r.userSetKey(userID)
-	members, err := r.client.SMembers(ctx, userSetKey).Result()
-	if err != nil {
-		return err
-	}
-	if len(members) == 0 {
-		return nil
-	}
-
-	fetchPipe := r.client.Pipeline()
-	recordCommands := make(map[string]*redis.MapStringStringCmd, len(members))
-	for _, hash := range members {
-		hash = strings.TrimSpace(hash)
-		if hash == "" {
-			continue
+	// Watch the index before taking the snapshot. A concurrent Create/Rotate
+	// adds a member atomically and forces a retry, including its new token.
+	// Also watch records so expiry cannot resurrect a partial hash on commit.
+	return r.watchWithRetry(ctx, []string{userSetKey}, func(tx *redis.Tx) error {
+		members, err := tx.SMembers(ctx, userSetKey).Result()
+		if err != nil || len(members) == 0 {
+			return err
 		}
-		recordCommands[hash] = fetchPipe.HGetAll(ctx, r.tokenKey(hash))
-	}
-	if len(recordCommands) == 0 {
-		return r.client.Del(ctx, userSetKey).Err()
-	}
-	if _, err := fetchPipe.Exec(ctx); err != nil {
-		return err
-	}
-
-	nowUnix := strconv.FormatInt(now.Unix(), 10)
-	remainingMembers := 0
-	updatePipe := r.client.Pipeline()
-	for hash, command := range recordCommands {
-		tokenKey := r.tokenKey(hash)
-		values := command.Val()
-		if len(values) == 0 {
-			updatePipe.SRem(ctx, userSetKey, hash)
-			continue
+		keys := make([]string, 0, len(members))
+		for _, hash := range members {
+			keys = append(keys, r.tokenKey(hash))
 		}
-
-		record, parseErr := parseRecordFields(hash, values)
-		if parseErr != nil {
-			updatePipe.Del(ctx, tokenKey)
-			updatePipe.SRem(ctx, userSetKey, hash)
-			continue
+		if err := tx.Watch(ctx, keys...).Err(); err != nil {
+			return err
 		}
-
-		if now.After(record.ExpiresAt.Add(expiredTokenRetention)) {
-			updatePipe.Del(ctx, tokenKey)
-			updatePipe.SRem(ctx, userSetKey, hash)
-			continue
+		fetchPipe := tx.Pipeline()
+		recordCommands := make(map[string]*redis.MapStringStringCmd, len(members))
+		for _, hash := range members {
+			recordCommands[hash] = fetchPipe.HGetAll(ctx, r.tokenKey(hash))
 		}
-		remainingMembers++
-
-		if strings.TrimSpace(values["revoked_at"]) != "" {
-			continue
+		if _, err := fetchPipe.Exec(ctx); err != nil {
+			return err
 		}
-
-		updatePipe.HSet(ctx, tokenKey, map[string]any{
-			"revoked_at":    nowUnix,
-			"revoke_reason": strings.TrimSpace(reason),
-			"last_used_at":  nowUnix,
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			remainingMembers := 0
+			for hash, command := range recordCommands {
+				tokenKey := r.tokenKey(hash)
+				values := command.Val()
+				if len(values) == 0 {
+					pipe.SRem(ctx, userSetKey, hash)
+					continue
+				}
+				record, parseErr := parseRecordFields(hash, values)
+				if parseErr != nil || !now.Before(record.ExpiresAt.Add(expiredTokenRetention)) {
+					pipe.Del(ctx, tokenKey)
+					pipe.SRem(ctx, userSetKey, hash)
+					continue
+				}
+				remainingMembers++
+				if record.RevokedAt == nil {
+					pipe.HSet(ctx, tokenKey, map[string]any{
+						"revoked_at": now.Unix(), "revoke_reason": strings.TrimSpace(reason), "last_used_at": now.Unix(),
+					})
+					pipe.ExpireAt(ctx, tokenKey, record.ExpiresAt.Add(expiredTokenRetention))
+				}
+			}
+			if remainingMembers == 0 {
+				pipe.Del(ctx, userSetKey)
+			}
+			// Preserve the existing index TTL: it already covers the longest token.
+			return nil
 		})
-		updatePipe.ExpireAt(ctx, tokenKey, record.ExpiresAt.Add(expiredTokenRetention))
-	}
+		return err
+	})
+}
 
-	if remainingMembers == 0 {
-		updatePipe.Del(ctx, userSetKey)
-	} else {
-		updatePipe.Expire(ctx, userSetKey, userSetTTL(now.Add(expiredTokenRetention)))
+func (r *redisRefreshTokenStore) watchWithRetry(ctx context.Context, keys []string, fn func(*redis.Tx) error) error {
+	for attempt := 0; attempt < 5; attempt++ {
+		err := r.client.Watch(ctx, fn, keys...)
+		if err != redis.TxFailedErr {
+			return err
+		}
 	}
-	_, err = updatePipe.Exec(ctx)
-	return err
+	return fmt.Errorf("refresh token transaction conflict after retries: %w", redis.TxFailedErr)
 }
 
 func (r *redisRefreshTokenStore) tokenKey(hash string) string {
@@ -331,6 +343,7 @@ func normalizeStorePrefix(prefix string) string {
 func buildRecordFields(record *RefreshTokenRecord) map[string]any {
 	fields := map[string]any{
 		"user_id":          strconv.Itoa(record.UserID),
+		"session_version":  strconv.FormatUint(record.SessionVersion, 10),
 		"token_hash":       record.TokenHash,
 		"expires_at":       strconv.FormatInt(record.ExpiresAt.Unix(), 10),
 		"replaced_by_hash": strings.TrimSpace(record.ReplacedByHash),
@@ -373,6 +386,13 @@ func parseRecordFields(hash string, values map[string]string) (*RefreshTokenReco
 		RevokeReason:   strings.TrimSpace(values["revoke_reason"]),
 		CreatedIP:      strings.TrimSpace(values["created_ip"]),
 		UserAgent:      strings.TrimSpace(values["user_agent"]),
+	}
+	if value := values["session_version"]; value != "" {
+		version, parseErr := strconv.ParseUint(value, 10, 64)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		record.SessionVersion = version
 	}
 
 	if revokedAt := strings.TrimSpace(values["revoked_at"]); revokedAt != "" {

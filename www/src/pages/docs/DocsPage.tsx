@@ -242,7 +242,7 @@ function MarkdownRenderer({ content }: { content: string }) {
                   height: 'auto',
                   display: 'block',
                   margin: '16px auto',
-                  bgcolor: 'grey.50',
+                  bgcolor: 'background.default',
                   borderRadius: 1,
                   p: 2,
                 }}

@@ -51,8 +51,6 @@ func main() {
 
 	// 解析命令行参数
 	configPath := flag.String("c", "", "配置文件路径")
-	edgeMode := flag.Bool("edge", false, "以无数据库边缘节点模式启动")
-	interconnectMode := flag.Bool("interconnect", false, "以无数据库边缘节点模式启动（edge 别名）")
 	showVersion := flag.Bool("v", false, "显示版本信息")
 	printConfig := flag.String("p", "", "打印配置信息")
 	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
@@ -61,12 +59,6 @@ func main() {
 	migrateDryRun := flag.Bool("migrate-dry-run", false, "仅统计迁移计划，不实际写入目标端")
 	migrateMaxBytesPerSecond := flag.Int64("migrate-max-bytes-per-second", 0, "迁移源端读取总速率上限（字节/秒，<=0 不限速）")
 	flag.Parse()
-	if *edgeMode || *interconnectMode {
-		if err := runEdgeMode(*configPath); err != nil {
-			stdlog.Fatalf("边缘节点启动失败: %v", err)
-		}
-		return
-	}
 
 	if *showVersion {
 		fmt.Printf("DraARL version %s (build time: %s)\n", buildinfo.VersionString(), buildinfo.BuildTimeString())

@@ -522,14 +522,14 @@ export function RegisterPage() {
                     display: 'flex',
                     alignItems: 'center',
                     gap: 1,
-                    bgcolor: 'grey.100',
+                    bgcolor: 'action.hover',
                     p: 1.5,
                     borderRadius: 1,
                     fontFamily: 'monospace',
                     fontSize: '1.2rem',
                   }}>
                     <strong>{devicePassword}</strong>
-                    <IconButton size="small" onClick={handleCopyPassword}>
+                    <IconButton size="small" onClick={handleCopyPassword} aria-label="复制设备密码">
                       <ContentCopy fontSize="small" />
                     </IconButton>
                   </Box>
@@ -587,7 +587,23 @@ export function RegisterPage() {
                   </Typography>
                 </Box>
 
-                <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ display: { xs: 'block', sm: 'none' }, textAlign: 'center', mb: 1 }}
+                >
+                  第 {activeStep + 1}/{steps.length} 步
+                </Typography>
+                <Stepper
+                  activeStep={activeStep}
+                  alternativeLabel
+                  sx={{
+                    mb: 4,
+                    '& .MuiStepLabel-label': {
+                      display: { xs: 'none', sm: 'block' },
+                    },
+                  }}
+                >
                   {steps.map((label) => (
                     <Step key={label}>
                       <StepLabel>{label}</StepLabel>

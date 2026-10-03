@@ -10,14 +10,17 @@ import (
 
 	"draarl/internal/accesspoint"
 	broadcastmodel "draarl/internal/broadcast/model"
+	protocolmodels "draarl/internal/models"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // User 用户模型
 type User struct {
 	ID             int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	SessionVersion uint64     `gorm:"type:bigint unsigned;not null;default:1;column:session_version" json:"session_version"`
 	Name           string     `gorm:"type:varchar(255);uniqueIndex;column:name" json:"name"`
 	Email          string     `gorm:"type:varchar(255);uniqueIndex;column:email" json:"email"`
 	EmailVerified  bool       `gorm:"type:tinyint(1);default:0;column:email_verified" json:"email_verified"`
@@ -724,6 +727,17 @@ func autoMigrateLocked(db *gorm.DB) error {
 			}
 			version = 2
 		}
+		if version < 3 {
+			if err := startMigrationVersion(db, 3); err != nil {
+				return err
+			}
+			if err := migrateCoreSchema(db); err != nil {
+				return err
+			}
+			if err := completeMigrationVersion(db, 3); err != nil {
+				return err
+			}
+		}
 		log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 		return nil
 	}
@@ -834,7 +848,7 @@ func isBcryptPasswordHash(value string) bool {
 
 // migrateCoreSchema 执行幂等的 GORM schema 同步（仅在结构差异时发 ALTER）。
 func migrateCoreSchema(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&User{},
 		&Device{},
 		&Group{},
@@ -863,7 +877,42 @@ func migrateCoreSchema(db *gorm.DB) error {
 		&broadcastmodel.BroadcastSchedule{},
 		&broadcastmodel.VirtualGroupBroadcastPolicy{},
 		&broadcastmodel.BroadcastRun{},
-	)
+	); err != nil {
+		return err
+	}
+	return ensureDefaultPublicGroup(db)
+}
+
+// ValidateDefaultPublicGroup checks the protocol fallback before serving users.
+func ValidateDefaultPublicGroup() error {
+	var group Group
+	if err := Get().First(&group, protocolmodels.GroupIDPublicMin).Error; err != nil {
+		return fmt.Errorf("default public group 999 is missing: %w", err)
+	}
+	if group.Type != protocolmodels.GroupTypeRelay || group.Status != 1 || group.IsVirtual {
+		return errors.New("default public group 999 must be an enabled public channel")
+	}
+	return nil
+}
+
+// ensureDefaultPublicGroup persists the protocol fallback without overwriting
+// existing channel settings, preventing first-use foreign-key failures.
+func ensureDefaultPublicGroup(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("ensure default public group requires database")
+	}
+	group := &Group{
+		ID:     protocolmodels.GroupIDPublicMin,
+		Name:   "公共频道",
+		Type:   protocolmodels.GroupTypeRelay,
+		Status: 1,
+		OwerID: 0,
+		Note:   "系统默认公共频道",
+	}
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(group).Error; err != nil {
+		return fmt.Errorf("ensure default public group: %w", err)
+	}
+	return nil
 }
 
 // normalizeLegacyServerEmptyIDs 将 servers 表历史空串 node_id/public_access_id 归一化为 NULL，
@@ -1002,6 +1051,9 @@ func migrateSchemaV1(db *gorm.DB) error {
 	)
 
 	if err != nil {
+		return err
+	}
+	if err := ensureDefaultPublicGroup(db); err != nil {
 		return err
 	}
 	if err := backfillCommRecordMessages(db); err != nil {

@@ -11,6 +11,7 @@ import {
   Alert,
   Chip,
   useTheme,
+  alpha,
   useMediaQuery,
   Button,
   Snackbar,
@@ -49,11 +50,12 @@ interface StatCardProps {
 }
 
 function StatCard({ title, value, icon, color }: StatCardProps) {
+  const theme = useTheme()
   const colorConfig = {
-    primary: { bg: 'primary.50', color: 'primary.main' },
-    success: { bg: 'success.50', color: 'success.main' },
-    info: { bg: 'info.50', color: 'info.main' },
-    warning: { bg: 'warning.50', color: 'warning.main' },
+    primary: { bg: alpha(theme.palette.primary.main, 0.12), color: 'primary.main' },
+    success: { bg: alpha(theme.palette.success.main, 0.12), color: 'success.main' },
+    info: { bg: alpha(theme.palette.info.main, 0.12), color: 'info.main' },
+    warning: { bg: alpha(theme.palette.warning.main, 0.12), color: 'warning.main' },
   }
 
   const config = colorConfig[color]
@@ -393,6 +395,8 @@ export function DashboardPage() {
                     width={isMobile ? 35 : 60}
                   />
                   <Tooltip
+                    contentStyle={{ backgroundColor: theme.palette.background.paper, borderColor: theme.palette.divider, color: theme.palette.text.primary }}
+                    labelStyle={{ color: theme.palette.text.primary }}
                     labelFormatter={(label) => `日期: ${label}`}
                     formatter={(value, name) => {
                       if (name === '通信时长') {
@@ -406,7 +410,7 @@ export function DashboardPage() {
                     yAxisId="left"
                     type="monotone"
                     dataKey="count"
-                    stroke="#1976d2"
+                    stroke={theme.palette.primary.main}
                     strokeWidth={2}
                     dot={false}
                     name="通信次数"
@@ -415,7 +419,7 @@ export function DashboardPage() {
                     yAxisId="right"
                     type="monotone"
                     dataKey="duration"
-                    stroke="#2e7d32"
+                    stroke={theme.palette.success.main}
                     strokeWidth={2}
                     dot={false}
                     name="通信时长"
@@ -459,7 +463,7 @@ export function DashboardPage() {
                 sx={{
                   height: 8,
                   borderRadius: 4,
-                  bgcolor: 'grey.200',
+                  bgcolor: 'action.disabledBackground',
                   '& .MuiLinearProgress-bar': {
                     bgcolor:
                       stats.my_devices > 0 && stats.online_devices / stats.my_devices > 0.8

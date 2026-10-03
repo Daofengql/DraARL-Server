@@ -35,6 +35,7 @@ interface MessageListProps {
   currentCallsign: string
   currentSSID: number
   loading?: boolean
+  voiceInputAvailable?: boolean
   currentUser?: any
   hasMore?: boolean
   isLoadingMore?: boolean
@@ -527,7 +528,7 @@ const MessageItem = memo(function MessageItem({
 // 主组件
 // ==========================================
 export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
-  ({ messages, currentCallsign, currentSSID, loading, currentUser, hasMore, isLoadingMore, onLoadMore, onVoicePlayStateChange }, ref) => {
+  ({ messages, currentCallsign, currentSSID, loading, voiceInputAvailable = true, currentUser, hasMore, isLoadingMore, onLoadMore, onVoicePlayStateChange }, ref) => {
     const styles = useStaticStyles()
     const scrollRef = useRef<HTMLDivElement>(null)
     const setScrollElement = useCallback((node: HTMLDivElement | null) => {
@@ -770,7 +771,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
         <Box sx={styles.emptyState}>
           <Typography variant="h6">暂无消息</Typography>
           <Typography variant="body2">
-            按 PTT 开始通话或发送文字消息
+            {voiceInputAvailable ? '按 PTT 开始通话或发送文字消息' : '发送文字消息，或使用 HTTPS 启用麦克风'}
           </Typography>
         </Box>
       )

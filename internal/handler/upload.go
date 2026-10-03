@@ -90,6 +90,9 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
+	if !parseLimitedUploadForm(c, 10*1024*1024) {
+		return
+	}
 	// 检查文件类型（avatar, cert等）
 	fileType := c.PostForm("file_type")
 	if fileType == "" {
@@ -251,6 +254,9 @@ func UploadOperatorCertificate(c *gin.Context) {
 		return
 	}
 
+	if !parseLimitedUploadForm(c, storage.MaxSizeForFileType("operator_cert")) {
+		return
+	}
 	userRepo := gormdb.NewUserRepository()
 	callsign := gormdb.NormalizeCallSign(c.PostForm("callsign"))
 	fileHeader, fileErr := c.FormFile("file")
@@ -593,6 +599,9 @@ func GetOperatorCertificate(c *gin.Context) {
 
 // UploadLogo 上传站点配置 logo（权限由 RequireAdmin 中间件检查）
 func UploadLogo(c *gin.Context) {
+	if !parseLimitedUploadForm(c, 10*1024*1024) {
+		return
+	}
 	// 获取当前用户
 	user, exists := c.Get("user")
 	if !exists {
@@ -702,6 +711,9 @@ func UploadLogo(c *gin.Context) {
 
 // UploadFavicon 上传站点配置 favicon（权限由 RequireAdmin 中间件检查）
 func UploadFavicon(c *gin.Context) {
+	if !parseLimitedUploadForm(c, 1*1024*1024) {
+		return
+	}
 	// 获取当前用户
 	user, exists := c.Get("user")
 	if !exists {
@@ -1167,6 +1179,7 @@ func ApproveUser(c *gin.Context) {
 		return
 	}
 	if req.Status != 1 {
+		revokeUserRefreshSessions(userID, "user_approval_revoked")
 		routesync.RevokeOwner(userID, "user_approval_revoked")
 	}
 

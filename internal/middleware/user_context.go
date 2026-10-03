@@ -19,6 +19,12 @@ func loadUserByName(ctx context.Context, name string) (*gormdb.User, error) {
 	return gormdb.NewUserRepository().GetUserByNameContext(ctx, name)
 }
 
+func loadUserByID(ctx context.Context, id int) (*gormdb.User, error) {
+	// Authentication needs the current version even if another process changed
+	// the account. Profile caches are local and cannot guarantee revocation.
+	return gormdb.NewUserRepository().GetUserByIDContext(ctx, id)
+}
+
 // userFromContext 返回 AuthMiddleware 已放入 context 的用户，未设置返回 nil。
 func userFromContext(c *gin.Context) *gormdb.User {
 	if c == nil {

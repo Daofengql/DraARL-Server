@@ -49,12 +49,8 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// 将用户信息存入 context
-		c.Set("username", claims.Username)
-		c.Set("roles", claims.Roles)
-
-		// 【H8 性能修复】用户查询走两级缓存（2 分钟 TTL，变更主动失效）
-		user, err := loadUserByName(c.Request.Context(), claims.Username)
+		// Read authoritative account state so revocation applies across instances.
+		user, err := loadUserByID(c.Request.Context(), claims.UserID)
 		if err != nil {
 			log.Printf("获取用户信息失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -80,7 +76,16 @@ func AuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if claims.SessionVersion != user.SessionVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录态已失效，请重新登录"})
+			return
+		}
 
+		// Downstream handlers historically read username/roles from context. Use
+		// the freshly loaded account values so a renamed account cannot make a
+		// handler perform a second lookup against a recycled username.
+		c.Set("username", user.Name)
+		c.Set("roles", user.GetRoles())
 		c.Set("user", user)
 		c.Set("user_id", user.ID)
 		c.Set("user_callsign", user.CallSign)

@@ -160,6 +160,8 @@ func UpdateUser(c *gin.Context) {
 	}
 
 	oldName := user.Name
+	oldRoles := user.Roles
+	oldStatus := user.Status
 
 	// 只有主管理员（ID=1）可以修改 ID=1 的用户信息
 	if id == 1 && currentUserModel.ID != 1 {
@@ -250,6 +252,9 @@ func UpdateUser(c *gin.Context) {
 			"message": "更新用户失败",
 		})
 		return
+	}
+	if oldName != user.Name || oldRoles != user.Roles || oldStatus != user.Status {
+		revokeUserRefreshSessions(user.ID, "identity_changed")
 	}
 
 	// 使用户缓存失效
@@ -345,6 +350,7 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 	if req.Status == 0 {
+		revokeUserRefreshSessions(id, "user_disabled")
 		reconcileOwnerGhostSessions(id)
 		routesync.RevokeOwner(id, "user_disabled")
 	}
@@ -498,6 +504,7 @@ func DeleteUser(c *gin.Context) {
 		})
 		return
 	}
+	revokeUserRefreshSessions(targetUser.ID, "user_deleted")
 	reconcileOwnerGhostSessions(id)
 	routesync.RevokeOwner(id, "user_deleted")
 	for _, device := range cascadeResult.DeletedDevices {

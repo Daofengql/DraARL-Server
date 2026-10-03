@@ -4,7 +4,7 @@ import useMediaQuery from '@mui/material/useMediaQuery'
 import {
   Box, Paper, Typography, IconButton, Button, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, Grid,
-  Switch, FormControlLabel, Tooltip, Autocomplete, CircularProgress,
+  Switch, FormControlLabel, Tooltip, Autocomplete, CircularProgress, Tabs, Tab,
 } from '@mui/material'
 import Refresh from '@mui/icons-material/Refresh'
 import LinkIcon from '@mui/icons-material/Link'
@@ -32,7 +32,8 @@ interface LogbookFormDialogProps {
 
 export function LogbookFormDialog({ open, onClose, onSave, initialData, title, presets, onManagePresets, isAdminPage }: LogbookFormDialogProps) {
   const theme = useTheme()
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
+  const [partyTab, setPartyTab] = useState(0)
 
   const [formData, setFormData] = useState<Partial<LogbookEntry>>(() =>
     initialData || {
@@ -71,6 +72,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
   // 重置表单 - 打开时默认使用当前时间
   const resetForm = useCallback(() => {
     setHasSubmitted(false)
+    setPartyTab(0)
     if (initialData) {
       setFormData(initialData)
       setIsRepeater(initialData.tx_frequency !== initialData.rx_frequency)
@@ -157,6 +159,8 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
     setHasSubmitted(true)
     // 验证必填字段
     if (!formData.my_callsign || !formData.callsign || !formData.tx_frequency || !formData.mode) {
+      if (!formData.callsign) setPartyTab(0)
+      else if (!formData.my_callsign) setPartyTab(1)
       return
     }
 
@@ -165,17 +169,17 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
       time_utc: formData.time_utc || getCurrentUtcTime(),
       tx_frequency: formData.tx_frequency || 0,
       rx_frequency: formData.rx_frequency || formData.tx_frequency || 0,
-      cq_zone: formData.cq_zone || 24,
-      itu_zone: formData.itu_zone || 44,
+      cq_zone: formData.cq_zone ?? 24,
+      itu_zone: formData.itu_zone ?? 44,
       mode: formData.mode || 'FM',
       callsign: formData.callsign || '',
-      their_rst: formData.their_rst || '59',
-      their_power: formData.their_power,
+      their_rst: formData.their_rst ?? '',
+      their_power: formData.their_power ?? null,
       their_qth: formData.their_qth || '',
       their_radio: formData.their_radio || '',
       their_antenna: formData.their_antenna || '',
-      my_rst: formData.my_rst || '59',
-      my_power: formData.my_power,
+      my_rst: formData.my_rst ?? '',
+      my_power: formData.my_power ?? null,
       my_qth: formData.my_qth || '',
       my_radio: formData.my_radio || '',
       my_antenna: formData.my_antenna || '',
@@ -251,7 +255,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
         <Grid container spacing={{ xs: 1.5, sm: 2.5 }}>
           {/* 通联时间 */}
           <Grid size={12}>
-            <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
+            <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'background.default' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
                 <Typography variant="subtitle2" color="text.secondary">
                   通联时间
@@ -293,7 +297,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
                     onChange={(e) => {
                       const currentTime = getDisplayTime()
                       // 保留秒数部分（:SS），如果原时间没有秒则使用 :00
-                      const secondsPart = currentTime?.length >= 19 ? currentTime.slice(14, 19) : ':00'
+                      const secondsPart = currentTime?.length >= 19 ? currentTime.slice(16, 19) : ':00'
                       const newTime = (currentTime?.slice(0, 10) || new Date().toISOString().slice(0, 10)) + ' ' + e.target.value + secondsPart
                       handleTimeChange(newTime, timeMode)
                     }}
@@ -319,7 +323,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
 
           {/* 频率设置 */}
           <Grid size={12}>
-            <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
+            <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'background.default' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1.5, flexWrap: 'wrap' }}>
                 <Typography variant="subtitle2" color="text.secondary">
                   频率设置
@@ -452,7 +456,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
 
           {/* 无线电信息 */}
           <Grid size={12}>
-            <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'grey.50' }}>
+            <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: 'background.default' }}>
               <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
                 无线电信息
               </Typography>
@@ -499,16 +503,22 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
 
           {/* 双方信息 - 两列布局 */}
           <Grid size={12}>
+            {isMobile && (
+              <Tabs value={partyTab} onChange={(_, value: number) => setPartyTab(value)} variant="fullWidth" aria-label="通联双方信息" sx={{ mb: 1 }}>
+                <Tab label="对方信息" />
+                <Tab label="我方信息" />
+              </Tabs>
+            )}
             <Grid container spacing={{ xs: 1, sm: 2 }}>
               {/* 对方信息 */}
-              <Grid size={{ xs: 12, md: 6 }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: isMobile && partyTab !== 0 ? 'none' : 'block' }}>
                 <Paper
                   variant="outlined"
                   sx={{
                     p: { xs: 1.5, sm: 2 },
                     height: '100%',
                     borderColor: 'primary.light',
-                    bgcolor: 'primary.50',
+                    bgcolor: 'action.selected',
                   }}
                 >
                   <Typography variant="subtitle2" color="primary.main" sx={{ mb: 1.5, fontWeight: 600 }}>
@@ -554,8 +564,8 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
                         label="功率 (W)"
                         type="number"
                         size="small"
-                        value={formData.their_power || ''}
-                        onChange={(e) => setFormData(prev => ({ ...prev, their_power: parseInt(e.target.value) || undefined }))}
+                        value={formData.their_power ?? ''}
+                        onChange={(e) => setFormData(prev => ({ ...prev, their_power: e.target.value === '' ? null : Number(e.target.value) }))}
                       />
                     </Grid>
                     <Grid size={{ xs: 12, sm: 6 }}>
@@ -583,7 +593,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
               </Grid>
 
               {/* 我方信息 */}
-              <Grid size={{ xs: 12, md: 6 }}>
+              <Grid size={{ xs: 12, md: 6 }} sx={{ display: isMobile && partyTab !== 1 ? 'none' : 'block' }}>
                 <Paper
                   variant="outlined"
                   sx={{
@@ -624,7 +634,7 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
                           )}
                         />
                         <Tooltip title="管理预设">
-                          <IconButton size="small" onClick={onManagePresets}>
+                          <IconButton size="small" onClick={onManagePresets} aria-label="管理电台预设">
                             <Settings fontSize="small" />
                           </IconButton>
                         </Tooltip>
@@ -671,8 +681,8 @@ export function LogbookFormDialog({ open, onClose, onSave, initialData, title, p
                         label="功率 (W)"
                         type="number"
                         size="small"
-                        value={formData.my_power || ''}
-                        onChange={(e) => setFormData(prev => ({ ...prev, my_power: parseInt(e.target.value) || undefined }))}
+                        value={formData.my_power ?? ''}
+                        onChange={(e) => setFormData(prev => ({ ...prev, my_power: e.target.value === '' ? null : Number(e.target.value) }))}
                       />
                     </Grid>
                     <Grid size={{ xs: 12, sm: 6 }}>

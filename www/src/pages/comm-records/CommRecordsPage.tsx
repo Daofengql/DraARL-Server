@@ -475,7 +475,7 @@ export function CommRecordsPage() {
           )}
         </DialogTitle>
         <DialogContent>
-          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
+          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.default' }}>
             <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
               {selectedText?.text_content}
             </Typography>

@@ -28,10 +28,10 @@ export function PublicPageLayout({ children, maxWidth = 'sm', centered = true }:
           alignItems: centered ? 'center' : 'flex-start',
           justifyContent: centered ? 'center' : 'flex-start',
           mt: 8,
-          p: 3,
+          p: { xs: 1, sm: 3 },
         }}
       >
-        <Container maxWidth={maxWidth} sx={{ py: 4 }}>
+        <Container maxWidth={maxWidth} sx={{ py: { xs: 2, sm: 4 }, px: { xs: 1, sm: 3 } }}>
           {children}
         </Container>
       </Box>
@@ -44,7 +44,7 @@ export function PublicPageLayout({ children, maxWidth = 'sm', centered = true }:
             py: 2,
             textAlign: 'center',
             borderTop: '1px solid',
-            borderColor: 'grey.200',
+            borderColor: 'divider',
             bgcolor: 'background.paper',
           }}
         >

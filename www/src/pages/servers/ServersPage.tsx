@@ -487,7 +487,7 @@ export function ServersPage() {
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
         <Table sx={{ minWidth: 1510 }}>
-          <TableHead sx={{ bgcolor: 'grey.50' }}>
+          <TableHead sx={{ bgcolor: 'background.default' }}>
             <TableRow>
               <TableCell sx={{ width: 95 }}>健康</TableCell>
               <TableCell sx={{ minWidth: 180 }}>节点</TableCell>
@@ -504,7 +504,7 @@ export function ServersPage() {
                   position: { xs: 'static', md: 'sticky' },
                   right: 0,
                   zIndex: 2,
-                  bgcolor: 'grey.50',
+                  bgcolor: 'background.default',
                   minWidth: 120,
                   whiteSpace: 'nowrap',
                 }}
@@ -782,7 +782,7 @@ export function ServersPage() {
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>此凭据只显示一次，关闭前请妥善保存。</Alert>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{secret?.description}</Typography>
-          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50', overflow: 'auto' }}>
+          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.default', overflow: 'auto' }}>
             <Typography component="pre" sx={{ m: 0, fontFamily: 'monospace', fontSize: '0.82rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
               {secret?.value}
             </Typography>

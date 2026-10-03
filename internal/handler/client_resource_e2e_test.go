@@ -121,8 +121,8 @@ func TestClientResourceHTTPE2E(t *testing.T) {
 	if err := jwtutil.SetSecret(jwtSecret); err != nil {
 		t.Fatal(err)
 	}
-	adminToken, _ := jwtutil.GenerateToken(admin.Name, []string{"admin"})
-	ordinaryToken, _ := jwtutil.GenerateToken(ordinary.Name, []string{"user"})
+	adminToken, _ := jwtutil.GenerateTokenForUser(admin.ID, admin.Name, []string{"admin"}, admin.SessionVersion)
+	ordinaryToken, _ := jwtutil.GenerateTokenForUser(ordinary.ID, ordinary.Name, []string{"user"}, ordinary.SessionVersion)
 	oldConfig := config.Config
 	t.Cleanup(func() { config.Config = oldConfig })
 

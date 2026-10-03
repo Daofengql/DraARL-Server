@@ -159,7 +159,7 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
+      <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.default' }}>
         <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
           中继台预设填入
         </Typography>

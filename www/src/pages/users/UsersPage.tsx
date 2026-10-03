@@ -323,14 +323,67 @@ export function UsersPage() {
             size="small"
             sx={{ flexGrow: 1 }}
           />
-          <Button variant="outlined" startIcon={<Search />}>
+          <Button variant="outlined" startIcon={<Search />} sx={{ whiteSpace: 'nowrap', flexShrink: 0 }} aria-label="搜索用户" onClick={() => setPage(0)}>
             搜索
           </Button>
         </Box>
       </Paper>
 
       <TableContainer component={Paper} sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 600 }}>
+        <Box sx={{ display: { xs: 'block', lg: 'none' }, p: 1 }}>
+          {loading ? (
+            <Typography align="center" sx={{ py: 4 }}>加载中...</Typography>
+          ) : paginatedUsers.length === 0 ? (
+            <Typography align="center" sx={{ py: 4 }}>暂无数据</Typography>
+          ) : (
+            <List disablePadding>
+              {paginatedUsers.map((user) => (
+                <Card key={user.id} variant="outlined" sx={{ mb: 1 }}>
+                  <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                      <Avatar src={user.avatar_thumb || user.avatar} sx={{ width: 32, height: 32 }}>{user.username?.charAt(0).toUpperCase()}</Avatar>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Button size="small" aria-label={`查看 ${user.username} 详情`} onClick={(e) => handleOpenUserDetail(e, user)} sx={{ p: 0, justifyContent: 'flex-start', maxWidth: '100%', textTransform: 'none' }}>
+                          <Typography fontWeight={600} noWrap>{user.username}</Typography>
+                        </Button>
+                        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                          ID {user.id} · {user.callsign || '未设置呼号'}
+                        </Typography>
+                      </Box>
+                      <Chip label={user.status === 1 ? '正常' : '已禁用'} size="small" color={user.status === 1 ? 'success' : 'error'} />
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                      <Chip label={user.role === 'admin' ? '管理员' : '普通用户'} size="small" variant="outlined" />
+                      {user.id === currentUserId && <Chip label="当前用户" size="small" variant="outlined" />}
+                      <Typography variant="caption" color="text.secondary">{user.created_at ? new Date(user.created_at).toLocaleDateString('zh-CN') : '-'}</Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                        设备密码：{devicePasswords[user.id] ?? '********'}
+                      </Typography>
+                      <Tooltip title={devicePasswords[user.id] !== undefined ? '隐藏设备密码' : '查看设备密码'}>
+                        <IconButton size="small" onClick={() => handleToggleDevicePassword(user)} disabled={Boolean(passwordLoading[user.id])} aria-label={devicePasswords[user.id] !== undefined ? '隐藏设备密码' : '查看设备密码'}>
+                          {devicePasswords[user.id] !== undefined ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                      {user.id !== currentUserId && user.id !== 1 && user.status === 1 && (
+                        <Button size="small" aria-label={`以 ${user.username} 身份登录`} startIcon={<SwitchAccount />} onClick={() => handleSwitchLogin(user)} disabled={switchingUserId !== null}>以此用户登录</Button>
+                      )}
+                      <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
+                      <Tooltip title="编辑"><IconButton size="small" onClick={() => handleOpenDialog(user)} disabled={switchingUserId !== null} aria-label={`编辑 ${user.username}`}><Edit fontSize="small" /></IconButton></Tooltip>
+                      <Tooltip title={user.status === 1 ? '禁用用户' : '启用用户'}><IconButton size="small" onClick={() => handleToggleStatus(user)} color={user.status === 1 ? 'warning' : 'success'} disabled={user.id === 1 || switchingUserId !== null} aria-label={user.status === 1 ? `禁用 ${user.username}` : `启用 ${user.username}`} >{user.status === 1 ? <Block fontSize="small" /> : <CheckCircle fontSize="small" />}</IconButton></Tooltip>
+                      <Tooltip title="删除"><IconButton size="small" color="error" onClick={() => handleDelete(user.id)} disabled={user.id === 1 || switchingUserId !== null} aria-label={`删除 ${user.username}`}><Delete fontSize="small" /></IconButton></Tooltip>
+                      </Box>
+                    </Box>
+                  </CardContent>
+                </Card>
+              ))}
+            </List>
+          )}
+        </Box>
+        <Table sx={{ display: { xs: 'none', lg: 'table' }, minWidth: 600 }}>
           <TableHead>
             <TableRow>
               <TableCell>ID</TableCell>
@@ -443,6 +496,7 @@ export function UsersPage() {
                               color="primary"
                               onClick={() => handleSwitchLogin(user)}
                               disabled={switchingUserId !== null}
+                              aria-label={`以 ${user.username} 身份登录`}
                             >
                               <SwitchAccount fontSize="small" />
                             </IconButton>
@@ -450,7 +504,7 @@ export function UsersPage() {
                         </Tooltip>
                       )}
                       <Tooltip title="编辑">
-                        <IconButton size="small" onClick={() => handleOpenDialog(user)} disabled={switchingUserId !== null}>
+                        <IconButton size="small" onClick={() => handleOpenDialog(user)} disabled={switchingUserId !== null} aria-label={`编辑 ${user.username}`}>
                           <Edit fontSize="small" />
                         </IconButton>
                       </Tooltip>
@@ -458,6 +512,7 @@ export function UsersPage() {
                         <IconButton
                           size="small"
                           onClick={() => handleToggleStatus(user)}
+                          aria-label={user.status === 1 ? `禁用 ${user.username}` : `启用 ${user.username}`}
                           color={user.status === 1 ? 'warning' : 'success'}
                           disabled={user.id === 1 || switchingUserId !== null}
                         >
@@ -469,6 +524,7 @@ export function UsersPage() {
                           size="small"
                           color="error"
                           onClick={() => handleDelete(user.id)}
+                          aria-label={`删除 ${user.username}`}
                           disabled={user.id === 1 || switchingUserId !== null}
                         >
                           <Delete fontSize="small" />

@@ -19,6 +19,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Card,
+  CardContent,
 } from '@mui/material'
 import Delete from '@mui/icons-material/Delete'
 import Lock from '@mui/icons-material/Lock'
@@ -208,7 +210,7 @@ export function DevicesPage() {
       <PageHeader
         title="设备管理"
         actions={
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ width: { xs: '100%', sm: 'auto' } }}>
             <AutoRefresh
               value={autoRefresh}
               onChange={setAutoRefresh}
@@ -220,7 +222,9 @@ export function DevicesPage() {
               size="small"
               startIcon={<AddLink />}
               onClick={() => setDynamicBindDialogOpen(true)}
+              aria-label="动态码绑定"
               color="secondary"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
             >
               动态码绑定
             </Button>
@@ -229,7 +233,9 @@ export function DevicesPage() {
               size="small"
               startIcon={<Key />}
               onClick={() => setDevicePasswordDialogOpen(true)}
+              aria-label="设备密码"
               color="primary"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
             >
               设备密码
             </Button>
@@ -238,7 +244,9 @@ export function DevicesPage() {
               size="small"
               startIcon={<Tune />}
               onClick={() => setPreConfigToolOpen((prev) => !prev)}
+              aria-label="预配置工具"
               color="info"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
             >
               预配置工具
             </Button>
@@ -259,7 +267,7 @@ export function DevicesPage() {
 
       <Paper sx={{ mb: 2, p: 2 }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
-          <FormControl size="small" sx={{ minWidth: 280 }}>
+          <FormControl size="small" sx={{ minWidth: { xs: 0, md: 280 }, width: { xs: '100%', md: 'auto' } }}>
             <InputLabel id="device-default-group-label">新设备默认群组</InputLabel>
             <Select
               labelId="device-default-group-label"
@@ -294,8 +302,65 @@ export function DevicesPage() {
       </Paper>
 
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
-        <Table sx={{ minWidth: 920, tableLayout: 'fixed' }}>
-          <TableHead sx={{ bgcolor: 'grey.50' }}>
+        <Box sx={{ display: { xs: 'block', lg: 'none' }, p: 1 }}>
+          {loading ? (
+            <Typography align="center" sx={{ py: 4 }}>加载中...</Typography>
+          ) : paginatedDevices.length === 0 ? (
+            <Typography align="center" sx={{ py: 4 }}>暂无设备数据</Typography>
+          ) : (
+            <Stack spacing={1}>
+              {paginatedDevices.map((device) => {
+                const group = getGroupInfo(device.group_id)
+                return (
+                  <Card key={device.id} variant="outlined">
+                    <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                      <Stack spacing={1}>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography fontWeight={600} noWrap title={device.name}>{device.name || `设备 ${device.id}`}</Typography>
+                            <Typography variant="body2" color="text.secondary" noWrap>
+                              {device.callsign}-{device.ssid}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {getDevModelName(device.model ?? device.dev_model ?? 0)}
+                            </Typography>
+                          </Box>
+                          <OnlineIndicator online={device.online || device.is_online || false} />
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary">
+                          群组：{group?.name || (device.group_id === 0 ? '未分组' : `群组 ${device.group_id} 不可用`)}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                          最新 IP：{device.last_online_ip || '-'}{device.last_online_ip_location ? ` · ${device.last_online_ip_location}` : ''}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                          {device.is_online ? '当前入口' : '最近入口'}：{device.entry_node_name || '-'}
+                        </Typography>
+                        <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                          <Button size="small" variant="outlined" onClick={() => handleOpenSwitchDialog(device)}>
+                            切换群组{group?.type === GROUP_TYPE_PRIVATE ? ' · 私有' : ''}
+                          </Button>
+                          <SendRecvControl
+                            disableSend={device.disable_send ?? false}
+                            disableRecv={device.disable_recv ?? false}
+                            onToggleSend={() => handleToggleSend(device)}
+                            onToggleRecv={() => handleToggleRecv(device)}
+                          />
+                          <Box sx={{ display: 'flex', gap: 0.5, ml: 'auto' }}>
+                            <Tooltip title="设置"><IconButton size="small" aria-label={`设置 ${device.name || device.id}`} onClick={() => { setParamDevice(device); setParamDialogOpen(true) }}><Settings fontSize="small" /></IconButton></Tooltip>
+                            <Tooltip title="删除设备"><IconButton size="small" color="error" aria-label={`删除 ${device.name || device.id}`} onClick={() => handleDelete(device.id)}><Delete fontSize="small" /></IconButton></Tooltip>
+                          </Box>
+                        </Stack>
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </Stack>
+          )}
+        </Box>
+        <Table sx={{ display: { xs: 'none', lg: 'table' }, minWidth: 920, tableLayout: 'fixed' }}>
+          <TableHead sx={{ bgcolor: 'background.default' }}>
             <TableRow>
               <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
               <TableCell align="center">名称</TableCell>
@@ -382,6 +447,7 @@ export function DevicesPage() {
                           <IconButton
                             size="small"
                             color="secondary"
+                            aria-label={`设置 ${device.name || device.id}`}
                             onClick={() => {
                               setParamDevice(device)
                               setParamDialogOpen(true)
@@ -391,7 +457,7 @@ export function DevicesPage() {
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="删除设备">
-                          <IconButton size="small" color="error" onClick={() => handleDelete(device.id)}>
+                          <IconButton size="small" color="error" onClick={() => handleDelete(device.id)} aria-label={`删除 ${device.name || device.id}`}>
                             <Delete fontSize="small" />
                           </IconButton>
                         </Tooltip>

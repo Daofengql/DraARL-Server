@@ -79,7 +79,7 @@ func TestGroupPasswordHTTPFlowMySQL(t *testing.T) {
 
 	issueToken := func(user *gormdb.User) string {
 		t.Helper()
-		token, err := appjwt.GenerateToken(user.Name, []string{"user"})
+		token, err := appjwt.GenerateTokenForUser(user.ID, user.Name, []string{"user"}, user.SessionVersion)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -14,6 +14,8 @@ import {
   Tabs,
   TextField,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import { deviceService, type DeviceConfig } from '../../services/device'
 import {
@@ -68,6 +70,8 @@ export function ParamConfigDialog({
   onClose,
   onDeviceUpdated,
 }: ParamConfigDialogProps) {
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const defaultRadioConfig = useRef(getDefaultRadioConfig())
   const loadRequestRef = useRef(0)
   const [tabValue, setTabValue] = useState(0)
@@ -256,11 +260,12 @@ export function ParamConfigDialog({
         onClose={(_, reason) => (reason === 'backdropClick' ? null : onClose())}
         maxWidth="md"
         fullWidth
+        fullScreen={isMobile}
       >
       <DialogTitle sx={{ pb: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>{tabs[tabValue]?.label || '参数配置'} - {deviceName}</span>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
             {loading && <CircularProgress size={20} />}
             {isOnline ? (
               <Typography variant="caption" color="success.main">● 在线</Typography>
@@ -272,7 +277,7 @@ export function ParamConfigDialog({
       </DialogTitle>
 
       <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 3 }}>
-        <Tabs value={tabValue} onChange={(_, value) => setTabValue(value)}>
+        <Tabs value={tabValue} onChange={(_, value) => setTabValue(value)} variant="fullWidth" aria-label="设备配置分类" sx={{ '& .MuiTab-root': { minWidth: 0, px: 1 } }}>
           {tabs.map((tab) => (
             <Tab key={tab.key} label={tab.label} />
           ))}

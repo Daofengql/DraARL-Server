@@ -9,9 +9,10 @@ import (
 const expiredTokenRetention = 24 * time.Hour
 
 type memoryRefreshTokenStore struct {
-	mu         sync.RWMutex
-	tokens     map[string]*RefreshTokenRecord
-	userTokens map[int]map[string]struct{}
+	mu          sync.RWMutex
+	tokens      map[string]*RefreshTokenRecord
+	userTokens  map[int]map[string]struct{}
+	nextCleanup time.Time
 }
 
 func newMemoryRefreshTokenStore() *memoryRefreshTokenStore {
@@ -26,6 +27,7 @@ func (m *memoryRefreshTokenStore) Close() error {
 	defer m.mu.Unlock()
 	m.tokens = make(map[string]*RefreshTokenRecord)
 	m.userTokens = make(map[int]map[string]struct{})
+	m.nextCleanup = time.Time{}
 	return nil
 }
 
@@ -78,7 +80,7 @@ func (m *memoryRefreshTokenStore) Rotate(oldTokenHash string, newToken *RefreshT
 		return ErrRefreshTokenNotActive
 	}
 
-	if oldRecord.UserID != newToken.UserID {
+	if oldRecord.UserID != newToken.UserID || oldRecord.SessionVersion != newToken.SessionVersion || !now.Before(oldRecord.ExpiresAt) {
 		return ErrRefreshTokenNotActive
 	}
 
@@ -164,6 +166,12 @@ func (m *memoryRefreshTokenStore) addUserTokenLocked(userID int, tokenHash strin
 }
 
 func (m *memoryRefreshTokenStore) cleanupExpiredLocked(now time.Time) {
+	// Retention cleanup is maintenance, not an authorization check. Avoid an
+	// O(total sessions) scan on every login/refresh while holding the store lock.
+	if now.Before(m.nextCleanup) {
+		return
+	}
+	m.nextCleanup = now.Add(time.Minute)
 	for hash, record := range m.tokens {
 		if now.After(record.ExpiresAt.Add(expiredTokenRetention)) {
 			delete(m.tokens, hash)

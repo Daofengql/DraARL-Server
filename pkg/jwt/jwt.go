@@ -47,9 +47,13 @@ func isSecretInitialized() bool {
 
 // Claims JWT声明
 type Claims struct {
-	Username string   `json:"username"`
-	Roles    []string `json:"roles"`
-	TokenUse string   `json:"token_use,omitempty"`
+	Username string `json:"username"`
+	// UserID is the immutable application user identifier. New web sessions
+	// must use this value for authentication; Username is a display claim only.
+	UserID         int      `json:"user_id,omitempty"`
+	SessionVersion uint64   `json:"session_version"`
+	Roles          []string `json:"roles"`
+	TokenUse       string   `json:"token_use,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -64,20 +68,34 @@ func SetSecret(secret string) error {
 	return nil
 }
 
-// GenerateToken 生成JWT令牌
-func GenerateToken(username string, roles []string) (string, error) {
+// GenerateTokenForUser signs an access token bound to the immutable user ID.
+// The subject is also populated for consumers that follow the standard JWT
+// convention, while UserID keeps the claim explicit for existing clients.
+func GenerateTokenForUser(userID int, username string, roles []string, sessionVersion uint64) (string, error) {
+	if userID <= 0 || sessionVersion == 0 {
+		return "", errors.New("user ID and session version must be positive")
+	}
+	return generateToken(userID, username, roles, sessionVersion)
+}
+
+func generateToken(userID int, username string, roles []string, sessionVersion uint64) (string, error) {
 	now := time.Now()
 	expireTime := now.Add(AccessTokenTTL)
 
 	claims := Claims{
-		Username: username,
-		Roles:    roles,
-		TokenUse: TokenUseAccess,
+		Username:       username,
+		UserID:         userID,
+		SessionVersion: sessionVersion,
+		Roles:          roles,
+		TokenUse:       TokenUseAccess,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expireTime),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "draarl",
 		},
+	}
+	if userID > 0 {
+		claims.Subject = fmt.Sprintf("%d", userID)
 	}
 
 	if !isSecretInitialized() {
@@ -89,9 +107,9 @@ func GenerateToken(username string, roles []string) (string, error) {
 	return token, err
 }
 
-func GenerateEdgeDiscoveryToken(username string, ttl time.Duration) (string, time.Time, error) {
-	if username == "" {
-		return "", time.Time{}, errors.New("discovery token username is required")
+func GenerateEdgeDiscoveryToken(userID int, username string, sessionVersion uint64, ttl time.Duration) (string, time.Time, error) {
+	if username == "" || userID <= 0 || sessionVersion == 0 {
+		return "", time.Time{}, errors.New("discovery token user ID, username and session version are required")
 	}
 	if ttl <= 0 || ttl > EdgeDiscoveryTokenTTL {
 		ttl = EdgeDiscoveryTokenTTL
@@ -99,14 +117,16 @@ func GenerateEdgeDiscoveryToken(username string, ttl time.Duration) (string, tim
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 	claims := Claims{
-		Username: username,
-		TokenUse: TokenUseEdgeDiscovery,
+		Username:       username,
+		UserID:         userID,
+		SessionVersion: sessionVersion,
+		TokenUse:       TokenUseEdgeDiscovery,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Audience:  jwt.ClaimStrings{EdgeDiscoveryAudience},
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "draarl",
-			Subject:   username,
+			Subject:   fmt.Sprintf("%d", userID),
 		},
 	}
 	if !isSecretInitialized() {
@@ -144,7 +164,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 
 func ValidateAccessToken(tokenString string) (*Claims, error) {
 	claims, err := ParseToken(tokenString)
-	if err != nil || (claims.TokenUse != "" && claims.TokenUse != TokenUseAccess) {
+	if err != nil || claims.TokenUse != TokenUseAccess || !hasUserIdentity(claims) {
 		return nil, errors.New("令牌错误，登录超时，请重新登录")
 	}
 	return claims, nil
@@ -152,7 +172,7 @@ func ValidateAccessToken(tokenString string) (*Claims, error) {
 
 func ValidateEdgeDiscoveryToken(tokenString string) (*Claims, error) {
 	claims, err := ParseToken(tokenString)
-	if err != nil || claims.TokenUse != TokenUseEdgeDiscovery || claims.Subject != claims.Username {
+	if err != nil || claims.TokenUse != TokenUseEdgeDiscovery || !hasUserIdentity(claims) {
 		return nil, errors.New("invalid edge discovery token")
 	}
 	foundAudience := false
@@ -166,6 +186,10 @@ func ValidateEdgeDiscoveryToken(tokenString string) (*Claims, error) {
 		return nil, errors.New("invalid edge discovery audience")
 	}
 	return claims, nil
+}
+
+func hasUserIdentity(claims *Claims) bool {
+	return claims != nil && claims.UserID > 0 && claims.SessionVersion > 0 && claims.Subject == fmt.Sprintf("%d", claims.UserID)
 }
 
 // GetUsername 从令牌获取用户名

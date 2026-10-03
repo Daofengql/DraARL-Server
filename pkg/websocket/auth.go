@@ -248,7 +248,7 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 
 	// 获取用户信息
 	repo := gormdb.NewUserRepository()
-	user, err := repo.GetUserByName(claims.Username)
+	user, err := repo.GetUserByID(claims.UserID)
 	if err != nil || user == nil {
 		result.Error = "user_not_found"
 		log.Printf("[WS-AUTH] User not found: %s", claims.Username)
@@ -259,6 +259,10 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	if user.Status != 1 {
 		result.Error = "user_disabled"
 		log.Printf("[WS-AUTH] User disabled: %s", claims.Username)
+		return result
+	}
+	if claims.SessionVersion != user.SessionVersion {
+		result.Error = "invalid_token"
 		return result
 	}
 

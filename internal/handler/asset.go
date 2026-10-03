@@ -260,6 +260,9 @@ func (h *AssetHandler) CreateFolder(c *gin.Context) {
 // UploadFile 上传文件
 // POST /api/admin/assets/upload
 func (h *AssetHandler) UploadFile(c *gin.Context) {
+	if !parseLimitedUploadForm(c, 100*1024*1024) {
+		return
+	}
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
@@ -661,6 +664,9 @@ func (h *AssetHandler) MoveAsset(c *gin.Context) {
 // ReplaceFile 覆盖文件
 // POST /api/admin/assets/:id/replace
 func (h *AssetHandler) ReplaceFile(c *gin.Context) {
+	if !parseLimitedUploadForm(c, 100*1024*1024) {
+		return
+	}
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {

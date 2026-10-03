@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,12 +27,57 @@ import (
 	"draarl/internal/udphub"
 	jwtutil "draarl/pkg/jwt"
 	"draarl/pkg/storage"
+	ws "draarl/pkg/websocket"
 
 	"github.com/gin-gonic/gin"
 	drivermysql "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/websocket"
 )
 
 const broadcastAPIE2EEnabledEnv = "DRAARL_BROADCAST_API_E2E"
+
+func newBroadcastE2EReceiver(t *testing.T, user *gormdb.User, groups []int) *atomic.Uint64 {
+	t.Helper()
+	serverConnections := make(chan *websocket.Conn, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err == nil {
+			serverConnections <- conn
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := ws.GlobalManager.RegisterConnection(<-serverConnections)
+	// Initialize before exposing the connection through the manager indexes.
+	device.SessionID = fmt.Sprintf("broadcast-e2e-%d", user.ID)
+	device.GroupID, device.RxGroupIDs = groups[0], append([]int(nil), groups...)
+	if err := ws.GlobalManager.RegisterGhostDevice(device, user.ID, user.Name, user.CallSign, "", 105); err != nil {
+		client.Close()
+		ws.GlobalManager.UnregisterDevice(device)
+		t.Fatal(err)
+	}
+	device.StartWriter()
+	received := &atomic.Uint64{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, _, err := client.ReadMessage(); err != nil {
+				return
+			}
+			received.Add(1)
+		}
+	}()
+	t.Cleanup(func() {
+		ws.GlobalManager.UnregisterDevice(device)
+		client.Close()
+		<-done
+	})
+	return received
+}
 
 type broadcastHTTPResult struct {
 	Status int
@@ -266,6 +312,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	udphub.RefreshGroupCache()
 	udphub.RefreshGroupLinkCache()
 	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	// Successful playback requires an actual receiver. Keep a loopback WS
+	// connection subscribed throughout the playback and deletion scenarios.
+	received := newBroadcastE2EReceiver(t, other, []int{groupA.ID, groupB.ID, groupDelete.ID})
 	if err := broadcastruntime.Init(cfg); err != nil {
 		t.Fatalf("start broadcast scheduler: %v", err)
 	}
@@ -341,6 +390,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	succeededRun = waitBroadcastRunTerminal(t, repo, groupA.ID, succeededRun.ID)
 	if succeededRun.Status != model.RunStatusSucceeded || succeededRun.SentPackets != audioA.PacketCount || succeededRun.PlayedDurationMS != audioA.DurationMS {
 		t.Fatalf("successful manual run=%#v audio=%#v", succeededRun, audioA)
+	}
+	if received.Load() == 0 {
+		t.Fatal("successful broadcast delivered no frames to the real WS receiver")
 	}
 	var automaticRecords []gormdb.CommRecord
 	if err := db.Where("group_id = ? AND is_auto_broadcast = ?", groupA.ID, true).Order("id ASC").Find(&automaticRecords).Error; err != nil {
@@ -562,6 +614,7 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	userDeleteAudio := uploadWAV(owner, groupA.ID, "用户删除释放", makeBroadcastTestWAV(4*time.Second))
+	userOrphanAudio := uploadWAV(owner, groupA.ID, "未播放的用户音频", makeBroadcastTestWAV(650*time.Millisecond))
 	userDeleteSchedule := createSchedule(userDeleteAudio.ID, "播放中删除用户", "23:50:00")
 	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
 	userDeleteRun := trigger(userDeleteSchedule.ID)
@@ -577,8 +630,16 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	if _, _, err := storage.Stat(context.Background(), userDeleteAudio.PlaybackObjectKey); err == nil {
 		t.Fatal("user-owned group playback broadcast object still exists")
 	}
-	if _, _, err := storage.Stat(context.Background(), userDeleteAudio.RecordObjectKey); err == nil {
-		t.Fatal("user-owned group unreferenced shared recording still exists")
+	var survivingReferences int64
+	if err := db.Model(&gormdb.CommRecord{}).Where("audio_path = ?", userDeleteAudio.RecordObjectKey).Count(&survivingReferences).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, _, recordErr := storage.Stat(context.Background(), userDeleteAudio.RecordObjectKey)
+	if (survivingReferences > 0) != (recordErr == nil) {
+		t.Fatalf("shared recording retention does not match history references: references=%d error=%v", survivingReferences, recordErr)
+	}
+	if _, _, err := storage.Stat(context.Background(), userOrphanAudio.RecordObjectKey); err == nil {
+		t.Fatal("unplayed user-owned shared recording was orphaned")
 	}
 	ownerAfterDelete, err := gormdb.NewUserRepository().GetUserByID(owner.ID)
 	if err != nil {

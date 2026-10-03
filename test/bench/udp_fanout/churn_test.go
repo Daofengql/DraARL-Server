@@ -50,7 +50,7 @@ func TestChurnAPIContracts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	api, err := newChurnAPI(server.URL+"/api/", strings.Repeat("s", 32), usernameForUser(0))
+	api, err := newChurnAPI(server.URL+"/api/", strings.Repeat("s", 32), usernameForUser(0), 42, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -190,6 +190,12 @@ func main() {
 	}
 
 	// 初始化管理员用户（首次启动时）
+	if !gormdb.Get().Migrator().HasColumn(&gormdb.User{}, "session_version") {
+		stdlog.Fatal("数据库缺少认证会话版本列，请使用 --auto-migrate 完成升级")
+	}
+	if err := gormdb.ValidateDefaultPublicGroup(); err != nil {
+		stdlog.Fatalf("公共频道初始化检查失败（请使用 --auto-migrate）: %v", err)
+	}
 	adminUser, adminPass, err := db.InitAdminUser()
 	if err != nil {
 		stdlog.Printf("初始化管理员用户失败: %v", err)

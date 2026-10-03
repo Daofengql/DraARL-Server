@@ -17,6 +17,7 @@ var (
 // RefreshTokenRecord 刷新令牌记录。
 type RefreshTokenRecord struct {
 	UserID         int
+	SessionVersion uint64
 	TokenHash      string
 	ExpiresAt      time.Time
 	RevokedAt      *time.Time

@@ -36,9 +36,7 @@ func (w *replayWindow) accept(messageID uint64) bool {
 		if delta >= replayWindowBits {
 			clear(w.bits[:])
 		} else {
-			for step := uint64(1); step <= delta; step++ {
-				w.clear(w.maxID + step)
-			}
+			w.clearRange(w.maxID+1, delta)
 		}
 		w.maxID = messageID
 	} else if w.maxID-messageID >= replayWindowBits {
@@ -66,7 +64,16 @@ func (w *replayWindow) set(messageID uint64) {
 	w.bits[word] |= mask
 }
 
-func (w *replayWindow) clear(messageID uint64) {
-	word, mask := w.bit(messageID)
-	w.bits[word] &^= mask
+// Clear only the newly entered positions, up to one word per iteration.
+// The circular bitmap may wrap at the end of the window.
+func (w *replayWindow) clearRange(first, count uint64) {
+	index := first & (replayWindowBits - 1)
+	for count > 0 {
+		offset := index & 63
+		length := min(count, 64-offset)
+		mask := (^uint64(0) >> (64 - length)) << offset
+		w.bits[index>>6] &^= mask
+		count -= length
+		index = (index + length) & (replayWindowBits - 1)
+	}
 }

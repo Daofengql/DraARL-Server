@@ -17,13 +17,13 @@ export interface LogbookEntry {
   // 对方信息
   callsign: string
   their_rst: string
-  their_power?: number // W
+  their_power?: number | null // W; null explicitly clears a previous value
   their_qth?: string
   their_radio?: string
   their_antenna?: string
   // 我方信息
   my_rst: string
-  my_power?: number // W
+  my_power?: number | null // W
   my_qth?: string
   my_radio?: string
   my_antenna?: string

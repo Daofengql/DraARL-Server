@@ -61,6 +61,17 @@ type interCenterLinkRequest struct {
 	LocalReceiveAudio *bool `json:"local_receive_audio"`
 }
 
+// Inter-center group IDs are part of the admitted routing contract. They are
+// intentionally absent from this update request: each center chooses its own
+// local group when creating/importing the link, and changing either side later
+// would leave the two persisted mappings inconsistent.
+type interCenterLinkUpdateRequest struct {
+	Enabled           *bool `json:"enabled"`
+	Accepted          *bool `json:"accepted"`
+	LocalSendAudio    *bool `json:"local_send_audio"`
+	LocalReceiveAudio *bool `json:"local_receive_audio"`
+}
+
 func parsePositiveID(value string) (int, error) {
 	id, err := strconv.Atoi(value)
 	if err != nil || id <= 0 {
@@ -74,6 +85,42 @@ func centerID() string {
 	}
 	return ""
 }
+
+// interCenterLinkSummary is the administrator-facing representation. The
+// remote group ID is intentionally omitted: it is learned during the HTTP
+// admission handshake and is used only by the local routing runtime. Showing
+// it here makes it look as if this center can configure the other center's
+// group, which violates the per-center ownership boundary.
+type interCenterLinkSummary struct {
+	ID                int    `json:"id"`
+	LinkID            string `json:"link_id"`
+	LocalCenterID     string `json:"local_center_id"`
+	RemoteCenterID    string `json:"remote_center_id"`
+	RemoteAddress     string `json:"remote_address,omitempty"`
+	LocalGroupID      int    `json:"local_group_id"`
+	InitiatorCenterID string `json:"initiator_center_id"`
+	Direction         string `json:"direction"`
+	ForwardAudio      bool   `json:"forward_audio"`
+	Enabled           bool   `json:"enabled"`
+	Accepted          bool   `json:"accepted"`
+	CredentialEpoch   uint32 `json:"credential_epoch"`
+	VirtualDeviceName string `json:"virtual_device_name"`
+	LocalSendAudio    bool   `json:"local_send_audio"`
+	LocalReceiveAudio bool   `json:"local_receive_audio"`
+}
+
+func summarizeInterCenterLink(l *gormdb.InterCenterLink) interCenterLinkSummary {
+	return interCenterLinkSummary{
+		ID: l.ID, LinkID: l.LinkID, LocalCenterID: l.LocalCenterID,
+		RemoteCenterID: l.RemoteCenterID, RemoteAddress: l.RemoteAddress,
+		LocalGroupID: l.LocalGroupID, InitiatorCenterID: l.InitiatorCenterID,
+		Direction: l.Direction, ForwardAudio: l.ForwardAudio, Enabled: l.Enabled,
+		Accepted: l.Accepted, CredentialEpoch: l.CredentialEpoch,
+		VirtualDeviceName: l.VirtualDeviceName, LocalSendAudio: l.LocalSendAudio,
+		LocalReceiveAudio: l.LocalReceiveAudio,
+	}
+}
+
 func peerLinkView(l *gormdb.InterCenterLink) gin.H {
 	var status interconnect.CenterPeerStatus
 	if r := interconnect.ActiveCenterRuntime(); r != nil {
@@ -83,7 +130,7 @@ func peerLinkView(l *gormdb.InterCenterLink) gin.H {
 			status = r.Peers.Status(l.LinkID)
 		}
 	}
-	return gin.H{"link": l, "runtime": status}
+	return gin.H{"link": summarizeInterCenterLink(l), "runtime": status}
 }
 func ListInterCenterLinks(c *gin.Context) {
 	links, err := gormdb.NewInterCenterLinkRepository().List()
@@ -102,7 +149,9 @@ func peerError(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{"code": status, "message": message})
 }
 
-// PUT replaces all editable fields. Identity and link ID cannot change.
+// PUT changes only this center's local state and media permissions. Identity,
+// group mapping, invitation binding, and transport credentials are immutable;
+// recreate the link when either side's group must change.
 func preparePeer(req interCenterLinkRequest, old *gormdb.InterCenterLink) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
 	l := gormdb.InterCenterLink{LinkID: strings.TrimSpace(req.LinkID), LocalCenterID: centerID(), RemoteCenterID: strings.TrimSpace(req.RemoteCenterID), RemoteAddress: strings.TrimSpace(req.RemoteAddress), TLSServerName: strings.TrimSpace(req.TLSServerName), TLSPinSHA256: strings.ToLower(strings.TrimSpace(req.TLSPinSHA256)), LocalGroupID: req.LocalGroupID, RemoteGroupID: req.RemoteGroupID, InitiatorCenterID: strings.TrimSpace(req.InitiatorCenterID), Direction: req.Direction, Enabled: req.Enabled, Accepted: req.Accepted, ForwardAudio: req.ForwardAudio, ForwardText: req.ForwardText, ForwardBroadcast: req.ForwardBroadcast, VirtualDeviceName: strings.TrimSpace(req.VirtualDeviceName), CredentialEpoch: req.CredentialEpoch}
 	fail := func(err error) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
@@ -249,19 +298,40 @@ func UpdateInterCenterLink(c *gin.Context) {
 		}
 		return
 	}
-	var req interCenterLinkRequest
+	var req interCenterLinkUpdateRequest
 	if c.ShouldBindJSON(&req) != nil {
 		peerError(c, 400, "互联参数错误")
 		return
 	}
-	l, pc, credential, err := preparePeer(req, old)
-	if err != nil {
+	if req.Enabled == nil && req.Accepted == nil && req.LocalSendAudio == nil && req.LocalReceiveAudio == nil {
+		peerError(c, 400, "没有可更新的本地互联设置")
+		return
+	}
+	l := *old
+	if req.Enabled != nil {
+		l.Enabled = *req.Enabled
+	}
+	if req.Accepted != nil {
+		l.Accepted = *req.Accepted
+	}
+	if req.LocalSendAudio != nil {
+		l.LocalSendAudio = *req.LocalSendAudio
+	}
+	if req.LocalReceiveAudio != nil {
+		l.LocalReceiveAudio = *req.LocalReceiveAudio
+	}
+	if err := centerbridge.Policy(l).Validate(); err != nil {
 		peerError(c, 400, err.Error())
 		return
 	}
-	fields := map[string]interface{}{"remote_address": l.RemoteAddress, "tls_server_name": l.TLSServerName, "tls_pin_sha256": l.TLSPinSHA256, "local_group_id": l.LocalGroupID, "remote_group_id": l.RemoteGroupID, "direction": l.Direction, "enabled": l.Enabled, "accepted": l.Accepted, "forward_audio": l.ForwardAudio, "forward_text": false, "forward_broadcast": false, "virtual_device_name": l.VirtualDeviceName, "credential_epoch": l.CredentialEpoch, "credential_hash": l.CredentialHash, "credential_ciphertext": l.CredentialCiphertext, "local_send_audio": l.LocalSendAudio, "local_receive_audio": l.LocalReceiveAudio}
+	fields := map[string]interface{}{"enabled": l.Enabled, "accepted": l.Accepted, "local_send_audio": l.LocalSendAudio, "local_receive_audio": l.LocalReceiveAudio}
 	if err := repo.Update(id, fields); err != nil {
 		peerError(c, 500, "更新互联对象失败")
+		return
+	}
+	pc, err := centerbridge.Config(l)
+	if err != nil {
+		peerError(c, 500, "读取互联凭据失败")
 		return
 	}
 	applyPeer(pc)
@@ -282,9 +352,6 @@ func UpdateInterCenterLink(c *gin.Context) {
 		}
 	}
 	data := peerLinkView(saved)
-	if credential != "" {
-		data["credential"] = credential
-	}
 	c.JSON(200, gin.H{"code": 200, "message": "互联对象已更新", "data": data})
 }
 func DeleteInterCenterLink(c *gin.Context) {

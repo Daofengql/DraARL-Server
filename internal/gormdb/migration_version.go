@@ -20,7 +20,7 @@ import (
 
 // CurrentMigrationVersion 当前已版本化迁移的版本号。
 // 升级版本号只执行对应的小步迁移，不重放旧版本的数据清洗。
-const CurrentMigrationVersion = 3
+const CurrentMigrationVersion = 4
 
 const migrationVersionTable = "schema_migrations"
 

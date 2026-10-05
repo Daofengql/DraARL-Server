@@ -5,7 +5,6 @@ import People from '@mui/icons-material/People'
 import TaskAlt from '@mui/icons-material/TaskAlt'
 import Verified from '@mui/icons-material/Verified'
 import Radio from '@mui/icons-material/Radio'
-import Dns from '@mui/icons-material/Dns'
 import Settings from '@mui/icons-material/Settings'
 import ArrowBack from '@mui/icons-material/ArrowBack'
 import ExitToApp from '@mui/icons-material/ExitToApp'
@@ -55,7 +54,6 @@ const adminMenuItems: MenuItem[] = [
       { path: '/admin/devices', label: '客户端', icon: <Devices /> },
       { path: '/admin/radio-sessions', label: '移动端', icon: <Hub /> },
       { path: '/admin/relays', label: '中继台', icon: <Radio /> },
-      { path: '/admin/servers', label: '服务器', icon: <Dns /> },
     ]
   },
   {
@@ -75,6 +73,7 @@ const adminMenuItems: MenuItem[] = [
     children: [
       { path: '/admin/groups', label: '普通群组', icon: <Group /> },
       { path: '/admin/group-links', label: '互联管理', icon: <LinkIcon /> },
+      { path: '/admin/inter-center-links', label: '中心互联', icon: <Hub /> },
     ]
   },
   {
@@ -116,9 +115,9 @@ export function AdminLayout() {
   // 当路由变化时，如果焦点不在子菜单上，自动折叠
   useEffect(() => {
     const userPaths = ['/admin/users', '/admin/approvals', '/admin/certificate-approvals']
-    const devicePaths = ['/admin/devices', '/admin/radio-sessions', '/admin/relays', '/admin/servers']
+    const devicePaths = ['/admin/devices', '/admin/radio-sessions', '/admin/relays']
     const resourcePaths = ['/admin/client-resources', '/admin/firmware', '/admin/assets']
-    const groupPaths = ['/admin/groups', '/admin/group-links']
+    const groupPaths = ['/admin/groups', '/admin/group-links', '/admin/inter-center-links']
     const commRecordsPaths = ['/admin/comm-records/platform', '/admin/comm-records/logbook']
 
     // 如果当前路径不在用户管理子菜单下，折叠

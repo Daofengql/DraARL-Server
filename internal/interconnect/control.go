@@ -30,18 +30,20 @@ import (
 )
 
 const (
-	controlMaxFrame      = 4 << 20
-	controlHelloMaxFrame = 16 << 10
-	controlHello         = "node_enroll"
-	controlAuthOK        = "node_auth_ok"
-	controlAuthError     = "node_auth_error"
+	controlMaxFrame          = 4 << 20
+	controlHelloMaxFrame     = 16 << 10
+ controlCenterPeerMaxFrame = 8 << 10
+	controlHello             = "node_enroll"
+	controlAuthOK            = "node_auth_ok"
+	controlAuthError         = "node_auth_error"
 	controlAuthInternalError = "node_auth_internal_error"
-	controlProtocolError = "node_protocol_error"
-	controlHeartbeat     = "node_heartbeat"
+	controlProtocolError     = "node_protocol_error"
+	controlHeartbeat         = "node_heartbeat"
 )
 
 var ErrNodeAuthenticationRejected = errors.New("node authentication rejected")
 var ErrNodeProtocolIncompatible = errors.New("node protocol incompatible")
+
 // ErrNodeAuthInternalError 表示中心端认证过程中的瞬时内部错误（DB 抖动/行锁等）。
 // 【H3 安全修复】边缘端必须把它与"凭据被拒"区分开：内部错误应使用原凭据重试，
 // 绝不能触发一次性 bootstrap 令牌回退，否则中心一次瞬时 DB 错误会把边缘永久锁死。
@@ -126,6 +128,7 @@ type NodeAuthentication struct {
 	Accepted         bool
 	IssuedCredential string
 	CredentialEpoch  uint32
+	PeerLinkID       string // server-authoritative; cannot be supplied by an edge
 }
 
 type NodeAuthenticationEvent struct {
@@ -197,6 +200,8 @@ type NodeSession struct {
 	Key                    []byte
 	ProtocolVersion        byte
 	Features               uint64
+	PeerLinkID             string
+	CredentialEpoch        uint32
 	RemoteAddr             string
 	ConnectedAt            time.Time
 	LastHeartbeat          atomic.Int64
@@ -218,6 +223,10 @@ type NodeSession struct {
 func (s *NodeSession) Send(msg ControlMessage) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if s.PeerLinkID != "" {
+		_ = s.conn.SetWriteDeadline(time.Now().Add(time.Second))
+		defer s.conn.SetWriteDeadline(time.Time{})
+	}
 	wire, err := marshalControlMessage(msg)
 	if err != nil {
 		s.ControlMetrics.AddError()
@@ -425,6 +434,7 @@ func (s *NodeServer) Addr() net.Addr {
 	}
 	return s.listener.Addr()
 }
+
 // enableTCPKeepAlive 为控制面 TCP 连接启用 keepalive，避免节点掉电后
 // 中心/边缘会话挂到 OS 级 TCP 超时（可达数小时）才恢复。
 func enableTCPKeepAlive(conn net.Conn) {
@@ -468,7 +478,12 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	hello, helloBytes, err := readControlMessageSizeLimit(conn, controlHelloMaxFrame)
 	authentication := NodeAuthentication{}
 	validHello := err == nil && hello.Kind == controlHello && hello.NodeID != "" && hello.NodeID != CenterLocalNodeID
-	protocolVersion, features, negotiationErr := negotiateNodeCapabilities(s.capabilities, NodeCapabilities{
+	serverCapabilities := s.capabilities
+	peerRequested := hello.Features == NodeFeatureCenterPeer && hello.RequiredFeatures == NodeFeatureCenterPeer
+	if peerRequested {
+		serverCapabilities.RequiredFeatures = NodeFeatureCenterPeer
+	}
+	protocolVersion, features, negotiationErr := negotiateNodeCapabilities(serverCapabilities, NodeCapabilities{
 		MinProtocolVersion: hello.MinProtocol, MaxProtocolVersion: hello.MaxProtocol,
 		Features: hello.Features, RequiredFeatures: hello.RequiredFeatures,
 	})
@@ -503,6 +518,9 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+	if authentication.Accepted && (authentication.PeerLinkID != "") != peerRequested {
+		authentication.Accepted = false
+	}
 	if err != nil || !validHello || !authentication.Accepted {
 		if !rateRejected {
 			s.protection.AuthFailed.Add(1)
@@ -525,6 +543,7 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	}
 	sid := randomUint64()
 	session := &NodeSession{NodeID: hello.NodeID, SessionID: sid, KeyEpoch: 1, Key: key, ProtocolVersion: protocolVersion, Features: features, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn, protection: newNodeProtection(s.limits)}
+	session.PeerLinkID, session.CredentialEpoch = authentication.PeerLinkID, authentication.CredentialEpoch
 	session.Touch()
 	if !s.reserveSession(session.NodeID) {
 		s.protection.MaxNodesRejected.Add(1)
@@ -576,7 +595,12 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		}
 	}()
 	for {
-		msg, frameBytes, readErr := readControlMessageSize(conn)
+		if session.PeerLinkID != "" {
+			_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		}
+  frameLimit:=controlMaxFrame
+  if session.PeerLinkID!="" {frameLimit=controlCenterPeerMaxFrame}
+  msg, frameBytes, readErr := readControlMessageSizeLimit(conn,frameLimit)
 		if readErr != nil {
 			err = readErr
 			return
@@ -616,6 +640,10 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 					err = ErrNodeProtocolIncompatible
 					return
 				}
+				continue
+			}
+			if session.PeerLinkID != "" && env.Subtype != SubtypeCenterPeerRelay && env.Subtype != SubtypeCenterPeerHello {
+				session.ControlMetrics.AddDrop()
 				continue
 			}
 			if env.Expired(now, 30*time.Second) {
@@ -879,6 +907,10 @@ func DialNode(ctx context.Context, cfg NodeClientConfig) (*NodeClient, error) {
 	}
 	_ = conn.SetDeadline(time.Time{})
 	client.Session = &NodeSession{NodeID: response.NodeID, SessionID: response.SessionID, KeyEpoch: response.KeyEpoch, Key: key, ProtocolVersion: response.Protocol, Features: response.Features, RemoteAddr: conn.RemoteAddr().String(), ConnectedAt: time.Now(), conn: conn}
+	if response.Features == NodeFeatureCenterPeer {
+		client.Session.PeerLinkID = cfg.NodeID
+		client.Session.CredentialEpoch = response.CredentialEpoch
+	}
 	client.Session.ControlMetrics.AddOut(len(helloWire))
 	client.Session.ControlMetrics.AddIn(responseBytes)
 	client.IssuedCredential = response.Credential
@@ -899,7 +931,12 @@ func (c *NodeClient) readLoop() {
 		}
 	}()
 	for {
-		msg, frameBytes, readErr := readControlMessageSize(c.conn)
+		if c.Session.PeerLinkID != "" {
+			_ = c.conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		}
+  frameLimit:=controlMaxFrame
+  if c.Session.PeerLinkID!="" {frameLimit=controlCenterPeerMaxFrame}
+  msg, frameBytes, readErr := readControlMessageSizeLimit(c.conn,frameLimit)
 		if readErr != nil {
 			err = readErr
 			return
@@ -957,6 +994,10 @@ func (c *NodeClient) readLoop() {
 func (c *NodeClient) Send(msg ControlMessage) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.Session.PeerLinkID != "" {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
+		defer c.conn.SetWriteDeadline(time.Time{})
+	}
 	wire, err := marshalControlMessage(msg)
 	if err != nil {
 		c.Session.ControlMetrics.AddError()

@@ -168,6 +168,74 @@ func (GroupLink) TableName() string {
 	return "group_links"
 }
 
+// InterCenterLink describes one explicitly approved group mapping between two
+// independent centres. It deliberately stores only the mapping and a hashed
+// peer credential; users, devices and JWTs never cross this boundary.
+type InterCenterLink struct {
+	ID                   int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	LinkID               string     `gorm:"type:varchar(96);uniqueIndex;not null;column:link_id" json:"link_id"`
+	LocalCenterID        string     `gorm:"type:varchar(96);index;not null;column:local_center_id" json:"local_center_id"`
+	RemoteCenterID       string     `gorm:"type:varchar(96);index;not null;column:remote_center_id" json:"remote_center_id"`
+	RemoteAddress        string     `gorm:"type:varchar(255);column:remote_address" json:"remote_address,omitempty"`
+	LocalGroupID         int        `gorm:"type:int;index;not null;column:local_group_id" json:"local_group_id"`
+	RemoteGroupID        int        `gorm:"type:int;index;not null;column:remote_group_id" json:"remote_group_id"`
+	InitiatorCenterID    string     `gorm:"type:varchar(96);not null;column:initiator_center_id" json:"initiator_center_id"`
+	Direction            string     `gorm:"type:varchar(24);not null;column:direction" json:"direction"`
+	Enabled              bool       `gorm:"type:tinyint(1);not null;index;column:enabled" json:"enabled"`
+	Accepted             bool       `gorm:"type:tinyint(1);default:0;index;column:accepted" json:"accepted"`
+	ForwardAudio         bool       `gorm:"type:tinyint(1);not null;column:forward_audio" json:"forward_audio"`
+	ForwardText          bool       `gorm:"type:tinyint(1);default:0;column:forward_text" json:"forward_text"`
+	ForwardBroadcast     bool       `gorm:"type:tinyint(1);default:0;column:forward_broadcast" json:"forward_broadcast"`
+	VirtualDeviceName    string     `gorm:"type:varchar(96);not null;column:virtual_device_name" json:"virtual_device_name"`
+	CredentialHash       string     `gorm:"type:char(64);column:credential_hash" json:"-"`
+	CredentialCiphertext string     `gorm:"type:text;column:credential_ciphertext" json:"-"`
+	TLSServerName        string     `gorm:"type:varchar(255);column:tls_server_name" json:"tls_server_name"`
+	TLSPinSHA256         string     `gorm:"type:char(64);column:tls_pin_sha256" json:"tls_pin_sha256"`
+	CredentialEpoch      uint32     `gorm:"type:int unsigned;default:1;column:credential_epoch" json:"credential_epoch"`
+	LastConnectedAt      *time.Time `gorm:"type:datetime;column:last_connected_at" json:"last_connected_at,omitempty"`
+	LastError            string     `gorm:"type:varchar(255);column:last_error" json:"last_error,omitempty"`
+	// Local controls are deliberately kept separate from the legacy direction
+	// field.  They are the two halves of the invitation flow: the effective
+	// permission is the intersection of both centres' local choices.
+	LocalSendAudio       bool      `gorm:"type:tinyint(1);default:1;column:local_send_audio" json:"local_send_audio"`
+	LocalReceiveAudio    bool      `gorm:"type:tinyint(1);default:1;column:local_receive_audio" json:"local_receive_audio"`
+	RemoteSendAudio      bool      `gorm:"type:tinyint(1);default:1;column:remote_send_audio" json:"-"`
+	RemoteReceiveAudio   bool      `gorm:"type:tinyint(1);default:1;column:remote_receive_audio" json:"-"`
+	SessionID            string    `gorm:"type:char(32);column:session_id" json:"-"`
+	SessionKeyCiphertext string    `gorm:"type:text;column:session_key_ciphertext" json:"-"`
+	RemoteUDPAddress     string    `gorm:"type:varchar(255);column:remote_udp_address" json:"-"`
+	InviteTokenHash      string    `gorm:"type:char(64);column:invite_token_hash;index" json:"-"`
+	InviteBound          bool      `gorm:"type:tinyint(1);default:0;column:invite_bound" json:"invite_bound"`
+	CreateTime           time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime           time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+}
+
+// CenterPeerInvite is created by the business initiator. The clear token is
+// returned once and only its digest is used for admission afterwards.
+type CenterPeerInvite struct {
+	ID                int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	InviteID          string    `gorm:"type:char(32);uniqueIndex;not null;column:invite_id" json:"invite_id"`
+	TokenHash         string    `gorm:"type:char(64);uniqueIndex;not null;column:token_hash" json:"-"`
+	CenterID          string    `gorm:"type:varchar(96);index;not null;column:center_id" json:"center_id"`
+	LocalGroupID      int       `gorm:"type:int;not null;column:local_group_id" json:"local_group_id"`
+	SendAudio         bool      `gorm:"type:tinyint(1);not null;column:send_audio" json:"send_audio"`
+	ReceiveAudio      bool      `gorm:"type:tinyint(1);not null;column:receive_audio" json:"receive_audio"`
+	VirtualDeviceName string    `gorm:"type:varchar(96);not null;column:virtual_device_name" json:"virtual_device_name"`
+	Enabled           bool      `gorm:"type:tinyint(1);not null;index;column:enabled" json:"enabled"`
+	Bound             bool      `gorm:"type:tinyint(1);default:0;index;column:bound" json:"bound"`
+	BoundCenterID     string    `gorm:"type:varchar(96);column:bound_center_id" json:"bound_center_id"`
+	BoundGroupID      int       `gorm:"type:int;column:bound_group_id" json:"bound_group_id"`
+	LinkID            string    `gorm:"type:varchar(96);column:link_id" json:"link_id"`
+	CreatedAt         time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
+	UpdatedAt         time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
+}
+
+func (CenterPeerInvite) TableName() string { return "center_peer_invites" }
+
+func (InterCenterLink) TableName() string {
+	return "inter_center_links"
+}
+
 // Server 服务器模型
 type Server struct {
 	ID                         int        `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -346,6 +414,10 @@ func (GroupMember) TableName() string {
 
 // CommRecord 通信记录（精简版，名称通过联表查询获取）
 type CommRecord struct {
+	SourceType       string    `gorm:"type:varchar(24);column:source_type" json:"source_type"`
+	SourceCenterID   string    `gorm:"type:varchar(64);column:source_center_id" json:"source_center_id"`
+	LinkID           string    `gorm:"type:varchar(64);column:link_id" json:"link_id"`
+	VirtualDeviceID  string    `gorm:"type:varchar(180);column:virtual_device_id" json:"virtual_device_id"`
 	ID               uint      `gorm:"primaryKey;autoIncrement;index:idx_comm_records_group_status_start_id,priority:4;index:idx_comm_records_group_status_type_start_id,priority:5;index:idx_comm_records_status_start_id,priority:3;index:idx_comm_records_user_status_start_id,priority:4" json:"id"`
 	DeviceID         uint      `gorm:"index;not null;column:device_id" json:"device_id"`                                                                                                                                                                                                                                                                                                  // 发送设备ID（0=幽灵设备，>0=普通设备）
 	DeviceSSID       uint8     `gorm:"column:device_ssid" json:"device_ssid"`                                                                                                                                                                                                                                                                                                             // 设备 SSID（冗余，便于查询）
@@ -695,6 +767,10 @@ func AutoMigrateContext(ctx context.Context) error {
 }
 
 func autoMigrateLocked(db *gorm.DB) error {
+	// Connection-scoped GET_LOCK leaves the callback DB's statement populated
+	// by the lock probe. Start schema work on a clean session so a later Create
+	// or AutoMigrate cannot inherit an unrelated model/table.
+	db = db.Session(&gorm.Session{NewDB: true})
 	// 【H12 安全修复】迁移版本化：数据清洗/索引重建等一次性高风险步骤只在
 	// 首次（或版本升级后）执行并记录 schema_migrations；日常启动仅做幂等的
 	// GORM schema 同步与轻量归一化，避免大表 ALTER 锁库与全表扫描重复执行。
@@ -735,6 +811,18 @@ func autoMigrateLocked(db *gorm.DB) error {
 				return err
 			}
 			if err := completeMigrationVersion(db, 3); err != nil {
+				return err
+			}
+			version = 3
+		}
+		if version < 4 {
+			if err := startMigrationVersion(db, 4); err != nil {
+				return err
+			}
+			if err := migrateCoreSchema(db); err != nil {
+				return err
+			}
+			if err := completeMigrationVersion(db, 4); err != nil {
 				return err
 			}
 		}
@@ -848,37 +936,24 @@ func isBcryptPasswordHash(value string) bool {
 
 // migrateCoreSchema 执行幂等的 GORM schema 同步（仅在结构差异时发 ALTER）。
 func migrateCoreSchema(db *gorm.DB) error {
-	if err := db.AutoMigrate(
-		&User{},
-		&Device{},
-		&Group{},
-		&GroupLink{},
-		&Server{},
-		&Relay{},
-		&OperatorLog{},
-		&OperatorCert{},
-		&SiteConfig{},
-		&GroupMember{},
-		&CommRecord{},
-		&CommRecordDeliveryGroup{},
-		&Asset{},
-		&UserDevicePreference{},
-		&GhostClientPreference{},
-		&GhostClientSubscription{},
-		&DeviceConfig{},
-		&Logbook{},
-		&UserRadioPreset{},
-		&FirmwareRelease{},
-		&ClientResource{},
-		&ClientResourceRelease{},
-		&ClientResourceArtifact{},
-		&ClientResourceArtifactTarget{},
-		&broadcastmodel.BroadcastAudio{},
-		&broadcastmodel.BroadcastSchedule{},
-		&broadcastmodel.VirtualGroupBroadcastPolicy{},
-		&broadcastmodel.BroadcastRun{},
-	); err != nil {
-		return err
+	models := []struct {
+		name  string
+		value interface{}
+	}{
+		{"users", &User{}}, {"devices", &Device{}}, {"groups", &Group{}}, {"group_links", &GroupLink{}},
+		{"inter_center_links", &InterCenterLink{}}, {"center_peer_invites", &CenterPeerInvite{}}, {"servers", &Server{}}, {"relays", &Relay{}},
+		{"operator_logs", &OperatorLog{}}, {"operator_certs", &OperatorCert{}}, {"site_configs", &SiteConfig{}}, {"group_members", &GroupMember{}},
+		{"comm_records", &CommRecord{}}, {"comm_record_delivery_groups", &CommRecordDeliveryGroup{}}, {"assets", &Asset{}},
+		{"user_device_preferences", &UserDevicePreference{}}, {"ghost_client_preferences", &GhostClientPreference{}}, {"ghost_client_subscriptions", &GhostClientSubscription{}},
+		{"device_configs", &DeviceConfig{}}, {"logbooks", &Logbook{}}, {"user_radio_presets", &UserRadioPreset{}}, {"firmware_releases", &FirmwareRelease{}},
+		{"client_resources", &ClientResource{}}, {"client_resource_releases", &ClientResourceRelease{}}, {"client_resource_artifacts", &ClientResourceArtifact{}},
+		{"client_resource_artifact_targets", &ClientResourceArtifactTarget{}}, {"broadcast_audio", &broadcastmodel.BroadcastAudio{}},
+		{"broadcast_schedules", &broadcastmodel.BroadcastSchedule{}}, {"virtual_group_broadcast_policies", &broadcastmodel.VirtualGroupBroadcastPolicy{}}, {"broadcast_runs", &broadcastmodel.BroadcastRun{}},
+	}
+	for _, model := range models {
+		if err := db.AutoMigrate(model.value); err != nil {
+			return fmt.Errorf("migrate %s: %w", model.name, err)
+		}
 	}
 	return ensureDefaultPublicGroup(db)
 }
@@ -1019,39 +1094,17 @@ func migrateSchemaV1(db *gorm.DB) error {
 	// GORM 底层会进行计算，比对现有数据库结构与代码中的结构体。
 	// 只有在缺失表、缺失字段、或缺失外键时，才会发送 ALTER TABLE 语句，非常安全。
 	log.Println("[Migration Info] 正在启动 GORM 核心迁移机制，建立级联外键约束...")
-	err = db.AutoMigrate(
-		&User{},
-		&Device{},
-		&Group{},
-		&GroupLink{},
-		&Server{},
-		&Relay{},
-		&OperatorLog{},
-		&OperatorCert{},
-		&SiteConfig{},
-		&GroupMember{},
-		&CommRecord{},
-		&CommRecordDeliveryGroup{},
-		&Asset{},
-		&UserDevicePreference{},
-		&GhostClientPreference{},
-		&GhostClientSubscription{},
-		&DeviceConfig{},
-		&Logbook{},
-		&UserRadioPreset{},
-		&FirmwareRelease{},
-		&ClientResource{},
-		&ClientResourceRelease{},
-		&ClientResourceArtifact{},
-		&ClientResourceArtifactTarget{},
-		&broadcastmodel.BroadcastAudio{},
-		&broadcastmodel.BroadcastSchedule{},
-		&broadcastmodel.VirtualGroupBroadcastPolicy{},
-		&broadcastmodel.BroadcastRun{},
-	)
-
-	if err != nil {
-		return err
+	// Keep individual model names in the error. A single giant AutoMigrate call
+	// otherwise hides which newly added relation prevented startup.
+	for _, model := range []struct {
+		name  string
+		value interface{}
+	}{
+		{"users", &User{}}, {"devices", &Device{}}, {"groups", &Group{}}, {"group_links", &GroupLink{}}, {"inter_center_links", &InterCenterLink{}}, {"center_peer_invites", &CenterPeerInvite{}}, {"servers", &Server{}}, {"relays", &Relay{}}, {"operator_logs", &OperatorLog{}}, {"operator_certs", &OperatorCert{}}, {"site_configs", &SiteConfig{}}, {"group_members", &GroupMember{}}, {"comm_records", &CommRecord{}}, {"comm_record_delivery_groups", &CommRecordDeliveryGroup{}}, {"assets", &Asset{}}, {"user_device_preferences", &UserDevicePreference{}}, {"ghost_client_preferences", &GhostClientPreference{}}, {"ghost_client_subscriptions", &GhostClientSubscription{}}, {"device_configs", &DeviceConfig{}}, {"logbooks", &Logbook{}}, {"user_radio_presets", &UserRadioPreset{}}, {"firmware_releases", &FirmwareRelease{}}, {"client_resources", &ClientResource{}}, {"client_resource_releases", &ClientResourceRelease{}}, {"client_resource_artifacts", &ClientResourceArtifact{}}, {"client_resource_artifact_targets", &ClientResourceArtifactTarget{}}, {"broadcast_audio", &broadcastmodel.BroadcastAudio{}}, {"broadcast_schedules", &broadcastmodel.BroadcastSchedule{}}, {"virtual_group_broadcast_policies", &broadcastmodel.VirtualGroupBroadcastPolicy{}}, {"broadcast_runs", &broadcastmodel.BroadcastRun{}},
+	} {
+		if err = db.AutoMigrate(model.value); err != nil {
+			return fmt.Errorf("migrate %s: %w", model.name, err)
+		}
 	}
 	if err := ensureDefaultPublicGroup(db); err != nil {
 		return err

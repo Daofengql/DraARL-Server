@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -305,22 +306,15 @@ func (c *MessageAPIConfig) SetDefaults() error {
 	return nil
 }
 
-// InterconnectConfig controls the optional centre-side Type 0 node services.
-// It is ignored unless Enabled is true, preserving existing single-node startup.
+// InterconnectConfig controls the centre-to-centre runtime. Admission is
+// handled by the existing HTTP service and media is carried over System.Port.
 type InterconnectConfig struct {
-	Enabled                        bool   `yaml:"Enabled" json:"enabled"`
-	ControlListen                  string `yaml:"ControlListen" json:"control_listen"`
-	TLSCertFile                    string `yaml:"TLSCertFile" json:"tls_cert_file"`
-	TLSKeyFile                     string `yaml:"TLSKeyFile" json:"tls_key_file"`
-	TLSClientCAFile                string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
-	AllowSelfSigned                bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
-	RegistrationTokenTTL           int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
-	CredentialRotationGraceSeconds int    `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
-	SessionRecoveryWindowSeconds   int    `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
-	// NodeTokens is a development/bootstrap map. Production deployments should
-	// replace it with hashed, rotatable credentials managed by the admin API.
-	NodeTokens map[string]string          `yaml:"NodeTokens" json:"node_tokens"`
-	Resources  InterconnectResourceConfig `yaml:"Resources" json:"resources"`
+	Enabled                        bool                       `yaml:"Enabled" json:"enabled"`
+	CenterID                       string                     `yaml:"CenterID" json:"center_id"`
+	RegistrationTokenTTL           int                        `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
+	CredentialRotationGraceSeconds int                        `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
+	SessionRecoveryWindowSeconds   int                        `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
+	Resources                      InterconnectResourceConfig `yaml:"Resources" json:"resources"`
 }
 
 type InterconnectResourceConfig struct {
@@ -588,8 +582,11 @@ func (c *Configuration) SetDefaults() error {
 	if c.UDP.WriteBufferBytes <= 0 {
 		c.UDP.WriteBufferBytes = 4 * 1024 * 1024
 	}
-	if strings.TrimSpace(c.Interconnect.ControlListen) == "" {
-		c.Interconnect.ControlListen = ":60100"
+	if strings.TrimSpace(c.Interconnect.CenterID) == "" {
+		c.Interconnect.CenterID = "center"
+	}
+	if !regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$").MatchString(c.Interconnect.CenterID) {
+		return fmt.Errorf("Interconnect.CenterID must be 1–64 ASCII letters, digits, dots, hyphens or underscores")
 	}
 	if c.Interconnect.RegistrationTokenTTL <= 0 {
 		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60

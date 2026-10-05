@@ -11,10 +11,14 @@ import (
 )
 
 type CommSenderSnapshot struct {
-	Username string
-	CallSign string
-	Nickname string
-	DevModel int
+	SourceType      string
+	SourceCenterID  string
+	LinkID          string
+	VirtualDeviceID string
+	Username        string
+	CallSign        string
+	Nickname        string
+	DevModel        int
 }
 
 func (s CommSenderSnapshot) normalized() CommSenderSnapshot {

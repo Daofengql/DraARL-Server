@@ -228,8 +228,8 @@ func main() {
 		fmt.Sscanf(cfg.System.Port, "%d", &udpPort)
 	}
 
-	// 先等待共享 UDP socket 和 udphub pipeline 就绪。Type 0 与普通设备
-	// 共用这个端口，TLS 节点控制面只能在此后启动。
+	// 先等待主 UDP socket 和 udphub pipeline 就绪。中心互联的实时数据面
+	// 与普通设备共用这个端口；低频准入走 HTTP API。
 	udpReady := make(chan error, 1)
 	udpErrCh := make(chan error, 1)
 	go func() {
@@ -303,15 +303,23 @@ func main() {
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {
 				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
 			},
+			RelayPeer: func(source udphub.CenterLocalSource, data []byte) error {
+				if centerRuntime.HTTPPeers == nil {
+					return nil
+				}
+				return centerRuntime.HTTPPeers.RelayGroup(source.GroupID, data)
+			},
 			SendConfig: centerRuntime.Gateway.SendDeviceConfig,
 			Revoke: func(source udphub.CenterLocalSource) {
 				centerRuntime.Gateway.RevokeLocalDevice(source.SessionID, source.SessionEpoch)
 			},
 		})
 		defer udphub.SetCenterInterconnectHooks(udphub.CenterInterconnectHooks{})
-		udphub.SetType0Handler(centerRuntime.UDPBridge)
+		// Centre peer UDP sessions use a dedicated authenticated AES-GCM envelope
+		// on the main socket. No legacy Type 0/TLS node handler is exposed on dev.
+		udphub.SetType0Handler(centerRuntime.HTTPPeers)
 		defer udphub.SetType0Handler(nil)
-		stdlog.Printf("Type 0 节点服务已启动: control=%s shared_udp=%s", cfg.Interconnect.ControlListen, cfg.System.Port)
+		stdlog.Printf("中心互联已启动: HTTP准入 + shared_udp=%s", cfg.System.Port)
 	}
 
 	// 启动 APRS 服务（配置从数据库加载）

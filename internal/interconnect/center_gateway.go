@@ -8,6 +8,7 @@ import (
 )
 
 type CenterGateway struct {
+	peers              *CenterPeerManager
 	cluster            *ClusterManager
 	server             *NodeServer
 	data               *NodeDatagramBridge
@@ -134,6 +135,12 @@ func (g *CenterGateway) IdentityOwnedByRemote(ownerID int, ssid byte) bool {
 }
 
 func (g *CenterGateway) OnConnect(session *NodeSession) {
+	if session.PeerLinkID != "" {
+		if g.peers != nil {
+			g.peers.AcceptSession(session)
+		}
+		return
+	}
 	g.ownershipMu.Lock()
 	g.mu.Lock()
 	recovering := make([]deviceSessionOwner, 0)
@@ -156,6 +163,12 @@ func (g *CenterGateway) OnConnect(session *NodeSession) {
 }
 
 func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
+	if session.PeerLinkID != "" {
+		if g.peers != nil {
+			g.peers.DetachSession(session)
+		}
+		return
+	}
 	if g.speaker != nil {
 		g.speaker.ReleaseNode(session.NodeID, session.SessionID)
 	}
@@ -186,6 +199,9 @@ func (g *CenterGateway) OnDisconnect(session *NodeSession, err error) {
 }
 
 func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
+	if session.PeerLinkID != "" {
+		return
+	}
 	if msg.Kind == "node_ready" {
 		if g.cluster != nil {
 			_ = g.cluster.SendFullProjection(session.NodeID)
@@ -211,6 +227,10 @@ func (g *CenterGateway) OnMessage(session *NodeSession, msg ControlMessage) {
 }
 
 func (g *CenterGateway) OnDatagram(session *NodeSession, env Envelope, _ *net.UDPAddr) {
+	if session != nil && session.PeerLinkID != "" {
+		session.DataMetrics.AddDrop()
+		return
+	}
 	if env.Subtype != SubtypeRelayUpstream {
 		if session != nil {
 			session.DataMetrics.AddDrop()
@@ -223,6 +243,16 @@ func (g *CenterGateway) OnDatagram(session *NodeSession, env Envelope, _ *net.UD
 }
 
 func (g *CenterGateway) OnEnvelope(session *NodeSession, env Envelope) {
+	if session.PeerLinkID != "" {
+		if g.peers != nil {
+			g.peers.HandleEnvelope(session, env)
+		}
+		return
+	}
+	if env.Subtype == SubtypeCenterPeerRelay || env.Subtype == SubtypeCenterPeerHello {
+		session.ControlMetrics.AddDrop()
+		return
+	}
 	if env.Subtype == SubtypeNodeDataBind {
 		g.handleDataBindRequest(session, env)
 		return

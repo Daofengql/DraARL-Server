@@ -160,6 +160,8 @@ func frontendTitleSuffix(requestPath string) string {
 		return " - 群组管理"
 	case "/admin/group-links":
 		return " - 互联管理"
+	case "/admin/inter-center-links":
+		return " - 中心互联"
 	case "/admin/comm-records":
 		return " - 通信记录"
 	case "/admin/assets":

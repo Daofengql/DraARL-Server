@@ -13,7 +13,6 @@ import (
 
 	"draarl/internal/accesspoint"
 	"draarl/internal/gormdb"
-	"draarl/internal/interconnect"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
 	appjwt "draarl/pkg/jwt"
@@ -141,33 +140,6 @@ func centerAccessPoint(id, displayName, host string, port int, region, network s
 		ID: publicID, DisplayName: label, UDPHost: udpHost, UDPPort: port,
 		Region: region, Network: network, Priority: priority, HealthySampleAt: now,
 	}, true
-}
-
-func publishedEdgeAccessPoint(node *gormdb.Server, status interconnect.NodeStatus, now time.Time, healthTTL time.Duration) (publicAccessPoint, bool) {
-	if node == nil || node.NodeID == nil || node.PublicAccessID == nil || !node.PublicAccessEnabled || node.Status != 1 || node.NodeRegisteredAt == nil || !status.Online || status.LastHeartbeat == nil || status.LastHeartbeat.After(now.Add(time.Second)) || now.Sub(*status.LastHeartbeat) > healthTTL {
-		return publicAccessPoint{}, false
-	}
-	host, err := accesspoint.NormalizeUDPHost(node.PublicUDPHost)
-	if err != nil || accesspoint.ValidateUDPPort(node.PublicUDPPort) != nil {
-		return publicAccessPoint{}, false
-	}
-	publicID, err := accesspoint.NormalizePublicID(*node.PublicAccessID)
-	if err != nil {
-		return publicAccessPoint{}, false
-	}
-	displayName, err := accesspoint.NormalizeLabel(node.DisplayName, 100)
-	if err != nil || displayName == "" {
-		return publicAccessPoint{}, false
-	}
-	region, err := accesspoint.NormalizeAdministrativeRegion(node.PublicRegion, 100)
-	if err != nil {
-		return publicAccessPoint{}, false
-	}
-	network, err := accesspoint.NormalizeLabel(node.PublicNetwork, 100)
-	if err != nil {
-		return publicAccessPoint{}, false
-	}
-	return publicAccessPoint{ID: publicID, DisplayName: displayName, UDPHost: host, UDPPort: node.PublicUDPPort, Region: region, Network: network, Priority: node.PublicPriority, HealthySampleAt: *status.LastHeartbeat}, true
 }
 
 func setNoStore(c *gin.Context) {

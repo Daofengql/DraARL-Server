@@ -40,18 +40,14 @@ Firmware:
     AutoProxy: true
     MaxPresignedURLLength: 255
 
-# 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
+# 可选中心群组互联。中心间低频准入走现有 HTTP/HTTPS，实时音频复用主 UDP 端口。
+# 在后台“群组管理 → 中心互联”生成邀请或导入对端 Token。
 Interconnect:
     Enabled: false
-    ControlListen: ":60100"   # 仅 TLS/TCP 节点控制面
-    TLSCertFile: ""
-    TLSKeyFile: ""
-    TLSClientCAFile: ""
-    AllowSelfSigned: false       # 仅本地开发/测试
+    CenterID: "center-a"       # 每个独立站点使用不同的稳定 ID
     RegistrationTokenTTL: 86400
     CredentialRotationGraceSeconds: 600 # 在线轮换后旧凭据可重连的短时宽限，最大 3600 秒
     SessionRecoveryWindowSeconds: 180   # 中心重启/节点重连时保留旧设备归属的恢复窗口，30-600 秒
-    NodeTokens: {}               # 开发引导配置；生产使用后台签发凭据
     Resources:
         MaxNodes: 256
         MaxPendingHandshakes: 64

@@ -48,6 +48,10 @@ const (
 	SubtypeSpeakerLease         byte = 0x28
 	SubtypeRelayUpstream        byte = 0x30
 	SubtypeRelayDownstream      byte = 0x31
+	// SubtypeCenterPeerRelay carries an explicitly mapped centre-to-centre
+	// media frame. It never carries a user credential or device session.
+	SubtypeCenterPeerRelay byte = 0x40
+	SubtypeCenterPeerHello byte = 0x41
 )
 
 const (
@@ -71,12 +75,13 @@ const (
 	NodeFeatureSessionReconfirm
 	NodeFeatureGhostMultiSession
 	NodeFeatureGhostRecoveryTicket
+	NodeFeatureCenterPeer
 )
 
 const (
 	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
 		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation |
-		NodeFeatureSessionReconfirm | NodeFeatureGhostMultiSession | NodeFeatureGhostRecoveryTicket
+		NodeFeatureSessionReconfirm | NodeFeatureGhostMultiSession | NodeFeatureGhostRecoveryTicket | NodeFeatureCenterPeer
 	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
 )
 
@@ -87,7 +92,7 @@ func IsKnownSubtype(subtype byte) bool {
 		SubtypeRouteDelta, SubtypeRouteAck, SubtypeRouteResyncRequest,
 		SubtypeDeviceAuth, SubtypeDeviceSessionRenew, SubtypeDeviceSessionReport,
 		SubtypeDeviceSessionRevoke, SubtypeDeviceConfig, SubtypeDeviceSessionConfirm, SubtypeSpeakerLease,
-		SubtypeRelayUpstream, SubtypeRelayDownstream:
+		SubtypeRelayUpstream, SubtypeRelayDownstream, SubtypeCenterPeerRelay, SubtypeCenterPeerHello:
 		return true
 	default:
 		return false

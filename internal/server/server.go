@@ -144,6 +144,11 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/access-points", middleware.AccessDiscoveryListIPRateLimit(), middleware.AccessDiscoveryAuth(), middleware.AccessDiscoveryListUserRateLimit(), handler.ListAccessPoints)
 
+		// Low-frequency centre admission. It authenticates only an invitation
+		// token and returns an ephemeral UDP session; it never grants a user or
+		// administrator session.
+		api.POST("/inter-center/admit", middleware.CenterPeerAdmissionRateLimit(), handler.AdmitCenterPeerInvite)
+
 		// 需要认证的路由
 		protected := api.Group("")
 		protected.Use(middleware.AuthMiddleware())
@@ -343,6 +348,13 @@ func (s *Server) setupRoutes() {
 			admin.POST("/edge-nodes/:id/rotate-credential", handler.RotateEdgeNodeCredential)
 			admin.POST("/edge-nodes/:id/revoke-credential", handler.RevokeEdgeNodeCredential)
 			admin.POST("/edge-nodes/:id/disconnect", handler.DisconnectEdgeNode)
+			// 中心到中心群组互联：只保存显式群组映射，不同步用户和设备。
+			admin.GET("/inter-center-links", handler.ListInterCenterLinks)
+			admin.POST("/inter-center-links", handler.CreateInterCenterLink)
+			admin.POST("/inter-center-links/invites", handler.CreateCenterPeerInvite)
+			admin.POST("/inter-center-links/import", handler.ImportCenterPeerInvite)
+			admin.PUT("/inter-center-links/:id", handler.UpdateInterCenterLink)
+			admin.DELETE("/inter-center-links/:id", handler.DeleteInterCenterLink)
 
 			// 设备配置管理（管理员权限，可操作任意设备）
 			admin.GET("/admin/devices/:id/config", handler.AdminGetDeviceConfig)

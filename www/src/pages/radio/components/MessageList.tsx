@@ -615,7 +615,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     // 当消息变化时，加载未缓存的用户头像
     useEffect(() => {
       messages.forEach(msg => {
-        if (!msg.senderAvatar) {
+        if (!msg.senderAvatar && Number(msg.senderSSID)!==255) {
           const usernameToFetch = (msg as any).senderUsername || msg.senderNickname || msg.senderId
           if (usernameToFetch) {
             const key = String(usernameToFetch).trim()

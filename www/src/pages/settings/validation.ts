@@ -10,9 +10,6 @@ export function validateAccessDiscovery(config: AccessDiscoveryConfig): string |
   if (config.token_ttl_seconds < 1 || config.token_ttl_seconds > 300) {
     return '发现凭证有效期必须在 1-300 秒之间'
   }
-  if (config.edge_health_ttl_seconds < 1 || config.edge_health_ttl_seconds > 300) {
-    return '边缘健康有效期必须在 1-300 秒之间'
-  }
   if (config.cache_max_age_seconds < 1 || config.cache_max_age_seconds > 30) {
     return '客户端缓存时间必须在 1-30 秒之间'
   }

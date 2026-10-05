@@ -9,6 +9,10 @@ import (
 )
 
 type MessageRecord struct {
+	SourceType      string    `gorm:"column:source_type"`
+	SourceCenterID  string    `gorm:"column:source_center_id"`
+	LinkID          string    `gorm:"column:link_id"`
+	VirtualDeviceID string    `gorm:"column:virtual_device_id"`
 	ID              uint      `gorm:"column:id"`
 	DeviceID        uint      `gorm:"column:device_id"`
 	DeviceSSID      uint8     `gorm:"column:device_ssid"`
@@ -62,7 +66,8 @@ func (r *MessageRepository) messageQuery(table string, groupIDs []int) *gorm.DB 
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id AS source_group_id,
 			COALESCE(cr.user_id, d.owner_id) AS user_id, cr.start_time, cr.end_time, cr.duration_ms,
 			cr.audio_path, cr.audio_size, cr.status, cr.message_type, cr.text_content,
-			cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
+   cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
+   cr.source_type, cr.source_center_id, cr.link_id, cr.virtual_device_id,
 			g.name AS source_group_name,
 			u.name AS current_username, u.callsign AS current_callsign, u.nickname AS current_nickname,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END AS current_dev_model

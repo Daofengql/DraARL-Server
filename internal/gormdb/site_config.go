@@ -205,10 +205,9 @@ type AccessDiscoveryCenterConfig struct {
 
 // AccessDiscoveryConfig 设备接入点发现配置。
 type AccessDiscoveryConfig struct {
-	TokenTTLSeconds      int                         `json:"token_ttl_seconds"`
-	EdgeHealthTTLSeconds int                         `json:"edge_health_ttl_seconds"`
-	CacheMaxAgeSeconds   int                         `json:"cache_max_age_seconds"`
-	Center               AccessDiscoveryCenterConfig `json:"center"`
+	TokenTTLSeconds    int                         `json:"token_ttl_seconds"`
+	CacheMaxAgeSeconds int                         `json:"cache_max_age_seconds"`
+	Center             AccessDiscoveryCenterConfig `json:"center"`
 }
 
 // CommSettingsConfig 通信设置配置
@@ -484,9 +483,8 @@ func (r *SiteConfigRepository) GetAccessDiscoveryConfig() (*AccessDiscoveryConfi
 	}
 
 	result := &AccessDiscoveryConfig{
-		TokenTTLSeconds:      300,
-		EdgeHealthTTLSeconds: 20,
-		CacheMaxAgeSeconds:   5,
+		TokenTTLSeconds:    300,
+		CacheMaxAgeSeconds: 5,
 		Center: AccessDiscoveryCenterConfig{
 			PublicID:    "center",
 			DisplayName: "中心直连",
@@ -500,10 +498,6 @@ func (r *SiteConfigRepository) GetAccessDiscoveryConfig() (*AccessDiscoveryConfi
 		case "access_discovery.token_ttl_seconds":
 			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
 				result.TokenTTLSeconds = value
-			}
-		case "access_discovery.edge_health_ttl_seconds":
-			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
-				result.EdgeHealthTTLSeconds = value
 			}
 		case "access_discovery.cache_max_age_seconds":
 			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
@@ -539,7 +533,6 @@ func (r *SiteConfigRepository) GetAccessDiscoveryConfig() (*AccessDiscoveryConfi
 func (r *SiteConfigRepository) SetAccessDiscoveryConfig(config AccessDiscoveryConfig) error {
 	configs := []SiteConfig{
 		{Key: "access_discovery.token_ttl_seconds", Value: strconv.Itoa(config.TokenTTLSeconds), Category: CategoryAccessDiscovery, Description: "发现凭证有效期（秒）"},
-		{Key: "access_discovery.edge_health_ttl_seconds", Value: strconv.Itoa(config.EdgeHealthTTLSeconds), Category: CategoryAccessDiscovery, Description: "边缘节点健康有效期（秒）"},
 		{Key: "access_discovery.cache_max_age_seconds", Value: strconv.Itoa(config.CacheMaxAgeSeconds), Category: CategoryAccessDiscovery, Description: "发现列表客户端缓存时间（秒）"},
 		{Key: "access_discovery.center.enabled", Value: strconv.FormatBool(config.Center.Enabled), Category: CategoryAccessDiscovery, Description: "是否发布中心直连接入点"},
 		{Key: "access_discovery.center.public_id", Value: config.Center.PublicID, Category: CategoryAccessDiscovery, Description: "中心接入点公开 ID"},
@@ -550,7 +543,12 @@ func (r *SiteConfigRepository) SetAccessDiscoveryConfig(config AccessDiscoveryCo
 		{Key: "access_discovery.center.network", Value: config.Center.Network, Category: CategoryAccessDiscovery, Description: "中心接入点网络标签"},
 		{Key: "access_discovery.center.priority", Value: strconv.Itoa(config.Center.Priority), Category: CategoryAccessDiscovery, Description: "中心接入点优先级"},
 	}
-	return r.SetBatch(configs)
+	if err := r.SetBatch(configs); err != nil {
+		return err
+	}
+	// The centre-only discovery list no longer uses the legacy edge health
+	// setting. Remove an old row when an administrator saves this section.
+	return r.Delete("access_discovery.edge_health_ttl_seconds")
 }
 
 // GetCommSettingsConfig 获取通信设置配置

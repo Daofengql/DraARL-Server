@@ -540,9 +540,6 @@ func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*go
 	if result.TokenTTLSeconds < 1 || result.TokenTTLSeconds > 300 {
 		return nil, fmt.Errorf("发现凭证有效期必须在 1-300 秒之间")
 	}
-	if result.EdgeHealthTTLSeconds < 1 || result.EdgeHealthTTLSeconds > 300 {
-		return nil, fmt.Errorf("边缘健康有效期必须在 1-300 秒之间")
-	}
 	if result.CacheMaxAgeSeconds < 1 || result.CacheMaxAgeSeconds > 30 {
 		return nil, fmt.Errorf("客户端缓存时间必须在 1-30 秒之间")
 	}

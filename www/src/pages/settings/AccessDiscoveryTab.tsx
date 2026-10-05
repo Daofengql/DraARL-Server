@@ -26,16 +26,10 @@ export function AccessDiscoveryTab({ value, config, setConfig, loading, onSave }
           <CardContent>
             <Typography variant="h6" gutterBottom>设备接入点发现</Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
                 <TextField
                   label="发现凭证有效期" type="number" value={config.token_ttl_seconds}
                   onChange={(event) => setConfig({ ...config, token_ttl_seconds: Number(event.target.value) })}
-                  inputProps={{ min: 1, max: 300 }}
-                  InputProps={{ endAdornment: <InputAdornment position="end">秒</InputAdornment> }}
-                />
-                <TextField
-                  label="边缘健康有效期" type="number" value={config.edge_health_ttl_seconds}
-                  onChange={(event) => setConfig({ ...config, edge_health_ttl_seconds: Number(event.target.value) })}
                   inputProps={{ min: 1, max: 300 }}
                   InputProps={{ endAdornment: <InputAdornment position="end">秒</InputAdornment> }}
                 />

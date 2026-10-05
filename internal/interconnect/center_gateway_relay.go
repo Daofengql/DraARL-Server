@@ -8,6 +8,23 @@ import (
 	"draarl/internal/protocol"
 )
 
+// A peer participates in the same local half-duplex arbitration as local
+// devices, but never enters the authenticated device/session projection.
+func (g *CenterGateway) AcquirePeerVoice(linkID string, domainID uint64) bool {
+	if g == nil || g.speaker == nil || domainID == 0 {
+		return false
+	}
+	id := uint64(0xc000000000000000)
+	for i := range linkID {
+		id = (id ^ uint64(linkID[i])) * 1099511628211
+	}
+	if id == 0 {
+		id = 1
+	}
+	_, ok := g.speaker.AcquireLocal(id, 1, domainID, time.Now())
+	return ok
+}
+
 func (g *CenterGateway) handleRelayUpstream(session *NodeSession, env Envelope) bool {
 	if session == nil || g.cluster == nil {
 		return false

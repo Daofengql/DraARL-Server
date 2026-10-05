@@ -8,26 +8,34 @@ package interconnect
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"draarl/internal/protocol"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 const (
-	httpPeerMagic           = "CPUD"
-	httpPeerVersion    byte = 1
-	httpPeerHello      byte = 1
-	httpPeerHelloAck   byte = 2
-	httpPeerAudio      byte = 3
-	httpPeerHeaderSize      = 4 + 1 + 1 + 32 + 8 + 8 + 2
-	httpPeerMaxAge          = 3 * time.Second
+	httpPeerMagic               = "CPUD"
+	httpPeerVersion        byte = 1
+	httpPeerHello          byte = 1
+	httpPeerHelloAck       byte = 2
+	httpPeerAudio          byte = 3
+	httpPeerHeaderSize          = 4 + 1 + 1 + 32 + 8 + 8 + 2
+	httpPeerMaxAge              = 3 * time.Second
+	httpPeerSessionKDFInfo      = "DraARL/center-peer/session-key/v1"
 )
 
 type CenterHTTPPeerSession struct {
@@ -39,6 +47,79 @@ type CenterHTTPPeerSession struct {
 	// sent only when both sides have enabled the corresponding local control.
 	LocalSendAudio, LocalReceiveAudio   bool
 	RemoteSendAudio, RemoteReceiveAudio bool
+}
+
+// DerivePeerSessionKey deterministically derives the UDP session key from the
+// invitation verifier and the server-issued session ID. The verifier is the
+// SHA-256 digest of the one-time invitation token; both centres already have
+// it, so the raw token and the resulting AES key never need to cross the HTTP
+// response. HTTPS still protects the bearer invitation while it is submitted
+// for admission, and this KDF prevents a proxy or access log from receiving a
+// reusable UDP key in the response body.
+func DerivePeerSessionKey(tokenHash, sessionID string) ([]byte, error) {
+	tokenHash = strings.TrimSpace(tokenHash)
+	sessionID = strings.TrimSpace(sessionID)
+	if len(tokenHash) != sha256.Size*2 || len(sessionID) != 32 {
+		return nil, errors.New("invalid peer session derivation input")
+	}
+	verifier, err := hex.DecodeString(tokenHash)
+	if err != nil || len(verifier) != sha256.Size {
+		return nil, errors.New("invalid peer invitation verifier")
+	}
+	info := []byte(httpPeerSessionKDFInfo + ":" + sessionID)
+	reader := hkdf.New(sha256.New, verifier, nil, info)
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(reader, key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// PeerAdmissionProof authenticates the low-frequency HTTP admission request
+// without sending the invitation secret over the network. The initiator sends
+// the invitation ID, a fresh nonce and this proof; the accepting centre only
+// needs the stored SHA-256 verifier to check it. All policy fields are bound to
+// the proof, so an observer cannot reuse it for another centre or group.
+func PeerAdmissionProof(tokenHash, inviteID, centerID string, localGroupID int, sendAudio, receiveAudio bool, nonce string) (string, error) {
+	tokenHash = strings.TrimSpace(tokenHash)
+	if len(tokenHash) != sha256.Size*2 || strings.TrimSpace(inviteID) == "" || strings.TrimSpace(centerID) == "" || localGroupID <= 0 || strings.TrimSpace(nonce) == "" {
+		return "", errors.New("invalid peer admission proof input")
+	}
+	verifier, err := hex.DecodeString(tokenHash)
+	if err != nil || len(verifier) != sha256.Size {
+		return "", errors.New("invalid peer invitation verifier")
+	}
+	message := fmt.Sprintf("DraARL/center-peer/admit/v1\n%s\n%s\n%d\n%t\n%t\n%s", inviteID, centerID, localGroupID, sendAudio, receiveAudio, nonce)
+	mac := hmac.New(sha256.New, verifier)
+	_, _ = mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+// PeerAdmissionResponseProof authenticates the accepting centre's HTTP
+// response. The response contains the session and UDP endpoint that the
+// importing centre will persist, so those values must be bound to the same
+// invitation verifier before they are trusted. This keeps the control-plane
+// exchange tamper-evident even when a deployment uses plain HTTP internally.
+func PeerAdmissionResponseProof(tokenHash, inviteID, linkID, sessionID, acceptingCenterID, requestingCenterID string, acceptingGroupID, requestingGroupID int, requestingSendAudio, requestingReceiveAudio, acceptingSendAudio, acceptingReceiveAudio bool, udpAddress, virtualDeviceName string) (string, error) {
+	tokenHash = strings.TrimSpace(tokenHash)
+	inviteID = strings.TrimSpace(inviteID)
+	linkID = strings.TrimSpace(linkID)
+	sessionID = strings.TrimSpace(sessionID)
+	acceptingCenterID = strings.TrimSpace(acceptingCenterID)
+	requestingCenterID = strings.TrimSpace(requestingCenterID)
+	udpAddress = strings.TrimSpace(udpAddress)
+	virtualDeviceName = strings.TrimSpace(virtualDeviceName)
+	if len(tokenHash) != sha256.Size*2 || inviteID == "" || linkID == "" || len(sessionID) != 32 || acceptingCenterID == "" || requestingCenterID == "" || acceptingGroupID <= 0 || requestingGroupID <= 0 || udpAddress == "" {
+		return "", errors.New("invalid peer admission response proof input")
+	}
+	verifier, err := hex.DecodeString(tokenHash)
+	if err != nil || len(verifier) != sha256.Size {
+		return "", errors.New("invalid peer invitation verifier")
+	}
+	message := fmt.Sprintf("DraARL/center-peer/admit-response/v1\n%s\n%s\n%s\n%s\n%s\n%s\n%d\n%d\n%t\n%t\n%t\n%t\n%s", inviteID, linkID, sessionID, acceptingCenterID, requestingCenterID, udpAddress, acceptingGroupID, requestingGroupID, requestingSendAudio, requestingReceiveAudio, acceptingSendAudio, acceptingReceiveAudio, virtualDeviceName)
+	mac := hmac.New(sha256.New, verifier)
+	_, _ = mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
 type httpPeerSession struct {

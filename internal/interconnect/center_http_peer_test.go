@@ -2,12 +2,45 @@ package interconnect
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"testing"
 	"time"
 
 	"draarl/internal/protocol"
 )
+
+func TestPeerAdmissionProofAndSessionKeyDerivation(t *testing.T) {
+	hash := sha256.Sum256([]byte("invite-secret"))
+	verifier := hex.EncodeToString(hash[:])
+	proof, err := PeerAdmissionProof(verifier, "invite-001", "center-b", 38, true, false, "nonce-0123456789")
+	if err != nil || len(proof) != 64 {
+		t.Fatalf("proof=%q err=%v", proof, err)
+	}
+	if other, _ := PeerAdmissionProof(verifier, "invite-001", "center-b", 39, true, false, "nonce-0123456789"); other == proof {
+		t.Fatal("admission proof did not bind the local group")
+	}
+	keyA, err := DerivePeerSessionKey(verifier, "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := DerivePeerSessionKey(verifier, "0123456789abcdef0123456789abcdef")
+	if err != nil || !bytes.Equal(keyA, keyB) {
+		t.Fatalf("derived keys differ: %x %x err=%v", keyA, keyB, err)
+	}
+	keyC, err := DerivePeerSessionKey(verifier, "abcdefabcdefabcdefabcdefabcdefab")
+	if err != nil || bytes.Equal(keyA, keyC) {
+		t.Fatal("session ID did not separate derived keys")
+	}
+	responseProof, err := PeerAdmissionResponseProof(verifier, "invite-001", "link-001", "0123456789abcdef0123456789abcdef", "center-a", "center-b", 12, 38, true, false, false, true, "198.51.100.10:26170", "Server-A")
+	if err != nil || len(responseProof) != 64 {
+		t.Fatalf("response proof=%q err=%v", responseProof, err)
+	}
+	if changed, _ := PeerAdmissionResponseProof(verifier, "invite-001", "link-001", "0123456789abcdef0123456789abcdef", "center-a", "center-b", 12, 39, true, false, false, true, "198.51.100.10:26170", "Server-A"); changed == responseProof {
+		t.Fatal("admission response proof did not bind the requesting group")
+	}
+}
 
 func TestHTTPPeerUDPAdmissionEnvelope(t *testing.T) {
 	key := bytes.Repeat([]byte{7}, 32)

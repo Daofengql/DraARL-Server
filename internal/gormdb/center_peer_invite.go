@@ -47,6 +47,15 @@ func (r *CenterPeerInviteRepository) GetByID(id int) (*CenterPeerInvite, error) 
 	return &invite, err
 }
 
+func (r *CenterPeerInviteRepository) GetByInviteID(inviteID string) (*CenterPeerInvite, error) {
+	var invite CenterPeerInvite
+	err := r.db.Where("invite_id = ?", strings.TrimSpace(inviteID)).First(&invite).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrCenterPeerInviteNotFound
+	}
+	return &invite, err
+}
+
 func (r *CenterPeerInviteRepository) Update(id int, fields map[string]interface{}) error {
 	result := r.db.Model(&CenterPeerInvite{}).Where("id = ?", id).Updates(fields)
 	if result.Error != nil {

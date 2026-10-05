@@ -226,6 +226,7 @@ type CenterPeerInvite struct {
 	BoundCenterID     string    `gorm:"type:varchar(96);column:bound_center_id" json:"bound_center_id"`
 	BoundGroupID      int       `gorm:"type:int;column:bound_group_id" json:"bound_group_id"`
 	LinkID            string    `gorm:"type:varchar(96);column:link_id" json:"link_id"`
+	ExpiresAt         time.Time `gorm:"column:expires_at;index" json:"expires_at"`
 	CreatedAt         time.Time `gorm:"autoCreateTime;column:created_at" json:"created_at"`
 	UpdatedAt         time.Time `gorm:"autoUpdateTime;column:updated_at" json:"updated_at"`
 }

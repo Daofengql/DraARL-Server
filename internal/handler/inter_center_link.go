@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -61,11 +62,11 @@ type interCenterLinkRequest struct {
 	LocalReceiveAudio *bool `json:"local_receive_audio"`
 }
 
-// Inter-center group IDs are part of the admitted routing contract. They are
-// intentionally absent from this update request: each center chooses its own
-// local group when creating/importing the link, and changing either side later
-// would leave the two persisted mappings inconsistent.
+// Inter-center group IDs are local mappings. The update request accepts only
+// this center's group, so changing a mapping never changes or exposes the
+// peer's local group.
 type interCenterLinkUpdateRequest struct {
+	LocalGroupID      *int  `json:"local_group_id"`
 	Enabled           *bool `json:"enabled"`
 	Accepted          *bool `json:"accepted"`
 	LocalSendAudio    *bool `json:"local_send_audio"`
@@ -149,9 +150,8 @@ func peerError(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{"code": status, "message": message})
 }
 
-// PUT changes only this center's local state and media permissions. Identity,
-// group mapping, invitation binding, and transport credentials are immutable;
-// recreate the link when either side's group must change.
+// PUT changes only this center's local mapping, state, and media permissions.
+// The peer's local mapping is independent and is never accepted here.
 func preparePeer(req interCenterLinkRequest, old *gormdb.InterCenterLink) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
 	l := gormdb.InterCenterLink{LinkID: strings.TrimSpace(req.LinkID), LocalCenterID: centerID(), RemoteCenterID: strings.TrimSpace(req.RemoteCenterID), RemoteAddress: strings.TrimSpace(req.RemoteAddress), TLSServerName: strings.TrimSpace(req.TLSServerName), TLSPinSHA256: strings.ToLower(strings.TrimSpace(req.TLSPinSHA256)), LocalGroupID: req.LocalGroupID, RemoteGroupID: req.RemoteGroupID, InitiatorCenterID: strings.TrimSpace(req.InitiatorCenterID), Direction: req.Direction, Enabled: req.Enabled, Accepted: req.Accepted, ForwardAudio: req.ForwardAudio, ForwardText: req.ForwardText, ForwardBroadcast: req.ForwardBroadcast, VirtualDeviceName: strings.TrimSpace(req.VirtualDeviceName), CredentialEpoch: req.CredentialEpoch}
 	fail := func(err error) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
@@ -303,11 +303,23 @@ func UpdateInterCenterLink(c *gin.Context) {
 		peerError(c, 400, "互联参数错误")
 		return
 	}
-	if req.Enabled == nil && req.Accepted == nil && req.LocalSendAudio == nil && req.LocalReceiveAudio == nil {
+	if req.LocalGroupID == nil && req.Enabled == nil && req.Accepted == nil && req.LocalSendAudio == nil && req.LocalReceiveAudio == nil {
 		peerError(c, 400, "没有可更新的本地互联设置")
 		return
 	}
 	l := *old
+	if req.LocalGroupID != nil {
+		if *req.LocalGroupID <= 0 {
+			peerError(c, 400, "本地群组必须是有效正整数")
+			return
+		}
+		group, groupErr := gormdb.NewGroupRepository().GetGroupByID(*req.LocalGroupID)
+		if groupErr != nil || !canUseGroupAsLinkTarget(group) {
+			peerError(c, 400, "本地群组必须是已启用的实体群组")
+			return
+		}
+		l.LocalGroupID = *req.LocalGroupID
+	}
 	if req.Enabled != nil {
 		l.Enabled = *req.Enabled
 	}
@@ -324,7 +336,7 @@ func UpdateInterCenterLink(c *gin.Context) {
 		peerError(c, 400, err.Error())
 		return
 	}
-	fields := map[string]interface{}{"enabled": l.Enabled, "accepted": l.Accepted, "local_send_audio": l.LocalSendAudio, "local_receive_audio": l.LocalReceiveAudio}
+	fields := map[string]interface{}{"local_group_id": l.LocalGroupID, "enabled": l.Enabled, "accepted": l.Accepted, "local_send_audio": l.LocalSendAudio, "local_receive_audio": l.LocalReceiveAudio}
 	if err := repo.Update(id, fields); err != nil {
 		peerError(c, 500, "更新互联对象失败")
 		return
@@ -402,11 +414,37 @@ type importPeerInviteRequest struct {
 }
 
 type admitPeerInviteRequest struct {
-	InviteToken  string `json:"invite_token" binding:"required"`
+	InviteID     string `json:"invite_id" binding:"required"`
+	TokenProof   string `json:"token_proof" binding:"required"`
+	ClientNonce  string `json:"client_nonce" binding:"required"`
 	CenterID     string `json:"center_id" binding:"required"`
 	LocalGroupID int    `json:"local_group_id" binding:"required"`
 	SendAudio    bool   `json:"send_audio"`
 	ReceiveAudio bool   `json:"receive_audio"`
+}
+
+var centerPeerInviteIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{15,63}$`)
+
+// Invitation text is an opaque, one-time value for administrators. The
+// invite ID is included only so the receiving centre can address the stored
+// verifier; the secret portion is never sent to the issuing centre.
+func splitCenterPeerInviteToken(value string) (inviteID, secret string, err error) {
+	parts := strings.Split(strings.TrimSpace(value), ".")
+	if len(parts) != 2 || !centerPeerInviteIDPattern.MatchString(parts[0]) {
+		return "", "", errors.New("邀请格式已过期，请重新生成")
+	}
+	decoded, decodeErr := base64.RawURLEncoding.DecodeString(parts[1])
+	if decodeErr != nil || len(decoded) != 32 {
+		return "", "", errors.New("邀请格式已过期，请重新生成")
+	}
+	return parts[0], parts[1], nil
+}
+
+func secureEqualString(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func randomURLToken(size int) (string, error) {
@@ -462,16 +500,21 @@ func CreateCenterPeerInvite(c *gin.Context) {
 		peerError(c, 400, "未配置本地中心 ID")
 		return
 	}
-	token, err := randomURLToken(32)
+	secret, err := randomURLToken(32)
 	if err != nil {
 		peerError(c, 500, "生成邀请失败")
 		return
 	}
+	// Link IDs share the centre identity grammar and therefore must begin with
+	// an ASCII letter or digit. Prefixing the 128-bit random value keeps the
+	// token URL-safe while eliminating the small invalid-leading-character
+	// probability of a raw base64url string.
 	inviteID, err := randomURLToken(16)
 	if err != nil {
 		peerError(c, 500, "生成邀请失败")
 		return
 	}
+	inviteID = "i" + inviteID
 	name := strings.TrimSpace(req.VirtualDeviceName)
 	if name == "" {
 		name = "Server-" + cfg.Interconnect.CenterID
@@ -480,8 +523,13 @@ func CreateCenterPeerInvite(c *gin.Context) {
 		peerError(c, 400, "虚拟设备名称必须以 Server- 开头且不超过 32 个字符")
 		return
 	}
-	hash := gormdb.HashCenterPeerInviteToken(token)
-	invite := &gormdb.CenterPeerInvite{InviteID: inviteID, TokenHash: hash, CenterID: cfg.Interconnect.CenterID, LocalGroupID: req.LocalGroupID, SendAudio: req.SendAudio, ReceiveAudio: req.ReceiveAudio, VirtualDeviceName: name, Enabled: true}
+	// The displayed token carries the public invitation ID and a 256-bit
+	// secret. Only the secret's digest is persisted; the secret is later used
+	// locally by the importing centre to produce an HTTP admission proof.
+	token := inviteID + "." + secret
+	hash := gormdb.HashCenterPeerInviteToken(secret)
+	ttl := time.Duration(cfg.Interconnect.RegistrationTokenTTL) * time.Second
+	invite := &gormdb.CenterPeerInvite{InviteID: inviteID, TokenHash: hash, CenterID: cfg.Interconnect.CenterID, LocalGroupID: req.LocalGroupID, SendAudio: req.SendAudio, ReceiveAudio: req.ReceiveAudio, VirtualDeviceName: name, Enabled: true, ExpiresAt: time.Now().Add(ttl)}
 	if err := gormdb.NewCenterPeerInviteRepository().Create(invite); err != nil {
 		peerError(c, 500, "保存邀请失败")
 		return
@@ -500,9 +548,18 @@ func admitPeerInvite(c *gin.Context) {
 		return
 	}
 	repo := gormdb.NewCenterPeerInviteRepository()
-	invite, err := repo.GetByTokenHash(gormdb.HashCenterPeerInviteToken(req.InviteToken))
-	if err != nil || invite == nil || !invite.Enabled {
+	if !centerPeerInviteIDPattern.MatchString(strings.TrimSpace(req.InviteID)) || len(strings.TrimSpace(req.ClientNonce)) < 16 || len(strings.TrimSpace(req.TokenProof)) != 64 {
+		peerError(c, 401, "邀请证明无效")
+		return
+	}
+	invite, err := repo.GetByInviteID(req.InviteID)
+	if err != nil || invite == nil || !invite.Enabled || !invite.ExpiresAt.IsZero() && !time.Now().Before(invite.ExpiresAt) {
 		peerError(c, 401, "邀请 Token 无效或已停用")
+		return
+	}
+	expectedProof, proofErr := interconnect.PeerAdmissionProof(invite.TokenHash, req.InviteID, req.CenterID, req.LocalGroupID, req.SendAudio, req.ReceiveAudio, req.ClientNonce)
+	if proofErr != nil || !secureEqualString(expectedProof, strings.TrimSpace(req.TokenProof)) {
+		peerError(c, 401, "邀请证明无效")
 		return
 	}
 	if invite.Bound && (invite.BoundCenterID != req.CenterID || invite.BoundGroupID != req.LocalGroupID) {
@@ -519,22 +576,40 @@ func admitPeerInvite(c *gin.Context) {
 			return
 		}
 		existing, getErr := linkRepo.GetByLinkID(invite.LinkID)
-		if getErr != nil || existing == nil || existing.SessionID == "" || existing.SessionKeyCiphertext == "" {
+		if getErr != nil || existing == nil || existing.SessionID == "" {
 			peerError(c, 409, "邀请绑定状态不完整，请重新生成邀请")
 			return
 		}
-		key, keyErr := decryptPeerSessionKey(existing.SessionKeyCiphertext)
+		key, keyErr := interconnect.DerivePeerSessionKey(invite.TokenHash, existing.SessionID)
 		if keyErr != nil {
 			peerError(c, 500, "互联会话密钥不可用")
 			return
 		}
+		encodedKey := interconnect.EncodePeerSessionKey(key)
+		encKey, encErr := appcrypto.Encrypt(encodedKey)
+		if encErr != nil || linkRepo.Update(existing.ID, map[string]interface{}{"session_key_ciphertext": encKey}) != nil {
+			peerError(c, 500, "更新互联会话密钥失败")
+			return
+		}
+		existing.SessionKeyCiphertext = encKey
 		registerHTTPPeerSession(existing, key)
 		peerAudit(c, "invite_admit_retry", existing.LinkID)
+		udpAddress := centerUDPAddress(c.Request.Host)
+		responseProof, proofErr := interconnect.PeerAdmissionResponseProof(
+			invite.TokenHash, req.InviteID, existing.LinkID, existing.SessionID,
+			existing.LocalCenterID, existing.RemoteCenterID, existing.LocalGroupID, existing.RemoteGroupID,
+			existing.RemoteSendAudio, existing.RemoteReceiveAudio, existing.LocalSendAudio, existing.LocalReceiveAudio,
+			udpAddress, invite.VirtualDeviceName,
+		)
+		if proofErr != nil {
+			peerError(c, 500, "生成准入响应证明失败")
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
 			"link_id": existing.LinkID, "center_id": existing.LocalCenterID,
 			"remote_center_id": existing.RemoteCenterID, "remote_group_id": existing.RemoteGroupID,
-			"session_id": existing.SessionID, "session_key": interconnect.EncodePeerSessionKey(key),
-			"udp_address": centerUDPAddress(c.Request.Host), "send_audio": existing.RemoteSendAudio,
+			"session_id":      existing.SessionID,
+			"admission_proof": responseProof, "udp_address": udpAddress, "send_audio": existing.RemoteSendAudio,
 			"receive_audio": existing.RemoteReceiveAudio, "remote_send_audio": existing.LocalSendAudio,
 			"remote_receive_audio": existing.LocalReceiveAudio, "virtual_device_name": invite.VirtualDeviceName,
 		}})
@@ -547,11 +622,6 @@ func admitPeerInvite(c *gin.Context) {
 		peerError(c, 500, "中心配置不可用")
 		return
 	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		peerError(c, 500, "生成会话密钥失败")
-		return
-	}
 	sessionID, err := randomURLToken(24)
 	if err != nil {
 		peerError(c, 500, "生成会话 ID 失败")
@@ -561,9 +631,9 @@ func admitPeerInvite(c *gin.Context) {
 	if invite.LinkID != "" {
 		linkID = invite.LinkID
 	}
-	encToken, encErr := appcrypto.Encrypt(req.InviteToken)
-	if encErr != nil {
-		peerError(c, 500, "保存邀请凭据失败")
+	key, keyErr := interconnect.DerivePeerSessionKey(invite.TokenHash, sessionID)
+	if keyErr != nil {
+		peerError(c, 500, "生成会话密钥失败")
 		return
 	}
 	encodedKey := interconnect.EncodePeerSessionKey(key)
@@ -572,7 +642,7 @@ func admitPeerInvite(c *gin.Context) {
 		peerError(c, 500, "保存会话密钥失败")
 		return
 	}
-	link := gormdb.InterCenterLink{LinkID: linkID, LocalCenterID: invite.CenterID, RemoteCenterID: req.CenterID, RemoteAddress: "", LocalGroupID: invite.LocalGroupID, RemoteGroupID: req.LocalGroupID, InitiatorCenterID: invite.CenterID, Direction: interconnect.CenterLinkDirectionBidirectional, Enabled: true, Accepted: true, ForwardAudio: invite.SendAudio && req.ReceiveAudio || invite.ReceiveAudio && req.SendAudio, VirtualDeviceName: "Server-" + req.CenterID, CredentialHash: invite.TokenHash, CredentialCiphertext: encToken, LocalSendAudio: invite.SendAudio, LocalReceiveAudio: invite.ReceiveAudio, RemoteSendAudio: req.SendAudio, RemoteReceiveAudio: req.ReceiveAudio, SessionID: sessionID, SessionKeyCiphertext: encKey, InviteTokenHash: invite.TokenHash, InviteBound: true, CredentialEpoch: 1}
+	link := gormdb.InterCenterLink{LinkID: linkID, LocalCenterID: invite.CenterID, RemoteCenterID: req.CenterID, RemoteAddress: "", LocalGroupID: invite.LocalGroupID, RemoteGroupID: req.LocalGroupID, InitiatorCenterID: invite.CenterID, Direction: interconnect.CenterLinkDirectionBidirectional, Enabled: true, Accepted: true, ForwardAudio: invite.SendAudio && req.ReceiveAudio || invite.ReceiveAudio && req.SendAudio, VirtualDeviceName: "Server-" + req.CenterID, CredentialHash: invite.TokenHash, CredentialCiphertext: "", LocalSendAudio: invite.SendAudio, LocalReceiveAudio: invite.ReceiveAudio, RemoteSendAudio: req.SendAudio, RemoteReceiveAudio: req.ReceiveAudio, SessionID: sessionID, SessionKeyCiphertext: encKey, InviteTokenHash: invite.TokenHash, InviteBound: true, CredentialEpoch: 1}
 	if err := centerbridge.Policy(link).Validate(); err != nil {
 		peerError(c, 400, "对端中心身份无效")
 		return
@@ -597,25 +667,21 @@ func admitPeerInvite(c *gin.Context) {
 	}
 	registerHTTPPeerSession(&link, key)
 	peerAudit(c, "invite_admit", linkID)
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"link_id": linkID, "center_id": invite.CenterID, "remote_center_id": req.CenterID, "remote_group_id": invite.LocalGroupID, "session_id": sessionID, "session_key": encodedKey, "udp_address": centerUDPAddress(c.Request.Host), "send_audio": req.SendAudio, "receive_audio": req.ReceiveAudio, "remote_send_audio": invite.SendAudio, "remote_receive_audio": invite.ReceiveAudio, "virtual_device_name": invite.VirtualDeviceName}})
+	udpAddress := centerUDPAddress(c.Request.Host)
+	responseProof, proofErr := interconnect.PeerAdmissionResponseProof(
+		invite.TokenHash, req.InviteID, linkID, sessionID,
+		invite.CenterID, req.CenterID, invite.LocalGroupID, req.LocalGroupID,
+		req.SendAudio, req.ReceiveAudio, invite.SendAudio, invite.ReceiveAudio,
+		udpAddress, invite.VirtualDeviceName,
+	)
+	if proofErr != nil {
+		peerError(c, 500, "生成准入响应证明失败")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"link_id": linkID, "center_id": invite.CenterID, "remote_center_id": req.CenterID, "remote_group_id": invite.LocalGroupID, "session_id": sessionID, "admission_proof": responseProof, "udp_address": udpAddress, "send_audio": req.SendAudio, "receive_audio": req.ReceiveAudio, "remote_send_audio": invite.SendAudio, "remote_receive_audio": invite.ReceiveAudio, "virtual_device_name": invite.VirtualDeviceName}})
 }
 
 func AdmitCenterPeerInvite(c *gin.Context) { admitPeerInvite(c) }
-
-func decryptPeerSessionKey(ciphertext string) ([]byte, error) {
-	encoded, err := appcrypto.Decrypt(ciphertext)
-	if err != nil {
-		return nil, err
-	}
-	key, err := interconnect.DecodePeerSessionKey(encoded)
-	if err != nil || len(key) != 32 {
-		if err == nil {
-			err = errors.New("invalid peer session key length")
-		}
-		return nil, err
-	}
-	return key, nil
-}
 
 func registerHTTPPeerSession(link *gormdb.InterCenterLink, key []byte) {
 	if link == nil {
@@ -657,6 +723,12 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 400, "Token 太短")
 		return
 	}
+	inviteID, secret, splitErr := splitCenterPeerInviteToken(req.InviteToken)
+	if splitErr != nil {
+		peerError(c, 400, splitErr.Error())
+		return
+	}
+	tokenHash := gormdb.HashCenterPeerInviteToken(secret)
 	cfg := config.TryGet()
 	if cfg == nil || cfg.Interconnect.CenterID == "" {
 		peerError(c, 500, "未配置本地中心 ID")
@@ -667,7 +739,17 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 400, "本地群组必须是已启用的实体群组")
 		return
 	}
-	body := admitPeerInviteRequest{InviteToken: req.InviteToken, CenterID: cfg.Interconnect.CenterID, LocalGroupID: req.LocalGroupID, SendAudio: req.SendAudio, ReceiveAudio: req.ReceiveAudio}
+	nonce, err := randomURLToken(16)
+	if err != nil {
+		peerError(c, 500, "生成准入随机数失败")
+		return
+	}
+	proof, err := interconnect.PeerAdmissionProof(tokenHash, inviteID, cfg.Interconnect.CenterID, req.LocalGroupID, req.SendAudio, req.ReceiveAudio, nonce)
+	if err != nil {
+		peerError(c, 500, "生成准入证明失败")
+		return
+	}
+	body := admitPeerInviteRequest{InviteID: inviteID, TokenProof: proof, ClientNonce: nonce, CenterID: cfg.Interconnect.CenterID, LocalGroupID: req.LocalGroupID, SendAudio: req.SendAudio, ReceiveAudio: req.ReceiveAudio}
 	data, err := jsonMarshal(body)
 	if err != nil {
 		peerError(c, 500, "生成准入请求失败")
@@ -693,7 +775,7 @@ func ImportCenterPeerInvite(c *gin.Context) {
 			CenterID           string `json:"center_id"`
 			RemoteCenterID     string `json:"remote_center_id"`
 			SessionID          string `json:"session_id"`
-			SessionKey         string `json:"session_key"`
+			AdmissionProof     string `json:"admission_proof"`
 			UDPAddress         string `json:"udp_address"`
 			VirtualDeviceName  string `json:"virtual_device_name"`
 			RemoteGroupID      int    `json:"remote_group_id"`
@@ -708,17 +790,27 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 502, "远端响应格式无效")
 		return
 	}
-	if response.StatusCode != http.StatusOK || envelope.Data.SessionKey == "" {
-		log.Printf("[CENTER-PEER] admission rejected status=%d session_key_len=%d", response.StatusCode, len(envelope.Data.SessionKey))
-		if response.StatusCode != http.StatusOK {
-			peerError(c, 502, "远端拒绝互联邀请（HTTP 状态异常）")
-		} else {
-			peerError(c, 502, "远端响应缺少会话密钥")
-		}
+	if response.StatusCode != http.StatusOK {
+		log.Printf("[CENTER-PEER] admission rejected status=%d", response.StatusCode)
+		peerError(c, 502, "远端拒绝互联邀请（HTTP 状态异常）")
 		return
 	}
-	key, err := interconnect.DecodePeerSessionKey(envelope.Data.SessionKey)
-	if err != nil || len(key) != 32 || envelope.Data.LinkID == "" || envelope.Data.CenterID == "" || envelope.Data.CenterID == cfg.Interconnect.CenterID || len(envelope.Data.SessionID) != 32 || envelope.Data.RemoteGroupID <= 0 || envelope.Data.UDPAddress == "" {
+	if envelope.Data.LinkID == "" || envelope.Data.CenterID == "" || envelope.Data.CenterID == cfg.Interconnect.CenterID || envelope.Data.RemoteCenterID != cfg.Interconnect.CenterID || len(envelope.Data.SessionID) != 32 || len(envelope.Data.AdmissionProof) != 64 || envelope.Data.RemoteGroupID <= 0 || envelope.Data.UDPAddress == "" {
+		peerError(c, 502, "远端会话密钥无效")
+		return
+	}
+	expectedResponseProof, proofErr := interconnect.PeerAdmissionResponseProof(
+		tokenHash, inviteID, envelope.Data.LinkID, envelope.Data.SessionID,
+		envelope.Data.CenterID, envelope.Data.RemoteCenterID, envelope.Data.RemoteGroupID, req.LocalGroupID,
+		envelope.Data.SendAudio, envelope.Data.ReceiveAudio, envelope.Data.RemoteSendAudio, envelope.Data.RemoteReceiveAudio,
+		envelope.Data.UDPAddress, envelope.Data.VirtualDeviceName,
+	)
+	if proofErr != nil || !secureEqualString(expectedResponseProof, strings.TrimSpace(envelope.Data.AdmissionProof)) {
+		peerError(c, 502, "远端准入响应证明无效")
+		return
+	}
+	key, err := interconnect.DerivePeerSessionKey(tokenHash, envelope.Data.SessionID)
+	if err != nil {
 		peerError(c, 502, "远端会话密钥无效")
 		return
 	}
@@ -726,17 +818,17 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 502, "远端 UDP 地址无效")
 		return
 	}
-	encKey, err := appcrypto.Encrypt(envelope.Data.SessionKey)
+	encKey, err := appcrypto.Encrypt(interconnect.EncodePeerSessionKey(key))
 	if err != nil {
 		peerError(c, 500, "保存会话密钥失败")
 		return
 	}
-	hash := gormdb.HashCenterPeerInviteToken(req.InviteToken)
+	hash := tokenHash
 	virtualName := envelope.Data.VirtualDeviceName
 	if virtualName == "" {
 		virtualName = "Server-" + envelope.Data.CenterID
 	}
-	link := &gormdb.InterCenterLink{LinkID: envelope.Data.LinkID, LocalCenterID: cfg.Interconnect.CenterID, RemoteCenterID: envelope.Data.CenterID, RemoteAddress: req.RemoteAddress, LocalGroupID: req.LocalGroupID, RemoteGroupID: envelope.Data.RemoteGroupID, InitiatorCenterID: envelope.Data.CenterID, Direction: interconnect.CenterLinkDirectionBidirectional, Enabled: true, Accepted: true, ForwardAudio: req.SendAudio && envelope.Data.RemoteReceiveAudio || req.ReceiveAudio && envelope.Data.RemoteSendAudio, VirtualDeviceName: virtualName, CredentialHash: hash, CredentialCiphertext: encKey, LocalSendAudio: req.SendAudio, LocalReceiveAudio: req.ReceiveAudio, RemoteSendAudio: envelope.Data.RemoteSendAudio, RemoteReceiveAudio: envelope.Data.RemoteReceiveAudio, SessionID: envelope.Data.SessionID, SessionKeyCiphertext: encKey, RemoteUDPAddress: envelope.Data.UDPAddress, InviteTokenHash: hash, InviteBound: true, CredentialEpoch: 1}
+	link := &gormdb.InterCenterLink{LinkID: envelope.Data.LinkID, LocalCenterID: cfg.Interconnect.CenterID, RemoteCenterID: envelope.Data.CenterID, RemoteAddress: req.RemoteAddress, LocalGroupID: req.LocalGroupID, RemoteGroupID: envelope.Data.RemoteGroupID, InitiatorCenterID: envelope.Data.CenterID, Direction: interconnect.CenterLinkDirectionBidirectional, Enabled: true, Accepted: true, ForwardAudio: req.SendAudio && envelope.Data.RemoteReceiveAudio || req.ReceiveAudio && envelope.Data.RemoteSendAudio, VirtualDeviceName: virtualName, CredentialHash: hash, CredentialCiphertext: "", LocalSendAudio: req.SendAudio, LocalReceiveAudio: req.ReceiveAudio, RemoteSendAudio: envelope.Data.RemoteSendAudio, RemoteReceiveAudio: envelope.Data.RemoteReceiveAudio, SessionID: envelope.Data.SessionID, SessionKeyCiphertext: encKey, RemoteUDPAddress: envelope.Data.UDPAddress, InviteTokenHash: hash, InviteBound: true, CredentialEpoch: 1}
 	if err := centerbridge.Policy(*link).Validate(); err != nil {
 		peerError(c, 502, "远端互联身份无效")
 		return

@@ -54,6 +54,11 @@ type interCenterLinkRequest struct {
 	Credential        string `json:"credential"`
 	CredentialEpoch   uint32 `json:"credential_epoch"`
 	RotateCredential  bool   `json:"rotate_credential"`
+	// Local media permissions belong to this center and may be changed without
+	// reissuing the invitation. Pointer fields preserve the existing policy when
+	// older clients omit them.
+	LocalSendAudio    *bool `json:"local_send_audio"`
+	LocalReceiveAudio *bool `json:"local_receive_audio"`
 }
 
 func parsePositiveID(value string) (int, error) {
@@ -116,8 +121,26 @@ func preparePeer(req interCenterLinkRequest, old *gormdb.InterCenterLink) (gormd
 		if l.CredentialEpoch == 0 {
 			l.CredentialEpoch = old.CredentialEpoch
 		}
+		l.LocalSendAudio = old.LocalSendAudio
+		l.LocalReceiveAudio = old.LocalReceiveAudio
+		if req.LocalSendAudio != nil {
+			l.LocalSendAudio = *req.LocalSendAudio
+		}
+		if req.LocalReceiveAudio != nil {
+			l.LocalReceiveAudio = *req.LocalReceiveAudio
+		}
 	} else if l.CredentialEpoch == 0 {
 		l.CredentialEpoch = 1
+		if req.LocalSendAudio == nil {
+			l.LocalSendAudio = true
+		} else {
+			l.LocalSendAudio = *req.LocalSendAudio
+		}
+		if req.LocalReceiveAudio == nil {
+			l.LocalReceiveAudio = true
+		} else {
+			l.LocalReceiveAudio = *req.LocalReceiveAudio
+		}
 	}
 	if err := centerbridge.Policy(l).Validate(); err != nil {
 		return fail(err)
@@ -236,7 +259,7 @@ func UpdateInterCenterLink(c *gin.Context) {
 		peerError(c, 400, err.Error())
 		return
 	}
-	fields := map[string]interface{}{"remote_address": l.RemoteAddress, "tls_server_name": l.TLSServerName, "tls_pin_sha256": l.TLSPinSHA256, "local_group_id": l.LocalGroupID, "remote_group_id": l.RemoteGroupID, "direction": l.Direction, "enabled": l.Enabled, "accepted": l.Accepted, "forward_audio": l.ForwardAudio, "forward_text": false, "forward_broadcast": false, "virtual_device_name": l.VirtualDeviceName, "credential_epoch": l.CredentialEpoch, "credential_hash": l.CredentialHash, "credential_ciphertext": l.CredentialCiphertext}
+	fields := map[string]interface{}{"remote_address": l.RemoteAddress, "tls_server_name": l.TLSServerName, "tls_pin_sha256": l.TLSPinSHA256, "local_group_id": l.LocalGroupID, "remote_group_id": l.RemoteGroupID, "direction": l.Direction, "enabled": l.Enabled, "accepted": l.Accepted, "forward_audio": l.ForwardAudio, "forward_text": false, "forward_broadcast": false, "virtual_device_name": l.VirtualDeviceName, "credential_epoch": l.CredentialEpoch, "credential_hash": l.CredentialHash, "credential_ciphertext": l.CredentialCiphertext, "local_send_audio": l.LocalSendAudio, "local_receive_audio": l.LocalReceiveAudio}
 	if err := repo.Update(id, fields); err != nil {
 		peerError(c, 500, "更新互联对象失败")
 		return

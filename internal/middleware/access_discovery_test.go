@@ -11,11 +11,11 @@ func TestValidateDiscoveryAuthorizationAcceptsOnlyAccessOrDiscoveryTokens(t *tes
 	if err := appjwt.SetSecret("middleware-test-secret-0123456789abcdef0123456789abcdef"); err != nil {
 		t.Fatal(err)
 	}
-	accessToken, err := appjwt.GenerateToken("web-user", []string{"user"})
+	accessToken, err := appjwt.GenerateTokenForUser(1, "web-user", []string{"user"}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoveryToken, _, err := appjwt.GenerateEdgeDiscoveryToken("device-user", time.Minute)
+	discoveryToken, _, err := appjwt.GenerateEdgeDiscoveryToken(2, "device-user", 1, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

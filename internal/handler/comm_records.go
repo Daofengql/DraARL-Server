@@ -23,6 +23,10 @@ import (
 
 // CommRecordResponse 通信记录响应结构（用于前端显示）
 type CommRecordResponse struct {
+	SourceType      string `json:"source_type"`
+	SourceCenterID  string `json:"source_center_id"`
+	LinkID          string `json:"link_id"`
+	VirtualDeviceID string `json:"virtual_device_id"`
 	ID              uint   `json:"id"`
 	DeviceID        uint   `json:"device_id"`
 	DeviceName      string `json:"device_name"` // 通过联表查询获取：users.callsign + devices.ssid
@@ -46,6 +50,10 @@ type CommRecordResponse struct {
 
 // CommRecordWithDetails 联表查询结果
 type CommRecordWithDetails struct {
+	SourceType      string    `gorm:"column:source_type"`
+	SourceCenterID  string    `gorm:"column:source_center_id"`
+	LinkID          string    `gorm:"column:link_id"`
+	VirtualDeviceID string    `gorm:"column:virtual_device_id"`
 	ID              uint      `gorm:"column:id"`
 	DeviceID        uint      `gorm:"column:device_id"`
 	DeviceOwnerID   int       `gorm:"column:device_owner_id"`
@@ -139,7 +147,9 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	if senderCallSign == "" {
 		senderCallSign = r.UserCallSign
 	}
-	if r.DeviceID == 0 {
+	if r.SourceType == "intercenter" {
+		deviceName = r.SenderCallSign
+	} else if r.DeviceID == 0 {
 		// 幽灵设备：呼号-DevModel（100-105），前端根据 dev_model 判断设备类型
 		if senderCallSign != "" {
 			deviceName = senderCallSign + "-" + strconv.Itoa(devModel)
@@ -178,6 +188,7 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 	}
 
 	return CommRecordResponse{
+		SourceType: r.SourceType, SourceCenterID: r.SourceCenterID, LinkID: r.LinkID, VirtualDeviceID: r.VirtualDeviceID,
 		ID:              r.ID,
 		DeviceID:        r.DeviceID,
 		DeviceName:      deviceName,
@@ -235,7 +246,7 @@ func newCommRecordDetailsQuery(db *gorm.DB) *gorm.DB {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid as "DeviceSSID", cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast, cr.source_type, cr.source_center_id, cr.link_id, cr.virtual_device_id,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
 			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,
@@ -402,7 +413,7 @@ func GetCommRecord(c *gin.Context) {
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
-			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast,
+			cr.message_type, cr.text_content, cr.sender_username, cr.sender_callsign, cr.sender_nickname, cr.sender_dev_model, cr.is_auto_broadcast, cr.source_type, cr.source_center_id, cr.link_id, cr.virtual_device_id,
 			CASE WHEN cr.device_id = 0 THEN cr.device_ssid ELSE COALESCE(d.dev_model, 0) END as current_dev_model,
 			d.owner_id as device_owner_id,
 			d_owner.callsign as owner_call_sign, d_owner.nickname as owner_nick_name,

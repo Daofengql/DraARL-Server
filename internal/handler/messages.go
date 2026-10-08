@@ -18,13 +18,17 @@ import (
 )
 
 type MessageSenderResponse struct {
-	UserID   *uint  `json:"user_id"`
-	Username string `json:"username"`
-	CallSign string `json:"callsign"`
-	Nickname string `json:"nickname"`
-	SSID     uint8  `json:"ssid"`
-	DevModel int    `json:"dev_model"`
-	IsGhost  bool   `json:"is_ghost"`
+	SourceType      string `json:"source_type"`
+	SourceCenterID  string `json:"source_center_id"`
+	LinkID          string `json:"link_id"`
+	VirtualDeviceID string `json:"virtual_device_id"`
+	UserID          *uint  `json:"user_id"`
+	Username        string `json:"username"`
+	CallSign        string `json:"callsign"`
+	Nickname        string `json:"nickname"`
+	SSID            uint8  `json:"ssid"`
+	DevModel        int    `json:"dev_model"`
+	IsGhost         bool   `json:"is_ghost"`
 }
 
 type MessageResponse struct {
@@ -153,7 +157,8 @@ func toMessageResponse(record *gormdb.MessageRecord, requestedGroupID uint) Mess
 		RequestedGroupID: requestedGroupID,
 		Sender: MessageSenderResponse{
 			UserID: record.UserID, Username: username, CallSign: callSign, Nickname: nickname,
-			SSID: record.DeviceSSID, DevModel: devModel, IsGhost: record.DeviceID == 0,
+			SSID: record.DeviceSSID, DevModel: devModel, IsGhost: record.DeviceID == 0 && record.SourceType != "intercenter",
+			SourceType: record.SourceType, SourceCenterID: record.SourceCenterID, LinkID: record.LinkID, VirtualDeviceID: record.VirtualDeviceID,
 		},
 		SentAt:          record.StartTime.UTC().Format(time.RFC3339Nano),
 		DurationMs:      record.DurationMs,

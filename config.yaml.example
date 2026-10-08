@@ -8,6 +8,7 @@ System:
     LogPath: ""                # 日志文件路径，空则不输出文件
     IPfile: ./ipinfo.ipdb      # IP数据库文件路径
     ProxyProtocol: ""          # PROXY Protocol 版本: "v2" 启用, 留空禁用。启用后可从 frp 等代理获取真实客户端 IP
+    HTTPTrustedProxyCIDRs: []  # HTTP 反代来源；直连保持空。仅列出实际代理 IP/CIDR，控制 X-Forwarded-For/Proto 信任
 
 # UDP 转发性能配置。SendWorkers/IngressWorkers 为 0 时按 CPU 自动选择。
 UDP:
@@ -39,18 +40,14 @@ Firmware:
     AutoProxy: true
     MaxPresignedURLLength: 255
 
-# 可选中心/边缘互联。Type 0 UDP 复用上方 System.Port，不另开数据端口。
+# 可选中心群组互联。中心间低频准入走现有 HTTP/HTTPS，实时音频复用主 UDP 端口。
+# 在后台“群组管理 → 中心互联”生成邀请或导入对端 Token。
 Interconnect:
     Enabled: false
-    ControlListen: ":60100"   # 仅 TLS/TCP 节点控制面
-    TLSCertFile: ""
-    TLSKeyFile: ""
-    TLSClientCAFile: ""
-    AllowSelfSigned: false       # 仅本地开发/测试
+    CenterID: "center-a"       # 每个独立站点使用不同的稳定 ID
     RegistrationTokenTTL: 86400
     CredentialRotationGraceSeconds: 600 # 在线轮换后旧凭据可重连的短时宽限，最大 3600 秒
     SessionRecoveryWindowSeconds: 180   # 中心重启/节点重连时保留旧设备归属的恢复窗口，30-600 秒
-    NodeTokens: {}               # 开发引导配置；生产使用后台签发凭据
     Resources:
         MaxNodes: 256
         MaxPendingHandshakes: 64
@@ -67,24 +64,6 @@ Interconnect:
         ControlHardMbpsPerNode: 256
         DeviceAuthPPSPerNode: 500
         MaxDeviceSessionsPerNode: 25000
-
-# 仅在 `draarl --edge -c config.yaml` 下读取；中心模式忽略此块。
-# 边缘不需要下方 Database/Redis/Web/Storage 等中心依赖。
-Edge:
-    Center: "center.example.com:60100" # 中心 TLS 控制面
-    CenterUDP: "center.example.com:60050" # 中心 Type 0 UDP，与中心普通设备端口复用
-    Token: ""                  # 后台一次性注册凭据；首次注册后使用独立 identity 文件
-    NodeID: ""                 # 可由注册凭据携带，通常无需手填
-    Listen: ":60050"           # 边缘普通设备与 Type 0 共用双向 socket；远程中心场景不要绑定 127.0.0.1
-    ProxyProtocol: ""          # 设为 v2 时解析 FRP PROXY Protocol v2；应使用防火墙仅允许受信代理访问
-    ProxyTrustedCIDRs: []       # 受信代理源网段，例如 ["127.0.0.0/8", "10.0.0.0/8"]；release 构建启用 v2 时必须配置非空网段
-    TLSCAFile: ""              # 中心证书 CA；使用公共 CA 时可留空
-    TLSServerName: "center.example.com"
-    InsecureSkipVerify: false     # 仅本地测试可临时开启
-    IdentityFile: "edge-identity.json"
-    DeviceSessionTimeoutSeconds: 20 # 普通设备无包超时；超时后立即从本地路由移除并报告中心
-    GrantRenewBeforeSeconds: 30     # 在中心短期授权到期前随设备心跳续租
-    DisconnectedLocalGraceSeconds: 15 # 控制链断开后仅允许已有设备短暂本地通信，随后失败关闭
 
 # MySQL数据库配置
 Database:

@@ -26,7 +26,6 @@ export interface APRSConfig {
 
 export interface AccessDiscoveryConfig {
   token_ttl_seconds: number
-  edge_health_ttl_seconds: number
   cache_max_age_seconds: number
   center: {
     enabled: boolean
@@ -93,7 +92,6 @@ export const DEFAULT_SITE_CONFIGS: SiteConfigs = {
   },
   accessDiscovery: {
     token_ttl_seconds: 300,
-    edge_health_ttl_seconds: 20,
     cache_max_age_seconds: 5,
     center: {
       enabled: false,

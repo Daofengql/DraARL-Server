@@ -41,13 +41,18 @@ type CenterRuntimeConfig struct {
 	Confirm          DeviceSessionConfirmHandler
 	Config           DeviceConfigHandler
 	OnAcceptedRelay  AcceptedRelayHandler
+	OnPeerAudio      func(CenterPeerLink, []byte) bool
+	PeerConfigs      []CenterPeerConfig
 	OnNodeStatus     func(*NodeSession, *NodeHeartbeat, bool)
 	OnAuthentication func(NodeAuthenticationEvent)
 	ResourceLimits   ResourceLimits
 }
 type CenterRuntime struct {
+	TLSFingerprint    string
 	Cluster           *ClusterManager
 	Gateway           *CenterGateway
+	Peers             *CenterPeerManager
+	HTTPPeers         *CenterHTTPPeerManager
 	Control           *NodeServer
 	UDPBridge         *NodeDatagramBridge
 	status            *NodeStatusDispatcher
@@ -63,15 +68,22 @@ type pendingNodeCredentialRotation struct {
 }
 
 func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
-	if cfg.TLSConfig == nil {
-		return nil, errors.New("center node TLS config is required")
-	}
 	if cfg.ValidateToken == nil && cfg.Authenticate == nil {
-		return nil, errors.New("center node token validator is required")
+		cfg.Authenticate = func(string, string) (NodeAuthentication, error) { return NodeAuthentication{}, nil }
 	}
 	cluster := NewClusterManager(0)
 	gateway := NewCenterGateway(cluster, cfg.Auth, cfg.Activate)
+	peers := NewCenterPeerManager(cfg.OnPeerAudio)
+	for _, pc := range cfg.PeerConfigs {
+		if err := peers.SetConfig(pc); err != nil {
+			peers.Close()
+			cluster.Close()
+			return nil, err
+		}
+	}
+	gateway.peers = peers
 	if err := gateway.SetResourceLimits(cfg.ResourceLimits); err != nil {
+		peers.Close()
 		cluster.Close()
 		return nil, err
 	}
@@ -82,28 +94,48 @@ func StartCenterRuntime(cfg CenterRuntimeConfig) (*CenterRuntime, error) {
 	if status != nil {
 		gateway.onNodeStatus = status.Submit
 	}
-	server, err := NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect, OnAuthentication: cfg.OnAuthentication, ResourceLimits: cfg.ResourceLimits})
-	if err != nil {
-		return nil, err
+	var server *NodeServer
+	var data *NodeDatagramBridge
+	var err error
+	if cfg.TLSConfig != nil && strings.TrimSpace(cfg.ControlListen) != "" {
+		server, err = NewNodeServer(NodeServerConfig{ListenAddr: cfg.ControlListen, TLSConfig: cfg.TLSConfig, ValidateToken: cfg.ValidateToken, Authenticate: cfg.Authenticate, OnConnect: gateway.OnConnect, OnMessage: gateway.OnMessage, OnEnvelope: gateway.OnEnvelope, OnDisconnect: gateway.OnDisconnect, OnAuthentication: cfg.OnAuthentication, ResourceLimits: cfg.ResourceLimits})
+		if err != nil {
+			peers.Close()
+			gateway.Close()
+			cluster.Close()
+			return nil, err
+		}
+		data, err = NewNodeDatagramBridge(server.SessionByID, gateway.OnDatagram, 2*time.Second, cfg.ResourceLimits)
+		if err != nil {
+			peers.Close()
+			gateway.Close()
+			cluster.Close()
+			return nil, err
+		}
+		gateway.Bind(server, data)
+		if err := server.Start(); err != nil {
+			peers.Close()
+			data.Close()
+			gateway.Close()
+			cluster.Close()
+			return nil, err
+		}
 	}
-	data, err := NewNodeDatagramBridge(server.SessionByID, gateway.OnDatagram, 2*time.Second, cfg.ResourceLimits)
-	if err != nil {
-		return nil, err
-	}
-	gateway.Bind(server, data)
-	if err := server.Start(); err != nil {
-		data.Close()
-		gateway.Close()
-		cluster.Close()
-		return nil, err
-	}
-	runtime := &CenterRuntime{Cluster: cluster, Gateway: gateway, Control: server, UDPBridge: data, status: status, credentialPending: make(map[uint64]*pendingNodeCredentialRotation)}
+	httpPeers := NewCenterHTTPPeerManager(cfg.OnPeerAudio)
+	httpPeers.Start()
+	runtime := &CenterRuntime{TLSFingerprint: CertificateFingerprint(cfg.TLSConfig), Cluster: cluster, Gateway: gateway, Peers: peers, HTTPPeers: httpPeers, Control: server, UDPBridge: data, status: status, credentialPending: make(map[uint64]*pendingNodeCredentialRotation)}
 	gateway.onCredentialResult = runtime.finishCredentialRotation
 	return runtime, nil
 }
 func (r *CenterRuntime) Close() {
 	if r == nil {
 		return
+	}
+	if r.Peers != nil {
+		r.Peers.Close()
+	}
+	if r.HTTPPeers != nil {
+		r.HTTPPeers.Close()
 	}
 	r.credentialMu.Lock()
 	for messageID, pending := range r.credentialPending {

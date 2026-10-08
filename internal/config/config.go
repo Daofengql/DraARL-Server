@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -305,22 +306,15 @@ func (c *MessageAPIConfig) SetDefaults() error {
 	return nil
 }
 
-// InterconnectConfig controls the optional centre-side Type 0 node services.
-// It is ignored unless Enabled is true, preserving existing single-node startup.
+// InterconnectConfig controls the centre-to-centre runtime. Admission is
+// handled by the existing HTTP service and media is carried over System.Port.
 type InterconnectConfig struct {
-	Enabled                        bool   `yaml:"Enabled" json:"enabled"`
-	ControlListen                  string `yaml:"ControlListen" json:"control_listen"`
-	TLSCertFile                    string `yaml:"TLSCertFile" json:"tls_cert_file"`
-	TLSKeyFile                     string `yaml:"TLSKeyFile" json:"tls_key_file"`
-	TLSClientCAFile                string `yaml:"TLSClientCAFile" json:"tls_client_ca_file"`
-	AllowSelfSigned                bool   `yaml:"AllowSelfSigned" json:"allow_self_signed"`
-	RegistrationTokenTTL           int    `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
-	CredentialRotationGraceSeconds int    `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
-	SessionRecoveryWindowSeconds   int    `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
-	// NodeTokens is a development/bootstrap map. Production deployments should
-	// replace it with hashed, rotatable credentials managed by the admin API.
-	NodeTokens map[string]string          `yaml:"NodeTokens" json:"node_tokens"`
-	Resources  InterconnectResourceConfig `yaml:"Resources" json:"resources"`
+	Enabled                        bool                       `yaml:"Enabled" json:"enabled"`
+	CenterID                       string                     `yaml:"CenterID" json:"center_id"`
+	RegistrationTokenTTL           int                        `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
+	CredentialRotationGraceSeconds int                        `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
+	SessionRecoveryWindowSeconds   int                        `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
+	Resources                      InterconnectResourceConfig `yaml:"Resources" json:"resources"`
 }
 
 type InterconnectResourceConfig struct {
@@ -363,6 +357,9 @@ type Configuration struct {
 		// 开发/测试构建中为空时保持旧兼容行为并告警；release 构建要求显式配置，
 		// 仅来自这些前缀的连接才会解析 PROXY 头，防止伪造源 IP。
 		ProxyTrustedCIDRs []string `yaml:"ProxyTrustedCIDRs" json:"proxy_trusted_cidrs"`
+		// HTTPTrustedProxyCIDRs controls HTTP forwarded headers only. Empty means
+		// direct connections: X-Forwarded-For from clients is ignored.
+		HTTPTrustedProxyCIDRs []string `yaml:"HTTPTrustedProxyCIDRs" json:"http_trusted_proxy_cidrs"`
 	} `yaml:"System" json:"system"`
 
 	UDP           UDPConfig          `yaml:"UDP" json:"udp"`
@@ -538,6 +535,9 @@ func (c *Configuration) SetDefaults() error {
 	if _, err := ParseProxyTrustedCIDRs(c.System.ProxyTrustedCIDRs); err != nil {
 		return fmt.Errorf("System.ProxyTrustedCIDRs: %w", err)
 	}
+	if _, err := ParseProxyTrustedCIDRs(c.System.HTTPTrustedProxyCIDRs); err != nil {
+		return fmt.Errorf("System.HTTPTrustedProxyCIDRs: %w", err)
+	}
 	if IsReleaseBuild() && c.System.ProxyProtocol == "v2" && len(c.System.ProxyTrustedCIDRs) == 0 {
 		return fmt.Errorf("System.ProxyTrustedCIDRs must contain at least one CIDR when System.ProxyProtocol=v2 in release builds")
 	}
@@ -582,8 +582,11 @@ func (c *Configuration) SetDefaults() error {
 	if c.UDP.WriteBufferBytes <= 0 {
 		c.UDP.WriteBufferBytes = 4 * 1024 * 1024
 	}
-	if strings.TrimSpace(c.Interconnect.ControlListen) == "" {
-		c.Interconnect.ControlListen = ":60100"
+	if strings.TrimSpace(c.Interconnect.CenterID) == "" {
+		c.Interconnect.CenterID = "center"
+	}
+	if !regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$").MatchString(c.Interconnect.CenterID) {
+		return fmt.Errorf("Interconnect.CenterID must be 1–64 ASCII letters, digits, dots, hyphens or underscores")
 	}
 	if c.Interconnect.RegistrationTokenTTL <= 0 {
 		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60

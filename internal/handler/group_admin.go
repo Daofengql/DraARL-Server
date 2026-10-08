@@ -175,6 +175,10 @@ func UpdateGroup(c *gin.Context) {
 		return
 	}
 	previousStatus := group.Status
+	if id == models.GroupIDPublicMin && ((req.Type != 0 && req.Type != groupTypePublic) || (req.Status != nil && *req.Status != 1)) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "默认公共频道必须保持公开且启用"})
+		return
+	}
 
 	// 更新字段
 	if req.Name != "" {
@@ -320,6 +324,10 @@ func DeleteGroup(c *gin.Context) {
 		return
 	}
 	deviceRepo := gormdb.NewDeviceRepository()
+	if id == models.GroupIDPublicMin {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "默认公共频道不能删除"})
+		return
+	}
 	movedDevices, err := deviceRepo.ListDevicesByGroupID(id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备失败"})

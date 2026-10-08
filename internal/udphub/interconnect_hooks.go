@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,8 +53,11 @@ type CenterInterconnectHooks struct {
 	RelayBroadcast       func(runID uint, sourceGroupID int, domainID uint64, data []byte) error
 	RemoteOwner          func(ownerID int, ssid byte) bool
 	Relay                func(CenterLocalSource, []byte) error
-	SendConfig           func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
-	Revoke               func(CenterLocalSource)
+	// RelayPeer sends only an explicitly configured centre-to-centre mapping.
+	// It is separate from Relay, which is the legacy centre-to-edge data plane.
+	RelayPeer  func(CenterLocalSource, []byte) error
+	SendConfig func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
+	Revoke     func(CenterLocalSource)
 }
 
 var centerInterconnectBridge struct {
@@ -142,18 +146,29 @@ func ActivateCenterLocalDeviceContext(ctx context.Context, dev *models.Device) e
 
 func RelayCenterLocalDevice(dev *models.Device, data []byte) error {
 	hooks := centerHooks()
-	if hooks.Relay == nil {
+	if hooks.Relay == nil && hooks.RelayPeer == nil {
 		return nil
 	}
 	if dev == nil || len(data) == 0 {
 		return errors.New("invalid centre-local relay")
 	}
-	if dev.RuntimeSnapshot().InterconnectSessionID == 0 {
+	if hooks.Relay != nil && dev.RuntimeSnapshot().InterconnectSessionID == 0 {
 		if err := ActivateCenterLocalDevice(dev); err != nil {
 			return err
 		}
 	}
-	return hooks.Relay(centerSourceFromDevice(dev), data)
+	source := centerSourceFromDevice(dev)
+	if hooks.Relay != nil {
+		if err := hooks.Relay(source, data); err != nil {
+			return err
+		}
+	}
+	if hooks.RelayPeer != nil {
+		if err := hooks.RelayPeer(source, data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func CenterLocalDeviceAuthoritative(dev *models.Device) bool {
@@ -253,18 +268,33 @@ func centerSourceFromWS(source interfaces.WSDeviceInterface, groupID int) Center
 // demand, then the newly assigned owner/epoch is used for the same frame.
 func RelayCenterLocalWS(source interfaces.WSDeviceInterface, groupID int, data []byte) error {
 	hooks := centerHooks()
-	if hooks.Activate == nil || hooks.Relay == nil {
+	if hooks.Relay == nil && hooks.RelayPeer == nil {
 		return nil
 	}
 	local := centerSourceFromWS(source, groupID)
 	if local.OwnerID <= 0 || local.DomainID == 0 || len(data) == 0 {
 		return nil
 	}
-	if err := hooks.Activate(&local); err != nil {
-		return err
+	if hooks.Relay != nil {
+		if hooks.Activate == nil {
+			return errors.New("centre activation hook is unavailable")
+		}
+		if err := hooks.Activate(&local); err != nil {
+			return err
+		}
+		source.SetInterconnectSession(local.SessionID, local.SessionEpoch)
 	}
-	source.SetInterconnectSession(local.SessionID, local.SessionEpoch)
-	return hooks.Relay(local, data)
+	if hooks.Relay != nil {
+		if err := hooks.Relay(local, data); err != nil {
+			return err
+		}
+	}
+	if hooks.RelayPeer != nil {
+		if err := hooks.RelayPeer(local, data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func AuthorizeCenterLocalWS(source interfaces.WSDeviceInterface, groupID int) bool {
@@ -406,5 +436,33 @@ func DeliverInterconnectPacket(domainID uint64, data []byte) bool {
 			activeDomainGroupIDs(groupID), physicalData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
 		)
 	}
+	return true
+}
+
+// DeliverCenterPeerAudio injects media from another centre as a stable
+// system source. It deliberately rewrites the public DraARL identity to the
+// configured Server-* virtual device and never enters ordinary authentication.
+func DeliverCenterPeerAudio(groupID int, data []byte, virtualDeviceName, remoteCenterID, linkID, direction string) bool {
+	if groupID <= 0 || len(data) == 0 || len(data) > 710 || !strings.HasPrefix(virtualDeviceName, "Server-") || len(virtualDeviceName) > 32 {
+		return false
+	}
+	if group, ok := GetGroupFromCache(groupID); !ok || group == nil || group.Status != 1 || group.IsVirtual {
+		return false
+	}
+	identity := strings.TrimSpace(virtualDeviceName)
+	physicalData := protocol.EncodeDraARLv1(identity, "", protocol.SSIDRangeInterconnectMin, protocol.DraARLTypeOpus16K, protocol.DraARLDevModelInterconnect, 0, identity, data)
+	if len(physicalData) == 0 {
+		return false
+	}
+	writeUDPDomain(physicalData, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
+	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
+		GlobalMessageRouter.wsManager.BroadcastToGroups(
+			activeDomainGroupIDs(groupID), physicalData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
+		)
+	}
+	MarkAcceptedVoice(groupID, time.Now())
+	gid := uint(groupID)
+	sender := CommSenderSnapshot{CallSign: identity, Nickname: identity, DevModel: int(protocol.DraARLDevModelInterconnect), SourceType: "intercenter", SourceCenterID: remoteCenterID, LinkID: linkID, VirtualDeviceID: "intercenter:" + remoteCenterID + ":" + linkID + ":" + direction}
+	RecordCommPacket(sender.VirtualDeviceID, 0, 255, &gid, nil, sender, data)
 	return true
 }

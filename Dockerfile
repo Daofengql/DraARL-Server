@@ -8,7 +8,7 @@ COPY www/ ./
 ARG DRAARL_VERSION=dev
 RUN VITE_APP_VERSION="${DRAARL_VERSION}" npm run build
 
-FROM golang:1.25-alpine AS backend
+FROM golang:1.26.8-alpine AS backend
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src

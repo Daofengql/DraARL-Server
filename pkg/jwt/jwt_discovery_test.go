@@ -8,7 +8,7 @@ import (
 )
 
 func TestDiscoveryTokenCannotBeUsedAsAccessTokenOrRefreshed(t *testing.T) {
-	token, expiresAt, err := GenerateEdgeDiscoveryToken("radio-user", time.Minute)
+	token, expiresAt, err := GenerateEdgeDiscoveryToken(1, "radio-user", 1, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestDiscoveryTokenCannotBeUsedAsAccessTokenOrRefreshed(t *testing.T) {
 }
 
 func TestAccessTokenCannotBeRefreshedStatelessly(t *testing.T) {
-	token, err := GenerateToken("web-user", []string{"user"})
+	token, err := GenerateTokenForUser(1, "web-user", []string{"user"}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestAccessTokenCannotBeRefreshedStatelessly(t *testing.T) {
 }
 
 func TestAccessTokenCannotBeUsedAsDiscoveryToken(t *testing.T) {
-	token, err := GenerateToken("web-user", []string{"user"})
+	token, err := GenerateTokenForUser(1, "web-user", []string{"user"}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestAccessTokenCannotBeUsedAsDiscoveryToken(t *testing.T) {
 	}
 }
 
-func TestAccessTokenRequiresExpiryButKeepsLegacyTokenUseCompatibility(t *testing.T) {
+func TestAccessTokenRejectsLegacyUsernameIdentityAndRequiresExpiry(t *testing.T) {
 	now := time.Now()
 	legacyClaims := Claims{
 		Username: "legacy-user",
@@ -68,11 +68,15 @@ func TestAccessTokenRequiresExpiryButKeepsLegacyTokenUseCompatibility(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ValidateAccessToken(legacy); err != nil {
-		t.Fatalf("legacy access token without token_use was rejected: %v", err)
+	if _, err := ValidateAccessToken(legacy); err == nil {
+		t.Fatal("legacy username-only token was accepted")
 	}
 
 	withoutExpiry := legacyClaims
+	withoutExpiry.UserID = 7
+	withoutExpiry.SessionVersion = 1
+	withoutExpiry.Subject = "7"
+	withoutExpiry.TokenUse = TokenUseAccess
 	withoutExpiry.ExpiresAt = nil
 	invalid, err := jwt.NewWithClaims(jwt.SigningMethodHS256, withoutExpiry).SignedString([]byte(testJWTSecret))
 	if err != nil {
@@ -80,5 +84,24 @@ func TestAccessTokenRequiresExpiryButKeepsLegacyTokenUseCompatibility(t *testing
 	}
 	if _, err := ValidateAccessToken(invalid); err == nil {
 		t.Fatal("access token without expiry was accepted")
+	}
+}
+
+func TestAccessTokenBindsSubjectAndSessionVersion(t *testing.T) {
+	token, err := GenerateTokenForUser(42, "renamable", []string{"user"}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := ValidateAccessToken(token)
+	if err != nil || claims.UserID != 42 || claims.Subject != "42" || claims.SessionVersion != 3 {
+		t.Fatalf("claims=%#v err=%v", claims, err)
+	}
+	claims.Subject = "43"
+	invalid, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testJWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateAccessToken(invalid); err == nil {
+		t.Fatal("mismatched subject accepted")
 	}
 }

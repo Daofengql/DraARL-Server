@@ -258,13 +258,17 @@ func AuthenticateJWT(token string) *JWTAuthResult {
 		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthInvalidToken, "Invalid or expired token"
 		return result
 	}
-	user, err := gormdb.NewUserRepository().GetUserByName(claims.Username)
+	user, err := gormdb.NewUserRepository().GetUserByID(claims.UserID)
 	if err != nil || user == nil {
 		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthUserNotFound, "User not found"
 		return result
 	}
 	if user.Status != 1 {
 		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthUserDisabled, "User is disabled"
+		return result
+	}
+	if claims.SessionVersion != user.SessionVersion {
+		result.ErrorCode, result.ErrorMsg = protocol.JWTAuthInvalidToken, "Session revoked"
 		return result
 	}
 	if user.ApprovalStatus != 1 {

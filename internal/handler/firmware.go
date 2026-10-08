@@ -40,6 +40,9 @@ var firmwareSemverRegex = regexp.MustCompile(`^\d+\.\d+\.\d+(-[\w.]+)?$`)
 
 // UploadFirmware 上传固件（管理员权限）
 func UploadFirmware(c *gin.Context) {
+	if !parseLimitedUploadForm(c, maxFirmwareSize) {
+		return
+	}
 	// 解析表单字段
 	devModelStr := c.PostForm("dev_model")
 	version := c.PostForm("version")

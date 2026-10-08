@@ -19,7 +19,6 @@ const UsersPage = lazy(() => import('./pages/users/UsersPage').then(m => ({ defa
 const ApprovalsPage = lazy(() => import('./pages/users/ApprovalsPage').then(m => ({ default: m.ApprovalsPage })))
 const CertificateApprovalsPage = lazy(() => import('./pages/certificates/CertificateApprovalsPage').then(m => ({ default: m.CertificateApprovalsPage })))
 const RelaysPage = lazy(() => import('./pages/relays/RelaysPage').then(m => ({ default: m.RelaysPage })))
-const ServersPage = lazy(() => import('./pages/servers/ServersPage').then(m => ({ default: m.ServersPage })))
 const ProfilePage = lazy(() => import('./pages/profile/ProfilePage').then(m => ({ default: m.ProfilePage })))
 const SiteConfigPage = lazy(() => import('./pages/settings/SiteConfigPage').then(m => ({ default: m.SiteConfigPage })))
 const CommRecordsPage = lazy(() => import('./pages/comm-records/CommRecordsPage').then(m => ({ default: m.CommRecordsPage })))
@@ -36,6 +35,7 @@ const AdminDevicePage = lazy(() => import('./pages/admin/DevicePage').then(m => 
 const RadioSessionsPage = lazy(() => import('./pages/admin/RadioSessionsPage').then(m => ({ default: m.RadioSessionsPage })))
 const AdminGroupPage = lazy(() => import('./pages/admin/GroupPage').then(m => ({ default: m.AdminGroupPage })))
 const GroupLinkPage = lazy(() => import('./pages/admin/GroupLinkPage').then(m => ({ default: m.GroupLinkPage })))
+const InterCenterLinksPage = lazy(() => import('./pages/admin/InterCenterLinksPage').then(m => ({ default: m.InterCenterLinksPage })))
 const AssetPage = lazy(() => import('./pages/admin/AssetPage').then(m => ({ default: m.AssetPage })))
 const FirmwarePage = lazy(() => import('./pages/admin/FirmwarePage').then(m => ({ default: m.FirmwarePage })))
 const ClientResourcePage = lazy(() => import('./pages/admin/ClientResourcePage').then(m => ({ default: m.ClientResourcePage })))
@@ -158,10 +158,10 @@ function App() {
           <Route path="radio-sessions" element={<PageSuspense><RadioSessionsPage /></PageSuspense>} />
           <Route path="groups" element={<PageSuspense><AdminGroupPage /></PageSuspense>} />
           <Route path="group-links" element={<PageSuspense><GroupLinkPage /></PageSuspense>} />
+          <Route path="inter-center-links" element={<PageSuspense><InterCenterLinksPage /></PageSuspense>} />
           <Route path="approvals" element={<PageSuspense><ApprovalsPage /></PageSuspense>} />
           <Route path="certificate-approvals" element={<PageSuspense><CertificateApprovalsPage /></PageSuspense>} />
           <Route path="relays" element={<PageSuspense><RelaysPage /></PageSuspense>} />
-          <Route path="servers" element={<PageSuspense><ServersPage /></PageSuspense>} />
           <Route path="comm-records" element={<Navigate to="/admin/comm-records/platform" replace />} />
           <Route path="comm-records/platform" element={<PageSuspense><CommRecordsPage /></PageSuspense>} />
           <Route path="comm-records/logbook" element={<PageSuspense><LogbookPage /></PageSuspense>} />

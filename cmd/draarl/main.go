@@ -51,8 +51,6 @@ func main() {
 
 	// 解析命令行参数
 	configPath := flag.String("c", "", "配置文件路径")
-	edgeMode := flag.Bool("edge", false, "以无数据库边缘节点模式启动")
-	interconnectMode := flag.Bool("interconnect", false, "以无数据库边缘节点模式启动（edge 别名）")
 	showVersion := flag.Bool("v", false, "显示版本信息")
 	printConfig := flag.String("p", "", "打印配置信息")
 	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
@@ -61,12 +59,6 @@ func main() {
 	migrateDryRun := flag.Bool("migrate-dry-run", false, "仅统计迁移计划，不实际写入目标端")
 	migrateMaxBytesPerSecond := flag.Int64("migrate-max-bytes-per-second", 0, "迁移源端读取总速率上限（字节/秒，<=0 不限速）")
 	flag.Parse()
-	if *edgeMode || *interconnectMode {
-		if err := runEdgeMode(*configPath); err != nil {
-			stdlog.Fatalf("边缘节点启动失败: %v", err)
-		}
-		return
-	}
 
 	if *showVersion {
 		fmt.Printf("DraARL version %s (build time: %s)\n", buildinfo.VersionString(), buildinfo.BuildTimeString())
@@ -190,6 +182,12 @@ func main() {
 	}
 
 	// 初始化管理员用户（首次启动时）
+	if !gormdb.Get().Migrator().HasColumn(&gormdb.User{}, "session_version") {
+		stdlog.Fatal("数据库缺少认证会话版本列，请使用 --auto-migrate 完成升级")
+	}
+	if err := gormdb.ValidateDefaultPublicGroup(); err != nil {
+		stdlog.Fatalf("公共频道初始化检查失败（请使用 --auto-migrate）: %v", err)
+	}
 	adminUser, adminPass, err := db.InitAdminUser()
 	if err != nil {
 		stdlog.Printf("初始化管理员用户失败: %v", err)
@@ -230,8 +228,8 @@ func main() {
 		fmt.Sscanf(cfg.System.Port, "%d", &udpPort)
 	}
 
-	// 先等待共享 UDP socket 和 udphub pipeline 就绪。Type 0 与普通设备
-	// 共用这个端口，TLS 节点控制面只能在此后启动。
+	// 先等待主 UDP socket 和 udphub pipeline 就绪。中心互联的实时数据面
+	// 与普通设备共用这个端口；低频准入走 HTTP API。
 	udpReady := make(chan error, 1)
 	udpErrCh := make(chan error, 1)
 	go func() {
@@ -305,15 +303,23 @@ func main() {
 			Relay: func(source udphub.CenterLocalSource, data []byte) error {
 				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
 			},
+			RelayPeer: func(source udphub.CenterLocalSource, data []byte) error {
+				if centerRuntime.HTTPPeers == nil {
+					return nil
+				}
+				return centerRuntime.HTTPPeers.RelayGroup(source.GroupID, data)
+			},
 			SendConfig: centerRuntime.Gateway.SendDeviceConfig,
 			Revoke: func(source udphub.CenterLocalSource) {
 				centerRuntime.Gateway.RevokeLocalDevice(source.SessionID, source.SessionEpoch)
 			},
 		})
 		defer udphub.SetCenterInterconnectHooks(udphub.CenterInterconnectHooks{})
-		udphub.SetType0Handler(centerRuntime.UDPBridge)
+		// Centre peer UDP sessions use a dedicated authenticated AES-GCM envelope
+		// on the main socket. No legacy Type 0/TLS node handler is exposed on dev.
+		udphub.SetType0Handler(centerRuntime.HTTPPeers)
 		defer udphub.SetType0Handler(nil)
-		stdlog.Printf("Type 0 节点服务已启动: control=%s shared_udp=%s", cfg.Interconnect.ControlListen, cfg.System.Port)
+		stdlog.Printf("中心互联已启动: HTTP准入 + shared_udp=%s", cfg.System.Port)
 	}
 
 	// 启动 APRS 服务（配置从数据库加载）

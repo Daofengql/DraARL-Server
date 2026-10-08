@@ -1,16 +1,13 @@
 package main
 
 import (
-	"crypto/tls"
-	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	stdlog "log"
 	"net"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"draarl/internal/config"
@@ -20,6 +17,7 @@ import (
 	oplog "draarl/internal/log"
 	"draarl/internal/protocol"
 	"draarl/internal/udphub"
+	appcrypto "draarl/pkg/crypto"
 )
 
 func localSourceGrant(source *udphub.CenterLocalSource) interconnect.DeviceGrant {
@@ -36,63 +34,6 @@ func localSourceGrant(source *udphub.CenterLocalSource) interconnect.DeviceGrant
 	}
 }
 
-func runEdgeMode(configPath string) error {
-	if strings.TrimSpace(configPath) == "" {
-		configPath = config.DefaultConfigFileName
-	}
-	edgeCfg, err := interconnect.LoadEdgeConfig(configPath)
-	if err != nil {
-		return err
-	}
-	ghostsession.ConfigureGlobal(
-		edgeCfg.GhostSessions.MaxSessionsPerOwner,
-		edgeCfg.GhostSessions.MaxSubscriptionsPerSession,
-	)
-	rootPool, err := edgeRootPool(edgeCfg.Edge.TLSCAFile)
-	if err != nil {
-		return err
-	}
-	serverName := edgeCfg.Edge.TLSServerName
-	if serverName == "" {
-		serverName = "localhost"
-	}
-	tlsCfg := &tls.Config{RootCAs: rootPool, ServerName: serverName, MinVersion: tls.VersionTLS13, InsecureSkipVerify: edgeCfg.Edge.InsecureSkipVerify} // #nosec G402 -- only explicit local/test configuration may skip verification.
-	fallbackNodeID, fallbackToken, _ := edgeCfg.RegistrationFallback()
-	runtime, err := interconnect.StartEdgeRuntime(interconnect.EdgeRuntimeConfig{
-		NodeID: edgeCfg.Edge.NodeID, Token: edgeCfg.Edge.Token, FallbackNodeID: fallbackNodeID, FallbackToken: fallbackToken,
-		CenterControl: edgeCfg.Edge.Center, CenterUDP: edgeCfg.Edge.CenterUDP, Listen: edgeCfg.Edge.Listen, ProxyProtocol: edgeCfg.Edge.ProxyProtocol, ProxyTrustedCIDRs: append([]string(nil), edgeCfg.Edge.ProxyTrustedCIDRs...), TLSConfig: tlsCfg,
-		DeviceSessionTimeout: time.Duration(edgeCfg.Edge.DeviceSessionTimeoutSeconds) * time.Second,
-		GrantRenewBefore:     time.Duration(edgeCfg.Edge.GrantRenewBeforeSeconds) * time.Second,
-		DisconnectedGrace:    time.Duration(edgeCfg.Edge.DisconnectedLocalGraceSeconds) * time.Second,
-		OnCredential: func(identity interconnect.EdgeIdentity) error {
-			if err := interconnect.SaveEdgeIdentity(edgeCfg.Edge.IdentityFile, identity); err != nil {
-				return fmt.Errorf("save issued edge identity: %w", err)
-			}
-			return nil
-		},
-	})
-	if err != nil {
-		return err
-	}
-	defer runtime.Close()
-	stdlog.Printf("DraARL edge node %s started: shared_udp=%s center_control=%s center_udp=%s", edgeCfg.Edge.NodeID, runtime.Gateway.Addr(), edgeCfg.Edge.Center, edgeCfg.Edge.CenterUDP)
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-quit:
-		return nil
-	case err := <-runtime.Fatal():
-		return err
-	}
-}
-
-func edgeRootPool(path string) (*x509.CertPool, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
-	}
-	return interconnect.LoadRootPool(path)
-}
-
 func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRuntime, error) {
 	if cfg == nil {
 		return nil, errors.New("center configuration is nil")
@@ -105,73 +46,11 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	if err != nil {
 		return nil, err
 	}
-	var tlsCfg *tls.Config
-	if cfg.Interconnect.TLSCertFile != "" || cfg.Interconnect.TLSKeyFile != "" {
-		if cfg.Interconnect.TLSCertFile == "" || cfg.Interconnect.TLSKeyFile == "" {
-			return nil, errors.New("both Interconnect.TLSCertFile and TLSKeyFile are required")
-		}
-		loaded, err := interconnect.LoadTLSCertificate(cfg.Interconnect.TLSCertFile, cfg.Interconnect.TLSKeyFile, nil)
-		if err != nil {
-			return nil, err
-		}
-		tlsCfg = loaded
-	} else if cfg.Interconnect.AllowSelfSigned {
-		generated, _, err := interconnect.NewSelfSignedTLSConfig("localhost")
-		if err != nil {
-			return nil, err
-		}
-		tlsCfg = generated
-	} else {
-		return nil, errors.New("Type 0 requires TLS certificate files or explicit AllowSelfSigned=true")
-	}
-	tokens := make(map[string]string, len(cfg.Interconnect.NodeTokens))
-	for node, token := range cfg.Interconnect.NodeTokens {
-		tokens[node] = token
-	}
-	validateStaticToken := func(nodeID, token string) bool {
-		expected, ok := tokens[nodeID]
-		return ok && expected != "" && token == expected
-	}
-	authenticateNode := func(nodeID, token string) (interconnect.NodeAuthentication, error) {
-		if validateStaticToken(nodeID, token) {
-			return interconnect.NodeAuthentication{Accepted: true}, nil
-		}
-		// 【H3 安全修复】凭据被拒以 Accepted=false + nil error 表达（区别于内部错误）。
-		// 中心 handleConn 据此区分：只有 nil error 且 Accepted=false 才回 controlAuthError，
-		// 边缘端才允许回退一次性 bootstrap 令牌；DB 抖动等瞬时错误保持 err != nil，
-		// 边缘端使用原凭据重试，避免被一次瞬时错误永久锁死。
-		if interconnect.CredentialNodeID(token) != nodeID {
-			return interconnect.NodeAuthentication{}, nil
-		}
-		issuedCredential, err := interconnect.NewLongTermCredential(nodeID)
-		if err != nil {
-			return interconnect.NodeAuthentication{}, err
-		}
-		result, err := gormdb.NewServerRepository().AuthenticateNode(
-			nodeID, interconnect.HashCredential(token), interconnect.HashCredential(issuedCredential), time.Now(),
-		)
-		if err != nil {
-			if errors.Is(err, gormdb.ErrNodeNotFound) || errors.Is(err, gormdb.ErrNodeDisabled) ||
-				errors.Is(err, gormdb.ErrNodeCredentialInvalid) || errors.Is(err, gormdb.ErrNodeCredentialMissing) {
-				// 明确的凭据/节点拒绝：不视为内部错误
-				return interconnect.NodeAuthentication{}, nil
-			}
-			// 其余（连接、锁等待、超时等）为瞬时内部错误，交由边缘重试
-			return interconnect.NodeAuthentication{}, err
-		}
-		if !result.Accepted {
-			return interconnect.NodeAuthentication{}, nil
-		}
-		authentication := interconnect.NodeAuthentication{Accepted: true, CredentialEpoch: result.CredentialEpoch}
-		if result.IssueCredential {
-			authentication.IssuedCredential = issuedCredential
-		}
-		return authentication, nil
-	}
-	var runtime *interconnect.CenterRuntime
+	var runtimeRef atomic.Pointer[interconnect.CenterRuntime]
 	ghostHooks := func() udphub.ProxiedGhostSessionHooks {
 		return udphub.ProxiedGhostSessionHooks{
 			ApplyRouting: func(ghostSessionID string, _ int, _ byte, _ string, routing ghostsession.Routing) error {
+				runtime := runtimeRef.Load()
 				if runtime == nil || runtime.Gateway == nil {
 					return nil
 				}
@@ -179,6 +58,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 				return err
 			},
 			Disconnect: func(ghostSessionID, reason string) {
+				runtime := runtimeRef.Load()
 				if runtime != nil && runtime.Gateway != nil {
 					_, _ = runtime.Gateway.RevokeActiveGhost(ghostSessionID, reason)
 				}
@@ -424,6 +304,16 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 	if err != nil {
 		return nil, fmt.Errorf("list edge restart recovery sessions: %w", err)
 	}
+	// Centre-to-centre mappings are admitted by HTTP and use the shared UDP
+	// socket. They must never start the legacy TLS peer connector.
+	acceptPeerAudio := func(link interconnect.CenterPeerLink, payload []byte) bool {
+		runtime := runtimeRef.Load()
+		domain := udphub.GetActiveCommunicationDomainID(link.LocalGroupID)
+		if runtime == nil || domain == 0 || !runtime.Gateway.AcquirePeerVoice(link.LinkID, domain) {
+			return false
+		}
+		return udphub.DeliverCenterPeerAudio(link.LocalGroupID, payload, link.VirtualDeviceName, link.RemoteCenterID, link.LinkID, link.Direction)
+	}
 	recordAcceptedRelay := func(relay interconnect.AcceptedRelay) {
 		if len(relay.Payload) == 0 {
 			return
@@ -450,13 +340,32 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			udphub.RecordTextMessage(relay.DeviceID, relay.SSID, groupID, ownerID, sender, string(relay.Payload))
 		}
 	}
-	runtime, err = interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{
-		ControlListen: cfg.Interconnect.ControlListen, TLSConfig: tlsCfg, Authenticate: authenticateNode,
+	runtime, err := interconnect.StartCenterRuntime(interconnect.CenterRuntimeConfig{
 		Auth: authHandler, Activate: activateDevice, Confirm: confirmHandler, Config: configHandler,
-		OnAcceptedRelay: recordAcceptedRelay, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits,
+		OnAcceptedRelay: recordAcceptedRelay, OnPeerAudio: acceptPeerAudio, OnNodeStatus: onNodeStatus, OnAuthentication: onNodeAuthentication, ResourceLimits: limits,
 	})
 	if err != nil {
 		return nil, err
+	}
+	runtimeRef.Store(runtime)
+	// Restore the last admitted UDP session after a process restart. B's
+	// persisted endpoint sends a fresh Hello; A learns it again without any
+	// control TCP listener.
+	if links, loadErr := gormdb.NewInterCenterLinkRepository().List(); loadErr == nil {
+		for _, link := range links {
+			if link.LocalCenterID != cfg.Interconnect.CenterID || link.SessionID == "" || link.SessionKeyCiphertext == "" {
+				continue
+			}
+			encoded, decErr := appcrypto.Decrypt(link.SessionKeyCiphertext)
+			if decErr != nil {
+				continue
+			}
+			key, keyErr := base64.RawURLEncoding.DecodeString(encoded)
+			if keyErr != nil {
+				continue
+			}
+			_ = runtime.HTTPPeers.RegisterSession(interconnect.CenterHTTPPeerSession{Link: interconnect.CenterPeerLink{LinkID: link.LinkID, LocalCenterID: link.LocalCenterID, RemoteCenterID: link.RemoteCenterID, LocalGroupID: link.LocalGroupID, RemoteGroupID: link.RemoteGroupID, InitiatorCenterID: link.InitiatorCenterID, Direction: link.Direction, Enabled: link.Enabled, Accepted: link.Accepted, ForwardAudio: link.ForwardAudio, VirtualDeviceName: link.VirtualDeviceName, CredentialEpoch: link.CredentialEpoch}, SessionID: link.SessionID, SessionKey: key, RemoteUDP: link.RemoteUDPAddress, LocalSendAudio: link.LocalSendAudio, LocalReceiveAudio: link.LocalReceiveAudio, RemoteSendAudio: link.RemoteSendAudio, RemoteReceiveAudio: link.RemoteReceiveAudio})
+		}
 	}
 	runtime.Gateway.SetGhostRecoveryWindow(recoveryWindow)
 	runtime.Gateway.SetGhostSessionHandlers(

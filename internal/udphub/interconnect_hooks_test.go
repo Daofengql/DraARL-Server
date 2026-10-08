@@ -71,3 +71,22 @@ func TestDeliverInterconnectPacketRejectsCredentialAndUnknownDomain(t *testing.T
 		assertNoRouteTestPacket(t, endpoint.conn)
 	}
 }
+
+func TestDeliverCenterPeerPacketUsesStableVirtualIdentity(t *testing.T) {
+	env := setupRouteTest(t, 9700, false)
+	payload := []byte{4, 5, 6}
+	if !DeliverCenterPeerAudio(env.groupA, payload, "Server-A", "A", "bridge", "bidirectional") {
+		t.Fatal("centre peer packet was not delivered")
+	}
+	receivedWire := readRouteTestPacket(t, env.udpA1.conn)
+	received, err := protocol.NewDraARLv1Packet(nil, receivedWire)
+	if err != nil {
+		t.Fatalf("decode virtual packet: %v", err)
+	}
+	if received.Username != "Server-A" || received.CallSign != "Server-A" || received.SSID != protocol.SSIDRangeInterconnectMin || received.DevModel != protocol.DraARLDevModelInterconnect {
+		t.Fatalf("unexpected virtual identity: username=%q callsign=%q ssid=%d model=%d", received.Username, received.CallSign, received.SSID, received.DevModel)
+	}
+	if string(received.DATA) != string(payload) {
+		t.Fatalf("virtual payload=%v want %v", received.DATA, payload)
+	}
+}

@@ -79,7 +79,7 @@ func TestProxiedModernGhostAuthenticationMySQL(t *testing.T) {
 	if err := jwtutil.SetSecret("edge-ghost-e2e-secret-0123456789-abcdefghijklmnopqrstuvwxyz"); err != nil {
 		t.Fatal(err)
 	}
-	token, err := jwtutil.GenerateToken(owner.Name, []string{"user"})
+	token, err := jwtutil.GenerateTokenForUser(owner.ID, owner.Name, []string{"user"}, owner.SessionVersion)
 	if err != nil {
 		t.Fatal(err)
 	}

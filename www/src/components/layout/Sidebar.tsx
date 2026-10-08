@@ -155,8 +155,8 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
                       mx: 1,
                       borderRadius: 2,
                       '&.Mui-selected': {
-                        bgcolor: 'primary.50',
-                        '&:hover': { bgcolor: 'primary.100' },
+                        bgcolor: 'action.selected',
+                        '&:hover': { bgcolor: 'action.hover' },
                         '& .MuiListItemIcon-root': { color: 'primary.main' },
                       },
                       '&:hover': { bgcolor: 'action.hover' },
@@ -195,8 +195,8 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
                               mx: 1,
                               borderRadius: 2,
                               '&.Mui-selected': {
-                                bgcolor: 'primary.50',
-                                '&:hover': { bgcolor: 'primary.100' },
+                                bgcolor: 'action.selected',
+                                '&:hover': { bgcolor: 'action.hover' },
                                 '& .MuiListItemIcon-root': { color: 'primary.main' },
                               },
                               '&:hover': { bgcolor: 'action.hover' },
@@ -316,7 +316,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
             height: '100vh',
             zIndex: (theme) => theme.zIndex.drawer - 1,
             borderRight: '1px solid',
-            borderColor: 'grey.200',
+            borderColor: 'divider',
           },
         },
         ...(Array.isArray(sx) ? sx : [sx ?? {}])

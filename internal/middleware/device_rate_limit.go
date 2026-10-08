@@ -134,6 +134,12 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 			"group-join-password-user": {
 				Key: "user", Limit: 10, Window: time.Minute, Description: "同一用户每分钟 10 次私有群组密码验证",
 			},
+			"center-peer-admit-ip-burst": {
+				Key: "ip", Limit: 10, Window: 10 * time.Second, Description: "同一 IP 每 10 秒 10 次中心互联准入",
+			},
+			"center-peer-admit-ip-minute": {
+				Key: "ip", Limit: 60, Window: time.Minute, Description: "同一 IP 每分钟 60 次中心互联准入",
+			},
 		},
 	}
 }
@@ -592,6 +598,18 @@ func PublicClientResourceRateLimit() gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// CenterPeerAdmissionRateLimit protects the unauthenticated invitation
+// endpoint from token-guessing and cheap database/crypto amplification. A
+// valid invitation remains low frequency, so these limits are intentionally
+// generous for normal administration while bounding abuse per source IP.
+func CenterPeerAdmissionRateLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if checkRateLimitRules(c, []string{"center-peer-admit-ip-burst", "center-peer-admit-ip-minute"}, map[string]string{"ip": c.ClientIP()}) {
+			c.Next()
+		}
 	}
 }
 

@@ -145,6 +145,7 @@ func (cs *CommSyncer) SyncToDatabase() {
 		}
 
 		records = append(records, &gormdb.CommRecord{
+			SourceType: item.Session.Sender.SourceType, SourceCenterID: item.Session.Sender.SourceCenterID, LinkID: item.Session.Sender.LinkID, VirtualDeviceID: item.Session.Sender.VirtualDeviceID,
 			DeviceID:         deviceID,
 			DeviceSSID:       item.Session.DeviceSSID,
 			GroupID:          item.Session.GroupID,

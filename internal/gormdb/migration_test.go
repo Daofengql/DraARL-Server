@@ -115,7 +115,8 @@ func TestValidateAppliedMigrationVersionsRequiresContiguousHistory(t *testing.T)
 		{name: "out of order", versions: []int{2, 1}, want: 2},
 		{name: "gap", versions: []int{1, 3}, wantErr: true},
 		{name: "starts too high", versions: []int{2}, wantErr: true},
-		{name: "future", versions: []int{1, 2, 3}, wantErr: true},
+		{name: "current", versions: []int{1, 2, 3, 4}, want: 4},
+		{name: "future", versions: []int{1, 2, 3, 4, 5}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

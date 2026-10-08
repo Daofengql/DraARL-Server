@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+func TestCenterRuntimeCanRunHTTPAdmissionWithoutTLSControlPlane(t *testing.T) {
+	runtime, err := StartCenterRuntime(CenterRuntimeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if runtime.Control != nil || runtime.UDPBridge != nil {
+		t.Fatal("HTTP-only centre runtime unexpectedly started the legacy TLS control plane")
+	}
+	if runtime.HTTPPeers == nil {
+		t.Fatal("HTTP admission UDP peer manager was not initialized")
+	}
+}
+
 func TestCenterAndEdgeRuntimeConnectWithoutExternalDependencies(t *testing.T) {
 	serverTLS, roots, err := NewSelfSignedTLSConfig("localhost")
 	if err != nil {

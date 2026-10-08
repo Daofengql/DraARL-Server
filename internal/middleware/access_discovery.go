@@ -21,8 +21,8 @@ func AccessDiscoveryAuth() gin.HandlerFunc {
 			return
 		}
 
-		// 【性能】高吞吐发现接口走用户缓存，避免每请求查库
-		user, err := loadUserByName(c.Request.Context(), claims.Username)
+		// Discovery credentials must observe current account and session state.
+		user, err := loadUserByID(c.Request.Context(), claims.UserID)
 		if err != nil {
 			log.Printf("查询接入点发现用户失败: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "认证服务暂时不可用"})
@@ -32,6 +32,10 @@ func AccessDiscoveryAuth() gin.HandlerFunc {
 		if user == nil || user.Status != 1 || (user.ApprovalStatus != 1 && !user.HasRole("admin")) {
 			c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "当前账号不可使用设备接入服务"})
 			c.Abort()
+			return
+		}
+		if claims.SessionVersion != user.SessionVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "发现凭证已失效"})
 			return
 		}
 

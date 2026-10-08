@@ -43,6 +43,8 @@ import { PageHeader } from '../../components/common/PageHeader'
 import { getDevModelIcon, formatDeviceDisplayName } from '../../utils/deviceModel'
 
 interface CommRecord {
+  source_type?: string
+  source_center_id?: string
   id: number
   device_id: number
   device_name: string
@@ -379,6 +381,7 @@ export function CommRecordsPage() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {getDevModelIcon(record.dev_model)}
                       {formatDeviceDisplayName(record.device_name, record.dev_model)}
+                      {record.source_type === 'intercenter' && <Chip size="small" label="中心互联" />}
                     </Box>
                   </TableCell>
                   <TableCell>
@@ -475,7 +478,7 @@ export function CommRecordsPage() {
           )}
         </DialogTitle>
         <DialogContent>
-          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'grey.50' }}>
+          <Paper variant="outlined" sx={{ p: 2, bgcolor: 'background.default' }}>
             <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
               {selectedText?.text_content}
             </Typography>

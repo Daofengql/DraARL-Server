@@ -1,0 +1,41 @@
+name: Security checks
+
+on:
+  pull_request:
+  push:
+    branches: [master, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: www/package-lock.json
+      - name: Build and scan frontend dependencies
+        working-directory: www
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+          npm audit --omit=dev --registry=https://registry.npmjs.org
+      - name: Prepare release assets
+        run: |
+          mkdir -p internal/server/web/dist
+          cp -r www/dist/. internal/server/web/dist/
+      - name: Scan release backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest -tags=embed ./cmd/draarl
+      - name: Test and vet backend
+        run: |
+          go test ./...
+          go vet ./...

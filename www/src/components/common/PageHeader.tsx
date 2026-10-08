@@ -13,7 +13,9 @@ export function PageHeader({ title, subtitle, actions, sx }: PageHeaderProps) {
       sx={{
         display: 'flex',
         justifyContent: 'space-between',
-        alignItems: 'center',
+        alignItems: { xs: 'stretch', md: 'center' },
+        flexDirection: { xs: 'column', md: 'row' },
+        gap: { xs: 1.5, sm: 2 },
         mb: 3,
         ...sx,
       }}
@@ -28,7 +30,7 @@ export function PageHeader({ title, subtitle, actions, sx }: PageHeaderProps) {
           </Typography>
         )}
       </Box>
-      {actions && <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>{actions}</Box>}
+      {actions && <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', width: { xs: '100%', sm: 'auto' } }}>{actions}</Box>}
     </Box>
   )
 }

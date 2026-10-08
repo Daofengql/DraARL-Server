@@ -10,6 +10,7 @@ import (
 	"draarl/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UserRepository 用户仓库
@@ -255,9 +256,24 @@ func (r *UserRepository) UpdateUser(user *User) error {
 		"mdcid":           user.MDCID,
 		"update_time":     time.Now(),
 	}
-	err := r.db.Model(&User{}).Where("id = ?", user.ID).Updates(fields).Error
+	var sessionVersion uint64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var current User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, user.ID).Error; err != nil {
+			return err
+		}
+		sessionVersion = current.SessionVersion
+		if current.Name != user.Name || current.Roles != user.Roles || current.Status != user.Status || current.ApprovalStatus != user.ApprovalStatus {
+			fields["session_version"] = gorm.Expr("session_version + 1")
+			sessionVersion++
+		}
+		return tx.Model(&User{}).Where("id = ?", user.ID).Updates(fields).Error
+	})
 	if IsDuplicateColumnError(err, "callsign") {
 		return ErrCallSignConflict
+	}
+	if err == nil {
+		user.SessionVersion = sessionVersion
 	}
 	return err
 }
@@ -269,7 +285,7 @@ func (r *UserRepository) UpdateUserOpenID(id int, openID string) error {
 
 // UpdateUserPassword 更新用户密码
 func (r *UserRepository) UpdateUserPassword(id int, password string) error {
-	return r.db.Model(&User{}).Where("id = ?", id).Update("password", password).Error
+	return r.db.Model(&User{}).Where("id = ?", id).Updates(map[string]interface{}{"password": password, "session_version": gorm.Expr("session_version + 1")}).Error
 }
 
 // UpdateUserAvatar 更新用户头像
@@ -314,12 +330,12 @@ func (r *UserRepository) UpdateUserCallSignChecked(id int, callsign string) erro
 
 // UpdateUserRoles 更新用户角色
 func (r *UserRepository) UpdateUserRoles(id int, roles string) error {
-	return r.db.Model(&User{}).Where("id = ?", id).Update("roles", roles).Error
+	return r.db.Model(&User{}).Where("id = ? AND roles <> ?", id, roles).Updates(map[string]interface{}{"roles": roles, "session_version": gorm.Expr("session_version + 1")}).Error
 }
 
 // UpdateUserStatus 更新用户状态
 func (r *UserRepository) UpdateUserStatus(id int, status int) error {
-	return r.db.Model(&User{}).Where("id = ?", id).Update("status", status).Error
+	return r.db.Model(&User{}).Where("id = ? AND status <> ?", id, status).Updates(map[string]interface{}{"status": status, "session_version": gorm.Expr("session_version + 1")}).Error
 }
 
 // UpdateLastLogin 更新最后登录时间和IP
@@ -518,6 +534,15 @@ func collectDeletedGroupBroadcastObjectKeys(tx *gorm.DB, groupIDs []int, objectK
 		if audio.PlaybackObjectKey != "" {
 			set[audio.PlaybackObjectKey] = struct{}{}
 		}
+		if recordKey := audio.EffectiveRecordObjectKey(); recordKey != "" {
+			var references int64
+			if err := tx.Model(&CommRecord{}).Where("audio_path = ?", recordKey).Count(&references).Error; err != nil {
+				return err
+			}
+			if references == 0 {
+				set[recordKey] = struct{}{}
+			}
+		}
 	}
 	keys := make([]string, 0, len(set))
 	for key := range set {
@@ -638,6 +663,7 @@ func (r *UserRepository) UpdateUserApproval(id int, status int, reviewerID int, 
 		"reviewer_id":     reviewerID,
 		"review_note":     note,
 		"review_time":     gorm.Expr("NOW()"),
+		"session_version": gorm.Expr("session_version + 1"),
 	}
 	return r.db.Model(&User{}).Where("id = ?", id).Updates(updates).Error
 }

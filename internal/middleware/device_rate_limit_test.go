@@ -135,6 +135,19 @@ func TestPublicClientResourceRateLimitDefaults(t *testing.T) {
 	}
 }
 
+func TestCenterPeerAdmissionRateLimitDefaults(t *testing.T) {
+	limiter := newDeviceRateLimiter()
+	for name, want := range map[string]RateLimitRule{
+		"center-peer-admit-ip-burst":  {Key: "ip", Limit: 10, Window: 10 * time.Second},
+		"center-peer-admit-ip-minute": {Key: "ip", Limit: 60, Window: time.Minute},
+	} {
+		got, ok := limiter.rules[name]
+		if !ok || got.Key != want.Key || got.Limit != want.Limit || got.Window != want.Window {
+			t.Fatalf("rule %q = %#v, want %#v", name, got, want)
+		}
+	}
+}
+
 func TestAccessDiscoveryTokenLimiterSupportsSharedNATButCapsEachUser(t *testing.T) {
 	limiter := newDeviceRateLimiter()
 	if got := accessDiscoveryTokenPrincipalKey("203.0.113.10", " Alice "); got != "203.0.113.10\x00alice" {

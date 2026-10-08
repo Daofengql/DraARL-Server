@@ -50,10 +50,10 @@ export function Header({ onMenuClick }: HeaderProps) {
       elevation={0}
       sx={{
         zIndex: (theme) => theme.zIndex.drawer + 1,
-        bgcolor: '#ffffff',
+        bgcolor: 'background.paper',
         color: 'text.primary',
         borderBottom: '1px solid',
-        borderColor: 'grey.200',
+        borderColor: 'divider',
       }}
     >
       <Toolbar disableGutters sx={{ px: { xs: 2, sm: 3 }, height: 64 }}>

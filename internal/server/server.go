@@ -27,7 +27,7 @@ type Server struct {
 }
 
 func New(cfg *config.Configuration) *Server {
-	engine := gin.New()
+	engine := newHTTPEngine(cfg)
 	engine.Use(gin.Recovery())
 	engine.Use(securityHeadersMiddleware())
 	engine.Use(accessLogMiddleware())
@@ -65,6 +65,15 @@ func New(cfg *config.Configuration) *Server {
 	s.setupRoutes()
 
 	return s
+}
+
+func newHTTPEngine(cfg *config.Configuration) *gin.Engine {
+	engine := gin.New()
+	if err := engine.SetTrustedProxies(cfg.System.HTTPTrustedProxyCIDRs); err != nil {
+		log.Printf("配置 HTTP trusted proxies 失败，回退为直连模式: %v", err)
+		_ = engine.SetTrustedProxies(nil)
+	}
+	return engine
 }
 
 func (s *Server) setupRoutes() {
@@ -134,6 +143,11 @@ func (s *Server) setupRoutes() {
 		}
 
 		api.GET("/access-points", middleware.AccessDiscoveryListIPRateLimit(), middleware.AccessDiscoveryAuth(), middleware.AccessDiscoveryListUserRateLimit(), handler.ListAccessPoints)
+
+		// Low-frequency centre admission. It authenticates only an invitation
+		// token and returns an ephemeral UDP session; it never grants a user or
+		// administrator session.
+		api.POST("/inter-center/admit", middleware.CenterPeerAdmissionRateLimit(), handler.AdmitCenterPeerInvite)
 
 		// 需要认证的路由
 		protected := api.Group("")
@@ -334,6 +348,13 @@ func (s *Server) setupRoutes() {
 			admin.POST("/edge-nodes/:id/rotate-credential", handler.RotateEdgeNodeCredential)
 			admin.POST("/edge-nodes/:id/revoke-credential", handler.RevokeEdgeNodeCredential)
 			admin.POST("/edge-nodes/:id/disconnect", handler.DisconnectEdgeNode)
+			// 中心到中心群组互联：只保存显式群组映射，不同步用户和设备。
+			admin.GET("/inter-center-links", handler.ListInterCenterLinks)
+			admin.POST("/inter-center-links", handler.CreateInterCenterLink)
+			admin.POST("/inter-center-links/invites", handler.CreateCenterPeerInvite)
+			admin.POST("/inter-center-links/import", handler.ImportCenterPeerInvite)
+			admin.PUT("/inter-center-links/:id", handler.UpdateInterCenterLink)
+			admin.DELETE("/inter-center-links/:id", handler.DeleteInterCenterLink)
 
 			// 设备配置管理（管理员权限，可操作任意设备）
 			admin.GET("/admin/devices/:id/config", handler.AdminGetDeviceConfig)
@@ -367,6 +388,7 @@ func (s *Server) setupRoutes() {
 			admin.POST("/cache/clear", cacheHandler.ClearAllCache)
 			admin.GET("/udp/metrics", handler.GetUDPMetrics)
 			admin.GET("/broadcast/metrics", handler.GetBroadcastMetrics)
+			admin.GET("/system/overview", handler.GetSystemOverview)
 			admin.GET("/broadcast/health", handler.GetBroadcastHealth)
 			admin.PUT("/broadcast/runtime", handler.UpdateBroadcastOperationalState)
 			admin.POST("/broadcast/emergency-stop", handler.EmergencyStopBroadcasts)

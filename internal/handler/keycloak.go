@@ -155,7 +155,7 @@ func saveState(state string, action string, userID int) {
 	}
 
 	// 清理过期 state（同步执行，map 小且有 TTL，避免每次保存启动 goroutine 堆积）
-	cleanExpiredStates()
+	cleanExpiredStatesLocked(time.Now())
 }
 
 // consumeState 消费state（验证后删除）
@@ -182,7 +182,10 @@ func cleanExpiredStates() {
 	stateMutex.Lock()
 	defer stateMutex.Unlock()
 
-	now := time.Now()
+	cleanExpiredStatesLocked(time.Now())
+}
+
+func cleanExpiredStatesLocked(now time.Time) {
 	for k, v := range stateStore {
 		if now.After(v.ExpiresAt) {
 			delete(stateStore, k)
@@ -211,7 +214,7 @@ func saveLoginCode(userID int, userData gin.H) (string, error) {
 		ExpiresAt: time.Now().Add(2 * time.Minute),
 	}
 
-	cleanExpiredLoginCodes()
+	cleanExpiredLoginCodesLocked(time.Now())
 
 	return code, nil
 }
@@ -240,7 +243,10 @@ func cleanExpiredLoginCodes() {
 	loginCodeMutex.Lock()
 	defer loginCodeMutex.Unlock()
 
-	now := time.Now()
+	cleanExpiredLoginCodesLocked(time.Now())
+}
+
+func cleanExpiredLoginCodesLocked(now time.Time) {
 	for k, v := range loginCodeStore {
 		if now.After(v.ExpiresAt) {
 			delete(loginCodeStore, k)

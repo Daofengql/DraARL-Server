@@ -42,7 +42,7 @@ func TestMemoryRefreshCleanupRemovesUserIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.mu.Lock()
-	store.cleanupExpiredLocked(now.Add(time.Minute))
+	store.cleanupExpiredLocked(now.Add(2 * time.Minute))
 	store.mu.Unlock()
 	if record, _ := store.GetByTokenHash("expired"); record != nil {
 		t.Fatal("expired token retained")

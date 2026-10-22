@@ -4,6 +4,10 @@ site_url: "https://daofengql.github.io/DraARL-Server/"
 docs_dir: docs
 site_dir: site
 
+exclude_docs: |
+  audit-2026-10-03.md
+  remediation-plan-2026-10-03.md
+
 theme:
   name: material
   language: zh

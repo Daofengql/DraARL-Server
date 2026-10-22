@@ -150,7 +150,7 @@ cp config.yaml.example config.yaml
 - `Web.FrontendURL` 与 `Web.AllowedOrigins`：登录回调、CORS 和 WebSocket Origin 白名单。
 - `JWT.Secret`：至少 32 字符；不符合要求时程序会自动生成并写回配置。
 - `DeviceAuth.AESKey`：16、24 或 32 字节；留空时程序会自动生成并写回配置。
-- `Storage`：选择 `local`、`minio`、`s3`、`r2`、`cos` 或 `oss`；可通过命名 profile 切换和迁移。
+- `Storage`：选择 `local`、`minio`、`s3`、`r2`、`cos` 或 `oss`；可通过命名 profile 切换和迁移，并可启用 EdgeOne TypeA CDN 下载签名。
 - `GhostSessions`：设置每账号在线幽灵 Session 数与每 Session 接收频道数上限。
 - `MessageAPI`：设置频道消息分页、账号/IP 限流和数据库查询并发上限。
 - `Interconnect` / `Edge`：仅在启用 Type 0 中心/边缘部署时配置。

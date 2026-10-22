@@ -1,8 +1,8 @@
 package storage
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -235,17 +235,21 @@ func newS3APIClient(sc config.S3Config, endpoint string, useSSL bool, bucketLook
 // construction time. It deliberately operates on the driver's config copy so
 // later config saves retain references instead of writing secrets to disk.
 func resolveCredentialReference(value, field string) (string, error) {
+	return resolveSecretReference(value, "S3 "+field)
+}
+
+func resolveSecretReference(value, field string) (string, error) {
 	value = strings.TrimSpace(value)
 	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
 		return value, nil
 	}
 	name := strings.TrimSpace(value[2 : len(value)-1])
 	if !validCredentialEnvName(name) {
-		return "", fmt.Errorf("S3 %s 环境变量引用无效: %s", field, value)
+		return "", fmt.Errorf("%s 环境变量引用无效: %s", field, value)
 	}
 	resolved, ok := os.LookupEnv(name)
 	if !ok || strings.TrimSpace(resolved) == "" {
-		return "", fmt.Errorf("S3 %s 引用的环境变量未设置或为空: %s", field, name)
+		return "", fmt.Errorf("%s 引用的环境变量未设置或为空: %s", field, name)
 	}
 	return strings.TrimSpace(resolved), nil
 }

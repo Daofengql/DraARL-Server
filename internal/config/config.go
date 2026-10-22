@@ -90,13 +90,26 @@ type StorageProfile struct {
 // StorageConfig keeps the legacy Local/MinIO fields intact while introducing
 // named profiles for generic S3-compatible providers.
 type StorageConfig struct {
-	Driver        string                    `yaml:"Driver" json:"driver"`
-	Local         LocalStorageConfig        `yaml:"Local" json:"local"`
-	MinIO         MinIOConfig               `yaml:"MinIO" json:"minio"`
-	S3            S3Config                  `yaml:"S3" json:"s3"`
-	UploadLimits  StorageUploadLimitsConfig `yaml:"UploadLimits" json:"upload_limits"`
-	ActiveProfile string                    `yaml:"ActiveProfile" json:"active_profile"`
-	Profiles      map[string]StorageProfile `yaml:"Profiles" json:"profiles"`
+	Driver           string `yaml:"Driver" json:"driver"`
+	UseCDN           bool   `yaml:"UseCDN" json:"use_cdn"`
+	CDNBaseURL       string `yaml:"CDNBaseURL" json:"cdn_base_url"`
+	CDNSignParam     string `yaml:"CDNSignParam" json:"cdn_sign_param"`
+	CDNExpirySeconds int    `yaml:"CDNExpirySeconds" json:"cdn_expiry_seconds"`
+	CDNKey           string `yaml:"CDNKey" json:"-"`
+	// The snake_case names are accepted for deployment configurations that use
+	// lower-case option names. SetDefaults folds them into the canonical fields
+	// above and clears the compatibility values before a config is saved.
+	CDNEnabledCompat   *bool                     `yaml:"cdn_enabled,omitempty" json:"-"`
+	CDNBaseURLCompat   string                    `yaml:"cdn_base_url,omitempty" json:"-"`
+	CDNSignParamCompat string                    `yaml:"cdn_sign_param,omitempty" json:"-"`
+	CDNSignTTLCompat   string                    `yaml:"cdn_sign_ttl,omitempty" json:"-"`
+	CDNSignKeyCompat   string                    `yaml:"cdn_sign_key,omitempty" json:"-"`
+	Local              LocalStorageConfig        `yaml:"Local" json:"local"`
+	MinIO              MinIOConfig               `yaml:"MinIO" json:"minio"`
+	S3                 S3Config                  `yaml:"S3" json:"s3"`
+	UploadLimits       StorageUploadLimitsConfig `yaml:"UploadLimits" json:"upload_limits"`
+	ActiveProfile      string                    `yaml:"ActiveProfile" json:"active_profile"`
+	Profiles           map[string]StorageProfile `yaml:"Profiles" json:"profiles"`
 }
 
 // FirmwareDownloadConfig controls the compatibility path used by legacy
@@ -700,6 +713,9 @@ func (c *Configuration) SetDefaults() error {
 	}
 
 	// 存储默认值
+	if err := c.Storage.SetCDNDefaults(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Storage.Local.RootPath) == "" {
 		c.Storage.Local.RootPath = "./data/storage"
 	}

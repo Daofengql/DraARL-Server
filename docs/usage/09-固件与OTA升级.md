@@ -106,7 +106,7 @@ GET /api/public/firmware/latest?dev_model=1&current_version=1.2.2
 }
 ```
 
-当前版本已不低于服务端 latest 时返回 200 且 `data: null`；型号没有固件时返回 404。`download_mode=presigned` 返回有效期一小时的签名地址，`download_mode=proxy` 返回 `/api/public/firmware/:id/download`。当 `Firmware.AutoProxy=true` 且预签名地址超过 `Firmware.MaxPresignedURLLength`（默认 255）时自动使用代理地址；设置为 `false` 可紧急回滚为仅预签名模式。代理会在响应前核对对象大小和 SHA-256，S3 错误转换为 502。
+当前版本已不低于服务端 latest 时返回 200 且 `data: null`；型号没有固件时返回 404。`download_mode=presigned` 默认返回有效期一小时的签名地址；启用 `Storage.UseCDN` 后返回 EdgeOne TypeA CDN 签名地址，有效期由 `Storage.CDNExpirySeconds` 控制。`download_mode=proxy` 返回 `/api/public/firmware/:id/download`。当 `Firmware.AutoProxy=true` 且签名地址超过 `Firmware.MaxPresignedURLLength`（默认 255）时自动使用代理地址；设置为 `false` 可紧急回滚为仅签名地址模式。代理会在响应前核对对象大小和 SHA-256，上游存储或 CDN 错误转换为 502。
 
 ## 5. 设备端 OTA 约定
 

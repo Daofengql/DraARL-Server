@@ -105,6 +105,7 @@ type ObjectInfo struct {
 var (
 	mu          sync.RWMutex
 	current     Storage
+	currentCDN  *cdnSigner
 	cleanupOnce sync.Once
 )
 
@@ -114,6 +115,10 @@ func Init(cfg *config.Configuration) error {
 		return fmt.Errorf("config is nil")
 	}
 
+	cdn, err := newCDNSigner(cfg.Storage)
+	if err != nil {
+		return err
+	}
 	store, err := createDriver(cfg)
 	if err != nil {
 		return err
@@ -121,9 +126,13 @@ func Init(cfg *config.Configuration) error {
 
 	mu.Lock()
 	current = store
+	currentCDN = cdn
 	mu.Unlock()
 
 	log.Printf("[STORAGE] 已启用驱动: %s (registered=%v)", store.Driver(), KnownDrivers())
+	if cdn != nil {
+		log.Printf("[STORAGE] 已启用 EdgeOne TypeA CDN 读取签名: %s (param=%s expiry=%s)", cdn.baseURL, cdn.param, cdn.validity)
+	}
 	cleanupOnce.Do(startStagingCleanup)
 	return nil
 }
@@ -188,6 +197,12 @@ func Get() Storage {
 	mu.RLock()
 	defer mu.RUnlock()
 	return current
+}
+
+func readStorage() (Storage, *cdnSigner) {
+	mu.RLock()
+	defer mu.RUnlock()
+	return current, currentCDN
 }
 
 // IsEnabled 存储是否可用。
@@ -325,8 +340,8 @@ func PublicURL(key string) string {
 }
 
 // ReadURL returns a browser-readable object URL. Local storage may expose a
-// stable URL for explicitly safe keys; S3-compatible storage always uses a
-// short-lived signed GET URL.
+// stable URL for explicitly safe keys. When enabled, CDN signing takes
+// precedence over driver read URLs for every object key.
 func ReadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -335,9 +350,13 @@ func ReadURL(ctx context.Context, key string, expiry time.Duration) (string, err
 	if strings.HasPrefix(key, "http://") || strings.HasPrefix(key, "https://") {
 		return key, nil
 	}
-	s := Get()
+	s, cdn := readStorage()
 	if s == nil {
 		return "", fmt.Errorf("存储未初始化")
+	}
+	if cdn != nil {
+		signedURL, _, err := cdn.sign(key, time.Now())
+		return signedURL, err
 	}
 	if s.Capabilities().PublicURL {
 		if publicURL := strings.TrimSpace(s.PublicURL(key)); publicURL != "" {
@@ -457,11 +476,29 @@ func Stat(ctx context.Context, key string) (int64, string, error) {
 
 // PresignGet 便捷方法。
 func PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	s := Get()
+	signedURL, _, err := PresignGetWithExpiry(ctx, key, expiry)
+	return signedURL, err
+}
+
+// PresignGetWithExpiry returns a signed GET URL and its actual expiry. CDN
+// reads use the configured EdgeOne duration instead of the caller's S3 duration.
+func PresignGetWithExpiry(ctx context.Context, key string, expiry time.Duration) (string, time.Time, error) {
+	s, cdn := readStorage()
 	if s == nil {
-		return "", fmt.Errorf("存储未初始化")
+		return "", time.Time{}, fmt.Errorf("存储未初始化")
 	}
-	return s.PresignGet(ctx, key, expiry)
+	if cdn != nil {
+		return cdn.sign(key, time.Now())
+	}
+	if expiry <= 0 {
+		expiry = DefaultReadURLExpiry
+	}
+	expiresAt := time.Now().Truncate(time.Second).Add(expiry)
+	signedURL, err := s.PresignGet(ctx, key, expiry)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return signedURL, expiresAt, nil
 }
 
 // PresignPut 便捷方法。

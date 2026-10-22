@@ -789,7 +789,7 @@ func GetClientResourceArtifactDownload(c *gin.Context) {
 		writeClientResourceError(c, http.StatusServiceUnavailable, "存储服务不可用")
 		return
 	}
-	downloadURL, err := storage.PresignGet(c.Request.Context(), artifact.StorageKey, clientResourceDownloadURLExpiry)
+	downloadURL, expiresAt, err := storage.PresignGetWithExpiry(c.Request.Context(), artifact.StorageKey, clientResourceDownloadURLExpiry)
 	if err != nil {
 		logClientResourceStorageError("生成资源下载地址失败", artifact.StorageKey, err)
 		writeClientResourceError(c, http.StatusServiceUnavailable, "生成下载链接失败")
@@ -800,7 +800,7 @@ func GetClientResourceArtifactDownload(c *gin.Context) {
 	}
 	writeClientResourceSuccess(c, "成功", gin.H{
 		"artifact_id": artifact.ID, "download_url": downloadURL,
-		"url_expires_at": time.Now().Add(clientResourceDownloadURLExpiry).UTC().Format(time.RFC3339),
+		"url_expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }
 

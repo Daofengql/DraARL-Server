@@ -18,7 +18,7 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 | 在线文档 | [https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/) |
 | GitHub 仓库 | [Daofengql/DraARL-Server](https://github.com/Daofengql/DraARL-Server) |
 | 最新发布 | [GitHub Releases](https://github.com/Daofengql/DraARL-Server/releases) |
-| 当前版本 | `v2.0.1-alpha2`（以根目录 `VERSION` 和 Release 页面为准） |
+| 当前版本 | `v2.0.1-alpha3`（以根目录 `VERSION` 和 Release 页面为准） |
 | 问题反馈 | [Issues](https://github.com/Daofengql/DraARL-Server/issues) |
 | 构建发布 | [Release workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/release.yml) |
 | 文档发布 | [Docs Deploy workflow](https://github.com/Daofengql/DraARL-Server/actions/workflows/docs-pages.yml) |
@@ -150,7 +150,7 @@ cp config.yaml.example config.yaml
 - `Web.FrontendURL` 与 `Web.AllowedOrigins`：登录回调、CORS 和 WebSocket Origin 白名单。
 - `JWT.Secret`：至少 32 字符；不符合要求时程序会自动生成并写回配置。
 - `DeviceAuth.AESKey`：16、24 或 32 字节；留空时程序会自动生成并写回配置。
-- `Storage`：选择 `local`、`minio`、`s3`、`r2`、`cos` 或 `oss`；可通过命名 profile 切换和迁移。
+- `Storage`：选择 `local`、`minio`、`s3`、`r2`、`cos` 或 `oss`；可通过命名 profile 切换和迁移，并可启用 EdgeOne TypeA CDN 下载签名。
 - `GhostSessions`：设置每账号在线幽灵 Session 数与每 Session 接收频道数上限。
 - `MessageAPI`：设置频道消息分页、账号/IP 限流和数据库查询并发上限。
 - `Interconnect` / `Edge`：仅在启用 Type 0 中心/边缘部署时配置。

@@ -133,6 +133,11 @@ Keycloak:
 # 新部署建议使用 ActiveProfile + Profiles；MinIO 旧配置仍保持兼容。
 Storage:
     Driver: ""                        # minio | s3 | r2 | cos | oss | local；空则自动推断
+    UseCDN: false                     # GET 链接使用 EdgeOne TypeA 签名；适用于当前 active profile 或旧配置
+    CDNBaseURL: ""                    # CDN 访问前缀，例如 https://cdn.example.com；可包含路径前缀
+    CDNSignParam: "sign"              # 鉴权参数名称，必须与 EdgeOne 规则一致
+    CDNExpirySeconds: 3600            # 有效秒数，默认 1 小时；必须与 EdgeOne 规则的有效时长一致
+    CDNKey: ""                        # EdgeOne 鉴权密钥，也支持精确的 ${EDGEONE_CDN_KEY} 环境变量引用
     UploadLimits:
         ClientResourceBytes: 536870912 # 客户端资源直传上限，默认 512 MiB
     Local:

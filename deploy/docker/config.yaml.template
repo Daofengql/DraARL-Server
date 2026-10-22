@@ -63,6 +63,11 @@ Broadcast:
 
 Storage:
   Driver: minio
+  UseCDN: false
+  CDNBaseURL: ""
+  CDNSignParam: "sign"
+  CDNExpirySeconds: 3600
+  CDNKey: ""
   MinIO:
     Endpoint: "${DRAARL_MINIO_ENDPOINT}"
     PublicEndpoint: "${DRAARL_MINIO_ENDPOINT}"

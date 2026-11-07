@@ -2,6 +2,7 @@ package email
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -327,8 +328,8 @@ func (m *VerificationManager) Verify(sessionID, code string) (*VerificationSessi
 		return nil, fmt.Errorf("验证码已使用")
 	}
 
-	// 验证码错误
-	if session.Code != code {
+	// 使用恒定时间比较防止时序攻击
+	if subtle.ConstantTimeCompare([]byte(session.Code), []byte(code)) != 1 {
 		session.Attempts++
 		return nil, fmt.Errorf("验证码错误，还剩 %d 次机会", m.maxAttempts-session.Attempts)
 	}

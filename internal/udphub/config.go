@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -254,12 +255,19 @@ func encodeTLV(configs map[string]string) ([]byte, int) {
 
 	configs = NormalizeDeviceConfigs(configs)
 
+	// 对 key 排序以确保编码顺序确定性，防止不同执行产生不同结果
+	keys := make([]string, 0, len(configs))
+	for key := range configs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	// 预估容量：最多 7 个配置项，每个最大 10 字节 (1+1+8)
 	result := make([]byte, 0, len(configs)*10)
 	count := 0
 
-	for key, value := range configs {
-		value = strings.TrimSpace(value)
+	for _, key := range keys {
+		value := strings.TrimSpace(configs[key])
 		if value == "" {
 			continue
 		}

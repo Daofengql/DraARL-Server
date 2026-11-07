@@ -74,9 +74,12 @@ func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (
 // 1) 校验协议范围；
 // 2) 仅在发生变化时更新内存；
 // 3) 对已落库设备同步写回 devices.dev_model。
-func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
+func applyClientReportedDevModel(ctx context.Context, dev *models.Device, reportedDevModel byte) {
 	if dev == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	state := dev.RuntimeSnapshot()
 	if !protocol.IsValidClientReportedDevModel(reportedDevModel) {
@@ -106,7 +109,6 @@ func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
 	}
 
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		ctx := context.Background()
 		_ = deviceCache.InvalidateDevice(ctx, state.ID, state.OwnerID, uint8(state.SSID))
 		_ = deviceCache.InvalidateDeviceList(ctx)
 		if state.GroupID > 0 {
@@ -167,7 +169,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 	}
 
 	if dev != nil {
-		applyClientReportedDevModel(dev, packet.DevModel)
+		applyClientReportedDevModel(context.Background(), dev, packet.DevModel)
 		dev.UpdateRuntime(func(current *models.Device) {
 			if current.CallSign == "" {
 				current.CallSign = authResult.CallSign
@@ -333,7 +335,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 			current.LastOnlineIP = realIP
 		}
 	})
-	applyClientReportedDevModel(dev, packet.DevModel)
+	applyClientReportedDevModel(context.Background(), dev, packet.DevModel)
 
 	// 检测重连
 	if addrChanged && wasOnline {

@@ -174,7 +174,7 @@ func startCenterInterconnect(cfg *config.Configuration) (*interconnect.CenterRun
 			result.Grant = &interconnect.DeviceGrant{
 				DeviceID: device.ID, OwnerID: device.OwnerID, Username: device.Owner.Name, CallSign: device.Owner.CallSign, Nickname: device.Owner.NickName,
 				SSID: byte(device.SSID), DevModel: byte(device.DevModel), DMRID: uint32(device.DMRID),
-			GroupID: device.GroupIDValue(), DomainID: udphub.GetActiveCommunicationDomainID(device.GroupIDValue()),
+				GroupID: device.GroupIDValue(), DomainID: udphub.GetActiveCommunicationDomainID(device.GroupIDValue()),
 				DisableSend: device.DisableSend, DisableRecv: device.DisableRecv,
 				ExpiresAtMillis: now.Add(2 * time.Minute).UnixMilli(),
 			}

@@ -63,20 +63,15 @@ func GetGroupDevices(c *gin.Context) {
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
-	ownerIDs := make([]int, 0, len(devicesRaw))
+	ownerIDSet := make(map[int]bool, len(devicesRaw))
 	for _, d := range devicesRaw {
 		if d.OwnerID > 0 {
-			ownerIDs = append(ownerIDs, d.OwnerID)
+			ownerIDSet[d.OwnerID] = true
 		}
 	}
-	// 去重
-	ownerIDSet := make(map[int]bool)
-	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
-	for _, id := range ownerIDs {
-		if !ownerIDSet[id] {
-			ownerIDSet[id] = true
-			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
-		}
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDSet))
+	for id := range ownerIDSet {
+		uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 	}
 	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 

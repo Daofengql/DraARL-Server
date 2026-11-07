@@ -172,20 +172,15 @@ func GetDevices(c *gin.Context) {
 
 	// 批量获取所有需要的用户信息（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
-	ownerIDs := make([]int, 0, len(devices))
+	ownerIDSet := make(map[int]bool, len(devices))
 	for _, d := range devices {
 		if d.OwnerID > 0 {
-			ownerIDs = append(ownerIDs, d.OwnerID)
+			ownerIDSet[d.OwnerID] = true
 		}
 	}
-	// 去重
-	ownerIDSet := make(map[int]bool)
-	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
-	for _, id := range ownerIDs {
-		if !ownerIDSet[id] {
-			ownerIDSet[id] = true
-			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
-		}
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDSet))
+	for id := range ownerIDSet {
+		uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 	}
 	// 批量查询用户简要信息
 	userCache := cache.GetUserCache()
@@ -983,20 +978,15 @@ func GetDeviceQTHs(c *gin.Context) {
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
 	userRepo := gormdb.NewUserRepository()
-	ownerIDs := make([]int, 0, len(devicesRaw))
+	ownerIDSet := make(map[int]bool, len(devicesRaw))
 	for _, d := range devicesRaw {
 		if d.OwnerID > 0 {
-			ownerIDs = append(ownerIDs, d.OwnerID)
+			ownerIDSet[d.OwnerID] = true
 		}
 	}
-	// 去重
-	ownerIDSet := make(map[int]bool)
-	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
-	for _, id := range ownerIDs {
-		if !ownerIDSet[id] {
-			ownerIDSet[id] = true
-			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
-		}
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDSet))
+	for id := range ownerIDSet {
+		uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 	}
 	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 

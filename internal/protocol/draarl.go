@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // forwardPacketPool 复用转发改写缓冲。调用方在 fan-out 完成后应 ReleaseForwardPacket。
@@ -250,6 +251,19 @@ func (p *DraARLv1Packet) Decode(data []byte) error {
 	return nil
 }
 
+// copyProtocolText preserves complete UTF-8 characters in fixed-width fields.
+func copyProtocolText(dst []byte, value string) {
+	if len(value) > len(dst) {
+		end := len(dst)
+		for end > 0 && !utf8.RuneStart(value[end]) {
+			end--
+		}
+		value = value[:end]
+	}
+	clear(dst)
+	copy(dst, value)
+}
+
 // Encode 编码 DraARLv1 报文
 func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel byte, dmrid uint32, callsign string, data []byte) []byte {
 	totalSize := DraARLv1HeaderSize + len(data)
@@ -262,11 +276,7 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
 
 	// 写入 Username (6-37)
-	usernameBytes := []byte(username)
-	if len(usernameBytes) > 32 {
-		usernameBytes = usernameBytes[:32]
-	}
-	copy(packet[6:38], usernameBytes)
+	copyProtocolText(packet[6:38], username)
 
 	// 写入 DevicePassword (38-47)
 	passwordBytes := []byte(devicePassword)
@@ -288,11 +298,7 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	uint24ToBytes(dmrid, packet[51:54])
 
 	// 写入 CallSign (54-85)
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
-	}
-	copy(packet[54:86], callsignBytes)
+	copyProtocolText(packet[54:86], callsign)
 
 	// Reserved (86-89) - 已经是 0
 
@@ -329,14 +335,7 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	copy(out, src)
 
 	// Username (6-37)
-	for i := 6; i < 38; i++ {
-		out[i] = 0
-	}
-	usernameBytes := []byte(username)
-	if len(usernameBytes) > 32 {
-		usernameBytes = usernameBytes[:32]
-	}
-	copy(out[6:38], usernameBytes)
+	copyProtocolText(out[6:38], username)
 
 	// DevicePassword (38-47) 转发时必须清空
 	for i := 38; i < 48; i++ {
@@ -349,14 +348,7 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	uint24ToBytes(dmrid, out[51:54])
 
 	// CallSign (54-85)
-	for i := 54; i < 86; i++ {
-		out[i] = 0
-	}
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
-	}
-	copy(out[54:86], callsignBytes)
+	copyProtocolText(out[54:86], callsign)
 
 	// Reserved contains hop-local authentication metadata on UDP ghost
 	// uplinks. Never relay a sender's session tag; fan-out adds source-group
@@ -400,6 +392,9 @@ func PrepareForwardPacket(src []byte, username, callsign string, ssid, packetTyp
 
 // EncodeHeartbeatResponse 编码心跳响应包（填充 CallSign）
 func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
+	if req == nil {
+		return nil
+	}
 	totalSize := DraARLv1HeaderSize + len(req.DATA)
 	packet := make([]byte, totalSize)
 
@@ -408,8 +403,7 @@ func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
 	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
 
 	// 复制 Username
-	usernameBytes := []byte(req.Username)
-	copy(packet[6:38], usernameBytes)
+	copyProtocolText(packet[6:38], req.Username)
 
 	// 复制 DevicePassword
 	passwordBytes := []byte(req.DevicePassword)
@@ -428,11 +422,7 @@ func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
 	uint24ToBytes(req.DMRID, packet[51:54])
 
 	// 填充 CallSign（服务器填充）
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
-	}
-	copy(packet[54:86], callsignBytes)
+	copyProtocolText(packet[54:86], callsign)
 
 	// Reserved - 已经是 0
 

@@ -3,12 +3,20 @@ package udphub
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"draarl/internal/gormdb"
 	"draarl/internal/models"
 	"draarl/pkg/cache"
 )
+
+const (
+	groupCacheSyncInterval = 10 * time.Second
+	groupCacheSyncTimeout  = 8 * time.Second
+)
+
+var deviceCacheSyncMu sync.Mutex
 
 // ==========================================
 // 架构重构：全局群组缓存管理
@@ -23,7 +31,7 @@ func StartGroupCacheSync() {
 
 	go func() {
 		// 每隔 10 秒同步一次数据库中的群组和设备状态
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(groupCacheSyncInterval)
 		defer ticker.Stop()
 
 		for {
@@ -44,10 +52,12 @@ func StartGroupCacheSync() {
 // 核心原则：只更新静态配置属性，绝对不碰动态连接池(ConnPool)
 // 性能优化：使用 RCU 模式，构建新 map 后原子替换，避免阻塞读取
 func refreshGroupCache() {
+	ctx, cancel := context.WithTimeout(context.Background(), groupCacheSyncTimeout)
+	defer cancel()
 	groupCacheMutex.Lock()
 	defer groupCacheMutex.Unlock()
 
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(ctx)
 	dbGroups, err := repo.ListGroups()
 	if err != nil {
 		log.Printf("[CACHE] 从数据库加载群组失败: %v", err)
@@ -157,7 +167,11 @@ func refreshGroupCache() {
 // 核心原则：只更新动态属性（GroupID, DisableSend, DisableRecv, Priority），不碰连接状态
 // 同时将内存中的在线状态同步回数据库，供 Web 端查询
 func refreshDeviceCache() {
-	repo := gormdb.NewDeviceRepository()
+	ctx, cancel := context.WithTimeout(context.Background(), groupCacheSyncTimeout)
+	defer cancel()
+	deviceCacheSyncMu.Lock()
+	defer deviceCacheSyncMu.Unlock()
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	dbDevices, err := repo.ListAllDevices()
 	if err != nil {
 		log.Printf("[CACHE] 从数据库加载设备失败: %v", err)
@@ -174,7 +188,7 @@ func refreshDeviceCache() {
 		dbDeviceKeys[getOwnerSSIDKey(dbDev.OwnerID, dbDev.SSID)] = struct{}{}
 	}
 
-	userCache := loadDeviceOwnerCache(dbDevices)
+	userCache := loadDeviceOwnerCacheContext(ctx, dbDevices)
 
 	for _, dbDev := range dbDevices {
 		memDev := findDeviceByOwnerSSIDFromMemory(dbDev.OwnerID, dbDev.SSID)
@@ -243,15 +257,16 @@ func refreshDeviceCache() {
 			if onlineStateChanged && state.ISOnline && !state.OnlineTime.IsZero() {
 				onlineTime = state.OnlineTime.Format("2006-01-02 15:04:05")
 			}
-			repo.UpdateDeviceOnlineStatus(state.OwnerID, uint8(state.SSID), state.ISOnline, onlineTime, state.LastOnlineIP)
+			if err := repo.UpdateDeviceOnlineStatus(state.OwnerID, state.SSID, state.ISOnline, onlineTime, state.LastOnlineIP); err != nil {
+				log.Printf("[CACHE] 同步设备在线状态失败: device=%d err=%v", state.ID, err)
+				continue
+			}
 			onlineSyncCount++
 
 			// 获取缓存接口实例
 			if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-				ctx := context.Background()
-
 				// 1. 失效单个设备的详细信息缓存
-				_ = deviceCache.InvalidateDevice(ctx, memDev.ID, memDev.OwnerID, uint8(memDev.SSID))
+				_ = deviceCache.InvalidateDevice(ctx, state.ID, state.OwnerID, state.SSID)
 
 				// 2. 失效全局设备分页列表缓存，确保前端 "所有设备" 页面能刷新状态
 				_ = deviceCache.InvalidateDeviceList(ctx)
@@ -273,19 +288,20 @@ func refreshDeviceCache() {
 		if memDev == nil {
 			continue
 		}
-		if _, exists := dbDeviceKeys[getOwnerSSIDKey(memDev.OwnerID, memDev.SSID)]; exists {
+		state := memDev.RuntimeSnapshot()
+		if _, exists := dbDeviceKeys[getOwnerSSIDKey(state.OwnerID, state.SSID)]; exists {
 			continue
 		}
 		missingDevices = append(missingDevices, memDev)
 	}
 	for _, missingDev := range missingDevices {
-		if RemoveRuntimeDevice(missingDev.OwnerID, missingDev.SSID) {
+		state := missingDev.RuntimeSnapshot()
+		if RemoveRuntimeDevice(state.OwnerID, state.SSID) {
 			removedCount++
 		}
 	}
 	if removedCount > 0 {
 		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-			ctx := context.Background()
 			_ = deviceCache.InvalidateDeviceList(ctx)
 			for _, missingDev := range missingDevices {
 				state := missingDev.RuntimeSnapshot()

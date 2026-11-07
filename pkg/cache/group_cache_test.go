@@ -21,18 +21,18 @@ func testGroupCache(t *testing.T) *GroupCache {
 func TestGroupListCacheUsesDatabasePaginationOnMiss(t *testing.T) {
 	groupCache := testGroupCache(t)
 	fullCalls, pageCalls, countCalls := 0, 0, 0
-	groupCache.listGroupsPaginated = func(limit, page int) ([]*gormdb.Group, int64, error) {
+	groupCache.listGroupsPaginated = func(ctx context.Context, limit, page int) ([]*gormdb.Group, int64, error) {
 		fullCalls++
 		if limit != 2 || page != 3 {
 			t.Fatalf("unexpected pagination arguments: limit=%d page=%d", limit, page)
 		}
 		return []*gormdb.Group{{ID: 5}, {ID: 4}}, 5, nil
 	}
-	groupCache.listGroupsPage = func(int, int) ([]*gormdb.Group, error) {
+	groupCache.listGroupsPage = func(context.Context, int, int) ([]*gormdb.Group, error) {
 		pageCalls++
 		return nil, errors.New("page-only loader should not run on complete miss")
 	}
-	groupCache.countGroups = func() (int64, error) {
+	groupCache.countGroups = func(context.Context) (int64, error) {
 		countCalls++
 		return 0, errors.New("count loader should not run on complete miss")
 	}
@@ -56,18 +56,18 @@ func TestGroupListCacheUsesDatabasePaginationOnMiss(t *testing.T) {
 func TestGroupListCachePartialHitsQueryOnlyMissingView(t *testing.T) {
 	groupCache := testGroupCache(t)
 	ctx := context.Background()
-	groupCache.listGroupsPaginated = func(int, int) ([]*gormdb.Group, int64, error) {
+	groupCache.listGroupsPaginated = func(context.Context, int, int) ([]*gormdb.Group, int64, error) {
 		return nil, 0, errors.New("full loader should not run for partial hit")
 	}
 	pageCalls, countCalls := 0, 0
-	groupCache.listGroupsPage = func(limit, page int) ([]*gormdb.Group, error) {
+	groupCache.listGroupsPage = func(ctx context.Context, limit, page int) ([]*gormdb.Group, error) {
 		pageCalls++
 		if limit != 3 || page != 2 {
 			t.Fatalf("unexpected page arguments: limit=%d page=%d", limit, page)
 		}
 		return []*gormdb.Group{{ID: 8}}, nil
 	}
-	groupCache.countGroups = func() (int64, error) {
+	groupCache.countGroups = func(context.Context) (int64, error) {
 		countCalls++
 		return 9, nil
 	}
@@ -102,16 +102,16 @@ func TestGroupListCachePartialHitsQueryOnlyMissingView(t *testing.T) {
 
 func TestGroupListCacheNormalizesInvalidPageArguments(t *testing.T) {
 	groupCache := testGroupCache(t)
-	groupCache.listGroupsPaginated = func(limit, page int) ([]*gormdb.Group, int64, error) {
+	groupCache.listGroupsPaginated = func(ctx context.Context, limit, page int) ([]*gormdb.Group, int64, error) {
 		if limit != 20 || page != 1 {
 			t.Fatalf("arguments were not normalized: limit=%d page=%d", limit, page)
 		}
 		return nil, 0, nil
 	}
-	groupCache.listGroupsPage = func(int, int) ([]*gormdb.Group, error) {
+	groupCache.listGroupsPage = func(context.Context, int, int) ([]*gormdb.Group, error) {
 		return nil, errors.New("unexpected page loader")
 	}
-	groupCache.countGroups = func() (int64, error) {
+	groupCache.countGroups = func(context.Context) (int64, error) {
 		return 0, errors.New("unexpected count loader")
 	}
 	if _, _, err := groupCache.GetGroupList(context.Background(), 0, 0); err != nil {

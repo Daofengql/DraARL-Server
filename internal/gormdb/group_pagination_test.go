@@ -19,3 +19,20 @@ func TestNormalizePageOffsetRejectsOverflow(t *testing.T) {
 		t.Fatal("expected oversized group page to be rejected")
 	}
 }
+
+func TestSingleItemPaginationSupportsMaximumPage(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for name, normalize := range map[string]func(int, int) (int, int, int, error){
+		"groups":        NormalizePageOffset,
+		"users":         NormalizeUserPagination,
+		"devices":       NormalizeDevicePageOffset,
+		"operator logs": NormalizeOperatorLogPagination,
+	} {
+		t.Run(name, func(t *testing.T) {
+			limit, page, offset, err := normalize(1, maxInt)
+			if err != nil || limit != 1 || page != maxInt || offset != maxInt-1 {
+				t.Fatalf("normalized=(%d,%d,%d) err=%v", limit, page, offset, err)
+			}
+		})
+	}
+}

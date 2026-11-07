@@ -11,7 +11,7 @@ import (
 )
 
 func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
-	return r.UpdateDeviceEntryContext(context.Background(), deviceID, nodeID, mode, sessionID, online, now)
+	return r.UpdateDeviceEntryContext(r.db.Statement.Context, deviceID, nodeID, mode, sessionID, online, now)
 }
 
 // UpdateDeviceEntryContext allows shutdown-aware callers to cancel the row
@@ -73,7 +73,7 @@ type DeviceListFilter struct {
 // imposing a list-size cap on internal callers such as the QTH snapshot path.
 func NormalizeDevicePageOffset(limit, page int) (int, int, int, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = DefaultPageSize
 	}
 	if page <= 0 {
 		page = 1

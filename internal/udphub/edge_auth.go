@@ -98,7 +98,7 @@ func AuthenticateProxiedDevice(sourceIP string, wire []byte, optionList ...Proxi
 	if !protocol.IsValidClientReportedDevModel(model) {
 		model = protocol.DraARLDevModelUnknown
 	}
-	newDevice := &models.Device{Username: authResult.User.Name, CallSign: authResult.CallSign, Nickname: authResult.User.NickName, SSID: packet.SSID, OwnerID: authResult.User.ID, CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID), DevModel: model, Priority: 100, Status: 0, LastOnlineIP: sourceIP}
+	newDevice := &models.Device{Username: authResult.User.Name, CallSign: authResult.CallSign, Nickname: authResult.User.NickName, SSID: packet.SSID, OwnerID: authResult.User.ID, CallSignSSID: protocol.GetCallSignSSID(authResult.CallSign, packet.SSID), DevModel: model, Priority: 100, Status: 0, LastOnlineIP: sourceIP}
 	dev, err := addDevice(newDevice, func() int { return resolveAvailableNewDeviceDefaultGroup(authResult.User) })
 	if err != nil || dev == nil {
 		return ProxiedDeviceAuthResult{Error: "device_registration_failed"}

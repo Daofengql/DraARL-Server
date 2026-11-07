@@ -82,7 +82,7 @@ func (c *DeviceCache) GetDeviceByID(ctx context.Context, id int) (*gormdb.Device
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	dbDevice, err := repo.GetDeviceByID(id)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (c *DeviceCache) GetDeviceList(ctx context.Context, page, pageSize int) ([]
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	dbDevices, dbTotal, err := repo.ListDevices(pageSize, page)
 	if err != nil {
 		return nil, 0, err
@@ -194,7 +194,7 @@ func (c *DeviceCache) GetDevicesByGroupID(ctx context.Context, groupID int) ([]*
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	dbDevices, err := repo.ListDevicesByGroupID(groupID)
 	if err != nil {
 		return nil, err

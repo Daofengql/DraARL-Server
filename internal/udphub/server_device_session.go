@@ -3,7 +3,6 @@ package udphub
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"log"
 	"math"
 	"net"
@@ -99,7 +98,7 @@ func applyClientReportedDevModel(ctx context.Context, dev *models.Device, report
 		return
 	}
 
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	if err := repo.UpdateDeviceFields(state.ID, map[string]interface{}{
 		"dev_model": int(reportedDevModel),
 	}); err != nil {
@@ -123,8 +122,11 @@ func applyClientReportedDevModel(ctx context.Context, dev *models.Device, report
 // registerAuthenticatedDraARLDevice creates or restores a normal UDP device
 // after the dedicated authentication pool has verified its credentials.
 func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, authResult *DeviceAuthResult, incomingMAC string) {
-	if packet == nil || authResult == nil || !authResult.Success || authResult.User == nil {
+	if packet == nil || packet.UDPAddr == nil || conn == nil || authResult == nil || !authResult.Success || authResult.User == nil {
 		return
+	}
+	if realAddr == nil {
+		realAddr = packet.UDPAddr
 	}
 
 	if existingDev := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflictForModel(existingDev, normalDeviceConflictAddr(existingDev, packet.UDPAddr, realAddr), incomingMAC, packet.DevModel) {
@@ -143,13 +145,12 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 		reportedDevModel = protocol.DraARLDevModelUnknown
 	}
 	newDevice := &models.Device{
-		Username: packet.Username,
-		CallSign: authResult.CallSign,
-		Nickname: authResult.User.NickName,
-		SSID:     packet.SSID,
-		OwnerID:  authResult.User.ID, // 设置所有者ID
-		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
-		CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID),
+		Username:     packet.Username,
+		CallSign:     authResult.CallSign,
+		Nickname:     authResult.User.NickName,
+		SSID:         packet.SSID,
+		OwnerID:      authResult.User.ID, // 设置所有者ID
+		CallSignSSID: protocol.GetCallSignSSID(authResult.CallSign, packet.SSID),
 		DevModel:     reportedDevModel,
 		MAC:          incomingMAC,
 		Priority:     100,
@@ -183,7 +184,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 			if incomingMAC != "" {
 				current.MAC = incomingMAC
 			}
-			current.CallSignSSID = fmt.Sprintf("%s-%d", current.CallSign, current.SSID)
+			current.CallSignSSID = protocol.GetCallSignSSID(current.CallSign, current.SSID)
 			// UDPAddr 存储 frp 转发地址（用于发送响应）
 			current.UDPAddr = packet.UDPAddr
 			current.RealUDPAddr = realAddr
@@ -283,7 +284,7 @@ func resolveNewDeviceDefaultGroup(user *gormdb.User) int {
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
 // isGhost: 是否为 UDP 幽灵设备
 func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
-	if packet == nil || dev == nil {
+	if packet == nil || packet.UDPAddr == nil || dev == nil || conn == nil {
 		return
 	}
 	state := dev.RuntimeSnapshot()

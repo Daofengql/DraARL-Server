@@ -451,23 +451,17 @@ func searchMembershipCandidateIDs(groups []*gormdb.Group, userID int) []int {
 	return result
 }
 
-const maxGroupPageSize = 100
+const maxGroupPageSize = gormdb.MaxPageSize
 
 func normalizeGroupPagination(page, pageSize int) (int, int, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
 	if pageSize > maxGroupPageSize {
 		pageSize = maxGroupPageSize
 	}
-	maxInt := int(^uint(0) >> 1)
-	if page > (maxInt/pageSize)+1 {
+	pageSize, page, offset, err := gormdb.NormalizePageOffset(pageSize, page)
+	if err != nil {
 		return 0, 0, 0, fmt.Errorf("分页页码过大")
 	}
-	return page, pageSize, (page - 1) * pageSize, nil
+	return page, pageSize, offset, nil
 }
 
 // JoinGroupRequest 加入群组请求

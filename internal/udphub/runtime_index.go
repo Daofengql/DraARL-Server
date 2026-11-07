@@ -3,8 +3,10 @@ package udphub
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"draarl/internal/models"
@@ -13,6 +15,25 @@ import (
 )
 
 const runtimeDeviceActiveTimeout = 20 * time.Second
+
+var deviceGroupCleanupFallbacks atomic.Uint64
+
+// Device.GroupID is maintained by the same detach/attach path as membership.
+// Only a missing group requires the compatibility scan across cached groups.
+func visitRuntimeDeviceGroups(dev *models.Device, visit func(*models.Group)) {
+	state := dev.RuntimeSnapshot()
+	if gp, ok := GetGroupFromCache(state.GroupID); ok && gp != nil {
+		visit(gp)
+	} else if state.GroupID > 0 {
+		count := deviceGroupCleanupFallbacks.Add(1)
+		if count == 1 || count%100 == 0 {
+			log.Printf("[WARN] device group cleanup index missing: device=%d group=%d fallbacks=%d", state.ID, state.GroupID, count)
+		}
+		for _, gp := range GetAllGroupsFromCache() {
+			visit(gp)
+		}
+	}
+}
 
 func getOwnerSSIDKey(ownerID int, ssid byte) string {
 	return fmt.Sprintf("%d-%d", ownerID, ssid)
@@ -90,44 +111,40 @@ func indexRuntimeDevice(dev *models.Device) {
 	if dev == nil {
 		return
 	}
-	runtimeIndexMu.Lock()
-	indexRuntimeDeviceLocked(dev)
-	runtimeIndexMu.Unlock()
+	// Device state always precedes the index lock. Readers copy map entries
+	// before taking a device snapshot, so neither lock waits in reverse order.
+	dev.UpdateRuntime(func(current *models.Device) {
+		if current.CallSign != "" {
+			current.CallSignSSID = callsignSSIDKey(current.CallSign, current.SSID)
+		}
+		runtimeIndexMu.Lock()
+		defer runtimeIndexMu.Unlock()
+		if current.OwnerID > 0 {
+			devOwnerSSIDMap[getOwnerSSIDKey(current.OwnerID, current.SSID)] = dev
+		}
+		if current.Username != "" {
+			devUsernameSSIDMap[usernameSSIDKey(current.Username, current.SSID)] = dev
+		}
+		if current.CallSign != "" {
+			devCallsignSSIDMap[current.CallSignSSID] = dev
+		}
+	})
 	// Redis is an external dependency and may stall during a failover. Keep
 	// that I/O outside the global runtime-index lock so one device cannot block
 	// lookups or indexing for every other device.
 	syncRuntimeDeviceMAC(dev)
 }
 
-func indexRuntimeDeviceLocked(dev *models.Device) {
-	if dev == nil {
-		return
-	}
-	state := dev.RuntimeSnapshot()
-	if state.OwnerID > 0 {
-		devOwnerSSIDMap[getOwnerSSIDKey(state.OwnerID, state.SSID)] = dev
-	}
-	if state.Username != "" {
-		devUsernameSSIDMap[usernameSSIDKey(state.Username, state.SSID)] = dev
-	}
-	if state.CallSign != "" {
-		callsignSSID := callsignSSIDKey(state.CallSign, state.SSID)
-		if state.CallSignSSID != callsignSSID {
-			dev.UpdateRuntime(func(current *models.Device) {
-				current.CallSignSSID = callsignSSID
-			})
-		}
-		devCallsignSSIDMap[callsignSSID] = dev
-	}
-}
-
 func removeRuntimeUsernameKey(dev *models.Device, username string) {
 	if dev == nil || username == "" {
 		return
 	}
-	runtimeIndexMu.Lock()
 	state := dev.RuntimeSnapshot()
-	delete(devUsernameSSIDMap, usernameSSIDKey(username, state.SSID))
+	runtimeIndexMu.Lock()
+	key := usernameSSIDKey(username, state.SSID)
+	if devUsernameSSIDMap[key] == dev {
+		delete(devUsernameSSIDMap, key)
+	}
 	runtimeIndexMu.Unlock()
 }
 
@@ -135,9 +152,12 @@ func removeRuntimeCallSignKey(dev *models.Device, callsign string) {
 	if dev == nil || callsign == "" {
 		return
 	}
-	runtimeIndexMu.Lock()
 	state := dev.RuntimeSnapshot()
-	delete(devCallsignSSIDMap, callsignSSIDKey(callsign, state.SSID))
+	runtimeIndexMu.Lock()
+	key := callsignSSIDKey(callsign, state.SSID)
+	if devCallsignSSIDMap[key] == dev {
+		delete(devCallsignSSIDMap, key)
+	}
 	runtimeIndexMu.Unlock()
 }
 
@@ -333,6 +353,7 @@ func SyncRuntimeDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64,
 	if dev == nil {
 		return
 	}
+	remote := nodeID != "center"
 	dev.UpdateRuntime(func(current *models.Device) {
 		current.CurrentEntryNodeID = nodeID
 		current.CurrentEntrySessionID = sessionID
@@ -343,31 +364,28 @@ func SyncRuntimeDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64,
 		}
 		current.EntryMode = mode
 		current.ISOnline = online
-	})
-	runtimeIndexMu.Lock()
-	if online {
-		dev.UpdateRuntime(func(current *models.Device) {
+		if online {
 			current.OnlineTime = seenAt
-		})
-		onlineDevMap[dev.ID] = dev
-		onlineDevMapDraARL[dev.ID] = dev
-	} else {
-		delete(onlineDevMap, dev.ID)
-		delete(onlineDevMapDraARL, dev.ID)
-	}
-	remote := nodeID != "center"
-	if remote || !online {
-		dev.UpdateRuntime(func(current *models.Device) {
+		}
+		if remote || !online {
 			current.UDPAddr = nil
 			current.RealUDPAddr = nil
-		})
-	}
-	runtimeIndexMu.Unlock()
+		}
+		runtimeIndexMu.Lock()
+		if online {
+			onlineDevMap[current.ID] = dev
+			onlineDevMapDraARL[current.ID] = dev
+		} else {
+			delete(onlineDevMap, current.ID)
+			delete(onlineDevMapDraARL, current.ID)
+		}
+		runtimeIndexMu.Unlock()
+	})
 
 	if remote || !online {
-		for _, gp := range GetAllGroupsFromCache() {
+		visitRuntimeDeviceGroups(dev, func(gp *models.Group) {
 			removeDeviceConnectionFromGroup(gp, dev)
-		}
+		})
 	}
 	invalidateDeviceEntryCache(dev)
 }
@@ -431,9 +449,9 @@ func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
 		current.RealUDPAddr = nil
 	})
 
-	for _, gp := range GetAllGroupsFromCache() {
+	visitRuntimeDeviceGroups(dev, func(gp *models.Group) {
 		removeDeviceFromGroupRuntime(gp, dev)
-	}
+	})
 
 	userList.Range(func(_, value any) bool {
 		info, ok := value.(*UserInfo)
@@ -516,20 +534,19 @@ func SyncUserCallSignChange(ownerID int, username, oldCallSign, newCallSign stri
 		})
 	}
 
-	runtimeIndexMu.Lock()
 	for dev := range seen {
-		state := dev.RuntimeSnapshot()
-		if oldCallSign != "" {
-			delete(devCallsignSSIDMap, callsignSSIDKey(oldCallSign, state.SSID))
-		}
-		callsignSSID := callsignSSIDKey(newCallSign, state.SSID)
 		dev.UpdateRuntime(func(current *models.Device) {
+			runtimeIndexMu.Lock()
+			defer runtimeIndexMu.Unlock()
+			oldKey := callsignSSIDKey(oldCallSign, current.SSID)
+			if oldCallSign != "" && devCallsignSSIDMap[oldKey] == dev {
+				delete(devCallsignSSIDMap, oldKey)
+			}
 			current.CallSign = newCallSign
-			current.CallSignSSID = callsignSSID
+			current.CallSignSSID = callsignSSIDKey(newCallSign, current.SSID)
+			devCallsignSSIDMap[current.CallSignSSID] = dev
 		})
-		devCallsignSSIDMap[callsignSSID] = dev
 	}
-	runtimeIndexMu.Unlock()
 
 	GlobalUDPGhostManager.UpdateUserCallSign(ownerID, username, newCallSign)
 }

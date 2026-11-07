@@ -30,3 +30,13 @@ func TestNormalizeGroupPaginationAllowsLargestRepresentableOffset(t *testing.T) 
 		t.Fatalf("largest representable page=(%d,%d,%d) err=%v", gotPage, gotSize, offset, err)
 	}
 }
+
+func TestNormalizeGroupPaginationSupportsSingleItemPages(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for _, page := range []int{1, maxInt} {
+		gotPage, pageSize, offset, err := normalizeGroupPagination(page, 1)
+		if err != nil || gotPage != page || pageSize != 1 || offset != page-1 {
+			t.Fatalf("single-item page=(%d,%d,%d) err=%v", gotPage, pageSize, offset, err)
+		}
+	}
+}

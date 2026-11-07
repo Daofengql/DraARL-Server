@@ -56,6 +56,7 @@ export function ProvisionDraarlForm({
               size="small"
               startIcon={<Save />}
               onClick={onSave}
+              loading={loading}
               disabled={disabled || loading}
             >
               保存 DraARL

@@ -21,13 +21,13 @@ type GroupRepository struct {
 // all direct repository/cache callers from integer-overflowed SQL offsets.
 func NormalizePageOffset(limit, page int) (int, int, int, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = DefaultPageSize
 	}
 	if page <= 0 {
 		page = 1
 	}
 	maxInt := int(^uint(0) >> 1)
-	if page > maxInt/limit+1 {
+	if page-1 > maxInt/limit {
 		return 0, 0, 0, errors.New("group page is too large")
 	}
 	return limit, page, (page - 1) * limit, nil
@@ -575,14 +575,14 @@ type OperatorLogRepository struct {
 	db *gorm.DB
 }
 
-const maxOperatorLogPageSize = 100
+const maxOperatorLogPageSize = MaxPageSize
 
 // NormalizeOperatorLogPagination keeps offset calculations bounded before a
 // caller can pass values to SQL. The handler and repository share this rule so
 // direct repository users cannot reintroduce a negative offset.
 func NormalizeOperatorLogPagination(limit, page int) (int, int, int, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = DefaultPageSize
 	}
 	if limit > maxOperatorLogPageSize {
 		limit = maxOperatorLogPageSize
@@ -591,7 +591,7 @@ func NormalizeOperatorLogPagination(limit, page int) (int, int, int, error) {
 		page = 1
 	}
 	maxInt := int(^uint(0) >> 1)
-	if page > (maxInt/limit)+1 {
+	if page-1 > maxInt/limit {
 		return 0, 0, 0, errors.New("operator log page is too large")
 	}
 	return limit, page, (page - 1) * limit, nil

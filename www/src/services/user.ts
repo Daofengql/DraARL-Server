@@ -1,3 +1,4 @@
+import { debugLog } from '../utils/debugLog.ts'
 import { apiClient } from './api'
 import type {
   User,
@@ -55,8 +56,8 @@ export const userService = {
   // 获取用户公开信息（任何登录用户可访问）
   async getPublicInfo(id: number): Promise<User> {
     const res = await apiClient.get<{ code: number; message: string; data?: User }>(`/api/users/${id}/public`)
-    console.log('getPublicInfo raw response:', res)
-    console.log('getPublicInfo data:', res.data)
+    debugLog('getPublicInfo raw response:', res)
+    debugLog('getPublicInfo data:', res.data)
     return res.data!
   },
 

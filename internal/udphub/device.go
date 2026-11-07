@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -88,6 +89,10 @@ func loadAllDevices() {
 }
 
 func loadDeviceOwnerCache(devices []*gormdb.Device) map[int]*gormdb.User {
+	return loadDeviceOwnerCacheContext(context.Background(), devices)
+}
+
+func loadDeviceOwnerCacheContext(ctx context.Context, devices []*gormdb.Device) map[int]*gormdb.User {
 	ownerSet := make(map[int]struct{}, len(devices))
 	for _, dev := range devices {
 		if dev != nil && dev.OwnerID > 0 {
@@ -100,7 +105,7 @@ func loadDeviceOwnerCache(devices []*gormdb.Device) map[int]*gormdb.User {
 	}
 
 	cache := make(map[int]*gormdb.User, len(ownerIDs))
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(ctx)
 	const batchSize = 1000
 	for start := 0; start < len(ownerIDs); start += batchSize {
 		end := min(start+batchSize, len(ownerIDs))
@@ -429,7 +434,7 @@ func checkDeviceOnline() {
 								// 在宽限期内，延长超时时间
 								if timeSinceLastPacket < offlineTimeout+reconnectGrace {
 									log.Printf("[GRACE] Device %v-%v in reconnection grace period, waiting... (%v since last packet)",
-									state.CallSign, state.SSID, timeSinceLastPacket)
+										state.CallSign, state.SSID, timeSinceLastPacket)
 									groupOnlineCount++
 									onlineMap[dev.ID] = dev
 									continue

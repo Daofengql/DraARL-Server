@@ -20,6 +20,7 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
+      'no-console': ['error', { allow: ['warn', 'error'] }],
       // Existing API adapters intentionally use `any` at untyped HTTP/browser boundaries.
       // TypeScript strict mode still validates typed application code.
       '@typescript-eslint/no-explicit-any': 'off',

@@ -19,6 +19,7 @@ var (
 func GetSecurityPacketMetrics() map[string]uint64 {
 	return map[string]uint64{
 		"normal_device_endpoint_rejects": devicePacketEndpointRejects.Load(),
+		"device_group_cleanup_fallbacks": deviceGroupCleanupFallbacks.Load(),
 	}
 }
 

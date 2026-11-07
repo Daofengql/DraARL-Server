@@ -1,3 +1,4 @@
+import { debugLog } from '../../utils/debugLog.ts'
 import { useEffect, useState } from 'react'
 import {
   Box,
@@ -113,10 +114,10 @@ export function GroupsPage() {
     const target = event.currentTarget
     try {
       const user = await userService.getPublicInfo(userId)
-      console.log('User info loaded:', user)
+      debugLog('User info loaded:', user)
       setSelectedUser(user)
       setUserDetailAnchorEl(target)
-      console.log('AnchorEl set:', target)
+      debugLog('AnchorEl set:', target)
     } catch (err) {
       console.error('Failed to load user info:', err)
       setError('获取用户信息失败')

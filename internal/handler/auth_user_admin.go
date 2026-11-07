@@ -25,9 +25,9 @@ func GetUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 
 	if limit <= 0 {
-		limit = 20
-	} else if limit > 100 {
-		limit = 100
+		limit = gormdb.DefaultPageSize
+	} else if limit > gormdb.MaxPageSize {
+		limit = gormdb.MaxPageSize
 	}
 	if page <= 0 {
 		page = 1
@@ -42,15 +42,8 @@ func GetUsers(c *gin.Context) {
 	}
 	limit, page = normalizedLimit, normalizedPage
 
-	// 检查用户是否为管理员
-	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
-	currentUser, err := repo.GetUserByName(username.(string))
-	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
 		return
 	}
 
@@ -64,6 +57,8 @@ func GetUsers(c *gin.Context) {
 
 	var users []*gormdb.User
 	var total int64
+	var err error
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 根据是否有关键字选择不同的查询方法
 	if keyword != "" {
@@ -147,7 +142,7 @@ func UpdateUser(c *gin.Context) {
 	}
 	currentUserModel := currentUser.(*gormdb.User)
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 获取目标用户
 	user, err := repo.GetUserByID(id)
@@ -328,7 +323,7 @@ func UpdateUserStatus(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 检查用户是否存在
 	user, err := repo.GetUserByID(id)
@@ -421,7 +416,7 @@ func DeleteUser(c *gin.Context) {
 	}
 	currentUserModel := currentUser.(*gormdb.User)
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 检查目标用户是否存在
 	targetUser, err := repo.GetUserByID(id)
@@ -473,7 +468,7 @@ func DeleteUser(c *gin.Context) {
 			continue
 		}
 		if group.Status == 1 {
-			if updateErr := gormdb.NewGroupRepository().UpdateGroupFields(group.ID, map[string]interface{}{"status": 0}); updateErr != nil {
+			if updateErr := gormdb.NewGroupRepository().WithContext(c.Request.Context()).UpdateGroupFields(group.ID, map[string]interface{}{"status": 0}); updateErr != nil {
 				log.Printf("删除用户前停用实体群组 %d 失败: %v", group.ID, updateErr)
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "停止实体群组自动播报失败"})
 				return

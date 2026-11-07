@@ -26,7 +26,7 @@ func GetGroupDevices(c *gin.Context) {
 		})
 		return
 	}
-	groupRepo := gormdb.NewGroupRepository()
+	groupRepo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := groupRepo.GetGroupByID(groupID)
 	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -50,7 +50,7 @@ func GetGroupDevices(c *gin.Context) {
 	if deviceCache != nil {
 		devicesRaw, err = deviceCache.GetDevicesByGroupID(ctx, groupID)
 	} else {
-		repo := gormdb.NewDeviceRepository()
+		repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 		devicesRaw, err = repo.ListDevicesByGroupID(groupID)
 	}
 	if err != nil {
@@ -62,7 +62,7 @@ func GetGroupDevices(c *gin.Context) {
 	}
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	ownerIDSet := make(map[int]bool, len(devicesRaw))
 	for _, d := range devicesRaw {
 		if d.OwnerID > 0 {
@@ -73,7 +73,11 @@ func GetGroupDevices(c *gin.Context) {
 	for id := range ownerIDSet {
 		uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 	}
-	ownerCallSigns, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+	ownerCallSigns, err := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询设备所有者失败"})
+		return
+	}
 
 	// 转换为响应格式（收发控制只来自 devices 表）
 	devices := make([]gin.H, 0, len(devicesRaw))
@@ -135,7 +139,7 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "至少需要设置一项收发状态"})
 		return
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(groupID)
 	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
 		return
@@ -153,7 +157,7 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 		return
 	}
 
-	deviceRepo := gormdb.NewDeviceRepository()
+	deviceRepo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	currentDevice, err := deviceRepo.GetDeviceByID(deviceID)
 	if err != nil || currentDevice == nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "设备不存在"})
@@ -192,7 +196,7 @@ func UpdateGroupDeviceCommControl(c *gin.Context) {
 	routesync.PublishDevice(after.ID)
 
 	ownerCallSign := ""
-	if owner, ownerErr := gormdb.NewUserRepository().GetUserByID(after.OwnerID); ownerErr == nil && owner != nil {
+	if owner, ownerErr := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserByID(after.OwnerID); ownerErr == nil && owner != nil {
 		ownerCallSign = owner.CallSign
 	}
 	source := "group_owner"
@@ -255,7 +259,7 @@ func KickDevice(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(groupID)
 	if err != nil || group == nil {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -283,7 +287,7 @@ func KickDevice(c *gin.Context) {
 	}
 
 	// 检查设备是否属于该群组
-	deviceRepo := gormdb.NewDeviceRepository()
+	deviceRepo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	device, err := deviceRepo.GetDeviceByID(deviceID)
 	if err != nil || device == nil {
 		c.JSON(http.StatusNotFound, gin.H{

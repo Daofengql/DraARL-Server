@@ -27,6 +27,8 @@ const DEVICE_MODEL_DEFINITIONS: DeviceModelOption[] = [
   { value: 103, label: 'Windows 客户端', icon: DesktopWindows, selectable: true },
   { value: 104, label: 'macOS 客户端', icon: LaptopMac, selectable: true },
   { value: 105, label: '浏览器客户端', icon: Language, selectable: true },
+  { value: 106, label: '历史互联设备', icon: SettingsInputAntenna, selectable: false },
+  { value: 107, label: '历史 ESP32 链路台/手咪', icon: SettingsInputAntenna, selectable: false },
   { value: 236, label: '南山对讲软件桥接器', icon: SettingsInputAntenna, selectable: true },
   { value: 237, label: '涛涛对讲软件桥接器', icon: SettingsInputAntenna, selectable: true },
   { value: 238, label: '本视对讲（HT）软件桥接器', icon: SettingsInputAntenna, selectable: true },

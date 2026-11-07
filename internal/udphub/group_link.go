@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"context"
 	"log"
 	"sort"
 	"sync"
@@ -45,7 +46,9 @@ func RefreshGroupLinkCache() {
 
 // refreshGroupLinkCache 刷新群组互联缓存的内部实现
 func refreshGroupLinkCache() {
-	repo := gormdb.NewGroupLinkRepository()
+	ctx, cancel := context.WithTimeout(context.Background(), groupCacheSyncTimeout)
+	defer cancel()
+	repo := gormdb.NewGroupLinkRepository().WithContext(ctx)
 	links, err := repo.GetAllLinks()
 	if err != nil {
 		log.Printf("[CACHE] 从数据库加载群组互联关系失败: %v", err)

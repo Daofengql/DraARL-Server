@@ -99,6 +99,7 @@ export function ProvisionWifiForm({
               size="small"
               startIcon={<Save />}
               onClick={onSave}
+              loading={loading}
               disabled={disabled || loading}
             >
               保存 WiFi

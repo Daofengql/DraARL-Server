@@ -177,11 +177,13 @@ type MessageAPIConfig struct {
 }
 
 const (
-	DefaultBroadcastQuietWindowSeconds  = 5
-	DefaultBroadcastMaxDurationSeconds  = 30
-	MaxBroadcastDurationSeconds         = 60
-	DefaultBroadcastMaxUploadBytes      = 20 * 1024 * 1024
-	DefaultBroadcastTranscodeMemoryMB   = 512
+	DefaultBroadcastQuietWindowSeconds = 5
+	DefaultBroadcastMaxDurationSeconds = 30
+	MaxBroadcastDurationSeconds        = 60
+	DefaultBroadcastMaxUploadBytes     = 20 * 1024 * 1024
+	// Keep enough virtual address space for distro ffmpeg builds to create
+	// their codec/filter worker stacks while retaining a hard per-process cap.
+	DefaultBroadcastTranscodeMemoryMB   = 1024
 	DefaultBroadcastTranscodeCPUSeconds = 60
 	DefaultBroadcastTranscodeWorkers    = 2
 )

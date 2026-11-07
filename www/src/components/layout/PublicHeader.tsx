@@ -2,21 +2,23 @@ import { useState, useEffect } from 'react'
 import { Box, Typography, Button, AppBar, Toolbar, Avatar, IconButton, Menu, MenuItem, Tooltip } from '@mui/material'
 import DarkMode from '@mui/icons-material/DarkMode'
 import LightMode from '@mui/icons-material/LightMode'
-import Login from '@mui/icons-material/Login'
-import PersonAdd from '@mui/icons-material/PersonAdd'
-import Dashboard from '@mui/icons-material/Dashboard'
-import MenuBook from '@mui/icons-material/MenuBook'
-import Info from '@mui/icons-material/Info'
-import Forum from '@mui/icons-material/Forum'
-import Home from '@mui/icons-material/Home'
-import Build from '@mui/icons-material/Build'
-import SettingsInputAntenna from '@mui/icons-material/SettingsInputAntenna'
 import MenuIcon from '@mui/icons-material/Menu'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link as RouterLink } from 'react-router-dom'
 import { useConfig } from '../../contexts/ConfigContext'
 import { SITE_CONFIG } from '../../config/site'
 import { authService } from '../../services'
 import { useColorMode } from '../../contexts/ThemeContext'
+import {
+  AntennaIcon,
+  DashboardIcon,
+  DocsIcon,
+  ForumIcon,
+  HomeIcon,
+  InfoIcon,
+  LoginIcon,
+  RegisterIcon,
+  ToolsIcon,
+} from '../icons/BlueprintIcons'
 
 interface PublicHeaderProps {
   /** 是否显示菜单按钮（用于移动端侧边栏） */
@@ -59,12 +61,12 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
 
   // 导航项
   const navItems = [
-    { label: '首页', path: '/', icon: <Home /> },
-    { label: '中继查询', path: '/relays', icon: <SettingsInputAntenna /> },
-    { label: '工具', path: '/tools', icon: <Build /> },
-    { label: '技术交流', path: '/forum', icon: <Forum /> },
-    { label: '文档', path: '/docs', icon: <MenuBook /> },
-    { label: '关于', path: '/about', icon: <Info /> },
+    { label: '首页', path: '/', icon: <HomeIcon /> },
+    { label: '中继查询', path: '/relays', icon: <AntennaIcon /> },
+    { label: '工具', path: '/tools', icon: <ToolsIcon /> },
+    { label: '技术交流', path: '/forum', icon: <ForumIcon /> },
+    { label: '文档', path: '/docs', icon: <DocsIcon /> },
+    { label: '关于', path: '/about', icon: <InfoIcon /> },
   ]
 
   const isActive = (path: string) => {
@@ -93,9 +95,16 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
         color: 'text.primary',
         borderBottom: '1px solid',
         borderColor: 'divider',
-        zIndex: (theme) => theme.zIndex.drawer + 1,
+        zIndex: (theme) => ({ xs: theme.zIndex.appBar, md: theme.zIndex.drawer + 1 }),
       }}
     >
+      <Box component="a" href="#main-content" sx={{
+        position: 'absolute', left: 16, top: -100, px: 2, py: 1,
+        bgcolor: 'primary.main', color: 'primary.contrastText',
+        '&:focus': { top: 8 }, zIndex: 1,
+      }}>
+        跳至主要内容
+      </Box>
       <Toolbar sx={{ height: 64, px: { xs: 1.5, sm: 3 }, gap: { xs: 1, sm: 2 } }}>
         {/* 移动端侧边栏菜单按钮 - 仅在有侧边栏时显示，放在左侧 */}
         {onMenuClick && (
@@ -103,7 +112,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
             onClick={onMenuClick}
             aria-label="打开控制台菜单"
             sx={{
-              display: { xs: 'flex', sm: 'none' },
+              display: { xs: 'flex', md: 'none' },
               color: 'text.secondary',
               p: 1,
             }}
@@ -114,14 +123,17 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
 
         {/* Logo */}
         <Box
-          onClick={() => navigate('/')}
+          component={RouterLink}
+          to="/"
+          aria-label={systemName + ' 首页'}
           sx={{
             display: 'flex',
             alignItems: 'center',
-            cursor: 'pointer',
+            textDecoration: 'none',
             flexShrink: 1,
             minWidth: 0,
-            maxWidth: { xs: 120, sm: 200 },
+            maxWidth: { xs: 104, sm: 220 },
+            gap: 1.5,
             overflow: 'hidden',
           }}
         >
@@ -133,33 +145,43 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
               sx={{ height: { xs: 36, sm: 48 }, maxWidth: { xs: 120, sm: 200 }, objectFit: 'contain' }}
             />
           ) : (
-            <Typography
-              variant="h6"
-              sx={{
-                fontWeight: 600,
-                color: 'primary.main',
-                fontSize: { xs: '1rem', sm: '1.25rem' },
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {systemName}
-            </Typography>
+            <>
+              <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center', justifyContent: 'center', width: 34, height: 34, border: '1px solid', borderColor: 'secondary.main', color: 'secondary.main', flexShrink: 0 }}>
+                <AntennaIcon sx={{ fontSize: 21 }} />
+              </Box>
+              <Typography
+                component="div"
+                variant="h6"
+                sx={{
+                  fontWeight: 600,
+                  color: 'text.primary',
+                  fontSize: { xs: '1rem', sm: '1.25rem' },
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {systemName}
+              </Typography>
+            </>
           )}
         </Box>
 
         {/* 导航链接 - 仅桌面端显示 */}
-        <Box sx={{ display: { xs: 'none', lg: 'flex' }, gap: 0.5, ml: 2 }}>
+        <Box component="nav" aria-label="站点导航" sx={{ display: { xs: 'none', lg: 'flex' }, gap: 0.5, ml: 2 }}>
           {navItems.map((item) => (
             <Button
               key={item.path}
               startIcon={item.icon}
-              onClick={() => navigate(item.path)}
+              component={RouterLink}
+              to={item.path}
+              aria-current={isActive(item.path) ? 'page' : undefined}
               sx={{
                 textTransform: 'none',
                 color: isActive(item.path) ? 'primary.main' : 'text.secondary',
-                bgcolor: isActive(item.path) ? 'action.selected' : 'transparent',
+                borderBottom: '2px solid',
+                borderColor: isActive(item.path) ? 'primary.main' : 'transparent',
+                bgcolor: 'transparent',
                 '&:hover': {
                   bgcolor: 'action.hover',
                   color: 'primary.main',
@@ -186,7 +208,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
             {!isInConsole && (
               <Button
                 variant="contained"
-                startIcon={<Dashboard />}
+                startIcon={<DashboardIcon />}
                 onClick={() => navigate('/dashboard')}
                 sx={{
                   textTransform: 'none',
@@ -203,7 +225,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
                 aria-label="打开控制台"
                 sx={{ display: { xs: 'flex', lg: 'none' }, color: 'primary.main' }}
               >
-                <Dashboard />
+                <DashboardIcon />
               </IconButton>
             )}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -232,6 +254,9 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
             <IconButton
               onClick={handleNavMenuOpen}
               aria-label="打开导航菜单"
+              aria-haspopup="menu"
+              aria-expanded={Boolean(navMenuAnchor)}
+              aria-controls={navMenuAnchor ? 'site-navigation-menu' : undefined}
               sx={{ display: { xs: 'flex', lg: 'none' }, color: 'text.secondary', p: 1 }}
             >
               <MenuIcon />
@@ -241,7 +266,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Button
               variant="text"
-              startIcon={<Login />}
+              startIcon={<LoginIcon />}
               onClick={() => navigate('/login')}
               sx={{
                 textTransform: 'none',
@@ -264,7 +289,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
             </Button>
             <Button
               variant="contained"
-              startIcon={<PersonAdd />}
+              startIcon={<RegisterIcon />}
               onClick={() => navigate('/register')}
               sx={{
                 textTransform: 'none',
@@ -277,6 +302,9 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
             <IconButton
               onClick={handleNavMenuOpen}
               aria-label="打开导航菜单"
+              aria-haspopup="menu"
+              aria-expanded={Boolean(navMenuAnchor)}
+              aria-controls={navMenuAnchor ? 'site-navigation-menu' : undefined}
               sx={{ display: { xs: 'flex', lg: 'none' }, color: 'text.secondary', p: 1 }}
             >
               <MenuIcon />
@@ -287,6 +315,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
 
       {/* 移动端导航菜单 */}
       <Menu
+        id="site-navigation-menu"
         anchorEl={navMenuAnchor}
         open={Boolean(navMenuAnchor)}
         onClose={handleNavMenuClose}

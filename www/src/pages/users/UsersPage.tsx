@@ -1,3 +1,6 @@
+import { parseAPIDate } from '../../utils/apiTime'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useEffect, useRef, useState } from 'react'
 import {
   Box,
@@ -73,6 +76,7 @@ export function UsersPage() {
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const debouncedKeyword = useDebouncedValue(searchKeyword)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [devicePasswords, setDevicePasswords] = useState<Record<number, string>>({})
@@ -139,7 +143,7 @@ export function UsersPage() {
       }
     } catch (err: any) {
       if (requestGeneration !== passwordRequestGeneration.current) return
-      setError(err.response?.data?.message || '读取设备密码失败')
+      setError(getErrorMessage(err, '读取设备密码失败'))
     } finally {
       if (requestGeneration === passwordRequestGeneration.current) {
         setPasswordLoading((current) => {
@@ -188,7 +192,7 @@ export function UsersPage() {
       handleCloseDialog()
       loadUsers()
     } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
+      setError(getErrorMessage(err, '操作失败'))
     }
   }
 
@@ -209,7 +213,7 @@ export function UsersPage() {
           await userService.delete(id)
           loadUsers()
         } catch (err: any) {
-          setError(err.response?.data?.message || '删除失败')
+          setError(getErrorMessage(err, '删除失败'))
         }
       },
     })
@@ -255,7 +259,7 @@ export function UsersPage() {
           authService.saveAuth(session.token, session.user)
           window.location.replace('/dashboard')
         } catch (err: any) {
-          setError(err.response?.data?.message || '切换登录用户失败')
+          setError(getErrorMessage(err, '切换登录用户失败'))
           setSwitchingUserId(null)
         }
       },
@@ -274,7 +278,7 @@ export function UsersPage() {
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('zh-CN')
+    return parseAPIDate(dateStr).toLocaleDateString('zh-CN')
   }
 
   const getSexLabel = (sex: number) => {
@@ -290,9 +294,9 @@ export function UsersPage() {
 
   const filteredUsers = users.filter(
     (u) =>
-      !searchKeyword ||
-      u.username.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-      (u.callsign && u.callsign.toLowerCase().includes(searchKeyword.toLowerCase()))
+      !debouncedKeyword ||
+      u.username.toLowerCase().includes(debouncedKeyword.toLowerCase()) ||
+      (u.callsign && u.callsign.toLowerCase().includes(debouncedKeyword.toLowerCase()))
   )
 
   const paginatedUsers = filteredUsers.slice(
@@ -305,7 +309,7 @@ export function UsersPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
-        <Typography variant="h4" fontWeight={600}>用户管理</Typography>
+        <Typography component="h1" variant="h4" fontWeight={600}>用户管理</Typography>
       </Box>
 
       {error && (
@@ -338,7 +342,7 @@ export function UsersPage() {
           ) : (
             <List disablePadding>
               {paginatedUsers.map((user) => (
-                <Card key={user.id} variant="outlined" sx={{ mb: 1 }}>
+                <Card component="li" key={user.id} variant="outlined" sx={{ mb: 1, listStyle: 'none' }}>
                   <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                       <Avatar src={user.avatar_thumb || user.avatar} sx={{ width: 32, height: 32 }}>{user.username?.charAt(0).toUpperCase()}</Avatar>
@@ -355,7 +359,7 @@ export function UsersPage() {
                     <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mt: 1 }}>
                       <Chip label={user.role === 'admin' ? '管理员' : '普通用户'} size="small" variant="outlined" />
                       {user.id === currentUserId && <Chip label="当前用户" size="small" variant="outlined" />}
-                      <Typography variant="caption" color="text.secondary">{user.created_at ? new Date(user.created_at).toLocaleDateString('zh-CN') : '-'}</Typography>
+                      <Typography variant="caption" color="text.secondary">{user.created_at ? parseAPIDate(user.created_at).toLocaleDateString('zh-CN') : '-'}</Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
@@ -483,7 +487,7 @@ export function UsersPage() {
                   </TableCell>
                   <TableCell>
                     {user.created_at
-                      ? new Date(user.created_at).toLocaleDateString('zh-CN')
+                      ? parseAPIDate(user.created_at).toLocaleDateString('zh-CN')
                       : '-'}
                   </TableCell>
                   <TableCell>
@@ -626,7 +630,7 @@ export function UsersPage() {
                   {selectedUser.username?.charAt(0).toUpperCase()}
                 </Avatar>
                 <Box>
-                  <Typography variant="h6">{selectedUser.username}</Typography>
+                  <Typography component="h2" variant="h6">{selectedUser.username}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     ID: {selectedUser.id}
                   </Typography>
@@ -705,7 +709,7 @@ export function UsersPage() {
                     <CheckCircle sx={{ mr: 2, color: 'text.secondary' }} fontSize="small" />
                     <ListItemText
                       primary="最后登录"
-                      secondary={new Date(selectedUser.last_login_time).toLocaleString('zh-CN')}
+                      secondary={parseAPIDate(selectedUser.last_login_time).toLocaleString('zh-CN')}
                     />
                   </ListItem>
                 )}

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -13,15 +12,13 @@ import (
 func accessLogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		method := c.Request.Method
 		path := sanitizeLogPath(c.Request.URL.Path, c.Request.URL.RawQuery)
 		clientIP := c.ClientIP()
 
 		c.Next()
 
 		latency := time.Since(start).Truncate(time.Millisecond)
-		status := c.Writer.Status()
-		log.Printf("[HTTP] %3d | %13s | %15s | %-7s %s", status, latency.String(), clientIP, method, path)
+		logRequest(c, latency, path, clientIP)
 	}
 }
 

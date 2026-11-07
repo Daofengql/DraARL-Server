@@ -1,3 +1,5 @@
+import { parseAPIDate } from '../../utils/apiTime'
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useEffect, useState } from 'react'
 import {
   Box,
@@ -78,7 +80,7 @@ export function CertificateApprovalsPage() {
       setRejectedCerts(rejectedData.items || [])
     } catch (err: any) {
       console.error('Failed to load certificate approvals:', err)
-      setError(err.response?.data?.message || '加载数据失败')
+      setError(getErrorMessage(err, '加载数据失败'))
     } finally {
       setLoading(false)
     }
@@ -104,7 +106,7 @@ export function CertificateApprovalsPage() {
       }
     } catch (err: any) {
       console.error('Failed to load certificate approvals:', err)
-      setError(err.response?.data?.message || '加载数据失败')
+      setError(getErrorMessage(err, '加载数据失败'))
     } finally {
       setLoading(false)
     }
@@ -136,7 +138,7 @@ export function CertificateApprovalsPage() {
       handleCloseApproveDialog()
       loadCertificateApprovals()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '操作失败')
+      showMessage('error', getErrorMessage(err, '操作失败'))
     } finally {
       setSubmitting(false)
     }
@@ -157,7 +159,7 @@ export function CertificateApprovalsPage() {
       handleCloseApproveDialog()
       loadCertificateApprovals()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '操作失败')
+      showMessage('error', getErrorMessage(err, '操作失败'))
     } finally {
       setSubmitting(false)
     }
@@ -284,7 +286,7 @@ export function CertificateApprovalsPage() {
                       </TableCell>
                       <TableCell>
                         {cert.upload_time
-                          ? new Date(cert.upload_time).toLocaleString('zh-CN')
+                          ? parseAPIDate(cert.upload_time).toLocaleString('zh-CN')
                           : '-'}
                       </TableCell>
                       <TableCell>
@@ -373,7 +375,7 @@ export function CertificateApprovalsPage() {
                       <TableCell>{cert.file_name}</TableCell>
                       <TableCell>
                         {cert.review_time
-                          ? new Date(cert.review_time).toLocaleString('zh-CN')
+                          ? parseAPIDate(cert.review_time).toLocaleString('zh-CN')
                           : '-'}
                       </TableCell>
                       <TableCell>{cert.reviewer_id || '-'}</TableCell>
@@ -444,7 +446,7 @@ export function CertificateApprovalsPage() {
                       </TableCell>
                       <TableCell>
                         {cert.review_time
-                          ? new Date(cert.review_time).toLocaleString('zh-CN')
+                          ? parseAPIDate(cert.review_time).toLocaleString('zh-CN')
                           : '-'}
                       </TableCell>
                     </TableRow>

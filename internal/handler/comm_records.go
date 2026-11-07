@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"errors"
 	"fmt"
 	"log"
@@ -198,8 +199,8 @@ func toCommRecordResponse(r CommRecordWithDetails) CommRecordResponse {
 		UserID:          r.UserID,
 		Username:        username,
 		Nickname:        nickname,
-		StartTime:       r.StartTime.Format("2006-01-02 15:04:05"),
-		EndTime:         r.EndTime.Format("2006-01-02 15:04:05"),
+		StartTime:       common.FormatAPITime(r.StartTime),
+		EndTime:         common.FormatAPITime(r.EndTime),
 		DurationMs:      r.DurationMs,
 		AudioURL:        audioURL,
 		AudioSize:       r.AudioSize,
@@ -291,24 +292,24 @@ func GetCommRecords(c *gin.Context) {
 	if groupIDStr != "" {
 		parsedGroupID, err := strconv.ParseUint(groupIDStr, 10, 32)
 		if err != nil || parsedGroupID == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "无效的群组ID",
 			})
 			return
 		}
 
-		group, err := gormdb.NewGroupRepository().GetGroupByID(int(parsedGroupID))
+		group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(int(parsedGroupID))
 		if err != nil {
 			log.Printf("[COMM_RECORDS] 查询群组失败 group=%d err=%v", parsedGroupID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    http.StatusInternalServerError,
 				"message": "查询群组失败",
 			})
 			return
 		}
 		if group == nil {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    http.StatusNotFound,
 				"message": "群组不存在",
 			})
@@ -335,9 +336,9 @@ func GetCommRecords(c *gin.Context) {
 	}
 
 	var total int64
-	if err := newCommRecordListScope(gormdb.Get(), filter).Count(&total).Error; err != nil {
+	if err := newCommRecordListScope(gormdb.Get().WithContext(c.Request.Context()), filter).Count(&total).Error; err != nil {
 		log.Printf("[COMM_RECORDS] 统计通信记录总数失败 err=%v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询通信记录失败",
 		})
@@ -346,13 +347,13 @@ func GetCommRecords(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 	var recordIDs []uint
-	if err := newCommRecordListScope(gormdb.Get(), filter).
+	if err := newCommRecordListScope(gormdb.Get().WithContext(c.Request.Context()), filter).
 		Order("cr.start_time DESC").Order("cr.id DESC").
 		Offset(offset).
 		Limit(pageSize).
 		Pluck("cr.id", &recordIDs).Error; err != nil {
 		log.Printf("[COMM_RECORDS] 查询通信记录列表失败 err=%v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询通信记录失败",
 		})
@@ -360,12 +361,12 @@ func GetCommRecords(c *gin.Context) {
 	}
 	var results []CommRecordWithDetails
 	if len(recordIDs) > 0 {
-		if err := newCommRecordDetailsQuery(gormdb.Get()).
+		if err := newCommRecordDetailsQuery(gormdb.Get().WithContext(c.Request.Context())).
 			Where("cr.id IN ?", recordIDs).
 			Order("cr.start_time DESC").Order("cr.id DESC").
 			Scan(&results).Error; err != nil {
 			log.Printf("[COMM_RECORDS] 查询通信记录详情失败 err=%v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "查询通信记录失败",
 			})
@@ -401,7 +402,7 @@ func GetCommRecord(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的记录ID",
 		})
@@ -409,7 +410,7 @@ func GetCommRecord(c *gin.Context) {
 	}
 
 	var result CommRecordWithDetails
-	err = gormdb.Get().Table("comm_records cr").
+	err = gormdb.Get().WithContext(c.Request.Context()).Table("comm_records cr").
 		Select(`
 			cr.id, cr.device_id, cr.device_ssid, cr.group_id, cr.user_id,
 			cr.start_time, cr.end_time, cr.duration_ms, cr.audio_path, cr.audio_size, cr.status,
@@ -428,7 +429,7 @@ func GetCommRecord(c *gin.Context) {
 		First(&result).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    http.StatusNotFound,
 			"message": "记录不存在",
 		})
@@ -436,14 +437,14 @@ func GetCommRecord(c *gin.Context) {
 	}
 	if err != nil {
 		log.Printf("[COMM_RECORDS] 查询通信记录详情失败 id=%d err=%v", id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    http.StatusInternalServerError,
 			"message": "查询通信记录失败",
 		})
 		return
 	}
 	if !canViewOwnCommRecord(currentUser, &result) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权访问该通信记录",
 		})
@@ -462,7 +463,7 @@ func DeleteCommRecord(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的记录ID",
 		})
@@ -471,14 +472,14 @@ func DeleteCommRecord(c *gin.Context) {
 
 	// 获取当前用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 
 	var record gormdb.CommRecord
-	_ = gormdb.Get().Select("id", "audio_path").First(&record, id).Error
-	result := gormdb.Get().Delete(&gormdb.CommRecord{}, id)
+	_ = gormdb.Get().WithContext(c.Request.Context()).Select("id", "audio_path").First(&record, id).Error
+	result := gormdb.Get().WithContext(c.Request.Context()).Delete(&gormdb.CommRecord{}, id)
 	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除失败",
 		})
@@ -486,8 +487,8 @@ func DeleteCommRecord(c *gin.Context) {
 	}
 	if record.AudioPath != "" {
 		var recordReferences, broadcastReferences int64
-		recordErr := gormdb.Get().Model(&gormdb.CommRecord{}).Where("audio_path = ?", record.AudioPath).Count(&recordReferences).Error
-		broadcastErr := gormdb.Get().Table("broadcast_audios").
+		recordErr := gormdb.Get().WithContext(c.Request.Context()).Model(&gormdb.CommRecord{}).Where("audio_path = ?", record.AudioPath).Count(&recordReferences).Error
+		broadcastErr := gormdb.Get().WithContext(c.Request.Context()).Table("broadcast_audios").
 			Where("deleted_at IS NULL AND (record_object_key = ? OR playback_object_key LIKE ?)", record.AudioPath, path.Dir(record.AudioPath)+"/%").
 			Count(&broadcastReferences).Error
 		if recordErr != nil || broadcastErr != nil {
@@ -522,7 +523,7 @@ func GetCommSettings(c *gin.Context) {
 	repo := gormdb.GetSiteConfigRepo()
 	settings, err := repo.GetCommSettingsConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取设置失败",
 		})
@@ -549,7 +550,7 @@ type UpdateCommSettingsRequest struct {
 func UpdateCommSettings(c *gin.Context) {
 	var req UpdateCommSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "参数错误",
 		})
@@ -558,28 +559,28 @@ func UpdateCommSettings(c *gin.Context) {
 
 	// 验证参数
 	if req.RetentionDays < 1 || req.RetentionDays > 365 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "数据保留天数必须在 1-365 之间",
 		})
 		return
 	}
 	if req.MinDurationMs < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "最小录制阈值不能为负数",
 		})
 		return
 	}
 	if req.MaxDurationSec < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "最大录制时长不能为负数",
 		})
 		return
 	}
 	if req.BatchUploadSec < 1 || req.BatchUploadSec > 300 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "批量上传间隔必须在 1-300 秒之间",
 		})
@@ -597,7 +598,7 @@ func UpdateCommSettings(c *gin.Context) {
 	}
 
 	if err := repo.SetCommSettingsConfig(settings); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "保存失败",
 		})
@@ -620,7 +621,7 @@ func UpdateCommSettings(c *gin.Context) {
 
 	// 记录审计日志
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser != nil {
 		oplog.AddLog(
@@ -679,7 +680,7 @@ func GetUserCommStats(c *gin.Context) {
 	// 获取当前用户名
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -687,10 +688,10 @@ func GetUserCommStats(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := userRepo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -702,7 +703,7 @@ func GetUserCommStats(c *gin.Context) {
 	// 查询用户设备的通信统计
 	// 通过 devices 表关联查询，获取用户所有设备的通信记录
 	// 同时包含幽灵设备（device_id=0）的记录，通过 user_id 直接关联
-	err = gormdb.Get().Table("comm_records cr").
+	err = gormdb.Get().WithContext(c.Request.Context()).Table("comm_records cr").
 		Select(`
 			COALESCE(COUNT(cr.id), 0) as total_count,
 			COALESCE(SUM(cr.audio_size), 0) as total_size,
@@ -713,7 +714,7 @@ func GetUserCommStats(c *gin.Context) {
 		Scan(&stats).Error
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取统计失败",
 		})
@@ -732,7 +733,7 @@ func GetUserCommTrend(c *gin.Context) {
 	// 获取当前用户名
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -740,10 +741,10 @@ func GetUserCommTrend(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := userRepo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -759,7 +760,7 @@ func GetUserCommTrend(c *gin.Context) {
 	// 查询用户设备近30天的通信趋势
 	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
 	// 同时包含幽灵设备（device_id=0）的记录，通过 user_id 直接关联
-	err = gormdb.Get().Table("comm_records cr").
+	err = gormdb.Get().WithContext(c.Request.Context()).Table("comm_records cr").
 		Select(`DATE_FORMAT(cr.start_time, '%Y-%m-%d') as date, COUNT(cr.id) as count, COALESCE(SUM(cr.duration_ms), 0) as duration`).
 		Joins("LEFT JOIN devices d ON cr.device_id = d.id").
 		Where("d.owner_id = ? OR cr.user_id = ?", user.ID, user.ID).
@@ -769,7 +770,7 @@ func GetUserCommTrend(c *gin.Context) {
 		Scan(&trends).Error
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取趋势失败",
 		})
@@ -790,7 +791,7 @@ func GetUserCommTrend(c *gin.Context) {
 func GetSystemCommStats(c *gin.Context) {
 	var stats SystemCommStats
 
-	err := gormdb.Get().Table("comm_records").
+	err := gormdb.Get().WithContext(c.Request.Context()).Table("comm_records").
 		Select(`
 			COALESCE(COUNT(id), 0) as total_count,
 			COALESCE(SUM(audio_size), 0) as total_size,
@@ -799,7 +800,7 @@ func GetSystemCommStats(c *gin.Context) {
 		Scan(&stats).Error
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取统计失败",
 		})
@@ -822,7 +823,7 @@ func GetSystemCommTrend(c *gin.Context) {
 	var trends []DailyCommStats
 
 	// 使用 DATE_FORMAT (MySQL) 确保日期格式为字符串 'YYYY-MM-DD'
-	err := gormdb.Get().Table("comm_records").
+	err := gormdb.Get().WithContext(c.Request.Context()).Table("comm_records").
 		Select(`DATE_FORMAT(start_time, '%Y-%m-%d') as date, COUNT(id) as count, COALESCE(SUM(duration_ms), 0) as duration`).
 		Where("start_time >= ?", thirtyDaysAgoTime).
 		Group("DATE_FORMAT(start_time, '%Y-%m-%d')").
@@ -830,7 +831,7 @@ func GetSystemCommTrend(c *gin.Context) {
 		Scan(&trends).Error
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取趋势失败",
 		})

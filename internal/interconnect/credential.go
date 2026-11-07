@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	registrationCredentialPrefix = "draarl-enroll"
-	nodeCredentialPrefix         = "draarl-node"
+	registrationCredentialPrefix = "draarl-enroll" // #nosec G101 -- Public credential format prefix, not a secret.
+	// #nosec G101 -- Public credential format prefix, not a secret.
+	nodeCredentialPrefix = "draarl-node"
 )
 
 func NewNodeID() (string, error) {

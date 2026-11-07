@@ -48,7 +48,7 @@ func hashAddrPort(ap netip.AddrPort) uint64 {
 	}
 	h ^= uint64(ap.Port() >> 8)
 	h *= prime64
-	h ^= uint64(byte(ap.Port()))
+	h ^= uint64(byte(ap.Port())) // #nosec G115 -- Hash byte extraction or modulo a positive int shard count; result fits the target.
 	h *= prime64
 	return h
 }
@@ -61,12 +61,15 @@ func udpAddrShard(addr *net.UDPAddr, shards int) int {
 	if !ok {
 		return 0
 	}
-	return int(hashAddrPort(ap) % uint64(shards))
+	// #nosec G115 -- Modulo a positive int shard count guarantees the result fits int.
+	// #nosec G115 -- Modulo a positive int shard count guarantees that the result fits int.
+	return int(hashAddrPort(ap) % uint64(shards)) // #nosec G115 -- Hash byte extraction or modulo a positive int shard count; result fits the target.
 }
 
 func addrPortShard(ap netip.AddrPort, shards int) int {
 	if shards <= 1 {
 		return 0
 	}
+	// #nosec G115 -- Modulo a positive int shard count guarantees that the result fits int.
 	return int(hashAddrPort(ap) % uint64(shards))
 }

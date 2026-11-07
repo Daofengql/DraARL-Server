@@ -2,6 +2,7 @@ package email
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -179,7 +180,7 @@ func (m *VerificationManager) CheckIPRateLimit(ip string) (bool, int, string) {
 
 	// 检查是否超过限制
 	if len(sendTimes) >= m.maxIPPerMin {
-		return false, 0, fmt.Sprintf("该 IP 发送过于频繁，请稍后再试")
+		return false, 0, "该 IP 发送过于频繁，请稍后再试"
 	}
 
 	return true, m.maxIPPerMin - len(sendTimes), ""
@@ -327,8 +328,8 @@ func (m *VerificationManager) Verify(sessionID, code string) (*VerificationSessi
 		return nil, fmt.Errorf("验证码已使用")
 	}
 
-	// 验证码错误
-	if session.Code != code {
+	// 使用恒定时间比较防止时序攻击
+	if subtle.ConstantTimeCompare([]byte(session.Code), []byte(code)) != 1 {
 		session.Attempts++
 		return nil, fmt.Errorf("验证码错误，还剩 %d 次机会", m.maxAttempts-session.Attempts)
 	}

@@ -1,3 +1,4 @@
+import { parseAPIDate } from '../utils/apiTime'
 import {
   Card,
   CardContent,
@@ -28,7 +29,7 @@ interface UserDetailPopoverProps {
 export function UserDetailPopover({ open, anchorEl, onClose, user }: UserDetailPopoverProps) {
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('zh-CN')
+    return parseAPIDate(dateStr).toLocaleDateString('zh-CN')
   }
 
   if (!user) return null

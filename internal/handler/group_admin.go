@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	gormdb "draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/internal/models"
@@ -17,7 +18,7 @@ import (
 func CreateGroup(c *gin.Context) {
 	var req CreateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -27,17 +28,17 @@ func CreateGroup(c *gin.Context) {
 	// 1. 获取当前登录用户 (从上下文中提取)
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -49,27 +50,27 @@ func CreateGroup(c *gin.Context) {
 		groupType = groupTypePublic
 	}
 	if !isSupportedGroupType(groupType) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "群组类型仅支持公开(1)或私有(2)",
 		})
 		return
 	}
 	if err := validateGroupPasswordRequirement(groupType, req.Password); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "私有群组必须设置密码"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "私有群组必须设置密码"})
 		return
 	}
 
 	// 【H9 安全修复】群组密码 bcrypt 哈希后落库，禁止明文存储
 	hashedPassword, err := hashGroupPassword(req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "群组密码加密失败",
 		})
 		return
 	}
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group := &gormdb.Group{
 		Name:     req.Name,
 		Type:     groupType,
@@ -81,7 +82,7 @@ func CreateGroup(c *gin.Context) {
 
 	// 群组与群主的已验证成员资格必须原子创建，避免只留下半个群组。
 	if err := repo.CreateGroupWithOwnerMember(group); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建群组失败",
 		})
@@ -122,7 +123,7 @@ func CreateGroup(c *gin.Context) {
 func UpdateGroup(c *gin.Context) {
 	var req UpdateGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -137,22 +138,22 @@ func UpdateGroup(c *gin.Context) {
 	if idStr != "" {
 		parsedID, err := strconv.Atoi(idStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
 			return
 		}
 		id = parsedID
 	}
 	if id <= 0 || (req.ID > 0 && idStr != "" && req.ID != id) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效或不一致的群组ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效或不一致的群组ID"})
 		return
 	}
 
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 
 	// 先获取现有群组
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
@@ -163,20 +164,20 @@ func UpdateGroup(c *gin.Context) {
 		return
 	}
 	if !canManageGroup(currentUser, group) {
-		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
 		return
 	}
 	if group.IsVirtual || !isSupportedGroupType(group.Type) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口修改虚拟群组"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口修改虚拟群组"})
 		return
 	}
 	if req.Status != nil && *req.Status != 0 && *req.Status != 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "群组状态只能是关闭或开启"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "群组状态只能是关闭或开启"})
 		return
 	}
 	previousStatus := group.Status
 	if id == models.GroupIDPublicMin && ((req.Type != 0 && req.Type != groupTypePublic) || (req.Status != nil && *req.Status != 1)) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "默认公共频道必须保持公开且启用"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "默认公共频道必须保持公开且启用"})
 		return
 	}
 
@@ -186,7 +187,7 @@ func UpdateGroup(c *gin.Context) {
 	}
 	if req.Type != 0 {
 		if !isSupportedGroupType(req.Type) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "群组类型仅支持公开(1)或私有(2)",
 			})
@@ -198,7 +199,7 @@ func UpdateGroup(c *gin.Context) {
 		// 【H9 安全修复】更新群组密码同样 bcrypt 哈希后落库
 		hashedPassword, hashErr := hashGroupPassword(req.Password)
 		if hashErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "群组密码加密失败",
 			})
@@ -213,12 +214,12 @@ func UpdateGroup(c *gin.Context) {
 		group.Status = *req.Status
 	}
 	if err := validateGroupPasswordRequirement(group.Type, group.Password); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "私有群组必须设置密码"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "私有群组必须设置密码"})
 		return
 	}
 
 	if err := repo.UpdateGroup(group); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新群组失败",
 		})
@@ -244,7 +245,7 @@ func UpdateGroup(c *gin.Context) {
 	// Get owner callsign from user table
 	var ownerCallSign string
 	if group.OwerID > 0 {
-		userRepo := gormdb.NewUserRepository()
+		userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		if owner, err := userRepo.GetUserByID(group.OwerID); err == nil && owner != nil {
 			ownerCallSign = owner.CallSign
 		}
@@ -273,8 +274,8 @@ func UpdateGroup(c *gin.Context) {
 			"slave_server":  group.SlaveServer,
 			"status":        group.Status,
 			"note":          group.Note,
-			"create_time":   group.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":   group.UpdateTime.Format("2006-01-02 15:04:05"),
+			"create_time":   common.FormatAPITime(group.CreateTime),
+			"update_time":   common.FormatAPITime(group.UpdateTime),
 		},
 	})
 }
@@ -296,19 +297,19 @@ func DeleteGroup(c *gin.Context) {
 	}
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 
 	// 先获取群组信息用于审计日志
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
 		return
 	}
 	currentUser, ok := requireCurrentUser(c)
@@ -316,21 +317,21 @@ func DeleteGroup(c *gin.Context) {
 		return
 	}
 	if !canManageGroup(currentUser, group) {
-		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
 		return
 	}
 	if group.IsVirtual || !isSupportedGroupType(group.Type) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口删除虚拟群组"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请使用互联管理接口删除虚拟群组"})
 		return
 	}
-	deviceRepo := gormdb.NewDeviceRepository()
+	deviceRepo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	if id == models.GroupIDPublicMin {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "默认公共频道不能删除"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "默认公共频道不能删除"})
 		return
 	}
 	movedDevices, err := deviceRepo.ListDevicesByGroupID(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备失败"})
 		return
 	}
 	broadcastObjectKeys, ok := prepareEntityGroupBroadcastDeletion(c, currentUser.ID, id)
@@ -339,7 +340,7 @@ func DeleteGroup(c *gin.Context) {
 	}
 	if group.Status == 1 {
 		if err := repo.UpdateGroupFields(id, map[string]interface{}{"status": 0}); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "停止群组自动播报失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "停止群组自动播报失败"})
 			return
 		}
 		group.Status = 0
@@ -352,7 +353,7 @@ func DeleteGroup(c *gin.Context) {
 
 	if err := repo.DeleteGroupWithCascade(id); err != nil {
 		log.Printf("[GROUP] delete group %d failed: %v", id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除群组失败",
 		})

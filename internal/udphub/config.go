@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -254,12 +255,19 @@ func encodeTLV(configs map[string]string) ([]byte, int) {
 
 	configs = NormalizeDeviceConfigs(configs)
 
+	// 对 key 排序以确保编码顺序确定性，防止不同执行产生不同结果
+	keys := make([]string, 0, len(configs))
+	for key := range configs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	// 预估容量：最多 7 个配置项，每个最大 10 字节 (1+1+8)
 	result := make([]byte, 0, len(configs)*10)
 	count := 0
 
-	for key, value := range configs {
-		value = strings.TrimSpace(value)
+	for _, key := range keys {
+		value := strings.TrimSpace(configs[key])
 		if value == "" {
 			continue
 		}
@@ -270,13 +278,13 @@ func encodeTLV(configs map[string]string) ([]byte, int) {
 		}
 
 		length, ok := tlvLengthMap[tlvType]
-		if !ok {
+		if !ok || length < 0 || length > 255 {
 			continue
 		}
 
 		// 编码 TLV
 		result = append(result, tlvType)      // Type (1 byte)
-		result = append(result, byte(length)) // Length (1 byte)
+		result = append(result, byte(length)) // #nosec G115 -- Protocol fixed-width values are range checked or intentionally encode signed timestamp bits.
 
 		// Value (N bytes)
 		valueBytes, ok := encodeTLVValue(tlvType, value)
@@ -353,7 +361,7 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 			return nil, false
 		}
 		buf := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf, uint64(ts))
+		binary.BigEndian.PutUint64(buf, uint64(ts)) // #nosec G115 -- Protocol fixed-width values are range checked or intentionally encode signed timestamp bits.
 		return buf, true
 
 	default:
@@ -377,7 +385,7 @@ func decodeTLV(data []byte) map[string]string {
 		}
 
 		tlvType := data[offset]
-		length := int(data[offset+1])
+		length := int(data[offset+1]) // #nosec G602 -- The loop checks offset+2 against the datagram length before reading the TLV header.
 		offset += 2
 
 		key, knownType := tlvTypeToKeyMap[tlvType]
@@ -466,7 +474,7 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 		if len(data) != 8 {
 			return "", false
 		}
-		ts := int64(binary.BigEndian.Uint64(data))
+		ts := int64(binary.BigEndian.Uint64(data)) // #nosec G115 -- Protocol fixed-width values are range checked or intentionally encode signed timestamp bits.
 		return fmt.Sprintf("%d", ts), true
 
 	default:
@@ -529,6 +537,9 @@ func buildConfigSetPacket(configs map[string]string) []byte {
 	tlvData, itemCount := encodeTLV(configs)
 	result := make([]byte, 2+len(tlvData))
 	result[0] = ConfigTypeSet
+	if itemCount < 0 || itemCount > 255 {
+		return []byte{ConfigTypeSet, 0x00}
+	}
 	result[1] = byte(itemCount) // 配置项数量
 	copy(result[2:], tlvData)
 
@@ -703,9 +714,19 @@ func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error
 	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 }
 
-// SyncDeviceConfig 设备上线时同步配置
-// 如果数据库中有配置记录，则下发配置；否则发送查询请求
-// 无论哪种情况，最后都会发送时间同步包
+func syncDeviceConfigAsync(dev *models.Device) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[CONFIG] 异步配置同步 panic: %v", r)
+			}
+		}()
+		SyncDeviceConfig(dev)
+	}()
+}
+
+// SyncDeviceConfig 设备上线时同步配置。
+// 数据库中有配置则下发，否则查询设备；两种情况最后都会发送时间同步包。
 func SyncDeviceConfig(dev *models.Device) {
 	if dev == nil {
 		return

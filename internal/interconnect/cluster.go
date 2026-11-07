@@ -619,6 +619,10 @@ func (m *ClusterManager) Close() {
 	})
 }
 func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
+	return m.relay(sourceNode, frame, 0)
+}
+
+func (m *ClusterManager) relay(sourceNode string, frame RelayFrame, broadcastGroupID int) error {
 	if frame.DomainID == 0 || frame.SessionID == 0 {
 		return errors.New("relay frame identity is incomplete")
 	}
@@ -628,6 +632,9 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 	localDelivery := m.localDelivery
 	epoch := m.epoch
 	targets := m.targetNodeVersionsLocked(frame.DomainID, sourceNode)
+	if broadcastGroupID > 0 {
+		targets = m.groupBroadcastTargetsLocked(broadcastGroupID, frame.DomainID)
+	}
 	m.mu.RUnlock()
 	if sourceNode != CenterLocalNodeID && localDelivery != nil {
 		localDelivery(frame)
@@ -642,7 +649,7 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 		if server != nil {
 			targetSession, _ = server.Session(nodeID)
 		}
-		if targetSession == nil || targetSession.Features&NodeFeatureGhostMultiSession == 0 {
+		if broadcastGroupID == 0 && (targetSession == nil || targetSession.Features&NodeFeatureGhostMultiSession == 0) {
 			if cleared, ok := protocol.WithReservedUint32(targetFrame.InnerPacket, 0); ok {
 				targetFrame.InnerPacket = cleared
 			}
@@ -651,9 +658,13 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 		if err != nil {
 			return err
 		}
+		subtype := SubtypeRelayDownstream
+		if broadcastGroupID > 0 {
+			subtype = SubtypeGroupBroadcastDownstream
+		}
 		if dataBridge != nil && targetSession != nil {
 			if targetSession.DataAddr() != nil {
-				env := NewEnvelope(SubtypeRelayDownstream, "center", targetSession.SessionID, m.NextMessageID(), payload)
+				env := NewEnvelope(subtype, "center", targetSession.SessionID, m.NextMessageID(), payload)
 				env.ClusterEpoch, env.ProjectionVersion, env.HopCount, env.KeyEpoch = epoch, projectionVersion, 1, targetSession.KeyEpoch
 				if err := dataBridge.Send(targetSession, env); err == nil {
 					continue
@@ -663,7 +674,7 @@ func (m *ClusterManager) Relay(sourceNode string, frame RelayFrame) error {
 		if server == nil {
 			continue
 		}
-		env := NewEnvelope(SubtypeRelayDownstream, "center", 0, m.NextMessageID(), payload)
+		env := NewEnvelope(subtype, "center", 0, m.NextMessageID(), payload)
 		env.ClusterEpoch, env.ProjectionVersion, env.HopCount = epoch, projectionVersion, 1
 		if err := server.SendEnvelope(nodeID, env); err != nil {
 			return err

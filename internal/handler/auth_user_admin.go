@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,21 +21,33 @@ import (
 )
 
 func GetUsers(c *gin.Context) {
+	currentUser, ok := requireCurrentUser(c)
+	if !ok {
+		return
+	}
+	if !hasRoleGORM(currentUser, "admin") {
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"message": "权限不足"})
+		return
+	}
+	getUsersPage(c)
+}
+
+func getUsersPage(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	keyword := c.Query("keyword")
 
 	if limit <= 0 {
-		limit = 20
-	} else if limit > 100 {
-		limit = 100
+		limit = gormdb.DefaultPageSize
+	} else if limit > gormdb.MaxPageSize {
+		limit = gormdb.MaxPageSize
 	}
 	if page <= 0 {
 		page = 1
 	}
 	normalizedLimit, normalizedPage, _, paginationErr := gormdb.NormalizeUserPagination(limit, page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "分页参数过大",
 		})
@@ -42,28 +55,10 @@ func GetUsers(c *gin.Context) {
 	}
 	limit, page = normalizedLimit, normalizedPage
 
-	// 检查用户是否为管理员
-	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
-	currentUser, err := repo.GetUserByName(username.(string))
-	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户不存在",
-		})
-		return
-	}
-
-	if !hasRoleGORM(currentUser, "admin") {
-		c.JSON(http.StatusForbidden, gin.H{
-			"code":    403,
-			"message": "权限不足",
-		})
-		return
-	}
-
 	var users []*gormdb.User
 	var total int64
+	var err error
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 根据是否有关键字选择不同的查询方法
 	if keyword != "" {
@@ -74,7 +69,7 @@ func GetUsers(c *gin.Context) {
 
 	if err != nil {
 		log.Printf("获取用户列表失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取用户列表失败",
 		})
@@ -84,34 +79,29 @@ func GetUsers(c *gin.Context) {
 	// 转换为响应格式
 	items := make([]gin.H, 0, len(users))
 	for _, u := range users {
-		items = append(items, gin.H{
-			"id":           u.ID,
-			"username":     u.Name,
-			"nickname":     u.NickName,
-			"callsign":     u.CallSign,
-			"phone":        u.Phone,
-			"address":      u.Address,
-			"status":       u.Status,
-			"role":         getRoleNameFromUser(u),
-			"isAdmin":      hasRoleGORM(u, "admin"),
-			"roles":        u.Roles,
-			"avatar":       minio.GetAvatarURL(u.Avatar),
-			"avatar_thumb": minio.GetAvatarThumbURL(u.Avatar),
-			"created_at":   u.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at":   u.UpdateTime.Format("2006-01-02 15:04:05"),
-		})
+		items = append(items, userListItem(u))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "成功",
-		"data": gin.H{
-			"total":     total,
-			"items":     items,
-			"page":      page,
-			"page_size": limit,
-		},
-	})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "成功", "data": gin.H{"total": total, "items": items, "page": page, "page_size": limit}})
+}
+
+func userListItem(u *gormdb.User) gin.H {
+	return gin.H{
+		"id":           u.ID,
+		"username":     u.Name,
+		"nickname":     u.NickName,
+		"callsign":     u.CallSign,
+		"phone":        u.Phone,
+		"address":      u.Address,
+		"status":       u.Status,
+		"role":         getRoleNameFromUser(u),
+		"isAdmin":      hasRoleGORM(u, "admin"),
+		"roles":        u.Roles,
+		"avatar":       minio.GetAvatarURL(u.Avatar),
+		"avatar_thumb": minio.GetAvatarThumbURL(u.Avatar),
+		"created_at":   common.FormatAPITime(u.CreateTime),
+		"updated_at":   common.FormatAPITime(u.UpdateTime),
+	}
 }
 
 // UpdateUserRequest 更新用户请求
@@ -120,7 +110,7 @@ func UpdateUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -129,7 +119,7 @@ func UpdateUser(c *gin.Context) {
 
 	var req UpdateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -139,20 +129,24 @@ func UpdateUser(c *gin.Context) {
 	// 获取当前操作用户
 	currentUser, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
-	currentUserModel := currentUser.(*gormdb.User)
+	currentUserModel, userValid := currentUser.(*gormdb.User)
+	if !userValid || currentUserModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 获取目标用户
 	user, err := repo.GetUserByID(id)
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -165,7 +159,7 @@ func UpdateUser(c *gin.Context) {
 
 	// 只有主管理员（ID=1）可以修改 ID=1 的用户信息
 	if id == 1 && currentUserModel.ID != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "只有主管理员可以修改主管理员信息",
 		})
@@ -187,7 +181,7 @@ func UpdateUser(c *gin.Context) {
 
 	// 主管理员（ID=1）不能修改自己的角色，以防止系统失去管理员
 	if id == 1 && currentUserModel.ID == 1 && newRole != "" && newRole != user.Roles {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "主管理员不能修改自己的角色",
 		})
@@ -196,7 +190,7 @@ func UpdateUser(c *gin.Context) {
 
 	// 主管理员（ID=1）不能修改自己的状态，以防止被禁用
 	if id == 1 && currentUserModel.ID == 1 && req.Status > 0 && req.Status != user.Status {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "主管理员不能修改自己的状态",
 		})
@@ -205,7 +199,7 @@ func UpdateUser(c *gin.Context) {
 
 	// 如果在修改角色，只有主管理员（ID=1）可以操作
 	if newRole != "" && currentUserModel.ID != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "只有主管理员可以修改用户角色",
 		})
@@ -240,14 +234,14 @@ func UpdateUser(c *gin.Context) {
 
 	if err := repo.UpdateUser(user); err != nil {
 		if err == gormdb.ErrCallSignConflict {
-			c.JSON(http.StatusConflict, gin.H{
+			writeErrorResponse(c, http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "呼号已被使用",
 			})
 			return
 		}
 		log.Printf("更新用户失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新用户失败",
 		})
@@ -294,7 +288,7 @@ func UpdateUserStatus(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -303,7 +297,7 @@ func UpdateUserStatus(c *gin.Context) {
 
 	// 不允许修改ID为1的主管理员状态
 	if id == 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "主管理员不能被禁用",
 		})
@@ -312,7 +306,7 @@ func UpdateUserStatus(c *gin.Context) {
 
 	var req UpdateUserStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -321,19 +315,19 @@ func UpdateUserStatus(c *gin.Context) {
 
 	// 验证 status 值的有效性（0: 禁用, 1: 启用）
 	if req.Status != 0 && req.Status != 1 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "状态值必须为 0（禁用）或 1（启用）",
 		})
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 检查用户是否存在
 	user, err := repo.GetUserByID(id)
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -343,7 +337,7 @@ func UpdateUserStatus(c *gin.Context) {
 	// 更新用户状态
 	if err := repo.UpdateUserStatus(id, req.Status); err != nil {
 		log.Printf("更新用户状态失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新用户状态失败",
 		})
@@ -394,7 +388,7 @@ func DeleteUser(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -403,7 +397,7 @@ func DeleteUser(c *gin.Context) {
 
 	// 不允许删除ID为1的主管理员
 	if id == 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "主管理员不能被删除",
 		})
@@ -413,20 +407,24 @@ func DeleteUser(c *gin.Context) {
 	// 获取当前操作用户
 	currentUser, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
-	currentUserModel := currentUser.(*gormdb.User)
+	currentUserModel, userValid := currentUser.(*gormdb.User)
+	if !userValid || currentUserModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 检查目标用户是否存在
 	targetUser, err := repo.GetUserByID(id)
 	if err != nil || targetUser == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -435,7 +433,7 @@ func DeleteUser(c *gin.Context) {
 
 	// 不能删除管理员用户（只有主管理员可以删除其他管理员）
 	if targetUser.Roles == "admin" && currentUserModel.ID != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "不能删除管理员用户",
 		})
@@ -444,7 +442,7 @@ func DeleteUser(c *gin.Context) {
 	ownedGroups, err := repo.ListOwnedGroups(id)
 	if err != nil {
 		log.Printf("删除用户前读取群组失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户群组失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户群组失败"})
 		return
 	}
 
@@ -458,7 +456,7 @@ func DeleteUser(c *gin.Context) {
 		mutation, transitionErr := broadcastrepository.Default().SetVirtualGroupStatus(c.Request.Context(), group.ID, 0, time.Now().UTC())
 		if transitionErr != nil {
 			log.Printf("删除用户前关闭虚拟群组 %d 失败: %v", group.ID, transitionErr)
-			c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "停止虚拟群组自动播报失败"})
+			writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "停止虚拟群组自动播报失败"})
 			return
 		}
 		if !waitForBroadcastTopologyMutation(c, mutation) {
@@ -473,9 +471,9 @@ func DeleteUser(c *gin.Context) {
 			continue
 		}
 		if group.Status == 1 {
-			if updateErr := gormdb.NewGroupRepository().UpdateGroupFields(group.ID, map[string]interface{}{"status": 0}); updateErr != nil {
+			if updateErr := gormdb.NewGroupRepository().WithContext(c.Request.Context()).UpdateGroupFields(group.ID, map[string]interface{}{"status": 0}); updateErr != nil {
 				log.Printf("删除用户前停用实体群组 %d 失败: %v", group.ID, updateErr)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "停止实体群组自动播报失败"})
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "停止实体群组自动播报失败"})
 				return
 			}
 			group.Status = 0
@@ -498,7 +496,7 @@ func DeleteUser(c *gin.Context) {
 	cascadeResult, err := repo.DeleteUserWithCascade(id)
 	if err != nil {
 		log.Printf("删除用户失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除用户失败",
 		})
@@ -524,8 +522,8 @@ func DeleteUser(c *gin.Context) {
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 		for _, device := range cascadeResult.DeletedDevices {
 			_ = deviceCache.InvalidateDevice(c.Request.Context(), device.ID, device.OwnerID, uint8(device.SSID))
-			if device.GroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), device.GroupID)
+			if groupID := device.GroupIDValue(); groupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), groupID)
 			}
 		}
 		for _, device := range cascadeResult.MovedDevices {

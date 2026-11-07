@@ -20,7 +20,7 @@ export function CommSettingsTab({ value, config, setConfig, loading, onSave }: C
     <TabPanel value={value} index={3}>
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card><CardContent>
-          <Typography variant="h6" gutterBottom>通信设置</Typography>
+          <Typography component="h2" variant="h6" gutterBottom>通信设置</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>配置音频记录保存策略</Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <Box>

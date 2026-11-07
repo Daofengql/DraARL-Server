@@ -42,8 +42,8 @@ func TestDatabaseTimezoneRejectsInvalidValue(t *testing.T) {
 	}
 }
 
-func TestParseProxyTrustedCIDRsRejectsConfiguredInvalidEntries(t *testing.T) {
-	nets, err := ParseProxyTrustedCIDRs([]string{" 192.0.2.0/24 ", "2001:db8::/32"})
+func TestParseHTTPTrustedProxyCIDRsRejectsConfiguredInvalidEntries(t *testing.T) {
+	nets, err := ParseHTTPTrustedProxyCIDRs([]string{" 192.0.2.0/24 ", "2001:db8::/32"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,72 +51,12 @@ func TestParseProxyTrustedCIDRsRejectsConfiguredInvalidEntries(t *testing.T) {
 		t.Fatalf("unexpected parsed proxy networks: %v", nets)
 	}
 	for _, cidrs := range [][]string{{""}, {"not-a-cidr"}, {"192.0.2.0/24", "bad"}} {
-		if _, err := ParseProxyTrustedCIDRs(cidrs); err == nil {
+		if _, err := ParseHTTPTrustedProxyCIDRs(cidrs); err == nil {
 			t.Fatalf("invalid proxy trusted CIDRs were accepted: %q", cidrs)
 		}
 	}
-	if nets, err := ParseProxyTrustedCIDRs(nil); err != nil || len(nets) != 0 {
+	if nets, err := ParseHTTPTrustedProxyCIDRs(nil); err != nil || len(nets) != 0 {
 		t.Fatalf("empty compatibility list failed: nets=%v err=%v", nets, err)
-	}
-}
-
-func TestConfigurationRejectsInvalidSystemProxyTrustedCIDR(t *testing.T) {
-	cfg := &Configuration{}
-	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
-	cfg.System.ProxyProtocol = "v2"
-	cfg.System.ProxyTrustedCIDRs = []string{"not-a-cidr"}
-	if err := cfg.SetDefaults(); err == nil || !strings.Contains(err.Error(), "System.ProxyTrustedCIDRs") {
-		t.Fatalf("unexpected System.ProxyTrustedCIDRs validation error: %v", err)
-	}
-}
-
-func TestConfigurationRequiresProxyTrustedCIDRsForReleaseV2(t *testing.T) {
-	previousRelease := IsReleaseBuild()
-	SetReleaseBuild(true)
-	t.Cleanup(func() {
-		SetReleaseBuild(previousRelease)
-	})
-
-	cfg := &Configuration{}
-	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
-	cfg.System.ProxyProtocol = " V2 "
-	if err := cfg.SetDefaults(); err == nil || !strings.Contains(err.Error(), "ProxyTrustedCIDRs") {
-		t.Fatalf("expected release v2 trust-boundary validation error, got %v", err)
-	}
-
-	cfg.System.ProxyTrustedCIDRs = []string{"192.0.2.0/24"}
-	if err := cfg.SetDefaults(); err != nil {
-		t.Fatalf("valid release v2 configuration rejected: %v", err)
-	}
-	if cfg.System.ProxyProtocol != "v2" {
-		t.Fatalf("ProxyProtocol was not normalized: %q", cfg.System.ProxyProtocol)
-	}
-}
-
-func TestConfigurationKeepsEmptyProxyTrustForDevelopmentV2(t *testing.T) {
-	previousRelease := IsReleaseBuild()
-	SetReleaseBuild(false)
-	t.Cleanup(func() {
-		SetReleaseBuild(previousRelease)
-	})
-
-	cfg := &Configuration{}
-	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
-	cfg.System.ProxyProtocol = " V2 "
-	if err := cfg.SetDefaults(); err != nil {
-		t.Fatalf("development v2 compatibility configuration rejected: %v", err)
-	}
-}
-
-func TestConfigurationKeepsLegacyV1ValueCompatible(t *testing.T) {
-	cfg := &Configuration{}
-	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
-	cfg.System.ProxyProtocol = " V1 "
-	if err := cfg.SetDefaults(); err != nil {
-		t.Fatalf("legacy v1 configuration rejected: %v", err)
-	}
-	if cfg.System.ProxyProtocol != "v1" {
-		t.Fatalf("ProxyProtocol was not normalized: %q", cfg.System.ProxyProtocol)
 	}
 }
 

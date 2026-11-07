@@ -1,0 +1,15 @@
+FROM redis:7.4.12-alpine AS upstream
+
+# The upstream Alpine variant still uses an EOL base. Keep its official Redis
+# binaries and entrypoint on the maintained musl/OpenSSL runtime instead.
+FROM alpine:3.24
+RUN apk upgrade --no-cache && apk add --no-cache setpriv libssl3 libcrypto3 && \
+    ln -s /bin/setpriv /usr/bin/setpriv && \
+    addgroup -S -g 1000 redis && adduser -S -D -H -u 999 -G redis redis && \
+    mkdir /data && chown redis:redis /data
+COPY --from=upstream /usr/local/bin/ /usr/local/bin/
+WORKDIR /data
+VOLUME ["/data"]
+EXPOSE 6379
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["redis-server"]

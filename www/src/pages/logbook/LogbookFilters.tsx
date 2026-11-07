@@ -102,7 +102,7 @@ export function LogbookFilters({
             <Grid size={{ xs: 12, sm: 6, md: 2 }}>
               <FormControl fullWidth size="small">
                 <InputLabel>模式</InputLabel>
-                <Select
+                <Select inputProps={{ 'aria-label': '模式' }}
                   value={searchFilters.mode}
                   label="模式"
                   onChange={(e) => setSearchFilters(prev => ({ ...prev, mode: e.target.value }))}

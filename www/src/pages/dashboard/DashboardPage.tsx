@@ -11,18 +11,10 @@ import {
   Alert,
   Chip,
   useTheme,
-  alpha,
   useMediaQuery,
   Button,
   Snackbar,
 } from '@mui/material'
-import Devices from '@mui/icons-material/Devices'
-import CheckCircle from '@mui/icons-material/CheckCircle'
-import Group from '@mui/icons-material/Group'
-import Radio from '@mui/icons-material/Radio'
-import DashboardIcon from '@mui/icons-material/Dashboard'
-import RecordVoiceOver from '@mui/icons-material/RecordVoiceOver'
-import Timer from '@mui/icons-material/Timer'
 import Refresh from '@mui/icons-material/Refresh'
 import {
   LineChart,
@@ -39,55 +31,18 @@ import { platformService } from '../../services/platform'
 import { deviceService } from '../../services/device'
 import { commStatsService } from '../../services/commStats'
 import type { DailyCommStats } from '../../types'
+import { BlueprintStatCard as StatCard } from '../../components/common/BlueprintStatCard'
 import { SITE_CONFIG } from '../../config/site'
 import { useConfig } from '../../contexts/ConfigContext'
-
-interface StatCardProps {
-  title: string
-  value: number | string
-  icon: React.ReactNode
-  color: 'primary' | 'success' | 'info' | 'warning'
-}
-
-function StatCard({ title, value, icon, color }: StatCardProps) {
-  const theme = useTheme()
-  const colorConfig = {
-    primary: { bg: alpha(theme.palette.primary.main, 0.12), color: 'primary.main' },
-    success: { bg: alpha(theme.palette.success.main, 0.12), color: 'success.main' },
-    info: { bg: alpha(theme.palette.info.main, 0.12), color: 'info.main' },
-    warning: { bg: alpha(theme.palette.warning.main, 0.12), color: 'warning.main' },
-  }
-
-  const config = colorConfig[color]
-
-  return (
-    <Card>
-      <CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Box>
-            <Typography variant="body2" color="text.secondary">
-              {title}
-            </Typography>
-            <Typography variant="h4" fontWeight={700} mt={1}>
-              {typeof value === 'number' ? value.toLocaleString() : value}
-            </Typography>
-          </Box>
-          <Box
-            sx={{
-              p: 2,
-              borderRadius: 2,
-              bgcolor: config.bg,
-              color: config.color,
-              display: 'flex',
-            }}
-          >
-            {icon}
-          </Box>
-        </Stack>
-      </CardContent>
-    </Card>
-  )
-}
+import {
+  CheckIcon,
+  DashboardIcon,
+  DeviceIcon,
+  GroupIcon,
+  RadioIcon,
+  RecordIcon,
+  TimerIcon,
+} from '../../components/icons/BlueprintIcons'
 
 // 格式化时长
 function formatDuration(ms: number): string {
@@ -217,13 +172,13 @@ export function DashboardPage() {
   // 站点名称：欢迎卡片使用配置的站点名称或默认值
   const siteName = systemConfig?.systemInfo?.name || SITE_CONFIG.NAME
 
-  // 用户状态判断和卡片颜色
+  // 用户状态标识
   const getUserStatus = () => {
-    if (!cachedUser) return { label: '未登录', color: 'default' as const, cardColor: '#9e9e9e' }
-    if (cachedUser.role === 'admin') return { label: '管理员', color: 'secondary' as const, cardColor: '#9c27b0' }
-    if (cachedUser.approval_status === 0) return { label: '待审核', color: 'warning' as const, cardColor: '#ff9800' }
-    if (cachedUser.approval_status === 2) return { label: '已拒绝', color: 'error' as const, cardColor: '#f44336' }
-    return { label: '普通用户', color: 'primary' as const, cardColor: '#1976d2' }
+    if (!cachedUser) return { label: '未登录', color: 'default' as const }
+    if (cachedUser.role === 'admin') return { label: '管理员', color: 'secondary' as const }
+    if (cachedUser.approval_status === 0) return { label: '待审核', color: 'warning' as const }
+    if (cachedUser.approval_status === 2) return { label: '已拒绝', color: 'error' as const }
+    return { label: '普通用户', color: 'primary' as const }
   }
 
   const userStatus = getUserStatus()
@@ -237,37 +192,30 @@ export function DashboardPage() {
       {/* 欢迎信息卡片 */}
       <Card
         sx={{
-          background: `linear-gradient(135deg, ${userStatus.cardColor} 0%, ${userStatus.cardColor}dd 100%)`,
-          color: 'white',
-          border: 'none',
-          boxShadow: 3,
+          borderTop: '2px solid',
+          borderTopColor: 'secondary.main',
         }}
       >
         <CardContent>
-          <Stack direction="row" alignItems="center" spacing={2}>
-            <DashboardIcon sx={{ fontSize: 40 }} />
-            <Box sx={{ flexGrow: 1 }}>
-              <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="h5" fontWeight={600}>
+          <Typography variant="caption" color="secondary.main" sx={{ display: 'block', mb: 2 }}>
+            DraARL / 我的工作台
+          </Typography>
+          <Stack direction="row" alignItems="flex-start" spacing={2}>
+            <DashboardIcon sx={{ fontSize: 28, color: 'secondary.main', mt: 0.5, display: { xs: 'none', sm: 'block' } }} />
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Stack direction="row" alignItems="center" useFlexGap flexWrap="wrap" spacing={1.5}>
+                <Typography component="h1" variant="h5" fontWeight={600}>
                   欢迎回来，{displayName}！
                 </Typography>
                 <Chip
                   label={userStatus.label}
                   size="small"
                   color={userStatus.color}
-                  sx={{
-                    bgcolor: userStatus.color === 'secondary' ? 'rgba(255,255,255,0.2)' :
-                           userStatus.color === 'primary' ? 'rgba(33, 150, 243, 0.3)' :
-                           userStatus.color === 'warning' ? 'rgba(255, 152, 0, 0.3)' :
-                           userStatus.color === 'error' ? 'rgba(244, 67, 54, 0.3)' :
-                           'rgba(255,255,255,0.2)',
-                    color: 'white',
-                    fontWeight: 500,
-                  }}
+                  variant="outlined"
                 />
               </Stack>
-              <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', mt: 0.5 }}>
-                {siteName}
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                {siteName} · 设备、群组与通信概览
               </Typography>
             </Box>
           </Stack>
@@ -322,19 +270,19 @@ export function DashboardPage() {
         <StatCard
           title="我的设备"
           value={stats.my_devices}
-          icon={<Devices />}
+          icon={<DeviceIcon />}
           color="primary"
         />
         <StatCard
           title="在线设备"
           value={stats.online_devices}
-          icon={<CheckCircle />}
+          icon={<CheckIcon />}
           color="success"
         />
         <StatCard
           title="群组数量"
           value={stats.total_groups}
-          icon={<Group />}
+          icon={<GroupIcon />}
           color="info"
         />
       </Box>
@@ -350,14 +298,14 @@ export function DashboardPage() {
         <StatCard
           title="通信记录"
           value={stats.comm_count}
-          icon={<RecordVoiceOver />}
+          icon={<RecordIcon />}
           color="warning"
         />
         <StatCard
           title="通信总时长"
           value={formatDuration(stats.comm_duration)}
-          icon={<Timer />}
-          color="success"
+          icon={<TimerIcon />}
+          color="info"
         />
       </Box>
 
@@ -365,8 +313,8 @@ export function DashboardPage() {
       <Card>
         <CardContent>
           <Stack direction="row" alignItems="center" spacing={1} mb={2}>
-            <RecordVoiceOver color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <RecordIcon color="primary" />
+            <Typography component="h2" variant="h6" fontWeight={600}>
               近30天通信趋势
             </Typography>
           </Stack>
@@ -374,24 +322,25 @@ export function DashboardPage() {
             {commTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={commTrend} margin={{ top: 5, right: isMobile ? 5 : 60, left: isMobile ? 0 : 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
-                    tick={{ fontSize: isMobile ? 10 : 12 }}
-                    interval={isMobile ? 'preserveStartEnd' : 0}
+                    tick={{ fontSize: isMobile ? 10 : 12, fill: theme.palette.text.secondary }}
+                    interval="preserveStartEnd"
+                    minTickGap={24}
                     tickFormatter={(value) => value ? value.slice(5) : ''}
                   />
                   <YAxis
                     yAxisId="left"
-                    tick={{ fontSize: isMobile ? 10 : 12 }}
+                    tick={{ fontSize: isMobile ? 10 : 12, fill: theme.palette.text.secondary }}
                     allowDecimals={false}
                     width={isMobile ? 35 : 60}
                   />
                   <YAxis
                     yAxisId="right"
                     orientation="right"
-                    tick={{ fontSize: isMobile ? 10 : 12 }}
-                    tickFormatter={(value) => `${Math.round(value / 60000)}分`}
+                    tick={{ fontSize: isMobile ? 10 : 12, fill: theme.palette.text.secondary }}
+                    tickFormatter={(value) => value < 60000 ? `${Number((value / 1000).toFixed(1))}秒` : `${Math.round(value / 60000)}分`}
                     width={isMobile ? 35 : 60}
                   />
                   <Tooltip
@@ -413,6 +362,7 @@ export function DashboardPage() {
                     stroke={theme.palette.primary.main}
                     strokeWidth={2}
                     dot={false}
+                    isAnimationActive={false}
                     name="通信次数"
                   />
                   <Line
@@ -422,6 +372,7 @@ export function DashboardPage() {
                     stroke={theme.palette.success.main}
                     strokeWidth={2}
                     dot={false}
+                    isAnimationActive={false}
                     name="通信时长"
                   />
                 </LineChart>
@@ -440,8 +391,8 @@ export function DashboardPage() {
         {/* 设备状态 */}
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
-            <Radio color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <RadioIcon color="primary" />
+            <Typography component="h2" variant="h6" fontWeight={600}>
               我的设备状态
             </Typography>
           </Stack>
@@ -457,12 +408,12 @@ export function DashboardPage() {
                     : '0%'}
                 </Typography>
               </Stack>
-              <LinearProgress
+              <LinearProgress aria-label="设备在线率"
                 variant="determinate"
                 value={stats.my_devices > 0 ? (stats.online_devices / stats.my_devices) * 100 : 0}
                 sx={{
                   height: 8,
-                  borderRadius: 4,
+                  borderRadius: 0,
                   bgcolor: 'action.disabledBackground',
                   '& .MuiLinearProgress-bar': {
                     bgcolor:
@@ -491,8 +442,8 @@ export function DashboardPage() {
         {/* 系统信息 */}
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
-            <Devices color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <DeviceIcon color="primary" />
+            <Typography component="h2" variant="h6" fontWeight={600}>
               系统信息
             </Typography>
           </Stack>

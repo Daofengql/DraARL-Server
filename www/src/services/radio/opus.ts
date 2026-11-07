@@ -1,3 +1,4 @@
+import { debugLog } from '../../utils/debugLog.ts'
 /**
  * Opus 音频引擎
  * 处理音频采集、编码、解码和播放
@@ -118,7 +119,7 @@ export class AudioCapture {
       // 初始化 Opus 编码器
       await this.initOpusEncoder()
 
-      console.log('[AudioCapture] Initialized with Opus 16K encoder')
+      debugLog('[AudioCapture] Initialized with Opus 16K encoder')
     } catch (error) {
       console.error('[AudioCapture] Init failed:', error)
       throw error
@@ -140,7 +141,7 @@ export class AudioCapture {
       await this.opusEncoder.ready
       this.encoderReady = true
 
-      console.log('[AudioCapture] Opus encoder ready (16kHz VOIP mode)')
+      debugLog('[AudioCapture] Opus encoder ready (16kHz VOIP mode)')
     } catch (error) {
       console.error('[AudioCapture] Opus encoder init failed:', error)
       throw error
@@ -217,7 +218,7 @@ export class AudioCapture {
       this.startSendTimer()
 
       this.setState('capturing')
-      console.log('[AudioCapture] Started capturing')
+      debugLog('[AudioCapture] Started capturing')
 
     } catch (error) {
       console.error('[AudioCapture] Start failed:', error)
@@ -255,7 +256,7 @@ export class AudioCapture {
       this.source = null
     }
 
-    console.log('[AudioCapture] Stopped and nodes cleaned up')
+    debugLog('[AudioCapture] Stopped and nodes cleaned up')
   }
 
   /**
@@ -524,7 +525,7 @@ export class AudioPlayer {
         await decoder.ready
         this.opusDecoder = decoder
         this.decoderReady = true
-        console.log('[AudioPlayer] Opus decoder ready (16kHz)')
+        debugLog('[AudioPlayer] Opus decoder ready (16kHz)')
       } catch (error) {
         console.error('[AudioPlayer] Opus decoder init failed:', error)
         // 解码器初始化失败时，回退到 PCM 模式
@@ -673,7 +674,7 @@ export class AudioPlayer {
     if (this.idleTimeoutId) {
       clearTimeout(this.idleTimeoutId)
       this.idleTimeoutId = null
-      console.log('[AudioPlayer] 新数据到达，取消防抖定时器')
+      debugLog('[AudioPlayer] 新数据到达，取消防抖定时器')
     }
 
     // 1. 防止内存和延迟无限增长
@@ -744,7 +745,7 @@ export class AudioPlayer {
                 this.isBuffering = true // 必须重置回缓冲状态，为下一段语音做准备
                 this.setState('idle')
                 this.idleTimeoutId = null
-                console.log('[AudioPlayer] 容忍期结束，进入 idle 状态')
+                debugLog('[AudioPlayer] 容忍期结束，进入 idle 状态')
               }, this.IDLE_GRACE_PERIOD)
             }
           }
@@ -802,7 +803,7 @@ export class AudioPlayer {
     this.nextStartTime = 0
     this.isBuffering = true
     this.setState('idle')
-    console.log('[AudioPlayer] Stopped and queue cleared')
+    debugLog('[AudioPlayer] Stopped and queue cleared')
   }
 
   /**
@@ -817,7 +818,7 @@ export class AudioPlayer {
         this.opusDecoder.free()
         this.opusDecoder = null
         this.decoderReady = false
-        console.log('[AudioPlayer] Decoder reset for new stream')
+        debugLog('[AudioPlayer] Decoder reset for new stream')
       } catch (error) {
         console.error('[AudioPlayer] Failed to reset decoder:', error)
       }
@@ -836,7 +837,7 @@ export class AudioPlayer {
     // 重置时必须恢复初始的缓冲保护状态
     this.isBuffering = true
     this.isPlaying = false
-    console.log('[AudioPlayer] Schedule reset for new speaker')
+    debugLog('[AudioPlayer] Schedule reset for new speaker')
   }
 
   /**

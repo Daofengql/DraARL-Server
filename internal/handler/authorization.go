@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	gormdb "draarl/internal/gormdb"
@@ -33,7 +34,7 @@ func canManageGroup(user *gormdb.User, group *gormdb.Group) bool {
 
 func canManageGroupDeviceCommControl(user *gormdb.User, group *gormdb.Group, device *gormdb.Device) bool {
 	return canManageGroup(user, group) && device != nil && !group.IsVirtual &&
-		isSupportedGroupType(group.Type) && device.GroupID == group.ID
+		isSupportedGroupType(group.Type) && device.GroupIDValue() == group.ID
 }
 
 // canAdminSwitchLogin 只允许管理员切换到启用的其他账号。
@@ -52,7 +53,7 @@ func requireCurrentUser(c *gin.Context) (*gormdb.User, bool) {
 	if ok {
 		return user, true
 	}
-	c.JSON(http.StatusUnauthorized, gin.H{
+	writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 		"code":    http.StatusUnauthorized,
 		"message": "用户不存在",
 	})
@@ -67,10 +68,17 @@ func requireGroupViewAccess(c *gin.Context, group *gormdb.Group) (*gormdb.User, 
 
 	isVerifiedMember := false
 	if group != nil && group.Type == groupTypePrivate && !isAdminUser(user) && group.OwerID != user.ID {
-		isVerifiedMember = gormdb.NewGroupMemberRepository().IsVerifiedMember(group.ID, user.ID)
+		repo := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context())
+		member, err := repo.GetVerifiedMemberByGroupAndUser(group.ID, user.ID)
+		if err != nil {
+			log.Printf("检查群组成员资格失败: group=%d user=%d err=%v", group.ID, user.ID, err)
+			writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": "暂时无法检查群组权限，请稍后重试"})
+			return nil, false
+		}
+		isVerifiedMember = member != nil
 	}
 	if !canViewGroup(user, group, isVerifiedMember) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权访问该群组",
 		})

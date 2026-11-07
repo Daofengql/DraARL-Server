@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // forwardPacketPool 复用转发改写缓冲。调用方在 fan-out 完成后应 ReleaseForwardPacket。
@@ -70,8 +71,8 @@ func WithSourceGroupID(data []byte, groupID int) ([]byte, bool) {
 // DraARLv1 设备型号常量
 const (
 	DraARLDevModelUnknown      byte = 0   // 未知/历史默认
-	DraARLDevModelESP32Radio   byte = 1   // ESP32 链路盒子（1W 射频版）
-	DraARLDevModelESP32NoRadio byte = 2   // ESP32 链路盒子（无射频版）
+	DraARLDevModelESP32Radio   byte = 1   // Box32-RF（内置 RF）
+	DraARLDevModelESP32NoRadio byte = 2   // Box32-EX（RF 系统外置）
 	DraARLDevModelWeChatMini   byte = 100 // 微信小程序
 	DraARLDevModelAndroid      byte = 101 // Android 客户端
 	DraARLDevModelIOS          byte = 102 // iOS 客户端
@@ -250,8 +251,24 @@ func (p *DraARLv1Packet) Decode(data []byte) error {
 	return nil
 }
 
+// copyProtocolText preserves complete UTF-8 characters in fixed-width fields.
+func copyProtocolText(dst []byte, value string) {
+	if len(value) > len(dst) {
+		end := len(dst)
+		for end > 0 && !utf8.RuneStart(value[end]) {
+			end--
+		}
+		value = value[:end]
+	}
+	clear(dst)
+	copy(dst, value)
+}
+
 // Encode 编码 DraARLv1 报文
 func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel byte, dmrid uint32, callsign string, data []byte) []byte {
+	if len(data) > 65535-DraARLv1HeaderSize {
+		return nil
+	}
 	totalSize := DraARLv1HeaderSize + len(data)
 	packet := make([]byte, totalSize)
 
@@ -259,14 +276,11 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	copy(packet[0:4], []byte(DraARLVersion))
 
 	// 写入 Length (4-5)
+	// #nosec G115 -- Packet size is checked against uint16 maximum before fixed-width encoding.
 	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
 
 	// 写入 Username (6-37)
-	usernameBytes := []byte(username)
-	if len(usernameBytes) > 32 {
-		usernameBytes = usernameBytes[:32]
-	}
-	copy(packet[6:38], usernameBytes)
+	copyProtocolText(packet[6:38], username)
 
 	// 写入 DevicePassword (38-47)
 	passwordBytes := []byte(devicePassword)
@@ -288,11 +302,7 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	uint24ToBytes(dmrid, packet[51:54])
 
 	// 写入 CallSign (54-85)
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
-	}
-	copy(packet[54:86], callsignBytes)
+	copyProtocolText(packet[54:86], callsign)
 
 	// Reserved (86-89) - 已经是 0
 
@@ -309,7 +319,7 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 // 返回缓冲可能来自 pool；热路径 fan-out 完成后调用 ReleaseForwardPacket。
 // 若 src 非法则返回 nil，调用方应回退到 EncodeDraARLv1。
 func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetType, devModel byte, dmrid uint32) []byte {
-	if len(src) < DraARLv1HeaderSize {
+	if len(src) < DraARLv1HeaderSize || len(src) > 65535 {
 		return nil
 	}
 	if src[0] != 'D' || src[1] != 'r' || src[2] != 'a' || src[3] != 'A' {
@@ -329,14 +339,7 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	copy(out, src)
 
 	// Username (6-37)
-	for i := 6; i < 38; i++ {
-		out[i] = 0
-	}
-	usernameBytes := []byte(username)
-	if len(usernameBytes) > 32 {
-		usernameBytes = usernameBytes[:32]
-	}
-	copy(out[6:38], usernameBytes)
+	copyProtocolText(out[6:38], username)
 
 	// DevicePassword (38-47) 转发时必须清空
 	for i := 38; i < 48; i++ {
@@ -349,14 +352,7 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	uint24ToBytes(dmrid, out[51:54])
 
 	// CallSign (54-85)
-	for i := 54; i < 86; i++ {
-		out[i] = 0
-	}
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
-	}
-	copy(out[54:86], callsignBytes)
+	copyProtocolText(out[54:86], callsign)
 
 	// Reserved contains hop-local authentication metadata on UDP ghost
 	// uplinks. Never relay a sender's session tag; fan-out adds source-group
@@ -366,6 +362,7 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	}
 
 	// 长度字段保持与实际一致
+	// #nosec G115 -- Packet size is checked against uint16 maximum before fixed-width encoding.
 	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
 	return out
 }
@@ -400,16 +397,22 @@ func PrepareForwardPacket(src []byte, username, callsign string, ssid, packetTyp
 
 // EncodeHeartbeatResponse 编码心跳响应包（填充 CallSign）
 func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
+	if req == nil {
+		return nil
+	}
+	if len(req.DATA) > 65535-DraARLv1HeaderSize {
+		return nil
+	}
 	totalSize := DraARLv1HeaderSize + len(req.DATA)
 	packet := make([]byte, totalSize)
 
 	// 复制原始请求的大部分字段
 	copy(packet[0:4], []byte(DraARLVersion))
+	// #nosec G115 -- Packet size is checked against uint16 maximum before fixed-width encoding.
 	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
 
 	// 复制 Username
-	usernameBytes := []byte(req.Username)
-	copy(packet[6:38], usernameBytes)
+	copyProtocolText(packet[6:38], req.Username)
 
 	// 复制 DevicePassword
 	passwordBytes := []byte(req.DevicePassword)
@@ -428,11 +431,7 @@ func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
 	uint24ToBytes(req.DMRID, packet[51:54])
 
 	// 填充 CallSign（服务器填充）
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
-	}
-	copy(packet[54:86], callsignBytes)
+	copyProtocolText(packet[54:86], callsign)
 
 	// Reserved - 已经是 0
 
@@ -498,9 +497,9 @@ func uint24ToBytes(v uint32, b []byte) {
 	if len(b) < 3 {
 		return
 	}
-	b[0] = byte(v >> 16)
-	b[1] = byte(v >> 8)
-	b[2] = byte(v)
+	b[0] = byte((v >> 16) & 0xff)
+	b[1] = byte((v >> 8) & 0xff)
+	b[2] = byte((v) & 0xff)
 }
 
 // String 返回报文的字符串表示
@@ -524,8 +523,10 @@ func ParseUsernameSSID(s string) (username string, ssid byte, err error) {
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == '-' {
 			username = s[:i]
-			var ssidInt int
-			fmt.Sscanf(s[i+1:], "%d", &ssidInt)
+			ssidInt, parseErr := strconv.ParseUint(s[i+1:], 10, 8)
+			if parseErr != nil || username == "" {
+				return "", 0, errors.New("invalid username-ssid format")
+			}
 			return username, byte(ssidInt), nil
 		}
 	}
@@ -670,9 +671,9 @@ func GetDevModelName(devModel byte) string {
 	case DraARLDevModelUnknown:
 		return "Unknown"
 	case DraARLDevModelESP32Radio:
-		return "ESP32 Radio Box (1W)"
+		return "Box32-RF"
 	case DraARLDevModelESP32NoRadio:
-		return "ESP32 Link Box (No RF)"
+		return "Box32-EX"
 	case DraARLDevModelWeChatMini:
 		return "WeChat Mini"
 	case DraARLDevModelAndroid:

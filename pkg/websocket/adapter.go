@@ -3,6 +3,7 @@ package websocket
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"time"
 
 	"draarl/internal/groupaccess"
@@ -162,7 +163,7 @@ func startHeartbeatChecker() {
 		for _, device := range devices {
 			if time.Since(device.GetLastPacketTime()) > GlobalManager.HeartbeatTimeout {
 				log.Printf("[WS] Ghost device heartbeat timeout: %s", device.GetIdentifier())
-				device.Conn.Close()
+				_ = device.Conn.Close()
 			}
 		}
 	}
@@ -190,7 +191,7 @@ func handlePacket(device *WSDevice, packet *WSPacket, rawData []byte) {
 	case protocol.DraARLTypeTextMessage:
 		handleTextMessage(device, packet)
 	default:
-		log.Printf("[WS] Unknown packet type %d from %s", packet.Type, device.GetIdentifier())
+		slog.Warn("unknown WebSocket packet type", "packet_type", packet.Type, "device_id", device.GetIdentifier())
 	}
 }
 
@@ -199,7 +200,7 @@ func handleHeartbeat(device *WSDevice, packet *WSPacket) {
 	// 回填呼号（通过异步通道发送，避免写锁竞争）
 	response := EncodeHeartbeatResponse(packet, device.GetCallSign())
 	if !device.AsyncWrite(websocket.BinaryMessage, response) {
-		log.Printf("[WS] Heartbeat response failed for %s: write channel full or closed", device.GetIdentifier())
+		slog.Warn("WebSocket heartbeat response queue unavailable", "device_id", device.GetIdentifier())
 	}
 }
 

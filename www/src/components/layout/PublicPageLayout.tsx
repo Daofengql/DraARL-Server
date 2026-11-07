@@ -1,6 +1,7 @@
 import { Box, Container, Link } from '@mui/material'
 import { PublicHeader } from './PublicHeader'
 import { useConfig } from '../../contexts/ConfigContext'
+import { blueprintGridSx } from '../../theme/blueprint'
 
 interface PublicPageLayoutProps {
   children: React.ReactNode
@@ -15,23 +16,27 @@ export function PublicPageLayout({ children, maxWidth = 'sm', centered = true }:
   const icp = config.icp?.icp || ''
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
+    <Box sx={[blueprintGridSx, { display: 'flex', flexDirection: 'column', minHeight: '100dvh' }]}>
       {/* 顶部导航栏 */}
       <PublicHeader />
 
       {/* 主内容区 */}
       <Box
         component="main"
+        id="main-content"
+        tabIndex={-1}
         sx={{
           flex: 1,
           display: 'flex',
           alignItems: centered ? 'center' : 'flex-start',
           justifyContent: centered ? 'center' : 'flex-start',
           mt: 8,
-          p: { xs: 1, sm: 3 },
+          p: { xs: 2, sm: 3 },
+          minWidth: 0,
+          scrollMarginTop: 80,
         }}
       >
-        <Container maxWidth={maxWidth} sx={{ py: { xs: 2, sm: 4 }, px: { xs: 1, sm: 3 } }}>
+        <Container maxWidth={maxWidth} sx={{ py: { xs: 2, sm: 3 }, px: { xs: 0, sm: 1 }, minWidth: 0 }}>
           {children}
         </Container>
       </Box>

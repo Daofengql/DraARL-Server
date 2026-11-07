@@ -49,7 +49,7 @@ const useStyles = () => ({
     '@supports (height: 100dvh)': {
       height: 'calc(100dvh - 64px)',
     },
-    margin: { xs: -2, sm: -3 }, // 抵消父容器的 padding
+    margin: { xs: -2, sm: -3, lg: -4 }, // 抵消父容器的 padding
     display: 'flex',
     flexDirection: 'column',
     bgcolor: 'background.default',
@@ -137,7 +137,6 @@ const useStyles = () => ({
     borderRadius: 2,
     bgcolor: 'primary.main',
     color: 'primary.contrastText',
-    animation: 'pulse 1.5s infinite',
   },
 })
 
@@ -551,7 +550,8 @@ export const RadioPage: React.FC = () => {
     <Box sx={styles.root}>
       {/* 头部 */}
       <Box sx={styles.header}>
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', minWidth: 0 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <Typography component="h1" variant="h6">在线收发</Typography>
           {renderConnectionStatus()}
         </Box>
         <GroupSelector

@@ -1,7 +1,7 @@
 package udphub
 
 import (
-	"fmt"
+	"draarl/internal/observability"
 	"log"
 	"net"
 	"runtime"
@@ -56,7 +56,7 @@ func getType0Handler() Type0Handler {
 // callers invoke this function and therefore uses its separate NodeSession
 // resource accounting.
 func AllowEdgeDevicePacket(addr *net.UDPAddr) bool {
-	return addr == nil || checkRateLimit(addr)
+	return addr != nil && checkRateLimit(addr)
 }
 
 const (
@@ -66,7 +66,7 @@ const (
 
 type udpDatagramJob struct {
 	data       []byte
-	baseBuffer []byte
+	baseBuffer *[]byte
 	remoteAddr *net.UDPAddr
 	realAddr   *net.UDPAddr
 	receivedAt time.Time
@@ -84,56 +84,6 @@ var (
 	udpQueueNanos     int64
 	udpMaxQueueNanos  int64
 )
-
-// proxy trusted sources（PROXY Protocol v2 安全修复）
-var (
-	proxyTrustedCIDRsMu sync.RWMutex
-	proxyTrustedCIDRs   []*net.IPNet
-	proxyTrustAllWarned atomic.Bool
-)
-
-// setProxyTrustedCIDRs configures trusted proxy prefixes for the centre UDP
-// pipeline; an empty list preserves compatibility by trusting all sources.
-func setProxyTrustedCIDRs(cidrs []string) error {
-	nets, err := config.ParseProxyTrustedCIDRs(cidrs)
-	if err != nil {
-		return fmt.Errorf("invalid proxy trusted CIDRs: %w", err)
-	}
-	proxyTrustedCIDRsMu.Lock()
-	proxyTrustedCIDRs = nets
-	proxyTrustedCIDRsMu.Unlock()
-	return nil
-}
-
-// isTrustedProxySourceFor applies one endpoint's immutable trusted-prefix
-// snapshot. A nil warning flag is useful for callers that only need a pure
-// decision (for example tests); production endpoints pass their own flag.
-func isTrustedProxySourceFor(ip net.IP, nets []*net.IPNet, warned *atomic.Bool) bool {
-	if ip == nil {
-		return false
-	}
-	if len(nets) == 0 {
-		if warned != nil && warned.CompareAndSwap(false, true) {
-			log.Printf("[WARN] PROXY Protocol 已启用但未配置 ProxyTrustedCIDRs，当前信任所有来源（不安全），请配置受信代理前缀")
-		}
-		return true
-	}
-	for _, ipNet := range nets {
-		if ipNet.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// isTrustedProxySource 判断中心 UDP pipeline 的数据报源地址是否允许
-// 解析 PROXY Protocol 头。
-func isTrustedProxySource(ip net.IP) bool {
-	proxyTrustedCIDRsMu.RLock()
-	nets := proxyTrustedCIDRs
-	proxyTrustedCIDRsMu.RUnlock()
-	return isTrustedProxySourceFor(ip, nets, &proxyTrustAllWarned)
-}
 
 func udpWorkerCount() int {
 	workers := runtime.GOMAXPROCS(0)
@@ -153,7 +103,7 @@ func udpWorkerCount() int {
 }
 
 // startUDPPipeline 使用单 reader 避免同 FD readLock 竞争，再按源地址稳定分片。
-func startUDPPipeline(conn *net.UDPConn, proxyEnabled bool) {
+func startUDPPipeline(conn *net.UDPConn) {
 	workers := udpWorkerCount()
 	perQueue := udpJobQueueSize / workers
 	if perQueue < 64 {
@@ -178,7 +128,7 @@ func startUDPPipeline(conn *net.UDPConn, proxyEnabled bool) {
 		}
 	}
 	udpReaderWg.Add(1)
-	go udpReaderLoop(conn, proxyEnabled)
+	go udpReaderLoop(conn)
 
 	log.Printf("[UDP] pipeline started: readers=1 workers=%d queue=%d", workers, perQueue*workers)
 }
@@ -195,15 +145,15 @@ func stopUDPPipeline() {
 		atomic.LoadInt64(&udpJobsDropped), atomic.LoadInt64(&udpRateLimitDrops))
 }
 
-func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
+func udpReaderLoop(conn *net.UDPConn) {
 	defer udpReaderWg.Done()
 
 	for {
 		if isUDPShuttingDown() {
 			return
 		}
-		base := packetPool.Get().([]byte)
-		n, remoteAddr, err := conn.ReadFromUDP(base)
+		base := packetPool.Get().(*[]byte)
+		n, remoteAddr, err := conn.ReadFromUDP(*base)
 		if err != nil {
 			packetPool.Put(base)
 			if isClosedConnError(err) || isUDPShuttingDown() {
@@ -214,15 +164,8 @@ func udpReaderLoop(conn *net.UDPConn, proxyEnabled bool) {
 		}
 		atomic.AddInt64(&udpJobsRead, 1)
 
-		packetData := base[:n]
+		packetData := (*base)[:n]
 		realAddr := remoteAddr
-		if proxyEnabled && isTrustedProxySource(remoteAddr.IP) {
-			proxyInfo, payload, isProxy := ParseProxyProtocolV2(packetData)
-			if isProxy && proxyInfo != nil && proxyInfo.IsProxy {
-				realAddr = GetRealAddr(remoteAddr, proxyInfo)
-				packetData = payload
-			}
-		}
 		// Authenticated Type 0 is verified before the ordinary device limiter.
 		// The exemption is bound to a live TLS-created NodeSession, never to an
 		// IP address. Forged packets return false and remain rate-limited.
@@ -274,7 +217,7 @@ func udpDatagramShard(data []byte, fallback *net.UDPAddr, shards int) int {
 		if nonZero {
 			h ^= uint64(data[50])
 			h *= prime64
-			return int(h % uint64(shards))
+			return int(h % uint64(shards)) // #nosec G115 -- Modulo a positive int shard count guarantees the index fits int.
 		}
 	}
 	return udpAddrShard(fallback, shards)
@@ -299,6 +242,8 @@ func udpWorkerLoop(conn *net.UDPConn, queue <-chan udpDatagramJob) {
 }
 
 func processUDPJob(conn *net.UDPConn, job udpDatagramJob) {
+	finishSpan := observability.StartUDP()
+	defer finishSpan()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[PANIC] Recovered from panic while processing packet from %v: %v", job.remoteAddr, r)

@@ -25,7 +25,7 @@
   <text x="170" y="132" text-anchor="middle" fill="#333" font-size="12">UDP Socket 监听</text>
 
   <rect x="290" y="110" width="180" height="35" fill="#e3f2fd" rx="4"/>
-  <text x="380" y="132" text-anchor="middle" fill="#333" font-size="12">PROXY Protocol v2</text>
+  <text x="380" y="132" text-anchor="middle" fill="#333" font-size="12">Socket peer address</text>
 
   <rect x="500" y="110" width="180" height="35" fill="#e3f2fd" rx="4"/>
   <text x="590" y="132" text-anchor="middle" fill="#333" font-size="12">限速器 (150pps)</text>

@@ -20,6 +20,7 @@ import (
 
 const (
 	refreshTokenCookieName = "refresh_token"
+	// #nosec G101 -- Cookie path constant, not a credential.
 	refreshTokenCookiePath = "/api/auth"
 	refreshTokenTTL        = 14 * 24 * time.Hour
 )
@@ -39,7 +40,7 @@ type refreshTokenRequest struct {
 func RefreshToken(c *gin.Context) {
 	rawToken, fromCookie, bindErr := readRefreshTokenFromRequest(c)
 	if bindErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -48,7 +49,7 @@ func RefreshToken(c *gin.Context) {
 	if rawToken == "" {
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "refresh_token_required",
 		})
@@ -59,7 +60,7 @@ func RefreshToken(c *gin.Context) {
 	store := authstore.GetRefreshTokenStore()
 	stored, err := store.GetByTokenHash(tokenHash)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "刷新令牌校验失败",
 		})
@@ -68,7 +69,7 @@ func RefreshToken(c *gin.Context) {
 	if stored == nil {
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "invalid_refresh_token",
 		})
@@ -80,13 +81,13 @@ func RefreshToken(c *gin.Context) {
 		// 令牌重放：发现替换链，吊销该用户所有有效 refresh token。
 		if stored.ReplacedByHash != "" {
 			if err := store.RevokeAllByUser(stored.UserID, "reuse_detected", now); err != nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新会话吊销失败"})
+				writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新会话吊销失败"})
 				return
 			}
 		}
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "refresh_token_revoked",
 		})
@@ -97,20 +98,20 @@ func RefreshToken(c *gin.Context) {
 		_ = store.RevokeByTokenHash(tokenHash, "expired", now)
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "refresh_token_expired",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := userRepo.GetUserByID(stored.UserID)
 	if err != nil || user == nil || user.Status != 1 || user.ApprovalStatus != 1 || stored.SessionVersion != user.SessionVersion {
 		_ = store.RevokeAllByUser(stored.UserID, "user_invalid", now)
 		clearRefreshTokenCookie(c)
 		clearWSTokenCookie(c)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "user_invalid",
 		})
@@ -123,21 +124,21 @@ func RefreshToken(c *gin.Context) {
 			// A concurrent request may have rotated/revoked this token after the read.
 			latest, lookupErr := store.GetByTokenHash(tokenHash)
 			if lookupErr != nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新令牌校验失败"})
+				writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新令牌校验失败"})
 				return
 			}
 			if latest != nil && latest.ReplacedByHash != "" {
 				if revokeErr := store.RevokeAllByUser(stored.UserID, "reuse_detected", time.Now()); revokeErr != nil {
-					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新会话吊销失败"})
+					writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "刷新会话吊销失败"})
 					return
 				}
 			}
 			clearRefreshTokenCookie(c)
 			clearWSTokenCookie(c)
-			c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "refresh_token_revoked"})
+			writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "refresh_token_revoked"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "刷新登录态失败",
 		})
@@ -249,6 +250,8 @@ func setRefreshTokenCookie(c *gin.Context, token string) {
 		return
 	}
 
+	// #nosec G124 -- Secure is computed from TLS or the explicitly trusted HTTPS proxy; HttpOnly and SameSite are set.
+	// #nosec G124 -- Secure follows validated request transport; HttpOnly and SameSite are set.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     refreshTokenCookieName,
 		Value:    token,
@@ -263,6 +266,7 @@ func setRefreshTokenCookie(c *gin.Context, token string) {
 func clearRefreshTokenCookie(c *gin.Context) {
 	secure := shouldUseSecureCookie(c)
 
+	// #nosec G124 -- Secure follows validated request transport; HttpOnly and SameSite are set.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     refreshTokenCookieName,
 		Value:    "",
@@ -275,6 +279,7 @@ func clearRefreshTokenCookie(c *gin.Context) {
 	})
 
 	// 兼容历史路径，确保残留 cookie 被彻底清掉。
+	// #nosec G124 -- Secure follows validated request transport; HttpOnly and SameSite are set.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     refreshTokenCookieName,
 		Value:    "",

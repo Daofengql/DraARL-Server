@@ -44,7 +44,7 @@ func filterAvailableGroupLinkTargets(groups []*gormdb.Group, occupied map[int]st
 }
 
 func writeVirtualGroupError(c *gin.Context, status int, errorCode, message string) {
-	c.JSON(status, gin.H{"code": status, "error_code": errorCode, "message": message})
+	writeErrorResponse(c, status, gin.H{"code": status, "error_code": errorCode, "message": message})
 }
 
 func writeVirtualGroupRepositoryError(c *gin.Context, err error) {
@@ -106,7 +106,7 @@ type VirtualGroupBroadcastPolicyRequest struct {
 func CreateVirtualGroup(c *gin.Context) {
 	var req CreateVirtualGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -115,10 +115,10 @@ func CreateVirtualGroup(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -127,7 +127,7 @@ func CreateVirtualGroup(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -201,10 +201,10 @@ func CreateVirtualGroup(c *gin.Context) {
 func GetVirtualGroups(c *gin.Context) {
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -213,7 +213,7 @@ func GetVirtualGroups(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -221,10 +221,10 @@ func GetVirtualGroups(c *gin.Context) {
 	}
 
 	// 获取所有虚拟互联组
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	groups, err := repo.ListGroups()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取群组列表失败",
 		})
@@ -240,7 +240,7 @@ func GetVirtualGroups(c *gin.Context) {
 	}
 
 	// 获取每个互联组的关联群组数量
-	linkRepo := gormdb.NewGroupLinkRepository()
+	linkRepo := gormdb.NewGroupLinkRepository().WithContext(c.Request.Context())
 	type virtualGroupWithCount struct {
 		*gormdb.Group
 		TargetCount       int64                                `json:"target_count"`
@@ -293,7 +293,7 @@ func GetVirtualGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -302,10 +302,10 @@ func GetVirtualGroup(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -314,7 +314,7 @@ func GetVirtualGroup(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -322,10 +322,10 @@ func GetVirtualGroup(c *gin.Context) {
 	}
 
 	// 获取群组
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
@@ -334,7 +334,7 @@ func GetVirtualGroup(c *gin.Context) {
 
 	// 检查是否是虚拟互联组
 	if !group.IsVirtual {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "该群组不是虚拟互联组",
 		})
@@ -378,7 +378,7 @@ func UpdateVirtualGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -391,7 +391,7 @@ func UpdateVirtualGroup(c *gin.Context) {
 		Status *int   `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -400,10 +400,10 @@ func UpdateVirtualGroup(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -412,7 +412,7 @@ func UpdateVirtualGroup(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -420,10 +420,10 @@ func UpdateVirtualGroup(c *gin.Context) {
 	}
 
 	// 获取群组
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
@@ -432,7 +432,7 @@ func UpdateVirtualGroup(c *gin.Context) {
 
 	// 检查是否是虚拟互联组
 	if !group.IsVirtual {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "该群组不是虚拟互联组",
 		})
@@ -497,7 +497,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -506,10 +506,10 @@ func DeleteVirtualGroup(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -518,7 +518,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -526,10 +526,10 @@ func DeleteVirtualGroup(c *gin.Context) {
 	}
 
 	// 获取群组
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
@@ -538,7 +538,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 
 	// 检查是否是虚拟互联组
 	if !group.IsVirtual {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "该群组不是虚拟互联组",
 		})
@@ -556,7 +556,7 @@ func DeleteVirtualGroup(c *gin.Context) {
 
 	// 群组和全部关联关系由同一仓库事务删除，不能先在事务外删除关联。
 	if err := repo.DeleteGroupWithCascade(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除群组失败",
 		})
@@ -595,7 +595,7 @@ func GetGroupLinkTargets(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -604,10 +604,10 @@ func GetGroupLinkTargets(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -616,7 +616,7 @@ func GetGroupLinkTargets(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -624,10 +624,10 @@ func GetGroupLinkTargets(c *gin.Context) {
 	}
 
 	// 获取关联群组信息
-	linkRepo := gormdb.NewGroupLinkRepository()
+	linkRepo := gormdb.NewGroupLinkRepository().WithContext(c.Request.Context())
 	links, err := linkRepo.GetLinkWithGroupInfo(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取关联群组失败",
 		})
@@ -649,7 +649,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 	idStr := c.Param("id")
 	linkGroupID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -660,7 +660,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 		TargetGroupID int `json:"target_group_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -669,10 +669,10 @@ func AddGroupLinkTarget(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -681,7 +681,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -689,17 +689,17 @@ func AddGroupLinkTarget(c *gin.Context) {
 	}
 
 	// 验证互联组是否存在且是虚拟组
-	groupRepo := gormdb.NewGroupRepository()
+	groupRepo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	linkGroup, err := groupRepo.GetGroupByID(linkGroupID)
 	if err != nil || linkGroup == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "互联组不存在",
 		})
 		return
 	}
 	if !linkGroup.IsVirtual {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "目标群组必须是虚拟互联组",
 		})
@@ -709,14 +709,14 @@ func AddGroupLinkTarget(c *gin.Context) {
 	// 写入端必须独立校验目标，不能依赖候选列表阻止非法 ID 直提。
 	targetGroup, err := groupRepo.GetGroupByID(req.TargetGroupID)
 	if err != nil || targetGroup == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "目标群组不存在",
 		})
 		return
 	}
 	if !canUseGroupAsLinkTarget(targetGroup) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "只能关联已启用的公开或私有实体群组",
 		})
@@ -724,10 +724,10 @@ func AddGroupLinkTarget(c *gin.Context) {
 	}
 
 	// 检查是否已存在关联
-	linkRepo := gormdb.NewGroupLinkRepository()
+	linkRepo := gormdb.NewGroupLinkRepository().WithContext(c.Request.Context())
 	exists, _ := linkRepo.LinkExists(linkGroupID, req.TargetGroupID)
 	if exists {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "该关联关系已存在",
 		})
@@ -738,7 +738,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 	// 否则会导致互联拓扑重叠，产生不可预期的跨组扩散风险。
 	existingLinks, err := linkRepo.GetLinksByTargetGroup(req.TargetGroupID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "检查目标群组关联状态失败",
 		})
@@ -753,7 +753,7 @@ func AddGroupLinkTarget(c *gin.Context) {
 		if conflictGroup != nil {
 			conflictName = fmt.Sprintf("%s (ID: %d)", conflictGroup.Name, conflictGroup.ID)
 		}
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": fmt.Sprintf("目标群组已被虚拟互联组 %s 关联，每个实体组只能加入一个虚拟互联组", conflictName),
 		})
@@ -809,7 +809,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 	idStr := c.Param("id")
 	linkGroupID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -819,7 +819,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 	targetIDStr := c.Param("targetId")
 	targetGroupID, err := strconv.Atoi(targetIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的目标群组ID",
 		})
@@ -828,10 +828,10 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -840,7 +840,7 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -959,10 +959,10 @@ func UpdateVirtualGroupBroadcastPolicy(c *gin.Context) {
 func GetAvailableTargetGroups(c *gin.Context) {
 	// 获取当前登录用户
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -971,7 +971,7 @@ func GetAvailableTargetGroups(c *gin.Context) {
 
 	// 检查是否是管理员
 	if !currentUser.HasRole("admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -979,10 +979,10 @@ func GetAvailableTargetGroups(c *gin.Context) {
 	}
 
 	// 获取所有已启用实体群组（公开 + 私有，排除虚拟互联组）。
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	groups, err := repo.ListGroupsExcludeVirtual()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取群组列表失败",
 		})
@@ -990,10 +990,10 @@ func GetAvailableTargetGroups(c *gin.Context) {
 	}
 
 	// 获取已被互联占用的实体组
-	linkRepo := gormdb.NewGroupLinkRepository()
+	linkRepo := gormdb.NewGroupLinkRepository().WithContext(c.Request.Context())
 	linkedTargetIDs, err := linkRepo.GetLinkedTargetGroupIDs()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取已关联目标群组失败",
 		})

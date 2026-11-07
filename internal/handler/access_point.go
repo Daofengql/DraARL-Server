@@ -38,24 +38,24 @@ func IssueDeviceAccessPointToken(c *gin.Context) {
 	setNoStore(c)
 	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取设备接入点配置失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "读取设备接入点配置失败"})
 		return
 	}
 	var req deviceAccessPointTokenRequest
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 	username := strings.TrimSpace(req.Username)
 	result := udphub.AuthenticateDevice(c.ClientIP(), username, req.DevicePassword)
 	if result == nil || !result.Success || result.User == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "设备认证失败"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "设备认证失败"})
 		return
 	}
 	ttl := time.Duration(settings.TokenTTLSeconds) * time.Second
 	token, expiresAt, err := appjwt.GenerateEdgeDiscoveryToken(result.User.ID, result.User.Name, result.User.SessionVersion, ttl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "签发发现凭证失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "签发发现凭证失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "成功", "data": gin.H{"access_token": token, "token_type": "Bearer", "expires_at": expiresAt, "expires_in": int(time.Until(expiresAt).Seconds())}})
@@ -65,7 +65,7 @@ func ListAccessPoints(c *gin.Context) {
 	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
 	if err != nil {
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取设备接入点配置失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "读取设备接入点配置失败"})
 		return
 	}
 	now := time.Now()

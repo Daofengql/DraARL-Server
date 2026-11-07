@@ -24,7 +24,8 @@ func PublishDevice(deviceID int) bool {
 	if device == nil {
 		return RevokeDevice(deviceID, "device_deleted")
 	}
-	updated, err := runtime.Gateway.UpdateActiveDeviceRoute(device.ID, device.GroupID, udphub.GetActiveCommunicationDomainID(device.GroupID), device.DisableSend, device.DisableRecv)
+	groupID := device.GroupIDValue()
+	updated, err := runtime.Gateway.UpdateActiveDeviceRoute(device.ID, groupID, udphub.GetActiveCommunicationDomainID(groupID), device.DisableSend, device.DisableRecv)
 	if err != nil {
 		log.Printf("[ROUTE_SYNC] publish device %d failed: %v", deviceID, err)
 	}

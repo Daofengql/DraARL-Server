@@ -173,7 +173,7 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x14 | sql_active_high | 1 | uint8 | SQL 触发极性 (0=低电平触发, 1=高电平触发，仅 DevModel 2) |
 | 0x15 | ptt_active_high | 1 | uint8 | PTT 激活极性 (0=低电平发送, 1=高电平发送，仅 DevModel 2) |
 
-> `adc_gain_db / adc_volume / dac_volume` 是 ESP32 通用音频配置，适用于有射频版 (`DevModel=1`) 和无射频版 (`DevModel=2`)，不依赖 SA818 模块。
+> `adc_gain_db / adc_volume / dac_volume` 是 ESP32 通用音频配置，适用于 Box32-RF (`DevModel=1`) 和 Box32-EX (`DevModel=2`)，不依赖 SA818 模块。
 
 ### 频率配置约定
 
@@ -348,8 +348,8 @@ DevModel 字段用于标识设备类型，服务器可根据设备型号进行�
 | 值 | 常量名 | 说明 | 认证方式 |
 |----|--------|------|----------|
 | 0 | DevModelUnknown | 未知设备 | - |
-| 1 | DevModelESP32Radio | ESP32 链路盒子（1W 射频版） | 设备密码 |
-| 2 | DevModelESP32NoRadio | ESP32 链路盒子（无射频版） | 设备密码 |
+| 1 | DevModelESP32Radio | Box32-RF（内置 RF） | 设备密码 |
+| 2 | DevModelESP32NoRadio | Box32-EX（RF 系统外置） | 设备密码 |
 | 100 | DevModelWeChatMini | 微信小程序 | - |
 | 101 | DevModelAndroid | Android 客户端 | JWT Token |
 | 102 | DevModelIOS | iOS 客户端 | JWT Token |
@@ -367,7 +367,7 @@ DevModel 字段用于标识设备类型，服务器可根据设备型号进行�
 
 | 范围 | 含义 | 说明 |
 |------|------|------|
-| 0-99 | 互联产品段 | 本轮已明确启用：`1`=ESP32 链路盒子（1W 射频版），`2`=ESP32 链路盒子（无射频版） |
+| 0-99 | 互联产品段 | 当前启用：`1`=Box32-RF，`2`=Box32-EX |
 | 100-105 | 幽灵/保留段 | 与 SSID 保留段一致，供 JWT 客户端使用 |
 | 106-107 | 历史兼容段 | 仅保留读取/显示，不再作为正式新型号 |
 | 108-150 | 当前无效保留段 | 不再兼容 `110-113` |

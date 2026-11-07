@@ -25,7 +25,7 @@ func GetDeviceConfig(c *gin.Context) {
 	deviceIDStr := c.Param("id")
 	deviceID, err := strconv.Atoi(deviceIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备 ID",
 		})
@@ -38,10 +38,10 @@ func GetDeviceConfig(c *gin.Context) {
 	}
 
 	// 验证设备归属
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	device, err := repo.GetDeviceByID(deviceID)
 	if err != nil || device == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
 		})
@@ -50,7 +50,7 @@ func GetDeviceConfig(c *gin.Context) {
 
 	// 检查设备归属（必须为设备所有者或管理员）
 	if !canManageDevice(currentUser, device) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权访问此设备的配置",
 		})
@@ -60,7 +60,7 @@ func GetDeviceConfig(c *gin.Context) {
 	// 获取设备配置
 	configs, err := udphub.GetDeviceConfigsFromDB(deviceID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取设备配置失败",
 		})
@@ -104,7 +104,7 @@ func UpdateDeviceConfig(c *gin.Context) {
 	deviceIDStr := c.Param("id")
 	deviceID, err := strconv.Atoi(deviceIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备 ID",
 		})
@@ -118,10 +118,10 @@ func UpdateDeviceConfig(c *gin.Context) {
 	userID := currentUser.ID
 
 	// 验证设备归属
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	device, err := repo.GetDeviceByID(deviceID)
 	if err != nil || device == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
 		})
@@ -130,7 +130,7 @@ func UpdateDeviceConfig(c *gin.Context) {
 
 	// 检查设备归属（必须为设备所有者或管理员）
 	if !canManageDevice(currentUser, device) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权修改此设备的配置",
 		})
@@ -140,7 +140,7 @@ func UpdateDeviceConfig(c *gin.Context) {
 	// 解析请求
 	var req UpdateDeviceConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的请求参数",
 		})
@@ -211,7 +211,7 @@ func UpdateDeviceConfig(c *gin.Context) {
 	}
 
 	if len(configs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "未提供任何配置项",
 		})
@@ -220,7 +220,7 @@ func UpdateDeviceConfig(c *gin.Context) {
 
 	// 【配置校验】非法值原样入库并下发会导致设备异常
 	if err := validateDeviceConfigValues(configs); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "配置值不合法: " + err.Error(),
 		})
@@ -229,7 +229,7 @@ func UpdateDeviceConfig(c *gin.Context) {
 
 	// 保存配置到数据库（如果设备在线会自动下发）
 	if err := udphub.SaveDeviceConfigsToDB(deviceID, configs); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "保存配置失败",
 		})
@@ -265,7 +265,7 @@ func SyncDeviceConfig(c *gin.Context) {
 	deviceIDStr := c.Param("id")
 	deviceID, err := strconv.Atoi(deviceIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备 ID",
 		})
@@ -279,10 +279,10 @@ func SyncDeviceConfig(c *gin.Context) {
 	userID := currentUser.ID
 
 	// 验证设备归属
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	device, err := repo.GetDeviceByID(deviceID)
 	if err != nil || device == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
 		})
@@ -291,7 +291,7 @@ func SyncDeviceConfig(c *gin.Context) {
 
 	// 检查设备归属（必须为设备所有者或管理员）
 	if !canManageDevice(currentUser, device) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权同步此设备的配置",
 		})
@@ -301,7 +301,7 @@ func SyncDeviceConfig(c *gin.Context) {
 	// 获取设备配置
 	configs, err := udphub.GetDeviceConfigsFromDB(deviceID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取设备配置失败",
 		})
@@ -309,7 +309,7 @@ func SyncDeviceConfig(c *gin.Context) {
 	}
 
 	if len(configs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "设备没有保存的配置",
 		})
@@ -365,7 +365,7 @@ func getDeviceConfigAuditOperator(c *gin.Context, fallbackUserID int) (int, stri
 		return fallbackUserID, "", ""
 	}
 
-	user, err := gormdb.NewUserRepository().GetUserByName(usernameStr)
+	user, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserByName(usernameStr)
 	if err != nil || user == nil {
 		return fallbackUserID, usernameStr, ""
 	}

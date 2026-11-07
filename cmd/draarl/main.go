@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"draarl/internal/observability"
 	"flag"
 	"fmt"
 	stdlog "log"
@@ -82,6 +83,15 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("加载配置文件失败: %v", err)
 	}
+	shutdownTelemetry, err := observability.Init(context.Background(), cfg.Observability)
+	if err != nil {
+		stdlog.Fatalf("初始化可观测性失败: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(ctx)
+	}()
 	ghostsession.ConfigureGlobal(
 		cfg.GhostSessions.MaxSessionsPerOwner,
 		cfg.GhostSessions.MaxSubscriptionsPerSession,
@@ -137,7 +147,7 @@ func main() {
 	if err != nil {
 		stdlog.Fatalf("初始化数据库失败: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// 初始化 GORM 数据库
 	gormLogLevel := "info"
@@ -149,13 +159,14 @@ func main() {
 		MaxOpenConns: cfg.Database.MaxOpenConns,
 		MaxIdleConns: cfg.Database.MaxIdleConns,
 		MaxLifetime:  cfg.Database.MaxLifetime,
+		MaxIdleTime:  cfg.Database.MaxIdleTime,
 		LogLevel:     gormLogLevel,
 		Timezone:     cfg.Database.Timezone,
 	}
 	if err := gormdb.Init(gormCfg); err != nil {
 		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
 	}
-	defer gormdb.Close()
+	defer func() { _ = gormdb.Close() }()
 
 	// 全新空库可安全地自动初始化；任何非空库仍要求显式参数，避免
 	// 启动过程静默修改已有或半初始化结构。
@@ -225,7 +236,9 @@ func main() {
 	// 获取 UDP 端口号
 	udpPort := 60050
 	if cfg.System.Port != "" {
-		fmt.Sscanf(cfg.System.Port, "%d", &udpPort)
+		if _, err := fmt.Sscanf(cfg.System.Port, "%d", &udpPort); err != nil {
+			stdlog.Fatalf("invalid UDP port: %v", err)
+		}
 	}
 
 	// 先等待主 UDP socket 和 udphub pipeline 就绪。中心互联的实时数据面
@@ -415,7 +428,7 @@ func resetAdminPassword(newPassword, configPath string) {
 	if err != nil {
 		stdlog.Fatalf("初始化数据库失败: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// 使用 GORM 重置密码
 	gormCfg := &gormdb.Config{
@@ -423,13 +436,14 @@ func resetAdminPassword(newPassword, configPath string) {
 		MaxOpenConns: cfg.Database.MaxOpenConns,
 		MaxIdleConns: cfg.Database.MaxIdleConns,
 		MaxLifetime:  cfg.Database.MaxLifetime,
+		MaxIdleTime:  cfg.Database.MaxIdleTime,
 		LogLevel:     "silent",
 		Timezone:     cfg.Database.Timezone,
 	}
 	if err := gormdb.Init(gormCfg); err != nil {
 		stdlog.Fatalf("初始化 GORM 数据库失败: %v", err)
 	}
-	defer gormdb.Close()
+	defer func() { _ = gormdb.Close() }()
 
 	// 获取用户仓库
 	userRepo := gormdb.NewUserRepository()

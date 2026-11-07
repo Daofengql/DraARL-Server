@@ -30,15 +30,15 @@ import (
 )
 
 const (
-	controlMaxFrame          = 4 << 20
-	controlHelloMaxFrame     = 16 << 10
- controlCenterPeerMaxFrame = 8 << 10
-	controlHello             = "node_enroll"
-	controlAuthOK            = "node_auth_ok"
-	controlAuthError         = "node_auth_error"
-	controlAuthInternalError = "node_auth_internal_error"
-	controlProtocolError     = "node_protocol_error"
-	controlHeartbeat         = "node_heartbeat"
+	controlMaxFrame           = 4 << 20
+	controlHelloMaxFrame      = 16 << 10
+	controlCenterPeerMaxFrame = 8 << 10
+	controlHello              = "node_enroll"
+	controlAuthOK             = "node_auth_ok"
+	controlAuthError          = "node_auth_error"
+	controlAuthInternalError  = "node_auth_internal_error"
+	controlProtocolError      = "node_protocol_error"
+	controlHeartbeat          = "node_heartbeat"
 )
 
 var ErrNodeAuthenticationRejected = errors.New("node authentication rejected")
@@ -150,6 +150,7 @@ func marshalControlMessage(msg ControlMessage) ([]byte, error) {
 		return nil, errors.New("control frame too large")
 	}
 	wire := make([]byte, 4+len(data))
+	// #nosec G115 -- controlMaxFrame bounds the JSON length before allocation.
 	binary.BigEndian.PutUint32(wire[:4], uint32(len(data)))
 	copy(wire[4:], data)
 	return wire, nil
@@ -225,7 +226,7 @@ func (s *NodeSession) Send(msg ControlMessage) error {
 	defer s.writeMu.Unlock()
 	if s.PeerLinkID != "" {
 		_ = s.conn.SetWriteDeadline(time.Now().Add(time.Second))
-		defer s.conn.SetWriteDeadline(time.Time{})
+		defer func() { _ = s.conn.SetWriteDeadline(time.Time{}) }()
 	}
 	wire, err := marshalControlMessage(msg)
 	if err != nil {
@@ -564,13 +565,9 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	if _, err := io.Copy(conn, bytes.NewReader(responseWire)); err != nil {
-		_ = conn.Close()
-		return
-	}
-	session.ControlMetrics.AddIn(helloBytes)
-	session.ControlMetrics.AddOut(len(responseWire))
-	_ = conn.SetDeadline(time.Time{})
+	// Publish the new identity before acknowledging authentication. The client
+	// may send UDP immediately after reading the reply, and the old session must
+	// already be revoked at that point.
 	old, loaded, installed := s.installReservedSession(session)
 	if !installed {
 		_ = conn.Close()
@@ -578,6 +575,17 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 	}
 	reserved = false
 	releasePending()
+	if _, err := io.Copy(conn, bytes.NewReader(responseWire)); err != nil {
+		s.removeSession(session)
+		_ = conn.Close()
+		if loaded {
+			_ = old.Close()
+		}
+		return
+	}
+	session.ControlMetrics.AddIn(helloBytes)
+	session.ControlMetrics.AddOut(len(responseWire))
+	_ = conn.SetDeadline(time.Time{})
 	if loaded {
 		if s.cfg.OnConnect != nil {
 			s.cfg.OnConnect(session)
@@ -598,9 +606,11 @@ func (s *NodeServer) handleConn(conn net.Conn) {
 		if session.PeerLinkID != "" {
 			_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		}
-  frameLimit:=controlMaxFrame
-  if session.PeerLinkID!="" {frameLimit=controlCenterPeerMaxFrame}
-  msg, frameBytes, readErr := readControlMessageSizeLimit(conn,frameLimit)
+		frameLimit := controlMaxFrame
+		if session.PeerLinkID != "" {
+			frameLimit = controlCenterPeerMaxFrame
+		}
+		msg, frameBytes, readErr := readControlMessageSizeLimit(conn, frameLimit)
 		if readErr != nil {
 			err = readErr
 			return
@@ -934,9 +944,11 @@ func (c *NodeClient) readLoop() {
 		if c.Session.PeerLinkID != "" {
 			_ = c.conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		}
-  frameLimit:=controlMaxFrame
-  if c.Session.PeerLinkID!="" {frameLimit=controlCenterPeerMaxFrame}
-  msg, frameBytes, readErr := readControlMessageSizeLimit(c.conn,frameLimit)
+		frameLimit := controlMaxFrame
+		if c.Session.PeerLinkID != "" {
+			frameLimit = controlCenterPeerMaxFrame
+		}
+		msg, frameBytes, readErr := readControlMessageSizeLimit(c.conn, frameLimit)
 		if readErr != nil {
 			err = readErr
 			return
@@ -996,7 +1008,7 @@ func (c *NodeClient) Send(msg ControlMessage) error {
 	defer c.writeMu.Unlock()
 	if c.Session.PeerLinkID != "" {
 		_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
-		defer c.conn.SetWriteDeadline(time.Time{})
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
 	}
 	wire, err := marshalControlMessage(msg)
 	if err != nil {

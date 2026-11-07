@@ -100,17 +100,12 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		t.Fatalf("refusing non-test database %q", parsed.DBName)
 	}
 	parsed.ParseTime = true
-	if err := gormdb.Init(&gormdb.Config{DSN: parsed.FormatDSN(), MaxOpenConns: 10, MaxIdleConns: 2, MaxLifetime: 60, LogLevel: "silent"}); err != nil {
+	if err := gormdb.Init(&gormdb.Config{DSN: parsed.FormatDSN(), MaxOpenConns: 10, MaxIdleConns: 2, MaxLifetime: 60, LogLevel: "error"}); err != nil {
 		t.Fatalf("initialize MySQL: %v", err)
 	}
 	t.Cleanup(func() { _ = gormdb.Close() })
 	db := gormdb.Get()
-	if err := db.AutoMigrate(
-		&gormdb.User{}, &gormdb.Group{}, &gormdb.GroupLink{}, &gormdb.CommRecord{}, &gormdb.CommRecordDeliveryGroup{},
-		&gormdb.ClientResource{}, &gormdb.ClientResourceRelease{}, &gormdb.ClientResourceArtifact{}, &gormdb.FirmwareRelease{},
-		&model.BroadcastAudio{}, &model.BroadcastSchedule{},
-		&model.VirtualGroupBroadcastPolicy{}, &model.BroadcastRun{},
-	); err != nil {
+	if err := gormdb.AutoMigrate(); err != nil {
 		t.Fatalf("migrate broadcast API E2E tables: %v", err)
 	}
 
@@ -154,7 +149,8 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	owner := newUser("broadcast-owner", "user")
 	other := newUser("broadcast-other", "user")
 	admin := newUser("broadcast-admin", "admin")
-	for _, user := range []*gormdb.User{owner, other, admin} {
+	// The first account in an isolated database is the protected primary admin.
+	for _, user := range []*gormdb.User{admin, owner, other} {
 		if err := db.Create(user).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -197,8 +193,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 			_ = db.Where("id IN ?", recordIDs).Delete(&gormdb.CommRecord{}).Error
 		}
 		_ = db.Where("source_group_id IN ?", entityGroupIDs).Delete(&model.BroadcastRun{}).Error
-		_ = db.Where("group_id IN ?", entityGroupIDs).Delete(&model.BroadcastSchedule{}).Error
-		_ = db.Where("group_id IN ?", entityGroupIDs).Delete(&model.BroadcastAudio{}).Error
+		_ = db.Unscoped().Where("group_id IN ?", entityGroupIDs).Delete(&model.BroadcastSchedule{}).Error
+		_ = db.Unscoped().Where("group_id IN ?", entityGroupIDs).Delete(&model.BroadcastAudio{}).Error
+		_ = db.Where("virtual_group_id = ?", virtual.ID).Delete(&model.VirtualGroupBroadcastPolicy{}).Error
 		_ = db.Where("link_group_id = ?", virtual.ID).Delete(&gormdb.GroupLink{}).Error
 		_ = db.Delete(&gormdb.Group{}, []int{groupA.ID, groupB.ID, groupDelete.ID, virtual.ID}).Error
 		_ = db.Delete(&gormdb.User{}, []int{owner.ID, other.ID, admin.ID}).Error
@@ -314,7 +311,8 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
 	// Successful playback requires an actual receiver. Keep a loopback WS
 	// connection subscribed throughout the playback and deletion scenarios.
-	received := newBroadcastE2EReceiver(t, other, []int{groupA.ID, groupB.ID, groupDelete.ID})
+	received := newBroadcastE2EReceiver(t, owner, []int{groupA.ID, groupDelete.ID})
+	linkedReceived := newBroadcastE2EReceiver(t, other, []int{groupB.ID})
 	if err := broadcastruntime.Init(cfg); err != nil {
 		t.Fatalf("start broadcast scheduler: %v", err)
 	}
@@ -385,6 +383,26 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		t.Fatalf("emergency-stopped run=%#v", emergencyRun)
 	}
 
+	// Enable a real A/B interconnection with A allowed to announce. B's WS
+	// receiver must stay silent while A's scheduler completes normal playback.
+	for _, groupID := range []int{groupA.ID, groupB.ID} {
+		if err := db.Create(&gormdb.GroupLink{LinkGroupID: virtual.ID, TargetGroupID: groupID}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: virtual.ID, Mode: model.PolicyAllowSingleSource, AllowedSourceGroupID: &groupA.ID, UpdatedBy: admin.ID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetVirtualGroupStatus(context.Background(), virtual.ID, 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	if len(udphub.GetActiveCommunicationGroupIDs(groupA.ID)) != 2 {
+		t.Fatal("broadcast isolation fixture did not link A and B")
+	}
 	udphub.ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
 	succeededRun := trigger(scheduleA2.ID)
 	succeededRun = waitBroadcastRunTerminal(t, repo, groupA.ID, succeededRun.ID)
@@ -394,6 +412,20 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 	if received.Load() == 0 {
 		t.Fatal("successful broadcast delivered no frames to the real WS receiver")
 	}
+	if linkedReceived.Load() != 0 {
+		t.Fatalf("A announcement reached B's real WS receiver: packets=%d", linkedReceived.Load())
+	}
+	if _, err := repo.SetVirtualGroupStatus(context.Background(), virtual.ID, 0, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("link_group_id = ?", virtual.ID).Delete(&gormdb.GroupLink{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("virtual_group_id = ?", virtual.ID).Delete(&model.VirtualGroupBroadcastPolicy{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
 	var automaticRecords []gormdb.CommRecord
 	if err := db.Where("group_id = ? AND is_auto_broadcast = ?", groupA.ID, true).Order("id ASC").Find(&automaticRecords).Error; err != nil {
 		t.Fatal(err)
@@ -416,6 +448,9 @@ func TestBroadcastManagementHTTPE2E(t *testing.T) {
 		var deliveryCount int64
 		if err := db.Model(&gormdb.CommRecordDeliveryGroup{}).Where("record_id = ? AND group_id = ?", record.ID, groupA.ID).Count(&deliveryCount).Error; err != nil || deliveryCount != 1 {
 			t.Fatalf("automatic record delivery snapshot count=%d err=%v", deliveryCount, err)
+		}
+		if err := db.Model(&gormdb.CommRecordDeliveryGroup{}).Where("record_id = ? AND group_id = ?", record.ID, groupB.ID).Count(&deliveryCount).Error; err != nil || deliveryCount != 0 {
+			t.Fatalf("linked B group gained announcement recording access: count=%d err=%v", deliveryCount, err)
 		}
 		if _, _, err := storage.Stat(context.Background(), record.AudioPath); err != nil {
 			t.Fatalf("automatic recording object missing path=%s err=%v", record.AudioPath, err)

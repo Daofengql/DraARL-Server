@@ -27,7 +27,7 @@ func CreateServer(c *gin.Context) {
 	}
 
 	if !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "当前用户没有权限设置此参数",
 		})
@@ -36,7 +36,7 @@ func CreateServer(c *gin.Context) {
 
 	var server gormdb.Server
 	if err := c.ShouldBindJSON(&server); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -57,10 +57,10 @@ func CreateServer(c *gin.Context) {
 	server.NodeRegistrationTokenHash = ""
 
 	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := userRepo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取用户信息失败",
 		})
@@ -70,10 +70,10 @@ func CreateServer(c *gin.Context) {
 	server.OwerID = strconv.Itoa(user.ID)
 	server.OwerCallSign = user.CallSign
 
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	if err := repo.CreateServer(&server); err != nil {
 		log.Printf("创建服务器失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建服务器失败",
 		})
@@ -105,7 +105,7 @@ func UpdateServer(c *gin.Context) {
 	}
 
 	if !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "当前用户没有权限设置此参数",
 		})
@@ -114,19 +114,19 @@ func UpdateServer(c *gin.Context) {
 
 	var server gormdb.Server
 	if err := c.ShouldBindJSON(&server); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
-	existing, err := gormdb.NewServerRepository().GetServerByID(server.ID)
+	existing, err := gormdb.NewServerRepository().WithContext(c.Request.Context()).GetServerByID(server.ID)
 	if err != nil || existing == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "服务器不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "服务器不存在"})
 		return
 	}
 	if existing.NodeID != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点请使用节点管理接口修改"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点请使用节点管理接口修改"})
 		return
 	}
 	server.NodeID = nil
@@ -141,13 +141,13 @@ func UpdateServer(c *gin.Context) {
 	server.NodeRegistrationTokenHash = ""
 
 	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, _ := userRepo.GetUserByName(username.(string))
 
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	if err := repo.UpdateServer(&server); err != nil {
 		log.Printf("更新服务器失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "服务器更新失败",
 		})
@@ -181,7 +181,7 @@ func DeleteServer(c *gin.Context) {
 	}
 
 	if !isAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "当前用户没有权限设置此参数",
 		})
@@ -192,7 +192,7 @@ func DeleteServer(c *gin.Context) {
 		ID int `json:"id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -200,18 +200,18 @@ func DeleteServer(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, _ := userRepo.GetUserByName(username.(string))
 
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	server, _ := repo.GetServerByID(req.ID)
 	if server != nil && server.NodeID != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点需保留历史引用，请在节点管理中停用"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "边缘节点需保留历史引用，请在节点管理中停用"})
 		return
 	}
 
 	if err := repo.DeleteServer(req.ID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "服务器删除失败",
 		})

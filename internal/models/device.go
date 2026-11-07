@@ -99,7 +99,7 @@ type Device struct {
 	// Runtime fields (not stored in DB)
 	ISOnline           bool              `json:"is_online"`
 	UDPAddr            *net.UDPAddr      `json:"-"`
-	RealUDPAddr        *net.UDPAddr      `json:"-"` // PROXY v2 source; UDPAddr remains the response route
+	RealUDPAddr        *net.UDPAddr      `json:"-"` // Actual socket peer; UDPAddr is the response route.
 	LastPacketTime     time.Time         `json:"last_packet_time"`
 	LastVoiceTime      int64             `json:"last_voice_time"`
 	LastCtlTime        int64             `json:"last_ctl_time"`

@@ -60,7 +60,7 @@ func benchmarkCollectEdgeTargets(gateway *EdgeGateway, sourceSession, domainID u
 func BenchmarkEdgeReceiverCollection(b *testing.B) {
 	for _, sessionCount := range []int{10000, 20000} {
 		gateway := benchmarkEdgeGateway(sessionCount, 5)
-		endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", "", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
+		endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -179,7 +179,7 @@ func TestEdgeReceiverPlanSupportsThousandModernGhostSessions(t *testing.T) {
 		receiveDomains = 4
 	)
 	gateway, expected := benchmarkModernGhostGateway(sessionCount, domainCount, receiveDomains)
-	endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", "", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
+	endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func BenchmarkModernGhostMultiReceiveFanout(b *testing.B) {
 		receiveDomains = 4
 	)
 	gateway, expected := benchmarkModernGhostGateway(sessionCount, domainCount, receiveDomains)
-	endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", "", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
+	endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
 	if err != nil {
 		b.Fatal(err)
 	}

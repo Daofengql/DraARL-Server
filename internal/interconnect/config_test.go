@@ -1,11 +1,33 @@
 package interconnect
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"draarl/internal/config"
 )
+
+func TestEdgeIgnoresRemovedProxyOptions(t *testing.T) {
+	for _, obsolete := range []string{
+		"  ProxyProtocol: v2\n  ProxyTrustedCIDRs: [broken]\n",
+		"  ProxyProtocol: [invalid, type]\n  ProxyTrustedCIDRs: {bad: true}\n",
+	} {
+		path := filepath.Join(t.TempDir(), "edge.yaml")
+		data := "Edge:\n  Center: localhost:60100\n  NodeID: edge-test\n  Token: test-token\n" + obsolete
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadEdgeConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Edge.Listen != ":60050" {
+			t.Fatalf("ordinary UDP endpoint changed: %s", cfg.Edge.Listen)
+		}
+	}
+}
 
 func TestEdgeDefaultsReuseDraARLUDPPort(t *testing.T) {
 	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "center.example.com:60100", NodeID: "edge-test", Token: "token"}}
@@ -49,55 +71,5 @@ func TestEdgeCustomSharedUDPPortIsPreserved(t *testing.T) {
 	}
 	if cfg.Edge.CenterUDP != "127.0.0.1:61000" || cfg.Edge.Listen != ":62000" {
 		t.Fatalf("custom UDP ports changed: %+v", cfg.Edge)
-	}
-}
-
-func TestEdgeProxyProtocolV2IsNormalized(t *testing.T) {
-	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: " V2 ", ProxyTrustedCIDRs: []string{"192.0.2.0/24"}}}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Edge.ProxyProtocol != "v2" {
-		t.Fatalf("ProxyProtocol=%q want=v2", cfg.Edge.ProxyProtocol)
-	}
-	if len(cfg.Edge.ProxyTrustedCIDRs) != 1 || cfg.Edge.ProxyTrustedCIDRs[0] != "192.0.2.0/24" {
-		t.Fatalf("ProxyTrustedCIDRs=%v", cfg.Edge.ProxyTrustedCIDRs)
-	}
-}
-
-func TestEdgeRejectsUnsupportedProxyProtocol(t *testing.T) {
-	cfg := &EdgeConfig{Edge: EdgeSettings{Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: "v1"}}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyProtocol") {
-		t.Fatalf("unexpected validation error: %v", err)
-	}
-}
-
-func TestEdgeRejectsInvalidProxyTrustedCIDR(t *testing.T) {
-	cfg := &EdgeConfig{Edge: EdgeSettings{
-		Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token",
-		ProxyProtocol: "v2", ProxyTrustedCIDRs: []string{"not-a-cidr"},
-	}}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyTrustedCIDRs") {
-		t.Fatalf("unexpected trusted CIDR validation error: %v", err)
-	}
-}
-
-func TestEdgeRequiresProxyTrustedCIDRsForReleaseV2(t *testing.T) {
-	previousRelease := config.IsReleaseBuild()
-	config.SetReleaseBuild(true)
-	t.Cleanup(func() {
-		config.SetReleaseBuild(previousRelease)
-	})
-
-	cfg := &EdgeConfig{Edge: EdgeSettings{
-		Center: "127.0.0.1:60100", NodeID: "edge-test", Token: "token", ProxyProtocol: "v2",
-	}}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ProxyTrustedCIDRs") {
-		t.Fatalf("expected release v2 trust-boundary validation error, got %v", err)
-	}
-
-	cfg.Edge.ProxyTrustedCIDRs = []string{"192.0.2.0/24"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("valid release v2 edge configuration rejected: %v", err)
 	}
 }

@@ -25,7 +25,7 @@ export function ToolsPage() {
       <Stack spacing={3}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Build color="primary" sx={{ fontSize: 32 }} />
-          <Typography variant="h4">工具</Typography>
+          <Typography component="h1" variant="h4">工具</Typography>
         </Box>
 
         <Grid container spacing={2}>
@@ -36,7 +36,7 @@ export function ToolsPage() {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     <Tune color="primary" />
                     <Box sx={{ minWidth: 0 }}>
-                      <Typography variant="h6">设备配置工具</Typography>
+                      <Typography component="h2" variant="h6">设备配置工具</Typography>
                       <Typography variant="body2" color="text.secondary">
                         通过 BLE 写入设备的 WiFi 与 DraARL 连接配置。
                       </Typography>

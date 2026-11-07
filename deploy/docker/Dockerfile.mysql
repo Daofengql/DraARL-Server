@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1.7
+# Keep the upstream server/entrypoint, rebuild gosu with a patched Go runtime,
+# and omit the unused MySQL Shell Python dependency tree from the server image.
+FROM golang:1.27.3-alpine3.24 AS gosu
+WORKDIR /build
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod init draarl-gosu-build && \
+    go get github.com/tianon/gosu@v0.0.0-20261025094355-29b939aa5bd4 golang.org/x/sys@v0.49.0 && \
+    CGO_ENABLED=0 GOMAXPROCS=2 go build -o /out/gosu github.com/tianon/gosu
+
+FROM mysql:8.4.13
+RUN microdnf remove -y mysql-shell && microdnf update -y && microdnf clean all
+COPY --from=gosu /out/gosu /usr/local/bin/gosu

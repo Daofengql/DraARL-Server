@@ -24,7 +24,8 @@ var (
 	// ==========================================
 	packetPool = sync.Pool{
 		New: func() interface{} {
-			return make([]byte, 1460)
+			buffer := make([]byte, 1460)
+			return &buffer
 		},
 	}
 

@@ -45,6 +45,10 @@ vendor/
 !deploy/docker/*.yaml
 !/mkdocs.yml
 !.github/workflows/*.yml
+!.golangci.yml
+
+# Frontend unit-test artifacts
+/www/coverage/
 
 # Database files
 *.sqlite3
@@ -82,6 +86,7 @@ dist/
 # Development notes
 TODO*.md
 !todo.md
+!docs/todo-validation-*.md
 bugs.md
 
 .claude/

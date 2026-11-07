@@ -3,7 +3,6 @@ package udphub
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"log"
 	"math"
 	"net"
@@ -74,9 +73,12 @@ func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (
 // 1) 校验协议范围；
 // 2) 仅在发生变化时更新内存；
 // 3) 对已落库设备同步写回 devices.dev_model。
-func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
+func applyClientReportedDevModel(ctx context.Context, dev *models.Device, reportedDevModel byte) {
 	if dev == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	state := dev.RuntimeSnapshot()
 	if !protocol.IsValidClientReportedDevModel(reportedDevModel) {
@@ -96,7 +98,7 @@ func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
 		return
 	}
 
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	if err := repo.UpdateDeviceFields(state.ID, map[string]interface{}{
 		"dev_model": int(reportedDevModel),
 	}); err != nil {
@@ -106,7 +108,6 @@ func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
 	}
 
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
-		ctx := context.Background()
 		_ = deviceCache.InvalidateDevice(ctx, state.ID, state.OwnerID, uint8(state.SSID))
 		_ = deviceCache.InvalidateDeviceList(ctx)
 		if state.GroupID > 0 {
@@ -121,8 +122,11 @@ func applyClientReportedDevModel(dev *models.Device, reportedDevModel byte) {
 // registerAuthenticatedDraARLDevice creates or restores a normal UDP device
 // after the dedicated authentication pool has verified its credentials.
 func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr *net.UDPAddr, conn *net.UDPConn, authResult *DeviceAuthResult, incomingMAC string) {
-	if packet == nil || authResult == nil || !authResult.Success || authResult.User == nil {
+	if packet == nil || packet.UDPAddr == nil || conn == nil || authResult == nil || !authResult.Success || authResult.User == nil {
 		return
+	}
+	if realAddr == nil {
+		realAddr = packet.UDPAddr
 	}
 
 	if existingDev := findDeviceByOwnerSSIDFromMemory(authResult.User.ID, packet.SSID); shouldRejectNormalDeviceConflictForModel(existingDev, normalDeviceConflictAddr(existingDev, packet.UDPAddr, realAddr), incomingMAC, packet.DevModel) {
@@ -141,13 +145,12 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 		reportedDevModel = protocol.DraARLDevModelUnknown
 	}
 	newDevice := &models.Device{
-		Username: packet.Username,
-		CallSign: authResult.CallSign,
-		Nickname: authResult.User.NickName,
-		SSID:     packet.SSID,
-		OwnerID:  authResult.User.ID, // 设置所有者ID
-		// 使用 fmt.Sprintf 安全地将数字 byte 转换为字符串拼接到呼号后
-		CallSignSSID: fmt.Sprintf("%s-%d", authResult.CallSign, packet.SSID),
+		Username:     packet.Username,
+		CallSign:     authResult.CallSign,
+		Nickname:     authResult.User.NickName,
+		SSID:         packet.SSID,
+		OwnerID:      authResult.User.ID, // 设置所有者ID
+		CallSignSSID: protocol.GetCallSignSSID(authResult.CallSign, packet.SSID),
 		DevModel:     reportedDevModel,
 		MAC:          incomingMAC,
 		Priority:     100,
@@ -167,7 +170,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 	}
 
 	if dev != nil {
-		applyClientReportedDevModel(dev, packet.DevModel)
+		applyClientReportedDevModel(context.Background(), dev, packet.DevModel)
 		dev.UpdateRuntime(func(current *models.Device) {
 			if current.CallSign == "" {
 				current.CallSign = authResult.CallSign
@@ -181,8 +184,8 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 			if incomingMAC != "" {
 				current.MAC = incomingMAC
 			}
-			current.CallSignSSID = fmt.Sprintf("%s-%d", current.CallSign, current.SSID)
-			// UDPAddr 存储 frp 转发地址（用于发送响应）
+			current.CallSignSSID = protocol.GetCallSignSSID(current.CallSign, current.SSID)
+			// UDPAddr stores the actual socket peer used for replies.
 			current.UDPAddr = packet.UDPAddr
 			current.RealUDPAddr = realAddr
 			current.ISOnline = true
@@ -192,6 +195,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 				current.LastOnlineIP = realAddr.IP.String()
 			}
 		})
+		notifyDeviceOnlineChange(dev)
 		state := dev.RuntimeSnapshot()
 		indexRuntimeDevice(dev)
 		if dev.ID > 0 {
@@ -220,6 +224,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 		if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
 			log.Printf("[ONLINE] 发送设备 %d 首次心跳响应失败: %v", dev.ID, err)
 		}
+		syncDeviceConfigAsync(dev)
 	}
 }
 
@@ -280,7 +285,7 @@ func resolveNewDeviceDefaultGroup(user *gormdb.User) int {
 // realAddr: 真实客户端地址（用于日志和 QTH 查询）
 // isGhost: 是否为 UDP 幽灵设备
 func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group, realAddr *net.UDPAddr, isGhost bool) {
-	if packet == nil || dev == nil {
+	if packet == nil || packet.UDPAddr == nil || dev == nil || conn == nil {
 		return
 	}
 	state := dev.RuntimeSnapshot()
@@ -332,7 +337,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 			current.LastOnlineIP = realIP
 		}
 	})
-	applyClientReportedDevModel(dev, packet.DevModel)
+	applyClientReportedDevModel(context.Background(), dev, packet.DevModel)
 
 	// 检测重连
 	if addrChanged && wasOnline {
@@ -371,7 +376,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		syncDeviceConnPool(getGroupConnPool(gp), dev, packet.UDPAddr)
 	}
 
-	// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
+	// 发送心跳响应（填充 CallSign）
 	state = dev.RuntimeSnapshot()
 	response := protocol.EncodeHeartbeatResponse(packet, state.CallSign)
 	if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
@@ -379,6 +384,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	}
 
 	if !wasOnline {
+		defer notifyDeviceOnlineChange(dev)
 		// 新设备上线
 		dev.UpdateRuntime(func(current *models.Device) {
 			current.OnlineTime = packet.TimeStamp
@@ -409,15 +415,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 			// 【配置同步】普通设备上线时同步配置（幽灵设备使用 WebSocket API）
 			// 【性能修复】配置同步含多次 DB 查询 + 逐包下发，异步化避免阻塞
 			// 数据面 worker 的心跳处理；dev 字段在注册后稳定，读取安全。
-			syncDev := dev
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[CONFIG] 异步配置同步 panic: %v", r)
-					}
-				}()
-				SyncDeviceConfig(syncDev)
-			}()
+			syncDeviceConfigAsync(dev)
 		}
 
 	}

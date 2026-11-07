@@ -1,11 +1,20 @@
 package log
 
 import (
+	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
 
 	"draarl/internal/gormdb"
+)
+
+const (
+	operatorLogQueueSize     = 100
+	operatorLogBatchSize     = 50
+	operatorLogFlushInterval = 5 * time.Second
+	operatorLogWriteTimeout  = 5 * time.Second
 )
 
 // OperatorLog 操作日志
@@ -21,7 +30,7 @@ type OperatorLog struct {
 }
 
 var (
-	logBuffer = make(chan *OperatorLog, 100)
+	logBuffer = make(chan *OperatorLog, operatorLogQueueSize)
 	logOnce   sync.Once
 	repo      *gormdb.OperatorLogRepository
 )
@@ -55,23 +64,10 @@ func AddLog(content, operation string, userID int, userName, callSign, ipAddress
 	}
 }
 
-// AddLogWithContext 添加操作日志（带上下文）
-func AddLogWithContext(userID int, content, operation string) {
-	// TODO: 从上下文获取用户信息
-	AddLog(content, operation, userID, "", "", "")
-}
-
-// AddOperatorLog 添加操作日志（兼容函数）
-func AddOperatorLog(content, operation string, user interface{}) {
-	// 兼容旧代码：user 可能是 *models.User 或其他类型
-	// 目前简化处理
-	AddLog(content, operation, 0, "", "", "")
-}
-
 // processLogBuffer 处理日志缓冲区
 func processLogBuffer() {
-	batch := make([]*gormdb.OperatorLog, 0, 50)
-	ticker := time.NewTicker(5 * time.Second)
+	batch := make([]*gormdb.OperatorLog, 0, operatorLogBatchSize)
+	ticker := time.NewTicker(operatorLogFlushInterval)
 	defer ticker.Stop()
 
 	for {
@@ -87,7 +83,7 @@ func processLogBuffer() {
 				IPAddress:  logEntry.IPAddress,
 			}
 			batch = append(batch, dbLog)
-			if len(batch) >= 50 {
+			if len(batch) >= operatorLogBatchSize {
 				writeBatch(batch)
 				batch = batch[:0]
 			}
@@ -103,11 +99,13 @@ func processLogBuffer() {
 
 // writeBatch 批量写入日志到数据库
 func writeBatch(logs []*gormdb.OperatorLog) {
-	if len(logs) == 0 {
+	if len(logs) == 0 || repo == nil {
 		return
 	}
 
-	if err := repo.BatchCreate(logs); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), operatorLogWriteTimeout)
+	defer cancel()
+	if err := repo.WithContext(ctx).BatchCreate(logs); err != nil {
 		log.Printf("Write operator log batch failed: %v", err)
 	}
 	// 审计日志只写入数据库，不在命令行打印
@@ -115,6 +113,9 @@ func writeBatch(logs []*gormdb.OperatorLog) {
 
 // writeLog 写入单条日志到数据库
 func writeLog(logEntry *OperatorLog) {
+	if repo == nil || logEntry == nil {
+		return
+	}
 	dbLog := &gormdb.OperatorLog{
 		Content:    logEntry.Content,
 		EventType:  logEntry.Operation,
@@ -124,7 +125,9 @@ func writeLog(logEntry *OperatorLog) {
 		IPAddress:  logEntry.IPAddress,
 	}
 
-	if err := repo.CreateLog(dbLog); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), operatorLogWriteTimeout)
+	defer cancel()
+	if err := repo.WithContext(ctx).CreateLog(dbLog); err != nil {
 		log.Printf("Write operator log failed: %v", err)
 	}
 	// 审计日志只写入数据库，不在命令行打印
@@ -132,7 +135,12 @@ func writeLog(logEntry *OperatorLog) {
 
 // QueryLogs 查询操作日志
 func QueryLogs(userID int, page, limit int, operation string) ([]*OperatorLog, int64, error) {
-	dbLogs, total, err := repo.Query(userID, page, limit, operation)
+	if repo == nil {
+		return nil, 0, errors.New("operator log processor is not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), operatorLogWriteTimeout)
+	defer cancel()
+	dbLogs, total, err := repo.WithContext(ctx).Query(userID, page, limit, operation)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -192,5 +200,10 @@ func Flush() {
 
 // GetStats 获取日志统计信息
 func GetStats() (map[string]int64, error) {
-	return repo.GetStats()
+	if repo == nil {
+		return nil, errors.New("operator log processor is not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), operatorLogWriteTimeout)
+	defer cancel()
+	return repo.WithContext(ctx).GetStats()
 }

@@ -137,12 +137,18 @@ func TestGroupPasswordHTTPFlowMySQL(t *testing.T) {
 	changePath := fmt.Sprintf("/api/devices/%d/group", device.ID)
 	request(http.MethodPut, changePath, issueToken(switcher), ChangeDeviceGroupRequest{DeviceID: device.ID, GroupID: &created.Data.ID, Password: "wrong-password"}, http.StatusUnauthorized, "192.0.2.20:10000")
 	request(http.MethodPut, changePath, issueToken(switcher), ChangeDeviceGroupRequest{DeviceID: device.ID, GroupID: &created.Data.ID, Password: "private-password"}, http.StatusOK, "192.0.2.20:10001")
-	if err := db.First(device, device.ID).Error; err != nil || device.GroupID != created.Data.ID {
-		t.Fatalf("device did not enter bcrypt private group: group=%d err=%v", device.GroupID, err)
+	if err := db.First(device, device.ID).Error; err != nil || device.GroupIDValue() != created.Data.ID {
+		t.Fatalf("device did not enter bcrypt private group: group=%d err=%v", device.GroupIDValue(), err)
 	}
 	membership = gormdb.GroupMember{}
 	if err := db.Where("group_id = ? AND user_id = ?", created.Data.ID, switcher.ID).First(&membership).Error; err != nil || !membership.IsVerified {
 		t.Fatalf("device group change did not create verified membership: %#v err=%v", membership, err)
+	}
+	ungroupedID := 0
+	request(http.MethodPut, changePath, issueToken(switcher), ChangeDeviceGroupRequest{DeviceID: device.ID, GroupID: &ungroupedID}, http.StatusOK, "192.0.2.20:10002")
+	var ungroupedDevice gormdb.Device
+	if err := db.First(&ungroupedDevice, device.ID).Error; err != nil || ungroupedDevice.GroupID != nil {
+		t.Fatalf("device group was not cleared to SQL NULL: group=%v err=%v", ungroupedDevice.GroupID, err)
 	}
 	publicGroup := &gormdb.Group{Name: "public-group-" + suffix, Type: groupTypePublic, OwerID: owner.ID, Status: 1}
 	if err := db.Create(publicGroup).Error; err != nil {

@@ -88,8 +88,9 @@ export function ProvisionWifiForm({
   }
 
   return (
-    <Card variant="outlined">
+    <Card variant="outlined" data-config-section="wifi">
       <CardHeader
+        sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1, '& .MuiCardHeader-action': { m: 0, alignSelf: { xs: 'flex-start', sm: 'center' } }, '& .MuiCardHeader-content': { minWidth: 0 } }}
         title="WiFi"
         subheader="WiFi 为必填项，请直接填写网络名称与密码。"
         action={
@@ -99,6 +100,7 @@ export function ProvisionWifiForm({
               size="small"
               startIcon={<Save />}
               onClick={onSave}
+              loading={loading}
               disabled={disabled || loading}
             >
               保存 WiFi

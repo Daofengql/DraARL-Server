@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -86,7 +87,7 @@ func GetDevices(c *gin.Context) {
 	groupID := c.Query("group_id")
 	isOnline, onlineErr := parseOptionalBoolQuery(c, "isonline")
 	if onlineErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "无效的在线状态参数",
 		})
@@ -94,16 +95,16 @@ func GetDevices(c *gin.Context) {
 	}
 
 	if limit <= 0 {
-		limit = 20
-	} else if limit > 100 {
-		limit = 100
+		limit = gormdb.DefaultPageSize
+	} else if limit > gormdb.MaxPageSize {
+		limit = gormdb.MaxPageSize
 	}
 	if page <= 0 {
 		page = 1
 	}
 	normalizedLimit, normalizedPage, _, paginationErr := gormdb.NormalizeDevicePageOffset(limit, page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "分页参数过大",
 		})
@@ -131,18 +132,20 @@ func GetDevices(c *gin.Context) {
 	var total int64
 	var err error
 
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	filter := gormdb.DeviceListFilter{OwnerID: ownerID, IsOnline: isOnline}
 	if keyword != "" {
 		// 后台搜索框按设备名称或所有者呼号模糊匹配，并保持数据库层分页。
 		filter.Keyword = keyword
-	} else if callsign != "" {
+	}
+	if callsign != "" {
 		filter.CallSign = callsign
-	} else if groupID != "" {
+	}
+	if groupID != "" {
 		// 按群组过滤（数据库层分页）
 		gid, parseErr := strconv.Atoi(groupID)
-		if parseErr != nil || gid <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
+		if parseErr != nil || gid < 0 {
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "无效的群组ID",
 			})
@@ -151,45 +154,34 @@ func GetDevices(c *gin.Context) {
 		filter.GroupID = &gid
 	}
 
-	// 只有管理员的无过滤列表可以使用旧缓存；在线过滤必须走数据库，
-	// 否则旧缓存的总数和分页内容无法区分 online/offline 维度。
-	if filter.Keyword == "" && filter.CallSign == "" && filter.GroupID == nil && filter.IsOnline == nil && ownerID == 0 {
-		if deviceCache != nil {
-			devices, total, err = deviceCache.GetDeviceList(ctx, page, limit)
-		} else {
-			devices, total, err = repo.ListDevicesPaginated(filter, limit, page)
-		}
+	if deviceCache != nil {
+		devices, total, err = deviceCache.GetFilteredDeviceList(ctx, filter, page, limit)
 	} else {
 		devices, total, err = repo.ListDevicesPaginated(filter, limit, page)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    http.StatusInternalServerError,
-			"message": "查询设备列表失败",
-		})
+		writeRepositoryError(c, err, "查询设备列表失败")
 		return
 	}
 
 	// 批量获取所有需要的用户信息（解决 N+1 查询问题）
-	userRepo := gormdb.NewUserRepository()
-	ownerIDs := make([]int, 0, len(devices))
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
+	ownerIDSet := make(map[int]bool, len(devices))
 	for _, d := range devices {
 		if d.OwnerID > 0 {
-			ownerIDs = append(ownerIDs, d.OwnerID)
+			ownerIDSet[d.OwnerID] = true
 		}
 	}
-	// 去重
-	ownerIDSet := make(map[int]bool)
-	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
-	for _, id := range ownerIDs {
-		if !ownerIDSet[id] {
-			ownerIDSet[id] = true
-			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
-		}
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDSet))
+	for id := range ownerIDSet {
+		uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 	}
 	// 批量查询用户简要信息
-	userCache := cache.GetUserCache()
-	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+	ownerMap, err := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
+	if err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询设备所有者失败"})
+		return
+	}
 	nodeIDs := make([]string, 0, len(devices))
 	seenNodeIDs := make(map[string]struct{}, len(devices))
 	for _, d := range devices {
@@ -204,7 +196,7 @@ func GetDevices(c *gin.Context) {
 			}
 		}
 	}
-	nodeNames, _ := gormdb.NewServerRepository().GetNodeNames(nodeIDs)
+	nodeNames, _ := gormdb.NewServerRepository().WithContext(c.Request.Context()).GetNodeNames(nodeIDs)
 
 	// 转换为响应格式
 	items := make([]*DeviceInfo, 0, len(devices))
@@ -214,7 +206,7 @@ func GetDevices(c *gin.Context) {
 			Name:                 d.Name,
 			SSID:                 d.SSID,
 			DevModel:             d.DevModel,
-			GroupID:              d.GroupID,
+			GroupID:              d.GroupIDValue(),
 			Status:               d.Status,
 			Priority:             d.Priority,
 			IsOnline:             d.ISOnline,
@@ -224,8 +216,8 @@ func GetDevices(c *gin.Context) {
 			LastOnlineIP:         d.LastOnlineIP,
 			LastOnlineIPLocation: getIPLocation(d.LastOnlineIP),
 			Note:                 d.Note,
-			CreateTime:           d.CreateTime.Format("2006-01-02 15:04:05"),
-			UpdateTime:           d.UpdateTime.Format("2006-01-02 15:04:05"),
+			CreateTime:           common.FormatAPITime(d.CreateTime),
+			UpdateTime:           common.FormatAPITime(d.UpdateTime),
 		}
 		entryNodeID := d.LastEntryNodeID
 		if d.ISOnline && d.CurrentEntryNodeID != "" {
@@ -236,37 +228,20 @@ func GetDevices(c *gin.Context) {
 		}
 		info.EntryMode = d.EntryMode
 		if d.LastEntryAt != nil {
-			info.EntrySeenAt = d.LastEntryAt.Format("2006-01-02 15:04:05")
+			info.EntrySeenAt = common.FormatAPITime(d.LastEntryAt)
 		}
 		info.EntryNodeName = resolveEntryNodeName(entryNodeID, nodeNames)
 
-		// 从批量查询结果中获取设备所有者信息
-		if d.OwnerID > 0 {
-			// 优先从缓存获取
-			var owner *gormdb.User
-			if userCache != nil {
-				owner, _ = userCache.GetUserByID(ctx, d.OwnerID)
+		// The batch already contains every field needed here. Loading individual
+		// user-cache entries would issue one extra SQL query per cold owner.
+		if owner := ownerMap[d.OwnerID]; owner != nil {
+			info.OwnerID = owner.ID
+			info.OwnerName = owner.NickName
+			if info.OwnerName == "" {
+				info.OwnerName = owner.Name
 			}
-			if owner == nil {
-				// 从批量查询结果获取
-				if brief, ok := ownerMap[d.OwnerID]; ok {
-					info.OwnerID = brief.ID
-					info.OwnerName = brief.NickName
-					if info.OwnerName == "" {
-						info.OwnerName = brief.Name
-					}
-					info.OwnerCallSign = brief.CallSign
-					info.CallSign = brief.CallSign
-				}
-			} else {
-				info.OwnerID = owner.ID
-				info.OwnerName = owner.NickName
-				if info.OwnerName == "" {
-					info.OwnerName = owner.Name
-				}
-				info.OwnerCallSign = owner.CallSign
-				info.CallSign = owner.CallSign
-			}
+			info.OwnerCallSign = owner.CallSign
+			info.CallSign = owner.CallSign
 		}
 
 		items = append(items, info)
@@ -319,7 +294,7 @@ func GetDevice(c *gin.Context) {
 	if idStr != "" {
 		id, parseErr := strconv.Atoi(idStr)
 		if parseErr != nil || id <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "无效的设备ID",
 			})
@@ -328,11 +303,11 @@ func GetDevice(c *gin.Context) {
 		if deviceCache != nil {
 			device, err = deviceCache.GetDeviceByID(ctx, id)
 		} else {
-			repo := gormdb.NewDeviceRepository()
+			repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 			device, err = repo.GetDeviceByID(id)
 		}
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "缺少设备ID",
 		})
@@ -340,7 +315,7 @@ func GetDevice(c *gin.Context) {
 	}
 
 	if err != nil || device == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
 		})
@@ -351,7 +326,7 @@ func GetDevice(c *gin.Context) {
 		return
 	}
 	if !canManageDevice(currentUser, device) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权查看此设备",
 		})
@@ -360,7 +335,7 @@ func GetDevice(c *gin.Context) {
 
 	// 获取所有者呼号
 	var callsign string
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	if device.OwnerID > 0 {
 		var owner *gormdb.User
 		if userCache := cache.GetUserCache(); userCache != nil {
@@ -379,11 +354,11 @@ func GetDevice(c *gin.Context) {
 	}
 	nodeNames := map[string]string{}
 	if entryNodeID != "" && entryNodeID != "center" {
-		nodeNames, _ = gormdb.NewServerRepository().GetNodeNames([]string{entryNodeID})
+		nodeNames, _ = gormdb.NewServerRepository().WithContext(c.Request.Context()).GetNodeNames([]string{entryNodeID})
 	}
 	entrySeenAt := ""
 	if device.LastEntryAt != nil {
-		entrySeenAt = device.LastEntryAt.Format("2006-01-02 15:04:05")
+		entrySeenAt = common.FormatAPITime(device.LastEntryAt)
 	}
 	entryNodeIDResponse := ""
 	if isAdminUser(currentUser) {
@@ -399,7 +374,7 @@ func GetDevice(c *gin.Context) {
 			"callsign":                callsign,
 			"ssid":                    device.SSID,
 			"dev_model":               device.DevModel,
-			"group_id":                device.GroupID,
+			"group_id":                device.GroupIDValue(),
 			"status":                  device.Status,
 			"priority":                device.Priority,
 			"is_online":               device.ISOnline,
@@ -407,8 +382,8 @@ func GetDevice(c *gin.Context) {
 			"last_online_ip_location": getIPLocation(device.LastOnlineIP),
 			"owner_id":                device.OwnerID,
 			"note":                    device.Note,
-			"create_time":             device.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":             device.UpdateTime.Format("2006-01-02 15:04:05"),
+			"create_time":             common.FormatAPITime(device.CreateTime),
+			"update_time":             common.FormatAPITime(device.UpdateTime),
 			"entry_node_id":           entryNodeIDResponse,
 			"entry_node_name":         resolveEntryNodeName(entryNodeID, nodeNames),
 			"entry_mode":              device.EntryMode,
@@ -433,7 +408,7 @@ func UpdateDevice(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备ID",
 		})
@@ -442,19 +417,19 @@ func UpdateDevice(c *gin.Context) {
 
 	var req UpdateDeviceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 
 	// 检查设备是否存在
 	device, err := repo.GetDeviceByID(id)
 	if err != nil || device == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
 		})
@@ -467,7 +442,7 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 	if !canManageDevice(currentUser, device) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权修改此设备",
 		})
@@ -476,15 +451,15 @@ func UpdateDevice(c *gin.Context) {
 
 	// 群组切换必须走 ChangeDeviceGroup，确保私有群组验证、对象级授权、
 	// 缓存和 UDP 运行时状态同步不会被通用更新接口绕过。
-	if req.GroupID > 0 && req.GroupID != device.GroupID {
-		c.JSON(http.StatusBadRequest, gin.H{
+	if req.GroupID > 0 && req.GroupID != device.GroupIDValue() {
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "请使用设备切换群组接口修改群组",
 		})
 		return
 	}
 
-	oldGroupID := device.GroupID
+	oldGroupID := device.GroupIDValue()
 	oldDisableSend := device.DisableSend
 	oldDisableRecv := device.DisableRecv
 
@@ -518,7 +493,7 @@ func UpdateDevice(c *gin.Context) {
 	}
 
 	if err := repo.UpdateDeviceFields(id, updates); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新设备失败",
 		})
@@ -552,7 +527,7 @@ func UpdateDevice(c *gin.Context) {
 	}
 	oplog.AddLog(
 		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, disable_send=%t->%t, disable_recv=%t->%t",
-			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority,
+			id, device.OwnerID, oldGroupID, device.GroupIDValue(), device.Status, device.Priority,
 			oldDisableSend, device.DisableSend, oldDisableRecv, device.DisableRecv),
 		"device_update",
 		operatorID,
@@ -581,11 +556,11 @@ func DeleteDevice(c *gin.Context) {
 	id, err := strconv.Atoi(idStr)
 	if err == nil {
 		// 通过ID删除
-		repo := gormdb.NewDeviceRepository()
+		repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 		// 检查设备是否存在
 		device, err := repo.GetDeviceByID(id)
 		if err != nil || device == nil {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    404,
 				"message": "设备不存在",
 			})
@@ -594,7 +569,7 @@ func DeleteDevice(c *gin.Context) {
 
 		// 检查权限：只有设备所有者或管理员可以删除
 		if !canManageDevice(currentUser, device) {
-			c.JSON(http.StatusForbidden, gin.H{
+			writeErrorResponse(c, http.StatusForbidden, gin.H{
 				"code":    403,
 				"message": "无权删除此设备",
 			})
@@ -602,7 +577,7 @@ func DeleteDevice(c *gin.Context) {
 		}
 
 		if err := repo.DeleteDeviceWithCascade(id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "删除设备失败",
 			})
@@ -617,8 +592,8 @@ func DeleteDevice(c *gin.Context) {
 			// 使用 OwnerID 作为缓存键（不再查询呼号）
 			_ = deviceCache.InvalidateDevice(ctx, id, device.OwnerID, uint8(device.SSID))
 			_ = deviceCache.InvalidateDeviceList(ctx)
-			if device.GroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
+			if groupID := device.GroupIDValue(); groupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 			}
 		}
 
@@ -631,7 +606,7 @@ func DeleteDevice(c *gin.Context) {
 			operatorCallSign = currentUser.CallSign
 		}
 		oplog.AddLog(
-			fmt.Sprintf("删除设备: device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupID, device.SSID),
+			fmt.Sprintf("删除设备: device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupIDValue(), device.SSID),
 			"device_delete",
 			operatorID,
 			operatorName,
@@ -652,7 +627,7 @@ func DeleteDevice(c *gin.Context) {
 		}
 
 		if ownerIDStr == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "缺少设备标识",
 			})
@@ -661,17 +636,17 @@ func DeleteDevice(c *gin.Context) {
 
 		ownerID, err := strconv.Atoi(ownerIDStr)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "无效的所有者ID",
 			})
 			return
 		}
 
-		repo := gormdb.NewDeviceRepository()
+		repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 		device, err := repo.GetDeviceByOwnerSSID(ownerID, ssid)
 		if err != nil || device == nil {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    404,
 				"message": "设备不存在",
 			})
@@ -681,7 +656,7 @@ func DeleteDevice(c *gin.Context) {
 		// 兼容入口同样必须执行对象级授权，不能因为改用 owner_id + ssid
 		// 定位设备就绕过“设备所有者或管理员”规则。
 		if !canManageDevice(currentUser, device) {
-			c.JSON(http.StatusForbidden, gin.H{
+			writeErrorResponse(c, http.StatusForbidden, gin.H{
 				"code":    http.StatusForbidden,
 				"message": "无权删除此设备",
 			})
@@ -689,7 +664,7 @@ func DeleteDevice(c *gin.Context) {
 		}
 
 		if err := repo.DeleteDeviceWithCascade(device.ID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "删除设备失败",
 			})
@@ -704,8 +679,8 @@ func DeleteDevice(c *gin.Context) {
 			// 使用 OwnerID 作为缓存键
 			_ = deviceCache.InvalidateDevice(ctx, device.ID, device.OwnerID, uint8(device.SSID))
 			_ = deviceCache.InvalidateDeviceList(ctx)
-			if device.GroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
+			if groupID := device.GroupIDValue(); groupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 			}
 		}
 
@@ -718,7 +693,7 @@ func DeleteDevice(c *gin.Context) {
 			operatorCallSign = currentUser.CallSign
 		}
 		oplog.AddLog(
-			fmt.Sprintf("删除设备(兼容接口): device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupID, device.SSID),
+			fmt.Sprintf("删除设备(兼容接口): device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupIDValue(), device.SSID),
 			"device_delete",
 			operatorID,
 			operatorName,
@@ -744,7 +719,7 @@ type ChangeDeviceGroupRequest struct {
 func ChangeDeviceGroup(c *gin.Context) {
 	var req ChangeDeviceGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -753,14 +728,14 @@ func ChangeDeviceGroup(c *gin.Context) {
 	if idStr := c.Param("id"); idStr != "" {
 		deviceID, err := strconv.Atoi(idStr)
 		if err != nil || deviceID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "无效的设备ID",
 			})
 			return
 		}
 		if req.DeviceID != 0 && req.DeviceID != deviceID {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "路径设备ID与请求设备ID不一致",
 			})
@@ -769,14 +744,14 @@ func ChangeDeviceGroup(c *gin.Context) {
 		req.DeviceID = deviceID
 	}
 	if req.DeviceID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "无效的设备ID",
 		})
 		return
 	}
 	if req.GroupID == nil || *req.GroupID < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "无效的群组ID",
 		})
@@ -789,17 +764,17 @@ func ChangeDeviceGroup(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewDeviceRepository()
+	repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 	device, err := repo.GetDeviceByID(req.DeviceID)
 	if err != nil || device == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "设备不存在",
 		})
 		return
 	}
 	if !canManageDevice(currentUser, device) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权修改此设备的群组",
 		})
@@ -809,24 +784,24 @@ func ChangeDeviceGroup(c *gin.Context) {
 	var group *gormdb.Group
 	var groupRepo *gormdb.GroupRepository
 	if targetGroupID > 0 {
-		groupRepo = gormdb.NewGroupRepository()
+		groupRepo = gormdb.NewGroupRepository().WithContext(c.Request.Context())
 		group, err = groupRepo.GetGroupByID(targetGroupID)
 		if err != nil || group == nil {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    404,
 				"message": "群组不存在",
 			})
 			return
 		}
 		if group.IsVirtual || !isSupportedGroupType(group.Type) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "不能切换到虚拟或不受支持的群组",
 			})
 			return
 		}
 		if group.Status != 1 {
-			c.JSON(http.StatusForbidden, gin.H{
+			writeErrorResponse(c, http.StatusForbidden, gin.H{
 				"code":    http.StatusForbidden,
 				"message": "群组已禁用",
 			})
@@ -842,12 +817,12 @@ func ChangeDeviceGroup(c *gin.Context) {
 	} else {
 		// 私有群组，需要已验证
 		// 检查用户是否已验证
-		memberRepo := gormdb.NewGroupMemberRepository()
+		memberRepo := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context())
 		isVerified := memberRepo.IsVerifiedMember(targetGroupID, currentUser.ID)
 		if !isVerified {
 			// 未验证用户，需要提供密码
 			if req.Password == "" {
-				c.JSON(http.StatusForbidden, gin.H{
+				writeErrorResponse(c, http.StatusForbidden, gin.H{
 					"code":    403,
 					"message": "需要先验证密码才能加入该群组",
 				})
@@ -860,7 +835,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 				return
 			}
 			if !verifyGroupPassword(group.Password, req.Password) {
-				c.JSON(http.StatusUnauthorized, gin.H{
+				writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 					"code":    401,
 					"message": "密码错误",
 				})
@@ -883,7 +858,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 				JoinTime:   time.Now(),
 				LastVerify: time.Now(),
 			}); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "创建成员记录失败",
 				})
@@ -893,11 +868,11 @@ func ChangeDeviceGroup(c *gin.Context) {
 	}
 
 	// 更新设备的群组（数据库）
-	oldGroupID := device.GroupID
+	oldGroupID := device.GroupIDValue()
 	if err := repo.UpdateDeviceFields(req.DeviceID, map[string]interface{}{
 		"group_id": targetGroupID,
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "修改设备群组失败",
 		})
@@ -965,16 +940,16 @@ func GetDeviceQTHs(c *gin.Context) {
 		if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 			devicesRaw, _, err = deviceCache.GetDeviceList(ctx, 1, 1000)
 		} else {
-			repo := gormdb.NewDeviceRepository()
+			repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 			devicesRaw, _, err = repo.ListDevices(1000, 1)
 		}
 	} else {
-		repo := gormdb.NewDeviceRepository()
+		repo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
 		devicesRaw, err = repo.ListDevicesByOwnerID(currentUser.ID)
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询设备列表失败",
 		})
@@ -982,21 +957,16 @@ func GetDeviceQTHs(c *gin.Context) {
 	}
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
-	userRepo := gormdb.NewUserRepository()
-	ownerIDs := make([]int, 0, len(devicesRaw))
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
+	ownerIDSet := make(map[int]bool, len(devicesRaw))
 	for _, d := range devicesRaw {
 		if d.OwnerID > 0 {
-			ownerIDs = append(ownerIDs, d.OwnerID)
+			ownerIDSet[d.OwnerID] = true
 		}
 	}
-	// 去重
-	ownerIDSet := make(map[int]bool)
-	uniqueOwnerIDs := make([]int, 0, len(ownerIDs))
-	for _, id := range ownerIDs {
-		if !ownerIDSet[id] {
-			ownerIDSet[id] = true
-			uniqueOwnerIDs = append(uniqueOwnerIDs, id)
-		}
+	uniqueOwnerIDs := make([]int, 0, len(ownerIDSet))
+	for id := range ownerIDSet {
+		uniqueOwnerIDs = append(uniqueOwnerIDs, id)
 	}
 	ownerMap, _ := userRepo.GetUserBriefByIDs(uniqueOwnerIDs)
 

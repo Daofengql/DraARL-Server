@@ -197,8 +197,12 @@ func (cb *CommBuffer) AppendPacket(
 	// 逐个写入子帧（带帧长度前缀：2字节 little-endian + Opus 数据）
 	session.mu.Lock()
 	for _, frame := range subFrames {
+		if len(frame) > 65535 {
+			continue
+		}
 		// 写入帧长度前缀（2字节，little-endian）
 		lenBuf := make([]byte, 2)
+		// #nosec G115 -- Frames exceeding uint16 length are rejected above.
 		binary.LittleEndian.PutUint16(lenBuf, uint16(len(frame)))
 		session.Buffer.Write(lenBuf)
 		// 写入 Opus 帧数据

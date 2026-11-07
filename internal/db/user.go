@@ -104,12 +104,12 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*models.User, int, error)
 	}
 
 	// 获取分页数据
-	query := userSelectQuery("") + " ORDER BY id LIMIT ? OFFSET ?"
+	query := userSelectQuery("") + " ORDER BY id LIMIT ? OFFSET ?" // #nosec G202 -- userSelectQuery only appends static SQL; all filter values are bound parameters.
 	rows, err := r.db.Query(query, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	users := make([]*models.User, 0)
 	for rows.Next() {
@@ -182,7 +182,9 @@ func (r *UserRepository) VerifyPassword(phone, password string) (*models.User, e
 	}
 
 	// 更新登录时间
-	r.db.Exec(`UPDATE users SET last_login_time = NOW(), login_err_times = 0 WHERE id = ?`, user.ID)
+	if _, err := r.db.Exec(`UPDATE users SET last_login_time = NOW(), login_err_times = 0 WHERE id = ?`, user.ID); err != nil {
+		return nil, fmt.Errorf("update login state: %w", err)
+	}
 
 	return user, nil
 }
@@ -256,7 +258,7 @@ func (r *UserRepository) scanUser(row *sql.Row) (*models.User, error) {
 		user.LastLoginIP = lastLoginIP.String
 	}
 	if dmrid.Valid {
-		user.DMRID = uint32(dmrid.Int64)
+		user.DMRID = checkedDMRID(dmrid.Int64)
 	}
 	if mdcid.Valid {
 		user.MDCID = mdcid.String
@@ -323,7 +325,7 @@ func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*models.User, error) 
 		user.LastLoginIP = lastLoginIP.String
 	}
 	if dmrid.Valid {
-		user.DMRID = uint32(dmrid.Int64)
+		user.DMRID = checkedDMRID(dmrid.Int64)
 	}
 	if mdcid.Valid {
 		user.MDCID = mdcid.String
@@ -521,7 +523,7 @@ func scanUserDirect(row *sql.Row) (*models.User, error) {
 		user.LastLoginIP = lastLoginIP.String
 	}
 	if dmrid.Valid {
-		user.DMRID = uint32(dmrid.Int64)
+		user.DMRID = checkedDMRID(dmrid.Int64)
 	}
 	if mdcid.Valid {
 		user.MDCID = mdcid.String
@@ -631,4 +633,11 @@ func HasAdminUser() bool {
 		return false
 	}
 	return count > 0
+}
+
+func checkedDMRID(value int64) uint32 {
+	if value < 0 || value > 4294967295 {
+		return 0
+	}
+	return uint32(value)
 }

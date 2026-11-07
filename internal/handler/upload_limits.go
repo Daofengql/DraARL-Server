@@ -17,7 +17,7 @@ const uploadFormOverhead = 1 << 20
 func parseLimitedUploadForm(c *gin.Context, maxFileBytes int64) bool {
 	maxRequestBytes := maxFileBytes + uploadFormOverhead
 	if c.Request.ContentLength > maxRequestBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": 413, "message": "上传请求过大"})
+		writeErrorResponse(c, http.StatusRequestEntityTooLarge, gin.H{"code": 413, "message": "上传请求过大"})
 		return false
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBytes)
@@ -37,9 +37,9 @@ func parseLimitedUploadForm(c *gin.Context, maxFileBytes int64) bool {
 	}
 	var sizeErr *http.MaxBytesError
 	if errors.As(err, &sizeErr) {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"code": 413, "message": "上传请求过大"})
+		writeErrorResponse(c, http.StatusRequestEntityTooLarge, gin.H{"code": 413, "message": "上传请求过大"})
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传表单格式错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "上传表单格式错误"})
 	}
 	return false
 }

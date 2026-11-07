@@ -3,6 +3,7 @@ package gormdb
 import (
 	"context"
 	"errors"
+	"maps"
 	"time"
 
 	"gorm.io/gorm"
@@ -10,7 +11,7 @@ import (
 )
 
 func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
-	return r.UpdateDeviceEntryContext(context.Background(), deviceID, nodeID, mode, sessionID, online, now)
+	return r.UpdateDeviceEntryContext(r.db.Statement.Context, deviceID, nodeID, mode, sessionID, online, now)
 }
 
 // UpdateDeviceEntryContext allows shutdown-aware callers to cancel the row
@@ -72,7 +73,7 @@ type DeviceListFilter struct {
 // imposing a list-size cap on internal callers such as the QTH snapshot path.
 func NormalizeDevicePageOffset(limit, page int) (int, int, int, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = DefaultPageSize
 	}
 	if page <= 0 {
 		page = 1
@@ -118,7 +119,11 @@ func (r *DeviceRepository) ListDevicesPaginated(filter DeviceListFilter, limit, 
 			Where("users.callsign = ?", filter.CallSign)
 	}
 	if filter.GroupID != nil {
-		query = query.Where("devices.group_id = ?", *filter.GroupID)
+		if *filter.GroupID == 0 {
+			query = query.Where("devices.group_id IS NULL OR devices.group_id = 0")
+		} else {
+			query = query.Where("devices.group_id = ?", *filter.GroupID)
+		}
 	}
 	if filter.OwnerID > 0 {
 		query = query.Where("devices.owner_id = ?", filter.OwnerID)
@@ -151,7 +156,13 @@ func (r *DeviceRepository) ListAllDevices() ([]*Device, error) {
 // ListDevicesByGroupID 获取指定群组的设备列表
 func (r *DeviceRepository) ListDevicesByGroupID(groupID int) ([]*Device, error) {
 	var devices []*Device
-	err := r.db.Where("group_id = ?", groupID).Find(&devices).Error
+	query := r.db.Model(&Device{})
+	if groupID == 0 {
+		query = query.Where("devices.group_id IS NULL OR devices.group_id = 0")
+	} else {
+		query = query.Where("devices.group_id = ?", groupID)
+	}
+	err := query.Find(&devices).Error
 	return devices, err
 }
 
@@ -215,6 +226,11 @@ func (r *DeviceRepository) UpdateDevice(device *Device) error {
 
 // UpdateDeviceFields 更新设备指定字段
 func (r *DeviceRepository) UpdateDeviceFields(id int, fields map[string]interface{}) error {
+	// API 和运行时以 0 表示未分组，数据库外键需要对应的 SQL NULL。
+	if groupID, ok := fields["group_id"].(int); ok {
+		fields = maps.Clone(fields)
+		fields["group_id"] = nullableGroupID(groupID)
+	}
 	return r.db.Model(&Device{}).Where("id = ?", id).Updates(fields).Error
 }
 
@@ -229,7 +245,7 @@ func (r *DeviceRepository) UpdateDeviceCommControlInGroup(
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&device, deviceID).Error; err != nil {
 			return err
 		}
-		if device.GroupID != groupID {
+		if device.GroupIDValue() != groupID {
 			return ErrDeviceNotInGroup
 		}
 
@@ -422,7 +438,7 @@ func (r *DeviceRepository) ListDevicesByCallSign(callsign string) ([]*Device, er
 func (r *DeviceRepository) ChangeDeviceGroup(ownerID int, ssid uint8, groupID int) error {
 	return r.db.Model(&Device{}).
 		Where("owner_id = ? AND ssid = ?", ownerID, ssid).
-		Update("group_id", groupID).Error
+		Update("group_id", nullableGroupID(groupID)).Error
 }
 
 // ============================================================

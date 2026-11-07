@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,7 +20,7 @@ func GetUserPublicInfo(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -29,7 +30,7 @@ func GetUserPublicInfo(c *gin.Context) {
 	// 检查用户是否已登录
 	_, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -43,11 +44,11 @@ func GetUserPublicInfo(c *gin.Context) {
 	if userCache != nil {
 		user, err = userCache.GetUserByID(ctx, id)
 	} else {
-		repo := gormdb.NewUserRepository()
+		repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		user, err = repo.GetUserByID(id)
 	}
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -65,8 +66,8 @@ func GetUserPublicInfo(c *gin.Context) {
 			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"callsign":     user.CallSign,
 			// 【PII 修复】公开资料不返回手机号/住址等敏感信息
-			"created_at":   user.CreateTime,
-			"status":       user.Status,
+			"created_at": user.CreateTime,
+			"status":     user.Status,
 		},
 	})
 }
@@ -85,12 +86,12 @@ func GetCurrentUser(c *gin.Context) {
 		user, err = userCache.GetUserByName(c.Request.Context(), username.(string))
 	} else {
 		// 缓存不可用，直接从数据库查询
-		repo := gormdb.NewUserRepository()
+		repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		user, err = repo.GetUserByName(username.(string))
 	}
 
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -98,7 +99,7 @@ func GetCurrentUser(c *gin.Context) {
 	}
 
 	// 获取用户 Web 端的群组偏好
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	lastGroupID, _ := userRepo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -130,15 +131,15 @@ func GetCurrentUser(c *gin.Context) {
 			"last_group_id":   lastGroupID, // 从设备偏好表获取
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
-					return user.LastLoginTime.Format("2006-01-02 15:04:05")
+					return common.FormatAPITime(user.LastLoginTime)
 				}
 				return ""
 			}(),
 			"last_login_ip":          user.LastLoginIP,
 			"last_login_ip_location": getIPLocation(user.LastLoginIP),
 			"login_err_times":        user.LoginErrTimes,
-			"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
+			"created_at":             common.FormatAPITime(user.CreateTime),
+			"updated_at":             common.FormatAPITime(user.UpdateTime),
 		},
 	})
 }
@@ -148,7 +149,7 @@ func GetCurrentUser(c *gin.Context) {
 func GetUserPublicInfoByName(c *gin.Context) {
 	username := c.Param("username")
 	if username == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户名",
 		})
@@ -158,7 +159,7 @@ func GetUserPublicInfoByName(c *gin.Context) {
 	// 检查用户是否已登录
 	_, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -173,11 +174,11 @@ func GetUserPublicInfoByName(c *gin.Context) {
 	if userCache != nil {
 		user, err = userCache.GetUserByName(ctx, username)
 	} else {
-		repo := gormdb.NewUserRepository()
+		repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		user, err = repo.GetUserByName(username)
 	}
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -196,8 +197,8 @@ func GetUserPublicInfoByName(c *gin.Context) {
 			"avatar_thumb": minio.GetAvatarThumbURL(user.Avatar),
 			"callsign":     user.CallSign,
 			// 【PII 修复】公开资料不返回手机号/住址等敏感信息
-			"created_at":   user.CreateTime,
-			"status":       user.Status,
+			"created_at": user.CreateTime,
+			"status":     user.Status,
 		},
 	})
 }
@@ -207,7 +208,7 @@ func GetUserPublicInfoByName(c *gin.Context) {
 func UpdateProfile(c *gin.Context) {
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -215,10 +216,10 @@ func UpdateProfile(c *gin.Context) {
 	}
 
 	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -260,7 +261,7 @@ func UpdateProfile(c *gin.Context) {
 
 	if err := repo.UpdateUser(user); err != nil {
 		log.Printf("更新个人资料失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新个人资料失败",
 		})
@@ -306,15 +307,15 @@ func UpdateProfile(c *gin.Context) {
 			"isAdmin":      hasRoleGORM(user, "admin"),
 			"last_login_time": func() string {
 				if user.LastLoginTime != nil {
-					return user.LastLoginTime.Format("2006-01-02 15:04:05")
+					return common.FormatAPITime(user.LastLoginTime)
 				}
 				return ""
 			}(),
 			"last_login_ip":          user.LastLoginIP,
 			"last_login_ip_location": getIPLocation(user.LastLoginIP),
 			"login_err_times":        user.LoginErrTimes,
-			"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
-			"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
+			"created_at":             common.FormatAPITime(user.CreateTime),
+			"updated_at":             common.FormatAPITime(user.UpdateTime),
 		},
 	})
 }
@@ -325,7 +326,7 @@ func GetUserDetail(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -339,11 +340,11 @@ func GetUserDetail(c *gin.Context) {
 	if userCache != nil {
 		user, err = userCache.GetUserByID(ctx, id)
 	} else {
-		repo := gormdb.NewUserRepository()
+		repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		user, err = repo.GetUserByID(id)
 	}
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})

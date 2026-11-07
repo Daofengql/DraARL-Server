@@ -18,11 +18,11 @@ type UserRepository struct {
 	db *gorm.DB
 }
 
-const maxUserPageSize = 100
+const maxUserPageSize = MaxPageSize
 
 func normalizeUserOffset(limit, offset int) (int, int, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = DefaultPageSize
 	}
 	if limit > maxUserPageSize {
 		limit = maxUserPageSize
@@ -38,7 +38,7 @@ func normalizeUserOffset(limit, offset int) (int, int, error) {
 // must live at the repository boundary as well.
 func NormalizeUserPagination(limit, page int) (int, int, int, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = DefaultPageSize
 	}
 	if limit > maxUserPageSize {
 		limit = maxUserPageSize
@@ -47,7 +47,7 @@ func NormalizeUserPagination(limit, page int) (int, int, int, error) {
 		page = 1
 	}
 	maxInt := int(^uint(0) >> 1)
-	if page > maxInt/limit+1 {
+	if page-1 > maxInt/limit {
 		return 0, 0, 0, errors.New("user page is too large")
 	}
 	return limit, page, (page - 1) * limit, nil
@@ -83,7 +83,7 @@ func (r *UserRepository) ListUsers(limit, page int) ([]*User, int64, error) {
 
 // GetUserByID 通过ID获取用户
 func (r *UserRepository) GetUserByID(id int) (*User, error) {
-	return r.GetUserByIDContext(context.Background(), id)
+	return r.GetUserByIDContext(r.db.Statement.Context, id)
 }
 
 // GetUserByIDContext 使用调用方上下文查询用户，允许请求取消中断数据库等待。
@@ -104,7 +104,7 @@ func (r *UserRepository) GetUserByIDContext(ctx context.Context, id int) (*User,
 
 // GetUserByName 通过用户名获取用户
 func (r *UserRepository) GetUserByName(name string) (*User, error) {
-	return r.GetUserByNameContext(context.Background(), name)
+	return r.GetUserByNameContext(r.db.Statement.Context, name)
 }
 
 // GetUserByNameContext performs the authentication lookup with the caller's
@@ -697,7 +697,7 @@ func (r *UserRepository) GetPendingUsers(limit, page int) ([]*User, int64, error
 
 // UpdateUserDevicePassword 更新用户设备准入密码
 func (r *UserRepository) UpdateUserDevicePassword(id int, devicePassword string) error {
-	return r.UpdateUserDevicePasswordContext(context.Background(), id, devicePassword)
+	return r.UpdateUserDevicePasswordContext(r.db.Statement.Context, id, devicePassword)
 }
 
 // UpdateUserDevicePasswordContext keeps legacy password migration bounded by

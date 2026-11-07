@@ -79,7 +79,7 @@
   
   <rect x="150" y="285" width="200" height="50" fill="white" rx="6" stroke="#43a047" stroke-width="2"/>
   <text x="250" y="305" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">UDP Server</text>
-  <text x="250" y="322" text-anchor="middle" fill="#666" font-size="11">端口 60050 | PROXY Proto</text>
+  <text x="250" y="322" text-anchor="middle" fill="#666" font-size="11">端口 60050 | Socket Peer</text>
 
   <rect x="420" y="285" width="200" height="50" fill="white" rx="6" stroke="#43a047" stroke-width="2"/>
   <text x="520" y="305" text-anchor="middle" fill="#333" font-size="13" font-weight="bold">HTTP Server</text>

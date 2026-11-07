@@ -321,9 +321,9 @@ func (m *UDPGhostManager) UpdateSessionActivity(sessionID string, now time.Time)
 	m.mu.Lock()
 	device := m.sessions[sessionID]
 	if device != nil {
-	device.UpdateRuntime(func(current *models.Device) {
-		current.LastPacketTime = now
-	})
+		device.UpdateRuntime(func(current *models.Device) {
+			current.LastPacketTime = now
+		})
 	}
 	m.mu.Unlock()
 	if device != nil {

@@ -1,10 +1,9 @@
 System:
-    HTTPTrustedProxyCIDRs: [] # 使用 HTTPS 反代时，在持久化 config.yaml 中填入实际代理 IP/CIDR
+  HTTPTrustedProxyCIDRs: [] # 使用 HTTPS 反代时，在持久化 config.yaml 中填入实际代理 IP/CIDR
   Host: ""
   Port: "60050"
   LogPath: ""
   IPfile: ""
-  ProxyProtocol: ""
 
 UDP:
   SendWorkers: 0
@@ -28,6 +27,15 @@ Database:
   MaxOpenConns: 50
   MaxIdleConns: 10
   MaxLifetime: 300
+  MaxIdleTime: 30
+  Timezone: UTC
+
+Observability:
+  LogFormat: json
+  TracingEnabled: false
+  OTLPEndpoint: ""
+  ServiceName: draarl-server
+  TraceSampleRatio: 0.01
 
 Redis:
   Host: redis

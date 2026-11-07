@@ -189,6 +189,7 @@ func (cu *CommUploader) uploadAudio(session *AudioSession) (string, int64, error
 		SampleRate: 16000,
 		Channels:   1,
 		FrameSize:  960,
+		// #nosec G115 -- Frame count is bounded by session duration and packet limits.
 		FrameCount: uint32(frameCount),
 	}
 	copy(header.Magic[:], []byte("OPUS"))

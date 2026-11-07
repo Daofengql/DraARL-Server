@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"draarl/internal/common"
 	"encoding/json"
 	"errors"
 	"log"
@@ -115,7 +117,7 @@ type LogbookQueryRequest struct {
 func GetLogbooks(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -124,7 +126,7 @@ func GetLogbooks(c *gin.Context) {
 
 	var req LogbookQueryRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -140,7 +142,7 @@ func GetLogbooks(c *gin.Context) {
 	}
 	normalizedPageSize, normalizedPage, _, paginationErr := gormdb.NormalizePageOffset(req.PageSize, req.Page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
 		return
 	}
 	req.Page, req.PageSize = normalizedPage, normalizedPageSize
@@ -169,11 +171,11 @@ func GetLogbooks(c *gin.Context) {
 		}
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	logbooks, total, err := repo.ListByUser(params)
 	if err != nil {
 		log.Printf("获取通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取通联日志失败",
 		})
@@ -202,7 +204,7 @@ func GetLogbooks(c *gin.Context) {
 func GetLogbook(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -212,18 +214,18 @@ func GetLogbook(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	logbook, err := repo.GetByIDAndUser(uint(id), uint(userID.(int)))
 	if err != nil {
 		log.Printf("获取通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取通联日志失败",
 		})
@@ -231,7 +233,7 @@ func GetLogbook(c *gin.Context) {
 	}
 
 	if logbook == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "通联日志不存在",
 		})
@@ -249,7 +251,7 @@ func GetLogbook(c *gin.Context) {
 func CreateLogbook(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -258,7 +260,7 @@ func CreateLogbook(c *gin.Context) {
 
 	var req LogbookCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -268,7 +270,7 @@ func CreateLogbook(c *gin.Context) {
 	// 解析时间
 	timeUTC, err := time.Parse("2006-01-02 15:04:05", req.TimeUTC)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "时间格式错误，应为：2006-01-02 15:04:05",
 		})
@@ -304,10 +306,10 @@ func CreateLogbook(c *gin.Context) {
 		Notes:        req.Notes,
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	if err := repo.Create(logbook); err != nil {
 		log.Printf("创建通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建通联日志失败",
 		})
@@ -325,7 +327,7 @@ func CreateLogbook(c *gin.Context) {
 func UpdateLogbook(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -335,7 +337,7 @@ func UpdateLogbook(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
@@ -344,18 +346,18 @@ func UpdateLogbook(c *gin.Context) {
 
 	var req LogbookUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	logbook, err := repo.GetByIDAndUser(uint(id), uint(userID.(int)))
 	if err != nil {
 		log.Printf("获取通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取通联日志失败",
 		})
@@ -363,7 +365,7 @@ func UpdateLogbook(c *gin.Context) {
 	}
 
 	if logbook == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "通联日志不存在或无权修改",
 		})
@@ -371,7 +373,7 @@ func UpdateLogbook(c *gin.Context) {
 	}
 
 	if err := validateLogbookUpdate(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
 	// 更新字段
@@ -438,7 +440,7 @@ func UpdateLogbook(c *gin.Context) {
 
 	if err := repo.Update(logbook); err != nil {
 		log.Printf("更新通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新通联日志失败",
 		})
@@ -456,7 +458,7 @@ func UpdateLogbook(c *gin.Context) {
 func DeleteLogbook(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -466,24 +468,24 @@ func DeleteLogbook(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	if err := repo.DeleteByUser(uint(id), uint(userID.(int))); err != nil {
 		if err == gormdb.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    404,
 				"message": "通联日志不存在或无权删除",
 			})
 			return
 		}
 		log.Printf("删除通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除通联日志失败",
 		})
@@ -500,7 +502,7 @@ func DeleteLogbook(c *gin.Context) {
 func BatchDeleteLogbooks(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -511,7 +513,7 @@ func BatchDeleteLogbooks(c *gin.Context) {
 		IDs []uint `json:"ids" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -519,18 +521,18 @@ func BatchDeleteLogbooks(c *gin.Context) {
 	}
 
 	if len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请选择要删除的记录",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	deleted, err := repo.BatchDeleteByUser(req.IDs, uint(userID.(int)))
 	if err != nil {
 		log.Printf("批量删除通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "批量删除失败",
 		})
@@ -552,7 +554,7 @@ func BatchDeleteLogbooks(c *gin.Context) {
 func AdminGetLogbooks(c *gin.Context) {
 	var req LogbookQueryRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -568,7 +570,7 @@ func AdminGetLogbooks(c *gin.Context) {
 	}
 	normalizedPageSize, normalizedPage, _, paginationErr := gormdb.NormalizePageOffset(req.PageSize, req.Page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
 		return
 	}
 	req.Page, req.PageSize = normalizedPage, normalizedPageSize
@@ -608,11 +610,11 @@ func AdminGetLogbooks(c *gin.Context) {
 	// 解析用户名筛选（模糊匹配）
 	params.Username = c.Query("username")
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	logbooks, total, err := repo.List(params)
 	if err != nil {
 		log.Printf("获取通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取通联日志失败",
 		})
@@ -628,7 +630,7 @@ func AdminGetLogbooks(c *gin.Context) {
 	}
 	userNames := make(map[uint]string, len(userIDs))
 	if len(userIDs) > 0 {
-		if users, err := gormdb.NewUserRepository().GetUsersByIDs(userIDs); err == nil {
+		if users, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUsersByIDs(userIDs); err == nil {
 			for _, u := range users {
 				if u != nil {
 					userNames[uint(u.ID)] = u.Name
@@ -658,18 +660,18 @@ func AdminGetLogbook(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	logbook, err := repo.GetByID(uint(id))
 	if err != nil {
 		log.Printf("获取通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取通联日志失败",
 		})
@@ -677,7 +679,7 @@ func AdminGetLogbook(c *gin.Context) {
 	}
 
 	if logbook == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "通联日志不存在",
 		})
@@ -687,7 +689,7 @@ func AdminGetLogbook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "成功",
-		"data":    logbookToJSONWithUser(logbook),
+		"data":    logbookToJSONWithUserContext(c.Request.Context(), logbook),
 	})
 }
 
@@ -696,7 +698,7 @@ func AdminUpdateLogbook(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
@@ -705,18 +707,18 @@ func AdminUpdateLogbook(c *gin.Context) {
 
 	var req LogbookUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	logbook, err := repo.GetByID(uint(id))
 	if err != nil {
 		log.Printf("获取通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取通联日志失败",
 		})
@@ -724,7 +726,7 @@ func AdminUpdateLogbook(c *gin.Context) {
 	}
 
 	if logbook == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "通联日志不存在",
 		})
@@ -732,7 +734,7 @@ func AdminUpdateLogbook(c *gin.Context) {
 	}
 
 	if err := validateLogbookUpdate(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
 	// 更新字段
@@ -799,7 +801,7 @@ func AdminUpdateLogbook(c *gin.Context) {
 
 	if err := repo.Update(logbook); err != nil {
 		log.Printf("更新通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新通联日志失败",
 		})
@@ -809,7 +811,7 @@ func AdminUpdateLogbook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "更新成功",
-		"data":    logbookToJSONWithUser(logbook),
+		"data":    logbookToJSONWithUserContext(c.Request.Context(), logbook),
 	})
 }
 
@@ -818,17 +820,17 @@ func AdminDeleteLogbook(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	if err := repo.Delete(uint(id)); err != nil {
 		log.Printf("删除通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除通联日志失败",
 		})
@@ -847,7 +849,7 @@ func AdminBatchDeleteLogbooks(c *gin.Context) {
 		IDs []uint `json:"ids" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -855,17 +857,17 @@ func AdminBatchDeleteLogbooks(c *gin.Context) {
 	}
 
 	if len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请选择要删除的记录",
 		})
 		return
 	}
 
-	repo := gormdb.NewLogbookRepository()
+	repo := gormdb.NewLogbookRepository().WithContext(c.Request.Context())
 	if err := repo.BatchDelete(req.IDs); err != nil {
 		log.Printf("批量删除通联日志失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "批量删除失败",
 		})
@@ -907,16 +909,22 @@ func logbookToJSON(lb *gormdb.Logbook) gin.H {
 		"my_radio":      lb.MyRadio,
 		"my_antenna":    lb.MyAntenna,
 		"notes":         lb.Notes,
-		"created_at":    lb.CreatedAt.Format("2006-01-02 15:04:05"),
-		"updated_at":    lb.UpdatedAt.Format("2006-01-02 15:04:05"),
+		"created_at":    common.FormatAPITime(lb.CreatedAt),
+		"updated_at":    common.FormatAPITime(lb.UpdatedAt),
 	}
 }
 
 // logbookToJSONWithUser 单条转换（兼容单条详情接口，仅一次用户查询）
 func logbookToJSONWithUser(lb *gormdb.Logbook) gin.H {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return logbookToJSONWithUserContext(ctx, lb)
+}
+
+func logbookToJSONWithUserContext(ctx context.Context, lb *gormdb.Logbook) gin.H {
 	userNames := map[uint]string{}
 	if lb != nil && lb.UserID > 0 {
-		if user, err := gormdb.NewUserRepository().GetUserByID(int(lb.UserID)); err == nil && user != nil {
+		if user, err := gormdb.NewUserRepository().WithContext(ctx).GetUserByID(int(lb.UserID)); err == nil && user != nil {
 			userNames[uint(lb.UserID)] = user.Name
 		}
 	}
@@ -953,7 +961,7 @@ func logbookToJSONWithUserNames(lb *gormdb.Logbook, userNames map[uint]string) g
 		"my_radio":      lb.MyRadio,
 		"my_antenna":    lb.MyAntenna,
 		"notes":         lb.Notes,
-		"created_at":    lb.CreatedAt.Format("2006-01-02 15:04:05"),
-		"updated_at":    lb.UpdatedAt.Format("2006-01-02 15:04:05"),
+		"created_at":    common.FormatAPITime(lb.CreatedAt),
+		"updated_at":    common.FormatAPITime(lb.UpdatedAt),
 	}
 }

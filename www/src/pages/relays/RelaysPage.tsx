@@ -264,7 +264,7 @@ export function RelaysPage() {
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">中继台管理</Typography>
+        <Typography component="h1" variant="h4">中继台管理</Typography>
         <Button variant="contained" startIcon={<Add />} onClick={() => handleOpenDialog()}>
           添加中继台
         </Button>

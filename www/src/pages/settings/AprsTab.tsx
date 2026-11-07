@@ -101,7 +101,7 @@ export function AprsTab({ value, config, setConfig, loading, onSave, showMessage
           <Box sx={{ flex: { xs: '1 1 auto', md: '0 1 50%' } }}>
             <Card ref={configCardRef}>
               <CardContent>
-                <Typography variant="h6" gutterBottom>APRS配置</Typography>
+                <Typography component="h2" variant="h6" gutterBottom>APRS配置</Typography>
                 <Alert severity="info" sx={{ mb: 2 }}>
                   此配置用于服务器的APRS上报，将服务器信息（如在线设备数、服务器地址等）上报到APRS网络，而非设备的APRS配置。
                 </Alert>
@@ -195,7 +195,7 @@ export function AprsTab({ value, config, setConfig, loading, onSave, showMessage
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Terminal color="primary" />
-                    <Typography variant="h6">APRS日志</Typography>
+                    <Typography component="h2" variant="h6">APRS日志</Typography>
                   </Box>
                   <IconButton size="small" onClick={() => void loadLogs()} disabled={logsLoading}><Refresh /></IconButton>
                 </Box>

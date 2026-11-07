@@ -24,21 +24,19 @@ type EdgeConfig struct {
 	bootstrapNodeID string
 }
 type EdgeSettings struct {
-	Center                        string   `yaml:"Center" json:"center"`
-	CenterUDP                     string   `yaml:"CenterUDP" json:"center_udp"`
-	Token                         string   `yaml:"Token" json:"token"`
-	NodeID                        string   `yaml:"NodeID" json:"node_id"`
-	Listen                        string   `yaml:"Listen" json:"listen"`
-	ProxyProtocol                 string   `yaml:"ProxyProtocol" json:"proxy_protocol"`
-	ProxyTrustedCIDRs             []string `yaml:"ProxyTrustedCIDRs" json:"proxy_trusted_cidrs"`
-	ControlListen                 string   `yaml:"ControlListen" json:"control_listen"`
-	TLSCAFile                     string   `yaml:"TLSCAFile" json:"tls_ca_file"`
-	TLSServerName                 string   `yaml:"TLSServerName" json:"tls_server_name"`
-	InsecureSkipVerify            bool     `yaml:"InsecureSkipVerify" json:"insecure_skip_verify"`
-	IdentityFile                  string   `yaml:"IdentityFile" json:"identity_file"`
-	DeviceSessionTimeoutSeconds   int      `yaml:"DeviceSessionTimeoutSeconds" json:"device_session_timeout_seconds"`
-	GrantRenewBeforeSeconds       int      `yaml:"GrantRenewBeforeSeconds" json:"grant_renew_before_seconds"`
-	DisconnectedLocalGraceSeconds int      `yaml:"DisconnectedLocalGraceSeconds" json:"disconnected_local_grace_seconds"`
+	Center                        string `yaml:"Center" json:"center"`
+	CenterUDP                     string `yaml:"CenterUDP" json:"center_udp"`
+	Token                         string `yaml:"Token" json:"token"`
+	NodeID                        string `yaml:"NodeID" json:"node_id"`
+	Listen                        string `yaml:"Listen" json:"listen"`
+	ControlListen                 string `yaml:"ControlListen" json:"control_listen"`
+	TLSCAFile                     string `yaml:"TLSCAFile" json:"tls_ca_file"`
+	TLSServerName                 string `yaml:"TLSServerName" json:"tls_server_name"`
+	InsecureSkipVerify            bool   `yaml:"InsecureSkipVerify" json:"insecure_skip_verify"`
+	IdentityFile                  string `yaml:"IdentityFile" json:"identity_file"`
+	DeviceSessionTimeoutSeconds   int    `yaml:"DeviceSessionTimeoutSeconds" json:"device_session_timeout_seconds"`
+	GrantRenewBeforeSeconds       int    `yaml:"GrantRenewBeforeSeconds" json:"grant_renew_before_seconds"`
+	DisconnectedLocalGraceSeconds int    `yaml:"DisconnectedLocalGraceSeconds" json:"disconnected_local_grace_seconds"`
 }
 
 func (c *EdgeConfig) SetDefaults() {
@@ -75,16 +73,6 @@ func (c *EdgeConfig) Validate() error {
 	if err := c.GhostSessions.SetDefaults(); err != nil {
 		return err
 	}
-	c.Edge.ProxyProtocol = strings.ToLower(strings.TrimSpace(c.Edge.ProxyProtocol))
-	if c.Edge.ProxyProtocol != "" && c.Edge.ProxyProtocol != "v2" {
-		return errors.New("Edge.ProxyProtocol must be empty or v2")
-	}
-	if _, err := config.ParseProxyTrustedCIDRs(c.Edge.ProxyTrustedCIDRs); err != nil {
-		return fmt.Errorf("Edge.ProxyTrustedCIDRs: %w", err)
-	}
-	if config.IsReleaseBuild() && c.Edge.ProxyProtocol == "v2" && len(c.Edge.ProxyTrustedCIDRs) == 0 {
-		return errors.New("Edge.ProxyTrustedCIDRs must contain at least one CIDR when Edge.ProxyProtocol=v2 in release builds")
-	}
 	if strings.TrimSpace(c.Edge.Center) == "" {
 		return errors.New("Edge.Center is required")
 	}
@@ -117,6 +105,7 @@ func (c *EdgeConfig) Validate() error {
 	return nil
 }
 func LoadEdgeConfig(path string) (*EdgeConfig, error) {
+	// #nosec G304 -- The operator selects the edge configuration file.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read edge config: %w", err)

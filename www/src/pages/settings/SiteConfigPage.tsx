@@ -15,7 +15,7 @@ export function SiteConfigPage() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 3, fontWeight: 600 }}>站点配置</Typography>
+      <Typography component="h1" variant="h4" sx={{ mb: 3, fontWeight: 600 }}>站点配置</Typography>
       {siteConfig.message && (
         <Alert severity={siteConfig.message.type} sx={{ mb: 2 }} onClose={() => siteConfig.setMessage(null)}>
           {siteConfig.message.text}

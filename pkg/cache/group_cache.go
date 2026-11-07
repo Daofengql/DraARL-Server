@@ -11,9 +11,9 @@ import (
 // GroupCache 群组信息缓存管理器
 type GroupCache struct {
 	cache               *TwoLevelCache
-	listGroupsPaginated func(limit, page int) ([]*gormdb.Group, int64, error)
-	listGroupsPage      func(limit, page int) ([]*gormdb.Group, error)
-	countGroups         func() (int64, error)
+	listGroupsPaginated func(ctx context.Context, limit, page int) ([]*gormdb.Group, int64, error)
+	listGroupsPage      func(ctx context.Context, limit, page int) ([]*gormdb.Group, error)
+	countGroups         func(context.Context) (int64, error)
 }
 
 // GroupCacheConfig 群组缓存配置
@@ -32,10 +32,7 @@ func NewGroupCache(config GroupCacheConfig) (*GroupCache, error) {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewTwoLevelCache(CacheConfig{
-		LocalTTL: config.LocalTTL,
-		MaxSize:  config.MaxSize,
-	})
+	cache, err := NewTwoLevelCache(CacheConfig(config))
 	if err != nil {
 		return nil, err
 	}
@@ -43,14 +40,14 @@ func NewGroupCache(config GroupCacheConfig) (*GroupCache, error) {
 	return &GroupCache{
 		cache: cache,
 		// 延迟创建仓储，保持缓存管理器可在 GORM 初始化之前安全构造。
-		listGroupsPaginated: func(limit, page int) ([]*gormdb.Group, int64, error) {
-			return gormdb.NewGroupRepository().ListGroupsPaginated(limit, page)
+		listGroupsPaginated: func(ctx context.Context, limit, page int) ([]*gormdb.Group, int64, error) {
+			return gormdb.NewGroupRepository().WithContext(ctx).ListGroupsPaginated(limit, page)
 		},
-		listGroupsPage: func(limit, page int) ([]*gormdb.Group, error) {
-			return gormdb.NewGroupRepository().ListGroupsPage(limit, page)
+		listGroupsPage: func(ctx context.Context, limit, page int) ([]*gormdb.Group, error) {
+			return gormdb.NewGroupRepository().WithContext(ctx).ListGroupsPage(limit, page)
 		},
-		countGroups: func() (int64, error) {
-			return gormdb.NewGroupRepository().GroupCount()
+		countGroups: func(ctx context.Context) (int64, error) {
+			return gormdb.NewGroupRepository().WithContext(ctx).GroupCount()
 		},
 	}, nil
 }
@@ -97,7 +94,7 @@ func (c *GroupCache) GetGroupByID(ctx context.Context, id int) (*gormdb.Group, e
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(ctx)
 	dbGroup, err := repo.GetGroupByID(id)
 	if err != nil {
 		return nil, err
@@ -138,7 +135,7 @@ func (c *GroupCache) GetGroupList(ctx context.Context, page, pageSize int) ([]*g
 	// 只查询缺失的视图：完整 miss 使用一次分页+Count；总数已命中时
 	// 只查当前页；分页项已命中时只补 Count。任何路径都不再加载整张表。
 	if !itemsHit && !totalHit {
-		groups, loadedTotal, err := c.listGroupsPaginated(pageSize, page)
+		groups, loadedTotal, err := c.listGroupsPaginated(ctx, pageSize, page)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -154,7 +151,7 @@ func (c *GroupCache) GetGroupList(ctx context.Context, page, pageSize int) ([]*g
 		return groups, loadedTotal, nil
 	}
 	if !itemsHit {
-		groups, err := c.listGroupsPage(pageSize, page)
+		groups, err := c.listGroupsPage(ctx, pageSize, page)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -166,7 +163,7 @@ func (c *GroupCache) GetGroupList(ctx context.Context, page, pageSize int) ([]*g
 		}
 		return groups, total, nil
 	}
-	loadedTotal, err := c.countGroups()
+	loadedTotal, err := c.countGroups(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -186,7 +183,7 @@ func (c *GroupCache) GetPublicGroups(ctx context.Context) ([]*gormdb.Group, erro
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(ctx)
 	dbGroups, err := repo.ListPublicGroups()
 	if err != nil {
 		return nil, err
@@ -213,7 +210,7 @@ func (c *GroupCache) GetGroupMembers(ctx context.Context, groupID int) ([]*gormd
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewGroupMemberRepository()
+	repo := gormdb.NewGroupMemberRepository().WithContext(ctx)
 	dbMembers, err := repo.ListMembersByGroup(groupID)
 	if err != nil {
 		return nil, err
@@ -276,7 +273,7 @@ func (c *GroupCache) GetGroupsByUserID(ctx context.Context, userID int) ([]*gorm
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.NewGroupMemberRepository()
+	repo := gormdb.NewGroupMemberRepository().WithContext(ctx)
 	dbMembers, err := repo.ListGroupsByUser(userID)
 	if err != nil {
 		return nil, err

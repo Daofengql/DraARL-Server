@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"time"
 	"unsafe"
 
@@ -34,6 +35,9 @@ type processMeter struct {
 }
 
 func newProcessMeter(name string, pid int) (*processMeter, error) {
+	if pid <= 0 || uint64(pid) > math.MaxUint32 {
+		return nil, fmt.Errorf("invalid process ID: %d", pid)
+	}
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, uint32(pid))
 	if err != nil {
 		return nil, err
@@ -54,7 +58,7 @@ func (m *processMeter) sample() (processSample, error) {
 		return processSample{}, err
 	}
 	mem := processMemoryCounters{CB: uint32(unsafe.Sizeof(processMemoryCounters{}))}
-	result, _, callErr := getProcMem.Call(uintptr(m.handle), uintptr(unsafe.Pointer(&mem)), uintptr(mem.CB))
+	result, _, callErr := getProcMem.Call(uintptr(m.handle), uintptr(unsafe.Pointer(&mem)), uintptr(mem.CB)) // #nosec G103 -- Windows GetProcessMemoryInfo receives the exact documented structure and size.
 	if result == 0 {
 		return processSample{}, fmt.Errorf("GetProcessMemoryInfo(%s): %v", m.name, callErr)
 	}

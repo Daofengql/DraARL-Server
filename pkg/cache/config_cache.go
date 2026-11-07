@@ -29,10 +29,7 @@ func NewConfigCache(config ConfigCacheConfig) (*ConfigCache, error) {
 		config.MaxSize = 1000
 	}
 
-	cache, err := NewTwoLevelCache(CacheConfig{
-		LocalTTL: config.LocalTTL,
-		MaxSize:  config.MaxSize,
-	})
+	cache, err := NewTwoLevelCache(CacheConfig(config))
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +83,7 @@ func (c *ConfigCache) GetConfigByKey(ctx context.Context, key string) (*gormdb.S
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
+	repo := gormdb.GetSiteConfigRepo().WithContext(ctx)
 	dbConfig, err := repo.GetByKey(key)
 	if err != nil {
 		return nil, err
@@ -111,7 +108,7 @@ func (c *ConfigCache) GetConfigsByCategory(ctx context.Context, category string)
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
+	repo := gormdb.GetSiteConfigRepo().WithContext(ctx)
 	dbConfigs, err := repo.GetByCategory(category)
 	if err != nil {
 		return nil, err
@@ -138,7 +135,7 @@ func (c *ConfigCache) GetICPConfig(ctx context.Context) (*gormdb.ICPConfig, erro
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
+	repo := gormdb.GetSiteConfigRepo().WithContext(ctx)
 	dbConfig, err := repo.GetICPConfig()
 	if err != nil {
 		return nil, err
@@ -163,7 +160,7 @@ func (c *ConfigCache) GetSystemInfoConfig(ctx context.Context) (*gormdb.SystemIn
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
+	repo := gormdb.GetSiteConfigRepo().WithContext(ctx)
 	dbConfig, err := repo.GetSystemInfoConfig()
 	if err != nil {
 		return nil, err
@@ -188,7 +185,7 @@ func (c *ConfigCache) GetAPRSConfig(ctx context.Context) (*gormdb.APRSConfig, er
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
+	repo := gormdb.GetSiteConfigRepo().WithContext(ctx)
 	dbConfig, err := repo.GetAPRSConfig()
 	if err != nil {
 		return nil, err
@@ -212,7 +209,7 @@ func (c *ConfigCache) GetAccessDiscoveryConfig(ctx context.Context) (*gormdb.Acc
 		return &config, nil
 	}
 
-	dbConfig, err := gormdb.GetSiteConfigRepo().GetAccessDiscoveryConfig()
+	dbConfig, err := gormdb.GetSiteConfigRepo().WithContext(ctx).GetAccessDiscoveryConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +230,7 @@ func (c *ConfigCache) GetAllConfigs(ctx context.Context) ([]gormdb.SiteConfig, e
 	}
 
 	// 缓存未命中，从数据库查询
-	repo := gormdb.GetSiteConfigRepo()
+	repo := gormdb.GetSiteConfigRepo().WithContext(ctx)
 	dbConfigs, err := repo.GetAll()
 	if err != nil {
 		return nil, err

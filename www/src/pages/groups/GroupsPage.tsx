@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { getErrorMessage } from '../../utils/errorMessage'
+import { debugLog } from '../../utils/debugLog.ts'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Box,
   Paper,
@@ -71,6 +73,7 @@ export function GroupsPage() {
   const [searchResults, setSearchResults] = useState<Group[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchKeywordInput, setSearchKeywordInput] = useState('')
+  const searchVersion = useRef(0)
   const [joinPassword, setJoinPassword] = useState('')
   const [formData, setFormData] = useState({
     name: '',
@@ -113,10 +116,10 @@ export function GroupsPage() {
     const target = event.currentTarget
     try {
       const user = await userService.getPublicInfo(userId)
-      console.log('User info loaded:', user)
+      debugLog('User info loaded:', user)
       setSelectedUser(user)
       setUserDetailAnchorEl(target)
-      console.log('AnchorEl set:', target)
+      debugLog('AnchorEl set:', target)
     } catch (err) {
       console.error('Failed to load user info:', err)
       setError('获取用户信息失败')
@@ -131,26 +134,34 @@ export function GroupsPage() {
     setSelectedUser(null)
   }
 
-  const handleSearchGroups = async () => {
-    if (!searchKeywordInput.trim()) {
-      setError('请输入搜索关键词')
-      return
-    }
+  const searchGroups = useCallback(async (keyword: string) => {
+    const version = ++searchVersion.current
+    if (!keyword.trim()) { setSearchResults([]); setSearchLoading(false); return }
     setSearchLoading(true)
     try {
       const result = await groupService.search({
-        keyword: searchKeywordInput,
+        keyword: keyword.trim(),
         page: 1,
         page_size: 10,
       })
-      setSearchResults(result.items)
+      if (version === searchVersion.current) setSearchResults(result.items)
     } catch (err) {
-      console.error('Search failed:', err)
-      setError('搜索群组失败')
+      if (version === searchVersion.current) setError(getErrorMessage(err, '搜索群组失败'))
     } finally {
-      setSearchLoading(false)
+      if (version === searchVersion.current) setSearchLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    // Invalidate older responses immediately, including when the dialog closes.
+    const version = searchVersion
+    version.current++
+    if (!searchDialogOpen) return
+    const timer = window.setTimeout(() => { void searchGroups(searchKeywordInput) }, 300)
+    return () => { window.clearTimeout(timer); version.current++ }
+  }, [searchDialogOpen, searchKeywordInput, searchGroups])
+
+  const handleSearchGroups = () => { void searchGroups(searchKeywordInput) }
 
   const handleJoinGroup = async () => {
     if (!joiningGroup || !joinPassword) {
@@ -166,7 +177,7 @@ export function GroupsPage() {
       setError('')
       loadGroups()
     } catch (err: any) {
-      setError(err.response?.data?.message || '加入群组失败，请检查密码')
+      setError(getErrorMessage(err, '加入群组失败，请检查密码'))
     }
   }
 
@@ -181,7 +192,7 @@ export function GroupsPage() {
           await groupService.leave(group.id)
           loadGroups()
         } catch (err: any) {
-          setError(err.response?.data?.message || '退出群组失败')
+          setError(getErrorMessage(err, '退出群组失败'))
         }
       },
     })
@@ -226,7 +237,7 @@ export function GroupsPage() {
       setDialogOpen(false)
       loadGroups()
     } catch (err: any) {
-      setError(err.response?.data?.message || '保存失败')
+      setError(getErrorMessage(err, '保存失败'))
     }
   }
 
@@ -243,7 +254,7 @@ export function GroupsPage() {
       setDeletingGroup(null)
       loadGroups()
     } catch (err: any) {
-      setError(err.response?.data?.message || '删除失败')
+      setError(getErrorMessage(err, '删除失败'))
     }
   }
 
@@ -329,7 +340,7 @@ export function GroupsPage() {
             </Typography>
           </Box>
         ) : (
-          <Typography variant="body2" color="text.disabled">-</Typography>
+          <Typography variant="body2" color="text.secondary">-</Typography>
         )}
       </TableCell>
       <TableCell>
@@ -428,11 +439,11 @@ export function GroupsPage() {
         <Box sx={{ bgcolor: 'action.selected', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
-            <Typography variant="subtitle1" fontWeight={600}>公开群组</Typography>
+            <Typography component="h2" variant="subtitle1" fontWeight={600}>公开群组</Typography>
             <Typography variant="body2" color="text.secondary">({publicGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+        <TableContainer tabIndex={0} role="region" aria-label="公开群组列表" sx={{ flex: 1, overflow: 'auto' }}>
           <Table stickyHeader sx={{ minWidth: 1000, tableLayout: 'fixed' }}>
             <TableHead>
               <TableRow>
@@ -463,11 +474,11 @@ export function GroupsPage() {
         <Box sx={{ bgcolor: 'secondary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <GroupTypeIcon type={GROUP_TYPE_PRIVATE} />
-            <Typography variant="subtitle1" fontWeight={600}>已加入的私有群组</Typography>
+            <Typography component="h2" variant="subtitle1" fontWeight={600}>已加入的私有群组</Typography>
             <Typography variant="body2" color="text.secondary">({privateGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+        <TableContainer tabIndex={0} role="region" aria-label="私有群组列表" sx={{ flex: 1, overflow: 'auto' }}>
           <Table stickyHeader sx={{ minWidth: 1000, tableLayout: 'fixed' }}>
             <TableHead>
               <TableRow>

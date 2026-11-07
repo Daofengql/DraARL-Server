@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/rand"
+	"draarl/internal/observability"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -360,16 +361,12 @@ func IsReleaseBuild() bool {
 
 // Configuration 系统配置
 type Configuration struct {
-	System struct {
-		Port          string `yaml:"Port" json:"port"`
-		Host          string `yaml:"Host" json:"host"`
-		LogPath       string `yaml:"LogPath" json:"log_path"`
-		IPFile        string `yaml:"IPfile" json:"ipfile"`
-		ProxyProtocol string `yaml:"ProxyProtocol" json:"proxy_protocol"` // PROXY Protocol 版本: "", "v1", "v2"
-		// ProxyTrustedCIDRs 允许解析 PROXY Protocol 的代理源地址前缀。
-		// 开发/测试构建中为空时保持旧兼容行为并告警；release 构建要求显式配置，
-		// 仅来自这些前缀的连接才会解析 PROXY 头，防止伪造源 IP。
-		ProxyTrustedCIDRs []string `yaml:"ProxyTrustedCIDRs" json:"proxy_trusted_cidrs"`
+	Observability observability.Config `yaml:"Observability" json:"observability"`
+	System        struct {
+		Port    string `yaml:"Port" json:"port"`
+		Host    string `yaml:"Host" json:"host"`
+		LogPath string `yaml:"LogPath" json:"log_path"`
+		IPFile  string `yaml:"IPfile" json:"ipfile"`
 		// HTTPTrustedProxyCIDRs controls HTTP forwarded headers only. Empty means
 		// direct connections: X-Forwarded-For from clients is ignored.
 		HTTPTrustedProxyCIDRs []string `yaml:"HTTPTrustedProxyCIDRs" json:"http_trusted_proxy_cidrs"`
@@ -396,6 +393,7 @@ type Configuration struct {
 		// 连接池配置
 		MaxOpenConns int `yaml:"MaxOpenConns" json:"max_open_conns"`
 		MaxIdleConns int `yaml:"MaxIdleConns" json:"max_idle_conns"`
+		MaxIdleTime  int `yaml:"MaxIdleTime" json:"max_idle_time"`
 		MaxLifetime  int `yaml:"MaxLifetime" json:"max_lifetime"` // 秒
 	} `yaml:"Database" json:"database"`
 
@@ -466,7 +464,11 @@ func (c *Configuration) GetDSN() string {
 	query := fmt.Sprintf("charset=%s&collation=%s&parseTime=true&loc=%s",
 		url.QueryEscape(charset), url.QueryEscape(collate), url.QueryEscape(timezone))
 	if !strings.EqualFold(timezone, "Local") {
-		query += "&time_zone=" + url.QueryEscape("'"+timezone+"'")
+		mysqlZone := timezone
+		if strings.EqualFold(timezone, "UTC") {
+			mysqlZone = "+00:00"
+		}
+		query += "&time_zone=" + url.QueryEscape("'"+mysqlZone+"'")
 	}
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s",
 		c.Database.User,
@@ -493,6 +495,7 @@ func Load(configPath string) (*Configuration, error) {
 		configPath = filepath.Join(dir, DefaultConfigFileName)
 	}
 
+	// #nosec G304 G703 -- Configuration path is explicitly chosen by the process operator.
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("config file open err: %w", err)
@@ -515,11 +518,8 @@ func Load(configPath string) (*Configuration, error) {
 	return cfg, nil
 }
 
-// ParseProxyTrustedCIDRs validates and parses a proxy source allowlist.
-// An empty list is accepted here for backwards-compatible development/test
-// configurations; callers that enable PROXY Protocol in a release build must
-// reject it before starting the endpoint.
-func ParseProxyTrustedCIDRs(cidrs []string) ([]*net.IPNet, error) {
+// ParseHTTPTrustedProxyCIDRs validates the HTTP reverse proxy allowlist.
+func ParseHTTPTrustedProxyCIDRs(cidrs []string) ([]*net.IPNet, error) {
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for index, raw := range cidrs {
 		value := strings.TrimSpace(raw)
@@ -541,18 +541,8 @@ func ParseProxyTrustedCIDRs(cidrs []string) ([]*net.IPNet, error) {
 // SetDefaults 设置默认配置值
 func (c *Configuration) SetDefaults() error {
 	c.migrateLegacyStorageConfig()
-	c.System.ProxyProtocol = strings.ToLower(strings.TrimSpace(c.System.ProxyProtocol))
-	if c.System.ProxyProtocol != "" && c.System.ProxyProtocol != "v1" && c.System.ProxyProtocol != "v2" {
-		return fmt.Errorf("System.ProxyProtocol must be empty, v1 or v2")
-	}
-	if _, err := ParseProxyTrustedCIDRs(c.System.ProxyTrustedCIDRs); err != nil {
-		return fmt.Errorf("System.ProxyTrustedCIDRs: %w", err)
-	}
-	if _, err := ParseProxyTrustedCIDRs(c.System.HTTPTrustedProxyCIDRs); err != nil {
+	if _, err := ParseHTTPTrustedProxyCIDRs(c.System.HTTPTrustedProxyCIDRs); err != nil {
 		return fmt.Errorf("System.HTTPTrustedProxyCIDRs: %w", err)
-	}
-	if IsReleaseBuild() && c.System.ProxyProtocol == "v2" && len(c.System.ProxyTrustedCIDRs) == 0 {
-		return fmt.Errorf("System.ProxyTrustedCIDRs must contain at least one CIDR when System.ProxyProtocol=v2 in release builds")
 	}
 	if err := c.GhostSessions.SetDefaults(); err != nil {
 		return err
@@ -662,6 +652,21 @@ func (c *Configuration) SetDefaults() error {
 	if resources.MaxDeviceSessionsPerNode == 0 {
 		resources.MaxDeviceSessionsPerNode = 25000
 	}
+	if c.Observability.LogFormat == "" {
+		c.Observability.LogFormat = "text"
+	}
+	if c.Observability.LogFormat != "text" && c.Observability.LogFormat != "json" {
+		return fmt.Errorf("Observability.LogFormat must be text or json")
+	}
+	if c.Observability.TraceSampleRatio < 0 || c.Observability.TraceSampleRatio > 1 {
+		return fmt.Errorf("Observability.TraceSampleRatio must be between 0 and 1")
+	}
+	if c.Observability.TracingEnabled && c.Observability.OTLPEndpoint == "" {
+		return fmt.Errorf("Observability.OTLPEndpoint is required")
+	}
+	if c.Observability.TraceSampleRatio == 0 {
+		c.Observability.TraceSampleRatio = 0.01
+	}
 	// 数据库默认值
 	if c.Database.Port == 0 {
 		c.Database.Port = 3306
@@ -686,6 +691,15 @@ func (c *Configuration) SetDefaults() error {
 		c.Database.MaxLifetime = 300 // 5分钟
 	}
 
+	if c.Database.MaxIdleTime == 0 {
+		c.Database.MaxIdleTime = 30
+	}
+	if c.Database.MaxOpenConns < 0 || c.Database.MaxIdleConns < 0 || c.Database.MaxLifetime < 0 || c.Database.MaxIdleTime < 0 {
+		return fmt.Errorf("Database pool settings must not be negative")
+	}
+	if c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		c.Database.MaxIdleConns = c.Database.MaxOpenConns
+	}
 	// Redis 默认值
 	if strings.TrimSpace(c.Redis.Host) == "" {
 		c.Redis.Host = "127.0.0.1"

@@ -1,41 +1,132 @@
-name: Security checks
-
+name: Security and regression checks
 on:
   pull_request:
   push:
-    branches: [master, dev]
-
+    branches: [master, dev, edge]
+  workflow_dispatch:
 permissions:
   contents: read
-
 jobs:
-  scan:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.2'
+          cache: npm
+          cache-dependency-path: www/package-lock.json
+      - name: Verify frontend and lock file
+        working-directory: www
+        run: |
+          npm ci
+          npm run lint -- --max-warnings=0
+          npm run typecheck
+          npm test
+          npm run build
+          npm audit --registry=https://registry.npmjs.org
+          npm audit --omit=dev --registry=https://registry.npmjs.org
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-release
+          path: www/dist
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-coverage
+          path: www/coverage
+  backend:
+    needs: frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v4
+          go-version: '1.27.3'
+      - uses: actions/download-artifact@v4
         with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: www/package-lock.json
-      - name: Build and scan frontend dependencies
-        working-directory: www
+          name: frontend-release
+          path: internal/server/web/dist
+      - name: Test, vet, lint and generated API
         run: |
-          npm ci
-          npm run lint
-          npm test
-          npm run build
-          npm audit --omit=dev --registry=https://registry.npmjs.org
-      - name: Prepare release assets
+          go test -count=1 ./cmd/... ./internal/... ./pkg/... ./test/... ./tools/...
+          go vet ./cmd/... ./internal/... ./pkg/... ./test/... ./tools/...
+          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./cmd/... ./internal/... ./pkg/... ./test/... ./tools/...
+          go run ./tools/openapi -check
+      - name: Concurrent runtime checks
+        run: go test -race -count=1 ./internal/udphub ./internal/interconnect ./internal/handler ./internal/gormdb ./internal/auth ./pkg/cache ./internal/protocol ./pkg/websocket
+      - name: Build and scan Linux release
         run: |
-          mkdir -p internal/server/web/dist
-          cp -r www/dist/. internal/server/web/dist/
-      - name: Scan release backend
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest -tags=embed ./cmd/draarl
-      - name: Test and vet backend
+          mkdir -p output/security
+          CGO_ENABLED=0 go build -tags=embed -ldflags='-X draarl/internal/buildinfo.Release=true' -o output/draarl ./cmd/draarl
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -json -tags=embed ./cmd/draarl > output/security/govulncheck.jsonl
+      - name: Record dependency inventory and microbenchmarks
         run: |
-          go test ./...
-          go vet ./...
+          go list -m -json all > output/security/go-modules.jsonl
+          go test -run='^$' -bench='Benchmark(ForwardHeader|DecodeVoice|VerifyDevicePassword)' -benchmem ./internal/protocol ./pkg/crypto > output/security/benchmarks.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-security-evidence
+          path: output/security
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - name: Build and start updated database images
+        run: |
+          docker build -f deploy/docker/Dockerfile.mysql -t draarl-mysql:integration .
+          docker build -f deploy/docker/Dockerfile.redis -t draarl-redis:integration .
+          docker run -d --name integration-mysql -e MYSQL_ROOT_PASSWORD=integration-only-password -e MYSQL_ROOT_HOST=% -p 127.0.0.1:3306:3306 draarl-mysql:integration
+          docker run -d --name integration-redis -p 127.0.0.1:6379:6379 draarl-redis:integration
+          for attempt in $(seq 1 60); do
+            if docker exec integration-mysql mysqladmin ping -h127.0.0.1 -pintegration-only-password --silent; then break; fi
+            sleep 2
+          done
+          docker exec integration-mysql mysqladmin ping -h127.0.0.1 -pintegration-only-password --silent
+          docker exec integration-redis redis-cli ping
+      - name: Install audio test tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Isolated MySQL and Redis suites
+        env:
+          DRAARL_TEST_MYSQL_DSN: root:integration-only-password@tcp(127.0.0.1:3306)/draarl_test_ci?parseTime=true&loc=UTC
+          DRAARL_REDIS_ADDR: 127.0.0.1:6379
+          DRAARL_REDIS_DB: '0'
+        run: go run ./tools/integration -out output/integration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mysql-redis-regressions
+          path: |
+            output/integration/*.jsonl
+            output/integration/*.json
+            output/integration/*.cover
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release images
+        run: |
+          docker build -t draarl:security-check .
+          docker build -f deploy/docker/Dockerfile.minio -t draarl-minio:security-check .
+          docker build -f deploy/docker/Dockerfile.mysql -t draarl-mysql:security-check .
+          docker build -f deploy/docker/Dockerfile.redis -t draarl-redis:security-check .
+      - name: Scan final images
+        run: |
+          mkdir -p output/security trivy-cache
+          docker pull aquasec/trivy:0.76.2
+          docker image inspect draarl:security-check draarl-minio:security-check draarl-mysql:security-check draarl-redis:security-check > output/security/images.json
+          for image in draarl draarl-minio draarl-mysql draarl-redis; do
+            docker save "$image:security-check" -o "output/security/$image.tar"
+            docker run --rm -v "$PWD/output/security:/reports" -v "$PWD/trivy-cache:/root/.cache/trivy" aquasec/trivy:0.76.2 image --input "/reports/$image.tar" --scanners vuln --format json --output "/reports/$image.json"
+            docker run --rm -v "$PWD/output/security:/reports" -v "$PWD/trivy-cache:/root/.cache/trivy" aquasec/trivy:0.76.2 image --input "/reports/$image.tar" --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1
+            rm "output/security/$image.tar"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-security-evidence
+          path: output/security/*.json

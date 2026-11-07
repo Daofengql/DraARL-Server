@@ -40,10 +40,12 @@ func buildUDPSpeaker(dev *models.Device, packet *protocol.DraARLv1Packet) halfDu
 	var key uint64
 	switch {
 	case state.ID > 0:
+		// #nosec G115 -- Positive SQL device and owner IDs form fixed-width half-duplex speaker namespaces.
 		key = 0x4000000000000000 | uint64(uint32(state.ID))
 	case state.GhostSessionID != "":
 		key = 0x5000000000000000 | (fnv64String(state.GhostSessionID) & 0x0fffffffffffffff)
 	case state.OwnerID > 0:
+		// #nosec G115 -- Positive SQL device and owner IDs form fixed-width half-duplex speaker namespaces.
 		key = 0x6000000000000000 | uint64(uint32(state.OwnerID))<<8 | uint64(ssid)
 	case state.Username != "":
 		key = 0x7000000000000000 | uint64(fnv32String(state.Username))<<8 | uint64(ssid)
@@ -185,6 +187,8 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 		packet.DATA,
 	)
 
+	defer protocol.ReleaseForwardPacket(refilledData)
+
 	// 1. 连通域一次 fan-out（本群 UDP + ghost + 互联组），避免多轮扫描
 	forwardVoiceDomain(dev, refilledData, gp.ID)
 
@@ -193,5 +197,4 @@ func forwardDraARLVoice(packet *protocol.DraARLv1Packet, dev *models.Device, dat
 	if err := RelayCenterLocalDevice(dev, refilledData); err != nil {
 		log.Printf("[INTERCONNECT] relay centre voice failed: device=%d err=%v", state.ID, err)
 	}
-	protocol.ReleaseForwardPacket(refilledData)
 }

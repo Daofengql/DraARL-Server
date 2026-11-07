@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -56,7 +57,7 @@ func checkVerificationRecipient(purpose email.Purpose, address string, lookup ve
 func SendVerificationCode(c *gin.Context) {
 	var req SendCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -65,7 +66,7 @@ func SendVerificationCode(c *gin.Context) {
 
 	// 验证图片验证码
 	if !VerifyCaptchaCode(req.CaptchaID, req.CaptchaCode) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "图片验证码错误或已过期",
 		})
@@ -88,7 +89,7 @@ func SendVerificationCode(c *gin.Context) {
 	case "change_email":
 		purpose = email.PurposeChangeEmail
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的验证码用途",
 		})
@@ -98,7 +99,7 @@ func SendVerificationCode(c *gin.Context) {
 	// Consume the source-IP budget before account-existence checks. Otherwise an
 	// attacker can enumerate registered addresses without paying the send limit.
 	if allowed, errMsg := allowVerificationEmailSend(mgr, clientIP); !allowed {
-		c.JSON(http.StatusTooManyRequests, gin.H{
+		writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 			"code":    429,
 			"message": errMsg,
 		})
@@ -107,19 +108,19 @@ func SendVerificationCode(c *gin.Context) {
 
 	// Account checks deliberately happen after the IP budget is consumed so
 	// register/login/reset probing is subject to the same bounded policy.
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	if status, message, err := checkVerificationRecipient(purpose, req.Email, repo.GetUserByEmail); status != 0 {
 		if err != nil {
 			log.Printf("查询验证码邮箱失败: purpose=%s err=%v", purpose, err)
 		}
-		c.JSON(status, gin.H{"code": status, "message": message})
+		writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 		return
 	}
 
 	// 创建验证会话并发送验证码
 	session, err := mgr.CreateSession(req.Email, purpose)
 	if err != nil {
-		c.JSON(http.StatusTooManyRequests, gin.H{
+		writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 			"code":    429,
 			"message": err.Error(),
 		})
@@ -146,7 +147,7 @@ type EmailLoginRequest struct {
 func EmailLogin(c *gin.Context) {
 	var req EmailLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -157,7 +158,7 @@ func EmailLogin(c *gin.Context) {
 	mgr := email.GetVerificationManager()
 	session, err := mgr.Verify(req.SessionID, req.Code)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
@@ -166,7 +167,7 @@ func EmailLogin(c *gin.Context) {
 
 	// 验证用途是否正确
 	if session.Purpose != email.PurposeLogin {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "验证码用途不正确",
 		})
@@ -174,10 +175,10 @@ func EmailLogin(c *gin.Context) {
 	}
 
 	// 获取用户
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, _ := repo.GetUserByEmail(session.Email)
 	if user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -186,7 +187,7 @@ func EmailLogin(c *gin.Context) {
 
 	// 检查用户状态
 	if user.Status != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "用户已被禁用",
 		})
@@ -217,7 +218,7 @@ func EmailLogin(c *gin.Context) {
 	// 生成 JWT token
 	issued, err := issueAuthTokens(c, user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "生成令牌失败",
 		})
@@ -258,14 +259,14 @@ type ResetPasswordRequest struct {
 func ResetPassword(c *gin.Context) {
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 	if err := validateNewUserPassword(req.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
@@ -273,7 +274,7 @@ func ResetPassword(c *gin.Context) {
 	mgr := email.GetVerificationManager()
 	session, err := mgr.Verify(req.SessionID, req.Code)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
@@ -282,7 +283,7 @@ func ResetPassword(c *gin.Context) {
 
 	// 验证用途是否正确
 	if session.Purpose != email.PurposeResetPassword {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "验证码用途不正确",
 		})
@@ -290,10 +291,10 @@ func ResetPassword(c *gin.Context) {
 	}
 
 	// 获取用户
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, _ := repo.GetUserByEmail(session.Email)
 	if user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -303,7 +304,7 @@ func ResetPassword(c *gin.Context) {
 	// 加密新密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码加密失败",
 		})
@@ -312,7 +313,7 @@ func ResetPassword(c *gin.Context) {
 
 	// 更新密码
 	if err := repo.UpdateUserPassword(user.ID, string(hashedPassword)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码重置失败",
 		})
@@ -357,7 +358,7 @@ type VerifyEmailRequest struct {
 func VerifyEmail(c *gin.Context) {
 	var req VerifyEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -368,7 +369,7 @@ func VerifyEmail(c *gin.Context) {
 	mgr := email.GetVerificationManager()
 	session, err := mgr.Verify(req.SessionID, req.Code)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
@@ -377,7 +378,7 @@ func VerifyEmail(c *gin.Context) {
 
 	// 验证用途是否正确
 	if session.Purpose != email.PurposeRegister {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "验证码用途不正确",
 		})
@@ -410,7 +411,7 @@ func buildUserResponse(user *gormdb.User) gin.H {
 		"isAdmin":         hasRoleGORM(user, "admin"),
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
-				return user.LastLoginTime.Format("2006-01-02 15:04:05")
+				return common.FormatAPITime(user.LastLoginTime)
 			}
 			return ""
 		}(),
@@ -433,7 +434,7 @@ type ChangeEmailRequest struct {
 func ChangeEmail(c *gin.Context) {
 	var req ChangeEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -442,10 +443,10 @@ func ChangeEmail(c *gin.Context) {
 
 	// 获取当前用户
 	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -457,7 +458,7 @@ func ChangeEmail(c *gin.Context) {
 	// 如果用户有已验证的邮箱，需要验证旧邮箱
 	if user.Email != "" && user.EmailVerified {
 		if req.OldSessionID == "" || req.OldCode == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "请先验证当前邮箱",
 			})
@@ -467,7 +468,7 @@ func ChangeEmail(c *gin.Context) {
 		// 验证旧邮箱验证码
 		oldSession, err := mgr.Verify(req.OldSessionID, req.OldCode)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "当前邮箱验证码错误或已过期",
 			})
@@ -476,7 +477,7 @@ func ChangeEmail(c *gin.Context) {
 
 		// 验证用途是否正确
 		if oldSession.Purpose != email.PurposeChangeEmail {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "当前邮箱验证码用途不正确",
 			})
@@ -485,7 +486,7 @@ func ChangeEmail(c *gin.Context) {
 
 		// 验证旧邮箱是否匹配
 		if oldSession.Email != user.Email {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "当前邮箱地址不匹配",
 			})
@@ -499,7 +500,7 @@ func ChangeEmail(c *gin.Context) {
 	// 验证新邮箱验证码
 	newSession, err := mgr.Verify(req.NewSessionID, req.NewCode)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "新邮箱验证码错误或已过期",
 		})
@@ -508,7 +509,7 @@ func ChangeEmail(c *gin.Context) {
 
 	// 验证用途是否正确
 	if newSession.Purpose != email.PurposeChangeEmail {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "新邮箱验证码用途不正确",
 		})
@@ -517,7 +518,7 @@ func ChangeEmail(c *gin.Context) {
 
 	// 检查新邮箱是否与旧邮箱相同
 	if user.Email != "" && newSession.Email == user.Email {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "新邮箱不能与当前邮箱相同",
 		})
@@ -527,7 +528,7 @@ func ChangeEmail(c *gin.Context) {
 	// 检查新邮箱是否已被其他用户使用
 	existingUser, _ := repo.GetUserByEmail(newSession.Email)
 	if existingUser != nil && existingUser.ID != user.ID {
-		c.JSON(http.StatusConflict, gin.H{
+		writeErrorResponse(c, http.StatusConflict, gin.H{
 			"code":    409,
 			"message": "该邮箱已被其他用户使用",
 		})
@@ -537,7 +538,7 @@ func ChangeEmail(c *gin.Context) {
 	// 更新邮箱
 	if err := repo.UpdateUserEmail(user.ID, newSession.Email); err != nil {
 		log.Printf("更新邮箱失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新邮箱失败",
 		})

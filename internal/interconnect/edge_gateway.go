@@ -3,7 +3,6 @@ package interconnect
 import (
 	"errors"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,8 +12,6 @@ import (
 
 type EdgeGateway struct {
 	listenAddr         string
-	proxyProtocol      string
-	proxyTrustedCIDRs  []string
 	endpoint           *udphub.EdgeEndpoint
 	control            atomic.Pointer[edgeControlLink]
 	disconnectedAt     atomic.Int64
@@ -84,20 +81,13 @@ func (l *edgeControlLink) markReady() {
 	l.readyOnce.Do(func() { close(l.readyCh) })
 }
 
-func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...string) (*EdgeGateway, error) {
+func NewEdgeGateway(listenAddr string, client *NodeClient) (*EdgeGateway, error) {
 	if listenAddr == "" {
 		listenAddr = ":60050"
 	}
-	proxyProtocol := ""
-	if len(proxyProtocols) > 0 {
-		proxyProtocol = strings.ToLower(strings.TrimSpace(proxyProtocols[0]))
-	}
-	if proxyProtocol != "" && proxyProtocol != "v2" {
-		return nil, errors.New("edge proxy protocol must be empty or v2")
-	}
 	p := NewProjection(1)
 	gateway := &EdgeGateway{
-		listenAddr: listenAddr, proxyProtocol: proxyProtocol, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), bySessionTag: make(map[uint32]uint64),
+		listenAddr: listenAddr, projection: NewProjectionStore(p), sessions: make(map[uint64]*edgeDeviceSession), byIdentity: make(map[string]uint64), bySessionTag: make(map[uint32]uint64),
 		pending: make(map[uint64]*pendingDeviceAuth), pendingIdentity: make(map[string]uint64), pendingRenewals: make(map[uint64]pendingDeviceRenewal), renewingSessions: make(map[uint64]uint64),
 		pendingConfirms: make(map[uint64]chan DeviceSessionConfirmResponse),
 		pendingConfigUp: make(map[uint64]*pendingDeviceConfigUp), configDownResults: make(map[uint64]cachedDeviceConfigResult),
@@ -110,19 +100,8 @@ func NewEdgeGateway(listenAddr string, client *NodeClient, proxyProtocols ...str
 	return gateway, nil
 }
 
-// SetProxyTrustedCIDRs supplies the edge-local proxy source allowlist. It is
-// intentionally separate from the centre UDP global setting because an edge
-// can run as a standalone process and must not inherit another endpoint's
-// trust state.
-func (g *EdgeGateway) SetProxyTrustedCIDRs(cidrs []string) {
-	if g == nil {
-		return
-	}
-	g.proxyTrustedCIDRs = append([]string(nil), cidrs...)
-}
-
 func (g *EdgeGateway) Start() error {
-	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.proxyProtocol, g.handleInbound, g.proxyTrustedCIDRs)
+	endpoint, err := udphub.NewEdgeEndpoint(g.listenAddr, g.handleInbound)
 	if err != nil {
 		return err
 	}
@@ -437,7 +416,7 @@ func (g *EdgeGateway) onEnvelopeFrom(client *NodeClient, env Envelope) {
 		if !link.confirming.Load() {
 			g.markControlReady(client)
 		}
-	case SubtypeRelayDownstream:
+	case SubtypeRelayDownstream, SubtypeGroupBroadcastDownstream:
 		if !link.ready.Load() {
 			return
 		}

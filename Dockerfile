@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-alpine AS frontend
+FROM node:24.22.2-alpine3.24 AS frontend
 WORKDIR /src/www
 COPY www/package.json www/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -8,7 +8,7 @@ COPY www/ ./
 ARG DRAARL_VERSION=dev
 RUN VITE_APP_VERSION="${DRAARL_VERSION}" npm run build
 
-FROM golang:1.26.8-alpine AS backend
+FROM golang:1.27.3-alpine3.24 AS backend
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
@@ -17,16 +17,16 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . ./
 COPY --from=frontend /src/www/dist ./internal/server/web/dist
 ARG DRAARL_VERSION=dev
+ARG GO_BUILD_PARALLELISM=2
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
-    CGO_ENABLED=0 go build -tags=embed \
+    CGO_ENABLED=0 GOMAXPROCS=${GO_BUILD_PARALLELISM} go build -p=${GO_BUILD_PARALLELISM} -tags=embed \
       -ldflags="-s -w -X draarl/internal/buildinfo.Version=${DRAARL_VERSION} -X draarl/internal/buildinfo.BuildTime=${BUILD_TIME} -X draarl/internal/buildinfo.Release=true" \
       -o /out/draarl ./cmd/draarl
 
-FROM alpine:3.22
-ARG FFMPEG_VERSION=6.1.2-r2
-RUN apk add --no-cache ca-certificates gettext-envsubst tzdata ffmpeg=${FFMPEG_VERSION} && \
+FROM alpine:3.24
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates gettext-envsubst tzdata ffmpeg && \
     addgroup -S -g 10001 draarl && \
     adduser -S -D -H -u 10001 -G draarl draarl && \
     mkdir -p /var/lib/draarl && \

@@ -110,6 +110,84 @@ func TestShouldRejectNormalDeviceConflict(t *testing.T) {
 	}
 }
 
+func TestRuntimeIndexDoesNotBlockLookupBehindDeviceLock(t *testing.T) {
+	dev := &models.Device{ID: 910001, OwnerID: 910001, SSID: 1, Username: "lock-order-test", CallSign: "LOCKTEST"}
+	indexRuntimeDevice(dev)
+	t.Cleanup(func() {
+		runtimeIndexMu.Lock()
+		delete(devOwnerSSIDMap, getOwnerSSIDKey(dev.OwnerID, dev.SSID))
+		delete(devUsernameSSIDMap, usernameSSIDKey(dev.Username, dev.SSID))
+		delete(devCallsignSSIDMap, callsignSSIDKey(dev.CallSign, dev.SSID))
+		runtimeIndexMu.Unlock()
+	})
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 5000 {
+			indexRuntimeDevice(dev)
+		}
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for range 5000 {
+			dev.UpdateRuntime(func(current *models.Device) {
+				// A device-state update may consult an index. Index writers must
+				// never hold the map lock while waiting for this device lock.
+				_ = lookupDeviceByUsernameSSID(current.Username, current.SSID)
+			})
+		}
+	}()
+	close(start)
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("device state and runtime index locks deadlocked")
+	}
+}
+
+func TestVisitRuntimeDeviceGroupsUsesGroupIDAndCountsFallback(t *testing.T) {
+	previous := globalGroupCacheAtomic.Load()
+	t.Cleanup(func() {
+		if previous != nil {
+			globalGroupCacheAtomic.Store(previous)
+		} else {
+			globalGroupCacheAtomic.Store(map[int]*models.Group{})
+		}
+	})
+	groups := map[int]*models.Group{1001: {ID: 1001}, 1003: {ID: 1003}}
+	globalGroupCacheAtomic.Store(groups)
+	for _, tc := range []struct {
+		name         string
+		groupID      int
+		wantVisits   int
+		wantFallback uint64
+	}{
+		{"ungrouped", 0, 0, 0},
+		{"known group", 1001, 1, 0},
+		{"missing group", 1002, 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := deviceGroupCleanupFallbacks.Load()
+			visited := make(map[int]bool)
+			visitRuntimeDeviceGroups(&models.Device{ID: 7, GroupID: tc.groupID}, func(group *models.Group) {
+				visited[group.ID] = true
+			})
+			if len(visited) != tc.wantVisits || deviceGroupCleanupFallbacks.Load()-before != tc.wantFallback {
+				t.Fatalf("visited=%v fallback count=%d", visited, deviceGroupCleanupFallbacks.Load()-before)
+			}
+			if tc.groupID == 1001 && !visited[1001] {
+				t.Fatal("cleanup selected the wrong group")
+			}
+		})
+	}
+}
+
 func TestSyncUserCallSignChangeUpdatesRuntimeIndexes(t *testing.T) {
 	devOwnerSSIDMap = make(map[string]*models.Device)
 	devUsernameSSIDMap = make(map[string]*models.Device)

@@ -151,6 +151,16 @@ func routeReceiveDomains(route DeviceRoute) []uint64 {
 	return nil
 }
 
+func routeReceiveGroups(route DeviceRoute) []int {
+	if len(route.RxGroupIDs) > 0 {
+		return route.RxGroupIDs
+	}
+	if route.GroupID > 0 {
+		return []int{route.GroupID}
+	}
+	return nil
+}
+
 func deviceOwnerIdentity(ownerID int, ssid byte) string {
 	if ownerID <= 0 {
 		return ""

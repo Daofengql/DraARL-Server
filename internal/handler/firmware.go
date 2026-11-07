@@ -52,24 +52,24 @@ func UploadFirmware(c *gin.Context) {
 		downloadMode = gormdb.FirmwareDownloadModePresigned
 	}
 	if !isValidFirmwareDownloadMode(downloadMode) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "download_mode 只支持 presigned 或 proxy"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "download_mode 只支持 presigned 或 proxy"})
 		return
 	}
 
 	if devModelStr == "" || version == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 和 version 为必填字段"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 和 version 为必填字段"})
 		return
 	}
 
 	devModel, err := strconv.Atoi(devModelStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 格式无效"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 格式无效"})
 		return
 	}
 
 	// 白名单校验
 	if !isSupportedFirmwareDevModel(devModel) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": fmt.Sprintf("设备型号 %d 不支持固件升级", devModel),
 		})
@@ -78,7 +78,7 @@ func UploadFirmware(c *gin.Context) {
 
 	// 版本格式校验
 	if !firmwareSemverRegex.MatchString(version) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "版本号格式无效，应为 semver 格式如 1.0.0 或 1.0.0-beta.1",
 		})
@@ -88,13 +88,13 @@ func UploadFirmware(c *gin.Context) {
 	// 获取上传文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请选择固件文件"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请选择固件文件"})
 		return
 	}
 
 	// 文件大小校验
 	if fileHeader.Size <= 0 || fileHeader.Size > maxFirmwareSize {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": fmt.Sprintf("固件文件必须非空且不超过 %d MB", maxFirmwareSize/1024/1024),
 		})
@@ -102,7 +102,7 @@ func UploadFirmware(c *gin.Context) {
 	}
 	fileName, err := normalizeFirmwareFileName(fileHeader.Filename)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
 
@@ -111,11 +111,11 @@ func UploadFirmware(c *gin.Context) {
 	// 检查版本号是否已存在
 	exists, err := repo.ExistsVersion(devModel, version)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查版本号失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "检查版本号失败"})
 		return
 	}
 	if exists {
-		c.JSON(http.StatusConflict, gin.H{
+		writeErrorResponse(c, http.StatusConflict, gin.H{
 			"code":    409,
 			"message": fmt.Sprintf("设备型号 %d 已存在版本 %s", devModel, version),
 		})
@@ -125,10 +125,10 @@ func UploadFirmware(c *gin.Context) {
 	// 先流式计算哈希，再将 multipart 内容写入 staging 并提升到不可变 key。
 	file, err := fileHeader.Open()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取文件失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "读取文件失败"})
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fileSize, fileHash, err := hashFirmwareReader(file)
 	if err != nil {
@@ -137,11 +137,11 @@ func UploadFirmware(c *gin.Context) {
 		if errors.Is(err, storage.ErrObjectTooLarge) {
 			status, message = http.StatusBadRequest, "文件大小超过限制"
 		}
-		c.JSON(status, gin.H{"code": status, "message": message})
+		writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 		return
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取文件失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "读取文件失败"})
 		return
 	}
 
@@ -157,7 +157,7 @@ func UploadFirmware(c *gin.Context) {
 		contentType = "application/octet-stream"
 	}
 	if err := storage.Put(c.Request.Context(), stagingKey, file, fileSize, contentType); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "固件文件上传失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "固件文件上传失败"})
 		return
 	}
 	finalKey := firmwareObjectKey(devModel, version, fileHash, fileName)
@@ -170,7 +170,7 @@ func UploadFirmware(c *gin.Context) {
 		if errors.Is(err, storage.ErrFinalObjectAlreadyExists) {
 			status, message = http.StatusConflict, "不可变固件对象已存在"
 		}
-		c.JSON(status, gin.H{"code": status, "message": message})
+		writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 		return
 	}
 
@@ -192,7 +192,7 @@ func UploadFirmware(c *gin.Context) {
 		if delErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); delErr != nil {
 			log.Printf("回滚删除 MinIO 固件文件失败: %v", delErr)
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
 		return
 	}
 
@@ -217,7 +217,7 @@ func ListFirmware(c *gin.Context) {
 	}
 	normalizedPageSize, normalizedPage, _, paginationErr := gormdb.NormalizePageOffset(pageSize, page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "分页参数过大"})
 		return
 	}
 	page, pageSize = normalizedPage, normalizedPageSize
@@ -225,7 +225,7 @@ func ListFirmware(c *gin.Context) {
 	repo := gormdb.GetFirmwareRepo()
 	list, total, err := repo.ListByDevModel(devModel, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取固件列表失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取固件列表失败"})
 		return
 	}
 
@@ -274,11 +274,11 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		DownloadMode string `json:"download_mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 	if !isSupportedFirmwareDevModel(req.DevModel) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": fmt.Sprintf("设备型号 %d 不支持固件升级", req.DevModel)})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": fmt.Sprintf("设备型号 %d 不支持固件升级", req.DevModel)})
 		return
 	}
 	downloadMode := normalizeFirmwareDownloadMode(req.DownloadMode)
@@ -286,38 +286,42 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		downloadMode = gormdb.FirmwareDownloadModePresigned
 	}
 	if !isValidFirmwareDownloadMode(downloadMode) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "download_mode 只支持 presigned 或 proxy"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "download_mode 只支持 presigned 或 proxy"})
 		return
 	}
 	if !firmwareSemverRegex.MatchString(req.Version) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "版本号格式无效"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "版本号格式无效"})
 		return
 	}
 	fileName, err := normalizeFirmwareFileName(req.FileName)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
 	objectKey := strings.TrimLeft(req.ObjectKey, "/")
 	userValue, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	user := userValue.(*gormdb.User)
+	user, userValid := userValue.(*gormdb.User)
+	if !userValid || user == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 	if !storage.IsStagingObjectKey(objectKey, "firmware", user.ID) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "非法的 object_key"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "非法的 object_key"})
 		return
 	}
 
 	repo := gormdb.GetFirmwareRepo()
 	versionExists, err := repo.ExistsVersion(req.DevModel, req.Version)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查版本号失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "检查版本号失败"})
 		return
 	}
 	if versionExists {
-		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": fmt.Sprintf("设备型号 %d 已存在版本 %s", req.DevModel, req.Version)})
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": fmt.Sprintf("设备型号 %d 已存在版本 %s", req.DevModel, req.Version)})
 		return
 	}
 
@@ -325,7 +329,7 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		c.Request.Context(), req.UploadToken, objectKey, "firmware", user.ID,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传授权或对象校验失败"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "上传授权或对象校验失败"})
 		return
 	}
 
@@ -336,11 +340,11 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		if errors.Is(err, storage.ErrObjectTooLarge) {
 			status, message = http.StatusBadRequest, "文件大小超过限制"
 		}
-		c.JSON(status, gin.H{"code": status, "message": message})
+		writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 		return
 	}
 	if written != grant.Size {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "固件文件大小校验失败"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "固件文件大小校验失败"})
 		return
 	}
 	finalKey := firmwareObjectKey(req.DevModel, req.Version, fileHash, fileName)
@@ -351,7 +355,7 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		if errors.Is(err, storage.ErrFinalObjectAlreadyExists) {
 			status, message = http.StatusConflict, "不可变固件对象已存在"
 		}
-		c.JSON(status, gin.H{"code": status, "message": message})
+		writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 		return
 	}
 
@@ -370,7 +374,7 @@ func CompleteFirmwareUpload(c *gin.Context) {
 		if deleteErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); deleteErr != nil {
 			log.Printf("回滚删除 MinIO 固件文件失败: %v", deleteErr)
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "创建固件记录失败"})
 		return
 	}
 
@@ -381,14 +385,14 @@ func CompleteFirmwareUpload(c *gin.Context) {
 func DeleteFirmware(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的固件ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的固件ID"})
 		return
 	}
 
 	repo := gormdb.GetFirmwareRepo()
 	fw, err := repo.Delete(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "固件记录不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "固件记录不存在"})
 		return
 	}
 
@@ -408,24 +412,24 @@ func GetLatestFirmware(c *gin.Context) {
 	devModelStr := c.Query("dev_model")
 	currentVersion := c.Query("current_version")
 	if devModelStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数必填"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数必填"})
 		return
 	}
 
 	devModel, err := strconv.Atoi(devModelStr)
 	if err != nil || devModel == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数无效"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "dev_model 参数无效"})
 		return
 	}
 	if currentVersion != "" && !firmwareSemverRegex.MatchString(currentVersion) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "current_version 参数无效"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "current_version 参数无效"})
 		return
 	}
 
 	repo := gormdb.GetFirmwareRepo()
 	fw, err := repo.GetLatestByDevModel(devModel)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": fmt.Sprintf("设备型号 %d 暂无可用固件", devModel),
 		})
@@ -444,7 +448,7 @@ func GetLatestFirmware(c *gin.Context) {
 	// 所有驱动统一生成短期下载 URL；local 也使用签名 GET。
 	downloadURL, err := firmwareDownloadURL(c, fw)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成下载链接失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成下载链接失败"})
 		return
 	}
 
@@ -594,7 +598,7 @@ func openFirmwareProxyReader(c *gin.Context, signedURL, objectKey string) (io.Re
 			return nil, func() {}, 0, err
 		}
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, func() {}, http.StatusBadGateway, fmt.Errorf("对象存储返回 HTTP %d", resp.StatusCode)
 		}
 		return resp.Body, func() { _ = resp.Body.Close() }, 0, nil

@@ -53,8 +53,8 @@ func TestGroupQueryPaginationAndDeviceStatsMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	deviceRows := []*gormdb.Device{
-		{Name: "group-query-online-" + suffix, OwnerID: owner.ID, SSID: 1, GroupID: active.ID, Status: 1, ISOnline: true},
-		{Name: "group-query-offline-" + suffix, OwnerID: owner.ID, SSID: 2, GroupID: active.ID, Status: 1, ISOnline: false},
+		{Name: "group-query-online-" + suffix, OwnerID: owner.ID, SSID: 1, GroupID: &active.ID, Status: 1, ISOnline: true},
+		{Name: "group-query-offline-" + suffix, OwnerID: owner.ID, SSID: 2, GroupID: &active.ID, Status: 1, ISOnline: false},
 	}
 	if err := db.Create(deviceRows).Error; err != nil {
 		t.Fatal(err)

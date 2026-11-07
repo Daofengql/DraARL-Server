@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useSaveShortcut } from '../../../hooks/useSaveShortcut'
+import { verifyServerReadback, verifyWifiReadback } from '../../../utils/provisionVerification'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -14,10 +16,13 @@ import {
   FormControl,
   Grid,
   MenuItem,
+  LinearProgress,
   Select,
   Stack,
   TextField,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import BluetoothSearching from '@mui/icons-material/BluetoothSearching'
 import BluetoothDisabled from '@mui/icons-material/BluetoothDisabled'
@@ -55,21 +60,10 @@ type BusyAction =
 
 const WIFI_SCAN_DEFAULT_HINT = '请直接手动输入 2.4G 网络的 SSID 和密码。'
 
-function isChromeBrowser() {
-  if (typeof navigator === 'undefined') {
-    return false
-  }
-
-  const ua = navigator.userAgent
-  const vendor = navigator.vendor || ''
-  const isChromiumUA = /Chrome|CriOS|Edg\//.test(ua)
-  const isGoogleVendor = vendor.includes('Google') || /Edg\//.test(ua)
-  const isExcluded = /Firefox|Safari\//.test(ua) && !/Chrome|CriOS|Edg\//.test(ua)
-
-  return isChromiumUA && isGoogleVendor && !isExcluded
-}
-
 export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
+  const theme = useTheme()
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
+  const actionInProgress = useRef(false)
   const {
     supported,
     status,
@@ -93,7 +87,6 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
   const [wifiHelperText, setWifiHelperText] = useState(WIFI_SCAN_DEFAULT_HINT)
 
   const selectedProfile = useMemo(() => getProvisionDeviceProfile(deviceType), [deviceType])
-  const preferChrome = isChromeBrowser()
 
   useEffect(() => {
     if (!open) {
@@ -111,10 +104,13 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
   }, [open, disconnect])
 
   const handleClose = () => {
+    if (actionInProgress.current) return
     onClose()
   }
 
   const runAction = async (action: BusyAction, fn: () => Promise<void>) => {
+    if (actionInProgress.current) return
+    actionInProgress.current = true
     setBusyAction(action)
     setError('')
     setSuccess('')
@@ -123,6 +119,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
     } catch (actionError) {
       setError(getErrorMessage(actionError, '操作失败'))
     } finally {
+      actionInProgress.current = false
       setBusyAction(null)
     }
   }
@@ -175,7 +172,10 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
 
     await runAction('saveWifi', async () => {
       await saveWifi(payload)
-      setSuccess('WiFi 配置已发送到设备')
+      const confirmed = await loadConfig()
+      verifyWifiReadback(payload, confirmed.wifi)
+      applyLoadedConfig(createWifiFormValue(confirmed.wifi), createServerFormValue(confirmed.server))
+      setSuccess('WiFi 配置已保存并回读确认')
     })
   }
 
@@ -191,9 +191,18 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
 
     await runAction('saveServer', async () => {
       await saveServer(serverForm)
-      setSuccess('DraARL 配置已发送到设备')
+      const confirmed = await loadConfig()
+      verifyServerReadback(serverForm, confirmed.server)
+      applyLoadedConfig(createWifiFormValue(confirmed.wifi), createServerFormValue(confirmed.server))
+      setSuccess('DraARL 配置已保存并回读确认')
     })
   }
+
+  useSaveShortcut(open && status.authenticated && !busyAction, () => {
+    const focused = document.activeElement
+    if (focused?.closest('[data-config-section="server"]')) void handleSaveServer()
+    else void handleSaveWifi()
+  })
 
   return (
     <Dialog
@@ -201,16 +210,21 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
       onClose={handleClose}
       maxWidth="lg"
       fullWidth
+      fullScreen={fullScreen}
       scroll="paper"
+      aria-labelledby="preconfig-tool-title"
     >
-      <DialogTitle>预配置工具</DialogTitle>
-      <DialogContent dividers>
+      <DialogTitle id="preconfig-tool-title">预配置工具</DialogTitle>
+      <DialogContent dividers aria-busy={busyAction !== null}>
         <Card variant="outlined" sx={{ borderRadius: 2 }}>
           <CardContent sx={{ p: 3 }}>
             <Stack spacing={3}>
-              <Alert severity={preferChrome ? 'info' : 'warning'}>
-                请使用 Chrome 浏览器打开本工具。BLE 连接依赖 Chromium 的 Web Bluetooth 能力，请直接填写设备要连接的 2.4G WiFi 信息。
+              <Alert severity={supported ? 'info' : 'warning'}>
+                {supported
+                  ? '当前浏览器支持 Web Bluetooth。请连接设备后填写设备要使用的 2.4G WiFi 信息。'
+                  : '当前环境无法使用 Web Bluetooth，请通过 HTTPS 或 localhost 使用支持蓝牙的浏览器。'}
               </Alert>
+              {busyAction !== null && <LinearProgress aria-label="正在与设备通信，请稍候" />}
 
             <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 2 }}>
               <Box>
@@ -242,8 +256,10 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                     设备类型
                   </Typography>
                   <Select
+                    inputProps={{ 'aria-label': '设备类型' }}
                     value={deviceType}
                     displayEmpty
+                    disabled={status.connected || busyAction !== null}
                     onChange={(event) => {
                       setDeviceType(event.target.value)
                       setError('')
@@ -263,7 +279,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
               </Grid>
               <Grid size={{ xs: 12, md: 8 }}>
                 <Alert severity="info">
-                  {selectedProfile?.description || '当前先开放 ESP32 链路盒子（1W 射频版）。'}
+                  {selectedProfile?.description || '当前先开放 Box32-RF。'}
                 </Alert>
               </Grid>
             </Grid>
@@ -273,7 +289,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
             <Stack spacing={2}>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 2 }}>
                 <Box>
-                  <Typography variant="subtitle1">BLE 连接与动态码认证</Typography>
+                  <Typography component="h3" variant="subtitle1">BLE 连接与动态码认证</Typography>
                   <Typography variant="body2" color="text.secondary">
                     顶部流程沿用动态码认证，认证通过后可读取并保存配置；WiFi 请直接手动填写。
                   </Typography>
@@ -284,6 +300,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                     size="small"
                     startIcon={<BluetoothSearching />}
                     onClick={handleConnect}
+                    loading={busyAction === 'connect'}
                     disabled={!selectedProfile || !supported || busyAction !== null}
                   >
                     连接设备
@@ -293,6 +310,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                     size="small"
                     startIcon={<BluetoothDisabled />}
                     onClick={() => runAction('disconnect', disconnect)}
+                    loading={busyAction === 'disconnect'}
                     disabled={!status.connected || busyAction !== null}
                   >
                     断开连接
@@ -301,6 +319,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                     variant="outlined"
                     size="small"
                     startIcon={<Refresh />}
+                    loading={busyAction === 'refresh'}
                     onClick={() => runAction('refresh', async () => {
                       await refreshStatus()
                       setSuccess('状态已刷新')
@@ -322,6 +341,8 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                     placeholder="输入 6 位动态码"
                     value={dynamicCode}
                     onChange={(event) => setDynamicCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    helperText={dynamicCode.length === 6 ? '动态码格式正确，可以提交认证' : `请输入设备显示的 6 位数字，还需 ${6 - dynamicCode.length} 位`}
+                    slotProps={{ htmlInput: { inputMode: 'numeric', autoComplete: 'one-time-code', maxLength: 6, pattern: '[0-9]{6}' } }}
                     disabled={!status.connected || busyAction !== null}
                   />
                 </Grid>
@@ -331,13 +352,15 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                       variant="contained"
                       startIcon={<LockOpen />}
                       onClick={handleAuthenticate}
-                      disabled={!status.connected || busyAction !== null}
+                      loading={busyAction === 'auth'}
+                      disabled={!status.connected || dynamicCode.length !== 6 || busyAction !== null}
                     >
                       提交认证
                     </Button>
                     <Button
                       variant="outlined"
                       onClick={handleLoadConfig}
+                      loading={busyAction === 'loadConfig'}
                       disabled={!status.authenticated || busyAction !== null}
                     >
                       读取配置
@@ -353,7 +376,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                   <ProvisionWifiForm
                     value={wifiForm}
                     networks={wifiNetworks}
-                    disabled={!status.authenticated}
+                    disabled={!status.authenticated || busyAction !== null}
                     loading={busyAction === 'saveWifi'}
                     helperText={wifiHelperText}
                     onChange={setWifiForm}
@@ -364,7 +387,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
                 {selectedProfile.supportsDraarl && (
                   <ProvisionDraarlForm
                     value={serverForm}
-                    disabled={!status.authenticated}
+                    disabled={!status.authenticated || busyAction !== null}
                     loading={busyAction === 'saveServer'}
                     onChange={setServerForm}
                     onSave={handleSaveServer}
@@ -377,7 +400,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
         </Card>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose}>关闭</Button>
+        <Button onClick={handleClose} disabled={busyAction !== null}>关闭</Button>
       </DialogActions>
     </Dialog>
   )

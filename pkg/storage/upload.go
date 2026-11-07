@@ -108,7 +108,7 @@ func UploadMultipartFileWithContentTypeContext(ctx context.Context, fileHeader *
 	if err != nil {
 		return "", 0, "", fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	ext := filepath.Ext(fileHeader.Filename)
 	objectName := NewObjectKey(fileType, ext)
@@ -129,7 +129,7 @@ func DetectMultipartContentType(fileHeader *multipart.FileHeader) (string, error
 	if err != nil {
 		return "", fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return detectContentType(file)
 }
@@ -140,7 +140,7 @@ func DetectObjectContentType(ctx context.Context, objectName string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("打开对象失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return detectContentType(file)
 }
@@ -234,7 +234,7 @@ func UploadFaviconContext(ctx context.Context, fileHeader *multipart.FileHeader)
 	if err != nil {
 		return "", 0, fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	fileData, err := io.ReadAll(io.LimitReader(&contextReader{ctx: ctx, reader: file}, maxFaviconUploadBytes+1))
 	if err != nil {
 		return "", 0, fmt.Errorf("读取文件失败: %w", err)

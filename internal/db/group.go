@@ -56,7 +56,7 @@ func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	groups := make([]*models.Group, 0)
 	for rows.Next() {
@@ -172,7 +172,7 @@ func (r *RelayRepository) ListRelays() ([]models.Relay, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	relays := []models.Relay{}
 	for rows.Next() {
@@ -263,7 +263,7 @@ func (r *ServerRepository) ListServers() ([]*models.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	servers := []*models.Server{}
 	for rows.Next() {

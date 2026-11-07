@@ -250,7 +250,7 @@ func (a *APRS) Start() {
 		case err := <-a.errorChan:
 			a.mu.Lock()
 			if a.tcpClient != nil {
-				a.tcpClient.Close()
+				_ = a.tcpClient.Close()
 			}
 			a.mu.Unlock()
 
@@ -271,7 +271,7 @@ func (a *APRS) Stop() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.tcpClient != nil {
-		a.tcpClient.Close()
+		_ = a.tcpClient.Close()
 	}
 }
 
@@ -588,7 +588,7 @@ func getNRLFromAPRSTV() {
 		log.Println("APRS.TV request failed:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 读取响应体
 	body, err := io.ReadAll(resp.Body)
@@ -736,7 +736,7 @@ func getNRLStatsFromAPRSTV() map[string]int {
 		log.Println("APRS.TV stats request failed:", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// 读取响应体
 	body, err := io.ReadAll(resp.Body)

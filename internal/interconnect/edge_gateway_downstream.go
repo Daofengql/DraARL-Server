@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net"
 	"time"
+
+	"draarl/internal/protocol"
 )
 
 type pendingDownstreamFrame struct {
@@ -53,6 +55,23 @@ func (g *EdgeGateway) deliverDownstream(env Envelope, frame RelayFrame) {
 		}
 		return
 	}
+	g.fanoutDownstream(env, frame)
+}
+
+func (g *EdgeGateway) fanoutDownstream(env Envelope, frame RelayFrame) {
+	if env.Subtype == SubtypeGroupBroadcastDownstream {
+		if len(frame.InnerPacket) < protocol.DraARLv1HeaderSize {
+			g.metrics.AddDrop()
+			return
+		}
+		groupID := int(protocol.ReservedUint32(frame.InnerPacket[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]))
+		if groupID <= 0 {
+			g.metrics.AddDrop()
+			return
+		}
+		g.fanout(0, frame.DomainID, frame.InnerPacket, groupID, groupID)
+		return
+	}
 	g.localFanout(0, frame.DomainID, frame.InnerPacket)
 }
 
@@ -74,7 +93,7 @@ func (g *EdgeGateway) downstreamBarrierLoop() {
 
 func (g *EdgeGateway) drainDownstream(now time.Time) {
 	p := g.projection.Snapshot()
-	ready := make([]RelayFrame, 0)
+	ready := make([]pendingDownstreamFrame, 0)
 	dropped := 0
 	g.downstreamMu.Lock()
 	remaining := g.pendingDownstream[:0]
@@ -84,7 +103,7 @@ func (g *EdgeGateway) drainDownstream(now time.Time) {
 			continue
 		}
 		if p.Version >= pending.frame.RequiredProjectionVersion {
-			ready = append(ready, pending.frame)
+			ready = append(ready, pending)
 			continue
 		}
 		remaining = append(remaining, pending)
@@ -100,8 +119,8 @@ func (g *EdgeGateway) drainDownstream(now time.Time) {
 		}
 		return
 	}
-	for _, frame := range ready {
-		g.localFanout(0, frame.DomainID, frame.InnerPacket)
+	for _, pending := range ready {
+		g.fanoutDownstream(pending.envelope, pending.frame)
 	}
 }
 

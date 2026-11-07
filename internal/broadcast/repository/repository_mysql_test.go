@@ -865,7 +865,7 @@ func TestRepositoryFinishRunCreatesOneAutoBroadcastRecordMySQL(t *testing.T) {
 	if err := repo.DB().Where("record_id = ?", record.ID).Order("group_id ASC").Find(&deliveryGroups).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(deliveryGroups) != 2 || deliveryGroups[0].GroupID != uint(groups.a.ID) || deliveryGroups[1].GroupID != uint(groups.b.ID) {
+	if len(deliveryGroups) != 1 || deliveryGroups[0].GroupID != uint(groups.a.ID) {
 		t.Fatalf("delivery snapshot=%#v", deliveryGroups)
 	}
 	if err := repo.FinishRun(ctx, run.ID, "record-worker", model.RunStatusSucceeded, endedAt, 360, 3, 0, nil, "a,b", []int{groups.a.ID, groups.b.ID}, "", 0, "", ""); !errors.Is(err, ErrRunLeaseLost) {

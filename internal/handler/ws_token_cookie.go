@@ -23,6 +23,8 @@ func setWSTokenCookie(c *gin.Context, token string) {
 		return
 	}
 
+	// #nosec G124 -- Secure follows validated request transport; plain HTTP is supported for local development.
+	// #nosec G124 -- Secure follows TLS or the explicitly trusted HTTPS proxy; local HTTP remains supported.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     wsTokenCookieName,
 		Value:    token,
@@ -35,6 +37,7 @@ func setWSTokenCookie(c *gin.Context, token string) {
 }
 
 func clearWSTokenCookie(c *gin.Context) {
+	// #nosec G124 -- Secure follows TLS or the explicitly trusted HTTPS proxy; local HTTP remains supported.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     wsTokenCookieName,
 		Value:    "",
@@ -64,7 +67,7 @@ func shouldUseSecureCookie(c *gin.Context) bool {
 		return false
 	}
 	ip := net.ParseIP(host)
-	networks, err := config.ParseProxyTrustedCIDRs(cfg.System.HTTPTrustedProxyCIDRs)
+	networks, err := config.ParseHTTPTrustedProxyCIDRs(cfg.System.HTTPTrustedProxyCIDRs)
 	if err != nil || ip == nil {
 		return false
 	}
@@ -80,7 +83,7 @@ func shouldUseSecureCookie(c *gin.Context) bool {
 func SyncWSTokenCookie(c *gin.Context) {
 	token, ok := parseBearerToken(c.GetHeader("Authorization"))
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未提供认证令牌",
 		})

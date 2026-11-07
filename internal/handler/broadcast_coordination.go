@@ -73,7 +73,7 @@ func prepareEntityGroupBroadcastDeletion(c *gin.Context, userID, groupID int) ([
 		sharedRecordKey := audios[index].EffectiveRecordObjectKey()
 		if sharedRecordKey != "" {
 			var references int64
-			if err := gormdb.Get().Model(&gormdb.CommRecord{}).Where("audio_path = ?", sharedRecordKey).Count(&references).Error; err != nil {
+			if err := gormdb.Get().WithContext(c.Request.Context()).Model(&gormdb.CommRecord{}).Where("audio_path = ?", sharedRecordKey).Count(&references).Error; err != nil {
 				writeBroadcastError(c, http.StatusInternalServerError, "broadcast_group_assets_failed", "读取自动播报历史引用失败")
 				return nil, false
 			}
@@ -83,7 +83,7 @@ func prepareEntityGroupBroadcastDeletion(c *gin.Context, userID, groupID int) ([
 		}
 	}
 
-	links, err := gormdb.NewGroupLinkRepository().GetLinksByTargetGroup(groupID)
+	links, err := gormdb.NewGroupLinkRepository().WithContext(c.Request.Context()).GetLinksByTargetGroup(groupID)
 	if err != nil {
 		writeBroadcastError(c, http.StatusInternalServerError, "broadcast_group_topology_failed", "读取群组互联关系失败")
 		return nil, false
@@ -130,7 +130,7 @@ func cleanupDeletedBroadcastObjects(c *gin.Context, objectKeys []string) bool {
 			continue
 		}
 		var recordReferences int64
-		if err := gormdb.Get().Model(&gormdb.CommRecord{}).Where("audio_path = ?", key).Count(&recordReferences).Error; err != nil {
+		if err := gormdb.Get().WithContext(c.Request.Context()).Model(&gormdb.CommRecord{}).Where("audio_path = ?", key).Count(&recordReferences).Error; err != nil {
 			cleanupPending = true
 			log.Printf("[BROADCAST] recheck deleted group audio references failed: key=%s err=%v", key, err)
 			continue

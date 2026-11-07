@@ -68,16 +68,6 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 			report(result)
 		}
 	}()
-	proxyEnabled := false
-	var proxyTrustedCIDRs []string
-	if cfg := config.TryGet(); cfg != nil {
-		proxyEnabled = cfg.System.ProxyProtocol == "v2"
-		proxyTrustedCIDRs = cfg.System.ProxyTrustedCIDRs
-	}
-	if err := setProxyTrustedCIDRs(proxyTrustedCIDRs); err != nil {
-		result = fmt.Errorf("configure UDP PROXY Protocol trust: %w", err)
-		return result
-	}
 	network := "udp"
 	host := ""
 	if cfg := config.TryGet(); cfg != nil {
@@ -171,7 +161,7 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 	startDeviceAuthWorkers()
 
 	// 单/少 reader + worker 池，避免多 goroutine 争抢同一 socket
-	startUDPPipeline(conn, proxyEnabled)
+	startUDPPipeline(conn)
 	report(nil)
 
 	// 等待关闭
@@ -195,7 +185,7 @@ func StopUDPServer() {
 
 		// 关闭 UDP 连接（这会使阻塞的 ReadFromUDP 返回错误）
 		if globalConn != nil {
-			globalConn.Close()
+			_ = globalConn.Close()
 		}
 
 		// 等待收包流水线退出

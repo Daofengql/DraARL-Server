@@ -38,11 +38,13 @@ export function SearchBar({
       size={size}
       fullWidth={fullWidth}
       placeholder={placeholder}
+      aria-label={placeholder}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={handleKeyDown}
       sx={sx}
       slotProps={{
+        htmlInput: { 'aria-label': placeholder },
         input: {
           startAdornment: (
             <InputAdornment position="start">
@@ -51,7 +53,7 @@ export function SearchBar({
           ),
           endAdornment: value ? (
             <InputAdornment position="end">
-              <IconButton size="small" onClick={handleClear} edge="end">
+              <IconButton size="small" aria-label="清除搜索" onClick={handleClear} edge="end">
                 <Clear fontSize="small" />
               </IconButton>
             </InputAdornment>

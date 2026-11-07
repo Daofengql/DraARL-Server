@@ -100,7 +100,7 @@ func TestRemoveGroupMemberHTTPE2E(t *testing.T) {
 	}
 	device := &gormdb.Device{
 		Name: "membership-device-" + suffix, OwnerID: member.ID, SSID: 1,
-		DevModel: 2, GroupID: privateGroup.ID, Status: 1,
+		DevModel: 2, GroupID: &privateGroup.ID, Status: 1,
 	}
 	if err := db.Create(device).Error; err != nil {
 		t.Fatal(err)
@@ -210,8 +210,8 @@ func TestRemoveGroupMemberHTTPE2E(t *testing.T) {
 		t.Fatalf("membership count=%d err=%v", membershipCount, err)
 	}
 	var persistedDevice gormdb.Device
-	if err := db.First(&persistedDevice, device.ID).Error; err != nil || persistedDevice.GroupID != models.GroupIDPublicMin {
-		t.Fatalf("persisted device group=%d err=%v", persistedDevice.GroupID, err)
+	if err := db.First(&persistedDevice, device.ID).Error; err != nil || persistedDevice.GroupIDValue() != models.GroupIDPublicMin {
+		t.Fatalf("persisted device group=%d err=%v", persistedDevice.GroupIDValue(), err)
 	}
 	runtimeDevice = udphub.GetDeviceByID(device.ID)
 	if runtimeDevice == nil || runtimeDevice.GroupID != models.GroupIDPublicMin {

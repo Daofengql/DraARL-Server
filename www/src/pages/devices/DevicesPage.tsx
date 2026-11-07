@@ -1,6 +1,10 @@
+import { DeviceBatchActions } from '../../components/devices/DeviceBatchActions'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useEffect, useState } from 'react'
 import {
   Box,
+  Checkbox,
   Paper,
   Table,
   TableBody,
@@ -51,8 +55,11 @@ export function DevicesPage() {
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const debouncedKeyword = useDebouncedValue(searchKeyword)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<number[]>([])
+  const [batchBusy, setBatchBusy] = useState(false)
   const [defaultGroupId, setDefaultGroupId] = useState<number | ''>('')
   const [savingDefaultGroup, setSavingDefaultGroup] = useState(false)
 
@@ -94,8 +101,10 @@ export function DevicesPage() {
     try {
       const data = await deviceService.list()
       setDevices(data)
+      setSelectedDeviceIds((current) => current.filter((id) => data.some((device) => device.id === id)))
     } catch (err) {
       console.error('Failed to load devices:', err)
+      setError(getErrorMessage(err, '加载设备列表失败'))
     } finally {
       setLoading(false)
     }
@@ -126,7 +135,7 @@ export function DevicesPage() {
       const saved = await deviceService.setDefaultGroup(value === '' ? null : value)
       setDefaultGroupId(saved ?? '')
     } catch (err: any) {
-      setError(err.response?.data?.message || '保存新设备默认群组失败')
+      setError(getErrorMessage(err, '保存新设备默认群组失败'))
     } finally {
       setSavingDefaultGroup(false)
     }
@@ -140,7 +149,7 @@ export function DevicesPage() {
       })
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
+      setError(getErrorMessage(err, '操作失败'))
     }
   }
 
@@ -152,7 +161,7 @@ export function DevicesPage() {
       })
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
+      setError(getErrorMessage(err, '操作失败'))
     }
   }
 
@@ -169,7 +178,7 @@ export function DevicesPage() {
       setSwitchingDevice(null)
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '切换群组失败')
+      setError(getErrorMessage(err, '切换群组失败'))
     }
   }
 
@@ -185,7 +194,7 @@ export function DevicesPage() {
           await deviceService.delete(id)
           loadDevices()
         } catch (err: any) {
-          setError(err.response?.data?.message || '删除失败')
+          setError(getErrorMessage(err, '删除失败'))
         }
       },
     })
@@ -193,12 +202,14 @@ export function DevicesPage() {
 
   const filteredDevices = devices.filter(
     (d) =>
-      !searchKeyword ||
-      d.name.toLowerCase().includes(searchKeyword.toLowerCase()) ||
-      d.callsign.toLowerCase().includes(searchKeyword.toLowerCase())
+      !debouncedKeyword ||
+      d.name.toLowerCase().includes(debouncedKeyword.toLowerCase()) ||
+      d.callsign.toLowerCase().includes(debouncedKeyword.toLowerCase())
   )
 
-  const paginatedDevices = filteredDevices.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+  const safePage = Math.min(page, Math.max(0, Math.ceil(filteredDevices.length / rowsPerPage) - 1))
+  const paginatedDevices = filteredDevices.slice(safePage * rowsPerPage, safePage * rowsPerPage + rowsPerPage)
+  const toggleDeviceSelection = (id: number) => setSelectedDeviceIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
 
   // 获取群组信息
   const getGroupInfo = (groupId: number) => {
@@ -293,7 +304,7 @@ export function DevicesPage() {
       <Paper sx={{ mb: 2, p: 2 }}>
         <SearchBar
           value={searchKeyword}
-          onChange={setSearchKeyword}
+          onChange={(value) => { setSearchKeyword(value); setPage(0) }}
           onSearch={() => setPage(0)}
           placeholder="搜索设备名称或呼号"
           loading={loading}
@@ -301,6 +312,7 @@ export function DevicesPage() {
         />
       </Paper>
 
+      <DeviceBatchActions devices={devices} visible={paginatedDevices} groups={groups} selected={selectedDeviceIds} onSelection={setSelectedDeviceIds} onBusy={setBatchBusy} onComplete={loadDevices} />
       <TableContainer component={Paper} variant="outlined" sx={{ overflow: 'auto' }}>
         <Box sx={{ display: { xs: 'block', lg: 'none' }, p: 1 }}>
           {loading ? (
@@ -316,7 +328,8 @@ export function DevicesPage() {
                     <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
                       <Stack spacing={1}>
                         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-                          <Box sx={{ minWidth: 0 }}>
+                          <Checkbox checked={selectedDeviceIds.includes(device.id)} disabled={batchBusy} onChange={() => toggleDeviceSelection(device.id)} slotProps={{ input: { 'aria-label': `选择设备 ${device.name || device.id}` } }} />
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
                             <Typography fontWeight={600} noWrap title={device.name}>{device.name || `设备 ${device.id}`}</Typography>
                             <Typography variant="body2" color="text.secondary" noWrap>
                               {device.callsign}-{device.ssid}
@@ -362,6 +375,7 @@ export function DevicesPage() {
         <Table sx={{ display: { xs: 'none', lg: 'table' }, minWidth: 920, tableLayout: 'fixed' }}>
           <TableHead sx={{ bgcolor: 'background.default' }}>
             <TableRow>
+              <TableCell padding="checkbox" sx={{ width: 44 }}>选择</TableCell>
               <TableCell align="center" sx={{ width: 70 }}>在线</TableCell>
               <TableCell align="center">名称</TableCell>
               <TableCell align="center">设备类型</TableCell>
@@ -376,13 +390,13 @@ export function DevicesPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} align="center">
+                <TableCell colSpan={10} align="center">
                   加载中...
                 </TableCell>
               </TableRow>
             ) : paginatedDevices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} align="center">
+                <TableCell colSpan={10} align="center">
                   暂无设备数据
                 </TableCell>
               </TableRow>
@@ -390,7 +404,8 @@ export function DevicesPage() {
               paginatedDevices.map((device) => {
                 const group = getGroupInfo(device.group_id)
                 return (
-                  <TableRow key={device.id} hover>
+                  <TableRow key={device.id} hover selected={selectedDeviceIds.includes(device.id)}>
+                    <TableCell padding="checkbox"><Checkbox checked={selectedDeviceIds.includes(device.id)} disabled={batchBusy} onChange={() => toggleDeviceSelection(device.id)} slotProps={{ input: { 'aria-label': `选择设备 ${device.name || device.id}` } }} /></TableCell>
                     <TableCell align="center">
                       <OnlineIndicator online={device.online || device.is_online || false} />
                     </TableCell>
@@ -472,7 +487,7 @@ export function DevicesPage() {
         <TablePagination
           component="div"
           count={filteredDevices.length}
-          page={page}
+          page={safePage}
           onPageChange={(_, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => {

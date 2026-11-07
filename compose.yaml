@@ -2,7 +2,10 @@ name: ${COMPOSE_PROJECT_NAME:-draarl}
 
 services:
   mysql:
-    image: mysql:8.4
+    image: ${DRAARL_MYSQL_IMAGE:-draarl-mysql:8.4.13-security-20261107}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.mysql
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: draarl
@@ -24,7 +27,10 @@ services:
     networks: [draarl]
 
   redis:
-    image: redis:7.4-alpine
+    image: ${DRAARL_REDIS_IMAGE:-draarl-redis:7.4.12-security-20261107}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.redis
     restart: unless-stopped
     environment:
       REDIS_PASSWORD: ${DRAARL_REDIS_PASSWORD:?set DRAARL_REDIS_PASSWORD in .env}
@@ -40,7 +46,10 @@ services:
     networks: [draarl]
 
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: ${DRAARL_MINIO_IMAGE:-draarl-minio:2025-10-15-security-20261107}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${DRAARL_MINIO_ROOT_USER:?set DRAARL_MINIO_ROOT_USER in .env}

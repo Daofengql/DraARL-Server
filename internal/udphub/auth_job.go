@@ -324,5 +324,13 @@ func processDeviceAuthJob(job *deviceAuthJob) {
 			return
 		}
 	}
+	wasOnlineBeforeHeartbeat := job.dev.RuntimeSnapshot().ISOnline
 	continueDraARLPacket(packet, job.data, job.dev, job.conn, job.realAddr, false)
+	if wasOnlineBeforeHeartbeat {
+		// Activation can mark the runtime online before the heartbeat handler.
+		// Also resync on address changes while still online: an earlier settings
+		// push may have been sent to the old Wi-Fi/PPP/NAT endpoint.
+		// The offline path already schedules sync in handleDraARLHeartbeat.
+		syncDeviceConfigAsync(job.dev)
+	}
 }

@@ -3,7 +3,7 @@ package websocket
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -414,7 +414,7 @@ func (d *WSDevice) writerLoop(writeCh chan *writeRequest, closeCh <-chan struct{
 			req.payload.release()
 			wsWritesDrained.Add(1)
 			if err != nil {
-				log.Printf("[WS] Async write failed for %s: %v", d.GetIdentifier(), err)
+				slog.Warn("websocket asynchronous write failed", "device_id", d.GetIdentifier(), "error", err)
 				return
 			}
 		case <-closeCh:
@@ -730,7 +730,7 @@ func (m *WSConnectionManager) RegisterConnection(conn *websocket.Conn) *WSDevice
 	shard.connMap[conn] = device
 
 	atomic.AddInt64(&m.totalConnections, 1)
-	log.Printf("[WS] New connection registered: %s", conn.RemoteAddr().String())
+	slog.Info("websocket connection registered", "remote_addr", conn.RemoteAddr().String())
 	return device
 }
 
@@ -786,7 +786,7 @@ func (m *WSConnectionManager) UnregisterDevice(device *WSDevice) {
 	if device.connectionRegistered {
 		atomic.AddInt64(&m.totalConnections, -1)
 	}
-	log.Printf("[WS] Device unregistered: %s", key)
+	slog.Info("websocket device unregistered", "device_id", key)
 }
 
 // DisconnectDevice removes one exact session before closing its transport.
@@ -982,6 +982,8 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 		shard.mu.Unlock()
 		return errors.New("ghost session id is already registered")
 	}
+	// Web ghost sessions always use the protocol-assigned SSID.
+	_ = ssid
 	ssid = fixedWebGhostSSID
 
 	device.stateMu.Lock()
@@ -1010,7 +1012,7 @@ func (m *WSConnectionManager) RegisterGhostDevice(device *WSDevice, userID int, 
 	m.globalGroupIndex.mu.Unlock()
 	shard.mu.Unlock()
 
-	log.Printf("[WS] Ghost session registered: session=%s user=%d model=%d tx_group=%d rx_groups=%v", ghostsession.ShortID(device.SessionID), userID, device.DevModel, device.GetGroupID(), device.GetRxGroupIDs())
+	slog.Info("ghost session registered", "session_id", ghostsession.ShortID(device.SessionID), "user_id", userID, "model", device.DevModel, "tx_group", device.GetGroupID(), "rx_groups", device.GetRxGroupIDs())
 	return nil
 }
 
@@ -1052,7 +1054,7 @@ func (m *WSConnectionManager) SetDeviceRouting(device *WSDevice, routing ghostse
 	}
 	m.globalGroupIndex.mu.Unlock()
 	shard.mu.Unlock()
-	log.Printf("[WS] Ghost session routing changed: session=%s tx=%d rx=%v", ghostsession.ShortID(device.SessionID), routing.TxGroupID, routing.RxGroupIDs)
+	slog.Info("ghost session routing changed", "session_id", ghostsession.ShortID(device.SessionID), "tx_group", routing.TxGroupID, "rx_groups", routing.RxGroupIDs)
 	sendRoutingUpdated(device)
 	return nil
 }

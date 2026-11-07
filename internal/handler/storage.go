@@ -28,39 +28,39 @@ type presignPutRequest struct {
 // POST /api/storage/presign-put
 func PresignPut(c *gin.Context) {
 	if !storage.IsEnabled() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
+		writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
 		return
 	}
 
 	var req presignPutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	fileType := strings.ToLower(strings.TrimSpace(req.FileType))
 	if !storage.IsAllowedPresignFileType(fileType) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "不支持的 file_type"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "不支持的 file_type"})
 		return
 	}
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	user, err := gormdb.NewUserRepository().GetUserByName(username.(string))
+	user, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在"})
 		return
 	}
 	if (fileType == "assets" || fileType == "firmware" || fileType == "client_resource") && !hasRoleGORM(user, "admin") {
-		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "该文件类型需要管理员权限"})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": 403, "message": "该文件类型需要管理员权限"})
 		return
 	}
 
 	maxSize := storage.MaxSizeForFileType(fileType)
 	if req.Size <= 0 || req.Size > maxSize {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": fmt.Sprintf("文件大小无效或超过限制（最大 %d 字节）", maxSize),
 		})
@@ -77,14 +77,14 @@ func PresignPut(c *gin.Context) {
 	uploadToken, err := storage.CreateUploadGrant(objectKey, fileType, user.ID, req.Size, contentType, expiry)
 	if err != nil {
 		log.Printf("生成上传授权失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成上传授权失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成上传授权失败"})
 		return
 	}
 
 	result, err := storage.PresignPut(c.Request.Context(), objectKey, expiry, contentType, req.Size)
 	if err != nil {
 		log.Printf("生成预签名上传失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成上传凭证失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成上传凭证失败"})
 		return
 	}
 
@@ -113,11 +113,11 @@ func PresignPut(c *gin.Context) {
 // PUT /api/storage/put?token=...&key=...
 func StorageDirectPut(c *gin.Context) {
 	if !storage.IsEnabled() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
+		writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
 		return
 	}
 	if storage.ResolveDriver(config.Get()) != storage.DriverLocal {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "当前存储驱动不支持此接口"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "当前存储驱动不支持此接口"})
 		return
 	}
 
@@ -128,12 +128,12 @@ func StorageDirectPut(c *gin.Context) {
 		contentType = c.GetHeader("Content-Type")
 	}
 	if token == "" || key == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 token 或 key"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 token 或 key"})
 		return
 	}
 	expectedSize, effectiveContentType, err := storage.VerifyLocalPutToken(token, key, contentType)
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": err.Error()})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": 403, "message": err.Error()})
 		return
 	}
 	// 请求未提供 Content-Type 时采用 token 绑定类型落盘
@@ -141,7 +141,7 @@ func StorageDirectPut(c *gin.Context) {
 		contentType = effectiveContentType
 	}
 	if c.Request.ContentLength >= 0 && c.Request.ContentLength != expectedSize {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传内容大小与凭证不匹配"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "上传内容大小与凭证不匹配"})
 		return
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, expectedSize)
@@ -150,7 +150,7 @@ func StorageDirectPut(c *gin.Context) {
 	}
 	if err := storage.Put(c.Request.Context(), key, c.Request.Body, expectedSize, contentType); err != nil {
 		log.Printf("local 直传失败: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "上传内容与凭证不匹配"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "上传内容与凭证不匹配"})
 		return
 	}
 
@@ -168,7 +168,7 @@ func StorageDirectPut(c *gin.Context) {
 // GET /api/storage/get?token=...&key=...
 func StorageDirectGet(c *gin.Context) {
 	if !storage.IsEnabled() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
+		writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": 503, "message": "存储服务不可用"})
 		return
 	}
 	if storage.ResolveDriver(config.Get()) != storage.DriverLocal {

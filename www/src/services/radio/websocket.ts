@@ -1,3 +1,4 @@
+import { debugLog } from '../../utils/debugLog.ts'
 /**
  * WebSocket 客户端服务
  * 实现与后端 DraARLv1 协议的通信
@@ -190,7 +191,7 @@ export class RadioWebSocket {
         this.ws.binaryType = 'arraybuffer'
 
         this.ws.onopen = () => {
-          console.log('[WS] Connected')
+          debugLog('[WS] Connected')
           this.isConnecting = false
           this.reconnectAttempts = 0
           this.setState('authenticating')
@@ -214,7 +215,7 @@ export class RadioWebSocket {
         }
 
         this.ws.onclose = (event) => {
-          console.log('[WS] Closed:', event.code, event.reason)
+          debugLog('[WS] Closed:', event.code, event.reason)
           this.isConnecting = false
           this.stopHeartbeat()
           this.setState('disconnected')
@@ -601,14 +602,14 @@ export class RadioWebSocket {
     const elapsed = Date.now() - this.connectionStartTime
     if (elapsed >= this.config.preReconnectTime && !this.isReceiving && !this.isSending) {
       this.pendingReconnect = true
-      console.log('[WS] Marked for reconnect')
+      debugLog('[WS] Marked for reconnect')
     }
   }
 
   // 检查待重连
   private checkPendingReconnect() {
     if (this.pendingReconnect && !this.isReceiving && !this.isSending) {
-      console.log('[WS] Executing pending reconnect')
+      debugLog('[WS] Executing pending reconnect')
       this.doReconnect()
     }
   }
@@ -616,7 +617,7 @@ export class RadioWebSocket {
   // 安排重连
   private scheduleReconnect() {
     if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-      console.log('[WS] Max reconnect attempts reached')
+      debugLog('[WS] Max reconnect attempts reached')
       if (this.onError) this.onError('连接失败，请刷新页面重试')
       return
     }
@@ -624,7 +625,7 @@ export class RadioWebSocket {
     this.clearReconnectTimer()
 
     const delay = this.config.reconnectInterval * Math.pow(1.5, this.reconnectAttempts)
-    console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1})`)
+    debugLog(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1})`)
 
     this.setState('reconnecting')
 

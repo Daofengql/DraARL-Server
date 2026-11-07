@@ -145,7 +145,7 @@ func RequireApproved() gin.HandlerFunc {
 			return
 		}
 
-		userValue, ok := c.Get("user")
+		userValue, _ := c.Get("user")
 		user, ok := userValue.(*gormdb.User)
 		if !ok || user == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -200,7 +200,7 @@ func LoadUserInfo() gin.HandlerFunc {
 			return
 		}
 
-		userValue, ok := c.Get("user")
+		userValue, _ := c.Get("user")
 		user, ok := userValue.(*gormdb.User)
 		if !ok || user == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{

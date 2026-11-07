@@ -15,6 +15,9 @@ import (
 func TestMediaProcessLimitsHaveSafeDefaults(t *testing.T) {
 	command := exec.Command("/bin/sh", "-c", "sleep 0.1")
 	processor := &Processor{config: config.BroadcastConfig{}}
+	if err := processor.runCommand(nil); err == nil {
+		t.Fatal("nil media command must return an error")
+	}
 	if err := processor.runCommand(command); err != nil {
 		t.Fatalf("run command with default process limits: %v", err)
 	}
@@ -22,7 +25,8 @@ func TestMediaProcessLimitsHaveSafeDefaults(t *testing.T) {
 
 func TestRunCommandInstallsLimitsBeforeExec(t *testing.T) {
 	path := t.TempDir() + "/limits.txt"
-	command := exec.Command("/bin/sh", "-c", `awk '/Max address space|Max cpu time/ {print}' /proc/self/limits > "$1"`, "probe", path)
+	command := exec.Command("/bin/sh", "-c", `awk '/Max address space|Max cpu time/ {print}' /proc/self/limits > "$1"; printf 'threads=%s/%s keep=%s' "$OPENBLAS_NUM_THREADS" "$OMP_NUM_THREADS" "$DRAARL_TEST_KEEP" >> "$1"`, "probe", path)
+	command.Env = append(os.Environ(), "OPENBLAS_NUM_THREADS=64", "OMP_NUM_THREADS=64", "DRAARL_TEST_KEEP=present")
 	processor := &Processor{config: config.BroadcastConfig{TranscodeMemoryLimitMB: 768, TranscodeCPULimitSeconds: 17}}
 	if err := processor.runCommand(command); err != nil {
 		t.Fatal(err)
@@ -34,6 +38,9 @@ func TestRunCommandInstallsLimitsBeforeExec(t *testing.T) {
 	text := string(limits)
 	if !linuxLimitValue(text, "Max address space", "805306368") || !linuxLimitValue(text, "Max cpu time", "17") {
 		t.Fatalf("exec-time rlimits missing expected values: %s", text)
+	}
+	if !strings.Contains(text, "threads=1/1 keep=present") {
+		t.Fatalf("dependent runtimes not bounded, or caller environment lost: %s", text)
 	}
 }
 

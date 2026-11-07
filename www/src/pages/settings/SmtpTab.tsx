@@ -19,7 +19,7 @@ export function SmtpTab({ value, config, setConfig, loading, onSave }: SmtpTabPr
     <TabPanel value={value} index={4}>
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card><CardContent>
-          <Typography variant="h6" gutterBottom>SMTP邮件配置</Typography>
+          <Typography component="h2" variant="h6" gutterBottom>SMTP邮件配置</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
             配置SMTP服务器用于发送验证码邮件
           </Typography>

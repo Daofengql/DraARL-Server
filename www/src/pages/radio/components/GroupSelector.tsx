@@ -121,9 +121,10 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
           </FormControl>
 
           {updating && <CircularProgress size={20} />}
-          <Tooltip title="频道混音">
+          <Tooltip title="频道混音" describeChild>
             <span>
               <IconButton
+                aria-label="频道混音"
                 size="small"
                 disabled={disabled || rxGroupIds.length === 0}
                 onClick={event => setMixerAnchor(event.currentTarget)}

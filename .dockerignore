@@ -2,6 +2,8 @@
 .github
 .idea
 .vscode
+output
+www/coverage
 bin
 build
 data

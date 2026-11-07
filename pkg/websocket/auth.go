@@ -3,6 +3,7 @@ package websocket
 import (
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -251,14 +252,14 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	user, err := repo.GetUserByID(claims.UserID)
 	if err != nil || user == nil {
 		result.Error = "user_not_found"
-		log.Printf("[WS-AUTH] User not found: %s", claims.Username)
+		slog.Warn("WebSocket authentication account missing", "username", claims.Username)
 		return result
 	}
 
 	// 检查用户状态
 	if user.Status != 1 {
 		result.Error = "user_disabled"
-		log.Printf("[WS-AUTH] User disabled: %s", claims.Username)
+		slog.Warn("WebSocket authentication account disabled", "username", claims.Username)
 		return result
 	}
 	if claims.SessionVersion != user.SessionVersion {
@@ -269,7 +270,7 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	// 检查审核状态
 	if user.ApprovalStatus != 1 {
 		result.Error = "user_not_approved"
-		log.Printf("[WS-AUTH] User not approved: %s", claims.Username)
+		slog.Warn("WebSocket authentication account not approved", "username", claims.Username)
 		return result
 	}
 
@@ -284,7 +285,7 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 	// DevModel=105 为 Web 浏览器端
 	lastGroupID, err := repo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 	if err != nil {
-		log.Printf("[WS-AUTH] 获取用户 %d 的群组偏好失败: %v，使用默认群组", user.ID, err)
+		slog.Warn("WebSocket group preference lookup failed", "user_id", user.ID, "error", err)
 		lastGroupID = models.GroupIDPublicMin
 	}
 	if lastGroupID != models.GroupIDPublicMin {
@@ -300,13 +301,13 @@ func AuthenticateJWT(tokenString string) *AuthResult {
 			}
 		}
 		if groupErr != nil || !canUseGroupForWebGhost(user, lastGroupID, group, isVerifiedMember) {
-			log.Printf("[WS-AUTH] 用户 %d 的群组偏好 %d 已失效，回退默认群组", user.ID, lastGroupID)
+			slog.Info("websocket group preference expired", "user_id", user.ID, "group_id", lastGroupID)
 			lastGroupID = models.GroupIDPublicMin
 		}
 	}
 	result.GroupID = lastGroupID
 
-	log.Printf("[WS-AUTH] JWT auth success: user-%d (%s) group-%d", user.ID, user.CallSign, result.GroupID)
+	slog.Info("websocket authentication succeeded", "user_id", user.ID, "callsign", user.CallSign, "group_id", result.GroupID)
 	return result
 }
 

@@ -1,6 +1,7 @@
 package udphub
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -88,6 +89,10 @@ func loadAllDevices() {
 }
 
 func loadDeviceOwnerCache(devices []*gormdb.Device) map[int]*gormdb.User {
+	return loadDeviceOwnerCacheContext(context.Background(), devices)
+}
+
+func loadDeviceOwnerCacheContext(ctx context.Context, devices []*gormdb.Device) map[int]*gormdb.User {
 	ownerSet := make(map[int]struct{}, len(devices))
 	for _, dev := range devices {
 		if dev != nil && dev.OwnerID > 0 {
@@ -100,7 +105,7 @@ func loadDeviceOwnerCache(devices []*gormdb.Device) map[int]*gormdb.User {
 	}
 
 	cache := make(map[int]*gormdb.User, len(ownerIDs))
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(ctx)
 	const batchSize = 1000
 	for start := 0; start < len(ownerIDs); start += batchSize {
 		end := min(start+batchSize, len(ownerIDs))
@@ -429,7 +434,7 @@ func checkDeviceOnline() {
 								// 在宽限期内，延长超时时间
 								if timeSinceLastPacket < offlineTimeout+reconnectGrace {
 									log.Printf("[GRACE] Device %v-%v in reconnection grace period, waiting... (%v since last packet)",
-									state.CallSign, state.SSID, timeSinceLastPacket)
+										state.CallSign, state.SSID, timeSinceLastPacket)
 									groupOnlineCount++
 									onlineMap[dev.ID] = dev
 									continue
@@ -604,6 +609,7 @@ func finalizeCenterLocalOffline(dev *models.Device) {
 	if dev == nil || dev.ID <= 0 {
 		return
 	}
+	notifyDeviceOnlineChange(dev)
 	sessionID := dev.RuntimeSnapshot().InterconnectSessionID
 	RevokeCenterLocalDevice(dev)
 	cleared, err := gormdb.NewDeviceRepository().ClearDeviceEntryIfSession(dev.ID, "center", sessionID)
@@ -622,7 +628,8 @@ func processLogBuffer() {
 		if dev == nil {
 			continue
 		}
-		// TODO: 记录设备操作日志
+		// Burst summaries are diagnostic activity logs; communication records are
+		// persisted by the dedicated recorder, without duplicate audit rows.
 		state := dev.RuntimeSnapshot()
 		log.Printf("Device activity: %v-%v, voice: %dms, control: %dms",
 			state.CallSign, state.SSID, state.LastVoiceDuration, state.LastCtlDuration)
@@ -698,6 +705,7 @@ func SetDeviceOnline(dev *models.Device, online bool) {
 	if dev == nil {
 		return
 	}
+	wasOnline := dev.RuntimeSnapshot().ISOnline
 	now := time.Now()
 	dev.UpdateRuntime(func(current *models.Device) {
 		current.ISOnline = online
@@ -705,6 +713,9 @@ func SetDeviceOnline(dev *models.Device, online bool) {
 			current.OnlineTime = now
 		}
 	})
+	if wasOnline != online {
+		notifyDeviceOnlineChange(dev)
+	}
 }
 
 // GetDevice 根据 CallSign 和 SSID 获取设备（公开函数，供 websocket 包使用）

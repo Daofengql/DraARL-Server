@@ -202,8 +202,8 @@ func (g *CenterGateway) ReleaseScheduledBroadcast(runID uint, domainID uint64) {
 	g.speaker.ReleaseLocal(sessionID, 1, domainID)
 }
 
-func (g *CenterGateway) HasScheduledBroadcastReceiver(domainID uint64) bool {
-	return g != nil && g.cluster != nil && g.cluster.HasTargetNode(domainID, CenterLocalNodeID)
+func (g *CenterGateway) HasScheduledBroadcastReceiver(sourceGroupID int, domainID uint64) bool {
+	return g != nil && g.cluster != nil && g.cluster.HasGroupBroadcastTarget(sourceGroupID, domainID)
 }
 
 func (g *CenterGateway) RelayScheduledBroadcast(runID uint, sourceGroupID int, domainID uint64, inner []byte) error {
@@ -222,10 +222,10 @@ func (g *CenterGateway) RelayScheduledBroadcast(runID uint, sourceGroupID int, d
 	if tagged, ok := protocol.WithSourceGroupID(inner, sourceGroupID); ok {
 		relayInner = tagged
 	}
-	return g.cluster.Relay(CenterLocalNodeID, RelayFrame{
+	return g.cluster.relay(CenterLocalNodeID, RelayFrame{
 		SessionID: sessionID, SessionEpoch: 1, DomainID: domainID,
 		SpeakerLeaseID: leaseID, InnerPacket: relayInner,
-	})
+	}, sourceGroupID)
 }
 
 func (g *CenterGateway) AuthorizeLocalDevice(grant DeviceGrant) bool {

@@ -196,13 +196,12 @@ func loadUDPGhostRouting(user *gormdb.User, devModel byte, instanceID string, fa
 	if user == nil {
 		return ghostsession.Routing{}, errors.New("authenticated user is required")
 	}
-	routing := ghostsession.Routing{TxGroupID: fallbackGroupID, RxGroupIDs: []int{fallbackGroupID}}
 	repository := gormdb.NewGhostClientPreferenceRepository()
 	preference, err := repository.GetOrCreate(user.ID, devModel, instanceID, fallbackGroupID)
 	if err != nil || preference == nil {
 		return ghostsession.Routing{}, errors.New("client preference unavailable")
 	}
-	routing = ghostsession.Routing{TxGroupID: preference.TxGroupID, RxGroupIDs: preference.RxGroupIDs}
+	routing := ghostsession.Routing{TxGroupID: preference.TxGroupID, RxGroupIDs: preference.RxGroupIDs}
 	routing, changed, err := groupaccess.SanitizeRouting(gormdb.Get(), user, routing, models.GroupIDPublicMin, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return ghostsession.Routing{}, err

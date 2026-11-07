@@ -23,7 +23,7 @@ func AdminSwitchLogin(c *gin.Context) {
 	}
 	// 即使路由已经挂载 RequireAdmin，也在处理器内再次校验，避免以后调整路由时放宽权限。
 	if !isAdminUser(actor) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "仅管理员可以切换登录用户",
 		})
@@ -32,44 +32,44 @@ func AdminSwitchLogin(c *gin.Context) {
 
 	targetID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || targetID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "无效的用户ID",
 		})
 		return
 	}
 
-	target, err := gormdb.NewUserRepository().GetUserByID(targetID)
+	target, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserByID(targetID)
 	if err != nil || target == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    http.StatusNotFound,
 			"message": "目标用户不存在",
 		})
 		return
 	}
 	if target.ID == actor.ID {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "当前已登录该账号",
 		})
 		return
 	}
 	if target.ID == 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "不允许切换登录到主管理员账号",
 		})
 		return
 	}
 	if target.Status != 1 {
-		c.JSON(http.StatusConflict, gin.H{
+		writeErrorResponse(c, http.StatusConflict, gin.H{
 			"code":    http.StatusConflict,
 			"message": "目标用户已被禁用",
 		})
 		return
 	}
 	if !canAdminSwitchLogin(actor, target) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "不允许切换到该用户",
 		})
@@ -78,7 +78,7 @@ func AdminSwitchLogin(c *gin.Context) {
 
 	issued, err := issueAuthTokens(c, target)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    http.StatusInternalServerError,
 			"message": "签发目标用户登录态失败",
 		})
@@ -109,7 +109,7 @@ func AdminSwitchLogin(c *gin.Context) {
 			"refresh_token":      issued.RefreshToken,
 			"expires_in":         issued.AccessExpiresIn,
 			"refresh_expires_in": issued.RefreshExpiresIn,
-			"user":               buildLoginUserData(target),
+			"user":               buildLoginUserDataContext(c.Request.Context(), target),
 		},
 	})
 }

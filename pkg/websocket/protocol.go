@@ -94,6 +94,9 @@ func DecodeWSPacket(data []byte) (*WSPacket, error) {
 
 // EncodeWSPacket 编码 WSPacket 为 WebSocket 二进制数据
 func EncodeWSPacket(packet *WSPacket) []byte {
+	if packet == nil {
+		return nil
+	}
 	return protocol.EncodeDraARLv1(
 		packet.Username,
 		packet.DevicePassword,
@@ -108,48 +111,13 @@ func EncodeWSPacket(packet *WSPacket) []byte {
 
 // EncodeHeartbeatResponse 编码心跳响应包（填充 CallSign）
 func EncodeHeartbeatResponse(req *WSPacket, callsign string) []byte {
-	totalSize := protocol.DraARLv1HeaderSize + len(req.DATA)
-	packet := make([]byte, totalSize)
-
-	// 复制原始请求的大部分字段
-	copy(packet[0:4], []byte(protocol.DraARLVersion))
-	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
-
-	// 复制 Username
-	usernameBytes := []byte(req.Username)
-	copy(packet[6:38], usernameBytes)
-
-	// 复制 DevicePassword
-	passwordBytes := []byte(req.DevicePassword)
-	copy(packet[38:48], passwordBytes)
-
-	// 复制 Type
-	packet[48] = req.Type
-
-	// 复制 DevModel
-	packet[49] = req.DevModel
-
-	// 复制 SSID
-	packet[50] = req.SSID
-
-	// 复制 DMRID
-	uint24ToBytes(req.DMRID, packet[51:54])
-
-	// 填充 CallSign（服务器填充）
-	callsignBytes := []byte(callsign)
-	if len(callsignBytes) > 32 {
-		callsignBytes = callsignBytes[:32]
+	if req == nil {
+		return nil
 	}
-	copy(packet[54:86], callsignBytes)
-
-	// Reserved - 已经是 0
-
-	// 复制 DATA
-	if len(req.DATA) > 0 {
-		copy(packet[protocol.DraARLv1HeaderSize:], req.DATA)
-	}
-
-	return packet
+	return protocol.EncodeHeartbeatResponse(&protocol.DraARLv1Packet{
+		Username: req.Username, DevicePassword: req.DevicePassword,
+		Type: req.Type, DevModel: req.DevModel, SSID: req.SSID, DMRID: req.DMRID, DATA: req.DATA,
+	}, callsign)
 }
 
 // BuildHeartbeatPacket 构建心跳包
@@ -207,9 +175,9 @@ func uint24ToBytes(v uint32, b []byte) {
 	if len(b) < 3 {
 		return
 	}
-	b[0] = byte(v >> 16)
-	b[1] = byte(v >> 8)
-	b[2] = byte(v)
+	b[0] = byte((v >> 16) & 0xff)
+	b[1] = byte((v >> 8) & 0xff)
+	b[2] = byte(v & 0xff)
 }
 
 // GetPacketTypeName 获取数据包类型名称

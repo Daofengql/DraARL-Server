@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	gormdb "draarl/internal/gormdb"
 	"draarl/internal/udphub"
 	"draarl/pkg/cache"
@@ -28,7 +29,7 @@ func getGroups(c *gin.Context, adminView bool) {
 	keyword := c.Query("keyword")
 	page, pageSize, offset, err := normalizeGroupPagination(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
@@ -37,7 +38,7 @@ func getGroups(c *gin.Context, adminView bool) {
 		return
 	}
 	if adminView && !isAdminUser(currentUser) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "需要管理员权限",
 		})
@@ -47,7 +48,7 @@ func getGroups(c *gin.Context, adminView bool) {
 	uid := currentUser.ID
 	likeKeyword := "%" + keyword + "%"
 
-	countQuery := gormdb.Get().Table("public_groups g").
+	countQuery := gormdb.Get().WithContext(c.Request.Context()).Table("public_groups g").
 		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
 		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
@@ -61,7 +62,7 @@ func getGroups(c *gin.Context, adminView bool) {
 
 	var total int64
 	if err := countQuery.Distinct("g.id").Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询群组总数失败",
 		})
@@ -86,7 +87,7 @@ func getGroups(c *gin.Context, adminView bool) {
 	}
 
 	rows := make([]groupListRow, 0, pageSize)
-	dataQuery := gormdb.Get().Table("public_groups g").
+	dataQuery := gormdb.Get().WithContext(c.Request.Context()).Table("public_groups g").
 		Select(`
 			g.id, g.name, g.type, g.ower_id, g.master_server, g.slave_server, g.status, g.note, g.create_time, g.update_time,
 			COALESCE(u.callsign, '') AS owner_callsign,
@@ -114,7 +115,7 @@ func getGroups(c *gin.Context, adminView bool) {
 		Offset(offset).
 		Limit(pageSize).
 		Scan(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询群组列表失败",
 		})
@@ -135,12 +136,12 @@ func getGroups(c *gin.Context, adminView bool) {
 			TotalCount  int `gorm:"column:total_count"`
 		}
 		stats := make([]deviceStats, 0, len(groupIDs))
-		if err := gormdb.Get().Table("devices").
+		if err := gormdb.Get().WithContext(c.Request.Context()).Table("devices").
 			Select("group_id, SUM(CASE WHEN is_online = 1 THEN 1 ELSE 0 END) AS online_count, COUNT(1) AS total_count").
 			Where("group_id IN ?", groupIDs).
 			Group("group_id").
 			Scan(&stats).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备统计失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组设备统计失败"})
 			return
 		}
 		byGroupID := make(map[int]deviceStats, len(stats))
@@ -185,8 +186,8 @@ func getGroups(c *gin.Context, adminView bool) {
 			"is_owner":      row.OwerID == uid,
 			"online_count":  onlineCount,
 			"total_count":   row.TotalCount,
-			"create_time":   row.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":   row.UpdateTime.Format("2006-01-02 15:04:05"),
+			"create_time":   common.FormatAPITime(row.CreateTime),
+			"update_time":   common.FormatAPITime(row.UpdateTime),
 		})
 	}
 
@@ -208,7 +209,7 @@ func GetGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -222,11 +223,11 @@ func GetGroup(c *gin.Context) {
 	if groupCache != nil {
 		group, err = groupCache.GetGroupByID(ctx, id)
 	} else {
-		repo := gormdb.NewGroupRepository()
+		repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 		group, err = repo.GetGroupByID(id)
 	}
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
@@ -242,7 +243,7 @@ func GetGroup(c *gin.Context) {
 	// Get owner callsign from user table
 	var ownerCallSign string
 	if group.OwerID > 0 {
-		userRepo := gormdb.NewUserRepository()
+		userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		if owner, err := userRepo.GetUserByID(group.OwerID); err == nil && owner != nil {
 			ownerCallSign = owner.CallSign
 		}
@@ -262,8 +263,8 @@ func GetGroup(c *gin.Context) {
 			"status":        group.Status,
 			"note":          group.Note,
 			"is_owner":      isOwner,
-			"create_time":   group.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":   group.UpdateTime.Format("2006-01-02 15:04:05"),
+			"create_time":   common.FormatAPITime(group.CreateTime),
+			"update_time":   common.FormatAPITime(group.UpdateTime),
 		},
 	})
 }
@@ -273,7 +274,7 @@ func GetGroup(c *gin.Context) {
 func GetRelays(c *gin.Context) {
 	location := c.Query("location")
 
-	repo := gormdb.NewRelayRepository()
+	repo := gormdb.NewRelayRepository().WithContext(c.Request.Context())
 	var relays []*gormdb.Relay
 	var err error
 
@@ -285,7 +286,7 @@ func GetRelays(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询中继台列表失败",
 		})
@@ -304,10 +305,10 @@ func GetRelays(c *gin.Context) {
 // GetServers 获取服务器列表
 
 func GetServers(c *gin.Context) {
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	servers, err := repo.ListServers()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询服务器列表失败",
 		})
@@ -328,7 +329,7 @@ func GetServers(c *gin.Context) {
 func SearchGroups(c *gin.Context) {
 	var req SearchGroupsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -343,21 +344,21 @@ func SearchGroups(c *gin.Context) {
 		keyword = strings.TrimSpace(req.Query)
 	}
 	if keyword == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请输入搜索关键词"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请输入搜索关键词"})
 		return
 	}
 	page, pageSize, _, err := normalizeGroupPagination(req.Page, req.PageSize)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
 	// 搜索、计数和分页在同一个 SQL 可见性条件中完成，避免先加载所有
 	// 匹配群组再在 Go 内存中过滤私有群组。
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	groups, total, err := repo.SearchGroupsPaginatedVisible(keyword, currentUser.ID, isAdminUser(currentUser), pageSize, page)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "搜索群组失败",
 		})
@@ -366,9 +367,9 @@ func SearchGroups(c *gin.Context) {
 
 	verifiedGroupIDs := make(map[int]bool)
 	if candidates := searchMembershipCandidateIDs(groups, currentUser.ID); len(candidates) > 0 && !isAdminUser(currentUser) {
-		ids, err := gormdb.NewGroupMemberRepository().ListVerifiedGroupIDsByUser(currentUser.ID, candidates)
+		ids, err := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context()).ListVerifiedGroupIDsByUser(currentUser.ID, candidates)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组成员关系失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组成员关系失败"})
 			return
 		}
 		for _, groupID := range ids {
@@ -377,7 +378,7 @@ func SearchGroups(c *gin.Context) {
 	}
 
 	// 批量获取所有者呼号（解决 N+1 查询问题）
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	ownerIDs := make([]int, 0, len(groups))
 	for _, g := range groups {
 		if g.OwerID > 0 {
@@ -418,8 +419,8 @@ func SearchGroups(c *gin.Context) {
 			"note":             g.Note,
 			"require_password": false,
 			"is_joined":        isJoined,
-			"create_time":      g.CreateTime.Format("2006-01-02 15:04:05"),
-			"update_time":      g.UpdateTime.Format("2006-01-02 15:04:05"),
+			"create_time":      common.FormatAPITime(g.CreateTime),
+			"update_time":      common.FormatAPITime(g.UpdateTime),
 		})
 	}
 
@@ -451,23 +452,17 @@ func searchMembershipCandidateIDs(groups []*gormdb.Group, userID int) []int {
 	return result
 }
 
-const maxGroupPageSize = 100
+const maxGroupPageSize = gormdb.MaxPageSize
 
 func normalizeGroupPagination(page, pageSize int) (int, int, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
 	if pageSize > maxGroupPageSize {
 		pageSize = maxGroupPageSize
 	}
-	maxInt := int(^uint(0) >> 1)
-	if page > (maxInt/pageSize)+1 {
+	pageSize, page, offset, err := gormdb.NormalizePageOffset(pageSize, page)
+	if err != nil {
 		return 0, 0, 0, fmt.Errorf("分页页码过大")
 	}
-	return page, pageSize, (page - 1) * pageSize, nil
+	return page, pageSize, offset, nil
 }
 
 // JoinGroupRequest 加入群组请求

@@ -1,3 +1,4 @@
+import { parseAPIDate } from '../../utils/apiTime'
 import { useCallback, useState, useEffect, type FormEvent } from 'react'
 import {
   Box, Paper, Typography, Table, TableBody, TableCell, TableContainer,
@@ -205,7 +206,7 @@ export function FirmwarePage() {
                     <Chip label="历史" size="small" variant="outlined" />
                   )}
                 </TableCell>
-                <TableCell>{new Date(fw.create_time).toLocaleString()}</TableCell>
+                <TableCell>{parseAPIDate(fw.create_time).toLocaleString()}</TableCell>
                 <TableCell align="right">
                   <Tooltip title="删除">
                     <IconButton size="small" color="error" onClick={() => setDeleteTarget(fw)}>

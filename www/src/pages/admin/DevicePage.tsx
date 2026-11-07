@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useState, useEffect } from 'react'
 import {
   Box,
@@ -149,7 +150,7 @@ export function AdminDevicePage() {
       })
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
+      setError(getErrorMessage(err, '操作失败'))
     }
   }
 
@@ -161,7 +162,7 @@ export function AdminDevicePage() {
       })
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '操作失败')
+      setError(getErrorMessage(err, '操作失败'))
     }
   }
 
@@ -178,7 +179,7 @@ export function AdminDevicePage() {
       setSwitchingDevice(null)
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '切换群组失败')
+      setError(getErrorMessage(err, '切换群组失败'))
     }
   }
 
@@ -195,7 +196,7 @@ export function AdminDevicePage() {
       setDeletingDevice(null)
       loadDevices()
     } catch (err: any) {
-      setError(err.response?.data?.message || '删除失败')
+      setError(getErrorMessage(err, '删除失败'))
     }
   }
 
@@ -315,7 +316,7 @@ export function AdminDevicePage() {
                           </Typography>
                         </Box>
                       ) : (
-                        <Typography variant="body2" color="text.disabled">
+                        <Typography variant="body2" color="text.secondary">
                           {device.owner_name || device.owner_callsign || '-'}
                         </Typography>
                       )}

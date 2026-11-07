@@ -62,10 +62,12 @@ func buildWSSpeaker(source interfaces.WSDeviceInterface) halfDuplexSpeaker {
 	var key uint64
 	switch {
 	case source.GetDeviceID() > 0:
+		// #nosec G115 -- Positive database IDs are encoded in fixed-width speaker identity namespaces.
 		key = 0x1000000000000000 | uint64(uint32(source.GetDeviceID()))
 	case source.IsGhost() && source.GetSessionID() != "":
 		key = 0x2000000000000000 | (fnv64String(source.GetSessionID()) & 0x0fffffffffffffff)
 	case source.GetUserID() > 0:
+		// #nosec G115 -- Positive database IDs are encoded in fixed-width speaker identity namespaces.
 		key = 0x3000000000000000 | uint64(uint32(source.GetUserID()))<<8 | uint64(source.GetSSID())
 	default:
 		key = 0x4000000000000000 | uint64(fnv32String(source.GetIdentifier()))<<8 | uint64(source.GetSSID())

@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -244,7 +245,7 @@ export function RegisterPage() {
         })
       }, 1000)
     } catch (err: any) {
-      setError(err.response?.data?.message || '发送验证码失败')
+      setError(getErrorMessage(err, '发送验证码失败'))
       getCaptcha()
     } finally {
       setLoading(false)
@@ -271,7 +272,7 @@ export function RegisterPage() {
       })
       setEmailVerified(true)
     } catch (err: any) {
-      setError(err.response?.data?.message || '邮箱验证失败')
+      setError(getErrorMessage(err, '邮箱验证失败'))
     } finally {
       setLoading(false)
     }
@@ -310,7 +311,7 @@ export function RegisterPage() {
       }
       setRegisterSuccess(true)
     } catch (err: any) {
-      setError(err.response?.data?.message || '注册失败')
+      setError(getErrorMessage(err, '注册失败'))
     } finally {
       setLoading(false)
     }

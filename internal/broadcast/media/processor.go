@@ -297,7 +297,7 @@ func (p *Processor) process(ctx context.Context, audio *model.BroadcastAudio) (C
 	if err != nil {
 		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: create temp directory", ErrMediaProcess)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 	inputPath := filepath.Join(tempDir, "input"+path.Ext(audio.OriginalObjectKey))
 	if err := p.copyOriginal(ctx, audio, inputPath); err != nil {
 		return ContainerMetadata{}, "", "", 0, err
@@ -313,7 +313,7 @@ func (p *Processor) process(ctx context.Context, audio *model.BroadcastAudio) (C
 	if err := p.transcode(ctx, inputPath, oggPath); err != nil {
 		return ContainerMetadata{}, "", "", 0, err
 	}
-	ogg, err := os.Open(oggPath)
+	ogg, err := os.Open(oggPath) // #nosec G304 -- Path is a file in the private per-job temporary directory, not a user path.
 	if err != nil {
 		return ContainerMetadata{}, "", "", 0, fmt.Errorf("%w: open transcoded output", ErrMediaProcess)
 	}
@@ -354,8 +354,8 @@ func (p *Processor) copyOriginal(ctx context.Context, audio *model.BroadcastAudi
 	if err != nil {
 		return fmt.Errorf("open broadcast original: %w", err)
 	}
-	defer reader.Close()
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	defer func() { _ = reader.Close() }()
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- Path is a file in the private per-job temporary directory, not a user path.
 	if err != nil {
 		return fmt.Errorf("%w: create temp input", ErrMediaProcess)
 	}
@@ -382,6 +382,7 @@ type probeResult struct {
 }
 
 func (p *Processor) probe(ctx context.Context, inputPath string) (probeResult, error) {
+	// #nosec G204 -- Operator-selected executable; fixed argument list without a shell; file/pipe protocols only.
 	command := exec.CommandContext(ctx, p.config.FFprobePath,
 		"-v", "error", "-protocol_whitelist", "file,pipe",
 		"-show_entries", "format=duration,size:stream=codec_type,channels", "-of", "json", inputPath,
@@ -431,6 +432,7 @@ func (p *Processor) transcode(ctx context.Context, inputPath, outputPath string)
 	// Keep the source timeline intact. In particular, scheduled broadcasts must
 	// retain leading and trailing silence instead of shortening the uploaded media.
 	filter := "loudnorm=I=-20:TP=-3:LRA=7,alimiter=limit=0.85"
+	// #nosec G204 -- Operator-selected executable; fixed argument list without a shell; file/pipe protocols only.
 	command := exec.CommandContext(ctx, p.config.FFmpegPath,
 		"-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe",
 		"-i", inputPath, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", strconv.Itoa(OpusSampleRate),
@@ -447,6 +449,13 @@ func (p *Processor) transcode(ctx context.Context, inputPath, outputPath string)
 }
 
 func (p *Processor) runCommand(command *exec.Cmd) error {
+	if command == nil {
+		return errors.New("media command is nil")
+	}
+	// Some distro ffmpeg builds load BLAS/OpenMP libraries before parsing
+	// -threads. Their default worker count can exhaust RLIMIT_AS and spin even
+	// after ffprobe has emitted its result. Bound those runtimes before exec.
+	command.Env = append(command.Environ(), "OPENBLAS_NUM_THREADS=1", "OMP_NUM_THREADS=1")
 	if err := prepareMediaCommand(command, p.config.TranscodeMemoryLimitMB, p.config.TranscodeCPULimitSeconds); err != nil {
 		return err
 	}

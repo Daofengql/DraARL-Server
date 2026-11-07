@@ -260,7 +260,7 @@ func ListClientResources(c *gin.Context) {
 		}
 		enabled = &value
 	}
-	resources, total, err := gormdb.NewClientResourceRepository().ListResources(gormdb.ClientResourceListFilter{
+	resources, total, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).ListResources(gormdb.ClientResourceListFilter{
 		ResourceKey: c.Query("resource_key"), Name: c.Query("name"), Category: c.Query("category"),
 		Enabled: enabled, Page: page, PageSize: pageSize,
 	})
@@ -299,7 +299,7 @@ func CreateClientResource(c *gin.Context) {
 		ResourceKey: key, Name: name, Category: category, Description: description,
 		Required: req.Required, Enabled: enabled, CreatedBy: user.ID,
 	}
-	if err := gormdb.NewClientResourceRepository().CreateResource(resource); err != nil {
+	if err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).CreateResource(resource); err != nil {
 		if gormdb.IsDuplicateKeyError(err) {
 			writeClientResourceError(c, http.StatusConflict, "resource_key 已存在")
 			return
@@ -320,7 +320,7 @@ func GetClientResource(c *gin.Context) {
 		writeClientResourceError(c, http.StatusBadRequest, "无效的资源 ID")
 		return
 	}
-	resource, err := gormdb.NewClientResourceRepository().GetResourceByID(id)
+	resource, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).GetResourceByID(id)
 	if err != nil {
 		writeClientResourceRepositoryError(c, err, "获取客户端资源失败")
 		return
@@ -338,7 +338,7 @@ func UpdateClientResource(c *gin.Context) {
 		writeClientResourceError(c, http.StatusBadRequest, "无效的资源 ID")
 		return
 	}
-	repo := gormdb.NewClientResourceRepository()
+	repo := gormdb.NewClientResourceRepository().WithContext(c.Request.Context())
 	existing, err := repo.GetResourceByID(id)
 	if err != nil {
 		writeClientResourceRepositoryError(c, err, "获取客户端资源失败")
@@ -408,7 +408,7 @@ func DeleteClientResource(c *gin.Context) {
 		writeClientResourceError(c, http.StatusBadRequest, "无效的资源 ID")
 		return
 	}
-	deleted, err := gormdb.NewClientResourceRepository().DeleteResource(resourceID)
+	deleted, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).DeleteResource(resourceID)
 	if err != nil {
 		writeClientResourceRepositoryError(c, err, "删除客户端资源失败")
 		return
@@ -436,7 +436,7 @@ func ListClientResourceReleases(c *gin.Context) {
 		return
 	}
 	page, pageSize := clientResourcePagination(c)
-	releases, total, err := gormdb.NewClientResourceRepository().ListReleases(gormdb.ClientResourceReleaseListFilter{
+	releases, total, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).ListReleases(gormdb.ClientResourceReleaseListFilter{
 		ResourceID: resourceID, Version: c.Query("version"), Channel: c.Query("channel"), Status: c.Query("status"),
 		Platform: normalizeClientTargetValue(c.Query("platform")), Arch: normalizeClientArch(c.Query("arch")), Page: page, PageSize: pageSize,
 	})
@@ -506,7 +506,7 @@ func CreateClientResourceRelease(c *gin.Context) {
 		RequiredProtocolVersion: requiredProtocolVersion, RequiredCapabilitiesJSON: requiredCapabilitiesJSON,
 		CreatedBy: user.ID,
 	}
-	if err := gormdb.NewClientResourceRepository().CreateRelease(release); err != nil {
+	if err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).CreateRelease(release); err != nil {
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			writeClientResourceError(c, http.StatusNotFound, "资源不存在")
@@ -648,7 +648,7 @@ func CompleteClientResourceArtifact(c *gin.Context) {
 			cleanupClientResourceObject(c, artifact.StorageKey, "回滚客户端资源对象失败")
 		}
 	}
-	repo := gormdb.NewClientResourceRepository()
+	repo := gormdb.NewClientResourceRepository().WithContext(c.Request.Context())
 	if err := repo.CompleteArtifact(artifact, finalize, rollback); err != nil {
 		switch {
 		case errors.Is(err, gormdb.ErrClientResourceTargetConflict), gormdb.IsDuplicateKeyError(err):
@@ -682,7 +682,7 @@ func PublishClientResourceRelease(c *gin.Context) {
 		return
 	}
 	contract := clientcontract.Current()
-	published, err := gormdb.NewClientResourceRepository().PublishRelease(release.ID, func(locked *gormdb.ClientResourceRelease) error {
+	published, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).PublishRelease(release.ID, func(locked *gormdb.ClientResourceRelease) error {
 		return validateClientResourceServerContract(locked, contract)
 	})
 	if err != nil {
@@ -714,7 +714,7 @@ func DeleteClientResourceRelease(c *gin.Context) {
 	if !ok {
 		return
 	}
-	deleted, err := gormdb.NewClientResourceRepository().DeleteRelease(release.ID)
+	deleted, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).DeleteRelease(release.ID)
 	if err != nil {
 		writeClientResourceRepositoryError(c, err, "删除资源版本失败")
 		return
@@ -733,7 +733,7 @@ func GetClientResourceManifest(c *gin.Context) {
 		writeClientResourceError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	artifacts, err := gormdb.NewClientResourceRepository().ListManifestArtifacts(gormdb.ClientResourceManifestLookup{
+	artifacts, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).ListManifestArtifacts(gormdb.ClientResourceManifestLookup{
 		Channel: request.Channel, Platform: request.Platform, Arch: request.Arch,
 	})
 	if err != nil {
@@ -764,7 +764,7 @@ func GetClientResourceArtifactDownload(c *gin.Context) {
 		writeClientResourceError(c, http.StatusBadRequest, "无效的 artifact ID")
 		return
 	}
-	artifact, err := gormdb.NewClientResourceRepository().GetDownloadableArtifact(id)
+	artifact, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).GetDownloadableArtifact(id)
 	if err != nil {
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
@@ -1336,7 +1336,7 @@ func loadNestedClientResourceRelease(c *gin.Context) (*gormdb.ClientResourceRele
 		writeClientResourceError(c, http.StatusBadRequest, "无效的发布 ID")
 		return nil, false
 	}
-	release, err := gormdb.NewClientResourceRepository().GetReleaseByID(releaseID)
+	release, err := gormdb.NewClientResourceRepository().WithContext(c.Request.Context()).GetReleaseByID(releaseID)
 	if err != nil {
 		writeClientResourceRepositoryError(c, err, "获取资源发布失败")
 		return nil, false
@@ -1349,7 +1349,7 @@ func loadNestedClientResourceRelease(c *gin.Context) (*gormdb.ClientResourceRele
 }
 
 func requireClientResourceAdmin(c *gin.Context) (*gormdb.User, bool) {
-	value, ok := c.Get("user")
+	value, _ := c.Get("user")
 	user, ok := value.(*gormdb.User)
 	if !ok || user == nil || !hasRoleGORM(user, "admin") {
 		writeClientResourceError(c, http.StatusUnauthorized, "未授权")
@@ -1385,7 +1385,7 @@ func writeClientResourceSuccess(c *gin.Context, message string, data any) {
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": message, "data": data})
 }
 func writeClientResourceError(c *gin.Context, status int, message string) {
-	c.JSON(status, gin.H{"code": status, "message": message})
+	writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 }
 
 func writeClientResourceRepositoryError(c *gin.Context, err error, fallback string) {

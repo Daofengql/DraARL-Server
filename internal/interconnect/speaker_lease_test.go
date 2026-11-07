@@ -221,20 +221,20 @@ func TestScheduledBroadcastReceiverRequiresConnectedReceivableEdgeRoute(t *testi
 	defer cluster.Close()
 	gateway := NewCenterGateway(cluster, nil)
 	domainID := uint64(89)
-	route := DeviceRoute{SessionID: 1001, SessionEpoch: 1, DeviceID: 7, DomainID: domainID}
+	route := DeviceRoute{SessionID: 1001, SessionEpoch: 1, DeviceID: 7, GroupID: 7, DomainID: domainID}
 	if err := cluster.UpsertNodeRoute("edge-a", route); err != nil {
 		t.Fatal(err)
 	}
-	if gateway.HasScheduledBroadcastReceiver(domainID) {
+	if gateway.HasScheduledBroadcastReceiver(7, domainID) {
 		t.Fatal("disconnected edge projection counted as a receiver")
 	}
 
-	session := &NodeSession{NodeID: "edge-a", SessionID: 44}
+	session := &NodeSession{NodeID: "edge-a", SessionID: 44, Features: NodeFeatureGroupBroadcast}
 	cluster.OnConnect(session)
 	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
 		t.Fatal(err)
 	}
-	if !gateway.HasScheduledBroadcastReceiver(domainID) {
+	if !gateway.HasScheduledBroadcastReceiver(7, domainID) {
 		t.Fatal("connected receivable edge route was not counted")
 	}
 
@@ -242,7 +242,7 @@ func TestScheduledBroadcastReceiverRequiresConnectedReceivableEdgeRoute(t *testi
 	if err := cluster.UpsertNodeRoute(session.NodeID, route); err != nil {
 		t.Fatal(err)
 	}
-	if gateway.HasScheduledBroadcastReceiver(domainID) {
+	if gateway.HasScheduledBroadcastReceiver(7, domainID) {
 		t.Fatal("receive-disabled edge route counted as a receiver")
 	}
 
@@ -251,7 +251,7 @@ func TestScheduledBroadcastReceiverRequiresConnectedReceivableEdgeRoute(t *testi
 		t.Fatal(err)
 	}
 	cluster.OnDisconnect(session, nil)
-	if gateway.HasScheduledBroadcastReceiver(domainID) {
+	if gateway.HasScheduledBroadcastReceiver(7, domainID) {
 		t.Fatal("disconnected edge route remained reachable")
 	}
 }

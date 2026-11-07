@@ -2,21 +2,25 @@ package gormdb
 
 import (
 	"draarl/internal/models"
+	"math"
 )
 
 // ToModelDevice 将 GORM Device 转换为 models.Device
 func (d *Device) ToModelDevice() *models.Device {
+	if d == nil {
+		return nil
+	}
 	return &models.Device{
 		ID:                    d.ID,
 		Name:                  d.Name,
-		DMRID:                 uint32(d.DMRID),
+		DMRID:                 protocolDMRID(d.DMRID),
 		SSID:                  uint8(d.SSID),
 		OwnerID:               d.OwnerID,
 		QTH:                   d.QTH,
 		LastOnlineIP:          d.LastOnlineIP,
-		DevModel:              byte(d.DevModel),
+		DevModel:              protocolByte(d.DevModel),
 		GroupID:               d.GroupIDValue(),
-		Status:                byte(d.Status),
+		Status:                protocolByte(int(d.Status)),
 		IsCerted:              d.IsCerted,
 		Priority:              d.Priority,
 		OnlineTime:            d.OnlineTime,
@@ -36,6 +40,9 @@ func (d *Device) ToModelDevice() *models.Device {
 
 // ToModelGroup 将 GORM Group 转换为 models.Group
 func (g *Group) ToModelGroup() *models.Group {
+	if g == nil {
+		return nil
+	}
 	return &models.Group{
 		ID:           g.ID,
 		Name:         g.Name,
@@ -55,6 +62,9 @@ func (g *Group) ToModelGroup() *models.Group {
 
 // FromModelDevice 从 models.Device 转换为 GORM Device
 func FromModelDevice(d *models.Device) *Device {
+	if d == nil {
+		return nil
+	}
 	return &Device{
 		ID:                    d.ID,
 		Name:                  d.Name,
@@ -65,7 +75,7 @@ func FromModelDevice(d *models.Device) *Device {
 		LastOnlineIP:          d.LastOnlineIP,
 		DevModel:              int(d.DevModel),
 		GroupID:               nullableGroupID(d.GroupID),
-		Status:                int8(d.Status),
+		Status:                protocolStatus(d.Status),
 		IsCerted:              d.IsCerted,
 		Priority:              d.Priority,
 		OnlineTime:            d.OnlineTime,
@@ -92,6 +102,9 @@ func nullableGroupID(groupID int) *int {
 
 // FromModelGroup 从 models.Group 转换为 GORM Group
 func FromModelGroup(g *models.Group) *Group {
+	if g == nil {
+		return nil
+	}
 	return &Group{
 		ID:           g.ID,
 		Name:         g.Name,
@@ -122,4 +135,23 @@ func ToModelGroups(groups []*Group) []*models.Group {
 		result[i] = g.ToModelGroup()
 	}
 	return result
+}
+
+func protocolDMRID(value int64) uint32 {
+	if value < 0 || value > math.MaxUint32 {
+		return 0
+	}
+	return uint32(value)
+}
+func protocolByte(value int) byte {
+	if value < 0 || value > math.MaxUint8 {
+		return 0
+	}
+	return byte(value)
+}
+func protocolStatus(value byte) int8 {
+	if value > math.MaxInt8 {
+		return 0
+	}
+	return int8(value)
 }

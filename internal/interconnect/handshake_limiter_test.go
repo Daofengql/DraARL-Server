@@ -32,8 +32,10 @@ func TestHandshakeLimiterPreservesCurrentMinuteLimit(t *testing.T) {
 	limiter := newHandshakeLimiter(2)
 	now := time.Unix(600, 0)
 	addr := &net.UDPAddr{IP: net.ParseIP("198.51.100.5"), Port: 43000}
-	if !limiter.allow(addr, "node-a", now) || !limiter.allow(addr, "node-a", now) {
-		t.Fatal("current-minute handshake attempts were unexpectedly rejected")
+	for attempt := range 2 {
+		if !limiter.allow(addr, "node-a", now) {
+			t.Fatalf("current-minute handshake attempt %d was rejected", attempt)
+		}
 	}
 	if limiter.allow(addr, "node-a", now) {
 		t.Fatal("handshake limit was not enforced")

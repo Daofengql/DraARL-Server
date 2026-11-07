@@ -490,7 +490,7 @@ func objectSHA256(ctx context.Context, st Storage, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, reader); err != nil {
 		return "", err
@@ -512,7 +512,7 @@ func copyObject(ctx context.Context, src, dst Storage, key string, size int64, r
 	if err != nil {
 		return fmt.Errorf("打开源对象: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if rateLimiter != nil {
 		reader = throttledMigrateReader{reader: reader, limit: rateLimiter, ctx: ctx}

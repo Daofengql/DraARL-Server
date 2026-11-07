@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -29,9 +30,12 @@ func Init(dsn string, maxOpenConns, maxIdleConns, maxLifetime int) error {
 	newDB.SetMaxOpenConns(maxOpenConns)
 	newDB.SetMaxIdleConns(maxIdleConns)
 	newDB.SetConnMaxLifetime(time.Duration(maxLifetime) * time.Second)
+	newDB.SetConnMaxIdleTime(30 * time.Second)
 
 	// 验证连接
-	if err = newDB.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err = newDB.PingContext(ctx); err != nil {
 		_ = newDB.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
@@ -44,6 +48,16 @@ func Init(dsn string, maxOpenConns, maxIdleConns, maxLifetime int) error {
 
 	log.Println("MySQL database connected successfully")
 	return nil
+}
+
+// PoolStats includes the legacy SQL pool, which is separate from GORM's pool.
+func PoolStats() (sql.DBStats, bool) {
+	dbMu.RLock()
+	defer dbMu.RUnlock()
+	if db == nil {
+		return sql.DBStats{}, false
+	}
+	return db.Stats(), true
 }
 
 // Get 获取数据库连接

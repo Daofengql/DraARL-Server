@@ -261,7 +261,7 @@ export function LogbookPage() {
                 新增记录
               </Button>
             )}
-            <IconButton onClick={handleRefresh} disabled={loading} color="primary">
+            <IconButton aria-label="刷新通联日志" onClick={handleRefresh} disabled={loading} color="primary">
               <Refresh />
             </IconButton>
           </Stack>

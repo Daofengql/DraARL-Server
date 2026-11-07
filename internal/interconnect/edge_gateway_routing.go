@@ -14,6 +14,12 @@ type edgeReceiverSnapshot struct {
 	generation uint64
 	builtAt    time.Time
 	plans      map[uint64]*udphub.EdgeFanoutPlan
+	groups     map[groupBroadcastRoute]*udphub.EdgeFanoutPlan
+}
+
+type groupBroadcastRoute struct {
+	domainID uint64
+	groupID  int
 }
 
 type EdgeReceiverCacheSnapshot struct {
@@ -53,13 +59,24 @@ func updateEdgeReceiverMax(target *atomic.Uint64, value uint64) {
 }
 
 func (g *EdgeGateway) receiverPlan(domainID uint64) *udphub.EdgeFanoutPlan {
-	if domainID == 0 || g.endpoint == nil {
+	return g.receiverPlanFor(domainID, 0)
+}
+
+func selectReceiverPlan(snapshot *edgeReceiverSnapshot, domainID uint64, groupID int) *udphub.EdgeFanoutPlan {
+	if groupID > 0 {
+		return snapshot.groups[groupBroadcastRoute{domainID: domainID, groupID: groupID}]
+	}
+	return snapshot.plans[domainID]
+}
+
+func (g *EdgeGateway) receiverPlanFor(domainID uint64, groupID int) *udphub.EdgeFanoutPlan {
+	if (domainID == 0 && groupID <= 0) || g.endpoint == nil {
 		return nil
 	}
 	generation := g.receiverGen.Load()
 	if snapshot := g.receiverCache.Load(); snapshot != nil && snapshot.generation == generation && time.Since(snapshot.builtAt) < edgeReceiverCacheTTL {
 		g.receiverHits.Add(1)
-		return snapshot.plans[domainID]
+		return selectReceiverPlan(snapshot, domainID, groupID)
 	}
 
 	g.receiverMisses.Add(1)
@@ -69,15 +86,20 @@ func (g *EdgeGateway) receiverPlan(domainID uint64) *udphub.EdgeFanoutPlan {
 		generation = g.receiverGen.Load()
 		if snapshot := g.receiverCache.Load(); snapshot != nil && snapshot.generation == generation && time.Since(snapshot.builtAt) < edgeReceiverCacheTTL {
 			g.receiverHits.Add(1)
-			return snapshot.plans[domainID]
+			return selectReceiverPlan(snapshot, domainID, groupID)
 		}
 
 		started := time.Now()
 		targetsByDomain := make(map[uint64][]udphub.EdgeFanoutTarget)
+		targetsByGroup := make(map[groupBroadcastRoute][]udphub.EdgeFanoutTarget)
 		seenByDomain := make(map[uint64]map[uint64]struct{})
 		g.mu.RLock()
 		for _, session := range g.sessions {
 			if session == nil || session.Grant.DisableRecv || session.Addr == nil {
+				continue
+			}
+			target, validTarget := udphub.NewEdgeSessionFanoutTarget(session.Addr, session.Grant.SessionID, session.Grant.DeviceID, session.Grant.Username, session.Grant.SSID, session.Grant.SourceGroupV1)
+			if !validTarget {
 				continue
 			}
 			for _, domain := range routeReceiveDomains(session.Grant.Route()) {
@@ -90,16 +112,20 @@ func (g *EdgeGateway) receiverPlan(domainID uint64) *udphub.EdgeFanoutPlan {
 				if _, duplicate := seenByDomain[domain][session.Grant.SessionID]; duplicate {
 					continue
 				}
-				target, ok := udphub.NewEdgeSessionFanoutTarget(session.Addr, session.Grant.SessionID, session.Grant.DeviceID, session.Grant.Username, session.Grant.SSID, session.Grant.SourceGroupV1)
-				if ok {
-					seenByDomain[domain][session.Grant.SessionID] = struct{}{}
-					targetsByDomain[domain] = append(targetsByDomain[domain], target)
+				seenByDomain[domain][session.Grant.SessionID] = struct{}{}
+				targetsByDomain[domain] = append(targetsByDomain[domain], target)
+				for _, receiveGroupID := range routeReceiveGroups(session.Grant.Route()) {
+					if receiveGroupID > 0 {
+						key := groupBroadcastRoute{domainID: domain, groupID: receiveGroupID}
+						targetsByGroup[key] = append(targetsByGroup[key], target)
+					}
 				}
 			}
 		}
 		g.mu.RUnlock()
 
 		plans := make(map[uint64]*udphub.EdgeFanoutPlan, len(targetsByDomain))
+		groups := make(map[groupBroadcastRoute]*udphub.EdgeFanoutPlan, len(targetsByGroup))
 		var maxEntries uint64
 		for domain, targets := range targetsByDomain {
 			plan := g.endpoint.PrepareFanout(targets)
@@ -107,18 +133,24 @@ func (g *EdgeGateway) receiverPlan(domainID uint64) *udphub.EdgeFanoutPlan {
 				continue
 			}
 			plans[domain] = plan
+			// #nosec G115 -- Receiver count and monotonic elapsed duration are nonnegative.
 			if entries := uint64(plan.Len()); entries > maxEntries {
 				maxEntries = entries
 			}
 		}
+		for receiveGroupID, targets := range targetsByGroup {
+			groups[receiveGroupID] = g.endpoint.PrepareFanout(targets)
+		}
 		if generation != g.receiverGen.Load() {
 			continue
 		}
-		g.receiverCache.Store(&edgeReceiverSnapshot{generation: generation, builtAt: time.Now(), plans: plans})
+		snapshot := &edgeReceiverSnapshot{generation: generation, builtAt: time.Now(), plans: plans, groups: groups}
+		g.receiverCache.Store(snapshot)
 		g.receiverRebuilds.Add(1)
+		// #nosec G115 -- Receiver count and monotonic elapsed duration are nonnegative.
 		g.receiverBuildNS.Add(uint64(time.Since(started)))
 		updateEdgeReceiverMax(&g.receiverMaxEntries, maxEntries)
-		return plans[domainID]
+		return selectReceiverPlan(snapshot, domainID, groupID)
 	}
 	return nil
 }
@@ -148,7 +180,7 @@ func (g *EdgeGateway) applyRoutes(p *Projection) {
 			if session.Grant.SessionEpoch != route.SessionEpoch || session.Grant.DomainID != route.DomainID || route.DisableSend {
 				g.removeSpeakerSessionLocked(id, session.Grant.SessionEpoch)
 			}
-			if !slices.Equal(routeReceiveDomains(session.Grant.Route()), routeReceiveDomains(route)) || session.Grant.DisableRecv != route.DisableRecv || session.Grant.SourceGroupV1 != route.SourceGroupV1 {
+			if !slices.Equal(routeReceiveDomains(session.Grant.Route()), routeReceiveDomains(route)) || !slices.Equal(routeReceiveGroups(session.Grant.Route()), routeReceiveGroups(route)) || session.Grant.DisableRecv != route.DisableRecv || session.Grant.SourceGroupV1 != route.SourceGroupV1 {
 				receiversChanged = true
 			}
 			oldKey, oldTag := edgeSessionIdentity(session.Grant), session.Grant.SessionTag

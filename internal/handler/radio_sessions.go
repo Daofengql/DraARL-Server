@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -114,7 +115,7 @@ func AdminDeleteRadioSession(c *gin.Context) {
 	}
 	sessionID := strings.TrimSpace(c.Param("session_id"))
 	if err := ghostsession.Global.Disconnect(sessionID, "admin_disconnected_session"); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "error": "session_not_found", "message": "会话不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "error": "session_not_found", "message": "会话不存在"})
 		return
 	}
 	oplog.AddLog("管理员断开幽灵会话: "+ghostsession.ShortID(sessionID), "ghost_session_disconnect", actor.ID, actor.Name, actor.CallSign, c.ClientIP())
@@ -152,26 +153,32 @@ func resolveOwnedPlatformSession(ownerID int, devModel uint8, sessionID string) 
 }
 
 func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routing) (ghostsession.Routing, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return validateSessionRoutingAccessContext(ctx, user, routing)
+}
+
+func validateSessionRoutingAccessContext(ctx context.Context, user *gormdb.User, routing ghostsession.Routing) (ghostsession.Routing, error) {
 	normalized, err := ghostsession.NormalizeRouting(routing, ghostsession.MaxSubscriptions())
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}
 	groupIDs := normalized.RxGroupIDs
 	var groups []*gormdb.Group
-	if err := gormdb.Get().Where("id IN ?", groupIDs).Find(&groups).Error; err != nil {
+	if err := gormdb.Get().WithContext(ctx).Where("id IN ?", groupIDs).Find(&groups).Error; err != nil {
 		return ghostsession.Routing{}, err
 	}
 	if len(groups) != len(groupIDs) {
 		return ghostsession.Routing{}, errRoutingGroupNotFound
 	}
-	receivable, err := groupaccess.ReceivableGroupIDs(gormdb.Get(), user, normalized.RxGroupIDs)
+	receivable, err := groupaccess.ReceivableGroupIDs(gormdb.Get().WithContext(ctx), user, normalized.RxGroupIDs)
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}
 	if len(receivable) != len(normalized.RxGroupIDs) {
 		return ghostsession.Routing{}, errRoutingGroupForbidden
 	}
-	transmittable, err := groupaccess.TransmittableGroupIDs(gormdb.Get(), user, []int{normalized.TxGroupID})
+	transmittable, err := groupaccess.TransmittableGroupIDs(gormdb.Get().WithContext(ctx), user, []int{normalized.TxGroupID})
 	if err != nil {
 		return ghostsession.Routing{}, err
 	}
@@ -182,7 +189,13 @@ func validateSessionRoutingAccess(user *gormdb.User, routing ghostsession.Routin
 }
 
 func persistSessionRouting(session ghostsession.Session, routing ghostsession.Routing) error {
-	return gormdb.NewGhostClientPreferenceRepository().ReplaceRouting(
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return persistSessionRoutingContext(ctx, session, routing)
+}
+
+func persistSessionRoutingContext(ctx context.Context, session ghostsession.Session, routing ghostsession.Routing) error {
+	return gormdb.NewGhostClientPreferenceRepository().WithContext(ctx).ReplaceRouting(
 		session.OwnerID, session.DevModel, session.ClientInstanceID, routing.TxGroupID, routing.RxGroupIDs,
 	)
 }
@@ -198,7 +211,9 @@ func reconcileGhostSessionsForGroup(groupID int) {
 }
 
 func reconcileOwnerGhostSessions(ownerID int) {
-	user, err := gormdb.NewUserRepository().GetUserByID(ownerID)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	user, err := gormdb.NewUserRepository().WithContext(ctx).GetUserByID(ownerID)
 	if err != nil || user == nil || user.Status != 1 {
 		for _, session := range ghostsession.Global.ListOwner(ownerID) {
 			_ = ghostsession.Global.DisconnectOwned(ownerID, session.SessionID, "user_or_permissions_unavailable")
@@ -207,14 +222,14 @@ func reconcileOwnerGhostSessions(ownerID int) {
 	}
 	for _, session := range ghostsession.Global.ListOwner(ownerID) {
 		routing, changed, err := groupaccess.SanitizeRouting(
-			gormdb.Get(), user, session.Routing(), models.GroupIDPublicMin, ghostsession.MaxSubscriptions(),
+			gormdb.Get().WithContext(ctx), user, session.Routing(), models.GroupIDPublicMin, ghostsession.MaxSubscriptions(),
 		)
 		if err == nil && !changed {
 			continue
 		}
 		if err == nil {
 			_, err = ghostsession.Global.UpdateRoutingPersisted(session.SessionID, routing, func(current ghostsession.Session, next ghostsession.Routing) error {
-				return persistSessionRouting(current, next)
+				return persistSessionRoutingContext(ctx, current, next)
 			})
 		}
 		if err != nil {
@@ -225,6 +240,12 @@ func reconcileOwnerGhostSessions(ownerID int) {
 }
 
 func updateOwnedSessionRouting(user *gormdb.User, sessionID string, requested ghostsession.Routing) (ghostsession.Session, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return updateOwnedSessionRoutingContext(ctx, user, sessionID, requested)
+}
+
+func updateOwnedSessionRoutingContext(ctx context.Context, user *gormdb.User, sessionID string, requested ghostsession.Routing) (ghostsession.Session, error) {
 	session, exists := ghostsession.Global.Get(sessionID)
 	if !exists || user == nil || session.OwnerID != user.ID {
 		return ghostsession.Session{}, ghostsession.ErrSessionNotFound
@@ -236,12 +257,12 @@ func updateOwnedSessionRouting(user *gormdb.User, sessionID string, requested gh
 	if policyRouting.TxGroupID != session.TxGroupID && ghostsession.Global.IsPTTActive(sessionID, time.Now()) {
 		return ghostsession.Session{}, ghostsession.ErrPTTActive
 	}
-	routing, err := validateSessionRoutingAccess(user, policyRouting)
+	routing, err := validateSessionRoutingAccessContext(ctx, user, policyRouting)
 	if err != nil {
 		return ghostsession.Session{}, err
 	}
 	return ghostsession.Global.UpdateRoutingPersisted(sessionID, routing, func(current ghostsession.Session, next ghostsession.Routing) error {
-		if err := persistSessionRouting(current, next); err != nil {
+		if err := persistSessionRoutingContext(ctx, current, next); err != nil {
 			log.Printf("[RADIO] persist routing failed session=%s err=%v", ghostsession.ShortID(sessionID), err)
 			return err
 		}
@@ -256,10 +277,10 @@ func UpdateRadioSessionRouting(c *gin.Context) {
 	}
 	var request UpdateSessionRoutingRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的会话路由"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的会话路由"})
 		return
 	}
-	updated, err := updateOwnedSessionRouting(currentUser, c.Param("session_id"), ghostsession.Routing{
+	updated, err := updateOwnedSessionRoutingContext(c.Request.Context(), currentUser, c.Param("session_id"), ghostsession.Routing{
 		TxGroupID: request.TxGroupID, RxGroupIDs: request.RxGroupIDs,
 	})
 	if err != nil {
@@ -292,7 +313,7 @@ func writeSessionRoutingError(c *gin.Context, err error) {
 	if status == http.StatusInternalServerError {
 		message = "更新会话路由失败"
 	}
-	c.JSON(status, gin.H{"code": status, "error": code, "message": message})
+	writeErrorResponse(c, status, gin.H{"code": status, "error": code, "message": message})
 }
 
 func DeleteRadioSession(c *gin.Context) {
@@ -301,7 +322,7 @@ func DeleteRadioSession(c *gin.Context) {
 		return
 	}
 	if err := ghostsession.Global.DisconnectOwned(currentUser.ID, c.Param("session_id"), "user_disconnected_session"); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "error": "session_not_found", "message": "会话不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "error": "session_not_found", "message": "会话不存在"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "会话已断开"})

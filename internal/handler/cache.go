@@ -52,7 +52,7 @@ func (h *CacheMetricsHandler) ResetCacheMetrics(c *gin.Context) {
 
 	// 记录审计日志
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser != nil {
 		oplog.AddLog(
@@ -75,7 +75,7 @@ func (h *CacheMetricsHandler) ResetCacheMetrics(c *gin.Context) {
 func (h *CacheMetricsHandler) ClearAllCache(c *gin.Context) {
 	manager := cache.GetManager()
 	if manager == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
+		writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{
 			"code":    503,
 			"message": "缓存管理器未初始化",
 		})
@@ -83,7 +83,7 @@ func (h *CacheMetricsHandler) ClearAllCache(c *gin.Context) {
 	}
 
 	if err := manager.ClearAll(c.Request.Context()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "清空缓存失败",
 		})
@@ -92,7 +92,7 @@ func (h *CacheMetricsHandler) ClearAllCache(c *gin.Context) {
 
 	// 记录审计日志
 	username, _ := c.Get("username")
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser != nil {
 		oplog.AddLog(

@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -73,7 +74,7 @@ func checkOrigin(r *http.Request) bool {
 		return true
 	}
 
-	log.Printf("[WS] Origin rejected: origin=%s host=%s", origin, r.Host)
+	slog.Warn("websocket origin rejected", "origin", origin, "host", r.Host)
 	return false
 }
 
@@ -137,17 +138,17 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[WS] Upgrade failed: %v", err)
+		slog.Warn("websocket upgrade failed", "error", err)
 		return
 	}
 	// 【H2 安全修复】限制单帧读取上限，防止超大帧内存耗尽
 	conn.SetReadLimit(maxWSReadLimit)
 	remoteAddr := conn.RemoteAddr().String()
-	log.Printf("[WS] New connection from %s", remoteAddr)
+	slog.Info("websocket connection opened", "remote_addr", remoteAddr)
 	// 处理认证
 	device, err := RegisterAuthenticatedConnection(conn, GlobalManager, authResult)
 	if err != nil {
-		log.Printf("[WS] Session registration failed from %s: %v", remoteAddr, err)
+		slog.Warn("websocket session registration failed", "remote_addr", remoteAddr, "error", err)
 		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, ghostsession.StableErrorCode(err)))
 		_ = conn.Close()
 		return
@@ -172,8 +173,8 @@ func startPingPong(device *WSDevice) {
 			return
 		case <-ticker.C:
 			if !device.WritePing() {
-				log.Printf("[WS] Ping failed for %s: write channel closed", device.GetIdentifier())
-				device.Conn.Close()
+				slog.Warn("websocket ping failed: write channel closed", "device_id", device.GetIdentifier())
+				_ = device.Conn.Close()
 				return
 			}
 		}
@@ -185,31 +186,31 @@ func handleAuthenticatedConnection(device *WSDevice) {
 	defer func() {
 		udphub.RevokeCenterLocalWS(device)
 		device.StopWriter() // 先停止 writer goroutine
-		device.Conn.Close()
+		_ = device.Conn.Close()
 		GlobalManager.UnregisterDevice(device)
-		log.Printf("[WS] Ghost device disconnected: %s", device.GetIdentifier())
+		slog.Info("websocket ghost disconnected", "device_id", device.GetIdentifier())
 	}()
 
 	// 【心跳判活修复】设置 PongHandler：客户端 Pong 也算活跃，更新活动时间并
 	// 刷新读超时；不再"健康但静默"的客户端被误踢，也不再对死连接无限空转。
 	device.Conn.SetPongHandler(func(string) error {
 		GlobalManager.UpdateDeviceActivity(device)
-		device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		_ = device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		return nil
 	})
 	// 认证完成后改为滚动读超时：长时间无任何报文/心跳的连接会被关闭
-	device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+	_ = device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 
 	for {
 		messageType, data, err := device.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("[WS] Read error from %s: %v", device.GetIdentifier(), err)
+				slog.Warn("websocket read failed", "device_id", device.GetIdentifier(), "error", err)
 			}
 			break
 		}
 		// 任何成功收到的消息都刷新读超时
-		device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
+		_ = device.Conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		// 只处理二进制消息（DraARLv1 协议）
 		if messageType != websocket.BinaryMessage {
 			continue
@@ -217,12 +218,12 @@ func handleAuthenticatedConnection(device *WSDevice) {
 		// 解析数据包
 		packet, err := DecodeWSPacket(data)
 		if err != nil {
-			log.Printf("[WS] Packet decode error from %s: %v", device.GetIdentifier(), err)
+			slog.Warn("websocket packet decode failed", "device_id", device.GetIdentifier(), "error", err)
 			continue
 		}
 		if packet.Type == protocol.DraARLTypeOpus16K && !device.allowVoiceFrame(time.Now()) {
 			if dropped := device.voiceRateLimitedCount(); dropped == 1 || dropped%100 == 0 {
-				log.Printf("[WS] voice rate limited for %s (dropped=%d)", device.GetIdentifier(), dropped)
+				slog.Warn("websocket voice rate limited", "device_id", device.GetIdentifier(), "dropped", dropped)
 			}
 			continue
 		}
@@ -248,7 +249,7 @@ func sendAuthenticationSuccess(device *WSDevice) {
 		},
 	})
 	if err != nil || !device.AsyncWriteBlocking(websocket.TextMessage, payload, 2*time.Second) {
-		log.Printf("[WS] Failed to queue authentication success for %s", device.GetIdentifier())
+		slog.Warn("websocket authentication reply queue failed", "device_id", device.GetIdentifier())
 	}
 }
 
@@ -264,6 +265,6 @@ func sendRoutingUpdated(device *WSDevice) {
 		},
 	})
 	if err != nil || !device.AsyncWriteBlocking(websocket.TextMessage, payload, 2*time.Second) {
-		log.Printf("[WS] Failed to queue routing update for %s", device.GetIdentifier())
+		slog.Warn("websocket routing reply queue failed", "device_id", device.GetIdentifier())
 	}
 }

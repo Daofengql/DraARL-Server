@@ -22,23 +22,23 @@ func GetDeviceDefaultGroup(c *gin.Context) {
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	groupID, err := userRepo.GetUserDefaultDeviceGroupID(currentUser.ID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "读取默认群组失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "读取默认群组失败"})
 		return
 	}
 	if groupID > 0 {
-		group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+		group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(groupID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验默认群组失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验默认群组失败"})
 			return
 		}
 		isVerifiedMember := false
 		if group != nil && group.Type == groupTypePrivate && !isAdminUser(currentUser) && group.OwerID != currentUser.ID {
-			member, err := gormdb.NewGroupMemberRepository().GetVerifiedMemberByGroupAndUser(group.ID, currentUser.ID)
+			member, err := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context()).GetVerifiedMemberByGroupAndUser(group.ID, currentUser.ID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验私有群组成员资格失败"})
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验私有群组成员资格失败"})
 				return
 			}
 			isVerifiedMember = member != nil
@@ -46,7 +46,7 @@ func GetDeviceDefaultGroup(c *gin.Context) {
 		if !canUseGroupAsDeviceDefault(currentUser, group, isVerifiedMember) {
 			// 群组已删除、禁用，或用户已失去私有群权限时清理悬空偏好。
 			if err := userRepo.SetUserDefaultDeviceGroupID(currentUser.ID, 0); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "清理失效默认群组失败"})
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "清理失效默认群组失败"})
 				return
 			}
 			groupID = 0
@@ -78,7 +78,7 @@ func UpdateDeviceDefaultGroup(c *gin.Context) {
 		GroupID *int `json:"group_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "请求参数错误"})
 		return
 	}
 
@@ -87,37 +87,37 @@ func UpdateDeviceDefaultGroup(c *gin.Context) {
 		groupID = *req.GroupID
 	}
 	if groupID < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
 		return
 	}
 
 	if groupID > 0 {
-		group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+		group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(groupID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验默认群组失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验默认群组失败"})
 			return
 		}
 		if group == nil {
-			c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+			writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
 			return
 		}
 		isVerifiedMember := false
 		if group.Type == groupTypePrivate && !isAdminUser(currentUser) && group.OwerID != currentUser.ID {
-			member, err := gormdb.NewGroupMemberRepository().GetVerifiedMemberByGroupAndUser(group.ID, currentUser.ID)
+			member, err := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context()).GetVerifiedMemberByGroupAndUser(group.ID, currentUser.ID)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验私有群组成员资格失败"})
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "校验私有群组成员资格失败"})
 				return
 			}
 			isVerifiedMember = member != nil
 		}
 		if !canUseGroupAsDeviceDefault(currentUser, group, isVerifiedMember) {
-			c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "无权将该群组设为设备默认群组"})
+			writeErrorResponse(c, http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "无权将该群组设为设备默认群组"})
 			return
 		}
 	}
 
-	if err := gormdb.NewUserRepository().SetUserDefaultDeviceGroupID(currentUser.ID, groupID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "保存默认群组失败"})
+	if err := gormdb.NewUserRepository().WithContext(c.Request.Context()).SetUserDefaultDeviceGroupID(currentUser.ID, groupID); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "保存默认群组失败"})
 		return
 	}
 

@@ -150,16 +150,16 @@ export function GroupPickerDialog({
           {allowUngrouped && (
             <Button
               fullWidth
-              variant={currentGroupId ? 'outlined' : 'contained'}
+              variant={currentGroupId === 0 ? 'contained' : 'outlined'}
               color="inherit"
               onClick={() => {
-                if (currentGroupId) onSelect(0)
+                if (currentGroupId !== 0) onSelect(0)
                 onClose()
               }}
-              disabled={!currentGroupId}
+              disabled={currentGroupId === 0}
               sx={{ mb: 2 }}
             >
-              {currentGroupId ? '设为未分组（停止参与转发）' : '当前为未分组状态'}
+              {currentGroupId === 0 ? '当前为未分组状态' : '设为未分组（停止参与转发）'}
             </Button>
           )}
 

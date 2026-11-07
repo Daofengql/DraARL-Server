@@ -607,7 +607,7 @@ func (r *OperatorLogRepository) ListLogs(limit, page int) ([]*OperatorLog, int64
 	var logs []*OperatorLog
 	var total int64
 
-	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	limit, _, offset, err := NormalizeOperatorLogPagination(limit, page)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -630,7 +630,7 @@ func (r *OperatorLogRepository) ListLogsByEventType(eventType string, limit, pag
 	var logs []*OperatorLog
 	var total int64
 
-	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	limit, _, offset, err := NormalizeOperatorLogPagination(limit, page)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -657,7 +657,7 @@ func (r *OperatorLogRepository) ListLogsByOperator(operatorID int, limit, page i
 	var logs []*OperatorLog
 	var total int64
 
-	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	limit, _, offset, err := NormalizeOperatorLogPagination(limit, page)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -738,7 +738,7 @@ func (r *OperatorLogRepository) Query(userID int, page, limit int, eventType str
 	var logs []*OperatorLog
 	var total int64
 
-	limit, page, offset, err := NormalizeOperatorLogPagination(limit, page)
+	limit, _, offset, err := NormalizeOperatorLogPagination(limit, page)
 	if err != nil {
 		return nil, 0, err
 	}

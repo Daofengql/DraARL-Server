@@ -4,9 +4,9 @@
 > 项目版本：v2.0.1-alpha4  
 > 分析范围：性能、安全、逻辑、细微 bug、UI/UX
 
-> 2026-11-07 执行记录：当前批次已完成或复核 15 项，其余保持待办。验证明细见 [本批修复与验证记录](docs/optimization-validation-2026-11-07.md)。
+> 2026-11-07 最终记录：可实施修改已在 `dev` 完成；验证与剩余边界见 [最终验证记录](docs/todo-validation-2026-11-07.md)。
 >
-> 基线：`6a606fa`，分支：`optimization/p0-security-stability`；本批修改尚未提交或合并。未勾选项中的进展说明仅表示已完成的局部工作。
+> 保留 `master`、`dev`、`edge` 三个分支。AES 可逆存储与 `OwerID` 拼写按设计保留，不作为待修缺陷。未部署到生产。
 
 ## 优先级说明
 
@@ -30,40 +30,25 @@
   - 已复核：实际比较位于 `internal/email/verification.go`，基线已使用 `subtle.ConstantTimeCompare()`。
   - 验证：`internal/email` 测试通过。
 
-- [ ] **S-003: context.Background() 应传递请求上下文**
-  - 文件：多个文件（30+ 处）
-  - 问题：使用 `context.Background()` 替代请求上下文，无法正确传播取消信号和超时
-  - 影响：请求取消时可能造成 goroutine 泄漏和资源浪费
-  - 修复：将 `c.Request.Context()` 传递到数据库操作和下游调用
-  - 本批进展：设备、群组设备、用户管理、成员权限查询及设备/群组缓存 miss 已传递请求上下文；仓库便捷方法保留作用域上下文，后台缓存查询增加 8 秒超时。
-  - 验证：真实 MySQL 回归确认已取消的列表、用户查询/更新及设备事务返回取消错误。其余 handler 和后台任务仍需逐条核查。
-  - 关键位置：
-    - `internal/gormdb/device.go:109`
-    - `internal/udphub/server_cache_sync.go`
-    - `internal/handler/device.go:114-150`
+- [x] **S-003: context.Background() 应传递请求上下文**
+  - 请求处理的数据库、缓存、存储和下游调用传递请求 context；必要的后台清理使用独立且有界的超时。真实 MySQL 取消与 DB trace 继承测试通过。
 
 ### 📦 上游依赖与 CVE 整改
 
-- [ ] **DEP-001: 建立依赖 CVE 清单与影响核查**
-  - 清点 Go 工具链、Go 直接及间接模块、前端 npm 依赖和容器基础镜像。
-  - 以维护者安全公告和漏洞数据库为依据，记录 CVE/GHSA、受影响版本、上游修复版本及本项目实际使用路径。
-  - 区分运行时可达、已导入但不可达、仅依赖树存在及开发工具依赖；按实际影响安排升级优先级。
-  - 没有上游修复版本时记录临时缓解措施与后续升级条件，不将临时措施记为漏洞已修复。
+- [x] **DEP-001: 建立依赖 CVE 清单与影响核查**
+  - 完成 Go/npm/四个最终容器的基线与升级扫描，记录模块 finding 与调用链证据的区别。见 [依赖审计](docs/security/dependency-audit-2026-11-07.md)；仍有一条无上游修复版本的 imaging 公告，见 DEP-005。
 
-- [ ] **DEP-002: 从上游升级 Go 工具链和后端依赖**
-  - 优先升级到上游已修复 CVE 的受支持正式版本，覆盖直接和间接依赖；同步 `go.mod`、`go.sum` 与 Docker 构建工具链。
-  - 运行发布构建对应的 `govulncheck`，同时记录可达漏洞、已导入包漏洞和依赖模块公告，避免漏报或夸大修复范围。
-  - 验收：后端 test/vet、Linux 竞态测试，以及虚拟机中的认证、UDP/WS、MySQL/Redis 关键流程回归。
+- [x] **DEP-002: 从上游升级 Go 工具链和后端依赖**
+  - 工具链、CI 与容器统一 Go 1.27.3，最低 Go 1.26.10；模块更新见 go.mod/go.sum。x/crypto 使用上游修复提交的 pseudo-version。Windows 与 Linux embed govulncheck 均为 0 finding；test/vet/lint、Linux race 和真实依赖回归通过。
 
-- [ ] **DEP-003: 从上游升级前端依赖并更新锁文件**
-  - 核查生产与开发依赖的安全公告，优先采用上游修复版本，更新 `www/package.json` 和 `www/package-lock.json`。
-  - 避免未经兼容性验证直接执行强制升级；需要跨主版本时验证 React、MUI、Vite、TypeScript 等组件的实际兼容性。
-  - 验收：完整及生产依赖审计、lint、单元测试、构建和关键页面浏览器回归；确认全新 `npm ci` 可复现。
+- [x] **DEP-003: 从上游升级前端依赖并更新锁文件**
+  - 按上游版本更新依赖与锁文件，Node 24.22.2 全新 npm ci、lint、类型、13 项 legacy 测试、31 项 Vitest 和生产构建通过。完整 npm 审计由 11 项降至 0，生产依赖审计 0。
 
-- [ ] **DEP-004: 更新容器基础镜像并保留升级证据**
-  - 核查 Dockerfile、Compose 和发布流程使用的构建及运行镜像，采用上游已修复相关 CVE 的版本并保留明确版本标识。
-  - 扫描最终发布镜像中的系统包和应用依赖，记录镜像版本/摘要、扫描日期、修复前后结果及仍需跟进的公告。
-  - 验收：虚拟机重新构建和启动验证、数据库迁移与核心接口冒烟测试，并记录回退方式。
+- [x] **DEP-004: 更新容器基础镜像并保留升级证据**
+  - 虚拟机构建并启动应用、MySQL、Redis、MinIO 四镜像；记录镜像 ID、报告 SHA-256 与启动、持久化、备份恢复证据。最终 MySQL/Redis/MinIO 扫描 0，应用剩 imaging 一项 LOW（NVD 评分为 MEDIUM）。
+
+- [ ] **DEP-005: 跟进 imaging 无修复版本公告**
+  - 最终应用镜像仍有 `github.com/disintegration/imaging v1.6.2` / CVE-2023-36308；Trivy 为 LOW，报告另含 NVD 5.5/MEDIUM。现有图片大小/尺寸校验仅是缓解，不记为已修复；等待上游修复或另行验证替换库。
 
 ### 💥 稳定性 Stability
 
@@ -106,29 +91,17 @@
   - 完成：移除设备列表在批量查询后逐个加载所有者缓存的重复路径，补齐批量查询错误处理。
   - 验证：真实 MySQL 冷缓存测试返回 6 个不同所有者的设备，仅执行 1 次所有者查询，所有者字段与未分组状态完整。
 
-- [ ] **P-002: 缓存未充分利用**
-  - 文件：`pkg/cache/device_cache.go`, `internal/handler/device.go`
-  - 问题：部分设备查询接口未使用已实现的缓存层
-  - 影响：重复查询数据库，增加响应延迟
-  - 修复：在设备列表、详情、群组设备等接口中启用缓存
-  - 注意：缓存失效策略需与数据变更同步
+- [x] **P-002: 缓存未充分利用**
+  - 设备筛选列表使用权限、筛选与分页维度完整的短 TTL 缓存，页面与总数作为一致快照；变更失效、热查询和真实 MySQL 回归通过。
 
-- [ ] **P-003: UDP 转发数据包复用池不充分**
-  - 文件：`internal/protocol/draarl.go:15-27`
-  - 问题：已有 `forwardPacketPool` 和 `routingPacketPool` 但可能未在所有路径使用
-  - 检查：确认所有 fan-out 路径都调用 `ReleaseForwardPacket`
-  - 优化：减少高频路径的内存分配
+- [x] **P-003: UDP 转发数据包复用池不充分**
+  - 审查同步/异步 fan-out 的所有权和 ReleaseForwardPacket 生命周期，异步队列持有独立缓冲；UDP/WS/边缘路由及 Linux race 回归通过，保留池化与新建缓冲微基准。
 
-- [ ] **P-004: 数据库连接池配置**
-  - 文件：`internal/gormdb/gorm.go`
-  - 问题：需确认连接池大小、空闲连接数、连接存活时间配置是否合理
-  - 检查：`SetMaxOpenConns`, `SetMaxIdleConns`, `SetConnMaxLifetime`
-  - 建议：根据负载测试调优，添加连接池监控指标
+- [x] **P-004: 数据库连接池配置**
+  - 沿用可配置的最大连接、空闲连接和生命周期；增加等待数、等待耗时、使用中/空闲连接指标，并验证真实 MySQL readiness、查询与恢复。配置说明区分基线与实际容量调优。
 
-- [ ] **P-005: 频繁的时间格式化**
-  - 文件：多处使用 `CreateTime.Format("2006-01-02 15:04:05")`
-  - 问题：每次响应都执行字符串格式化
-  - 优化：考虑在 JSON 序列化时统一处理，或缓存常用格式
+- [x] **P-005: 频繁的时间格式化**
+  - 既有 API 共用 common.FormatAPITime 与命名布局，保留旧时间格式和数据库时区契约；未引入可能过期的时间字符串缓存，也不宣称已有性能收益。
 
 ### 🐛 逻辑 Logic
 
@@ -139,11 +112,8 @@
   - 相关：`www/src/utils/deviceModel.ts`
   - 完成：补齐前端 106/107 历史型号展示，并保持不可新选；后端协议校验与型号测试通过。
 
-- [ ] **L-003: 错误处理不一致**
-  - 文件：多个 handler 文件
-  - 问题：有些返回 500，有些返回 400，错误消息格式不统一
-  - 优化：建立统一的错误响应规范
-  - 建议：创建 `internal/handler/errors.go` 统一错误处理
+- [x] **L-003: 错误处理不一致**
+  - handler 共用 writeErrorResponse，统一 code/message/request_id，兼容原有 error/message 字段并隐藏内部 500 细节；参数、权限、缺失资源、冲突与服务错误分层，前端共用错误映射。
 
 - [x] **L-004: 分页参数验证**
   - 文件：`internal/handler/device.go:82-112`
@@ -152,12 +122,13 @@
   - 完成：设备、用户、群组、操作日志共用默认值/上限；修复 `limit=1` 时溢出误拒绝合法页码，保留内部大批量查询能力。
   - 验证：默认值、上限、最大合法 offset 和超大页码回归通过；已先用新测试复现群组及操作日志的误拒绝。
 
-- [ ] **L-005: 彻底移除 PROXY v2 协议及相关保护配置**
-  - 删除 UDP 接收链路中的 PROXY v2 解析、地址提取与对应的专用保护逻辑，以及相关测试和文档。
-  - 移除 `System.ProxyProtocol`、`System.ProxyTrustedCIDRs` 等仅为该协议服务的配置、默认值、校验和示例。
-  - 兼容已有配置文件：直接忽略这些旧选项，即使旧值无效也不得阻止加载或启动；不要求用户手动修改配置。
-  - UDP 统一使用实际 socket 对端地址；保留独立的 HTTP 反向代理信任配置 `System.HTTPTrustedProxyCIDRs`。
-  - 验收：旧配置加载回归、普通 UDP 认证与转发回归，并在虚拟机验证启动。
+- [x] **L-005: 彻底移除 PROXY v2 协议及相关保护配置**
+  - 已删除 UDP PROXY v2 解析、地址提取、专用保护、字段、示例与相关测试；旧字段即使类型非法也直接忽略。保留 System.HTTPTrustedProxyCIDRs，UDP 只认 socket 对端；旧配置启动和普通 UDP 回归通过。
+
+---
+
+- [x] **L-006: 自动播报在互联状态下保持组内投递**
+  - A/B 互联时，A 的定时/手动播报只发给明确接收 A 的会话；普通语音保留互联转发。中心 UDP/WS、边缘 UDP/TLS、来源组录音权限均有接收测试；静默检测与话权仍覆盖互联域，不转发跨中心。旧边缘须支持组内播报能力后才能接收播报。
 
 ---
 
@@ -165,11 +136,8 @@
 
 ### 🔧 代码质量 Code Quality
 
-- [ ] **CQ-001: TODO 注释未处理**
-  - 文件：
-    - `internal/udphub/device.go:625` - 设备操作日志
-    - `internal/log/operator.go:60` - 从上下文获取用户信息
-  - 建议：评估是否需要实现，或删除过期注释
+- [x] **CQ-001: TODO 注释未处理**
+  - 设备活动摘要保留诊断日志，通信记录由专用 recorder 持久化，移除重复审计的过期 TODO；删除无人调用的日志兼容空壳，AddLog 显式接收用户身份。上下线事件另有真实 MySQL 回归。
 
 - [x] **CQ-002: 重复的呼号格式化逻辑**
   - 文件：`internal/udphub/server_device_session.go:150`
@@ -177,33 +145,19 @@
   - 优化：提取为 `FormatCallSignSSID(callSign string, ssid byte) string` 辅助函数
   - 完成：中心和边缘设备认证路径统一复用既有 `protocol.GetCallSignSSID()`，设备会话测试通过。
 
-- [ ] **CQ-003: 魔法数字**
-  - 问题：代码中存在大量魔法数字
-  - 示例：
-    - 心跳间隔 `10 * time.Second` (`internal/udphub/server_cache_sync.go:26`)
-    - 缓存 TTL `5*time.Minute` (`pkg/cache/device_cache.go:95`)
-  - 优化：提取为命名常量或配置项
-  - 本批进展：群组缓存同步周期、数据库查询超时和通用分页参数已命名；其他位置继续核查。
+- [x] **CQ-003: 魔法数字**
+  - 提取设备详情/列表 TTL、缓存同步周期、后台查询超时、在线事件队列、操作日志批量/刷新和分页参数常量；保留协议规范定义的固定字段。
 
-- [ ] **CQ-004: 长函数拆分**
-  - 文件：`internal/handler/auth_user_admin.go:GetUsers()`
-  - 问题：函数超过 100 行，包含多个职责
-  - 优化：拆分为更小的函数（权限检查、查询、转换）
+- [x] **CQ-004: 长函数拆分**
+  - GetUsers 分离身份权限、分页查询与响应转换，复用 userListItem；用户与设备接口真实 MySQL 回归通过。
 
-- [ ] **CQ-005: 未使用的导入和变量**
-  - 检查：运行 `go vet ./...` 和 `golangci-lint run`
-  - 清理：移除未使用的导入和变量
+- [x] **CQ-005: 未使用的导入和变量**
+  - 生产包、测试和工具的 go vet 与 golangci-lint 检查通过；清理 errcheck、staticcheck、ineffassign 与 gosec 检出的实际问题。
 
 ### 🪲 潜在 Bug Potential Bugs
 
-- [ ] **PB-001: nil 指针检查不足**
-  - 文件：多处
-  - 问题：部分函数未充分检查参数是否为 nil
-  - 检查位置：
-    - `internal/handler/authorization.go:26-44` - device, group 参数
-    - `internal/udphub/server_device_session.go` - packet 处理
-  - 修复：添加 nil 检查，使用 Go 1.25 的改进错误处理
-  - 本批进展：补齐设备注册/心跳的 packet、地址、连接及空心跳请求检查；权限辅助函数已有 nil 防护，其余入口待核查。
+- [x] **PB-001: nil 指针检查不足**
+  - 补齐设备注册/心跳、JWT 身份断言、权限辅助、缓存转换、FFmpeg 命令入口和协议边界的空参数/类型检查；对应单元与真实链路回归通过。
 
 - [x] **PB-002: 竞态条件风险**
   - 文件：`internal/udphub/server_cache_sync.go`
@@ -213,17 +167,11 @@
   - 完成：设备缓存刷新串行化，删除设备与缓存失效使用运行时快照；保留现有群组静态快照发布机制。
   - 验证：虚拟机 UDP 会话/缓存回归及 Linux `-race` 检查通过。
 
-- [ ] **PB-003: 设备在线状态同步延迟**
-  - 文件：`internal/udphub/server_cache_sync.go:26`
-  - 问题：10 秒同步间隔可能导致状态不一致
-  - 影响：UI 显示延迟，设备状态跳变
-  - 优化：考虑事件驱动更新 + 定期全量同步
+- [x] **PB-003: 设备在线状态同步延迟**
+  - 上线、迁移、下线触发事件持久化，短延迟合并后刷新列表缓存；周期同步作为兜底。真实 MySQL 验证最新会话覆盖旧事件，Linux race 通过。
 
-- [ ] **PB-004: 时区处理**
-  - 文件：多处时间处理
-  - 问题：未明确指定时区，可能造成跨时区部署问题
-  - 检查：`time.Now()` 使用位置，数据库时间字段类型
-  - 建议：统一使用 UTC，前端按用户时区显示
+- [x] **PB-004: 时区处理**
+  - 站点提供数据库时区，前端 parseAPIDate 正确解释无偏移的历史 DATETIME 并按用户本地显示；显式 ISO 偏移、UTC/BJT 日志簿契约保留。UTC、固定偏移、IANA 时区测试通过；未批量改写历史时间数据。
 
 - [x] **PB-005: 字符串编码问题**
   - 文件：`internal/protocol/draarl.go`
@@ -239,11 +187,8 @@
 
 ### 🎨 前端 UI/UX
 
-- [ ] **UI-001: 错误提示不友好**
-  - 文件：多个 React 组件
-  - 问题：部分错误消息直接显示技术细节
-  - 示例：`www/src/pages/devices/DevicesPage.tsx`
-  - 优化：使用 `getErrorMessage()` 统一处理，提供用户友好的提示
+- [x] **UI-001: 错误提示不友好**
+  - 表单/列表统一 getErrorMessage，显示操作相关提示并过滤后端内部异常；网络、权限与业务错误回归通过。
 
 - [x] **UI-002: 加载状态缺失**
   - 文件：`www/src/components/devices/preconfig/PreConfigToolCard.tsx`
@@ -267,19 +212,11 @@
   - 建议：直接检查 `navigator.bluetooth` 可用性
   - 完成：直接采用 BLE 客户端的能力检测结果；浏览器移除蓝牙 API 后显示提示并禁用连接，即使 UA 仍为 Chromium。
 
-- [ ] **UI-005: 无障碍性改进**
-  - 问题：部分交互元素缺少 ARIA 标签
-  - 检查：按钮、输入框、对话框的可访问性
-  - 工具：使用 axe-core 或 Lighthouse 检查
-  - 修复：添加适当的 `aria-label`, `aria-describedby`
-  - 本批进展：预配置对话框标题关联、设备选择器名称和忙碌状态已补齐；动态码提示与输入关联。全站无障碍审计仍待完成。
+- [x] **UI-005: 无障碍性改进**
+  - 补齐页面标题层级、导航列表、按钮/输入/Select 名称、弹窗关联、滚动区键盘访问、进度条名称和浅色对比度。13 个关键路由的桌面/768px/320px axe 扫描零违规；范围限已扫描的浅色页面，未宣称所有主题/页面完全合规。
 
-- [ ] **UI-006: 响应式布局优化**
-  - 文件：多个页面组件
-  - 问题：移动端显示可能不理想
-  - 检查：在小屏幕设备上测试关键页面
-  - 优化：调整 Grid 断点，隐藏或折叠次要信息
-  - 本批进展：预配置弹窗在小屏幕全屏显示，320×568 浏览器检查无横向溢出；其他页面及表单细节仍待检查。
+- [x] **UI-006: 响应式布局优化**
+  - 13 个关键路由在桌面、768px、320px 检查无页面横向溢出；小屏预配置全屏、表格区域可滚动，已保存截图证据。
 
 - [x] **UI-007: 表单验证反馈**
   - 文件：`www/src/components/devices/preconfig/PreConfigToolCard.tsx`
@@ -290,26 +227,17 @@
 
 ### 📱 交互改进 Interaction
 
-- [ ] **IX-001: 设备配置保存确认**
-  - 文件：`www/src/components/devices/preconfig/PreConfigToolCard.tsx`
-  - 问题：保存配置后无明确成功反馈
-  - 优化：添加成功提示音或动画，确认配置已生效
-  - 已复核：当前已有“配置已发送到设备”的成功提示；模拟 BLE 检查通过，实机持久化与回读确认仍待验证。
+- [x] **IX-001: 设备配置保存确认**
+  - 保存后回读 WiFi/DraARL 配置并逐项比较，匹配后才提示成功；不一致拒绝成功提示。浏览器模拟 BLE 已验证，物理硬件持久化/断电验证仍需设备。
 
-- [ ] **IX-002: 批量操作支持**
-  - 文件：`www/src/pages/devices/DevicesPage.tsx`
-  - 功能：设备列表支持批量选择和操作
-  - 建议：添加全选、批量禁用、批量切组功能
+- [x] **IX-002: 批量操作支持**
+  - 增加全选、批量启用/禁用、切组和清空群组；部分失败保留失败项并可重试。真实 API 浏览器验证三台设备的部分 503、重试与切组后回读。
 
-- [ ] **IX-003: 搜索优化**
-  - 文件：设备、用户、群组列表页面
-  - 优化：添加搜索防抖，减少请求频率
-  - 建议：显示搜索历史，支持高级筛选
+- [x] **IX-003: 搜索优化**
+  - 设备、用户与群组搜索增加 useDebouncedValue，减少逐字请求，保留现有筛选条件；防抖单元与浏览器回归通过。搜索历史和新增高级筛选属于可选产品功能，未纳入本轮。
 
-- [ ] **IX-004: 快捷键支持**
-  - 建议：为常用操作添加键盘快捷键
-  - 示例：`Ctrl+S` 保存配置，`Esc` 关闭对话框
-  - 实现：使用 `useHotkeys` hook
+- [x] **IX-004: 快捷键支持**
+  - 预配置 Ctrl+S/Cmd+S 保存、Escape 关闭，busy 状态禁止关闭；PTT 键盘交互避开输入框与组合键。hook/组件单元和浏览器回归通过。
 
 ---
 
@@ -317,57 +245,34 @@
 
 ### 🔨 开发工具 Development Tools
 
-- [ ] **T-001: 配置 pre-commit hooks**
-  - 工具：husky + lint-staged
-  - 检查：格式化、linting、类型检查
-  - 配置文件：`.husky/pre-commit`
+- [x] **T-001: 配置 pre-commit hooks**
+  - 使用 .githooks/pre-commit 与 Go 工具检查暂存 Go 格式、go vet、前端 lint/类型/Vitest，支持 Windows npm.cmd。启用命令与检查范围见 CONTRIBUTING.md；本次提交实际执行 hook。
 
-- [ ] **T-002: 添加 golangci-lint 配置**
-  - 文件：`.golangci.yml`
-  - 启用检查器：gosec, errcheck, ineffassign, staticcheck
-  - 集成到 CI/CD
+- [x] **T-002: 添加 golangci-lint 配置**
+  - .golangci.yml 启用 govet、gosec、errcheck、ineffassign、staticcheck，CI 同步运行；AES/协议兼容例外有明确说明，其余具体例外在源码解释。
 
-- [ ] **T-003: 性能基准测试**
-  - 目录：`test/bench/`
-  - 场景：UDP 转发、设备认证、数据库查询
-  - 目标：建立性能基线，防止回归
+- [x] **T-003: 性能基准测试**
+  - 保留 UDP header 池化/新建、AES 设备认证、设备分页冷 DB/热缓存的基准；虚拟机三轮基线见最终验证文档。结果是微基准，不代表整机并发容量或百万行规模。
 
 - [ ] **T-004: 集成测试覆盖**
-  - 文件：`internal/handler/*_test.go`
-  - 当前：部分单元测试
-  - 目标：关键流程端到端测试覆盖率 > 80%
+  - 新增可复现 tools/integration，28 个独立真实 MySQL/Redis/FFmpeg suite 已执行，涵盖关键流程并有机器可读证据；不能把 suite 通过率等同语句覆盖率。合并 handler 语句覆盖约 30.52%，仓库约 66.82%，整体 >80% 目标尚未达到，继续作为覆盖率改进项。
 
-- [ ] **T-005: 前端单元测试**
-  - 工具：Vitest + React Testing Library
-  - 优先级：关键组件（设备配置、无线电页面）
-  - 目标：核心工具函数测试覆盖率 > 90%
+- [x] **T-005: 前端单元测试**
+  - 引入 Vitest/React Testing Library，设备配置回读、PTT、交互 hook 与工具测试 31 项通过；5 个核心工具文件行/语句/函数覆盖 100%，分支 98.73%，另保留 13 项 legacy 测试。
 
 ### 📊 监控与可观测性 Monitoring
 
-- [ ] **M-001: 添加结构化日志**
-  - 替换：`log.Printf` → 结构化日志库（zerolog/zap）
-  - 好处：便于日志聚合和分析
-  - 字段：timestamp, level, trace_id, user_id, device_id
+- [x] **M-001: 添加结构化日志**
+  - 使用标准库 slog 提供 text/json 输出，HTTP 日志包含 trace_id/request_id，启动时接管既有 log 输出；保留测试和兼容日志文本。
 
-- [ ] **M-002: 关键指标暴露**
-  - 端点：`/metrics` (Prometheus 格式)
-  - 指标：
-    - 在线设备数
-    - UDP 包处理速率
-    - 数据库查询延迟
-    - 缓存命中率
-    - WebSocket 连接数
+- [x] **M-002: 关键指标暴露**
+  - 受管理员认证保护的 /metrics 暴露 UDP、在线设备/WS、缓存命中及数据库池/查询指标；匿名访问真实返回 401，不使用 owner/device 作为高基数标签。
 
-- [ ] **M-003: 健康检查增强**
-  - 文件：`internal/server/server.go`
-  - 当前：`/healthz` 仅返回 OK
-  - 优化：检查数据库连接、Redis 连接、关键依赖状态
-  - 返回：详细的健康状态 JSON
+- [x] **M-003: 健康检查增强**
+  - /healthz 保持进程存活检查，新增 /readyz 有界探测 MySQL/Redis。虚拟机停止各依赖得到 healthz=200/readyz=503，恢复后 readyz=200。
 
-- [ ] **M-004: 分布式追踪**
-  - 工具：OpenTelemetry
-  - 追踪：HTTP 请求、数据库查询、UDP 处理链路
-  - 集成：Jaeger 或 Zipkin
+- [x] **M-004: 分布式追踪**
+  - 可选 OTLP/HTTP 接入 HTTP、DB、UDP，有限队列与采样。虚拟机 collector 实收并解码 3325 spans，其中 1185 个 DB span 直接继承 HTTP，SQL 文本属性为 0。
 
 ---
 
@@ -375,51 +280,28 @@
 
 ### 📚 文档 Documentation
 
-- [ ] **D-001: API 文档自动生成**
-  - 工具：Swagger/OpenAPI
-  - 来源：代码注释 + 结构体标签
-  - 目标：自动化 API 文档更新
+- [x] **D-001: API 文档自动生成**
+  - tools/openapi 从路由、请求/响应类型生成 docs/api/openapi.json；go run ./tools/openapi -check 接入 CI，避免手写文档漂移。
 
-- [ ] **D-002: 部署文档补充**
-  - 文件：`docs/usage/01-部署与配置.md`
-  - 补充：
-    - 生产环境性能调优指南
-    - 高可用部署架构
-    - 备份恢复流程
-    - 监控告警配置
+- [x] **D-002: 部署文档补充**
+  - 补充连接池/资源调优、中心与边缘边界、监控、四镜像升级、MinIO 卷权限、备份恢复与回退说明，并链接真实验证记录。
 
-- [ ] **D-003: 故障排查手册**
-  - 文件：`docs/usage/08-运维与排障.md`
-  - 补充：
-    - 常见问题清单
-    - 日志分析方法
-    - 性能问题诊断
-    - 紧急恢复流程
+- [x] **D-003: 故障排查手册**
+  - 补充 readiness、数据库池、缓存/在线事件、OTLP、FFmpeg 资源限制和恢复排查；区分探活失败与依赖不可用。
 
-- [ ] **D-004: 代码贡献指南**
-  - 文件：`CONTRIBUTING.md`
-  - 内容：
-    - 代码风格规范
-    - 提交消息格式
-    - PR 流程
-    - 测试要求
+- [x] **D-004: 代码贡献指南**
+  - 新增 CONTRIBUTING.md，记录提交格式、分支、格式/lint/test、hook、兼容设计与安全扫描要求。
 
 ### 🎯 规范 Standards
 
-- [ ] **S-001: 建立错误码规范**
-  - 文件：`internal/handler/errors.go`
-  - 规范：统一的错误码体系
-  - 格式：`{"code": 40001, "message": "设备不存在", "detail": "..."}`
+- [x] **S-001: 建立错误码规范**
+  - 规范 code/message/request_id 和旧字段兼容，HTTP 状态与错误类别一致，内部异常通过请求标识关联日志；见 internal/handler/errors.go。
 
-- [ ] **S-002: 数据库迁移流程**
-  - 工具：golang-migrate 或 GORM AutoMigrate
-  - 流程：版本化 SQL 文件，向后兼容
-  - 文档：每次迁移的 rollback 方案
+- [x] **S-002: 数据库迁移流程**
+  - 补充 docs/database-migrations.md，记录版本化 AutoMigrate、备份、停机、验证和不自动降级边界；真实 MySQL 32 表备份恢复逐表行数一致，两次应用重启迁移记录稳定。
 
-- [ ] **S-003: 前端组件库规范**
-  - 目录：`www/src/components/common/`
-  - 规范：可复用组件的 props、样式、文档
-  - 工具：Storybook 展示组件库
+- [x] **S-003: 前端组件库规范**
+  - 新增 docs/frontend-components.md，规定 props、交互/加载/错误、ARIA、测试及复用边界，列出现有公共组件用法。
 
 ---
 
@@ -461,7 +343,7 @@
 - 部署验证结果
 
 **注意**：
-- 所有修改都应先在独立分支完成
+- 按用户要求在 `dev` 继续开发，保留 `master`、`dev`、`edge`，本轮不合并到 master
 - 安全修复优先于性能优化
 - 保持向后兼容性
 - 充分测试后再合并到主分支

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +20,7 @@ func TestBroadcastHealthReportsDeploymentDisabledWithoutScheduler(t *testing.T) 
 	oldConfig := config.Config
 	config.Config = &config.Configuration{}
 	t.Cleanup(func() { config.Config = oldConfig })
-	_ = broadcastruntime.Stop(nil)
+	_ = broadcastruntime.Stop(context.Background())
 
 	admin := &gormdb.User{ID: 1, Roles: "admin"}
 	result := performBroadcastOperationRequest(admin, http.MethodGet, "/broadcast/health", nil, GetBroadcastHealth)
@@ -48,7 +49,7 @@ func TestBroadcastOperationsRequireAdminAndRunningScheduler(t *testing.T) {
 	oldConfig := config.Config
 	config.Config = &config.Configuration{}
 	t.Cleanup(func() { config.Config = oldConfig })
-	_ = broadcastruntime.Stop(nil)
+	_ = broadcastruntime.Stop(context.Background())
 
 	nonAdmin := &gormdb.User{ID: 2, Roles: "user"}
 	forbidden := performBroadcastOperationRequest(nonAdmin, http.MethodPost, "/broadcast/emergency-stop", nil, EmergencyStopBroadcasts)

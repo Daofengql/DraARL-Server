@@ -172,13 +172,13 @@ func duplicateUDPConns(conn *net.UDPConn, count int) ([]*net.UDPConn, error) {
 			return duplicates, err
 		}
 		packetConn, duplicateErr := net.FilePacketConn(file)
-		file.Close()
+		_ = file.Close()
 		if duplicateErr != nil {
 			return duplicates, duplicateErr
 		}
 		udpConn, ok := packetConn.(*net.UDPConn)
 		if !ok {
-			packetConn.Close()
+			_ = packetConn.Close()
 			return duplicates, errors.New("duplicated packet connection is not UDP")
 		}
 		duplicates = append(duplicates, udpConn)
@@ -469,7 +469,7 @@ func (s *FanoutSender) worker(writer *fanoutWriter) {
 	defer s.wg.Done()
 	defer func() {
 		if writer.owned && writer.conn != nil {
-			writer.conn.Close()
+			_ = writer.conn.Close()
 		}
 	}()
 

@@ -60,6 +60,7 @@ export function GroupListItem({
           {getGroupIcon()}
         </ListItemIcon>
         <ListItemText
+          slotProps={{ secondary: { component: 'div' } }}
           primary={group.name}
           secondary={
             <Stack direction="row" alignItems="center" spacing={1}>

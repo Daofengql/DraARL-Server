@@ -1,3 +1,5 @@
+import { useSaveShortcut } from '../../../hooks/useSaveShortcut'
+import { verifyServerReadback, verifyWifiReadback } from '../../../utils/provisionVerification'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
@@ -170,7 +172,10 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
 
     await runAction('saveWifi', async () => {
       await saveWifi(payload)
-      setSuccess('WiFi 配置已发送到设备')
+      const confirmed = await loadConfig()
+      verifyWifiReadback(payload, confirmed.wifi)
+      applyLoadedConfig(createWifiFormValue(confirmed.wifi), createServerFormValue(confirmed.server))
+      setSuccess('WiFi 配置已保存并回读确认')
     })
   }
 
@@ -186,9 +191,18 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
 
     await runAction('saveServer', async () => {
       await saveServer(serverForm)
-      setSuccess('DraARL 配置已发送到设备')
+      const confirmed = await loadConfig()
+      verifyServerReadback(serverForm, confirmed.server)
+      applyLoadedConfig(createWifiFormValue(confirmed.wifi), createServerFormValue(confirmed.server))
+      setSuccess('DraARL 配置已保存并回读确认')
     })
   }
+
+  useSaveShortcut(open && status.authenticated && !busyAction, () => {
+    const focused = document.activeElement
+    if (focused?.closest('[data-config-section="server"]')) void handleSaveServer()
+    else void handleSaveWifi()
+  })
 
   return (
     <Dialog
@@ -275,7 +289,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
             <Stack spacing={2}>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 2 }}>
                 <Box>
-                  <Typography variant="subtitle1">BLE 连接与动态码认证</Typography>
+                  <Typography component="h3" variant="subtitle1">BLE 连接与动态码认证</Typography>
                   <Typography variant="body2" color="text.secondary">
                     顶部流程沿用动态码认证，认证通过后可读取并保存配置；WiFi 请直接手动填写。
                   </Typography>

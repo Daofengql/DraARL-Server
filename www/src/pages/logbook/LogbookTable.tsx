@@ -100,8 +100,9 @@ export function LogbookTable({
         <Table sx={{ minWidth: 900 }}>
           <TableHead>
             <TableRow>
-              <TableCell padding="checkbox">
+              <TableCell padding="checkbox" aria-label="选择日志">
                 <Checkbox
+                  slotProps={{ input: { 'aria-label': '选择本页日志' } }}
                   indeterminate={selectedIds.length > 0 && selectedIds.length < filteredEntries.length}
                   checked={filteredEntries.length > 0 && selectedIds.length === filteredEntries.length}
                   onChange={handleSelectAll}

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"draarl/internal/common"
 	"errors"
 	"fmt"
 	"log"
@@ -73,18 +74,13 @@ type MoveAssetRequest struct {
 
 // invalidateAssetCache 使资源缓存失效
 // parentID 为 nil 时表示根目录，需要刷新目录树缓存
-func (h *AssetHandler) invalidateAssetCache(ctx interface{ Done() <-chan struct{} }, parentID *uint) {
+func (h *AssetHandler) invalidateAssetCache(ctx context.Context, parentID *uint) {
 	if h.assetCache == nil {
 		return
 	}
-
-	// 转换 context
-	var goCtx context.Context
-	if c, ok := ctx.(context.Context); ok {
-		goCtx = c
-	} else {
-		goCtx = context.Background()
-	}
+	// Cache cleanup follows a committed mutation and must finish if the client leaves.
+	goCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 
 	// 如果是根目录下的变更，需要刷新目录树缓存
 	if parentID == nil {
@@ -108,23 +104,17 @@ func (h *AssetHandler) GetAssets(c *gin.Context) {
 	if parentIDStr := c.Query("parent_id"); parentIDStr != "" {
 		id, err := strconv.ParseUint(parentIDStr, 10, 32)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, Response{
-				Code:    400,
-				Message: "无效的 parent_id",
-			})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的 parent_id"})
 			return
 		}
 		uid := uint(id)
 		parentID = &uid
 	}
 
-	assets, err := h.repo.GetByParentID(parentID)
+	assets, err := h.repo.WithContext(c.Request.Context()).GetByParentID(parentID)
 	if err != nil {
 		log.Printf("获取资源列表失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取资源列表失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取资源列表失败"})
 		return
 	}
 
@@ -139,8 +129,8 @@ func (h *AssetHandler) GetAssets(c *gin.Context) {
 			Size:      asset.Size,
 			Remark:    asset.Remark,
 			SortOrder: asset.SortOrder,
-			CreatedAt: asset.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt: asset.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: common.FormatAPITime(asset.CreatedAt),
+			UpdatedAt: common.FormatAPITime(asset.UpdatedAt),
 		}
 
 		// 如果是文件，添加下载链接
@@ -152,8 +142,8 @@ func (h *AssetHandler) GetAssets(c *gin.Context) {
 
 		// 如果是文件夹，添加子项数量
 		if asset.IsFolder() {
-			item.FileCount, _ = h.repo.GetFileCount(asset.ID)
-			item.FolderCount, _ = h.repo.GetSubFolderCount(asset.ID)
+			item.FileCount, _ = h.repo.WithContext(c.Request.Context()).GetFileCount(asset.ID)
+			item.FolderCount, _ = h.repo.WithContext(c.Request.Context()).GetSubFolderCount(asset.ID)
 		}
 
 		items = append(items, item)
@@ -172,38 +162,30 @@ func (h *AssetHandler) CreateFolder(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req CreateFolderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	// 检查同名资源是否存在
-	exists2, err := h.repo.ExistsByName(req.Name, req.ParentID)
+	exists2, err := h.repo.WithContext(c.Request.Context()).ExistsByName(req.Name, req.ParentID)
 	if err != nil {
 		log.Printf("检查资源是否存在失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "创建文件夹失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "创建文件夹失败"})
 		return
 	}
 	if exists2 {
-		c.JSON(http.StatusConflict, Response{
-			Code:    409,
-			Message: "同名资源已存在",
-		})
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "同名资源已存在"})
 		return
 	}
 
@@ -215,19 +197,16 @@ func (h *AssetHandler) CreateFolder(c *gin.Context) {
 		Remark:   req.Remark,
 	}
 
-	if err := h.repo.Create(folder); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).Create(folder); err != nil {
 		log.Printf("创建文件夹失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "创建文件夹失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "创建文件夹失败"})
 		return
 	}
 
 	// 记录操作日志
 	parentPath := "根目录"
 	if req.ParentID != nil {
-		parentPath, _ = h.repo.GetPath(*req.ParentID)
+		parentPath, _ = h.repo.WithContext(c.Request.Context()).GetPath(*req.ParentID)
 	}
 	oplog.AddLog(
 		fmt.Sprintf("创建文件夹: %s (位置: %s)", req.Name, parentPath),
@@ -251,8 +230,8 @@ func (h *AssetHandler) CreateFolder(c *gin.Context) {
 			Type:      folder.Type,
 			Remark:    folder.Remark,
 			SortOrder: folder.SortOrder,
-			CreatedAt: folder.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt: folder.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: common.FormatAPITime(folder.CreatedAt),
+			UpdatedAt: common.FormatAPITime(folder.UpdatedAt),
 		},
 	})
 }
@@ -266,59 +245,45 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取父目录ID
 	parentIDStr := c.PostForm("parent_id")
 	if parentIDStr == "" {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "缺少 parent_id 参数",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 parent_id 参数"})
 		return
 	}
 	parentIDUint, err := strconv.ParseUint(parentIDStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的 parent_id",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的 parent_id"})
 		return
 	}
 	parentID := uint(parentIDUint)
 
 	// 验证父目录存在且是文件夹
-	parent, err := h.repo.GetByID(parentID)
+	parent, err := h.repo.WithContext(c.Request.Context()).GetByID(parentID)
 	if err != nil || parent == nil || !parent.IsFolder() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "父目录不存在或不是文件夹",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "父目录不存在或不是文件夹"})
 		return
 	}
 
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "获取文件失败",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "获取文件失败"})
 		return
 	}
 
 	// 检查文件大小（100MB）
 	if fileHeader.Size > 100*1024*1024 {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "文件大小不能超过100MB",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "文件大小不能超过100MB"})
 		return
 	}
 
@@ -332,20 +297,14 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 	remark := c.PostForm("remark")
 
 	// 检查同名资源是否存在
-	exists2, err := h.repo.ExistsByName(displayName, &parentID)
+	exists2, err := h.repo.WithContext(c.Request.Context()).ExistsByName(displayName, &parentID)
 	if err != nil {
 		log.Printf("检查资源是否存在失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "上传文件失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "上传文件失败"})
 		return
 	}
 	if exists2 {
-		c.JSON(http.StatusConflict, Response{
-			Code:    409,
-			Message: "同名资源已存在",
-		})
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "同名资源已存在"})
 		return
 	}
 
@@ -354,16 +313,10 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 	if err != nil {
 		log.Printf("上传文件到MinIO失败: %v", err)
 		if errors.Is(err, storage.ErrFileTypeNotAllowed) {
-			c.JSON(http.StatusBadRequest, Response{
-				Code:    http.StatusBadRequest,
-				Message: "文件类型不被允许",
-			})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "文件类型不被允许"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "上传文件失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "上传文件失败"})
 		return
 	}
 
@@ -378,21 +331,18 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 		Remark:   remark,
 	}
 
-	if err := h.repo.Create(asset); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).Create(asset); err != nil {
 		// 回滚：删除已上传的文件
 		if deleteErr := deleteStoredObjectWithIndependentContext(objectName, minio.DeleteFile); deleteErr != nil {
 			log.Printf("回滚未提交资源对象失败: object=%s err=%v", objectName, deleteErr)
 		}
 		log.Printf("创建资源记录失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "上传文件失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "上传文件失败"})
 		return
 	}
 
 	// 记录操作日志
-	parentPath, _ := h.repo.GetPath(parentID)
+	parentPath, _ := h.repo.WithContext(c.Request.Context()).GetPath(parentID)
 	oplog.AddLog(
 		fmt.Sprintf("上传文件: %s (位置: %s, 大小: %d 字节)", displayName, parentPath, fileSize),
 		"asset_upload",
@@ -419,8 +369,8 @@ func (h *AssetHandler) UploadFile(c *gin.Context) {
 			Remark:      asset.Remark,
 			SortOrder:   asset.SortOrder,
 			DownloadURL: minio.GetFileURL(asset.Path),
-			CreatedAt:   asset.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:   asset.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:   common.FormatAPITime(asset.CreatedAt),
+			UpdatedAt:   common.FormatAPITime(asset.UpdatedAt),
 		},
 	})
 }
@@ -431,41 +381,33 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取资源ID
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的资源ID",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的资源ID"})
 		return
 	}
 
 	// 获取资源
-	asset, err := h.repo.GetByID(uint(id))
+	asset, err := h.repo.WithContext(c.Request.Context()).GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "资源不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "资源不存在"})
 		return
 	}
 
 	var req UpdateAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
@@ -473,20 +415,14 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 	updates := make(map[string]interface{})
 	if req.Name != "" && req.Name != asset.Name {
 		// 检查新名称是否已存在
-		exists2, err := h.repo.ExistsByName(req.Name, asset.ParentID)
+		exists2, err := h.repo.WithContext(c.Request.Context()).ExistsByName(req.Name, asset.ParentID)
 		if err != nil {
 			log.Printf("检查资源名称失败: %v", err)
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    500,
-				Message: "更新资源失败",
-			})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新资源失败"})
 			return
 		}
 		if exists2 {
-			c.JSON(http.StatusConflict, Response{
-				Code:    409,
-				Message: "同名资源已存在",
-			})
+			writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "同名资源已存在"})
 			return
 		}
 		updates["name"] = req.Name
@@ -507,12 +443,9 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 	}
 
 	// 执行更新
-	if err := h.repo.UpdatePartial(uint(id), updates); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).UpdatePartial(uint(id), updates); err != nil {
 		log.Printf("更新资源失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新资源失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新资源失败"})
 		return
 	}
 
@@ -545,99 +478,76 @@ func (h *AssetHandler) MoveAsset(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取资源ID
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的资源ID",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的资源ID"})
 		return
 	}
 
 	// 获取资源
-	asset, err := h.repo.GetByID(uint(id))
+	asset, err := h.repo.WithContext(c.Request.Context()).GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "资源不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "资源不存在"})
 		return
 	}
 
 	var req MoveAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	// 验证目标父目录
 	if req.TargetParentID != nil {
-		targetParent, err := h.repo.GetByID(*req.TargetParentID)
+		targetParent, err := h.repo.WithContext(c.Request.Context()).GetByID(*req.TargetParentID)
 		if err != nil || targetParent == nil || !targetParent.IsFolder() {
-			c.JSON(http.StatusBadRequest, Response{
-				Code:    400,
-				Message: "目标目录不存在或不是文件夹",
-			})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "目标目录不存在或不是文件夹"})
 			return
 		}
 	}
 
 	// 验证父目录有效性（不能移动到自己或子目录下）
 	if asset.IsFolder() {
-		if err := h.repo.ValidateParent(uint(id), req.TargetParentID); err != nil {
-			c.JSON(http.StatusBadRequest, Response{
-				Code:    400,
-				Message: err.Error(),
-			})
+		if err := h.repo.WithContext(c.Request.Context()).ValidateParent(uint(id), req.TargetParentID); err != nil {
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 			return
 		}
 	}
 
 	// 检查目标目录下是否已存在同名资源
-	exists2, err := h.repo.ExistsByName(asset.Name, req.TargetParentID)
+	exists2, err := h.repo.WithContext(c.Request.Context()).ExistsByName(asset.Name, req.TargetParentID)
 	if err != nil {
 		log.Printf("检查资源名称失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "移动资源失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "移动资源失败"})
 		return
 	}
 	if exists2 {
-		c.JSON(http.StatusConflict, Response{
-			Code:    409,
-			Message: "目标目录下已存在同名资源",
-		})
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "目标目录下已存在同名资源"})
 		return
 	}
 
 	// 执行移动
-	if err := h.repo.Move(uint(id), req.TargetParentID); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).Move(uint(id), req.TargetParentID); err != nil {
 		log.Printf("移动资源失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "移动资源失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "移动资源失败"})
 		return
 	}
 
 	// 记录操作日志
 	targetPath := "根目录"
 	if req.TargetParentID != nil {
-		targetPath, _ = h.repo.GetPath(*req.TargetParentID)
+		targetPath, _ = h.repo.WithContext(c.Request.Context()).GetPath(*req.TargetParentID)
 	}
 	oplog.AddLog(
 		fmt.Sprintf("移动资源: %s -> %s", asset.Name, targetPath),
@@ -670,60 +580,46 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取资源ID
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的资源ID",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的资源ID"})
 		return
 	}
 
 	// 获取资源
-	asset, err := h.repo.GetByID(uint(id))
+	asset, err := h.repo.WithContext(c.Request.Context()).GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "资源不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "资源不存在"})
 		return
 	}
 
 	// 验证是文件类型
 	if !asset.IsFile() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "只能覆盖文件类型的资源",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "只能覆盖文件类型的资源"})
 		return
 	}
 
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "获取文件失败",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "获取文件失败"})
 		return
 	}
 
 	// 检查文件大小（100MB）
 	if fileHeader.Size > 100*1024*1024 {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "文件大小不能超过100MB",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "文件大小不能超过100MB"})
 		return
 	}
 
@@ -735,16 +631,10 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 	if err != nil {
 		log.Printf("上传文件到MinIO失败: %v", err)
 		if errors.Is(err, storage.ErrFileTypeNotAllowed) {
-			c.JSON(http.StatusBadRequest, Response{
-				Code:    http.StatusBadRequest,
-				Message: "文件类型不被允许",
-			})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "文件类型不被允许"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "上传文件失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "上传文件失败"})
 		return
 	}
 
@@ -754,16 +644,13 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 		"size":      fileSize,
 		"mime_type": mimeType,
 	}
-	if err := h.repo.UpdatePartial(uint(id), updates); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).UpdatePartial(uint(id), updates); err != nil {
 		// 回滚：删除新上传的文件
 		if deleteErr := deleteStoredObjectWithIndependentContext(objectName, minio.DeleteFile); deleteErr != nil {
 			log.Printf("回滚未提交资源覆盖对象失败: asset_id=%d object=%s err=%v", id, objectName, deleteErr)
 		}
 		log.Printf("更新资源记录失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "覆盖文件失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "覆盖文件失败"})
 		return
 	}
 
@@ -799,8 +686,8 @@ func (h *AssetHandler) ReplaceFile(c *gin.Context) {
 			Remark:      asset.Remark,
 			SortOrder:   asset.SortOrder,
 			DownloadURL: minio.GetFileURL(objectName),
-			CreatedAt:   asset.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:   asset.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:   common.FormatAPITime(asset.CreatedAt),
+			UpdatedAt:   common.FormatAPITime(asset.UpdatedAt),
 		},
 	})
 }
@@ -811,32 +698,27 @@ func (h *AssetHandler) DeleteAsset(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取资源ID
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的资源ID",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的资源ID"})
 		return
 	}
 
 	// 获取资源及其所有子资源
-	asset, err := h.repo.GetByID(uint(id))
+	asset, err := h.repo.WithContext(c.Request.Context()).GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "资源不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "资源不存在"})
 		return
 	}
 
@@ -852,13 +734,10 @@ func (h *AssetHandler) DeleteAsset(c *gin.Context) {
 
 	// 如果是文件夹，获取所有子资源
 	if asset.IsFolder() {
-		children, err := h.repo.GetAllChildrenRecursive(uint(id))
+		children, err := h.repo.WithContext(c.Request.Context()).GetAllChildrenRecursive(uint(id))
 		if err != nil {
 			log.Printf("获取子资源失败: %v", err)
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    500,
-				Message: "删除资源失败",
-			})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "删除资源失败"})
 			return
 		}
 		collectFilePaths(children)
@@ -869,12 +748,9 @@ func (h *AssetHandler) DeleteAsset(c *gin.Context) {
 	}
 
 	// 从数据库删除资源（包括子资源）
-	if err := h.repo.DeleteWithChildren(uint(id)); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).DeleteWithChildren(uint(id)); err != nil {
 		log.Printf("删除资源失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "删除资源失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "删除资源失败"})
 		return
 	}
 
@@ -940,20 +816,17 @@ func (h *AssetHandler) GetAssetTree(c *gin.Context) {
 	}
 
 	// 缓存未命中，从数据库获取
-	folders, err := h.repo.GetRootFolders()
+	folders, err := h.repo.WithContext(c.Request.Context()).GetRootFolders()
 	if err != nil {
 		log.Printf("获取资源目录树失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取资源目录树失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取资源目录树失败"})
 		return
 	}
 
 	// 转换为响应格式
 	items := make([]AssetResponse, 0, len(folders))
 	for _, folder := range folders {
-		fileCount, _ := h.repo.GetFileCountRecursive(folder.ID)
+		fileCount, _ := h.repo.WithContext(c.Request.Context()).GetFileCountRecursive(folder.ID)
 		items = append(items, AssetResponse{
 			ID:        folder.ID,
 			Name:      folder.Name,
@@ -961,8 +834,8 @@ func (h *AssetHandler) GetAssetTree(c *gin.Context) {
 			Remark:    folder.Remark,
 			SortOrder: folder.SortOrder,
 			FileCount: fileCount,
-			CreatedAt: folder.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt: folder.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt: common.FormatAPITime(folder.CreatedAt),
+			UpdatedAt: common.FormatAPITime(folder.UpdatedAt),
 		})
 	}
 
@@ -980,20 +853,14 @@ func (h *AssetHandler) GetFolderFiles(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的文件夹ID",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的文件夹ID"})
 		return
 	}
 
 	// 验证文件夹存在
-	folder, err := h.repo.GetByID(uint(id))
+	folder, err := h.repo.WithContext(c.Request.Context()).GetByID(uint(id))
 	if err != nil || folder == nil || !folder.IsFolder() {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "文件夹不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "文件夹不存在"})
 		return
 	}
 
@@ -1028,13 +895,10 @@ func (h *AssetHandler) GetFolderFiles(c *gin.Context) {
 
 	// 缓存未命中，从数据库获取
 	if len(items) == 0 {
-		children, err := h.repo.GetChildrenByParentID(uint(id))
+		children, err := h.repo.WithContext(c.Request.Context()).GetChildrenByParentID(uint(id))
 		if err != nil {
 			log.Printf("获取内容列表失败: %v", err)
-			c.JSON(http.StatusInternalServerError, Response{
-				Code:    500,
-				Message: "获取内容列表失败",
-			})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取内容列表失败"})
 			return
 		}
 
@@ -1049,13 +913,13 @@ func (h *AssetHandler) GetFolderFiles(c *gin.Context) {
 				MimeType:  child.MimeType,
 				Remark:    child.Remark,
 				SortOrder: child.SortOrder,
-				CreatedAt: child.CreatedAt.Format("2006-01-02 15:04:05"),
-				UpdatedAt: child.UpdatedAt.Format("2006-01-02 15:04:05"),
+				CreatedAt: common.FormatAPITime(child.CreatedAt),
+				UpdatedAt: common.FormatAPITime(child.UpdatedAt),
 			}
 
 			// 如果是文件夹，递归获取子文件数量
 			if child.IsFolder() {
-				fileCount, _ := h.repo.GetFileCountRecursive(child.ID)
+				fileCount, _ := h.repo.WithContext(c.Request.Context()).GetFileCountRecursive(child.ID)
 				item.FileCount = fileCount
 			} else if child.IsFile() {
 				// 如果是文件，添加下载链接
@@ -1074,7 +938,7 @@ func (h *AssetHandler) GetFolderFiles(c *gin.Context) {
 				ID:        folder.ID,
 				Name:      folder.Name,
 				Remark:    folder.Remark,
-				CreatedAt: folder.CreatedAt.Format("2006-01-02 15:04:05"),
+				CreatedAt: common.FormatAPITime(folder.CreatedAt),
 			},
 			"files": items,
 		},
@@ -1088,29 +952,20 @@ func (h *AssetHandler) GetDownloadURL(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的资源ID",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的资源ID"})
 		return
 	}
 
 	// 获取资源
-	asset, err := h.repo.GetByID(uint(id))
+	asset, err := h.repo.WithContext(c.Request.Context()).GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "资源不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "资源不存在"})
 		return
 	}
 
 	// 验证是文件类型
 	if !asset.IsFile() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "只能下载文件类型的资源",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "只能下载文件类型的资源"})
 		return
 	}
 
@@ -1118,10 +973,7 @@ func (h *AssetHandler) GetDownloadURL(c *gin.Context) {
 	downloadURL, err := storage.PresignGet(c.Request.Context(), asset.Path, 15*time.Minute)
 	if err != nil {
 		log.Printf("生成下载链接失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "生成下载链接失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成下载链接失败"})
 		return
 	}
 	if strings.HasPrefix(downloadURL, "/") {
@@ -1145,10 +997,14 @@ func (h *AssetHandler) GetDownloadURL(c *gin.Context) {
 func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{Code: 401, Message: "未授权"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req struct {
 		ParentID    uint   `json:"parent_id" binding:"required"`
@@ -1158,19 +1014,19 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 		UploadToken string `json:"upload_token" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	objectKey := strings.TrimLeft(req.ObjectKey, "/")
 	if !storage.IsStagingObjectKey(objectKey, "assets", userModel.ID) {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "非法的 object_key"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "非法的 object_key"})
 		return
 	}
 
-	parent, err := h.repo.GetByID(req.ParentID)
+	parent, err := h.repo.WithContext(c.Request.Context()).GetByID(req.ParentID)
 	if err != nil || parent == nil || !parent.IsFolder() {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "父目录不存在或不是文件夹"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "父目录不存在或不是文件夹"})
 		return
 	}
 
@@ -1178,13 +1034,13 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 	if displayName == "" {
 		displayName = path.Base(objectKey)
 	}
-	exists2, err := h.repo.ExistsByName(displayName, &req.ParentID)
+	exists2, err := h.repo.WithContext(c.Request.Context()).ExistsByName(displayName, &req.ParentID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "上传文件失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "上传文件失败"})
 		return
 	}
 	if exists2 {
-		c.JSON(http.StatusConflict, Response{Code: 409, Message: "同名资源已存在"})
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "同名资源已存在"})
 		return
 	}
 
@@ -1192,7 +1048,7 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 		c.Request.Context(), req.UploadToken, objectKey, "assets", userModel.ID,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "上传授权或对象校验失败"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "上传授权或对象校验失败"})
 		return
 	}
 	size := grant.Size
@@ -1206,7 +1062,7 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 	finalKey, err := storage.PromoteStagedUpload(c.Request.Context(), grant)
 	if err != nil {
 		log.Printf("提升资源对象失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "完成文件上传失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "完成文件上传失败"})
 		return
 	}
 
@@ -1219,16 +1075,16 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 		MimeType: mimeType,
 		Remark:   req.Remark,
 	}
-	if err := h.repo.Create(asset); err != nil {
+	if err := h.repo.WithContext(c.Request.Context()).Create(asset); err != nil {
 		if deleteErr := deleteStoredObjectWithIndependentContext(finalKey, storage.Delete); deleteErr != nil {
 			log.Printf("回滚未提交直传资源对象失败: object=%s err=%v", finalKey, deleteErr)
 		}
 		log.Printf("创建资源记录失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "上传文件失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "上传文件失败"})
 		return
 	}
 
-	parentPath, _ := h.repo.GetPath(req.ParentID)
+	parentPath, _ := h.repo.WithContext(c.Request.Context()).GetPath(req.ParentID)
 	oplog.AddLog(
 		fmt.Sprintf("上传文件(直传): %s (位置: %s, 大小: %d 字节)", displayName, parentPath, size),
 		"asset_upload",
@@ -1253,8 +1109,8 @@ func (h *AssetHandler) CompleteUpload(c *gin.Context) {
 			Remark:      asset.Remark,
 			SortOrder:   asset.SortOrder,
 			DownloadURL: minio.GetFileURL(asset.Path),
-			CreatedAt:   asset.CreatedAt.Format("2006-01-02 15:04:05"),
-			UpdatedAt:   asset.UpdatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:   common.FormatAPITime(asset.CreatedAt),
+			UpdatedAt:   common.FormatAPITime(asset.UpdatedAt),
 		},
 	})
 }

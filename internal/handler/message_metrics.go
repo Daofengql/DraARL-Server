@@ -57,6 +57,7 @@ func beginMessageAPIRequest(c *gin.Context, detail bool) func() {
 		elapsed := nonZeroDurationNanos(time.Since(started))
 		messageRequestNanos.Add(elapsed)
 		updateMaxUint64(&messageMaxRequestNanos, elapsed)
+		// #nosec G115 -- Elapsed monotonic durations are nonnegative and bounded by request lifetime.
 		observeMessageLatency(&messageRequestBuckets, time.Duration(elapsed))
 		status := c.Writer.Status()
 		switch {
@@ -78,6 +79,7 @@ func observeMessageQuery(detail bool, elapsed time.Duration) {
 		messageListQueryNanos.Add(nanos)
 	}
 	updateMaxUint64(&messageMaxQueryNanos, nanos)
+	// #nosec G115 -- Elapsed monotonic durations are nonnegative and bounded by request lifetime.
 	observeMessageLatency(&messageQueryBuckets, time.Duration(nanos))
 }
 
@@ -85,6 +87,7 @@ func nonZeroDurationNanos(elapsed time.Duration) uint64 {
 	if elapsed <= 0 {
 		return 1
 	}
+	// #nosec G115 -- Elapsed monotonic durations are nonnegative and bounded by request lifetime.
 	return uint64(elapsed.Nanoseconds())
 }
 

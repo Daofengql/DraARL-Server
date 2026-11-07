@@ -2,7 +2,10 @@ package cache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	gormdb "draarl/internal/gormdb"
@@ -10,7 +13,48 @@ import (
 
 // DeviceCache 设备信息缓存管理器
 type DeviceCache struct {
-	cache *TwoLevelCache
+	cache   *TwoLevelCache
+	queryMu sync.RWMutex
+}
+
+const (
+	deviceDetailTTL = 5 * time.Minute
+	deviceQueryTTL  = 30 * time.Second
+)
+
+type devicePage struct {
+	Items []*gormdb.Device `json:"items"`
+	Total int64            `json:"total"`
+}
+
+func filteredDeviceListKey(filter gormdb.DeviceListFilter, page, size int) string {
+	encoded, _ := json.Marshal(filter)
+	return fmt.Sprintf("device:query:%x:%d:%d", sha256.Sum256(encoded), page, size)
+}
+
+// GetFilteredDeviceList caches one coherent page/count pair. Every dimension,
+// including the permission-derived owner ID, participates in the cache key.
+func (c *DeviceCache) GetFilteredDeviceList(ctx context.Context, filter gormdb.DeviceListFilter, page, size int) ([]*gormdb.Device, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	c.queryMu.RLock()
+	defer c.queryMu.RUnlock()
+	key := filteredDeviceListKey(filter, page, size)
+	var result devicePage
+	if err := c.cache.Get(ctx, key, &result); err == nil {
+		return result.Items, result.Total, nil
+	}
+	items, total, err := gormdb.NewDeviceRepository().WithContext(ctx).ListDevicesPaginated(filter, size, page)
+	if err != nil {
+		return nil, 0, err
+	}
+	if items == nil {
+		items = []*gormdb.Device{}
+	}
+	result = devicePage{items, total}
+	_ = c.cache.Set(ctx, key, result, deviceQueryTTL)
+	return items, total, nil
 }
 
 // DeviceCacheConfig 设备缓存配置
@@ -29,10 +73,7 @@ func NewDeviceCache(config DeviceCacheConfig) (*DeviceCache, error) {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewTwoLevelCache(CacheConfig{
-		LocalTTL: config.LocalTTL,
-		MaxSize:  config.MaxSize,
-	})
+	cache, err := NewTwoLevelCache(CacheConfig(config))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +133,7 @@ func (c *DeviceCache) GetDeviceByID(ctx context.Context, id int) (*gormdb.Device
 	}
 
 	// 写入缓存（详情缓存 5 分钟）
-	_ = c.cache.Set(ctx, key, dbDevice, 5*time.Minute)
+	_ = c.cache.Set(ctx, key, dbDevice, deviceDetailTTL)
 
 	return dbDevice, nil
 }
@@ -143,12 +184,23 @@ func (c *DeviceCache) InvalidateDevice(ctx context.Context, deviceID int, ownerI
 	if ownerID > 0 {
 		keys = append(keys, deviceByOwnerKey(ownerID, ssid))
 	}
-	return c.cache.Delete(ctx, keys...)
+	if err := c.cache.Delete(ctx, keys...); err != nil {
+		return err
+	}
+	if err := c.InvalidateDeviceList(ctx); err != nil {
+		return err
+	}
+	return c.cache.DeletePrefix(ctx, "device:group:")
 }
 
 // InvalidateDeviceList 使设备列表缓存失效（批量操作、新增、删除时调用）
 // 使用前缀匹配，将所有分页列表一并主动删除
 func (c *DeviceCache) InvalidateDeviceList(ctx context.Context) error {
+	c.queryMu.Lock()
+	defer c.queryMu.Unlock()
+	if err := c.cache.DeletePrefix(ctx, "device:query:"); err != nil {
+		return err
+	}
 	// 1. 删除总数缓存
 	if err := c.cache.Delete(ctx, deviceListTotalKey()); err != nil {
 		return err
@@ -181,7 +233,7 @@ func (c *DeviceCache) SetDeviceOnlineStatus(ctx context.Context, deviceID int, i
 
 	// 更新在线状态
 	device.ISOnline = isOnline
-	return c.cache.Set(ctx, key, &device, 5*time.Minute)
+	return c.cache.Set(ctx, key, &device, deviceDetailTTL)
 }
 
 // GetDevicesByGroupID 获取群组设备列表（带缓存）

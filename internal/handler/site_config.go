@@ -65,10 +65,7 @@ func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
@@ -83,13 +80,10 @@ func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 	if configCache != nil {
 		configs, err = configCache.GetAllConfigs(ctx)
 	} else {
-		configs, err = h.repo.GetAll()
+		configs, err = h.repo.WithContext(c.Request.Context()).GetAll()
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
 		return
 	}
 
@@ -104,10 +98,7 @@ func (h *SiteConfigHandler) GetAllConfigs(c *gin.Context) {
 func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 	_, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
@@ -123,13 +114,10 @@ func (h *SiteConfigHandler) GetConfigsByCategory(c *gin.Context) {
 	if configCache != nil {
 		configs, err = configCache.GetConfigsByCategory(ctx, category)
 	} else {
-		configs, err = h.repo.GetByCategory(category)
+		configs, err = h.repo.WithContext(c.Request.Context()).GetByCategory(category)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
 		return
 	}
 
@@ -163,35 +151,26 @@ func (h *SiteConfigHandler) GetPublicConfigs(c *gin.Context) {
 	if configCache != nil {
 		icpConfig, err = configCache.GetICPConfig(ctx)
 	} else {
-		icpConfig, err = h.repo.GetICPConfig()
+		icpConfig, err = h.repo.WithContext(c.Request.Context()).GetICPConfig()
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
 		return
 	}
 
 	if configCache != nil {
 		systemConfig, err = configCache.GetSystemInfoConfig(ctx)
 	} else {
-		systemConfig, err = h.repo.GetSystemInfoConfig()
+		systemConfig, err = h.repo.WithContext(c.Request.Context()).GetSystemInfoConfig()
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
 		return
 	}
 
-	registrationConfig, err = h.repo.GetRegistrationConfig()
+	registrationConfig, err = h.repo.WithContext(c.Request.Context()).GetRegistrationConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取配置失败"})
 		return
 	}
 
@@ -219,14 +198,15 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req struct {
 		Key      string `json:"key" binding:"required"`
@@ -235,24 +215,16 @@ func (h *SiteConfigHandler) UpdateConfig(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 	if isReservedBroadcastRuntimeKey(strings.TrimSpace(req.Key)) {
-		c.JSON(http.StatusBadRequest, Response{
-			Code: http.StatusBadRequest, Message: "自动播报运行状态必须通过专用管理接口修改",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "自动播报运行状态必须通过专用管理接口修改"})
 		return
 	}
 
-	if err := h.repo.Set(req.Key, req.Value, req.Category, ""); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).Set(req.Key, req.Value, req.Category, ""); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新配置失败"})
 		return
 	}
 
@@ -289,32 +261,27 @@ func (h *SiteConfigHandler) UpdateICPConfig(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req struct {
 		ICP string `json:"icp"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
-	if err := h.repo.SetICPConfig(req.ICP); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新ICP配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).SetICPConfig(req.ICP); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新ICP配置失败"})
 		return
 	}
 
@@ -343,30 +310,25 @@ func (h *SiteConfigHandler) UpdateICPConfig(c *gin.Context) {
 func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req gormdb.SystemInfoConfig
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
-	if err := h.repo.SetSystemInfoConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新系统信息配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).SetSystemInfoConfig(req); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新系统信息配置失败"})
 		return
 	}
 
@@ -404,46 +366,35 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req gormdb.APRSConfig
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	// 校验经纬度范围
 	if req.Longitude < -180 || req.Longitude > 180 {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "经度必须在 -180 到 180 之间",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "经度必须在 -180 到 180 之间"})
 		return
 	}
 	if req.Latitude < -90 || req.Latitude > 90 {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "纬度必须在 -90 到 90 之间",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "纬度必须在 -90 到 90 之间"})
 		return
 	}
 
-	if err := h.repo.SetAPRSConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新APRS配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).SetAPRSConfig(req); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新APRS配置失败"})
 		return
 	}
 
@@ -481,13 +432,13 @@ func (h *SiteConfigHandler) UpdateAPRSConfig(c *gin.Context) {
 // GetAccessDiscoveryConfig 获取设备接入点发现配置（管理员）。
 func (h *SiteConfigHandler) GetAccessDiscoveryConfig(c *gin.Context) {
 	if _, exists := c.Get("user"); !exists {
-		c.JSON(http.StatusUnauthorized, Response{Code: 401, Message: "未授权"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
 	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "获取接入点配置失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取接入点配置失败"})
 		return
 	}
 	c.JSON(http.StatusOK, Response{Code: 200, Message: "获取成功", Data: settings})
@@ -497,22 +448,22 @@ func (h *SiteConfigHandler) GetAccessDiscoveryConfig(c *gin.Context) {
 func (h *SiteConfigHandler) UpdateAccessDiscoveryConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{Code: 401, Message: "未授权"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
 	var req gormdb.AccessDiscoveryConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 	normalized, err := normalizeAccessDiscoveryConfig(&req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Message: err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	if err := h.repo.SetAccessDiscoveryConfig(*normalized); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{Code: 500, Message: "更新接入点配置失败"})
+	if err := h.repo.WithContext(c.Request.Context()).SetAccessDiscoveryConfig(*normalized); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新接入点配置失败"})
 		return
 	}
 	if configCache := cache.GetConfigCache(); configCache != nil {
@@ -520,7 +471,11 @@ func (h *SiteConfigHandler) UpdateAccessDiscoveryConfig(c *gin.Context) {
 		_ = configCache.InvalidateCategory(c.Request.Context(), gormdb.CategoryAccessDiscovery)
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 	oplog.AddLog(
 		fmt.Sprintf("更新接入点配置: 中心直连=%t, 中心入口=%s:%d", normalized.Center.Enabled, normalized.Center.UDPHost, normalized.Center.UDPPort),
 		"config_update",
@@ -597,10 +552,7 @@ func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*go
 func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
@@ -615,13 +567,10 @@ func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 	if configCache != nil {
 		config, err = configCache.GetAPRSConfig(ctx)
 	} else {
-		config, err = h.repo.GetAPRSConfig()
+		config, err = h.repo.WithContext(c.Request.Context()).GetAPRSConfig()
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取APRS配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取APRS配置失败"})
 		return
 	}
 
@@ -636,10 +585,7 @@ func (h *SiteConfigHandler) GetAPRSConfig(c *gin.Context) {
 func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
@@ -654,13 +600,10 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 	if configCache != nil {
 		config, err = configCache.GetSystemInfoConfig(ctx)
 	} else {
-		config, err = h.repo.GetSystemInfoConfig()
+		config, err = h.repo.WithContext(c.Request.Context()).GetSystemInfoConfig()
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取系统信息配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取系统信息配置失败"})
 		return
 	}
 
@@ -675,21 +618,15 @@ func (h *SiteConfigHandler) GetSystemInfoConfig(c *gin.Context) {
 func (h *SiteConfigHandler) GetRegistrationConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
 	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
-	config, err := h.repo.GetRegistrationConfig()
+	config, err := h.repo.WithContext(c.Request.Context()).GetRegistrationConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取注册配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取注册配置失败"})
 		return
 	}
 
@@ -704,29 +641,24 @@ func (h *SiteConfigHandler) GetRegistrationConfig(c *gin.Context) {
 func (h *SiteConfigHandler) UpdateRegistrationConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req gormdb.RegistrationConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
-	if err := h.repo.SetRegistrationConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新注册配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).SetRegistrationConfig(req); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新注册配置失败"})
 		return
 	}
 
@@ -754,10 +686,7 @@ func (h *SiteConfigHandler) UpdateRegistrationConfig(c *gin.Context) {
 func (h *SiteConfigHandler) GetAPRSLogs(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
@@ -794,21 +723,19 @@ func (h *SiteConfigHandler) DeleteLogo(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 清空 Logo URL 配置（将值设置为空字符串）
-	if err := h.repo.Set("system.logo_url", "", "system", "站点Logo URL"); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "删除Logo配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).Set("system.logo_url", "", "system", "站点Logo URL"); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "删除Logo配置失败"})
 		return
 	}
 
@@ -839,21 +766,19 @@ func (h *SiteConfigHandler) DeleteFavicon(c *gin.Context) {
 	// 路由已通过 RequireAdmin 中间件验证权限
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 清空 Favicon URL 配置（将值设置为空字符串）
-	if err := h.repo.Set("system.favicon_url", "", "system", "站点Favicon URL"); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "删除Favicon配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).Set("system.favicon_url", "", "system", "站点Favicon URL"); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "删除Favicon配置失败"})
 		return
 	}
 
@@ -883,21 +808,15 @@ func (h *SiteConfigHandler) DeleteFavicon(c *gin.Context) {
 func (h *SiteConfigHandler) GetSMTPConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
 	_ = user // 路由已通过 RequireAdmin 中间件验证权限
 
-	config, err := h.repo.GetSMTPConfig()
+	config, err := h.repo.WithContext(c.Request.Context()).GetSMTPConfig()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取SMTP配置失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取SMTP配置失败"})
 		return
 	}
 
@@ -920,53 +839,42 @@ func (h *SiteConfigHandler) GetSMTPConfig(c *gin.Context) {
 func (h *SiteConfigHandler) UpdateSMTPConfig(c *gin.Context) {
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "未授权",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未授权"})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	var req gormdb.SMTPConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	// 验证端口范围
 	if req.Port < 1 || req.Port > 65535 {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "端口必须在1-65535之间",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "端口必须在1-65535之间"})
 		return
 	}
 
 	// 生产环境强制 TLS 证书校验
 	if config.Get().IsProduction() && req.InsecureSkipVerify {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "生产环境禁止开启 InsecureSkipVerify",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "生产环境禁止开启 InsecureSkipVerify"})
 		return
 	}
 
 	// 如果密码是脱敏格式（包含*），则不更新密码
-	existingConfig, _ := h.repo.GetSMTPConfig()
+	existingConfig, _ := h.repo.WithContext(c.Request.Context()).GetSMTPConfig()
 	if existingConfig != nil && len(req.Password) > 0 && containsStars(req.Password) {
 		req.Password = existingConfig.Password
 	}
 
-	if err := h.repo.SetSMTPConfig(req); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "更新SMTP配置失败",
-		})
+	if err := h.repo.WithContext(c.Request.Context()).SetSMTPConfig(req); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新SMTP配置失败"})
 		return
 	}
 

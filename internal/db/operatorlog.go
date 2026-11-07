@@ -91,7 +91,7 @@ func (r *OperatorLogRepository) BatchCreate(logs []*OperatorLog) error {
 
 // Query 查询操作日志（分页）
 func (r *OperatorLogRepository) Query(userID int, page, limit int, operation string) ([]*OperatorLog, int, error) {
-	limit, page, offset, err := normalizeOperatorLogPagination(limit, page)
+	limit, _, offset, err := normalizeOperatorLogPagination(limit, page)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -114,7 +114,7 @@ func (r *OperatorLogRepository) Query(userID int, page, limit int, operation str
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		l := &OperatorLog{}

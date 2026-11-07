@@ -794,7 +794,7 @@ func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, statu
 		}
 		values["domain_group_ids"] = string(domainJSON)
 	}
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return r.finishRunTransaction(ctx, func(tx *gorm.DB) error {
 		var run model.BroadcastRun
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&run, runID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -822,12 +822,9 @@ func (r *Repository) FinishRun(ctx context.Context, runID uint, claimedBy, statu
 			startTime = run.StartedAt.UTC()
 		}
 		sourceGroupID := uint(run.SourceGroupID)
-		deliveryGroupIDs := make([]uint, 0, len(domainGroupIDs))
-		for _, groupID := range SortedUniqueGroupIDs(domainGroupIDs) {
-			if groupID > 0 {
-				deliveryGroupIDs = append(deliveryGroupIDs, uint(groupID))
-			}
-		}
+		// DomainGroupIDs describes shared arbitration, not announcement
+		// delivery. Linked groups must not gain access to this recording.
+		deliveryGroupIDs := []uint{sourceGroupID}
 		record := &gormdb.CommRecord{
 			DeviceID: 0, DeviceSSID: identity.SSID, GroupID: &sourceGroupID, UserID: nil,
 			StartTime: startTime, EndTime: endedAt.UTC(), DurationMs: max(playedDurationMS, 0),

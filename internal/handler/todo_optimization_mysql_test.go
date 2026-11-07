@@ -101,7 +101,7 @@ func TestDeviceListBatchOwnersAndRequestCancellationMySQL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	response = request(ctx)
-	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "查询设备列表失败") {
+	if response.Code != http.StatusRequestTimeout || !strings.Contains(response.Body.String(), "request_canceled") {
 		t.Fatalf("canceled query status=%d body=%s", response.Code, response.Body.String())
 	}
 	userRepo := gormdb.NewUserRepository().WithContext(ctx)

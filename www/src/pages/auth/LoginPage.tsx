@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -139,7 +140,7 @@ export function LoginPage() {
       authService.saveAuth(response.token, response.user)
       navigate('/dashboard')
     } catch (err: any) {
-      setError(err.response?.data?.message || '登录失败，请检查用户名和密码')
+      setError(getErrorMessage(err, '登录失败，请检查用户名和密码'))
       setCaptchaCode('')
       getCaptcha()
     } finally {
@@ -179,7 +180,7 @@ export function LoginPage() {
         })
       }, 1000)
     } catch (err: any) {
-      setError(err.response?.data?.message || '发送验证码失败')
+      setError(getErrorMessage(err, '发送验证码失败'))
       setCaptchaCode('')
       getCaptcha()
     } finally {
@@ -210,7 +211,7 @@ export function LoginPage() {
       authService.saveAuth(response.token, response.user)
       navigate('/dashboard')
     } catch (err: any) {
-      setError(err.response?.data?.message || '登录失败')
+      setError(getErrorMessage(err, '登录失败'))
     } finally {
       setLoading(false)
     }
@@ -233,7 +234,7 @@ export function LoginPage() {
       )
       // 注意：不在这里设置 loading = false，等待 postMessage 回调
     } catch (err: any) {
-      setError(err.response?.data?.message || '获取SSO登录地址失败')
+      setError(getErrorMessage(err, '获取SSO登录地址失败'))
       setLoading(false)
     }
   }

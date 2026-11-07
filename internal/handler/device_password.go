@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -55,7 +56,7 @@ func AdminGetUserDevicePassword(c *gin.Context) {
 		return
 	}
 	if !isAdminUser(adminUser) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "需要管理员权限",
 		})
@@ -64,17 +65,17 @@ func AdminGetUserDevicePassword(c *gin.Context) {
 
 	userID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || userID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "无效的用户ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	targetUser, err := repo.GetUserByID(userID)
 	if err != nil || targetUser == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    http.StatusNotFound,
 			"message": "用户不存在",
 		})
@@ -84,7 +85,7 @@ func AdminGetUserDevicePassword(c *gin.Context) {
 	devicePassword, isNew, err := revealDevicePassword(repo, targetUser)
 	if err != nil {
 		log.Printf("管理员读取用户设备密码失败: admin=%d target=%d err=%v", adminUser.ID, userID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    http.StatusInternalServerError,
 			"message": "读取设备密码失败",
 		})
@@ -115,10 +116,10 @@ func GetDevicePassword(c *gin.Context) {
 	setCredentialResponseNoStore(c)
 	username, _ := c.Get("username")
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -130,7 +131,7 @@ func GetDevicePassword(c *gin.Context) {
 		devicePassword, err := generateDevicePassword()
 		if err != nil {
 			log.Printf("生成设备密码失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "设备密码生成失败",
 			})
@@ -138,7 +139,7 @@ func GetDevicePassword(c *gin.Context) {
 		}
 		encryptedPassword, err := crypto.Encrypt(devicePassword)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "设备密码加密失败",
 			})
@@ -147,7 +148,7 @@ func GetDevicePassword(c *gin.Context) {
 
 		if err := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); err != nil {
 			log.Printf("更新设备密码失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "更新设备密码失败",
 			})
@@ -161,7 +162,7 @@ func GetDevicePassword(c *gin.Context) {
 				"device_password": devicePassword,
 				"has_password":    true,
 				"is_new":          true,
-				"created_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+				"created_at":      common.FormatAPITime(user.UpdateTime),
 			},
 		})
 		return
@@ -170,7 +171,7 @@ func GetDevicePassword(c *gin.Context) {
 	// 解码已存在的密码（兼容历史 bcrypt，不可逆则自动重建）
 	devicePassword, legacyPassword, err := crypto.DecodeDevicePassword(user.DevicePassword)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码解密失败",
 		})
@@ -180,7 +181,7 @@ func GetDevicePassword(c *gin.Context) {
 		devicePassword, err = generateDevicePassword()
 		if err != nil {
 			log.Printf("迁移历史设备密码时生成新密码失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "设备密码迁移失败",
 			})
@@ -188,7 +189,7 @@ func GetDevicePassword(c *gin.Context) {
 		}
 		encryptedPassword, encErr := crypto.Encrypt(devicePassword)
 		if encErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "设备密码迁移失败",
 			})
@@ -196,7 +197,7 @@ func GetDevicePassword(c *gin.Context) {
 		}
 		if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
 			log.Printf("迁移历史设备密码失败: %v", updateErr)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "设备密码迁移失败",
 			})
@@ -210,7 +211,7 @@ func GetDevicePassword(c *gin.Context) {
 				"device_password": devicePassword,
 				"has_password":    true,
 				"is_new":          true,
-				"created_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+				"created_at":      common.FormatAPITime(user.UpdateTime),
 			},
 		})
 		return
@@ -223,7 +224,7 @@ func GetDevicePassword(c *gin.Context) {
 			"device_password": devicePassword,
 			"has_password":    true,
 			"is_new":          false,
-			"created_at":      user.UpdateTime.Format("2006-01-02 15:04:05"),
+			"created_at":      common.FormatAPITime(user.UpdateTime),
 		},
 	})
 }
@@ -237,7 +238,7 @@ type UpdateDevicePasswordRequest struct {
 func UpdateDevicePassword(c *gin.Context) {
 	var req UpdateDevicePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -246,7 +247,7 @@ func UpdateDevicePassword(c *gin.Context) {
 
 	// 验证密码格式
 	if !protocol.IsValidDevicePassword(req.NewPassword) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "设备密码格式错误，需要6-10位字母或数字",
 		})
@@ -254,10 +255,10 @@ func UpdateDevicePassword(c *gin.Context) {
 	}
 
 	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -267,7 +268,7 @@ func UpdateDevicePassword(c *gin.Context) {
 	// AES 加密新密码
 	encryptedPassword, err := crypto.Encrypt(req.NewPassword)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码加密失败",
 		})
@@ -277,7 +278,7 @@ func UpdateDevicePassword(c *gin.Context) {
 	// 更新密码
 	if err := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); err != nil {
 		log.Printf("更新设备密码失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新设备密码失败",
 		})
@@ -308,10 +309,10 @@ func RegenerateDevicePassword(c *gin.Context) {
 	setCredentialResponseNoStore(c)
 	username, _ := c.Get("username")
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -322,7 +323,7 @@ func RegenerateDevicePassword(c *gin.Context) {
 	devicePassword, err := generateDevicePassword()
 	if err != nil {
 		log.Printf("重新生成设备密码失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "设备密码生成失败",
 		})
@@ -330,7 +331,7 @@ func RegenerateDevicePassword(c *gin.Context) {
 	}
 	encryptedPassword, err := crypto.Encrypt(devicePassword)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码加密失败",
 		})
@@ -340,7 +341,7 @@ func RegenerateDevicePassword(c *gin.Context) {
 	// 更新密码
 	if err := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); err != nil {
 		log.Printf("更新设备密码失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新设备密码失败",
 		})

@@ -14,7 +14,7 @@ import (
 )
 
 func newTestGhostSession(sessionID string, ownerID, txGroupID int, rxGroupIDs []int, capabilities []string) *WSDevice {
-	capabilities = []string{ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1}
+	capabilities = append(append([]string{}, capabilities...), ghostsession.CapabilityMultiReceiveV1, ghostsession.CapabilitySourceGroupV1)
 	return &WSDevice{
 		SessionID: sessionID, UserID: ownerID, Username: "owner", CallSign: "BG7AAA",
 		SSID: protocol.SSIDGhostWeb, DevModel: protocol.DraARLDevModelBrowser,

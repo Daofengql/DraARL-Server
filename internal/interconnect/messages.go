@@ -515,6 +515,7 @@ func (f RelayFrame) MarshalBinary() ([]byte, error) {
 	binary.BigEndian.PutUint64(out[16:24], f.DomainID)
 	binary.BigEndian.PutUint64(out[24:32], f.RequiredProjectionVersion)
 	binary.BigEndian.PutUint64(out[32:40], f.SpeakerLeaseID)
+	// #nosec G115 -- InnerPacket is checked against the 800-byte protocol limit.
 	binary.BigEndian.PutUint16(out[40:42], uint16(len(f.InnerPacket)))
 	copy(out[42:], f.InnerPacket)
 	return out, nil

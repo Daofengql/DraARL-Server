@@ -28,6 +28,7 @@ func StartGroupCacheSync() {
 	refreshGroupCache()
 	refreshDeviceCache()
 	InitGroupLinkCache() // 初始化群组互联缓存
+	go runOnlineEventSync()
 
 	go func() {
 		// 每隔 10 秒同步一次数据库中的群组和设备状态

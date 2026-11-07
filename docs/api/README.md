@@ -29,3 +29,9 @@
 - 群组不提供设备准入白名单或永久封禁；群主的临时收发控制在设备切换群组后仍然生效，设备所有者可自行恢复。
 - 频道历史使用 `/api/groups/:id/messages` 的不透明游标；`/api/comm-records` 是本人发信/审计视图，不能替代频道历史。
 - 完整路由索引按当前 `setupRoutes()` 登记，公开、JWT、Approved、Admin 和群主权限不会因路径前缀相似而互相替代。
+
+## 自动生成的 OpenAPI
+
+执行 `go run ./tools/openapi` 更新 [openapi.json](openapi.json)，`go run ./tools/openapi -check` 检查生成结果。CI 会检查过期文件。生成器分析实际 Gin 路由/分组/鉴权中间件、无线电路由注册、handler 注释、ShouldBindJSON 请求类型和 json/binding 标签，输出 OpenAPI 3.1。
+
+目前没有完整响应类型推导，通用响应说明需结合本目录的人工接口文档与 handler 阅读；上传、业务条件校验、WS 二进制和 UDP 协议仍参阅专题文档。新增路由注册模式时补生成器测试，避免遗漏。handler 错误响应兼容 code/message 并补充稳定 error_code，5xx 不返回内部诊断。

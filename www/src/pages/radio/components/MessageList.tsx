@@ -1,3 +1,4 @@
+import { parseAPIDate } from '../../../utils/apiTime'
 /**
  * 消息列表组件 - 性能优化版
  * 优化点：
@@ -669,7 +670,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
 
     // 格式化时间（使用 useCallback 缓存）
     const formatTime = useCallback((timestamp: number) => {
-      const date = new Date(timestamp)
+      const date = parseAPIDate(timestamp)
       const month = String(date.getMonth() + 1).padStart(2, '0')
       const day = String(date.getDate()).padStart(2, '0')
       const hour = String(date.getHours()).padStart(2, '0')
@@ -679,7 +680,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     }, [])
 
     const formatTimeDivider = useCallback((timestamp: number) => {
-      const date = new Date(timestamp)
+      const date = parseAPIDate(timestamp)
       const year = date.getFullYear()
       const month = String(date.getMonth() + 1).padStart(2, '0')
       const day = String(date.getDate()).padStart(2, '0')
@@ -769,7 +770,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     if (messages.length === 0) {
       return (
         <Box sx={styles.emptyState}>
-          <Typography variant="h6">暂无消息</Typography>
+          <Typography component="h2" variant="h6">暂无消息</Typography>
           <Typography variant="body2">
             {voiceInputAvailable ? '按 PTT 开始通话或发送文字消息' : '发送文字消息，或使用 HTTPS 启用麦克风'}
           </Typography>

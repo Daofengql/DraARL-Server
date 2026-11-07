@@ -80,7 +80,7 @@ func TestModernGhostInstancesKeepIndependentCenterOwnership(t *testing.T) {
 }
 
 func TestEdgeMultiReceiveFanoutUsesExactSessionAndTargetCapability(t *testing.T) {
-	endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", "", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
+	endpoint, err := udphub.NewEdgeEndpoint("127.0.0.1:0", func([]byte, *net.UDPAddr, *net.UDPAddr) {})
 	if err != nil {
 		t.Fatal(err)
 	}

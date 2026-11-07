@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -61,7 +62,7 @@ func getUserIDFromContext(c *gin.Context) (int, bool) {
 	if !exists {
 		return 0, false
 	}
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
 		return 0, false
@@ -74,7 +75,7 @@ func GetRadioConfig(c *gin.Context) {
 	// 获取当前用户 ID
 	userID, ok := getUserIDFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
 
@@ -89,7 +90,7 @@ func GetRadioConfig(c *gin.Context) {
 	}
 	if len(sessions) == 1 {
 		groupID = sessions[0].TxGroupID
-	} else if persistedGroupID, err := gormdb.NewUserRepository().GetUserLastGroupID(userID, protocol.DraARLDevModelBrowser); err == nil && persistedGroupID > 0 {
+	} else if persistedGroupID, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserLastGroupID(userID, protocol.DraARLDevModelBrowser); err == nil && persistedGroupID > 0 {
 		groupID = persistedGroupID
 	}
 
@@ -109,7 +110,7 @@ func GetRadioStatus(c *gin.Context) {
 	// 获取当前用户 ID
 	userID, ok := getUserIDFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "未登录"})
 		return
 	}
 
@@ -134,7 +135,7 @@ func GetRadioStatus(c *gin.Context) {
 			Connected:    true,
 			SessionID:    session.SessionID,
 			GroupID:      session.TxGroupID,
-			OnlineSince:  session.CreatedAt.Format("2006-01-02 15:04:05"),
+			OnlineSince:  common.FormatAPITime(session.CreatedAt),
 			CallSign:     session.CallSign,
 			SSID:         int(session.SSID),
 			IsSpeaking:   false, // 语音状态通过 WebSocket 实时推送，API 不再提供
@@ -148,12 +149,12 @@ func GetRadioGroupDevices(c *gin.Context) {
 	groupIDStr := c.Param("id")
 	groupID, err := strconv.Atoi(groupIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的群组 ID"})
 		return
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(groupID)
+	group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(groupID)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
 		return
 	}
 	if _, ok := requireGroupViewAccess(c, group); !ok {
@@ -189,8 +190,8 @@ func GetRadioGroupDevices(c *gin.Context) {
 			IsGhost:      false,
 			DisableSend:  state.DisableSend,
 			DisableRecv:  state.DisableRecv,
-			ConnectTime:  state.OnlineTime.Format("2006-01-02 15:04:05"),
-			LastActivity: state.LastPacketTime.Format("2006-01-02 15:04:05"),
+			ConnectTime:  common.FormatAPITime(state.OnlineTime),
+			LastActivity: common.FormatAPITime(state.LastPacketTime),
 		})
 	}
 
@@ -221,8 +222,8 @@ func GetRadioGroupDevices(c *gin.Context) {
 			IsGhost:      true,
 			DisableSend:  state.DisableSend,
 			DisableRecv:  state.DisableRecv,
-			ConnectTime:  state.OnlineTime.Format("2006-01-02 15:04:05"),
-			LastActivity: state.LastPacketTime.Format("2006-01-02 15:04:05"),
+			ConnectTime:  common.FormatAPITime(state.OnlineTime),
+			LastActivity: common.FormatAPITime(state.LastPacketTime),
 			SessionID:    state.GhostSessionID,
 			TxGroupID:    state.GroupID,
 			RxGroupIDs:   append([]int(nil), state.GhostRxGroupIDs...),
@@ -278,10 +279,10 @@ func GetRadioGroupStats(c *gin.Context) {
 	// 构建用户有权限的群组 ID 集合
 	accessibleGroupIDs := make(map[int]bool)
 	if !isAdminUser(currentUser) {
-		memberRepo := gormdb.NewGroupMemberRepository()
+		memberRepo := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context())
 		members, err := memberRepo.ListGroupsByUser(userID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取用户群组失败"})
 			return
 		}
 		for _, m := range members {

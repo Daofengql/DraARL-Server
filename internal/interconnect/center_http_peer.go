@@ -296,6 +296,9 @@ func (m *CenterHTTPPeerManager) seal(s *httpPeerSession, kind byte, payload []by
 	if s == nil || s.gcm == nil {
 		return nil, errors.New("peer session unavailable")
 	}
+	if len(payload) > 65507-httpPeerHeaderSize-12-s.gcm.Overhead() {
+		return nil, errors.New("peer payload exceeds UDP datagram limit")
+	}
 	seq := s.seq.Add(1)
 	nonce := make([]byte, 12)
 	if _, err := rand.Read(nonce); err != nil {
@@ -308,6 +311,7 @@ func (m *CenterHTTPPeerManager) seal(s *httpPeerSession, kind byte, payload []by
 	copy(out[6:38], peerSessionIDBytes(s.cfg.SessionID))
 	binary.BigEndian.PutUint64(out[38:46], seq)
 	binary.BigEndian.PutUint64(out[46:54], uint64(time.Now().UnixMilli()))
+	// #nosec G115 -- Payload is bounded by the UDP datagram limit above.
 	binary.BigEndian.PutUint16(out[54:56], uint16(len(payload)))
 	copy(out[56:], nonce)
 	return append(out, s.gcm.Seal(nil, nonce, payload, out[:56])...), nil
@@ -321,6 +325,7 @@ func parsePeerHeader(data []byte) (kind byte, id string, seq uint64, sent int64,
 	kind = data[5]
 	id = string(data[6:38])
 	seq = binary.BigEndian.Uint64(data[38:46])
+	// #nosec G115 -- Signed timestamp wire encoding intentionally preserves the two-complement bit pattern.
 	sent = int64(binary.BigEndian.Uint64(data[46:54]))
 	n := int(binary.BigEndian.Uint16(data[54:56]))
 	nonce = data[56:68]

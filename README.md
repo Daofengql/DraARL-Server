@@ -318,7 +318,7 @@ git push origin "$VERSION"
 - 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
 - 根据部署规模选择 local 或私有 S3 兼容存储；生产环境使用预签名读写，不要开放 bucket 匿名访问。
 - 从更早版本升级到 `v2.0.0-alpha3` 前先执行备份，并在维护窗口显式运行 `-auto-migrate`；频道消息迁移会回填消息类型、发送者快照和投递群组快照。
-- 对外暴露 UDP 服务时，确认防火墙和反向代理的真实 IP 传递策略；中心直连接入使用 `System.ProxyProtocol: v2`，边缘接入使用 `Edge.ProxyProtocol: v2`。启用后必须限制 UDP 入口只允许受信代理访问。
+- UDP 统一按实际 socket 对端地址认证和限速。使用 UDP 转发时应保留各设备端点；中心与边缘互联使用项目自身的认证链路。旧 PROXY v2 配置选项会被忽略。HTTP 反向代理单独使用 `System.HTTPTrustedProxyCIDRs`。
 - 首次上线后立即修改默认管理员密码，并检查注册审核、操作证审核和设备绑定策略。
 
 更多排障内容请阅读 [运维与排障](docs/usage/08-运维与排障.md)。

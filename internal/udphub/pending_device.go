@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"math/big"
 	"log"
+	"math/big"
 	"sync"
 	"time"
 )
@@ -196,7 +196,7 @@ func (m *PendingDeviceManager) ConfirmBind(mac string) (*PendingDevice, error) {
 	}
 
 	// 检查绑定状态是否过期
-	if device.Bound && time.Now().Sub(device.BoundAt) > m.bindDuration {
+	if device.Bound && time.Since(device.BoundAt) > m.bindDuration {
 		return nil, fmt.Errorf("绑定已过期")
 	}
 

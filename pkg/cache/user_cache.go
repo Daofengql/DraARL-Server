@@ -65,10 +65,7 @@ func NewUserCache(config UserCacheConfig) (*UserCache, error) {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewTwoLevelCache(CacheConfig{
-		LocalTTL: config.LocalTTL,
-		MaxSize:  config.MaxSize,
-	})
+	cache, err := NewTwoLevelCache(CacheConfig(config))
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +152,7 @@ func (c *UserCache) coalesce(ctx context.Context, key string, load func(context.
 		// No request owns the shared query after admission. Each caller may stop
 		// waiting independently, while the bounded load can still populate the
 		// cache for other callers and subsequent requests.
-		go func() {
+		go func() { // #nosec G118 -- Shared cache fill has no single request owner; bounded timeout and per-waiter cancellation are intentional.
 			loadCtx, cancel := context.WithTimeout(context.Background(), userLoadTimeout)
 			defer cancel()
 			defer func() {

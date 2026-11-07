@@ -135,7 +135,7 @@ func (s *BroadcastSource) SendVoice(payload []byte, acceptedAt time.Time) (Broad
 
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		result.WSSent, result.WSDropped = GlobalMessageRouter.wsManager.BroadcastToGroups(
-			s.lease.DomainGroupIDs, packet, 2,
+			[]int{s.lease.SourceGroupID}, packet, 2,
 			interfaces.WSBroadcastFilter{SourceGroupID: s.lease.SourceGroupID},
 		)
 		s.wsTargetsSent.Add(int64(result.WSSent))

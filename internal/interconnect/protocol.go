@@ -48,6 +48,9 @@ const (
 	SubtypeSpeakerLease         byte = 0x28
 	SubtypeRelayUpstream        byte = 0x30
 	SubtypeRelayDownstream      byte = 0x31
+	// Group broadcasts retain their source group in the inner reserved field
+	// and must never use communication-domain fanout.
+	SubtypeGroupBroadcastDownstream byte = 0x32
 	// SubtypeCenterPeerRelay carries an explicitly mapped centre-to-centre
 	// media frame. It never carries a user credential or device session.
 	SubtypeCenterPeerRelay byte = 0x40
@@ -76,12 +79,13 @@ const (
 	NodeFeatureGhostMultiSession
 	NodeFeatureGhostRecoveryTicket
 	NodeFeatureCenterPeer
+	NodeFeatureGroupBroadcast
 )
 
 const (
 	NodeSupportedFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions |
 		NodeFeatureDeviceConfig | NodeFeatureSpeakerLease | NodeFeatureRuntimeMetrics | NodeFeatureCredentialRotation |
-		NodeFeatureSessionReconfirm | NodeFeatureGhostMultiSession | NodeFeatureGhostRecoveryTicket | NodeFeatureCenterPeer
+		NodeFeatureSessionReconfirm | NodeFeatureGhostMultiSession | NodeFeatureGhostRecoveryTicket | NodeFeatureCenterPeer | NodeFeatureGroupBroadcast
 	NodeRequiredFeatures = NodeFeatureRouteSync | NodeFeatureUDPRelay | NodeFeatureDeviceSessions
 )
 
@@ -92,7 +96,7 @@ func IsKnownSubtype(subtype byte) bool {
 		SubtypeRouteDelta, SubtypeRouteAck, SubtypeRouteResyncRequest,
 		SubtypeDeviceAuth, SubtypeDeviceSessionRenew, SubtypeDeviceSessionReport,
 		SubtypeDeviceSessionRevoke, SubtypeDeviceConfig, SubtypeDeviceSessionConfirm, SubtypeSpeakerLease,
-		SubtypeRelayUpstream, SubtypeRelayDownstream, SubtypeCenterPeerRelay, SubtypeCenterPeerHello:
+		SubtypeRelayUpstream, SubtypeRelayDownstream, SubtypeGroupBroadcastDownstream, SubtypeCenterPeerRelay, SubtypeCenterPeerHello:
 		return true
 	default:
 		return false
@@ -177,6 +181,7 @@ func (e Envelope) marshal(key []byte, maxSize int) ([]byte, error) {
 	}
 	out := make([]byte, NodeHeaderSize+len(e.Payload)+NodeAuthTagSize)
 	copy(out[:4], NodeMagic)
+	// #nosec G115 -- validateForEncode bounds the entire envelope to the wire limit.
 	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
 	copy(out[6:38], e.SourceNodeID)
 	out[48] = NodePacketType
@@ -190,9 +195,11 @@ func (e Envelope) marshal(key []byte, maxSize int) ([]byte, error) {
 	binary.BigEndian.PutUint64(out[offset+12:offset+20], e.ProjectionVersion)
 	binary.BigEndian.PutUint64(out[offset+20:offset+28], e.NodeSessionID)
 	binary.BigEndian.PutUint64(out[offset+28:offset+36], e.MessageID)
+	// #nosec G115 -- Signed timestamp wire encoding intentionally preserves the two-complement bit pattern.
 	binary.BigEndian.PutUint64(out[offset+36:offset+44], uint64(e.SentAtMillis))
 	out[offset+44] = e.HopCount
 	binary.BigEndian.PutUint32(out[offset+45:offset+49], e.KeyEpoch)
+	// #nosec G115 -- validateForEncode bounds the entire envelope before allocation.
 	binary.BigEndian.PutUint32(out[offset+49:offset+53], uint32(len(e.Payload)))
 	copy(out[NodeHeaderSize:], e.Payload)
 	tag := hmac.New(sha256.New, key)
@@ -252,6 +259,7 @@ func unmarshal(data, key []byte, maxSize int) (Envelope, error) {
 	e.ProjectionVersion = binary.BigEndian.Uint64(data[offset+12 : offset+20])
 	e.NodeSessionID = binary.BigEndian.Uint64(data[offset+20 : offset+28])
 	e.MessageID = binary.BigEndian.Uint64(data[offset+28 : offset+36])
+	// #nosec G115 -- Signed timestamp wire encoding intentionally preserves the two-complement bit pattern.
 	e.SentAtMillis = int64(binary.BigEndian.Uint64(data[offset+36 : offset+44]))
 	e.HopCount = data[offset+44]
 	e.KeyEpoch = binary.BigEndian.Uint32(data[offset+45 : offset+49])

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
+	"draarl/internal/common"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -117,7 +119,13 @@ func GetSSOID(openID string, provider string) string {
 
 // FindUserBySSOID 查找绑定指定SSO的用户
 func FindUserBySSOID(provider, ssoID string) *gormdb.User {
-	repo := gormdb.NewUserRepository()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return FindUserBySSOIDContext(ctx, provider, ssoID)
+}
+
+func FindUserBySSOIDContext(ctx context.Context, provider, ssoID string) *gormdb.User {
+	repo := gormdb.NewUserRepository().WithContext(ctx)
 	user, err := repo.FindUserBySSOID(provider, ssoID)
 	if err != nil {
 		log.Printf("查找 SSO 绑定用户失败: provider=%s err=%v", provider, err)
@@ -287,10 +295,7 @@ func getKeycloakConfig() *config.Configuration {
 // GetSSOLoginURL 获取SSO登录URL
 func GetSSOLoginURL(c *gin.Context) {
 	if !isKeycloakEnabled() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "SSO未启用",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "SSO未启用"})
 		return
 	}
 
@@ -298,10 +303,7 @@ func GetSSOLoginURL(c *gin.Context) {
 	state, err := generateState()
 	if err != nil {
 		log.Printf("生成 SSO state 失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "生成SSO登录状态失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "生成SSO登录状态失败"})
 		return
 	}
 
@@ -329,10 +331,7 @@ func GetSSOLoginURL(c *gin.Context) {
 // SSOCallback SSO回调处理（直接从Keycloak回调）
 func SSOCallback(c *gin.Context) {
 	if !isKeycloakEnabled() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "SSO未启用",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "SSO未启用"})
 		return
 	}
 
@@ -340,31 +339,22 @@ func SSOCallback(c *gin.Context) {
 	state := c.Query("state")
 
 	if code == "" || state == "" {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "缺少必要参数",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "缺少必要参数"})
 		return
 	}
 
 	// 验证state
 	entry := consumeState(state)
 	if entry == nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效的state参数",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效的state参数"})
 		return
 	}
 
 	// 获取Keycloak用户信息
-	kcUserInfo, err := getKeycloakUserInfo(code)
+	kcUserInfo, err := getKeycloakUserInfo(c.Request.Context(), code)
 	if err != nil {
 		log.Printf("获取Keycloak用户信息失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "获取SSO用户信息失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取SSO用户信息失败"})
 		return
 	}
 
@@ -392,55 +382,37 @@ func ExchangeSSOCode(c *gin.Context) {
 		Code string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "请求参数错误",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
 
 	entry := consumeLoginCode(req.Code)
 	if entry == nil {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "无效或已过期的登录交换码",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效或已过期的登录交换码"})
 		return
 	}
 
 	userData := gin.H{}
 	if err := json.Unmarshal([]byte(entry.UserJSON), &userData); err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "解析登录数据失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "解析登录数据失败"})
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByID(entry.UserID)
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "用户不存在或会话已失效",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在或会话已失效"})
 		return
 	}
 
 	if user.Status != 1 || user.ApprovalStatus != 1 {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "用户状态异常，无法完成登录",
-		})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": 403, "message": "用户状态异常，无法完成登录"})
 		return
 	}
 
 	issued, err := issueAuthTokens(c, user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "生成令牌失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成令牌失败"})
 		return
 	}
 
@@ -458,7 +430,7 @@ func ExchangeSSOCode(c *gin.Context) {
 }
 
 // getKeycloakUserInfo 通过code获取Keycloak用户信息
-func getKeycloakUserInfo(code string) (*KeycloakUserInfo, error) {
+func getKeycloakUserInfo(ctx context.Context, code string) (*KeycloakUserInfo, error) {
 	cfg := getKeycloakConfig()
 
 	// 用code换取token
@@ -473,14 +445,23 @@ func getKeycloakUserInfo(code string) (*KeycloakUserInfo, error) {
 
 	log.Printf("[SSO] 正在请求 Token 交换")
 
-	resp, err := http.PostForm(tokenURL, data)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(request)
 	if err != nil {
 		log.Printf("[SSO] Token request error: %v", err)
 		return nil, fmt.Errorf("请求token失败: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return nil, fmt.Errorf("read SSO response: %w", readErr)
+	}
 	log.Printf("[SSO] Token 响应状态: %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
@@ -543,27 +524,21 @@ func parseJWTClaims(accessToken string) (*KeycloakUserInfo, error) {
 // handleLoginCallback 处理登录回调
 func handleLoginCallback(c *gin.Context, kcUserInfo *KeycloakUserInfo) {
 	// 查找绑定该Keycloak账号的用户
-	user := FindUserBySSOID(SSOProviderKeycloak, kcUserInfo.Sub)
+	user := FindUserBySSOIDContext(c.Request.Context(), SSOProviderKeycloak, kcUserInfo.Sub)
 
 	if user == nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "该SSO账号未绑定任何用户，请先使用账号密码登录后在个人中心绑定",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "该SSO账号未绑定任何用户，请先使用账号密码登录后在个人中心绑定"})
 		return
 	}
 
 	// 检查用户状态
 	if user.Status != 1 {
-		c.JSON(http.StatusForbidden, Response{
-			Code:    403,
-			Message: "用户已被禁用",
-		})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": 403, "message": "用户已被禁用"})
 		return
 	}
 
 	// 更新最后登录时间
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	clientIP := c.ClientIP()
 	if err := repo.UpdateLastLogin(user.ID, clientIP); err != nil {
 		log.Printf("更新最后登录时间失败: %v", err)
@@ -579,10 +554,7 @@ func handleLoginCallback(c *gin.Context, kcUserInfo *KeycloakUserInfo) {
 
 	issued, err := issueAuthTokens(c, user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "生成令牌失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成令牌失败"})
 		return
 	}
 
@@ -605,32 +577,26 @@ func handleLoginCallback(c *gin.Context, kcUserInfo *KeycloakUserInfo) {
 			"refresh_token":      issued.RefreshToken,
 			"expires_in":         issued.AccessExpiresIn,
 			"refresh_expires_in": issued.RefreshExpiresIn,
-			"user":               buildUserData(user),
+			"user":               buildUserDataContext(c.Request.Context(), user),
 		},
 	})
 }
 
 // handleBindCallback 处理绑定回调
 func handleBindCallback(c *gin.Context, userID int, kcUserInfo *KeycloakUserInfo) {
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 检查该Keycloak账号是否已被其他用户绑定
-	existingUser := FindUserBySSOID(SSOProviderKeycloak, kcUserInfo.Sub)
+	existingUser := FindUserBySSOIDContext(c.Request.Context(), SSOProviderKeycloak, kcUserInfo.Sub)
 	if existingUser != nil && existingUser.ID != userID {
-		c.JSON(http.StatusConflict, Response{
-			Code:    409,
-			Message: "该SSO账号已被其他用户绑定",
-		})
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "该SSO账号已被其他用户绑定"})
 		return
 	}
 
 	// 获取当前用户
 	user, err := repo.GetUserByID(userID)
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "用户不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
 		return
 	}
 
@@ -640,10 +606,7 @@ func handleBindCallback(c *gin.Context, userID int, kcUserInfo *KeycloakUserInfo
 
 	if err := repo.UpdateUser(user); err != nil {
 		log.Printf("更新用户OpenID失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "绑定失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "绑定失败"})
 		return
 	}
 
@@ -674,7 +637,7 @@ func handleBindCallback(c *gin.Context, userID int, kcUserInfo *KeycloakUserInfo
 // handleLoginCallbackRedirect 处理登录回调并重定向到前端
 func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, frontendURL string) string {
 	// 查找绑定该Keycloak账号的用户
-	user := FindUserBySSOID(SSOProviderKeycloak, kcUserInfo.Sub)
+	user := FindUserBySSOIDContext(c.Request.Context(), SSOProviderKeycloak, kcUserInfo.Sub)
 
 	if user == nil {
 		// 重定向到登录页，带上错误信息
@@ -687,7 +650,7 @@ func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, f
 	}
 
 	// 更新最后登录时间
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	clientIP := c.ClientIP()
 	if err := repo.UpdateLastLogin(user.ID, clientIP); err != nil {
 		log.Printf("更新最后登录时间失败: %v", err)
@@ -712,7 +675,7 @@ func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, f
 	)
 
 	// 重定向到前端，携带一次性交换码（避免 URL 透传 token）
-	userData := buildUserData(user)
+	userData := buildUserDataContext(c.Request.Context(), user)
 	code, err := saveLoginCode(user.ID, userData)
 	if err != nil {
 		log.Printf("保存 SSO 登录交换码失败: %v", err)
@@ -723,10 +686,10 @@ func handleLoginCallbackRedirect(c *gin.Context, kcUserInfo *KeycloakUserInfo, f
 
 // handleBindCallbackRedirect 处理绑定回调并重定向到前端
 func handleBindCallbackRedirect(c *gin.Context, userID int, kcUserInfo *KeycloakUserInfo, frontendURL string) string {
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 检查该Keycloak账号是否已被其他用户绑定
-	existingUser := FindUserBySSOID(SSOProviderKeycloak, kcUserInfo.Sub)
+	existingUser := FindUserBySSOIDContext(c.Request.Context(), SSOProviderKeycloak, kcUserInfo.Sub)
 	if existingUser != nil && existingUser.ID != userID {
 		return fmt.Sprintf("%s/profile?sso_error=%s", frontendURL, url.QueryEscape("该SSO账号已被其他用户绑定"))
 	}
@@ -769,14 +732,11 @@ func GetSSOStatus(c *gin.Context) {
 	username, _ := c.Get("username")
 
 	// SSO状态是关键信息，直接从数据库获取，不使用缓存
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, Response{
-			Code:    404,
-			Message: "用户不存在",
-		})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
 		return
 	}
 
@@ -799,22 +759,16 @@ func GetSSOStatus(c *gin.Context) {
 // SSOBind 发起SSO绑定
 func SSOBind(c *gin.Context) {
 	if !isKeycloakEnabled() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "SSO未启用",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "SSO未启用"})
 		return
 	}
 
 	// 获取当前用户
 	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "用户不存在",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在"})
 		return
 	}
 
@@ -822,10 +776,7 @@ func SSOBind(c *gin.Context) {
 	state, err := generateState()
 	if err != nil {
 		log.Printf("生成 SSO 绑定 state 失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    http.StatusInternalServerError,
-			Message: "生成SSO绑定状态失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "生成SSO绑定状态失败"})
 		return
 	}
 
@@ -853,30 +804,21 @@ func SSOBind(c *gin.Context) {
 // SSOUnbind 解除SSO绑定
 func SSOUnbind(c *gin.Context) {
 	if !isKeycloakEnabled() {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "SSO未启用",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "SSO未启用"})
 		return
 	}
 
 	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusUnauthorized, Response{
-			Code:    401,
-			Message: "用户不存在",
-		})
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"code": 401, "message": "用户不存在"})
 		return
 	}
 
 	// 检查是否已绑定
 	if !HasSSOBinding(user.OpenID, SSOProviderKeycloak) {
-		c.JSON(http.StatusBadRequest, Response{
-			Code:    400,
-			Message: "未绑定Keycloak账号",
-		})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "未绑定Keycloak账号"})
 		return
 	}
 
@@ -885,10 +827,7 @@ func SSOUnbind(c *gin.Context) {
 
 	if err := repo.UpdateUserOpenID(user.ID, newOpenID); err != nil {
 		log.Printf("更新用户OpenID失败: %v", err)
-		c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "解绑失败",
-		})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "解绑失败"})
 		return
 	}
 
@@ -915,8 +854,14 @@ func SSOUnbind(c *gin.Context) {
 
 // buildUserData 构建用户数据响应
 func buildUserData(user *gormdb.User) gin.H {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return buildUserDataContext(ctx, user)
+}
+
+func buildUserDataContext(ctx context.Context, user *gormdb.User) gin.H {
 	// 获取用户 Web 端的群组偏好
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(ctx)
 	lastGroupID, _ := userRepo.GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 
 	return gin.H{
@@ -941,14 +886,14 @@ func buildUserData(user *gormdb.User) gin.H {
 		"last_group_id":   lastGroupID, // 从设备偏好表获取
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
-				return user.LastLoginTime.Format("2006-01-02 15:04:05")
+				return common.FormatAPITime(user.LastLoginTime)
 			}
 			return ""
 		}(),
 		"last_login_ip":          user.LastLoginIP,
 		"last_login_ip_location": getIPLocation(user.LastLoginIP),
 		"login_err_times":        user.LoginErrTimes,
-		"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
-		"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
+		"created_at":             common.FormatAPITime(user.CreateTime),
+		"updated_at":             common.FormatAPITime(user.UpdateTime),
 	}
 }

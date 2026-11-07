@@ -131,7 +131,7 @@ func readCPUJiffies() (total, idle uint64, ok bool) {
 	if err != nil {
 		return 0, 0, false
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	line, err := bufio.NewReader(file).ReadString('\n')
 	if err != nil && len(line) == 0 {
 		return 0, 0, false

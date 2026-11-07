@@ -172,7 +172,8 @@ func TestBuildWSSpeakerUsesGhostSessionIdentity(t *testing.T) {
 	if buildWSSpeaker(first).key == buildWSSpeaker(second).key {
 		t.Fatal("same-account ghost sessions share a half-duplex speaker key")
 	}
-	if buildWSSpeaker(first).key != buildWSSpeaker(first).key {
+	initial := buildWSSpeaker(first).key
+	if buildWSSpeaker(first).key != initial {
 		t.Fatal("ghost session speaker key is unstable")
 	}
 }

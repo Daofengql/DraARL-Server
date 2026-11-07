@@ -180,7 +180,7 @@ func (m *VerificationManager) CheckIPRateLimit(ip string) (bool, int, string) {
 
 	// 检查是否超过限制
 	if len(sendTimes) >= m.maxIPPerMin {
-		return false, 0, fmt.Sprintf("该 IP 发送过于频繁，请稍后再试")
+		return false, 0, "该 IP 发送过于频繁，请稍后再试"
 	}
 
 	return true, m.maxIPPerMin - len(sendTimes), ""

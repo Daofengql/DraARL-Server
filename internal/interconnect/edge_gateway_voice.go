@@ -334,6 +334,10 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, s
 	} else if len(data) >= protocol.DraARLv1HeaderSize {
 		sourceGroupID = int(protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]))
 	}
+	g.fanout(sourceSession, domainID, data, sourceGroupID, 0)
+}
+
+func (g *EdgeGateway) fanout(sourceSession, domainID uint64, data []byte, sourceGroupID, deliveryGroupID int) {
 	physicalData := data
 	if len(data) >= protocol.DraARLv1HeaderSize && protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]) != 0 {
 		if cleared, ok := protocol.WithReservedUint32(data, 0); ok {
@@ -353,7 +357,7 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, s
 			}
 		}
 		for attempts := 0; attempts < 3; attempts++ {
-			plan := g.receiverPlan(domainID)
+			plan := g.receiverPlanFor(domainID, deliveryGroupID)
 			if plan == nil {
 				return
 			}
@@ -379,7 +383,8 @@ func (g *EdgeGateway) localFanout(sourceSession, domainID uint64, data []byte, s
 	g.mu.RLock()
 	targets := make([]udphub.EdgeFanoutTarget, 0, len(g.sessions))
 	for id, session := range g.sessions {
-		if id != sourceSession && slices.Contains(routeReceiveDomains(session.Grant.Route()), domainID) && !session.Grant.DisableRecv && session.Addr != nil {
+		if id != sourceSession && slices.Contains(routeReceiveDomains(session.Grant.Route()), domainID) &&
+			(deliveryGroupID == 0 || slices.Contains(routeReceiveGroups(session.Grant.Route()), deliveryGroupID)) && !session.Grant.DisableRecv && session.Addr != nil {
 			targets = append(targets, udphub.EdgeFanoutTarget{Addr: cloneUDPAddr(session.Addr), DeviceID: session.Grant.DeviceID, Username: session.Grant.Username, SSID: session.Grant.SSID, SessionID: id, SourceGroupV1: session.Grant.SourceGroupV1})
 		}
 	}

@@ -121,7 +121,7 @@ func (c *Client) Send(message string) error {
 	_ = c.conn.SetWriteDeadline(time.Now().Add(tcpWriteTimeout))
 	_, err := c.conn.Write([]byte(message))
 	if err != nil {
-		c.close()
+		_ = c.close()
 		return err
 	}
 
@@ -140,7 +140,7 @@ func (c *Client) SendBytes(data []byte) error {
 	_ = c.conn.SetWriteDeadline(time.Now().Add(tcpWriteTimeout))
 	_, err := c.conn.Write(data)
 	if err != nil {
-		c.close()
+		_ = c.close()
 		return err
 	}
 

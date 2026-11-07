@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -89,7 +90,7 @@ export function ForgotPasswordPage() {
         })
       }, 1000)
     } catch (err: any) {
-      setError(err.response?.data?.message || '发送验证码失败')
+      setError(getErrorMessage(err, '发送验证码失败'))
       getCaptcha() // 刷新验证码
     } finally {
       setLoading(false)
@@ -138,7 +139,7 @@ export function ForgotPasswordPage() {
       })
       navigate('/login', { state: { message: '密码重置成功，请使用新密码登录' } })
     } catch (err: any) {
-      setError(err.response?.data?.message || '密码重置失败')
+      setError(getErrorMessage(err, '密码重置失败'))
     } finally {
       setLoading(false)
     }

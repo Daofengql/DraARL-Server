@@ -1,3 +1,4 @@
+import { parseAPIDate } from '../../utils/apiTime'
 import { useEffect, useState, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
@@ -175,7 +176,7 @@ export function CommRecordsPage() {
   }
 
   const formatTime = (timeStr: string) => {
-    return new Date(timeStr).toLocaleString('zh-CN')
+    return parseAPIDate(timeStr).toLocaleString('zh-CN')
   }
 
   const formatFileSize = (bytes?: number) => {
@@ -252,7 +253,7 @@ export function CommRecordsPage() {
       const url = URL.createObjectURL(wavBlob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `comm_${record.device_name}_${new Date(record.start_time).toISOString().slice(0, 19).replace(/[:-]/g, '')}.wav`
+      a.download = `comm_${record.device_name}_${parseAPIDate(record.start_time).toISOString().slice(0, 19).replace(/[:-]/g, '')}.wav`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -285,7 +286,7 @@ export function CommRecordsPage() {
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
             <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 150 } }}>
               <InputLabel>设备筛选</InputLabel>
-              <Select
+              <Select inputProps={{ 'aria-label': '设备筛选' }}
                 value={filterDeviceId || ''}
                 label="设备筛选"
                 onChange={(e) => {
@@ -304,7 +305,7 @@ export function CommRecordsPage() {
 
             <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 150 } }}>
               <InputLabel>群组筛选</InputLabel>
-              <Select
+              <Select inputProps={{ 'aria-label': '群组筛选' }}
                 value={filterGroupId || ''}
                 label="群组筛选"
                 onChange={(e) => {
@@ -324,7 +325,7 @@ export function CommRecordsPage() {
             {showUserFilter && (
               <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 150 } }}>
                 <InputLabel>用户筛选</InputLabel>
-                <Select
+                <Select inputProps={{ 'aria-label': '用户筛选' }}
                   value={filterUserId || ''}
                   label="用户筛选"
                   onChange={(e) => {

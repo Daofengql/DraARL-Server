@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
+	"draarl/internal/common"
 	"fmt"
 	"io"
 	"log"
@@ -25,11 +27,18 @@ import (
 // A fixed valid bcrypt hash equalizes the expensive password-check path when
 // the username/email lookup returns no account. It is not used for storage or
 // authentication and contains no application secret.
+// #nosec G101 -- Public dummy bcrypt hash equalizes unknown-user verification cost; never authenticates an account.
 const unknownLoginDummyPasswordHash = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
 func buildLoginUserData(user *gormdb.User) gin.H {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return buildLoginUserDataContext(ctx, user)
+}
+
+func buildLoginUserDataContext(ctx context.Context, user *gormdb.User) gin.H {
 	roles := user.GetRoles()
-	lastGroupID, _ := gormdb.NewUserRepository().GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
+	lastGroupID, _ := gormdb.NewUserRepository().WithContext(ctx).GetUserLastGroupID(user.ID, protocol.DraARLDevModelBrowser)
 
 	return gin.H{
 		"id":              user.ID,
@@ -54,15 +63,15 @@ func buildLoginUserData(user *gormdb.User) gin.H {
 		"last_group_id":   lastGroupID,
 		"last_login_time": func() string {
 			if user.LastLoginTime != nil {
-				return user.LastLoginTime.Format("2006-01-02 15:04:05")
+				return common.FormatAPITime(user.LastLoginTime)
 			}
 			return ""
 		}(),
 		"last_login_ip":          user.LastLoginIP,
 		"last_login_ip_location": getIPLocation(user.LastLoginIP),
 		"login_err_times":        user.LoginErrTimes,
-		"created_at":             user.CreateTime.Format("2006-01-02 15:04:05"),
-		"updated_at":             user.UpdateTime.Format("2006-01-02 15:04:05"),
+		"created_at":             common.FormatAPITime(user.CreateTime),
+		"updated_at":             common.FormatAPITime(user.UpdateTime),
 	}
 }
 
@@ -71,33 +80,33 @@ func buildLoginUserData(user *gormdb.User) gin.H {
 func Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 	if err := validateNewUserPassword(req.Password); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 	// Consume the registration budget before database lookups or password work.
 	// This bounds both enumeration and expensive registration attempts per IP.
 	if !allowRegistration(c.ClientIP()) {
-		c.JSON(http.StatusTooManyRequests, gin.H{
+		writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 			"code":    http.StatusTooManyRequests,
 			"message": "注册请求过于频繁，请稍后再试",
 		})
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	req.CallSign = gormdb.NormalizeCallSign(req.CallSign)
 
 	// 检查用户名是否已存在
 	existing, _ := repo.GetUserByName(req.Username)
 	if existing != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		writeErrorResponse(c, http.StatusConflict, gin.H{
 			"code":    409,
 			"message": "用户名已存在",
 		})
@@ -108,14 +117,14 @@ func Register(c *gin.Context) {
 	if req.CallSign != "" {
 		available, err := repo.IsCallSignAvailable(req.CallSign, 0)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "校验呼号失败",
 			})
 			return
 		}
 		if !available {
-			c.JSON(http.StatusConflict, gin.H{
+			writeErrorResponse(c, http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "呼号已被使用",
 			})
@@ -127,7 +136,7 @@ func Register(c *gin.Context) {
 	if req.Phone != "" {
 		existingPhone, _ := repo.GetUserByPhone(req.Phone)
 		if existingPhone != nil {
-			c.JSON(http.StatusConflict, gin.H{
+			writeErrorResponse(c, http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "手机号已被注册",
 			})
@@ -138,7 +147,7 @@ func Register(c *gin.Context) {
 	// 检查邮箱是否已被注册
 	existingEmail, _ := repo.GetUserByEmail(req.Email)
 	if existingEmail != nil {
-		c.JSON(http.StatusConflict, gin.H{
+		writeErrorResponse(c, http.StatusConflict, gin.H{
 			"code":    409,
 			"message": "该邮箱已被注册",
 		})
@@ -148,7 +157,7 @@ func Register(c *gin.Context) {
 	registrationConfig, err := gormdb.GetSiteConfigRepo().GetRegistrationConfig()
 	if err != nil {
 		log.Printf("获取注册配置失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取注册配置失败",
 		})
@@ -158,7 +167,7 @@ func Register(c *gin.Context) {
 	emailVerified := false
 	if registrationConfig.RequireEmailVerification {
 		if req.SessionID == "" || req.EmailCode == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "请完成邮箱验证",
 			})
@@ -168,7 +177,7 @@ func Register(c *gin.Context) {
 		mgr := email.GetVerificationManager()
 		session, err := mgr.Verify(req.SessionID, req.EmailCode)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "邮箱验证码错误或已过期",
 			})
@@ -176,7 +185,7 @@ func Register(c *gin.Context) {
 		}
 		// 验证用途是否正确
 		if session.Purpose != email.PurposeRegister {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "验证码用途不正确",
 			})
@@ -184,7 +193,7 @@ func Register(c *gin.Context) {
 		}
 		// 验证邮箱是否匹配
 		if session.Email != req.Email {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "邮箱地址不匹配",
 			})
@@ -197,7 +206,7 @@ func Register(c *gin.Context) {
 	// 加密密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码加密失败",
 		})
@@ -208,7 +217,7 @@ func Register(c *gin.Context) {
 	devicePassword, err := generateDevicePassword()
 	if err != nil {
 		log.Printf("生成设备密码失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    http.StatusInternalServerError,
 			"message": "设备密码生成失败",
 		})
@@ -216,7 +225,7 @@ func Register(c *gin.Context) {
 	}
 	encryptedDevicePassword, err := appcrypto.Encrypt(devicePassword)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "设备密码加密失败",
 		})
@@ -245,14 +254,14 @@ func Register(c *gin.Context) {
 
 	if err := repo.CreateUser(user); err != nil {
 		if err == gormdb.ErrCallSignConflict {
-			c.JSON(http.StatusConflict, gin.H{
+			writeErrorResponse(c, http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "呼号已被使用",
 			})
 			return
 		}
 		log.Printf("创建用户失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建用户失败",
 		})
@@ -293,7 +302,7 @@ func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("登录请求参数错误: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -303,20 +312,20 @@ func Login(c *gin.Context) {
 	log.Printf("登录请求: username=%s", req.Username)
 
 	if !VerifyCaptchaCode(req.CaptchaID, req.CaptchaCode) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "图片验证码错误或已过期",
 		})
 		return
 	}
 	// 使用 GORM 查询用户（支持用户名或邮箱）
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByNameOrEmail(req.Username)
 	if err != nil {
 		// A backend failure is not evidence of an unknown account. Do not charge
 		// the source-IP guard or lock out legitimate users during a DB outage.
 		log.Printf("查询用户失败: %v", err)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
 		})
@@ -332,7 +341,7 @@ func Login(c *gin.Context) {
 				retrySeconds = 1
 			}
 			c.Header("Retry-After", strconv.Itoa(retrySeconds))
-			c.JSON(http.StatusTooManyRequests, gin.H{
+			writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 				"code":    http.StatusTooManyRequests,
 				"message": "登录请求过于频繁，请稍后再试",
 			})
@@ -343,7 +352,7 @@ func Login(c *gin.Context) {
 		_ = bcrypt.CompareHashAndPassword([]byte(unknownLoginDummyPasswordHash), []byte(req.Password))
 		if !unknownLoginIPGuardRecordFailure(c.ClientIP()) {
 			log.Printf("未知账号登录保护状态表已满，拒绝来源: %s", c.ClientIP())
-			c.JSON(http.StatusTooManyRequests, gin.H{
+			writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 				"code":    http.StatusTooManyRequests,
 				"message": "登录请求过于频繁，请稍后再试",
 			})
@@ -359,7 +368,7 @@ func Login(c *gin.Context) {
 			"",
 			c.ClientIP(),
 		)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
 		})
@@ -376,7 +385,7 @@ func Login(c *gin.Context) {
 			retrySeconds = 1
 		}
 		c.Header("Retry-After", strconv.Itoa(retrySeconds))
-		c.JSON(http.StatusTooManyRequests, gin.H{
+		writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 			"code":    429,
 			"message": "登录失败次数过多，账号已临时锁定，请稍后再试",
 		})
@@ -388,7 +397,7 @@ func Login(c *gin.Context) {
 		log.Printf("密码验证失败: %v", err)
 		if !loginGuardRecordFailure(user.Name) {
 			log.Printf("登录失败保护状态表已满，拒绝新账号尝试: %s", user.Name)
-			c.JSON(http.StatusTooManyRequests, gin.H{
+			writeErrorResponse(c, http.StatusTooManyRequests, gin.H{
 				"code":    http.StatusTooManyRequests,
 				"message": "登录请求过于频繁，请稍后再试",
 			})
@@ -406,7 +415,7 @@ func Login(c *gin.Context) {
 			user.CallSign,
 			c.ClientIP(),
 		)
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户名或密码错误",
 		})
@@ -415,7 +424,7 @@ func Login(c *gin.Context) {
 
 	// 检查用户状态
 	if user.Status != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "用户已被禁用",
 		})
@@ -443,7 +452,7 @@ func Login(c *gin.Context) {
 	// 生成 JWT token
 	issued, err := issueAuthTokens(c, user)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "生成令牌失败",
 		})
@@ -462,7 +471,7 @@ func Login(c *gin.Context) {
 		c.ClientIP(),
 	)
 
-	userData := buildLoginUserData(user)
+	userData := buildLoginUserDataContext(c.Request.Context(), user)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -505,7 +514,7 @@ func generateDevicePasswordFromReader(reader io.Reader) (string, error) {
 func Logout(c *gin.Context) {
 	// 获取当前用户信息用于审计日志
 	if username, exists := c.Get("username"); exists {
-		repo := gormdb.NewUserRepository()
+		repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		if user, err := repo.GetUserByName(username.(string)); err == nil && user != nil {
 			oplog.AddLog(
 				fmt.Sprintf("用户 %s (%s) 登出，IP: %s", user.Name, user.CallSign, c.ClientIP()),

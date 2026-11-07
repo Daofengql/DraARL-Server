@@ -171,8 +171,6 @@ type EdgeRuntimeConfig struct {
 	CenterControl        string
 	CenterUDP            string
 	Listen               string
-	ProxyProtocol        string
-	ProxyTrustedCIDRs    []string
 	TLSConfig            *tls.Config
 	DeviceSessionTimeout time.Duration
 	GrantRenewBefore     time.Duration
@@ -208,11 +206,10 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	if cfg.ReconnectMax < cfg.ReconnectMin {
 		cfg.ReconnectMax = 5 * time.Second
 	}
-	gateway, err := NewEdgeGateway(cfg.Listen, nil, cfg.ProxyProtocol)
+	gateway, err := NewEdgeGateway(cfg.Listen, nil)
 	if err != nil {
 		return nil, err
 	}
-	gateway.SetProxyTrustedCIDRs(cfg.ProxyTrustedCIDRs)
 	if cfg.DeviceSessionTimeout > 0 {
 		gateway.sessionTimeout = cfg.DeviceSessionTimeout
 	}
@@ -231,7 +228,7 @@ func StartEdgeRuntime(cfg EdgeRuntimeConfig) (*EdgeRuntime, error) {
 	client, link, connectErr := runtime.connectWithFallback(ctx)
 	cancel()
 	if connectErr != nil && (errors.Is(connectErr, errEdgeCredentialPersistence) || errors.Is(connectErr, ErrNodeAuthenticationRejected)) {
-		gateway.Close()
+		_ = gateway.Close()
 		return nil, connectErr
 	}
 	runtime.wg.Add(2)
@@ -473,6 +470,7 @@ func jitterReconnectDelay(base time.Duration) time.Duration {
 		return base
 	}
 	width := uint64(spread*2 + 1)
+	// #nosec G115 -- Modulo is bounded by the configured reconnect jitter interval.
 	offset := time.Duration(randomUint64()%width) - spread
 	return base + offset
 }
@@ -553,6 +551,7 @@ func LoadTLSCertificate(certFile, keyFile string, roots *x509.CertPool) (*tls.Co
 	return &tls.Config{Certificates: []tls.Certificate{pair}, ClientCAs: roots, MinVersion: tls.VersionTLS13}, nil
 }
 func LoadRootPool(path string) (*x509.CertPool, error) {
+	// #nosec G304 -- Persisted identity path is derived from the operator-selected configuration.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

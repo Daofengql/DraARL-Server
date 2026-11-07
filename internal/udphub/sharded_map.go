@@ -223,6 +223,6 @@ func (m *ShardedAuthMap) Len() int {
 // fnv32String FNV-32 字符串哈希函数
 func fnv32String(key string) uint32 {
 	h := fnv.New32a()
-	h.Write([]byte(key))
+	_, _ = h.Write([]byte(key))
 	return h.Sum32()
 }

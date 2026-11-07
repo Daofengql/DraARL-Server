@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -134,7 +135,7 @@ func peerLinkView(l *gormdb.InterCenterLink) gin.H {
 	return gin.H{"link": summarizeInterCenterLink(l), "runtime": status}
 }
 func ListInterCenterLinks(c *gin.Context) {
-	links, err := gormdb.NewInterCenterLinkRepository().List()
+	links, err := gormdb.NewInterCenterLinkRepository().WithContext(c.Request.Context()).List()
 	if err != nil {
 		peerError(c, 500, "查询中心互联失败")
 		return
@@ -147,12 +148,17 @@ func ListInterCenterLinks(c *gin.Context) {
 	c.JSON(200, gin.H{"code": 200, "data": gin.H{"items": items, "center_id": centerID(), "runtime_enabled": r != nil}})
 }
 func peerError(c *gin.Context, status int, message string) {
-	c.JSON(status, gin.H{"code": status, "message": message})
+	writeErrorResponse(c, status, gin.H{"code": status, "message": message})
 }
 
 // PUT changes only this center's local mapping, state, and media permissions.
 // The peer's local mapping is independent and is never accepted here.
 func preparePeer(req interCenterLinkRequest, old *gormdb.InterCenterLink) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return preparePeerContext(ctx, req, old)
+}
+func preparePeerContext(ctx context.Context, req interCenterLinkRequest, old *gormdb.InterCenterLink) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
 	l := gormdb.InterCenterLink{LinkID: strings.TrimSpace(req.LinkID), LocalCenterID: centerID(), RemoteCenterID: strings.TrimSpace(req.RemoteCenterID), RemoteAddress: strings.TrimSpace(req.RemoteAddress), TLSServerName: strings.TrimSpace(req.TLSServerName), TLSPinSHA256: strings.ToLower(strings.TrimSpace(req.TLSPinSHA256)), LocalGroupID: req.LocalGroupID, RemoteGroupID: req.RemoteGroupID, InitiatorCenterID: strings.TrimSpace(req.InitiatorCenterID), Direction: req.Direction, Enabled: req.Enabled, Accepted: req.Accepted, ForwardAudio: req.ForwardAudio, ForwardText: req.ForwardText, ForwardBroadcast: req.ForwardBroadcast, VirtualDeviceName: strings.TrimSpace(req.VirtualDeviceName), CredentialEpoch: req.CredentialEpoch}
 	fail := func(err error) (gormdb.InterCenterLink, interconnect.CenterPeerConfig, string, error) {
 		return l, interconnect.CenterPeerConfig{}, "", err
@@ -194,7 +200,7 @@ func preparePeer(req interCenterLinkRequest, old *gormdb.InterCenterLink) (gormd
 	if err := centerbridge.Policy(l).Validate(); err != nil {
 		return fail(err)
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(l.LocalGroupID)
+	group, err := gormdb.NewGroupRepository().WithContext(ctx).GetGroupByID(l.LocalGroupID)
 	if err != nil || !canUseGroupAsLinkTarget(group) && (old == nil || l.Enabled && l.Accepted && l.ForwardAudio || l.LocalGroupID != old.LocalGroupID) {
 		return fail(errors.New("本地群组必须是已启用的实体群组"))
 	}
@@ -255,12 +261,12 @@ func CreateInterCenterLink(c *gin.Context) {
 		peerError(c, 400, "互联参数错误")
 		return
 	}
-	l, pc, credential, err := preparePeer(req, nil)
+	l, pc, credential, err := preparePeerContext(c.Request.Context(), req, nil)
 	if err != nil {
 		peerError(c, 400, err.Error())
 		return
 	}
-	repo := gormdb.NewInterCenterLinkRepository()
+	repo := gormdb.NewInterCenterLinkRepository().WithContext(c.Request.Context())
 	if _, err := repo.GetByLinkID(l.LinkID); err == nil {
 		peerError(c, 409, "互联对象已存在")
 		return
@@ -288,7 +294,7 @@ func UpdateInterCenterLink(c *gin.Context) {
 		peerError(c, 400, "无效互联 ID")
 		return
 	}
-	repo := gormdb.NewInterCenterLinkRepository()
+	repo := gormdb.NewInterCenterLinkRepository().WithContext(c.Request.Context())
 	old, err := repo.GetByID(id)
 	if err != nil {
 		if errors.Is(err, gormdb.ErrInterCenterLinkNotFound) {
@@ -313,7 +319,7 @@ func UpdateInterCenterLink(c *gin.Context) {
 			peerError(c, 400, "本地群组必须是有效正整数")
 			return
 		}
-		group, groupErr := gormdb.NewGroupRepository().GetGroupByID(*req.LocalGroupID)
+		group, groupErr := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(*req.LocalGroupID)
 		if groupErr != nil || !canUseGroupAsLinkTarget(group) {
 			peerError(c, 400, "本地群组必须是已启用的实体群组")
 			return
@@ -374,7 +380,7 @@ func DeleteInterCenterLink(c *gin.Context) {
 		peerError(c, 400, "无效互联 ID")
 		return
 	}
-	repo := gormdb.NewInterCenterLinkRepository()
+	repo := gormdb.NewInterCenterLinkRepository().WithContext(c.Request.Context())
 	l, err := repo.GetByID(id)
 	if errors.Is(err, gormdb.ErrInterCenterLinkNotFound) || errors.Is(err, gorm.ErrRecordNotFound) {
 		peerError(c, 404, "互联对象不存在")
@@ -490,7 +496,7 @@ func CreateCenterPeerInvite(c *gin.Context) {
 		peerError(c, 400, "邀请参数错误")
 		return
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(req.LocalGroupID)
+	group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(req.LocalGroupID)
 	if err != nil || !canUseGroupAsLinkTarget(group) {
 		peerError(c, 400, "本地群组必须是已启用的实体群组")
 		return
@@ -530,7 +536,7 @@ func CreateCenterPeerInvite(c *gin.Context) {
 	hash := gormdb.HashCenterPeerInviteToken(secret)
 	ttl := time.Duration(cfg.Interconnect.RegistrationTokenTTL) * time.Second
 	invite := &gormdb.CenterPeerInvite{InviteID: inviteID, TokenHash: hash, CenterID: cfg.Interconnect.CenterID, LocalGroupID: req.LocalGroupID, SendAudio: req.SendAudio, ReceiveAudio: req.ReceiveAudio, VirtualDeviceName: name, Enabled: true, ExpiresAt: time.Now().Add(ttl)}
-	if err := gormdb.NewCenterPeerInviteRepository().Create(invite); err != nil {
+	if err := gormdb.NewCenterPeerInviteRepository().WithContext(c.Request.Context()).Create(invite); err != nil {
 		peerError(c, 500, "保存邀请失败")
 		return
 	}
@@ -547,7 +553,7 @@ func admitPeerInvite(c *gin.Context) {
 		peerError(c, 400, "准入参数错误")
 		return
 	}
-	repo := gormdb.NewCenterPeerInviteRepository()
+	repo := gormdb.NewCenterPeerInviteRepository().WithContext(c.Request.Context())
 	if !centerPeerInviteIDPattern.MatchString(strings.TrimSpace(req.InviteID)) || len(strings.TrimSpace(req.ClientNonce)) < 16 || len(strings.TrimSpace(req.TokenProof)) != 64 {
 		peerError(c, 401, "邀请证明无效")
 		return
@@ -566,7 +572,7 @@ func admitPeerInvite(c *gin.Context) {
 		peerError(c, 409, "邀请已经绑定到另一端")
 		return
 	}
-	linkRepo := gormdb.NewInterCenterLinkRepository()
+	linkRepo := gormdb.NewInterCenterLinkRepository().WithContext(c.Request.Context())
 	// A lost response is common on an HTTP control path. Once a token has
 	// already been bound to the same centre/group, return the original session
 	// instead of rotating the key or creating a second link on every retry.
@@ -734,7 +740,7 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 500, "未配置本地中心 ID")
 		return
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(req.LocalGroupID)
+	group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(req.LocalGroupID)
 	if err != nil || !canUseGroupAsLinkTarget(group) {
 		peerError(c, 400, "本地群组必须是已启用的实体群组")
 		return
@@ -768,7 +774,7 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 502, "连接远端中心失败")
 		return
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	var envelope struct {
 		Data struct {
 			LinkID             string `json:"link_id"`
@@ -833,7 +839,7 @@ func ImportCenterPeerInvite(c *gin.Context) {
 		peerError(c, 502, "远端互联身份无效")
 		return
 	}
-	linkRepo := gormdb.NewInterCenterLinkRepository()
+	linkRepo := gormdb.NewInterCenterLinkRepository().WithContext(c.Request.Context())
 	existing, getErr := linkRepo.GetByLinkID(link.LinkID)
 	if getErr == nil && existing != nil {
 		if existing.LocalCenterID != link.LocalCenterID || existing.RemoteCenterID != link.RemoteCenterID || existing.LocalGroupID != link.LocalGroupID {

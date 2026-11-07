@@ -235,8 +235,9 @@ export function AdminGroupPage() {
   // 渲染状态列（管理员可切换）
   const renderStatusSwitch = (group: Group) => {
     return (
-      <Tooltip title={group.status === 1 ? '点击禁用' : '点击启用'}>
+      <Tooltip title={group.status === 1 ? '点击禁用' : '点击启用'} describeChild>
         <Switch
+          slotProps={{ input: { 'aria-label': `${group.status === 1 ? '禁用' : '启用'}群组 ${group.name}` } }}
           checked={group.status === 1}
           onChange={() => handleToggleStatus(group)}
           size="small"
@@ -363,11 +364,11 @@ export function AdminGroupPage() {
         <Box sx={{ bgcolor: 'action.selected', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <GroupTypeIcon type={GROUP_TYPE_PUBLIC} />
-            <Typography variant="subtitle1" fontWeight={600}>公开群组</Typography>
+            <Typography component="h2" variant="subtitle1" fontWeight={600}>公开群组</Typography>
             <Typography variant="body2" color="text.secondary">({publicGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+        <TableContainer tabIndex={0} role="region" aria-label="公开群组列表" sx={{ flex: 1, overflow: 'auto' }}>
           <Table sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>
@@ -398,11 +399,11 @@ export function AdminGroupPage() {
         <Box sx={{ bgcolor: 'secondary.50', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <GroupTypeIcon type={GROUP_TYPE_PRIVATE} />
-            <Typography variant="subtitle1" fontWeight={600}>私有群组</Typography>
+            <Typography component="h2" variant="subtitle1" fontWeight={600}>私有群组</Typography>
             <Typography variant="body2" color="text.secondary">({privateGroups.length} 个)</Typography>
           </Stack>
         </Box>
-        <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
+        <TableContainer tabIndex={0} role="region" aria-label="私有群组列表" sx={{ flex: 1, overflow: 'auto' }}>
           <Table sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>

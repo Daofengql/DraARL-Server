@@ -675,7 +675,7 @@ func (g *EdgeGateway) finishAuth(response DeviceAuthResponse) {
 	receiversChanged := false
 	if existing := g.sessions[grant.SessionID]; existing != nil {
 		oldKey, oldTag := edgeSessionIdentity(existing.Grant), existing.Grant.SessionTag
-		receiversChanged = !slices.Equal(routeReceiveDomains(existing.Grant.Route()), routeReceiveDomains(grant.Route())) || existing.Grant.DisableRecv != grant.DisableRecv ||
+		receiversChanged = !slices.Equal(routeReceiveDomains(existing.Grant.Route()), routeReceiveDomains(grant.Route())) || !slices.Equal(routeReceiveGroups(existing.Grant.Route()), routeReceiveGroups(grant.Route())) || existing.Grant.DisableRecv != grant.DisableRecv ||
 			existing.Grant.DeviceID != grant.DeviceID || existing.Grant.Username != grant.Username || existing.Grant.SSID != grant.SSID ||
 			existing.Grant.SourceGroupV1 != grant.SourceGroupV1 || !udpAddrEqual(existing.Addr, session.Addr)
 		if existing.Grant.SessionEpoch != grant.SessionEpoch || existing.Grant.DomainID != grant.DomainID || grant.DisableSend {

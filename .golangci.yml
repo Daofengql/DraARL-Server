@@ -1,0 +1,28 @@
+version: "2"
+run:
+  timeout: 8m
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - errcheck
+    - gosec
+  settings:
+    staticcheck:
+      checks: ["SA*", "S*"]
+    gosec:
+      excludes:
+        # Protocol MD5/AES compatibility is intentional; see CONTRIBUTING.md.
+        - G401
+        - G405
+        - G407
+  exclusions:
+    generated: strict
+    paths:
+      - output
+      - www
+    rules:
+      - path: _test\.go
+        linters: [gosec, errcheck]

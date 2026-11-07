@@ -24,7 +24,7 @@ export function SystemInfoTab({
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card>
           <CardContent>
-            <Typography variant="h6" gutterBottom>系统基本信息</Typography>
+            <Typography component="h2" variant="h6" gutterBottom>系统基本信息</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               配置站点的基本显示信息
             </Typography>

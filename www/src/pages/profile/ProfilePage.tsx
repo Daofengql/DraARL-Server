@@ -1,3 +1,5 @@
+import { parseAPIDate } from '../../utils/apiTime'
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -252,7 +254,7 @@ export function ProfilePage() {
       // 不在这里设置 loading = false，等待 postMessage 回调
     } catch (err: any) {
       setSsoBindLoading(false)
-      showMessage('error', err.response?.data?.message || '获取绑定地址失败')
+      showMessage('error', getErrorMessage(err, '获取绑定地址失败'))
     }
   }
 
@@ -263,7 +265,7 @@ export function ProfilePage() {
       setSSOStatus({ bound: false })
       showMessage('success', '解绑成功')
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '解绑失败')
+      showMessage('error', getErrorMessage(err, '解绑失败'))
     } finally {
       setUnbinding(false)
       setUnbindConfirmOpen(false)
@@ -333,7 +335,7 @@ export function ProfilePage() {
       authService.saveAuth(authService.getToken()!, updatedUser)
       showMessage('success', '头像更新成功')
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '上传失败')
+      showMessage('error', getErrorMessage(err, '上传失败'))
     } finally {
       setUploadingAvatar(false)
       setSelectedAvatarImage(null)
@@ -366,7 +368,7 @@ export function ProfilePage() {
       setEditDialogOpen(false)
       showMessage('success', '资料更新成功')
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '更新失败')
+      showMessage('error', getErrorMessage(err, '更新失败'))
     }
   }
 
@@ -390,7 +392,7 @@ export function ProfilePage() {
       setPasswordForm({ old_password: '', new_password: '', confirm_password: '' })
       showMessage('success', '密码修改成功')
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '密码修改失败')
+      showMessage('error', getErrorMessage(err, '密码修改失败'))
     }
   }
 
@@ -435,7 +437,7 @@ export function ProfilePage() {
       showMessage('success', '验证码已发送到当前邮箱')
       getEmailCaptcha()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '发送验证码失败')
+      showMessage('error', getErrorMessage(err, '发送验证码失败'))
       getEmailCaptcha()
     }
   }
@@ -451,7 +453,7 @@ export function ProfilePage() {
       setEmailCaptchaCode('')
       getEmailCaptcha()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '验证失败')
+      showMessage('error', getErrorMessage(err, '验证失败'))
     }
   }
 
@@ -489,7 +491,7 @@ export function ProfilePage() {
       showMessage('success', '验证码已发送到新邮箱')
       getEmailCaptcha()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '发送验证码失败')
+      showMessage('error', getErrorMessage(err, '发送验证码失败'))
       getEmailCaptcha()
     }
   }
@@ -518,7 +520,7 @@ export function ProfilePage() {
       // 重新加载用户信息
       loadUserInfo()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '邮箱修改失败')
+      showMessage('error', getErrorMessage(err, '邮箱修改失败'))
     } finally {
       setChangingEmail(false)
     }
@@ -617,13 +619,13 @@ export function ProfilePage() {
       setCertCallsign('')
       showMessage('success', '提交成功，请等待管理员审核')
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '上传失败')
+      showMessage('error', getErrorMessage(err, '上传失败'))
     } finally {
       setUploadingCert(false)
     }
   }
 
-  const displayName = user?.nickname || user?.username || ''
+  const displayName = user?.nickname || user?.username || '个人资料'
 
   if (loading) {
     return (
@@ -635,7 +637,7 @@ export function ProfilePage() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 3, fontWeight: 600 }}>
+      <Typography component="h1" variant="h4" sx={{ mb: 3, fontWeight: 600 }}>
         个人中心
       </Typography>
 
@@ -685,6 +687,7 @@ export function ProfilePage() {
                       }}
                     />
                     <IconButton
+                      aria-label="更换头像"
                       sx={{
                         position: 'absolute',
                         bottom: -4,
@@ -701,7 +704,7 @@ export function ProfilePage() {
                     </IconButton>
                   </Box>
                   <Box sx={{ flex: 1, minWidth: 200 }}>
-                    <Typography variant="h5" fontWeight={600}>
+                    <Typography component="h2" variant="h5" fontWeight={600}>
                       {displayName}
                     </Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -743,7 +746,7 @@ export function ProfilePage() {
               {/* 左侧：信息列表 */}
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
+                  <Typography component="h2" variant="h6" gutterBottom>
                     个人信息
                   </Typography>
                   <Divider sx={{ mb: 2 }} />
@@ -825,7 +828,7 @@ export function ProfilePage() {
                     <ListItem>
                       <Box sx={{ minWidth: 120, color: 'text.secondary' }}>注册时间</Box>
                       <ListItemText>
-                        {user?.created_at ? new Date(user.created_at).toLocaleString('zh-CN') : '-'}
+                        {user?.created_at ? parseAPIDate(user.created_at).toLocaleString('zh-CN') : '-'}
                       </ListItemText>
                     </ListItem>
                   </List>
@@ -836,7 +839,7 @@ export function ProfilePage() {
               <Card>
                 <CardContent>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                    <Typography variant="h6">
+                    <Typography component="h2" variant="h6">
                       操作证书
                     </Typography>
                     {/* 操作证独立状态显示 */}
@@ -977,7 +980,7 @@ export function ProfilePage() {
               {/* 左侧：账号信息 */}
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
+                  <Typography component="h2" variant="h6" gutterBottom>
                     账号信息
                   </Typography>
                   <List disablePadding>
@@ -1016,7 +1019,7 @@ export function ProfilePage() {
                     </Box>
                     <ListItemText>
                       {user?.last_login_time
-                        ? new Date(user.last_login_time).toLocaleString('zh-CN')
+                        ? parseAPIDate(user.last_login_time).toLocaleString('zh-CN')
                         : '-'}
                     </ListItemText>
                   </ListItem>
@@ -1042,7 +1045,7 @@ export function ProfilePage() {
                     <Box sx={{ minWidth: 120, color: 'text.secondary' }}>注册时间</Box>
                     <ListItemText>
                       {user?.created_at
-                        ? new Date(user.created_at).toLocaleString('zh-CN')
+                        ? parseAPIDate(user.created_at).toLocaleString('zh-CN')
                         : '-'}
                     </ListItemText>
                   </ListItem>
@@ -1053,7 +1056,7 @@ export function ProfilePage() {
             {/* 右侧：账号安全 */}
             <Card>
               <CardContent>
-                <Typography variant="h6" gutterBottom>
+                <Typography component="h2" variant="h6" gutterBottom>
                   账号安全
                 </Typography>
                 <Divider sx={{ mb: 2 }} />

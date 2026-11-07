@@ -1,7 +1,8 @@
 package storage
 
 import (
-	"crypto/md5" // EdgeOne TypeA requires MD5 for protocol compatibility.
+	// #nosec G501 -- EdgeOne TypeA compatibility requires MD5; never used to hash passwords.
+	"crypto/md5" // #nosec G501 -- EdgeOne TypeA wire compatibility requires MD5; not password hashing.
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"

@@ -17,22 +17,22 @@ import (
 func ChangeOwnPassword(c *gin.Context) {
 	var req ChangeOwnPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 	if err := validateNewUserPassword(req.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
 	username, _ := c.Get("username")
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -41,7 +41,7 @@ func ChangeOwnPassword(c *gin.Context) {
 
 	// 验证旧密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "原密码错误",
 		})
@@ -51,7 +51,7 @@ func ChangeOwnPassword(c *gin.Context) {
 	// 加密新密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码加密失败",
 		})
@@ -61,7 +61,7 @@ func ChangeOwnPassword(c *gin.Context) {
 	// 更新密码
 	if err := repo.UpdateUserPassword(user.ID, string(hashedPassword)); err != nil {
 		log.Printf("更新密码失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码修改失败",
 		})
@@ -100,7 +100,7 @@ func UpdateUserPassword(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -109,24 +109,24 @@ func UpdateUserPassword(c *gin.Context) {
 
 	var req UpdateUserPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
 		return
 	}
 	if err := validateNewUserPassword(req.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": err.Error()})
 		return
 	}
 
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 
 	// 获取当前用户信息
 	username, _ := c.Get("username")
 	currentUser, err := repo.GetUserByName(username.(string))
 	if err != nil || currentUser == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -136,7 +136,7 @@ func UpdateUserPassword(c *gin.Context) {
 	// 获取目标用户（检查权限）
 	targetUser, err := repo.GetUserByID(id)
 	if err != nil || targetUser == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "目标用户不存在",
 		})
@@ -148,7 +148,7 @@ func UpdateUserPassword(c *gin.Context) {
 	isSelf := currentUser.ID == id
 
 	if !isAdmin && !isSelf {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "权限不足",
 		})
@@ -159,7 +159,7 @@ func UpdateUserPassword(c *gin.Context) {
 	// 可以免旧密码，避免被盗的管理员会话直接接管管理员本人账号。
 	if mustVerifyCurrentPassword(currentUser, targetUser) {
 		if err := bcrypt.CompareHashAndPassword([]byte(currentUser.Password), []byte(req.OldPassword)); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "原密码错误",
 			})
@@ -170,7 +170,7 @@ func UpdateUserPassword(c *gin.Context) {
 	// 加密新密码
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码加密失败",
 		})
@@ -180,7 +180,7 @@ func UpdateUserPassword(c *gin.Context) {
 	// 更新密码
 	if err := repo.UpdateUserPassword(id, string(hashedPassword)); err != nil {
 		log.Printf("更新密码失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "密码修改失败",
 		})

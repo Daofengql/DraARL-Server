@@ -11,9 +11,9 @@ import (
 )
 
 func GetTotalStats(c *gin.Context) {
-	userRepo := gormdb.NewUserRepository()
-	deviceRepo := gormdb.NewDeviceRepository()
-	groupRepo := gormdb.NewGroupRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
+	deviceRepo := gormdb.NewDeviceRepository().WithContext(c.Request.Context())
+	groupRepo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 
 	// 获取真实统计数据
 	userCount, _ := userRepo.UserCount()

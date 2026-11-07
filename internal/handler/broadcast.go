@@ -167,7 +167,7 @@ func UploadBroadcastAudio(c *gin.Context) {
 		writeBroadcastError(c, http.StatusBadRequest, "broadcast_audio_invalid", "无法读取音频文件")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	prefix := make([]byte, 512)
 	n, readErr := io.ReadFull(file, prefix)
 	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
@@ -221,7 +221,7 @@ func UploadBroadcastAudio(c *gin.Context) {
 		return
 	}
 	oplog.AddLog(fmt.Sprintf("上传自动播报音频: %s (群组: %s, ID: %d)", audio.Name, group.Name, audio.ID), "broadcast_audio_upload", user.ID, user.Name, user.CallSign, c.ClientIP())
-	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "音频已进入处理队列", "data": makeBroadcastAudioResponse(audio, 0, "")})
+	writeErrorResponse(c, http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "音频已进入处理队列", "data": makeBroadcastAudioResponse(audio, 0, "")})
 }
 
 func GetBroadcastAudio(c *gin.Context) {
@@ -280,7 +280,7 @@ func DeleteBroadcastAudio(c *gin.Context) {
 			continue
 		}
 		var recordReferences int64
-		if err := gormdb.Get().Model(&gormdb.CommRecord{}).Where("audio_path = ?", key).Count(&recordReferences).Error; err != nil {
+		if err := gormdb.Get().WithContext(c.Request.Context()).Model(&gormdb.CommRecord{}).Where("audio_path = ?", key).Count(&recordReferences).Error; err != nil {
 			cleanupPending = true
 			log.Printf("[BROADCAST] recheck deleted audio references key=%s failed: %v", key, err)
 			continue
@@ -479,7 +479,7 @@ func RunBroadcastSchedule(c *gin.Context) {
 		return
 	}
 	oplog.AddLog(fmt.Sprintf("手动触发自动播报: 计划ID=%d (群组: %s, 执行ID: %d)", scheduleID, group.Name, run.ID), "broadcast_schedule_run", user.ID, user.Name, user.CallSign, c.ClientIP())
-	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "自动播报已触发", "data": run})
+	writeErrorResponse(c, http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "自动播报已触发", "data": run})
 }
 
 func CancelBroadcastRun(c *gin.Context) {
@@ -505,7 +505,7 @@ func CancelBroadcastRun(c *gin.Context) {
 		return
 	}
 	oplog.AddLog(fmt.Sprintf("停止自动播报: 执行ID=%d (群组: %s)", run.ID, group.Name), "broadcast_run_cancel", user.ID, user.Name, user.CallSign, c.ClientIP())
-	c.JSON(http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "停止请求已提交", "data": gin.H{"run_id": run.ID}})
+	writeErrorResponse(c, http.StatusAccepted, gin.H{"code": http.StatusAccepted, "message": "停止请求已提交", "data": gin.H{"run_id": run.ID}})
 }
 
 func requireManagedBroadcastGroup(c *gin.Context) (*gormdb.User, *gormdb.Group, int, bool) {
@@ -514,7 +514,7 @@ func requireManagedBroadcastGroup(c *gin.Context) (*gormdb.User, *gormdb.Group, 
 		writeBroadcastError(c, http.StatusBadRequest, "invalid_group_id", "群组 ID 无效")
 		return nil, nil, 0, false
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(int(id64))
+	group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(int(id64))
 	if err != nil {
 		writeBroadcastError(c, http.StatusInternalServerError, "group_read_failed", "读取群组失败")
 		return nil, nil, 0, false
@@ -632,7 +632,7 @@ func writeBroadcastRepositoryError(c *gin.Context, err error) {
 }
 
 func writeBroadcastError(c *gin.Context, status int, errorCode, message string) {
-	c.JSON(status, gin.H{"code": status, "error_code": errorCode, "message": message})
+	writeErrorResponse(c, status, gin.H{"code": status, "error_code": errorCode, "message": message})
 }
 
 type broadcastCountingReader struct {

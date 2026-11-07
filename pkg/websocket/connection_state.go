@@ -363,7 +363,7 @@ func (r *ReconnectManager) initiateReconnect() {
 
 	// 关闭旧连接
 	if r.conn != nil {
-		r.conn.Close()
+		_ = r.conn.Close()
 	}
 }
 

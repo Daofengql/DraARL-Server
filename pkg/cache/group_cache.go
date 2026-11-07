@@ -32,10 +32,7 @@ func NewGroupCache(config GroupCacheConfig) (*GroupCache, error) {
 		config.MaxSize = 10000
 	}
 
-	cache, err := NewTwoLevelCache(CacheConfig{
-		LocalTTL: config.LocalTTL,
-		MaxSize:  config.MaxSize,
-	})
+	cache, err := NewTwoLevelCache(CacheConfig(config))
 	if err != nil {
 		return nil, err
 	}

@@ -21,7 +21,7 @@ func JoinGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -30,7 +30,7 @@ func JoinGroup(c *gin.Context) {
 
 	var req JoinGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -38,23 +38,23 @@ func JoinGroup(c *gin.Context) {
 	}
 
 	// 检查群组是否存在
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
 		return
 	}
 	if group.IsVirtual || !isSupportedGroupType(group.Type) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持加入"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持加入"})
 		return
 	}
 
 	// 检查群组类型（Type=2 才需要密码）
 	if group.Type != 2 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "该群组不需要密码验证",
 		})
@@ -63,7 +63,7 @@ func JoinGroup(c *gin.Context) {
 
 	// 验证密码是否正确。历史明文在验证成功后用条件更新升级，避免长期保留。
 	if !verifyGroupPassword(group.Password, req.Password) {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "密码错误",
 		})
@@ -71,7 +71,7 @@ func JoinGroup(c *gin.Context) {
 	}
 	// 检查群组是否被禁用
 	if group.Status != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "群组已禁用",
 		})
@@ -81,17 +81,17 @@ func JoinGroup(c *gin.Context) {
 	// 获取当前用户
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, _ := userRepo.GetUserByName(username.(string))
 	if currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -105,7 +105,7 @@ func JoinGroup(c *gin.Context) {
 		}
 	}
 
-	memberRepo := gormdb.NewGroupMemberRepository()
+	memberRepo := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context())
 
 	// 检查用户是否已加入
 	member, err := memberRepo.GetMemberByGroupAndUser(id, currentUser.ID)
@@ -122,7 +122,7 @@ func JoinGroup(c *gin.Context) {
 		// 已加入，更新最后验证时间
 		err = memberRepo.UpdateMemberVerification(id, currentUser.ID, true)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "更新验证时间失败",
 			})
@@ -139,7 +139,7 @@ func JoinGroup(c *gin.Context) {
 		}
 		err = memberRepo.CreateMember(&groupMember)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "加入群组失败",
 			})
@@ -181,24 +181,24 @@ func GetGroupMembers(c *gin.Context) {
 	groupIDStr := c.Param("id")
 	groupID, err := strconv.Atoi(groupIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
 		return
 	}
 
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(groupID)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
 		return
 	}
 	if group.IsVirtual || !isSupportedGroupType(group.Type) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持成员列表"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "虚拟群组不支持成员列表"})
 		return
 	}
 
@@ -208,7 +208,7 @@ func GetGroupMembers(c *gin.Context) {
 	}
 
 	if !canManageGroup(currentUser, group) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "需要管理员或群组创建者权限",
 		})
@@ -216,10 +216,10 @@ func GetGroupMembers(c *gin.Context) {
 	}
 
 	// 查询成员列表
-	memberRepo := gormdb.NewGroupMemberRepository()
+	memberRepo := gormdb.NewGroupMemberRepository().WithContext(c.Request.Context())
 	members, err := memberRepo.ListVerifiedMembersByGroup(groupID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询成员列表失败",
 		})
@@ -233,8 +233,8 @@ func GetGroupMembers(c *gin.Context) {
 	deviceCounts := make(map[int]int64, len(userIDs))
 	if len(userIDs) > 0 {
 		var users []gormdb.User
-		if err := gormdb.Get().Select("id", "name", "callsign", "nickname").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询成员用户失败"})
+		if err := gormdb.Get().WithContext(c.Request.Context()).Select("id", "name", "callsign", "nickname").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询成员用户失败"})
 			return
 		}
 		for _, user := range users {
@@ -244,11 +244,11 @@ func GetGroupMembers(c *gin.Context) {
 			OwnerID int
 			Count   int64
 		}
-		if err := gormdb.Get().Model(&gormdb.Device{}).
+		if err := gormdb.Get().WithContext(c.Request.Context()).Model(&gormdb.Device{}).
 			Select("owner_id, COUNT(*) AS count").
 			Where("group_id = ? AND owner_id IN ?", groupID, userIDs).
 			Group("owner_id").Scan(&counts).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询成员设备失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询成员设备失败"})
 			return
 		}
 		for _, count := range counts {
@@ -282,23 +282,23 @@ func GetGroupMembers(c *gin.Context) {
 func RemoveGroupMember(c *gin.Context) {
 	groupID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || groupID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
 		return
 	}
 	targetUserID, err := strconv.Atoi(c.Param("userId"))
 	if err != nil || targetUserID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的用户ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的用户ID"})
 		return
 	}
 
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(groupID)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
 		return
 	}
 	if group.IsVirtual || group.Type != groupTypePrivate {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "仅私有群组支持移除成员"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "仅私有群组支持移除成员"})
 		return
 	}
 	currentUser, ok := requireCurrentUser(c)
@@ -306,25 +306,25 @@ func RemoveGroupMember(c *gin.Context) {
 		return
 	}
 	if !canManageGroup(currentUser, group) {
-		c.JSON(http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": http.StatusForbidden, "message": "需要管理员或群组创建者权限"})
 		return
 	}
 	if targetUserID == group.OwerID {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "不能移除群组创建者"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "不能移除群组创建者"})
 		return
 	}
-	targetUser, err := gormdb.NewUserRepository().GetUserByID(targetUserID)
+	targetUser, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserByID(targetUserID)
 	if err != nil || targetUser == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "用户不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "用户不存在"})
 		return
 	}
 	movedDevices, err := repo.RemoveGroupMemberAndMoveDevices(groupID, targetUserID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组成员不存在"})
+			writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组成员不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "移除成员失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "移除成员失败"})
 		return
 	}
 	syncRemovedGroupMembership(c, groupID, targetUserID, movedDevices)
@@ -345,7 +345,7 @@ func LeaveGroup(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的群组ID",
 		})
@@ -353,10 +353,10 @@ func LeaveGroup(c *gin.Context) {
 	}
 
 	// 检查群组是否存在
-	repo := gormdb.NewGroupRepository()
+	repo := gormdb.NewGroupRepository().WithContext(c.Request.Context())
 	group, err := repo.GetGroupByID(id)
 	if err != nil || group == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "群组不存在",
 		})
@@ -365,7 +365,7 @@ func LeaveGroup(c *gin.Context) {
 
 	// 检查是否是私有群组
 	if group.Type != 2 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "该群组不支持离开",
 		})
@@ -379,7 +379,7 @@ func LeaveGroup(c *gin.Context) {
 
 	// 检查是否是群组创建者，创建者不能离开自己的群组
 	if group.OwerID == currentUser.ID {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "群组创建者不能退出自己的群组",
 		})
@@ -390,13 +390,13 @@ func LeaveGroup(c *gin.Context) {
 	movedDevices, err := repo.RemoveGroupMemberAndMoveDevices(id, currentUser.ID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    http.StatusNotFound,
 				"message": "尚未加入该群组",
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "离开群组失败",
 		})

@@ -2,16 +2,13 @@ package udphub
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"draarl/internal/config"
 	"draarl/internal/protocol"
 )
 
@@ -76,41 +73,23 @@ func (p *EdgeFanoutPlan) Len() int {
 // same single-reader, sharded-worker and parallel fan-out design as the
 // centre's udphub.
 type EdgeEndpoint struct {
-	conn                *net.UDPConn
-	handler             func([]byte, *net.UDPAddr, *net.UDPAddr)
-	proxyProtocolV2     bool
-	proxyTrustedCIDRs   []*net.IPNet
-	proxyTrustAllWarned atomic.Bool
-	queues              []chan udpDatagramJob
-	readerWG            sync.WaitGroup
-	workerWG            sync.WaitGroup
-	closeOnce           sync.Once
-	closed              chan struct{}
-	sender              *FanoutSender
-	planGeneration      atomic.Uint64
+	conn           *net.UDPConn
+	handler        func([]byte, *net.UDPAddr, *net.UDPAddr)
+	queues         []chan udpDatagramJob
+	readerWG       sync.WaitGroup
+	workerWG       sync.WaitGroup
+	closeOnce      sync.Once
+	closed         chan struct{}
+	sender         *FanoutSender
+	planGeneration atomic.Uint64
 }
 
-func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net.UDPAddr, *net.UDPAddr), trustedCIDRLists ...[]string) (*EdgeEndpoint, error) {
+func NewEdgeEndpoint(listenAddr string, handler func([]byte, *net.UDPAddr, *net.UDPAddr)) (*EdgeEndpoint, error) {
 	if handler == nil {
 		return nil, errors.New("edge UDP handler is required")
 	}
-	proxyProtocol = strings.ToLower(strings.TrimSpace(proxyProtocol))
-	if proxyProtocol != "" && proxyProtocol != "v2" {
-		return nil, errors.New("edge UDP proxy protocol must be empty or v2")
-	}
 	if listenAddr == "" {
 		listenAddr = ":60050"
-	}
-	var trustedCIDRs []string
-	if len(trustedCIDRLists) > 0 {
-		trustedCIDRs = trustedCIDRLists[0]
-	}
-	proxyTrustedCIDRs, err := config.ParseProxyTrustedCIDRs(trustedCIDRs)
-	if err != nil {
-		return nil, fmt.Errorf("invalid edge proxy trusted CIDRs: %w", err)
-	}
-	if config.IsReleaseBuild() && proxyProtocol == "v2" && len(proxyTrustedCIDRs) == 0 {
-		return nil, errors.New("edge proxy trusted CIDRs must contain at least one CIDR when proxy protocol v2 is enabled in release builds")
 	}
 	addr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
@@ -128,9 +107,8 @@ func NewEdgeEndpoint(listenAddr, proxyProtocol string, handler func([]byte, *net
 		perQueue = 64
 	}
 	e := &EdgeEndpoint{
-		conn: conn, handler: handler, proxyProtocolV2: proxyProtocol == "v2",
-		proxyTrustedCIDRs: proxyTrustedCIDRs,
-		queues:            make([]chan udpDatagramJob, workers), closed: make(chan struct{}),
+		conn: conn, handler: handler,
+		queues: make([]chan udpDatagramJob, workers), closed: make(chan struct{}),
 	}
 	for i := range e.queues {
 		e.queues[i] = make(chan udpDatagramJob, perQueue)
@@ -159,23 +137,14 @@ func (e *EdgeEndpoint) readLoop() {
 			return
 		default:
 		}
-		base := packetPool.Get().([]byte)
-		n, addr, err := e.conn.ReadFromUDP(base)
+		base := packetPool.Get().(*[]byte)
+		n, addr, err := e.conn.ReadFromUDP(*base)
 		if err != nil {
 			packetPool.Put(base)
 			return
 		}
-		packetData := base[:n]
+		packetData := (*base)[:n]
 		realAddr := addr
-		if e.proxyProtocolV2 && isTrustedProxySourceFor(addr.IP, e.proxyTrustedCIDRs, &e.proxyTrustAllWarned) {
-			proxyInfo, payload, parsed := ParseProxyProtocolV2(packetData)
-			if parsed {
-				packetData = payload
-				if proxyInfo != nil && proxyInfo.IsProxy {
-					realAddr = GetRealAddr(addr, proxyInfo)
-				}
-			}
-		}
 		job := udpDatagramJob{data: packetData, baseBuffer: base, remoteAddr: addr, realAddr: realAddr, receivedAt: time.Now()}
 		queue := e.queues[udpDatagramShard(job.data, realAddr, len(e.queues))]
 		select {

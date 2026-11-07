@@ -74,9 +74,9 @@ func edgeNodeToView(node *gormdb.Server) edgeNodeView {
 }
 
 func ListEdgeNodes(c *gin.Context) {
-	nodes, err := gormdb.NewServerRepository().ListServers()
+	nodes, err := gormdb.NewServerRepository().WithContext(c.Request.Context()).ListServers()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询边缘节点失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "查询边缘节点失败"})
 		return
 	}
 	items := make([]edgeNodeView, 0, len(nodes))
@@ -92,32 +92,32 @@ func CreateEdgeNode(c *gin.Context) {
 	setCredentialResponseNoStore(c)
 	var req createEdgeNodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.DisplayName) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称不能为空"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称不能为空"})
 		return
 	}
 	displayName, err := accesspoint.NormalizeLabel(req.DisplayName, 100)
 	if err != nil || displayName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称无效"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称无效"})
 		return
 	}
 	region, err := accesspoint.NormalizeAdministrativeRegion(req.PublicRegion, 100)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点地区不能为空，国内节点至少需要选择到市级别"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "节点地区不能为空，国内节点至少需要选择到市级别"})
 		return
 	}
 	nodeID, err := interconnect.NewNodeID()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成节点身份失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成节点身份失败"})
 		return
 	}
 	publicAccessID, err := accesspoint.NewPublicID()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成公开入口身份失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成公开入口身份失败"})
 		return
 	}
 	credential, err := interconnect.NewRegistrationCredential(nodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成注册凭据失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成注册凭据失败"})
 		return
 	}
 	now := time.Now()
@@ -130,8 +130,8 @@ func CreateEdgeNode(c *gin.Context) {
 		return
 	}
 	node := &gormdb.Server{Name: displayName, DisplayName: displayName, Note: strings.TrimSpace(req.Note), NodeID: &nodeID, PublicAccessID: &publicAccessID, PublicRegion: region, PublicPriority: 100, NodeRegistrationTokenHash: interconnect.HashCredential(credential), NodeRegistrationExpiresAt: &expiresAt, Status: 1, ServerType: 3, OwerID: strconv.Itoa(currentUser.ID), OwerCallSign: currentUser.CallSign}
-	if err := gormdb.NewServerRepository().CreateServer(node); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建边缘节点失败"})
+	if err := gormdb.NewServerRepository().WithContext(c.Request.Context()).CreateServer(node); err != nil {
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "创建边缘节点失败"})
 		return
 	}
 	oplog.AddLog("创建边缘节点: "+nodeID, "edge_node_create", currentUser.ID, currentUser.Name, currentUser.CallSign, c.ClientIP())
@@ -141,25 +141,25 @@ func CreateEdgeNode(c *gin.Context) {
 func UpdateEdgeNode(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
 		return
 	}
 	var req updateEdgeNodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "请求参数错误"})
 		return
 	}
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	node, err := repo.GetServerByID(id)
 	if err != nil || node == nil || node.NodeID == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 		return
 	}
 	updates := make(map[string]interface{})
 	if req.DisplayName != nil {
 		name, labelErr := accesspoint.NormalizeLabel(*req.DisplayName, 100)
 		if labelErr != nil || name == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称不能为空"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "节点昵称不能为空"})
 			return
 		}
 		updates["display_name"], updates["name"] = name, name
@@ -169,7 +169,7 @@ func UpdateEdgeNode(c *gin.Context) {
 	}
 	if req.Status != nil {
 		if *req.Status != 0 && *req.Status != 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点状态只能为0或1"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "节点状态只能为0或1"})
 			return
 		}
 		updates["status"] = *req.Status
@@ -186,7 +186,7 @@ func UpdateEdgeNode(c *gin.Context) {
 		if publicHost != "" {
 			publicHost, err = accesspoint.NormalizeUDPHost(publicHost)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "公开 UDP 主机无效"})
+				writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "公开 UDP 主机无效"})
 				return
 			}
 		}
@@ -196,7 +196,7 @@ func UpdateEdgeNode(c *gin.Context) {
 		publicPort = *req.PublicUDPPort
 		if publicPort != 0 {
 			if err := accesspoint.ValidateUDPPort(publicPort); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "公开 UDP 端口无效"})
+				writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "公开 UDP 端口无效"})
 				return
 			}
 		}
@@ -204,14 +204,14 @@ func UpdateEdgeNode(c *gin.Context) {
 	}
 	if publicEnabled {
 		if _, err := accesspoint.NormalizeUDPHost(publicHost); err != nil || accesspoint.ValidateUDPPort(publicPort) != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "启用公开入口前必须配置有效的 UDP 主机和端口"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "启用公开入口前必须配置有效的 UDP 主机和端口"})
 			return
 		}
 	}
 	if req.PublicRegion != nil {
 		region, regionErr := accesspoint.NormalizeAdministrativeRegion(*req.PublicRegion, 100)
 		if regionErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "节点地区不能为空，国内节点至少需要选择到市级别"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "节点地区不能为空，国内节点至少需要选择到市级别"})
 			return
 		}
 		updates["public_region"] = region
@@ -219,14 +219,14 @@ func UpdateEdgeNode(c *gin.Context) {
 	if req.PublicNetwork != nil {
 		label, labelErr := accesspoint.NormalizeLabel(*req.PublicNetwork, 100)
 		if labelErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "公开入口标签无效"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "公开入口标签无效"})
 			return
 		}
 		updates["public_network"] = label
 	}
 	if req.PublicPriority != nil {
 		if *req.PublicPriority < -10000 || *req.PublicPriority > 10000 {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "公开入口优先级超出范围"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "公开入口优先级超出范围"})
 			return
 		}
 		updates["public_priority"] = *req.PublicPriority
@@ -234,14 +234,14 @@ func UpdateEdgeNode(c *gin.Context) {
 	if node.PublicAccessID == nil || strings.TrimSpace(*node.PublicAccessID) == "" {
 		publicID, err := accesspoint.NewPublicID()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成公开入口身份失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成公开入口身份失败"})
 			return
 		}
 		updates["public_access_id"] = publicID
 	}
 	if len(updates) > 0 {
 		if err := repo.UpdateServerFields(id, updates); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新边缘节点失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "更新边缘节点失败"})
 			return
 		}
 	}
@@ -270,18 +270,18 @@ func RotateEdgeNodeCredential(c *gin.Context) {
 	setCredentialResponseNoStore(c)
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
 		return
 	}
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	node, err := repo.GetServerByID(id)
 	if err != nil || node == nil || node.NodeID == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 		return
 	}
 	credential, err := interconnect.NewLongTermCredential(*node.NodeID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成注册凭据失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "生成注册凭据失败"})
 		return
 	}
 	now := time.Now()
@@ -291,7 +291,7 @@ func RotateEdgeNodeCredential(c *gin.Context) {
 	}
 	rotation, err := repo.RotateNodeCredential(id, interconnect.HashCredential(credential), now, grace)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "轮换节点凭据失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "轮换节点凭据失败"})
 		return
 	}
 	deliveredOnline := false
@@ -320,17 +320,17 @@ func RotateEdgeNodeCredential(c *gin.Context) {
 func RevokeEdgeNodeCredential(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
 		return
 	}
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	nodeID, epoch, err := repo.RevokeNodeCredentials(id)
 	if err != nil {
 		if err == gormdb.ErrNodeNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+			writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "吊销节点凭据失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "吊销节点凭据失败"})
 		return
 	}
 	disconnected := false
@@ -351,7 +351,7 @@ func RevokeEdgeNodeCredential(c *gin.Context) {
 func DeleteEdgeNode(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
 		return
 	}
 	currentUser, ok := requireCurrentUser(c)
@@ -359,14 +359,14 @@ func DeleteEdgeNode(c *gin.Context) {
 		return
 	}
 
-	repo := gormdb.NewServerRepository()
+	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
 	node, err := repo.GetServerByID(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询边缘节点失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "查询边缘节点失败"})
 		return
 	}
 	if node == nil || node.NodeID == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 		return
 	}
 
@@ -377,10 +377,10 @@ func DeleteEdgeNode(c *gin.Context) {
 	deleted, err := repo.DeleteEdgeNode(id)
 	if err != nil {
 		if err == gormdb.ErrNodeNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+			writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除边缘节点失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "删除边缘节点失败"})
 		return
 	}
 
@@ -403,12 +403,12 @@ func DeleteEdgeNode(c *gin.Context) {
 func DisconnectEdgeNode(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "无效节点ID"})
 		return
 	}
-	node, err := gormdb.NewServerRepository().GetServerByID(id)
+	node, err := gormdb.NewServerRepository().WithContext(c.Request.Context()).GetServerByID(id)
 	if err != nil || node == nil || node.NodeID == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "边缘节点不存在"})
 		return
 	}
 	disconnected := false

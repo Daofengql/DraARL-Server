@@ -449,6 +449,7 @@ func RemoveRuntimeDevice(ownerID int, ssid byte) bool {
 		current.RealUDPAddr = nil
 	})
 
+	notifyDeviceOnlineChange(dev)
 	visitRuntimeDeviceGroups(dev, func(gp *models.Group) {
 		removeDeviceFromGroupRuntime(gp, dev)
 	})
@@ -471,7 +472,7 @@ func sendHeartbeatReject(conn *net.UDPConn, packet *protocol.DraARLv1Packet, cod
 	if conn == nil || packet == nil || packet.UDPAddr == nil {
 		return
 	}
-	conn.WriteToUDP(protocol.EncodeHeartbeatRejectResponse(packet, code, message), packet.UDPAddr)
+	_, _ = conn.WriteToUDP(protocol.EncodeHeartbeatRejectResponse(packet, code, message), packet.UDPAddr)
 }
 
 // SyncUserCallSignChange 在呼号审批真正落库后，同步 UDP 运行时索引与展示字段。

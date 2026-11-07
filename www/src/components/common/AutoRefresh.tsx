@@ -53,6 +53,7 @@ export function AutoRefresh({
       <FormControl size={size} sx={{ minWidth: 100 }}>
         <InputLabel>{label}</InputLabel>
         <Select
+          inputProps={{ 'aria-label': label }}
           value={value}
           label={label}
           onChange={(e) => onChange(Number(e.target.value))}

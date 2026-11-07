@@ -52,6 +52,9 @@ func BuildRawOpusFromPackets(packets [][]byte, maxPackets int) ([]byte, int, err
 		maxPackets = len(packets)
 	}
 
+	if maxPackets > maxContainerPacketCount {
+		return nil, 0, fmt.Errorf("%w: too many packets", ErrInvalidContainer)
+	}
 	frames := make([][]byte, 0, maxPackets*MaxFramesPerPacket)
 	for _, packet := range packets[:maxPackets] {
 		packetFrames, ok := splitMergedFrames(packet)
@@ -72,19 +75,22 @@ func BuildRawOpusFromPackets(packets [][]byte, maxPackets int) ([]byte, int, err
 	_ = binary.Write(output, binary.LittleEndian, uint32(OpusSampleRate))
 	_ = binary.Write(output, binary.LittleEndian, uint16(1))
 	_ = binary.Write(output, binary.LittleEndian, uint16(960))
-	_ = binary.Write(output, binary.LittleEndian, uint32(len(frames)))
+	_ = binary.Write(output, binary.LittleEndian, uint32(len(frames))) // #nosec G115 -- Lengths are validated against the container and frame limits before encoding.
 	_, _ = output.Write(make([]byte, 6))
 	for _, frame := range frames {
 		if len(frame) == 0 || len(frame) > int(^uint16(0)) {
 			return nil, 0, fmt.Errorf("%w: invalid Opus frame length", ErrInvalidContainer)
 		}
-		_ = binary.Write(output, binary.LittleEndian, uint16(len(frame)))
+		_ = binary.Write(output, binary.LittleEndian, uint16(len(frame))) // #nosec G115 -- Lengths are validated against the container and frame limits before encoding.
 		_, _ = output.Write(frame)
 	}
 	return output.Bytes(), len(frames), nil
 }
 
 func BuildContainer(frames [][]byte) ([]byte, ContainerMetadata, error) {
+	if len(frames) > maxContainerPacketCount*MaxFramesPerPacket {
+		return nil, ContainerMetadata{}, fmt.Errorf("%w: too many frames", ErrInvalidContainer)
+	}
 	if len(frames) == 0 {
 		return nil, ContainerMetadata{}, fmt.Errorf("%w: no Opus frames", ErrInvalidContainer)
 	}
@@ -102,7 +108,7 @@ func BuildContainer(frames [][]byte) ([]byte, ContainerMetadata, error) {
 				}
 				break
 			}
-			packet = binary.BigEndian.AppendUint16(packet, uint16(len(frame)))
+			packet = binary.BigEndian.AppendUint16(packet, uint16(len(frame))) // #nosec G115 -- Lengths are validated against the container and frame limits before encoding.
 			packet = append(packet, frame...)
 			index++
 		}
@@ -114,7 +120,7 @@ func BuildContainer(frames [][]byte) ([]byte, ContainerMetadata, error) {
 
 	payload := bytes.NewBuffer(nil)
 	for _, packet := range packets {
-		_ = binary.Write(payload, binary.BigEndian, uint16(len(packet)))
+		_ = binary.Write(payload, binary.BigEndian, uint16(len(packet))) // #nosec G115 -- Lengths are validated against the container and frame limits before encoding.
 		_, _ = payload.Write(packet)
 	}
 	digest := sha256.Sum256(payload.Bytes())
@@ -125,8 +131,8 @@ func BuildContainer(frames [][]byte) ([]byte, ContainerMetadata, error) {
 	_ = output.WriteByte(0)
 	_ = binary.Write(output, binary.BigEndian, uint16(OpusFrameDurationMS))
 	_ = binary.Write(output, binary.BigEndian, uint32(OpusSampleRate))
-	_ = binary.Write(output, binary.BigEndian, uint32(len(packets)))
-	_ = binary.Write(output, binary.BigEndian, uint32(durationMS))
+	_ = binary.Write(output, binary.BigEndian, uint32(len(packets))) // #nosec G115 -- Lengths are validated against the container and frame limits before encoding.
+	_ = binary.Write(output, binary.BigEndian, uint32(durationMS))   // #nosec G115 -- Lengths are validated against the container and frame limits before encoding.
 	_, _ = output.Write(digest[:])
 	_, _ = output.Write(payload.Bytes())
 	metadata := ContainerMetadata{PacketCount: len(packets), FrameCount: len(frames), DurationMS: durationMS, Size: int64(output.Len()), SHA256: digest}

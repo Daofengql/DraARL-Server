@@ -551,7 +551,8 @@ export const RadioPage: React.FC = () => {
     <Box sx={styles.root}>
       {/* 头部 */}
       <Box sx={styles.header}>
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', minWidth: 0 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <Typography component="h1" variant="h6">在线收发</Typography>
           {renderConnectionStatus()}
         </Box>
         <GroupSelector

@@ -127,9 +127,9 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
   }
 
   const drawerContent = (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box component="nav" aria-label="主导航" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
+        <Typography component="div" variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
           DraARL
         </Typography>
       </Box>
@@ -145,11 +145,12 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
             }
 
             return (
-              <Box key={item.path}>
+              <Box component="li" key={item.path} sx={{ listStyle: 'none' }}>
                 {/* 父菜单 */}
-                <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItem component="div" disablePadding sx={{ mb: 0.5 }}>
                   <ListItemButton
                     selected={shouldHighlight(item)}
+                    aria-expanded={item.children ? showChildren : undefined}
                     onClick={() => isExpandableMenu ? toggleMenu() : handleNavigate(item.path)}
                     sx={{
                       mx: 1,
@@ -181,7 +182,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
                 {item.children && (
                   <Collapse in={showChildren} timeout="auto" unmountOnExit>
                     <Divider sx={{ mb: 1, mx: 2, borderColor: 'grey.300' }} />
-                    <Box sx={{ pl: 2, mb: 1 }}>
+                    <List disablePadding sx={{ pl: 2, mb: 1 }}>
                       {item.children.map((child, index) => (
                         <ListItem
                           key={`${item.path}-${index}`}
@@ -214,7 +215,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
                           </ListItemButton>
                         </ListItem>
                       ))}
-                    </Box>
+                    </List>
                   </Collapse>
                 )}
               </Box>

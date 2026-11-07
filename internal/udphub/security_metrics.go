@@ -28,7 +28,10 @@ func GetSecurityPacketMetrics() map[string]uint64 {
 // 成员仅凭报文头 username+ssid 冒名注入语音/文本。心跳包不在此校验：
 // 地址变化的心跳会走 AuthenticateDevice 重认证并重新绑定地址。
 func enforceNormalDeviceEndpointBinding(dev *models.Device, packet *protocol.DraARLv1Packet, realAddrs ...*net.UDPAddr) bool {
-	if dev == nil || packet == nil || packet.Type == protocol.DraARLTypeHeartbeat {
+	if dev == nil || packet == nil {
+		return false
+	}
+	if packet.Type == protocol.DraARLTypeHeartbeat {
 		return true
 	}
 	state := dev.RuntimeSnapshot()
@@ -47,10 +50,7 @@ func enforceNormalDeviceEndpointBinding(dev *models.Device, packet *protocol.Dra
 	return false
 }
 
-// normalDeviceConflictAddr preserves the legacy transport-address comparison
-// for devices loaded before RealUDPAddr existed. Once a real source has been
-// learned, conflict checks use that source while UDPAddr remains the reply
-// route through a proxy.
+// normalDeviceConflictAddr selects the socket source used for session binding.
 func normalDeviceConflictAddr(dev *models.Device, transportAddr, realAddr *net.UDPAddr) *net.UDPAddr {
 	if dev != nil && realAddr != nil && dev.RuntimeSnapshot().RealUDPAddr != nil {
 		return realAddr

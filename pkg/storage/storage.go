@@ -452,7 +452,7 @@ func HashObjectSHA256(ctx context.Context, key string, maxSize int64) (int64, st
 	if err != nil {
 		return 0, "", err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	hasher := sha256.New()
 	written, err := io.Copy(hasher, io.LimitReader(reader, maxSize+1))

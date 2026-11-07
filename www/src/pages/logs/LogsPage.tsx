@@ -1,3 +1,4 @@
+import { parseAPIDate } from '../../utils/apiTime'
 import { useCallback, useEffect, useState } from 'react'
 import {
   Box,
@@ -139,7 +140,7 @@ export function LogsPage() {
   }
 
   const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString('zh-CN')
+    return parseAPIDate(timestamp).toLocaleString('zh-CN')
   }
 
   return (

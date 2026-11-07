@@ -202,9 +202,9 @@ export function AdminLayout() {
   }
 
   const drawer = (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box component="nav" aria-label="后台导航" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
+        <Typography component="div" variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
           后台管理
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -237,11 +237,12 @@ export function AdminLayout() {
           }
 
           return (
-            <Box key={item.path}>
+            <Box component="li" key={item.path} sx={{ listStyle: 'none' }}>
               {/* 父菜单 */}
-              <ListItem disablePadding sx={{ mb: 0.5 }}>
+              <ListItem component="div" disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
                   selected={shouldHighlight(item)}
+                    aria-expanded={item.children ? showChildren : undefined}
                   onClick={() => isExpandableMenu ? toggleMenu() : handleNavigate(item.path)}
                   sx={{
                     mx: 1,
@@ -274,7 +275,7 @@ export function AdminLayout() {
                 <Collapse in={showChildren} timeout="auto" unmountOnExit>
                   {/* 分隔线 */}
                   <Divider sx={{ mb: 1, borderColor: 'grey.300' }} />
-                  <Box sx={{ pl: 2, mb: 1 }}>
+                  <List disablePadding sx={{ pl: 2, mb: 1 }}>
                     {item.children.map((child, index) => (
                       <ListItem
                         key={`${item.path}-${index}`}
@@ -307,7 +308,7 @@ export function AdminLayout() {
                         </ListItemButton>
                       </ListItem>
                     ))}
-                  </Box>
+                  </List>
                 </Collapse>
               )}
             </Box>

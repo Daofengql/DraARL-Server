@@ -19,24 +19,24 @@ func GetOperatorLogs(c *gin.Context) {
 	}
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的日志分页大小"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的日志分页大小"})
 		return
 	}
 
 	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的日志页码"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的日志页码"})
 		return
 	}
 	eventType := c.Query("event_type")
 
 	limit, page, _, err = gormdb.NormalizeOperatorLogPagination(limit, page)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": fmt.Sprintf("无效的日志分页参数: %v", err)})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": fmt.Sprintf("无效的日志分页参数: %v", err)})
 		return
 	}
 
-	repo := gormdb.NewOperatorLogRepository()
+	repo := gormdb.NewOperatorLogRepository().WithContext(c.Request.Context())
 
 	var logs []*gormdb.OperatorLog
 	var total int64
@@ -49,7 +49,7 @@ func GetOperatorLogs(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "查询操作日志失败",
 		})
@@ -68,10 +68,10 @@ func GetOperatorLogs(c *gin.Context) {
 
 // GetOperatorLogStats 获取操作日志统计信息
 func GetOperatorLogStats(c *gin.Context) {
-	repo := gormdb.NewOperatorLogRepository()
+	repo := gormdb.NewOperatorLogRepository().WithContext(c.Request.Context())
 	stats, err := repo.GetLogStats()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取统计信息失败",
 		})

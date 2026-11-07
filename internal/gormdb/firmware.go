@@ -68,7 +68,7 @@ func GetFirmwareRepo() *FirmwareRepository {
 func (r *FirmwareRepository) ListByDevModel(devModel int, page, pageSize int) ([]*FirmwareRelease, int64, error) {
 	var list []*FirmwareRelease
 	var total int64
-	pageSize, page, offset, err := NormalizePageOffset(pageSize, page)
+	pageSize, _, offset, err := NormalizePageOffset(pageSize, page)
 	if err != nil {
 		return nil, 0, err
 	}

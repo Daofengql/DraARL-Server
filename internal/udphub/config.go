@@ -278,13 +278,13 @@ func encodeTLV(configs map[string]string) ([]byte, int) {
 		}
 
 		length, ok := tlvLengthMap[tlvType]
-		if !ok {
+		if !ok || length < 0 || length > 255 {
 			continue
 		}
 
 		// 编码 TLV
 		result = append(result, tlvType)      // Type (1 byte)
-		result = append(result, byte(length)) // Length (1 byte)
+		result = append(result, byte(length)) // #nosec G115 -- Protocol fixed-width values are range checked or intentionally encode signed timestamp bits.
 
 		// Value (N bytes)
 		valueBytes, ok := encodeTLVValue(tlvType, value)
@@ -361,7 +361,7 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 			return nil, false
 		}
 		buf := make([]byte, 8)
-		binary.BigEndian.PutUint64(buf, uint64(ts))
+		binary.BigEndian.PutUint64(buf, uint64(ts)) // #nosec G115 -- Protocol fixed-width values are range checked or intentionally encode signed timestamp bits.
 		return buf, true
 
 	default:
@@ -385,7 +385,7 @@ func decodeTLV(data []byte) map[string]string {
 		}
 
 		tlvType := data[offset]
-		length := int(data[offset+1])
+		length := int(data[offset+1]) // #nosec G602 -- The loop checks offset+2 against the datagram length before reading the TLV header.
 		offset += 2
 
 		key, knownType := tlvTypeToKeyMap[tlvType]
@@ -474,7 +474,7 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 		if len(data) != 8 {
 			return "", false
 		}
-		ts := int64(binary.BigEndian.Uint64(data))
+		ts := int64(binary.BigEndian.Uint64(data)) // #nosec G115 -- Protocol fixed-width values are range checked or intentionally encode signed timestamp bits.
 		return fmt.Sprintf("%d", ts), true
 
 	default:
@@ -537,6 +537,9 @@ func buildConfigSetPacket(configs map[string]string) []byte {
 	tlvData, itemCount := encodeTLV(configs)
 	result := make([]byte, 2+len(tlvData))
 	result[0] = ConfigTypeSet
+	if itemCount < 0 || itemCount > 255 {
+		return []byte{ConfigTypeSet, 0x00}
+	}
 	result[1] = byte(itemCount) // 配置项数量
 	copy(result[2:], tlvData)
 

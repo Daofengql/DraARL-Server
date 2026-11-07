@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,7 +28,7 @@ type RadioPresetRequest struct {
 func GetRadioPresets(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -35,9 +36,9 @@ func GetRadioPresets(c *gin.Context) {
 	}
 
 	var presets []gormdb.UserRadioPreset
-	if err := gormdb.Get().Where("user_id = ?", userID).Order("sort_order ASC, id ASC").Find(&presets).Error; err != nil {
+	if err := gormdb.Get().WithContext(c.Request.Context()).Where("user_id = ?", userID).Order("sort_order ASC, id ASC").Find(&presets).Error; err != nil {
 		log.Printf("获取电台预设失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取电台预设失败",
 		})
@@ -61,7 +62,7 @@ func GetRadioPresets(c *gin.Context) {
 func CreateRadioPreset(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -70,7 +71,7 @@ func CreateRadioPreset(c *gin.Context) {
 
 	var req RadioPresetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -87,9 +88,9 @@ func CreateRadioPreset(c *gin.Context) {
 		SortOrder: req.SortOrder,
 	}
 
-	if err := gormdb.Get().Create(preset).Error; err != nil {
+	if err := gormdb.Get().WithContext(c.Request.Context()).Create(preset).Error; err != nil {
 		log.Printf("创建电台预设失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "创建电台预设失败",
 		})
@@ -117,7 +118,7 @@ func CreateRadioPreset(c *gin.Context) {
 func UpdateRadioPreset(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -127,7 +128,7 @@ func UpdateRadioPreset(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
@@ -136,7 +137,7 @@ func UpdateRadioPreset(c *gin.Context) {
 
 	var req RadioPresetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -145,16 +146,16 @@ func UpdateRadioPreset(c *gin.Context) {
 
 	// 查询预设，确保是当前用户的
 	var preset gormdb.UserRadioPreset
-	if err := gormdb.Get().Where("id = ? AND user_id = ?", id, userID).First(&preset).Error; err != nil {
+	if err := gormdb.Get().WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", id, userID).First(&preset).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    404,
 				"message": "预设不存在或无权修改",
 			})
 			return
 		}
 		log.Printf("获取电台预设失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取电台预设失败",
 		})
@@ -171,9 +172,9 @@ func UpdateRadioPreset(c *gin.Context) {
 	preset.QTH = req.QTH
 	preset.SortOrder = req.SortOrder
 
-	if err := gormdb.Get().Save(&preset).Error; err != nil {
+	if err := gormdb.Get().WithContext(c.Request.Context()).Save(&preset).Error; err != nil {
 		log.Printf("更新电台预设失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新电台预设失败",
 		})
@@ -201,7 +202,7 @@ func UpdateRadioPreset(c *gin.Context) {
 func DeleteRadioPreset(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -211,7 +212,7 @@ func DeleteRadioPreset(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的ID",
 		})
@@ -220,16 +221,16 @@ func DeleteRadioPreset(c *gin.Context) {
 
 	// 先查询预设，确保是当前用户的
 	var preset gormdb.UserRadioPreset
-	if err := gormdb.Get().Where("id = ? AND user_id = ?", id, userID).First(&preset).Error; err != nil {
+	if err := gormdb.Get().WithContext(c.Request.Context()).Where("id = ? AND user_id = ?", id, userID).First(&preset).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{
+			writeErrorResponse(c, http.StatusNotFound, gin.H{
 				"code":    404,
 				"message": "预设不存在或无权删除",
 			})
 			return
 		}
 		log.Printf("获取电台预设失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取电台预设失败",
 		})
@@ -237,9 +238,9 @@ func DeleteRadioPreset(c *gin.Context) {
 	}
 
 	// 删除预设
-	if err := gormdb.Get().Delete(&preset).Error; err != nil {
+	if err := gormdb.Get().WithContext(c.Request.Context()).Delete(&preset).Error; err != nil {
 		log.Printf("删除电台预设失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "删除电台预设失败",
 		})
@@ -274,7 +275,7 @@ type ReorderPresetsRequest struct {
 func ReorderRadioPresets(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -283,7 +284,7 @@ func ReorderRadioPresets(c *gin.Context) {
 
 	var req ReorderPresetsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误: " + err.Error(),
 		})
@@ -291,7 +292,7 @@ func ReorderRadioPresets(c *gin.Context) {
 	}
 
 	// 使用事务批量更新
-	err := gormdb.Get().Transaction(func(tx *gorm.DB) error {
+	err := gormdb.Get().WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		for _, item := range req.Orders {
 			result := tx.Model(&gormdb.UserRadioPreset{}).
 				Where("id = ? AND user_id = ?", item.ID, userID).
@@ -305,7 +306,7 @@ func ReorderRadioPresets(c *gin.Context) {
 
 	if err != nil {
 		log.Printf("更新预设排序失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新排序失败",
 		})
@@ -339,8 +340,8 @@ func presetToJSON(p gormdb.UserRadioPreset) gin.H {
 		"power":      p.Power,
 		"qth":        p.QTH,
 		"sort_order": p.SortOrder,
-		"created_at": p.CreatedAt.Format("2006-01-02 15:04:05"),
-		"updated_at": p.UpdatedAt.Format("2006-01-02 15:04:05"),
+		"created_at": common.FormatAPITime(p.CreatedAt),
+		"updated_at": common.FormatAPITime(p.UpdatedAt),
 	}
 }
 
@@ -351,7 +352,7 @@ func getPresetAuditOperator(c *gin.Context, fallbackUserID int) (int, string, st
 		return fallbackUserID, "", ""
 	}
 
-	user, err := gormdb.NewUserRepository().GetUserByName(usernameStr)
+	user, err := gormdb.NewUserRepository().WithContext(c.Request.Context()).GetUserByName(usernameStr)
 	if err != nil || user == nil {
 		return fallbackUserID, usernameStr, ""
 	}

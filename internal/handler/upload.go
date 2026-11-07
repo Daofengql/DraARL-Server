@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"draarl/internal/common"
 	"errors"
 	"fmt"
 	"log"
@@ -72,7 +73,7 @@ func UploadFile(c *gin.Context) {
 	// 获取当前用户
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -80,10 +81,10 @@ func UploadFile(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := userRepo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -102,7 +103,7 @@ func UploadFile(c *gin.Context) {
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "获取文件失败",
 		})
@@ -111,7 +112,7 @@ func UploadFile(c *gin.Context) {
 
 	// 检查文件大小（10MB）
 	if fileHeader.Size > 10*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "文件大小不能超过10MB",
 		})
@@ -128,7 +129,7 @@ func UploadFile(c *gin.Context) {
 		avatarData, ext, err := minio.ProcessAvatarContext(c.Request.Context(), fileHeader)
 		if err != nil {
 			log.Printf("处理头像图片失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "处理头像图片失败",
 			})
@@ -139,7 +140,7 @@ func UploadFile(c *gin.Context) {
 		objectName, finalFileSize, err = minio.UploadAvatarContext(c.Request.Context(), user.ID, avatarData, ext)
 		if err != nil {
 			log.Printf("上传头像失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "上传头像失败",
 			})
@@ -159,7 +160,7 @@ func UploadFile(c *gin.Context) {
 		// 的对象，避免接口返回成功但用户资料仍指向旧头像并留下孤儿文件。
 		if err := persistAvatarReference(userRepo, user.ID, avatarRelativePath, objectName, minio.DeleteFile); err != nil {
 			log.Printf("更新用户头像失败: user_id=%d object=%s err=%v", user.ID, objectName, err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    http.StatusInternalServerError,
 				"message": "更新用户头像失败",
 			})
@@ -191,13 +192,13 @@ func UploadFile(c *gin.Context) {
 		if err != nil {
 			log.Printf("上传文件失败: %v", err)
 			if errors.Is(err, storage.ErrFileTypeNotAllowed) {
-				c.JSON(http.StatusBadRequest, gin.H{
+				writeErrorResponse(c, http.StatusBadRequest, gin.H{
 					"code":    400,
 					"message": "文件类型不被允许",
 				})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "上传文件失败",
 			})
@@ -227,7 +228,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 	// 获取当前用户
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -243,11 +244,11 @@ func UploadOperatorCertificate(c *gin.Context) {
 	if userCache != nil {
 		user, err = userCache.GetUserByName(ctx, username.(string))
 	} else {
-		userRepo := gormdb.NewUserRepository()
+		userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		user, err = userRepo.GetUserByName(username.(string))
 	}
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -257,7 +258,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 	if !parseLimitedUploadForm(c, storage.MaxSizeForFileType("operator_cert")) {
 		return
 	}
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	callsign := gormdb.NormalizeCallSign(c.PostForm("callsign"))
 	fileHeader, fileErr := c.FormFile("file")
 	objectKeyForm := strings.TrimSpace(c.PostForm("object_key"))
@@ -271,14 +272,14 @@ func UploadOperatorCertificate(c *gin.Context) {
 	if callSignChanged {
 		available, err := userRepo.IsCallSignAvailable(callsign, user.ID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "校验呼号失败",
 			})
 			return
 		}
 		if !available {
-			c.JSON(http.StatusConflict, gin.H{
+			writeErrorResponse(c, http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "呼号已被使用",
 			})
@@ -288,14 +289,14 @@ func UploadOperatorCertificate(c *gin.Context) {
 
 	// 既没有新文件也没有改呼号才驳回
 	if shouldRejectOperatorCertSubmission(hasNewFile, oldCallSign, callsign) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请上传操作证图片或输入新呼号",
 		})
 		return
 	}
 
-	certRepo := gormdb.NewOperatorCertRepository()
+	certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 	activeCert, _ := certRepo.GetActiveByUserID(user.ID)
 	pendingCert, _ := certRepo.GetPendingByUserID(user.ID)
 
@@ -317,7 +318,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 	case hasMultipart:
 		// 兼容 multipart 代理上传
 		if fileHeader.Size > maxCertSize {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": fmt.Sprintf("文件大小不能超过%dMB", maxCertSize/(1024*1024)),
 			})
@@ -325,7 +326,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		}
 		detectedContentType, err := storage.DetectMultipartContentType(fileHeader)
 		if err != nil || !storage.IsAllowedContentType(detectedContentType, allowedTypes) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的文件类型，只支持图片和PDF",
 			})
@@ -335,7 +336,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		objectName, fileSize, err = minio.UploadMultipartFileContext(c.Request.Context(), fileHeader, user.ID, "operator_cert")
 		if err != nil {
 			log.Printf("上传操作证失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "上传文件失败",
 			})
@@ -348,7 +349,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		// 直传完成后提交 object_key
 		objectName = strings.TrimLeft(objectKeyForm, "/")
 		if uploadTokenForm == "" || !storage.IsStagingObjectKey(objectName, "operator_cert", user.ID) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的上传授权或 object_key",
 			})
@@ -358,26 +359,22 @@ func UploadOperatorCertificate(c *gin.Context) {
 		if fileName == "" {
 			fileName = "operator_cert"
 		}
-		grant, storedContentType, err := storage.ValidateStagedUpload(
+		grant, _, err := storage.ValidateStagedUpload(
 			c.Request.Context(), uploadTokenForm, objectName, "operator_cert", user.ID,
 		)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "上传授权或对象校验失败",
 			})
 			return
-		}
-		contentType = grant.ContentType
-		if contentType == "" {
-			contentType = storedContentType
 		}
 		detectedContentType, err := storage.DetectObjectContentType(c.Request.Context(), objectName)
 		if err != nil || !storage.IsAllowedContentType(detectedContentType, allowedTypes) {
 			if deleteErr := deleteStoredObjectWithIndependentContext(objectName, storage.Delete); deleteErr != nil {
 				log.Printf("清理非法操作证直传对象失败: user_id=%d object=%s err=%v", user.ID, objectName, deleteErr)
 			}
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的文件类型，只支持图片和PDF",
 			})
@@ -387,7 +384,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 		finalKey, err := storage.PromoteStagedUpload(c.Request.Context(), grant)
 		if err != nil {
 			log.Printf("提升操作证对象失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "完成文件上传失败",
 			})
@@ -411,7 +408,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 			fileSize = activeCert.FileSize
 			contentType = activeCert.FileType
 		} else {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "首次设置呼号必须上传操作证图片",
 			})
@@ -436,7 +433,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 					log.Printf("回滚未提交操作证对象失败: user_id=%d object=%s err=%v", user.ID, objectName, deleteErr)
 				}
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "更新操作证记录失败",
 			})
@@ -456,7 +453,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 					log.Printf("回滚未提交操作证对象失败: user_id=%d object=%s err=%v", user.ID, objectName, deleteErr)
 				}
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "保存操作证记录失败",
 			})
@@ -498,7 +495,7 @@ func UploadOperatorCertificate(c *gin.Context) {
 			"callsign":    cert.CallSign,
 			"file_name":   cert.FileName,
 			"file_size":   cert.FileSize,
-			"upload_time": cert.UploadTime.Format("2006-01-02 15:04:05"),
+			"upload_time": common.FormatAPITime(cert.UploadTime),
 		},
 	})
 }
@@ -508,7 +505,7 @@ func GetOperatorCertificate(c *gin.Context) {
 	// 获取当前用户
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -524,11 +521,11 @@ func GetOperatorCertificate(c *gin.Context) {
 	if userCache != nil {
 		user, err = userCache.GetUserByName(ctx, username.(string))
 	} else {
-		userRepo := gormdb.NewUserRepository()
+		userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		user, err = userRepo.GetUserByName(username.(string))
 	}
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -544,7 +541,7 @@ func GetOperatorCertificate(c *gin.Context) {
 	if certCache != nil {
 		activeCert, _ = certCache.GetActiveCertByUserID(ctx, user.ID)
 	} else {
-		certRepo := gormdb.NewOperatorCertRepository()
+		certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 		activeCert, _ = certRepo.GetActiveByUserID(user.ID)
 	}
 
@@ -552,7 +549,7 @@ func GetOperatorCertificate(c *gin.Context) {
 	if certCache != nil {
 		pendingCert, _ = certCache.GetLatestPendingOrRejectedCertByUserID(ctx, user.ID)
 	} else {
-		certRepo := gormdb.NewOperatorCertRepository()
+		certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 		pendingCert, _ = certRepo.GetLatestPendingOrRejectedByUserID(user.ID)
 	}
 
@@ -569,7 +566,7 @@ func GetOperatorCertificate(c *gin.Context) {
 			"file_name":   activeCert.FileName,
 			"file_size":   activeCert.FileSize,
 			"file_type":   activeCert.FileType,
-			"upload_time": activeCert.UploadTime.Format("2006-01-02 15:04:05"),
+			"upload_time": common.FormatAPITime(activeCert.UploadTime),
 			"file_url":    minio.GetFileURL(activeCert.MinioPath),
 			"status":      activeCert.Status,
 			"review_note": activeCert.ReviewNote,
@@ -583,7 +580,7 @@ func GetOperatorCertificate(c *gin.Context) {
 			"file_name":   pendingCert.FileName,
 			"file_size":   pendingCert.FileSize,
 			"file_type":   pendingCert.FileType,
-			"upload_time": pendingCert.UploadTime.Format("2006-01-02 15:04:05"),
+			"upload_time": common.FormatAPITime(pendingCert.UploadTime),
 			"file_url":    minio.GetFileURL(pendingCert.MinioPath),
 			"status":      pendingCert.Status,
 			"review_note": pendingCert.ReviewNote,
@@ -605,19 +602,23 @@ func UploadLogo(c *gin.Context) {
 	// 获取当前用户
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "获取文件失败",
 		})
@@ -626,7 +627,7 @@ func UploadLogo(c *gin.Context) {
 
 	// 检查文件大小（10MB）
 	if fileHeader.Size > 10*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "文件大小不能超过10MB",
 		})
@@ -642,7 +643,7 @@ func UploadLogo(c *gin.Context) {
 	}
 	contentType := fileHeader.Header.Get("Content-Type")
 	if !allowedTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "非法的文件类型，只支持图片文件",
 		})
@@ -653,7 +654,7 @@ func UploadLogo(c *gin.Context) {
 	logoData, ext, err := minio.ProcessLogoContext(c.Request.Context(), fileHeader)
 	if err != nil {
 		log.Printf("处理logo图片失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "处理图片失败",
 		})
@@ -664,7 +665,7 @@ func UploadLogo(c *gin.Context) {
 	objectName, finalFileSize, err := minio.UploadLogoContext(c.Request.Context(), logoData, ext)
 	if err != nil {
 		log.Printf("上传logo失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "上传logo失败",
 		})
@@ -717,19 +718,23 @@ func UploadFavicon(c *gin.Context) {
 	// 获取当前用户
 	user, exists := c.Get("user")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userModel := user.(*gormdb.User)
+	userModel, userValid := user.(*gormdb.User)
+	if !userValid || userModel == nil {
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{"message": "登录状态无效，请重新登录"})
+		return
+	}
 
 	// 获取上传的文件
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "获取文件失败",
 		})
@@ -738,7 +743,7 @@ func UploadFavicon(c *gin.Context) {
 
 	// 检查文件大小（限制1MB，favicon通常很小）
 	if fileHeader.Size > 1*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "Favicon文件大小不能超过1MB",
 		})
@@ -751,13 +756,13 @@ func UploadFavicon(c *gin.Context) {
 	if err != nil {
 		log.Printf("上传favicon失败: %v", err)
 		if errors.Is(err, storage.ErrFileTypeNotAllowed) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "非法的Favicon文件，只支持真实 PNG 或 ICO",
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "上传favicon失败",
 		})
@@ -807,17 +812,17 @@ func GetPendingApprovals(c *gin.Context) {
 	// 检查管理员权限
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, err := userRepo.GetUserByName(username.(string))
 	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -825,7 +830,7 @@ func GetPendingApprovals(c *gin.Context) {
 	}
 
 	if !hasRoleGORM(currentUser, "admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -844,7 +849,7 @@ func GetPendingApprovals(c *gin.Context) {
 	}
 	limit, page, offset, paginationErr := gormdb.NormalizeOperatorCertPage(limit, page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "分页参数过大",
 		})
@@ -855,7 +860,7 @@ func GetPendingApprovals(c *gin.Context) {
 	status, _ := strconv.Atoi(c.DefaultQuery("status", "0"))
 
 	// 根据状态获取用户列表（包含所有操作证）
-	certRepo := gormdb.NewOperatorCertRepository()
+	certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 	var userWithCerts []*gormdb.UserWithCerts
 	var total int64
 
@@ -864,7 +869,7 @@ func GetPendingApprovals(c *gin.Context) {
 		userList, err := userRepo.ListByApprovalStatus(0, limit, offset)
 		if err != nil {
 			log.Printf("获取待审批用户失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "获取待审批用户失败",
 			})
@@ -875,7 +880,7 @@ func GetPendingApprovals(c *gin.Context) {
 		count, err := userRepo.CountByApprovalStatus(0)
 		if err != nil {
 			log.Printf("获取待审批用户总数失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "获取待审批用户总数失败",
 			})
@@ -892,9 +897,9 @@ func GetPendingApprovals(c *gin.Context) {
 		// 利用 IN 语句批量查询所有用户的证书
 		var allCerts []*gormdb.OperatorCert
 		if len(userIDs) > 0 {
-			if err := gormdb.Get().Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts).Error; err != nil {
+			if err := gormdb.Get().WithContext(c.Request.Context()).Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts).Error; err != nil {
 				log.Printf("获取待审批用户操作证失败: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "获取待审批用户操作证失败",
 				})
@@ -921,7 +926,7 @@ func GetPendingApprovals(c *gin.Context) {
 		userWithCerts, total, err = certRepo.ListRejectedWithCerts(limit, offset)
 		if err != nil {
 			log.Printf("获取已拒绝用户失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "获取已拒绝用户失败",
 			})
@@ -932,7 +937,7 @@ func GetPendingApprovals(c *gin.Context) {
 		userList, err := userRepo.ListByApprovalStatus(1, limit, offset)
 		if err != nil {
 			log.Printf("获取已通过用户失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "获取已通过用户失败",
 			})
@@ -943,7 +948,7 @@ func GetPendingApprovals(c *gin.Context) {
 		count, err := userRepo.CountByApprovalStatus(1)
 		if err != nil {
 			log.Printf("获取已通过用户总数失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "获取已通过用户总数失败",
 			})
@@ -960,9 +965,9 @@ func GetPendingApprovals(c *gin.Context) {
 		// 【性能优化 步骤2】利用 IN 语句，使用 1 条 SQL 查出所有用户的证书
 		var allCerts []*gormdb.OperatorCert
 		if len(userIDs) > 0 {
-			if err := gormdb.Get().Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts).Error; err != nil {
+			if err := gormdb.Get().WithContext(c.Request.Context()).Where("user_id IN ?", userIDs).Order("id DESC").Find(&allCerts).Error; err != nil {
 				log.Printf("获取已通过用户操作证失败: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
+				writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 					"code":    500,
 					"message": "获取已通过用户操作证失败",
 				})
@@ -1000,7 +1005,7 @@ func GetPendingApprovals(c *gin.Context) {
 			"phone":           u.Phone,
 			"address":         u.Address,
 			"approval_status": u.ApprovalStatus,
-			"created_at":      u.CreateTime.Format("2006-01-02 15:04:05"),
+			"created_at":      common.FormatAPITime(u.CreateTime),
 			"has_cert":        len(certs) > 0,
 			"certs":           make([]gin.H, 0, len(certs)), // 新增：所有操作证列表
 		}
@@ -1013,13 +1018,13 @@ func GetPendingApprovals(c *gin.Context) {
 				"file_name":   cert.FileName,
 				"file_size":   cert.FileSize,
 				"file_type":   cert.FileType,
-				"upload_time": cert.UploadTime.Format("2006-01-02 15:04:05"),
+				"upload_time": common.FormatAPITime(cert.UploadTime),
 				"file_url":    minio.GetFileURL(cert.MinioPath),
 				"status":      cert.Status,
 				"review_note": cert.ReviewNote,
 			}
 			if cert.ReviewTime != nil {
-				certData["review_time"] = cert.ReviewTime.Format("2006-01-02 15:04:05")
+				certData["review_time"] = common.FormatAPITime(cert.ReviewTime)
 			}
 			if cert.ReviewerID != nil {
 				certData["reviewer_id"] = *cert.ReviewerID
@@ -1047,7 +1052,7 @@ func GetPendingApprovals(c *gin.Context) {
 				"file_name":   targetCert.FileName,
 				"file_size":   targetCert.FileSize,
 				"file_type":   targetCert.FileType,
-				"upload_time": targetCert.UploadTime.Format("2006-01-02 15:04:05"),
+				"upload_time": common.FormatAPITime(targetCert.UploadTime),
 				"file_url":    minio.GetFileURL(targetCert.MinioPath),
 				"status":      targetCert.Status,
 				"review_note": targetCert.ReviewNote,
@@ -1070,7 +1075,7 @@ func GetPendingApprovals(c *gin.Context) {
 		}
 
 		if reviewTime != nil {
-			item["review_time"] = reviewTime.Format("2006-01-02 15:04:05")
+			item["review_time"] = common.FormatAPITime(reviewTime)
 		}
 		if reviewerID != nil {
 			item["reviewer_id"] = *reviewerID
@@ -1103,17 +1108,17 @@ func ApproveUser(c *gin.Context) {
 	// 检查管理员权限
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, err := userRepo.GetUserByName(username.(string))
 	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -1121,7 +1126,7 @@ func ApproveUser(c *gin.Context) {
 	}
 
 	if !hasRoleGORM(currentUser, "admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -1132,7 +1137,7 @@ func ApproveUser(c *gin.Context) {
 	idStr := c.Param("id")
 	userID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的用户ID",
 		})
@@ -1142,7 +1147,7 @@ func ApproveUser(c *gin.Context) {
 	// 获取审批请求
 	var req ApprovalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -1151,7 +1156,7 @@ func ApproveUser(c *gin.Context) {
 
 	// 检查审批状态是否有效
 	if req.Status != 1 && req.Status != 2 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的审批状态",
 		})
@@ -1161,7 +1166,7 @@ func ApproveUser(c *gin.Context) {
 	// 获取目标用户
 	targetUser, err := userRepo.GetUserByID(userID)
 	if err != nil || targetUser == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -1172,7 +1177,7 @@ func ApproveUser(c *gin.Context) {
 	err = userRepo.UpdateUserApproval(userID, req.Status, currentUser.ID, req.Note)
 	if err != nil {
 		log.Printf("更新审批状态失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新审批状态失败",
 		})
@@ -1220,7 +1225,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	// 检查管理员权限
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
@@ -1236,11 +1241,11 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	if userCache != nil {
 		currentUser, err = userCache.GetUserByName(ctx, username.(string))
 	} else {
-		userRepo := gormdb.NewUserRepository()
+		userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 		currentUser, err = userRepo.GetUserByName(username.(string))
 	}
 	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -1248,7 +1253,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	}
 
 	if !hasRoleGORM(currentUser, "admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -1259,7 +1264,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	idStr := c.Param("id")
 	certID, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的操作证ID",
 		})
@@ -1269,7 +1274,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	// 获取审批请求
 	var req ApprovalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -1278,7 +1283,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 
 	// 检查审批状态是否有效
 	if req.Status != 1 && req.Status != 2 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的审批状态",
 		})
@@ -1292,18 +1297,18 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	if certCache != nil {
 		cert, err = certCache.GetCertByID(ctx, certID)
 	} else {
-		certRepo := gormdb.NewOperatorCertRepository()
+		certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 		cert, err = certRepo.GetByID(certID)
 	}
 	if err != nil || cert == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "操作证不存在",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	var targetUserName string
 	var oldCallSign string
 	if targetUser, userErr := userRepo.GetUserByID(cert.UserID); userErr == nil && targetUser != nil {
@@ -1312,7 +1317,7 @@ func ApproveOperatorCertificate(c *gin.Context) {
 	}
 
 	// 更新操作证审批状态
-	certRepo := gormdb.NewOperatorCertRepository()
+	certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 	if req.Status == 1 {
 		err = certRepo.ApproveCert(certID, currentUser.ID, req.Note)
 	} else {
@@ -1321,14 +1326,14 @@ func ApproveOperatorCertificate(c *gin.Context) {
 
 	if err != nil {
 		if err == gormdb.ErrCallSignConflict {
-			c.JSON(http.StatusConflict, gin.H{
+			writeErrorResponse(c, http.StatusConflict, gin.H{
 				"code":    409,
 				"message": "呼号已被使用",
 			})
 			return
 		}
 		log.Printf("更新操作证审批状态失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "更新审批状态失败",
 		})
@@ -1403,17 +1408,17 @@ func GetCertificateApprovals(c *gin.Context) {
 	// 检查管理员权限
 	username, exists := c.Get("username")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "未授权",
 		})
 		return
 	}
 
-	userRepo := gormdb.NewUserRepository()
+	userRepo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	currentUser, err := userRepo.GetUserByName(username.(string))
 	if err != nil || currentUser == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
+		writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 			"code":    401,
 			"message": "用户不存在",
 		})
@@ -1421,7 +1426,7 @@ func GetCertificateApprovals(c *gin.Context) {
 	}
 
 	if !hasRoleGORM(currentUser, "admin") {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "需要管理员权限",
 		})
@@ -1442,10 +1447,10 @@ func GetCertificateApprovals(c *gin.Context) {
 	// 获取状态参数：0=待审核, 1=已通过, 2=已拒绝, -1=全部
 	status, _ := strconv.Atoi(c.DefaultQuery("status", "-1"))
 
-	certRepo := gormdb.NewOperatorCertRepository()
+	certRepo := gormdb.NewOperatorCertRepository().WithContext(c.Request.Context())
 	limit, page, offset, paginationErr := gormdb.NormalizeOperatorCertPage(limit, page)
 	if paginationErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "分页参数过大",
 		})
@@ -1454,7 +1459,7 @@ func GetCertificateApprovals(c *gin.Context) {
 	approvals, total, err := certRepo.ListCertificateApprovals(status, limit, offset)
 	if err != nil {
 		log.Printf("获取操作证审批列表失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取操作证审批列表失败",
 		})
@@ -1477,7 +1482,7 @@ func GetCertificateApprovals(c *gin.Context) {
 			"file_name":   a.FileName,
 			"file_size":   a.FileSize,
 			"file_type":   a.FileType,
-			"upload_time": a.UploadTime.Format("2006-01-02 15:04:05"),
+			"upload_time": common.FormatAPITime(a.UploadTime),
 			"file_url":    minio.GetFileURL(a.MinioPath),
 			"status":      a.Status,
 			"review_note": a.ReviewNote,
@@ -1485,7 +1490,7 @@ func GetCertificateApprovals(c *gin.Context) {
 			"is_replaced": isReplaced,
 		}
 		if a.ReviewTime != nil {
-			item["review_time"] = a.ReviewTime.Format("2006-01-02 15:04:05")
+			item["review_time"] = common.FormatAPITime(a.ReviewTime)
 		}
 		if a.ReviewerID != nil {
 			item["reviewer_id"] = *a.ReviewerID

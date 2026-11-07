@@ -2,7 +2,7 @@
  * PTT 按钮组件
  */
 
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 import {
   Button,
   Typography,
@@ -50,6 +50,26 @@ export const PTTButton: React.FC<PTTButtonProps> = ({
 }) => {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const keyboardPressed = useRef(false)
+  const releaseCallback = useRef(onMouseUp)
+  useEffect(() => { releaseCallback.current = onMouseUp }, [onMouseUp])
+  const releaseKeyboard = () => {
+    if (!keyboardPressed.current) return
+    keyboardPressed.current = false
+    releaseCallback.current()
+  }
+  useEffect(() => {
+    if (disabled && keyboardPressed.current) {
+      keyboardPressed.current = false
+      releaseCallback.current()
+    }
+    return () => {
+      if (keyboardPressed.current) {
+        keyboardPressed.current = false
+        releaseCallback.current()
+      }
+    }
+  }, [disabled])
 
   return (
     <Button
@@ -61,6 +81,23 @@ export const PTTButton: React.FC<PTTButtonProps> = ({
       onMouseLeave={onMouseLeave}
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchEnd}
+      aria-label={isMobile ? 'PTT 按住说话' : '按住说话'}
+      aria-pressed={isPressed}
+      onKeyDown={(event) => {
+        if (event.key !== ' ' && event.key !== 'Enter') return
+        event.preventDefault()
+        if (!disabled && !event.repeat && !keyboardPressed.current) {
+          keyboardPressed.current = true
+          onMouseDown()
+        }
+      }}
+      onKeyUp={(event) => {
+        if (event.key !== ' ' && event.key !== 'Enter') return
+        event.preventDefault()
+        releaseKeyboard()
+      }}
+      onBlur={releaseKeyboard}
       sx={{
         width: fullWidth ? '100%' : undefined,
         minWidth: fullWidth ? '100%' : (isMobile ? 100 : 140),

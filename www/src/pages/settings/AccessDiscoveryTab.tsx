@@ -24,7 +24,7 @@ export function AccessDiscoveryTab({ value, config, setConfig, loading, onSave }
       <Box sx={{ px: 2, maxWidth: 760 }}>
         <Card>
           <CardContent>
-            <Typography variant="h6" gutterBottom>设备接入点发现</Typography>
+            <Typography component="h2" variant="h6" gutterBottom>设备接入点发现</Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
                 <TextField

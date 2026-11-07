@@ -1,3 +1,4 @@
+import { setAPITimezone } from '../utils/apiTime'
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig, type AxiosError } from 'axios'
 
 const BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '')
@@ -85,7 +86,7 @@ class ApiClient {
 
     // 响应拦截器 - 处理错误
     this.client.interceptors.response.use(
-      (response: AxiosResponse) => response,
+      (response: AxiosResponse) => { setAPITimezone(response.headers['x-database-timezone']); return response },
       async (error: AxiosError) => {
         const status = error.response?.status
         const originalConfig = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined

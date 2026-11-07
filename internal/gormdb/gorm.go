@@ -2,6 +2,7 @@ package gormdb
 
 import (
 	"context"
+	"draarl/internal/observability"
 	"fmt"
 	"log"
 	"strings"
@@ -32,6 +33,7 @@ type Config struct {
 	DSN          string
 	MaxOpenConns int
 	MaxIdleConns int
+	MaxIdleTime  int
 	MaxLifetime  int
 	LogLevel     string
 	// Timezone is the same IANA timezone used by the MySQL DSN. Empty/Local
@@ -41,6 +43,26 @@ type Config struct {
 
 // Init 初始化 GORM 数据库连接
 func Init(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("database config is required")
+	}
+	configCopy := *cfg
+	cfg = &configCopy
+	if cfg.MaxOpenConns <= 0 {
+		cfg.MaxOpenConns = 25
+	}
+	if cfg.MaxIdleConns <= 0 {
+		cfg.MaxIdleConns = 5
+	}
+	if cfg.MaxIdleConns > cfg.MaxOpenConns {
+		cfg.MaxIdleConns = cfg.MaxOpenConns
+	}
+	if cfg.MaxLifetime <= 0 {
+		cfg.MaxLifetime = 300
+	}
+	if cfg.MaxIdleTime <= 0 {
+		cfg.MaxIdleTime = 30
+	}
 	managerMu.Lock()
 	defer managerMu.Unlock()
 
@@ -82,6 +104,9 @@ func Init(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect database: %w", err)
 	}
+	if err := observability.InstrumentDatabase(newDB); err != nil {
+		return fmt.Errorf("database instrumentation: %w", err)
+	}
 	manager.db = newDB
 
 	// 获取底层的 sql.DB
@@ -96,10 +121,12 @@ func Init(cfg *Config) error {
 	sqlDB.SetConnMaxLifetime(time.Duration(cfg.MaxLifetime) * time.Second)
 	// 设置连接最大空闲时间为 30 秒，避免使用已失效的连接
 	// MySQL wait_timeout 默认 8 小时，但网络环境可能导致连接提前失效
-	sqlDB.SetConnMaxIdleTime(30 * time.Second)
+	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.MaxIdleTime) * time.Second)
 
 	// 验证连接
-	if err = sqlDB.Ping(); err != nil {
+	pingCtx, cancelPing := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelPing()
+	if err = sqlDB.PingContext(pingCtx); err != nil {
 		_ = sqlDB.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}

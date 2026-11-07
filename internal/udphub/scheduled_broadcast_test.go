@@ -136,10 +136,12 @@ func TestScheduledBroadcastSkipsWithoutAnyReachableReceiver(t *testing.T) {
 	edgeReachable := false
 	released := 0
 	SetCenterInterconnectHooks(CenterInterconnectHooks{
-		Activate:             func(*CenterLocalSource) error { return nil },
-		AcquireBroadcast:     func(uint, uint64, time.Time) bool { return true },
-		ReleaseBroadcast:     func(uint, uint64) { released++ },
-		HasBroadcastReceiver: func(uint64) bool { return edgeReachable },
+		Activate:         func(*CenterLocalSource) error { return nil },
+		AcquireBroadcast: func(uint, uint64, time.Time) bool { return true },
+		ReleaseBroadcast: func(uint, uint64) { released++ },
+		HasBroadcastReceiver: func(groupID int, domainID uint64) bool {
+			return edgeReachable && groupID == env.groupA && domainID == GetActiveCommunicationDomainID(env.groupA)
+		},
 	})
 	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
 
@@ -157,6 +159,25 @@ func TestScheduledBroadcastSkipsWithoutAnyReachableReceiver(t *testing.T) {
 	}
 }
 
+func TestScheduledBroadcastDoesNotCountLinkedGroupReceivers(t *testing.T) {
+	env := setupRouteTest(t, 62150, true)
+	oldHooks := centerHooks()
+	SetCenterInterconnectHooks(CenterInterconnectHooks{})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+	env.udpA1.device.ISOnline, env.udpA2.device.ISOnline = false, false
+	env.wsSource.disableRecv, env.wsA.disableRecv = true, true
+	ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+	if lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 25, time.Now(), 5*time.Second); lease != nil || result != ScheduledBroadcastNoReceiver {
+		t.Fatalf("B-only receivers allowed an A announcement: lease=%v result=%s", lease, result)
+	}
+	env.wsA.disableRecv = false
+	now := time.Now()
+	MarkAcceptedVoiceGroups([]int{env.groupB}, now)
+	if lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 26, now, 5*time.Second); lease != nil || result != ScheduledBroadcastRecentVoice {
+		t.Fatalf("announcement ignored linked group conversation: lease=%v result=%s", lease, result)
+	}
+}
+
 func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T) {
 	env := setupRouteTest(t, 62200, true)
 	ghostConn := listenRouteTestUDP(t)
@@ -171,12 +192,14 @@ func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T
 	var relayedSourceGroupID int
 	var relayedDomainID uint64
 	var relayedPacket []byte
+	peerRelays := 0
 	SetCenterInterconnectHooks(CenterInterconnectHooks{
 		RelayBroadcast: func(runID uint, sourceGroupID int, domainID uint64, data []byte) error {
 			relayedRunID, relayedSourceGroupID, relayedDomainID = runID, sourceGroupID, domainID
 			relayedPacket = append([]byte(nil), data...)
 			return nil
 		},
+		RelayPeer: func(CenterLocalSource, []byte) error { peerRelays++; return nil },
 	})
 	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
 
@@ -207,11 +230,11 @@ func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !frame.UDPQueued || !frame.EdgeRelayed || frame.WSSent != 3 || frame.WSDropped != 0 {
+	if !frame.UDPQueued || !frame.EdgeRelayed || frame.WSSent != 2 || frame.WSDropped != 0 {
 		t.Fatalf("route result=%#v", frame)
 	}
 	stats := source.Finish()
-	if stats.SentPackets != 1 || stats.DroppedPackets != 0 || stats.UDPTargetsSent != 4 || stats.WSTargetsSent != 3 || stats.EdgeRelayErrors != 0 {
+	if stats.SentPackets != 1 || stats.DroppedPackets != 0 || stats.UDPTargetsSent != 3 || stats.WSTargetsSent != 2 || stats.EdgeRelayErrors != 0 {
 		t.Fatalf("source stats=%#v", stats)
 	}
 
@@ -220,7 +243,7 @@ func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T
 		protocol.DraARLTypeOpus16K, protocol.DraARLDevModelUnknown,
 		0, SystemBroadcastCallSign, payload,
 	)
-	for _, endpoint := range []routeTestEndpoint{env.udpA1, env.udpA2, env.udpB} {
+	for _, endpoint := range []routeTestEndpoint{env.udpA1, env.udpA2} {
 		assertRouteTestPacket(t, readRouteTestPacket(t, endpoint.conn), want, payload)
 	}
 	ghostWant, ok := protocol.WithSourceGroupID(want, env.groupA)
@@ -230,7 +253,11 @@ func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T
 	assertRouteTestPacket(t, readRouteTestPacket(t, ghostConn), ghostWant, payload)
 	assertNoRouteTestPacket(t, ghostConn)
 	assertNoRouteTestPacket(t, env.udpC.conn)
-	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+	assertNoRouteTestPacket(t, env.udpB.conn)
+	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-source", "ws-a"}, want, payload, []int{env.groupA})
+	if peerRelays != 0 || !LastAcceptedVoiceAt([]int{env.groupB}).IsZero() {
+		t.Fatalf("announcement escaped source group: peer relays=%d linked activity=%v", peerRelays, LastAcceptedVoiceAt([]int{env.groupB}))
+	}
 	if relayedRunID != 30 || relayedSourceGroupID != env.groupA || relayedDomainID != lease.domainID || !bytes.Equal(relayedPacket, want) {
 		t.Fatalf("edge relay run=%d source=%d domain=%d packet_match=%t", relayedRunID, relayedSourceGroupID, relayedDomainID, bytes.Equal(relayedPacket, want))
 	}

@@ -32,11 +32,8 @@ func TestGhostClientPreferenceMySQL(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = Close() })
 	db := Get()
-	if err := db.AutoMigrate(
-		&User{}, &Group{}, &GroupMember{}, &GroupLink{}, &Device{}, &DeviceConfig{}, &CommRecord{},
-		&OperatorCert{}, &Logbook{}, &UserDevicePreference{}, &GhostClientPreference{},
-		&GhostClientSubscription{}, &UserRadioPreset{},
-	); err != nil {
+	// Cascading deletion also touches broadcast state; use the current schema.
+	if err := AutoMigrate(); err != nil {
 		t.Fatal(err)
 	}
 

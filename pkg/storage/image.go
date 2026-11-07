@@ -54,7 +54,7 @@ func ProcessAvatarContext(ctx context.Context, fileHeader *multipart.FileHeader)
 	if err != nil {
 		return nil, "", fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// 解压炸弹防护：先校验像素尺寸再全量解码
 	if _, err := decodeImageConfigSafe(&contextReader{ctx: ctx, reader: file}); err != nil {
@@ -209,7 +209,7 @@ func ProcessLogoContext(ctx context.Context, fileHeader *multipart.FileHeader) (
 	if err != nil {
 		return nil, "", fmt.Errorf("打开文件失败: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	buf := make([]byte, fileHeader.Size)
 	_, err = io.ReadFull(&contextReader{ctx: ctx, reader: file}, buf)

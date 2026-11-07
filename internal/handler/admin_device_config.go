@@ -23,7 +23,7 @@ func AdminGetDeviceConfig(c *gin.Context) {
 	deviceIDStr := c.Param("id")
 	deviceID, err := strconv.Atoi(deviceIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备 ID",
 		})
@@ -33,7 +33,7 @@ func AdminGetDeviceConfig(c *gin.Context) {
 	// 获取设备配置
 	configs, err := udphub.GetDeviceConfigsFromDB(deviceID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取设备配置失败",
 		})
@@ -53,7 +53,7 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	deviceIDStr := c.Param("id")
 	deviceID, err := strconv.Atoi(deviceIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备 ID",
 		})
@@ -63,7 +63,7 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	// 解析请求
 	var req UpdateDeviceConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的请求参数",
 		})
@@ -134,14 +134,14 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	}
 
 	if len(configs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "未提供任何配置项",
 		})
 		return
 	}
 	if err := validateDeviceConfigValues(configs); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "配置值不合法: " + err.Error(),
 		})
@@ -150,7 +150,7 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 
 	// 保存配置到数据库（如果设备在线会自动下发）
 	if err := udphub.SaveDeviceConfigsToDB(deviceID, configs); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "保存配置失败",
 		})
@@ -194,7 +194,7 @@ func AdminSyncDeviceConfig(c *gin.Context) {
 	deviceIDStr := c.Param("id")
 	deviceID, err := strconv.Atoi(deviceIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "无效的设备 ID",
 		})
@@ -204,7 +204,7 @@ func AdminSyncDeviceConfig(c *gin.Context) {
 	// 获取设备配置
 	configs, err := udphub.GetDeviceConfigsFromDB(deviceID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取设备配置失败",
 		})
@@ -212,7 +212,7 @@ func AdminSyncDeviceConfig(c *gin.Context) {
 	}
 
 	if len(configs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "设备没有保存的配置",
 		})

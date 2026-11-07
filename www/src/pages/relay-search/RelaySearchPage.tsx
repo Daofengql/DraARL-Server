@@ -78,7 +78,7 @@ export function RelaySearchPage() {
         {/* 标题 */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
           <SettingsInputAntenna color="primary" sx={{ fontSize: 32 }} />
-          <Typography variant="h4">中继台查询</Typography>
+          <Typography component="h1" variant="h4">中继台查询</Typography>
         </Box>
 
         {/* 搜索区域 */}

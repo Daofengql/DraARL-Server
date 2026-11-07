@@ -41,7 +41,7 @@ export function OperatorLogsTab({ value }: { value: number }) {
     <TabPanel value={value} index={operatorLogsTabIndex}>
       <Box sx={{ px: 2 }}>
         <Card><CardContent>
-          <Typography variant="h6" gutterBottom>操作日志</Typography>
+          <Typography component="h2" variant="h6" gutterBottom>操作日志</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>查看系统操作日志记录</Typography>
           <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, mb: 2 }}>
             <TextField

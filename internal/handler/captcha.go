@@ -20,7 +20,7 @@ func VerifyCaptchaCode(captchaID, captchaCode string) bool {
 func GetCaptcha(c *gin.Context) {
 	result, err := captcha.Generate()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "生成验证码失败",
 		})
@@ -44,7 +44,7 @@ type VerifyCaptchaRequest struct {
 func VerifyCaptcha(c *gin.Context) {
 	var req VerifyCaptchaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -52,7 +52,7 @@ func VerifyCaptcha(c *gin.Context) {
 	}
 
 	if !captcha.Verify(req.CaptchaID, req.CaptchaCode, true) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "验证码错误或已过期",
 		})

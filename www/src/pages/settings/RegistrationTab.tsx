@@ -17,7 +17,7 @@ export function RegistrationTab({ value, config, setConfig, loading, onSave }: R
     <TabPanel value={value} index={5}>
       <Box sx={{ px: 2, maxWidth: 600 }}>
         <Card><CardContent>
-          <Typography variant="h6" gutterBottom>注册设置</Typography>
+          <Typography component="h2" variant="h6" gutterBottom>注册设置</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
             配置用户注册流程中的验证要求
           </Typography>

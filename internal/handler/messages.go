@@ -100,17 +100,17 @@ func requireMessageScope(c *gin.Context) (uint, []int, bool) {
 	}
 	groupID, err := strconv.ParseUint(groupParam, 10, 32)
 	if err != nil || groupID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的群组ID"})
 		return 0, nil, false
 	}
-	group, err := gormdb.NewGroupRepository().GetGroupByID(int(groupID))
+	group, err := gormdb.NewGroupRepository().WithContext(c.Request.Context()).GetGroupByID(int(groupID))
 	if err != nil {
 		log.Printf("[MESSAGES] 查询群组失败 group=%d err=%v", groupID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询群组失败"})
 		return 0, nil, false
 	}
 	if group == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "群组不存在"})
 		return 0, nil, false
 	}
 	if _, allowed := requireGroupViewAccess(c, group); !allowed {
@@ -197,7 +197,7 @@ func GetGroupMessages(c *gin.Context) {
 	messageType, err := parseMessageType(c.DefaultQuery("message_type", "all"))
 	if err != nil {
 		messageParameterRejects.Add(1)
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息类型"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息类型"})
 		return
 	}
 	defaultLimit, maxLimit := middleware.MessageAPIPageLimits(c)
@@ -206,7 +206,7 @@ func GetGroupMessages(c *gin.Context) {
 		parsed, err := strconv.Atoi(rawLimit)
 		if err != nil || parsed <= 0 || parsed > maxLimit {
 			messageParameterRejects.Add(1)
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code": http.StatusBadRequest, "error": "invalid_message_limit",
 				"message": fmt.Sprintf("limit必须在1到%d之间", maxLimit),
 			})
@@ -220,7 +220,7 @@ func GetGroupMessages(c *gin.Context) {
 		beforeTime, beforeID, err := decodeMessageCursor(encodedCursor)
 		if err != nil {
 			messageCursorRejects.Add(1)
-			c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息游标"})
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息游标"})
 			return
 		}
 		query.BeforeTime = &beforeTime
@@ -228,12 +228,12 @@ func GetGroupMessages(c *gin.Context) {
 	}
 
 	queryStarted := time.Now()
-	records, hasMore, err := gormdb.NewMessageRepository().List(query)
+	records, hasMore, err := gormdb.NewMessageRepository().WithContext(c.Request.Context()).List(query)
 	observeMessageQuery(false, time.Since(queryStarted))
 	if err != nil {
 		messageQueryErrors.Add(1)
 		log.Printf("[MESSAGES] 查询消息列表失败 group=%d err=%v", requestedGroupID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询消息失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询消息失败"})
 		return
 	}
 	messages := make([]MessageResponse, len(records))
@@ -253,7 +253,7 @@ func GetGroupMessages(c *gin.Context) {
 		nextCursor, err = encodeMessageCursor(records[len(records)-1].StartTime, records[len(records)-1].ID)
 		if err != nil {
 			log.Printf("[MESSAGES] 生成消息游标失败 group=%d err=%v", requestedGroupID, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "生成消息游标失败"})
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "生成消息游标失败"})
 			return
 		}
 	}
@@ -279,20 +279,20 @@ func GetGroupMessage(c *gin.Context) {
 	messageID, err := strconv.ParseUint(c.Param("message_id"), 10, 32)
 	if err != nil || messageID == 0 {
 		messageParameterRejects.Add(1)
-		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息ID"})
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效的消息ID"})
 		return
 	}
 	queryStarted := time.Now()
-	record, err := gormdb.NewMessageRepository().GetByID(uint(messageID), groupIDs)
+	record, err := gormdb.NewMessageRepository().WithContext(c.Request.Context()).GetByID(uint(messageID), groupIDs)
 	observeMessageQuery(true, time.Since(queryStarted))
 	if err != nil {
 		messageQueryErrors.Add(1)
 		log.Printf("[MESSAGES] 查询消息详情失败 group=%d message=%d err=%v", requestedGroupID, messageID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询消息失败"})
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询消息失败"})
 		return
 	}
 	if record == nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "消息不存在"})
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "消息不存在"})
 		return
 	}
 	response := toMessageResponse(record, requestedGroupID)

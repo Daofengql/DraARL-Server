@@ -1,3 +1,5 @@
+import { parseAPIDate } from '../../utils/apiTime'
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useEffect, useState } from 'react'
 import {
   Box,
@@ -104,7 +106,7 @@ export function ApprovalsPage() {
       setRejectedUsers(rejectedData.items || [])
     } catch (err: any) {
       console.error('Failed to load approvals:', err)
-      setError(err.response?.data?.message || '加载数据失败')
+      setError(getErrorMessage(err, '加载数据失败'))
     } finally {
       setLoading(false)
     }
@@ -130,7 +132,7 @@ export function ApprovalsPage() {
       }
     } catch (err: any) {
       console.error('Failed to load approvals:', err)
-      setError(err.response?.data?.message || '加载数据失败')
+      setError(getErrorMessage(err, '加载数据失败'))
     } finally {
       setLoading(false)
     }
@@ -169,7 +171,7 @@ export function ApprovalsPage() {
       handleCloseApproveDialog()
       loadPendingApprovals()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '操作失败')
+      showMessage('error', getErrorMessage(err, '操作失败'))
     } finally {
       setSubmitting(false)
     }
@@ -197,7 +199,7 @@ export function ApprovalsPage() {
       handleCloseApproveDialog()
       loadPendingApprovals()
     } catch (err: any) {
-      showMessage('error', err.response?.data?.message || '操作失败')
+      showMessage('error', getErrorMessage(err, '操作失败'))
     } finally {
       setSubmitting(false)
     }
@@ -315,7 +317,7 @@ export function ApprovalsPage() {
                       </TableCell>
                       <TableCell>
                         {user.created_at
-                          ? new Date(user.created_at).toLocaleString('zh-CN')
+                          ? parseAPIDate(user.created_at).toLocaleString('zh-CN')
                           : '-'}
                       </TableCell>
                       <TableCell>
@@ -409,7 +411,7 @@ export function ApprovalsPage() {
                       <TableCell>{user.phone || '-'}</TableCell>
                       <TableCell>
                         {user.review_time
-                          ? new Date(user.review_time).toLocaleString('zh-CN')
+                          ? parseAPIDate(user.review_time).toLocaleString('zh-CN')
                           : '-'}
                       </TableCell>
                       <TableCell>
@@ -483,7 +485,7 @@ export function ApprovalsPage() {
                       </TableCell>
                       <TableCell>
                         {user.review_time
-                          ? new Date(user.review_time).toLocaleString('zh-CN')
+                          ? parseAPIDate(user.review_time).toLocaleString('zh-CN')
                           : '-'}
                       </TableCell>
                       <TableCell>
@@ -559,7 +561,7 @@ export function ApprovalsPage() {
                     <Box sx={{ minWidth: 100, color: 'text.secondary' }}>注册时间</Box>
                     <Box>
                       {selectedUser.created_at
-                        ? new Date(selectedUser.created_at).toLocaleString('zh-CN')
+                        ? parseAPIDate(selectedUser.created_at).toLocaleString('zh-CN')
                         : '-'}
                     </Box>
                   </ListItem>

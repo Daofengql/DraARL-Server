@@ -1,0 +1,365 @@
+{
+  "date": "2026-11-07",
+  "suites": [
+    {
+      "suite": "handler-redis",
+      "passed": 223,
+      "skipped": 12,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "auth-redis",
+      "passed": 18,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "device-list",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "authentication",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "group-password",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "group-query",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "radio-routing",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "group-membership",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "messages",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "recordings",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "client-resources",
+      "passed": 2,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "broadcast-api",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "broadcast-policy",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "node-storage",
+      "passed": 4,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "db-online-filter",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "message-migration",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "migration-recovery",
+      "passed": 2,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "ghost-preferences",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "operator-log",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "site-secrets",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "database-tracing",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "online-events",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "edge-ghost",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "device-cache",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "websocket-routing",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "broadcast-schema",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "broadcast-repository",
+      "passed": 17,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    },
+    {
+      "suite": "ffmpeg",
+      "passed": 1,
+      "skipped": 0,
+      "failed": [],
+      "success": true
+    }
+  ],
+  "suite_pass_rate": 1.0,
+  "statement_coverage": {
+    "draarl/internal/auth": {
+      "statements": 357,
+      "covered": 232,
+      "percent": 64.99
+    },
+    "draarl/internal/broadcast/media": {
+      "statements": 545,
+      "covered": 162,
+      "percent": 29.72
+    },
+    "draarl/internal/broadcast/model": {
+      "statements": 15,
+      "covered": 6,
+      "percent": 40.0
+    },
+    "draarl/internal/broadcast/repository": {
+      "statements": 1070,
+      "covered": 715,
+      "percent": 66.82
+    },
+    "draarl/internal/gormdb": {
+      "statements": 3253,
+      "covered": 733,
+      "percent": 22.53
+    },
+    "draarl/internal/handler": {
+      "statements": 9714,
+      "covered": 2965,
+      "percent": 30.52
+    },
+    "draarl/internal/udphub": {
+      "statements": 5543,
+      "covered": 195,
+      "percent": 3.52
+    },
+    "draarl/pkg/cache": {
+      "statements": 883,
+      "covered": 100,
+      "percent": 11.33
+    },
+    "draarl/pkg/websocket": {
+      "statements": 1049,
+      "covered": 18,
+      "percent": 1.72
+    }
+  },
+  "frontend": {
+    "legacy_tests": 13,
+    "vitest_tests": 31,
+    "core_utilities": {
+      "lines": {
+        "total": 82,
+        "covered": 82,
+        "skipped": 0,
+        "pct": 100
+      },
+      "statements": {
+        "total": 103,
+        "covered": 103,
+        "skipped": 0,
+        "pct": 100
+      },
+      "functions": {
+        "total": 23,
+        "covered": 23,
+        "skipped": 0,
+        "pct": 100
+      },
+      "branches": {
+        "total": 79,
+        "covered": 78,
+        "skipped": 0,
+        "pct": 98.73
+      },
+      "branchesTrue": {
+        "total": 0,
+        "covered": 0,
+        "skipped": 0,
+        "pct": "Unknown"
+      }
+    }
+  },
+  "integration_totals": {
+    "suites": 28,
+    "passed_including_subtests": 288,
+    "skipped": 12
+  },
+  "broadcast_isolation": {
+    "source_group_only": true,
+    "ordinary_voice_still_interconnected": true,
+    "center_udp_ws_and_udp_ghost": "passed",
+    "edge_udp_and_tls": "passed",
+    "linked_group_only_receivers_do_not_trigger_playback": "passed",
+    "recording_delivery_source_group_only": "passed",
+    "linux_race_runtime": "passed",
+    "deployed_image_smoke": {
+      "normal_voice_a_to_b": 1,
+      "broadcast_a": 9,
+      "broadcast_b": 0,
+      "run_status": "succeeded",
+      "image_id": "sha256:9d12ff955eeb566bb651250cc1da512df58334fc98532b16950402cbe45b9606"
+    },
+    "linux_race_database": {
+      "suites": [
+        {
+          "suite": "broadcast-api",
+          "passed": 1,
+          "skipped": 0,
+          "failed": [],
+          "success": true
+        },
+        {
+          "suite": "broadcast-repository",
+          "passed": 17,
+          "skipped": 0,
+          "failed": [],
+          "success": true
+        }
+      ],
+      "passed_including_subtests": 18,
+      "skipped": 0
+    }
+  },
+  "local_evidence_sha256": {
+    "output/integration-final/summary.json": "7d3da0484c9930ca116d0491d177e62791f480badf94f4495063d15ef76d5a6b",
+    "output/vm-integration-isolation-final.log": "8e64d3ab7734fed0595eabbc34a7815d175cff96a0b9113ffad7ffc6ca02ec49",
+    "output/vm-broadcast-isolation.log": "210b276cc3d7fcf59fa03c0e6dcbc2b4389e0aa04f4ad2937c802e36621ebb07",
+    "output/vm-broadcast-isolation-race.log": "a6335c74b5620f6fdb9ffdf95f0e37a9f29d101075ac6ff4b6efc1cb53c52c5a",
+    "output/vm-deployed-broadcast-isolation.log": "a2fe5cbbb4691e6fff4a979062edd6a2433dae25d92c4742cc13ef2438d7bebc",
+    "output/backend-broadcast-isolation.log": "090050b4d1604272818a0769da076e5ff983bd3a8a8802ff3936f5b8c7e24c7a",
+    "output/golangci-broadcast-isolation.log": "bc1988bf921b4da8e4a985cb6772edad177c0e408118ea21fcf3a645e1fdc016",
+    "output/vm-broadcast-isolation-db-race.log": "1bec302efc85c30fa4b86806691ea532b5d85989c223f50f6b205efc653608bd",
+    "output/integration-broadcast-isolation-race-summary.json": "a5f3967a367a7d3326d51c4f3dce69cc5362f0a413166ebafcb8da97adf0f2e1",
+    "output/security/govuln-linux-embed-isolation.jsonl": "9360e70c91f0a6c68934aba6422021c3be6dc7f5df487624e51b305ec4aadd91"
+  },
+  "source_test_sha256": {
+    "internal/udphub/scheduled_broadcast_test.go": "e0a6d5951159a343afcbde02716094674b93057d425ae6e950473fda59b2fb00",
+    "internal/interconnect/e2e_test.go": "563457d738d0bfc4569f4e3ad15f87e5a67cf74720a8feb057ec0d658e783ab5",
+    "internal/interconnect/group_broadcast_test.go": "1d167829dbf245c3755051c670893f2dfc7853ef98671ad932aaa5a406f05843",
+    "internal/handler/broadcast_mysql_test.go": "bb9514ec898bdff71cca4a28908dd9a4ca323662ab70bcdf92b30e687222b090",
+    "internal/broadcast/repository/transaction_mysql_test.go": "6effc08df44bc90159dee28fc52f27963c5d83462e083bf52b711a30a85547f0"
+  },
+  "govulncheck_linux_embed_final": {
+    "target": "./cmd/draarl",
+    "tags": [
+      "embed"
+    ],
+    "exit_code": 0,
+    "findings": 0,
+    "config": {
+      "protocol_version": "v1.0.0",
+      "scanner_name": "govulncheck",
+      "scanner_version": "v1.9.0",
+      "db": "https://vuln.go.dev",
+      "db_last_modified": "2026-11-05T23:49:57Z",
+      "go_version": "go1.27.3",
+      "scan_level": "symbol",
+      "scan_mode": "source"
+    },
+    "report": "output/security/govuln-linux-embed-isolation.jsonl",
+    "report_sha256": "9360e70c91f0a6c68934aba6422021c3be6dc7f5df487624e51b305ec4aadd91"
+  }
+}

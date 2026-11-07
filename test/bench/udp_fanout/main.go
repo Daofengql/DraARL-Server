@@ -136,7 +136,7 @@ func run() (runErr error) {
 	if err != nil {
 		return fmt.Errorf("open mysql: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxIdleTime(15 * time.Second)
@@ -148,7 +148,7 @@ func run() (runErr error) {
 	if err != nil {
 		return fmt.Errorf("reserve MySQL benchmark connection: %w", err)
 	}
-	defer lockConn.Close()
+	defer func() { _ = lockConn.Close() }()
 	var lockAcquired int
 	if err := lockConn.QueryRowContext(context.Background(), "SELECT GET_LOCK(?, 0)", benchLockName).Scan(&lockAcquired); err != nil {
 		return fmt.Errorf("acquire MySQL benchmark lock: %w", err)
@@ -325,7 +325,7 @@ func cleanupBenchAudioFiles(db *sql.DB, root string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	removed := 0
 	for rows.Next() {
@@ -536,7 +536,7 @@ func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int, adminOwn
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	userIDs := make([]int64, usersForClients(clients))
 	for i := range userIDs {
@@ -580,7 +580,7 @@ func setupBenchData(db *sql.DB, aesKey string, clients, groupCount int, adminOwn
 	if err != nil {
 		return nil, err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for i := 0; i < clients; i++ {
 		identity := identityForIndex(i)
 		result, err := stmt.Exec(fmt.Sprintf("bench-device-%05d", i), identity.dmrid, identity.ssid,
@@ -605,7 +605,7 @@ func cleanupBenchData(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	statements := []struct {
 		query string
 		args  []any
@@ -643,10 +643,14 @@ func identityForIndex(index int) benchIdentity {
 	n := index + 1
 	return benchIdentity{
 		username: usernameForUser(index / devicesPerUser),
-		ssid:     byte(ssid),
-		dmrid:    uint32(9100000 + index),
-		mac:      fmt.Sprintf("02:42:%02X:%02X:%02X:%02X", byte(n>>24), byte(n>>16), byte(n>>8), byte(n)),
-		ip:       net.IPv4(127, 64+byte(n/(254*254)), 1+byte((n/254)%254), 1+byte(n%254)),
+		// #nosec G115 -- Benchmark SSID is validated and generated payload bytes intentionally wrap modulo 256.
+		ssid: byte(ssid),
+		// #nosec G115 -- Synthetic client count is bounded by CLI validation; network identity bytes intentionally wrap.
+		dmrid: uint32(9100000 + index),
+		// #nosec G115 -- Synthetic client count is bounded by CLI validation; network identity bytes intentionally wrap.
+		mac: fmt.Sprintf("02:42:%02X:%02X:%02X:%02X", byte(n>>24), byte(n>>16), byte(n>>8), byte(n)),
+		// #nosec G115 -- Synthetic client count is bounded by CLI validation; network identity bytes intentionally wrap.
+		ip: net.IPv4(127, 64+byte(n/(254*254)), 1+byte((n/254)%254), 1+byte(n%254)),
 	}
 }
 
@@ -844,7 +848,7 @@ func (c *benchClient) readLoop() {
 		if !bytes.Equal(payload[:8], packetMarker[:]) || binary.BigEndian.Uint64(payload[8:16]) != metrics.id {
 			continue
 		}
-		sentAt := int64(binary.BigEndian.Uint64(payload[24:32]))
+		sentAt := int64(binary.BigEndian.Uint64(payload[24:32])) // #nosec G115 -- Bounded diagnostic rate and duration conversions in the benchmark CLI.
 		latencyUS := uint64(0)
 		if elapsed := time.Now().UnixNano() - sentAt; elapsed > 0 {
 			latencyUS = uint64(elapsed / 1000)
@@ -931,7 +935,7 @@ func runStage(clients []*benchClient, opts options, serverMeters []*processMeter
 			packet := buildVoicePacket(source.identity, opts.payload, stageID, sent)
 			if _, err := source.conn.WriteToUDP(packet, source.serverAddr()); err == nil {
 				sent++
-				expected += uint64(groupSizes[groupIndex] - 1)
+				expected += uint64(groupSizes[groupIndex] - 1) // #nosec G115 -- Bounded diagnostic rate and duration conversions in the benchmark CLI.
 			}
 		}
 		ticks++
@@ -1003,6 +1007,7 @@ func buildVoicePacket(identity benchIdentity, payloadSize int, stageID, sequence
 	binary.BigEndian.PutUint64(payload[16:24], sequence)
 	binary.BigEndian.PutUint64(payload[24:32], uint64(time.Now().UnixNano()))
 	for i := 32; i < len(payload); i++ {
+		// #nosec G115 -- Benchmark SSID is validated and generated payload bytes intentionally wrap modulo 256.
 		payload[i] = byte(i + int(sequence))
 	}
 	return protocol.EncodeDraARLv1(identity.username, benchPassword, identity.ssid, protocol.DraARLTypeOpus16K,

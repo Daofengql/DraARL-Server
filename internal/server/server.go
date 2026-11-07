@@ -24,12 +24,15 @@ type Server struct {
 	config *config.Configuration
 	engine *gin.Engine
 	server *http.Server
+	health *dependencyHealth
 }
 
 func New(cfg *config.Configuration) *Server {
 	engine := newHTTPEngine(cfg)
 	engine.Use(gin.Recovery())
 	engine.Use(securityHeadersMiddleware())
+	engine.Use(requestObservability())
+	engine.Use(databaseTimezoneHeader(cfg))
 	engine.Use(accessLogMiddleware())
 
 	allowedOrigins := cfg.GetAllowedOrigins()
@@ -50,6 +53,7 @@ func New(cfg *config.Configuration) *Server {
 	s := &Server{
 		config: cfg,
 		engine: engine,
+		health: newDependencyHealth(cfg),
 	}
 
 	// Initialize local storage synchronously and make a best-effort synchronous
@@ -83,6 +87,8 @@ func (s *Server) setupRoutes() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	s.engine.GET("/readyz", s.health.ready)
+	s.engine.GET("/metrics", middleware.AuthMiddleware(), middleware.LoadUserInfo(), middleware.RequireAdmin(), prometheusMetrics)
 	// 本地存储文件服务
 	s.engine.GET("/files/*key", handler.ServeLocalFile)
 
@@ -552,6 +558,9 @@ func (s *Server) Start() error {
 
 // Shutdown 优雅关闭 HTTP 服务
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.health != nil {
+		defer func() { _ = s.health.redis.Close() }()
+	}
 	if s.server == nil {
 		return nil
 	}
@@ -586,6 +595,7 @@ func originGuardMiddleware(allowedOriginSet map[string]struct{}) gin.HandlerFunc
 				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 				c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+				c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Trace-ID, X-Database-Timezone")
 				c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			} else {
 				c.Writer.Header().Set("Vary", "Origin, Referer")

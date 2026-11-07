@@ -12,7 +12,7 @@ func GetUDPPerformanceStats() map[string]interface{} {
 		"socket":         getUDPSocketBufferStats(),
 		"ghost_sessions": ghostsession.Global.Metrics(),
 		"ghost_packets":  GetGhostPacketMetrics(),
-		"security":      GetSecurityPacketMetrics(),
+		"security":       GetSecurityPacketMetrics(),
 	}
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		stats["websocket"] = GlobalMessageRouter.wsManager.GetDeliveryStats()

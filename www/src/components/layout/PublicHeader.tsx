@@ -134,6 +134,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
             />
           ) : (
             <Typography
+              component="div"
               variant="h6"
               sx={{
                 fontWeight: 600,

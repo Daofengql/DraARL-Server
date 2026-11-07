@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"draarl/internal/common"
 	"fmt"
 	"log"
 	"net/http"
@@ -39,7 +41,7 @@ type PreCheckResponse struct {
 func PreCheck(c *gin.Context) {
 	var req PreCheckRequest
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -48,7 +50,7 @@ func PreCheck(c *gin.Context) {
 
 	// 验证 MAC 地址格式
 	if !udphub.ValidateMAC(req.MAC) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "MAC 地址格式错误",
 		})
@@ -59,7 +61,7 @@ func PreCheck(c *gin.Context) {
 	ip := c.ClientIP()
 
 	// 查询用户
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(req.Username)
 	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -155,7 +157,7 @@ type RequestCodeRequest struct {
 func RequestCode(c *gin.Context) {
 	var req RequestCodeRequest
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -164,7 +166,7 @@ func RequestCode(c *gin.Context) {
 
 	// 验证 MAC 地址格式
 	if !udphub.ValidateMAC(req.MAC) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "MAC 地址格式错误",
 		})
@@ -177,7 +179,7 @@ func RequestCode(c *gin.Context) {
 	// 生成动态码
 	manager := udphub.GetPendingDeviceManager()
 	if manager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "服务未初始化",
 		})
@@ -186,7 +188,7 @@ func RequestCode(c *gin.Context) {
 
 	device, err := manager.RequestCode(mac, ip)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
@@ -218,7 +220,7 @@ type ConfirmBindRequest struct {
 func ConfirmBind(c *gin.Context) {
 	var req ConfirmBindRequest
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -227,7 +229,7 @@ func ConfirmBind(c *gin.Context) {
 
 	// 验证 MAC 地址格式
 	if !udphub.ValidateMAC(req.MAC) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "MAC 地址格式错误",
 		})
@@ -239,7 +241,7 @@ func ConfirmBind(c *gin.Context) {
 	// 查询绑定状态
 	manager := udphub.GetPendingDeviceManager()
 	if manager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "服务未初始化",
 		})
@@ -248,7 +250,7 @@ func ConfirmBind(c *gin.Context) {
 
 	device, err := manager.ConfirmBind(mac)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": err.Error(),
 		})
@@ -306,7 +308,13 @@ func listPendingConfiguredDynamicBindSSIDs(manager *udphub.PendingDeviceManager,
 }
 
 func listUserUsedDynamicBindSSIDs(userID int, manager *udphub.PendingDeviceManager, excludeMAC string) (map[int]struct{}, error) {
-	repo := gormdb.NewDeviceRepository()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return listUserUsedDynamicBindSSIDsContext(ctx, userID, manager, excludeMAC)
+}
+
+func listUserUsedDynamicBindSSIDsContext(ctx context.Context, userID int, manager *udphub.PendingDeviceManager, excludeMAC string) (map[int]struct{}, error) {
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	devices, err := repo.ListDevicesByOwnerID(userID)
 	if err != nil {
 		return nil, err
@@ -346,7 +354,7 @@ func buildReplaceableDynamicBindDevices(devices []*gormdb.Device, pendingUsed ma
 			CallSign:     callSign,
 			SSID:         int(device.SSID),
 			LastOnlineIP: device.LastOnlineIP,
-			OnlineTime:   device.OnlineTime.Format("2006-01-02 15:04:05"),
+			OnlineTime:   common.FormatAPITime(device.OnlineTime),
 		})
 	}
 
@@ -375,7 +383,13 @@ func buildAvailableDynamicBindSSIDs(used map[int]struct{}) []int {
 }
 
 func buildDynamicBindOptions(user *gormdb.User, manager *udphub.PendingDeviceManager, excludeMAC string) ([]int, int, []DynamicBindReplaceableDevice, error) {
-	repo := gormdb.NewDeviceRepository()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return buildDynamicBindOptionsContext(ctx, user, manager, excludeMAC)
+}
+
+func buildDynamicBindOptionsContext(ctx context.Context, user *gormdb.User, manager *udphub.PendingDeviceManager, excludeMAC string) ([]int, int, []DynamicBindReplaceableDevice, error) {
+	repo := gormdb.NewDeviceRepository().WithContext(ctx)
 	devices, err := repo.ListDevicesByOwnerID(user.ID)
 	if err != nil {
 		return nil, 0, nil, err
@@ -408,7 +422,7 @@ func buildDynamicBindOptions(user *gormdb.User, manager *udphub.PendingDeviceMan
 func BindDevice(c *gin.Context) {
 	var req BindRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -419,10 +433,10 @@ func BindDevice(c *gin.Context) {
 	username, _ := c.Get("username")
 
 	// 查询用户
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -431,7 +445,7 @@ func BindDevice(c *gin.Context) {
 
 	// 检查用户是否已审核通过
 	if user.ApprovalStatus != 1 {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    403,
 			"message": "账号未审核通过，无法绑定设备",
 		})
@@ -440,7 +454,7 @@ func BindDevice(c *gin.Context) {
 
 	// 检查设备密码是否已设置
 	if user.DevicePassword == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请先设置设备密码",
 		})
@@ -450,7 +464,7 @@ func BindDevice(c *gin.Context) {
 	// 绑定设备
 	manager := udphub.GetPendingDeviceManager()
 	if manager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "服务未初始化",
 		})
@@ -459,16 +473,16 @@ func BindDevice(c *gin.Context) {
 
 	device, err := manager.BindDevice(req.DynamicCode, uint(user.ID))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
 		return
 	}
 
-	availableSSIDs, recommendedSSID, replaceableDevices, err := buildDynamicBindOptions(user, manager, device.MAC)
+	availableSSIDs, recommendedSSID, replaceableDevices, err := buildDynamicBindOptionsContext(c.Request.Context(), user, manager, device.MAC)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "获取动态绑定选项失败",
 		})
@@ -512,12 +526,18 @@ func isValidDynamicBindSSID(ssid int) bool {
 }
 
 func resolveDynamicBindSelectedSSID(user *gormdb.User, manager *udphub.PendingDeviceManager, excludeMAC string, req SubmitConfigRequest) (int, *gormdb.Device, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return resolveDynamicBindSelectedSSIDContext(ctx, user, manager, excludeMAC, req)
+}
+
+func resolveDynamicBindSelectedSSIDContext(ctx context.Context, user *gormdb.User, manager *udphub.PendingDeviceManager, excludeMAC string, req SubmitConfigRequest) (int, *gormdb.Device, error) {
 	if req.ReplaceDeviceID != nil {
 		if *req.ReplaceDeviceID <= 0 {
 			return 0, nil, fmt.Errorf("无效的离线设备")
 		}
 
-		repo := gormdb.NewDeviceRepository()
+		repo := gormdb.NewDeviceRepository().WithContext(ctx)
 		device, err := repo.GetDeviceByID(*req.ReplaceDeviceID)
 		if err != nil {
 			return 0, nil, fmt.Errorf("校验离线设备失败")
@@ -550,7 +570,7 @@ func resolveDynamicBindSelectedSSID(user *gormdb.User, manager *udphub.PendingDe
 		return 0, nil, fmt.Errorf("SSID 必须在 1-99 或 106-254 范围内")
 	}
 
-	usedSSIDs, err := listUserUsedDynamicBindSSIDs(user.ID, manager, excludeMAC)
+	usedSSIDs, err := listUserUsedDynamicBindSSIDsContext(ctx, user.ID, manager, excludeMAC)
 	if err != nil {
 		return 0, nil, fmt.Errorf("校验 SSID 失败")
 	}
@@ -566,7 +586,7 @@ func resolveDynamicBindSelectedSSID(user *gormdb.User, manager *udphub.PendingDe
 func SubmitDeviceConfig(c *gin.Context) {
 	var req SubmitConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "请求参数错误",
 		})
@@ -575,14 +595,14 @@ func SubmitDeviceConfig(c *gin.Context) {
 
 	if req.ReplaceDeviceID == nil {
 		if req.SSID == nil {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "请选择新 SSID 或离线设备",
 			})
 			return
 		}
 		if !isValidDynamicBindSSID(*req.SSID) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			writeErrorResponse(c, http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "SSID 必须在 1-99 或 106-254 范围内",
 			})
@@ -592,7 +612,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 
 	// 验证 MAC 地址格式
 	if !udphub.ValidateMAC(req.DeviceMAC) {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "MAC 地址格式错误",
 		})
@@ -605,10 +625,10 @@ func SubmitDeviceConfig(c *gin.Context) {
 	username, _ := c.Get("username")
 
 	// 查询用户
-	repo := gormdb.NewUserRepository()
+	repo := gormdb.NewUserRepository().WithContext(c.Request.Context())
 	user, err := repo.GetUserByName(username.(string))
 	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		writeErrorResponse(c, http.StatusNotFound, gin.H{
 			"code":    404,
 			"message": "用户不存在",
 		})
@@ -617,16 +637,16 @@ func SubmitDeviceConfig(c *gin.Context) {
 
 	manager := udphub.GetPendingDeviceManager()
 	if manager == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "服务未初始化",
 		})
 		return
 	}
 
-	selectedSSID, reusedDevice, err := resolveDynamicBindSelectedSSID(user, manager, mac, req)
+	selectedSSID, reusedDevice, err := resolveDynamicBindSelectedSSIDContext(c.Request.Context(), user, manager, mac, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})
@@ -639,7 +659,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 	if user.DevicePassword != "" {
 		devicePassword, legacyPassword, err = crypto.DecodeDevicePassword(user.DevicePassword)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "获取设备密码失败",
 			})
@@ -651,7 +671,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 		devicePassword, err = generateDevicePassword()
 		if err != nil {
 			log.Printf("[DEVICE] 生成设备密码失败: user=%s err=%v", user.Name, err)
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "生成设备密码失败",
 			})
@@ -659,14 +679,14 @@ func SubmitDeviceConfig(c *gin.Context) {
 		}
 		encryptedPassword, encErr := crypto.Encrypt(devicePassword)
 		if encErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "生成设备密码失败",
 			})
 			return
 		}
 		if updateErr := repo.UpdateUserDevicePassword(user.ID, encryptedPassword); updateErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
+			writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 				"code":    500,
 				"message": "更新设备密码失败",
 			})
@@ -684,7 +704,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 	}
 
 	if err := manager.SetDeviceConfig(mac, config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),
 		})

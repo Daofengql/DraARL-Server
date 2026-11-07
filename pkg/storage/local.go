@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"syscall"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"draarl/internal/config"
@@ -88,7 +88,7 @@ func newLocalStorageWithConfig(local config.LocalStorageConfig, secret string) (
 	if err != nil {
 		return nil, fmt.Errorf("解析本地存储路径失败: %w", err)
 	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	if err := os.MkdirAll(abs, 0o750); err != nil {
 		return nil, fmt.Errorf("创建本地存储目录失败: %w", err)
 	}
 	realRoot, err := filepath.EvalSymlinks(abs)
@@ -206,7 +206,7 @@ func (s *localStorage) Put(ctx context.Context, key string, r io.Reader, size in
 		return err
 	}
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("创建目录失败: %w", err)
 	}
 	tmp, err := os.CreateTemp(dir, ".draarl-upload-*")
@@ -214,7 +214,7 @@ func (s *localStorage) Put(ctx context.Context, key string, r io.Reader, size in
 		return fmt.Errorf("创建临时文件失败: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 
 	written, copyErr := io.Copy(tmp, &contextReader{ctx: ctx, reader: r})
 	closeErr := tmp.Close()
@@ -227,7 +227,7 @@ func (s *localStorage) Put(ctx context.Context, key string, r io.Reader, size in
 	if size >= 0 && written != size {
 		return fmt.Errorf("文件大小不匹配: got %d want %d", written, size)
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		return fmt.Errorf("设置文件权限失败: %w", err)
 	}
 	// Staging uploads may be retried with the same signed URL.
@@ -291,7 +291,7 @@ func (s *localStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("staging object is not a regular file")
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
 		return err
 	}
 	// Link creation is atomic and fails when destination already exists. Rename
@@ -327,12 +327,14 @@ func (s *localStorage) Promote(ctx context.Context, stagedKey, finalKey string) 
 // copyFileExclusive 以 O_EXCL 排他创建目标并拷贝源文件内容；目标已存在时
 // 返回错误（保持已发布对象不可覆盖的不可变承诺）。
 func copyFileExclusive(source, destination string) error {
+	// #nosec G304 -- Both paths are internal to a service-owned root and validated by resolvePath before promotion.
 	in, err := os.Open(source)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	defer func() { _ = in.Close() }()
+	// #nosec G304 -- Both paths are internal to a service-owned root and validated by resolvePath before promotion.
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -359,6 +361,11 @@ func (s *localStorage) CleanupStaging(ctx context.Context, olderThan time.Time) 
 	} else if err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(stagingRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
 	return filepath.WalkDir(stagingRoot, func(filePath string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -376,7 +383,11 @@ func (s *localStorage) CleanupStaging(ctx context.Context, olderThan time.Time) 
 			return err
 		}
 		if info.ModTime().Before(olderThan) {
-			return os.Remove(filePath)
+			relative, err := filepath.Rel(stagingRoot, filePath)
+			if err != nil {
+				return err
+			}
+			return root.Remove(relative)
 		}
 		return nil
 	})
@@ -433,12 +444,23 @@ func (s *localStorage) Walk(ctx context.Context, prefix string, fn func(ObjectIn
 }
 
 func (s *localStorage) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	path, err := s.resolvePath(key)
 	if err != nil {
 		return nil, err
 	}
-	return os.Open(path)
+	relative, err := filepath.Rel(s.root, path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.Open(relative)
 }
 
 func (s *localStorage) Stat(ctx context.Context, key string) (int64, string, error) {

@@ -165,11 +165,15 @@ func prewarmDomainReceiverSnapshots(stopCh <-chan struct{}) {
 }
 
 func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domainReceiverSnap {
-	started := time.Now()
 	groupIDs := GetHalfDuplexDomainGroupIDs(sourceGroupID)
 	if len(groupIDs) == 0 {
 		groupIDs = []int{sourceGroupID}
 	}
+	return buildGroupReceiverSnap(groupIDs, gen, workers)
+}
+
+func buildGroupReceiverSnap(groupIDs []int, gen uint64, workers int) *domainReceiverSnap {
+	started := time.Now()
 	entries := make([]domainReceiverEntry, 0, 64)
 	seen := make(map[netip.AddrPort]struct{}, 64)
 	candidates := int64(0)
@@ -305,6 +309,6 @@ func GetDomainReceiverCacheStats() map[string]int64 {
 		"candidates":    atomic.LoadInt64(&domainReceiverCandidates),
 		"deduplicated":  atomic.LoadInt64(&domainReceiverDeduped),
 		"entries_built": atomic.LoadInt64(&domainReceiverEntries),
-		"gen":           int64(atomic.LoadUint64(&domainReceiverGen)),
+		"gen":           int64(atomic.LoadUint64(&domainReceiverGen)), // #nosec G115 -- Diagnostic generation counter, cannot exceed MaxInt64 in process lifetime.
 	}
 }

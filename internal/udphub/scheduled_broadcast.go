@@ -86,7 +86,9 @@ func TryAcquireScheduledBroadcast(sourceGroupID int, runID uint, now time.Time, 
 	}
 	// Receiver membership is frozen only after the domain lease has been
 	// acquired. Later topology or session changes cannot expand this run.
-	lease.receiverSnap = getDomainReceiverSnap(sourceGroupID)
+	// Linked groups share arbitration, but announcements are delivered only
+	// to receivers explicitly listening to the source entity group.
+	lease.receiverSnap = buildGroupReceiverSnap([]int{sourceGroupID}, atomic.LoadUint64(&domainReceiverGen), currentFanoutWorkerCount())
 	if !scheduledBroadcastHasReceiver(lease) {
 		ReleaseScheduledBroadcast(lease)
 		return nil, lastVoiceAt, ScheduledBroadcastNoReceiver
@@ -102,7 +104,7 @@ func scheduledBroadcastHasReceiver(lease *ScheduledBroadcastLease) bool {
 		return true
 	}
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-		for _, groupID := range lease.DomainGroupIDs {
+		for _, groupID := range []int{lease.SourceGroupID} {
 			for _, device := range GlobalMessageRouter.wsManager.GetDevicesByGroup(groupID) {
 				if device == nil {
 					continue
@@ -120,7 +122,7 @@ func scheduledBroadcastHasReceiver(lease *ScheduledBroadcastLease) bool {
 	}
 	if lease.interconnect {
 		hooks := centerHooks()
-		return hooks.HasBroadcastReceiver != nil && hooks.HasBroadcastReceiver(lease.domainID)
+		return hooks.HasBroadcastReceiver != nil && hooks.HasBroadcastReceiver(lease.SourceGroupID, lease.domainID)
 	}
 	return false
 }
@@ -150,7 +152,7 @@ func acquireScheduledBroadcastArbiter(lease *ScheduledBroadcastLease, now time.T
 }
 
 // AcceptScheduledBroadcastFrame renews the exact lease and records activity
-// for its fixed delivery snapshot. A topology change invalidates the lease
+// for its source group. A topology change invalidates the lease
 // before the next frame can be accepted.
 func AcceptScheduledBroadcastFrame(lease *ScheduledBroadcastLease, acceptedAt time.Time) bool {
 	if lease == nil || lease.closed.Load() || !scheduledBroadcastTopologyMatches(lease) {
@@ -178,7 +180,7 @@ func AcceptScheduledBroadcastFrame(lease *ScheduledBroadcastLease, acceptedAt ti
 		state.lastVoiceAt = acceptedAt
 		shard.mu.Unlock()
 	}
-	MarkAcceptedVoiceGroups(lease.DomainGroupIDs, acceptedAt)
+	MarkAcceptedVoiceGroups([]int{lease.SourceGroupID}, acceptedAt)
 	return true
 }
 

@@ -3,9 +3,24 @@ package websocket
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"draarl/internal/protocol"
 )
+
+func TestHeartbeatEncoderBoundsAndUTF8(t *testing.T) {
+	if EncodeHeartbeatResponse(nil, "CALL") != nil || EncodeWSPacket(nil) != nil {
+		t.Fatal("nil packet must be rejected")
+	}
+	if EncodeHeartbeatResponse(&WSPacket{DATA: make([]byte, 65536)}, "CALL") != nil {
+		t.Fatal("unrepresentable heartbeat length must be rejected")
+	}
+	req := &WSPacket{Username: strings.Repeat("中", 12), Type: protocol.DraARLTypeHeartbeat}
+	data := EncodeHeartbeatResponse(req, strings.Repeat("呼", 12))
+	if !utf8.Valid(data[6:38]) || !utf8.Valid(data[54:86]) {
+		t.Fatal("heartbeat split a UTF-8 character")
+	}
+}
 
 func TestDecodeWSPacketRejectsUnsupportedType(t *testing.T) {
 	for _, packetType := range []byte{0, 6, 7, 255} {

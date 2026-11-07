@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useId } from 'react'
 import {
   Box,
   FormControl,
@@ -101,6 +101,7 @@ export function RegionCascader({
   error = false,
   fullWidth = true,
 }: RegionCascaderProps) {
+  const labelId = useId()
   // 解析初始值
   const parseValue = (locationStr: string) => {
     if (!locationStr) return { provinceCode: '', cityCode: '', areaCode: '' }
@@ -202,8 +203,9 @@ export function RegionCascader({
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: fullWidth ? '100%' : 'auto' }}>
       <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1 }}>
         <FormControl size={size} sx={{ minWidth: 0, flex: 1 }} required={required} error={error}>
-          <InputLabel shrink>{label}</InputLabel>
+          <InputLabel id={`${labelId}-province`} shrink>{label}</InputLabel>
           <Select
+            labelId={`${labelId}-province`}
             value={provinceCode}
             onChange={handleProvinceChange}
             label={label}
@@ -229,8 +231,9 @@ export function RegionCascader({
           required={required}
           error={error}
         >
-          <InputLabel shrink>城市</InputLabel>
+          <InputLabel id={`${labelId}-city`} shrink>城市</InputLabel>
           <Select
+            labelId={`${labelId}-city`}
             value={cityCode}
             onChange={handleCityChange}
             label="城市"
@@ -253,8 +256,9 @@ export function RegionCascader({
           sx={{ minWidth: 0, flex: 1 }}
           disabled={disabled || !cityCode}
         >
-          <InputLabel shrink>区县</InputLabel>
+          <InputLabel id={`${labelId}-area`} shrink>区县</InputLabel>
           <Select
+            labelId={`${labelId}-area`}
             value={areaCode}
             onChange={handleAreaChange}
             label="区县"

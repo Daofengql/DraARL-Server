@@ -68,7 +68,7 @@ function StatCard({ title, value, icon, color }: StatCardProps) {
             <Typography variant="body2" color="text.secondary">
               {title}
             </Typography>
-            <Typography variant="h4" fontWeight={700} mt={1}>
+            <Typography component="p" variant="h4" fontWeight={700} mt={1}>
               {typeof value === 'number' ? value.toLocaleString() : value}
             </Typography>
           </Box>
@@ -248,7 +248,7 @@ export function DashboardPage() {
             <DashboardIcon sx={{ fontSize: 40 }} />
             <Box sx={{ flexGrow: 1 }}>
               <Stack direction="row" alignItems="center" spacing={1}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography component="h1" variant="h5" fontWeight={600}>
                   欢迎回来，{displayName}！
                 </Typography>
                 <Chip
@@ -366,7 +366,7 @@ export function DashboardPage() {
         <CardContent>
           <Stack direction="row" alignItems="center" spacing={1} mb={2}>
             <RecordVoiceOver color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <Typography component="h2" variant="h6" fontWeight={600}>
               近30天通信趋势
             </Typography>
           </Stack>
@@ -441,7 +441,7 @@ export function DashboardPage() {
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
             <Radio color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <Typography component="h2" variant="h6" fontWeight={600}>
               我的设备状态
             </Typography>
           </Stack>
@@ -457,7 +457,7 @@ export function DashboardPage() {
                     : '0%'}
                 </Typography>
               </Stack>
-              <LinearProgress
+              <LinearProgress aria-label="设备在线率"
                 variant="determinate"
                 value={stats.my_devices > 0 ? (stats.online_devices / stats.my_devices) * 100 : 0}
                 sx={{
@@ -492,7 +492,7 @@ export function DashboardPage() {
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
             <Devices color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <Typography component="h2" variant="h6" fontWeight={600}>
               系统信息
             </Typography>
           </Stack>

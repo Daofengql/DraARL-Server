@@ -1,0 +1,205 @@
+{
+  "date": "2026-11-07",
+  "go_toolchain": "go1.27.3",
+  "govulncheck": "v1.9.0",
+  "go_before": [
+    {
+      "id": "GO-2026-5932",
+      "aliases": [],
+      "summary": "The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues",
+      "fixed": "v0.58.1-0.20261009181718-2f1f834330b2",
+      "trace": [
+        {
+          "module": "golang.org/x/crypto",
+          "version": "v0.57.0"
+        }
+      ],
+      "classification": "module-only; no symbol/call trace reported in baseline"
+    },
+    {
+      "id": "GO-2026-6865",
+      "aliases": [
+        "CVE-2026-116591",
+        "GHSA-fpmh-frq8-7rj8"
+      ],
+      "summary": "Panic on two-block frames in github.com/klauspost/compress",
+      "fixed": "v1.20.2",
+      "trace": [
+        {
+          "module": "github.com/klauspost/compress",
+          "version": "v1.18.7"
+        }
+      ],
+      "classification": "module-only; no symbol/call trace reported in baseline"
+    },
+    {
+      "id": "GO-2026-6860",
+      "aliases": [
+        "CVE-2026-78661"
+      ],
+      "summary": "Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net",
+      "fixed": "v0.62.0",
+      "trace": [
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.60.0"
+        }
+      ],
+      "classification": "module-only; no symbol/call trace reported in baseline"
+    },
+    {
+      "id": "GO-2026-6866",
+      "aliases": [
+        "CVE-2026-97045"
+      ],
+      "summary": "Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net",
+      "fixed": "v0.62.0",
+      "trace": [
+        {
+          "module": "golang.org/x/net",
+          "version": "v0.60.0"
+        }
+      ],
+      "classification": "module-only; no symbol/call trace reported in baseline"
+    }
+  ],
+  "go_after_windows_findings": 0,
+  "go_after_linux_embed_findings": 0,
+  "npm": {
+    "before": {
+      "info": 0,
+      "low": 0,
+      "moderate": 7,
+      "high": 4,
+      "critical": 0,
+      "total": 11
+    },
+    "after": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "production_after": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "trivy": "0.76.2",
+  "images": {
+    "mysql": {
+      "image_id": "sha256:5e5b9ed12261f804d20685a8da303b7ee85d382102094708bc3ac91ba71532bd",
+      "tag": "draarl-todo-mysql:20261107",
+      "scanned_at": "2026-11-07T11:42:37.015251238Z",
+      "os": {
+        "Family": "oracle",
+        "Name": "9.8"
+      },
+      "report_sha256": "09ca4edd3839e039d1c16b46fed718d886bfe1d423f54453a15b949594c08e74",
+      "counts": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "MEDIUM": 0,
+        "LOW": 0,
+        "UNKNOWN": 0
+      },
+      "remaining": []
+    },
+    "redis": {
+      "image_id": "sha256:37ec76ef766fc9cca0ceffad1ce38e5c71057bddded1578756dbfe11c15adb06",
+      "tag": "draarl-todo-redis:20261107",
+      "scanned_at": "2026-11-07T11:42:38.071555457Z",
+      "os": {
+        "Family": "alpine",
+        "Name": "3.24.4"
+      },
+      "report_sha256": "269f75a913a5bae629a151a039cfa9bde9778fe9cf116fefc3e294edc850ac57",
+      "counts": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "MEDIUM": 0,
+        "LOW": 0,
+        "UNKNOWN": 0
+      },
+      "remaining": []
+    },
+    "minio": {
+      "image_id": "sha256:231fd52fea1e08fb3f96ce3122ddae12b3633791a52b51af60170091f41938eb",
+      "tag": "draarl-todo-minio:20261107",
+      "scanned_at": "2026-11-07T11:42:39.68399271Z",
+      "os": {
+        "Family": "alpine",
+        "Name": "3.24.4"
+      },
+      "report_sha256": "80695d318ebdd03a621ad8ff2b34fd1778056a22b9acd3fc15d52ca177227994",
+      "counts": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "MEDIUM": 0,
+        "LOW": 0,
+        "UNKNOWN": 0
+      },
+      "remaining": []
+    },
+    "app": {
+      "image_id": "sha256:9d12ff955eeb566bb651250cc1da512df58334fc98532b16950402cbe45b9606",
+      "tag": "draarl-todo-app:20261107",
+      "scanned_at": "2026-11-07T12:12:30.033383551Z",
+      "os": {
+        "Family": "alpine",
+        "Name": "3.24.4"
+      },
+      "report_sha256": "6441acee0c36b55bf770e2e51d6386d2bf4ddf89a584be04d8ed219cd4051e22",
+      "counts": {
+        "CRITICAL": 0,
+        "HIGH": 0,
+        "MEDIUM": 0,
+        "LOW": 1,
+        "UNKNOWN": 0
+      },
+      "remaining": [
+        {
+          "id": "CVE-2023-36308",
+          "package": "github.com/disintegration/imaging",
+          "installed": "v1.6.2",
+          "fixed": null,
+          "severity": "LOW",
+          "severity_source": "ghsa",
+          "references": [
+            "github.com/disintegration/imaging",
+            "https://github.com/disintegration/imaging/issues/165",
+            "https://github.com/disintegration/imaging/releases/tag/v1.6.2",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/3GX2SYGRCNFUAGELLDOBIERCSCYSGKFY/",
+            "https://nvd.nist.gov/vuln/detail/CVE-2023-36308"
+          ]
+        }
+      ]
+    }
+  },
+  "linux_embed_final_verification": {
+    "target": "./cmd/draarl",
+    "tags": [
+      "embed"
+    ],
+    "exit_code": 0,
+    "findings": 0,
+    "config": {
+      "protocol_version": "v1.0.0",
+      "scanner_name": "govulncheck",
+      "scanner_version": "v1.9.0",
+      "db": "https://vuln.go.dev",
+      "db_last_modified": "2026-11-05T23:49:57Z",
+      "go_version": "go1.27.3",
+      "scan_level": "symbol",
+      "scan_mode": "source"
+    },
+    "report": "output/security/govuln-linux-embed-isolation.jsonl",
+    "report_sha256": "9360e70c91f0a6c68934aba6422021c3be6dc7f5df487624e51b305ec4aadd91"
+  }
+}

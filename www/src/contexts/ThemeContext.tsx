@@ -19,14 +19,14 @@ function createAppTheme(mode: PaletteMode) {
   return createTheme({
     palette: {
       mode,
-      primary: { main: dark ? '#60a5fa' : '#2563eb', light: '#93c5fd', dark: '#1d4ed8', contrastText: dark ? '#0b1220' : '#ffffff' },
-      secondary: { main: dark ? '#a1aab9' : '#6b7280', light: '#9ca3af', dark: '#4b5563' },
+      primary: { main: dark ? '#60a5fa' : '#1d4ed8', light: '#93c5fd', dark: '#1e40af', contrastText: dark ? '#0b1220' : '#ffffff' },
+      secondary: { main: dark ? '#a1aab9' : '#4b5563', light: '#9ca3af', dark: '#374151' },
       error: { main: dark ? '#f87171' : '#dc2626' },
-      warning: { main: dark ? '#fbbf24' : '#ca8a04' },
-      success: { main: dark ? '#4ade80' : '#16a34a' },
-      info: { main: dark ? '#38bdf8' : '#0284c7' },
+      warning: { main: dark ? '#fbbf24' : '#a16207' },
+      success: { main: dark ? '#4ade80' : '#15803d' },
+      info: { main: dark ? '#38bdf8' : '#0369a1' },
       background: { default: dark ? '#0f172a' : '#f9fafb', paper: dark ? '#1e293b' : '#ffffff' },
-      text: { primary: dark ? '#e5edf7' : '#1f2937', secondary: dark ? '#a6b4c7' : '#6b7280' },
+      text: { primary: dark ? '#e5edf7' : '#1f2937', secondary: dark ? '#a6b4c7' : '#4b5563' },
       divider: dark ? '#334155' : '#e5e7eb',
     },
     typography: {

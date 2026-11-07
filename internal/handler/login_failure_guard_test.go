@@ -87,8 +87,10 @@ func TestLoginGuardClearAndRegistrationWindow(t *testing.T) {
 			t.Fatalf("registration attempt %d unexpectedly rejected", i+1)
 		}
 	}
-	if allowRegistration("192.0.2.10") || allowRegistration("192.0.2.10") {
-		t.Fatal("registration limit was bypassed")
+	for range 2 {
+		if allowRegistration("192.0.2.10") {
+			t.Fatal("registration limit was bypassed")
+		}
 	}
 	registrationMu.Lock()
 	registration["192.0.2.10"].windowStart = time.Now().Add(-registerWindowDur - time.Second)

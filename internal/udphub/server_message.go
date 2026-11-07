@@ -86,13 +86,14 @@ func forwardDraARLMessage(packet *protocol.DraARLv1Packet, data []byte, dev *mod
 		packet.DATA,
 	)
 
+	defer protocol.ReleaseForwardPacket(refilledData)
+
 	// 文本同样走连通域 UDP fan-out
 	forwardVoiceDomain(dev, refilledData, gp.ID)
 	BroadcastTextFromUDPDomain(dev, refilledData, gp.ID)
 	if err := RelayCenterLocalDevice(dev, refilledData); err != nil {
 		log.Printf("[INTERCONNECT] relay centre text failed: device=%d err=%v", state.ID, err)
 	}
-	protocol.ReleaseForwardPacket(refilledData)
 }
 
 // min 返回两个整数中的较小值

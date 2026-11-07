@@ -185,7 +185,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 				current.MAC = incomingMAC
 			}
 			current.CallSignSSID = protocol.GetCallSignSSID(current.CallSign, current.SSID)
-			// UDPAddr 存储 frp 转发地址（用于发送响应）
+			// UDPAddr stores the actual socket peer used for replies.
 			current.UDPAddr = packet.UDPAddr
 			current.RealUDPAddr = realAddr
 			current.ISOnline = true
@@ -195,6 +195,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 				current.LastOnlineIP = realAddr.IP.String()
 			}
 		})
+		notifyDeviceOnlineChange(dev)
 		state := dev.RuntimeSnapshot()
 		indexRuntimeDevice(dev)
 		if dev.ID > 0 {
@@ -375,7 +376,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 		syncDeviceConnPool(getGroupConnPool(gp), dev, packet.UDPAddr)
 	}
 
-	// 发送心跳响应（填充 CallSign）- 发送到 frp 转发地址
+	// 发送心跳响应（填充 CallSign）
 	state = dev.RuntimeSnapshot()
 	response := protocol.EncodeHeartbeatResponse(packet, state.CallSign)
 	if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
@@ -383,6 +384,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	}
 
 	if !wasOnline {
+		defer notifyDeviceOnlineChange(dev)
 		// 新设备上线
 		dev.UpdateRuntime(func(current *models.Device) {
 			current.OnlineTime = packet.TimeStamp

@@ -53,7 +53,7 @@ func requireCurrentUser(c *gin.Context) (*gormdb.User, bool) {
 	if ok {
 		return user, true
 	}
-	c.JSON(http.StatusUnauthorized, gin.H{
+	writeErrorResponse(c, http.StatusUnauthorized, gin.H{
 		"code":    http.StatusUnauthorized,
 		"message": "用户不存在",
 	})
@@ -72,13 +72,13 @@ func requireGroupViewAccess(c *gin.Context, group *gormdb.Group) (*gormdb.User, 
 		member, err := repo.GetVerifiedMemberByGroupAndUser(group.ID, user.ID)
 		if err != nil {
 			log.Printf("检查群组成员资格失败: group=%d user=%d err=%v", group.ID, user.ID, err)
-			c.JSON(http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": "暂时无法检查群组权限，请稍后重试"})
+			writeErrorResponse(c, http.StatusServiceUnavailable, gin.H{"code": http.StatusServiceUnavailable, "message": "暂时无法检查群组权限，请稍后重试"})
 			return nil, false
 		}
 		isVerifiedMember = member != nil
 	}
 	if !canViewGroup(user, group, isVerifiedMember) {
-		c.JSON(http.StatusForbidden, gin.H{
+		writeErrorResponse(c, http.StatusForbidden, gin.H{
 			"code":    http.StatusForbidden,
 			"message": "无权访问该群组",
 		})

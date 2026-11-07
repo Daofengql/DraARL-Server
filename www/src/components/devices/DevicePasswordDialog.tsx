@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../../utils/errorMessage'
 import { useState, useEffect } from 'react'
 import {
   Dialog,
@@ -44,7 +45,7 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
       setPassword(result.device_password)
       setShowPassword(false) // 默认隐藏密码
     } catch (err: any) {
-      setError(err.response?.data?.message || '获取密码失败')
+      setError(getErrorMessage(err, '获取密码失败'))
     } finally {
       setLoading(false)
     }
@@ -81,7 +82,7 @@ export function DevicePasswordDialog({ open, onClose }: DevicePasswordDialogProp
       setPassword(result.device_password)
       setShowPassword(true) // 刷新后直接显示新密码
     } catch (err: any) {
-      setError(err.response?.data?.message || '刷新密码失败')
+      setError(getErrorMessage(err, '刷新密码失败'))
     } finally {
       setRefreshing(false)
     }

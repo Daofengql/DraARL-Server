@@ -266,6 +266,9 @@ func copyProtocolText(dst []byte, value string) {
 
 // Encode 编码 DraARLv1 报文
 func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel byte, dmrid uint32, callsign string, data []byte) []byte {
+	if len(data) > 65535-DraARLv1HeaderSize {
+		return nil
+	}
 	totalSize := DraARLv1HeaderSize + len(data)
 	packet := make([]byte, totalSize)
 
@@ -273,6 +276,7 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 	copy(packet[0:4], []byte(DraARLVersion))
 
 	// 写入 Length (4-5)
+	// #nosec G115 -- Packet size is checked against uint16 maximum before fixed-width encoding.
 	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
 
 	// 写入 Username (6-37)
@@ -315,7 +319,7 @@ func EncodeDraARLv1(username, devicePassword string, ssid, packetType, devModel 
 // 返回缓冲可能来自 pool；热路径 fan-out 完成后调用 ReleaseForwardPacket。
 // 若 src 非法则返回 nil，调用方应回退到 EncodeDraARLv1。
 func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetType, devModel byte, dmrid uint32) []byte {
-	if len(src) < DraARLv1HeaderSize {
+	if len(src) < DraARLv1HeaderSize || len(src) > 65535 {
 		return nil
 	}
 	if src[0] != 'D' || src[1] != 'r' || src[2] != 'a' || src[3] != 'A' {
@@ -358,6 +362,7 @@ func RewriteForwardHeader(src []byte, username, callsign string, ssid, packetTyp
 	}
 
 	// 长度字段保持与实际一致
+	// #nosec G115 -- Packet size is checked against uint16 maximum before fixed-width encoding.
 	binary.BigEndian.PutUint16(out[4:6], uint16(len(out)))
 	return out
 }
@@ -395,11 +400,15 @@ func EncodeHeartbeatResponse(req *DraARLv1Packet, callsign string) []byte {
 	if req == nil {
 		return nil
 	}
+	if len(req.DATA) > 65535-DraARLv1HeaderSize {
+		return nil
+	}
 	totalSize := DraARLv1HeaderSize + len(req.DATA)
 	packet := make([]byte, totalSize)
 
 	// 复制原始请求的大部分字段
 	copy(packet[0:4], []byte(DraARLVersion))
+	// #nosec G115 -- Packet size is checked against uint16 maximum before fixed-width encoding.
 	binary.BigEndian.PutUint16(packet[4:6], uint16(totalSize))
 
 	// 复制 Username
@@ -488,9 +497,9 @@ func uint24ToBytes(v uint32, b []byte) {
 	if len(b) < 3 {
 		return
 	}
-	b[0] = byte(v >> 16)
-	b[1] = byte(v >> 8)
-	b[2] = byte(v)
+	b[0] = byte((v >> 16) & 0xff)
+	b[1] = byte((v >> 8) & 0xff)
+	b[2] = byte((v) & 0xff)
 }
 
 // String 返回报文的字符串表示
@@ -514,8 +523,10 @@ func ParseUsernameSSID(s string) (username string, ssid byte, err error) {
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == '-' {
 			username = s[:i]
-			var ssidInt int
-			fmt.Sscanf(s[i+1:], "%d", &ssidInt)
+			ssidInt, parseErr := strconv.ParseUint(s[i+1:], 10, 8)
+			if parseErr != nil || username == "" {
+				return "", 0, errors.New("invalid username-ssid format")
+			}
 			return username, byte(ssidInt), nil
 		}
 	}

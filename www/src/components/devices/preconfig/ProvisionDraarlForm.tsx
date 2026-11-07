@@ -45,8 +45,9 @@ export function ProvisionDraarlForm({
   }
 
   return (
-    <Card variant="outlined">
+    <Card variant="outlined" data-config-section="server">
       <CardHeader
+        sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1, '& .MuiCardHeader-action': { m: 0, alignSelf: { xs: 'flex-start', sm: 'center' } }, '& .MuiCardHeader-content': { minWidth: 0 } }}
         title="DraARL"
         subheader="保留设备端现有的 DraARL 服务器配置读写交互。"
         action={

@@ -26,7 +26,7 @@ func jitterTTL(base time.Duration) time.Duration {
 		return base
 	}
 	// 生成 [-jitterFactor, +jitterFactor] 范围内的随机抖动
-	jitter := time.Duration(rand.Float64() * 2 * ttlJitterFactor * float64(base))
+	jitter := time.Duration(rand.Float64() * 2 * ttlJitterFactor * float64(base)) // #nosec G404 -- Non-security TTL jitter; this randomness is never used for credentials.
 	return base - time.Duration(ttlJitterFactor*float64(base)) + jitter
 }
 

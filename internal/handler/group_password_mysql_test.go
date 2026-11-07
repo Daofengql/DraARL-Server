@@ -137,8 +137,8 @@ func TestGroupPasswordHTTPFlowMySQL(t *testing.T) {
 	changePath := fmt.Sprintf("/api/devices/%d/group", device.ID)
 	request(http.MethodPut, changePath, issueToken(switcher), ChangeDeviceGroupRequest{DeviceID: device.ID, GroupID: &created.Data.ID, Password: "wrong-password"}, http.StatusUnauthorized, "192.0.2.20:10000")
 	request(http.MethodPut, changePath, issueToken(switcher), ChangeDeviceGroupRequest{DeviceID: device.ID, GroupID: &created.Data.ID, Password: "private-password"}, http.StatusOK, "192.0.2.20:10001")
-	if err := db.First(device, device.ID).Error; err != nil || device.GroupID != created.Data.ID {
-		t.Fatalf("device did not enter bcrypt private group: group=%d err=%v", device.GroupID, err)
+	if err := db.First(device, device.ID).Error; err != nil || device.GroupIDValue() != created.Data.ID {
+		t.Fatalf("device did not enter bcrypt private group: group=%d err=%v", device.GroupIDValue(), err)
 	}
 	membership = gormdb.GroupMember{}
 	if err := db.Where("group_id = ? AND user_id = ?", created.Data.ID, switcher.ID).First(&membership).Error; err != nil || !membership.IsVerified {

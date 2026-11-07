@@ -141,7 +141,7 @@ func GetDevices(c *gin.Context) {
 	} else if groupID != "" {
 		// 按群组过滤（数据库层分页）
 		gid, parseErr := strconv.Atoi(groupID)
-		if parseErr != nil || gid <= 0 {
+		if parseErr != nil || gid < 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    http.StatusBadRequest,
 				"message": "无效的群组ID",
@@ -214,7 +214,7 @@ func GetDevices(c *gin.Context) {
 			Name:                 d.Name,
 			SSID:                 d.SSID,
 			DevModel:             d.DevModel,
-			GroupID:              d.GroupID,
+			GroupID:              d.GroupIDValue(),
 			Status:               d.Status,
 			Priority:             d.Priority,
 			IsOnline:             d.ISOnline,
@@ -399,7 +399,7 @@ func GetDevice(c *gin.Context) {
 			"callsign":                callsign,
 			"ssid":                    device.SSID,
 			"dev_model":               device.DevModel,
-			"group_id":                device.GroupID,
+			"group_id":                device.GroupIDValue(),
 			"status":                  device.Status,
 			"priority":                device.Priority,
 			"is_online":               device.ISOnline,
@@ -476,7 +476,7 @@ func UpdateDevice(c *gin.Context) {
 
 	// 群组切换必须走 ChangeDeviceGroup，确保私有群组验证、对象级授权、
 	// 缓存和 UDP 运行时状态同步不会被通用更新接口绕过。
-	if req.GroupID > 0 && req.GroupID != device.GroupID {
+	if req.GroupID > 0 && req.GroupID != device.GroupIDValue() {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
 			"message": "请使用设备切换群组接口修改群组",
@@ -484,7 +484,7 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 
-	oldGroupID := device.GroupID
+	oldGroupID := device.GroupIDValue()
 	oldDisableSend := device.DisableSend
 	oldDisableRecv := device.DisableRecv
 
@@ -552,7 +552,7 @@ func UpdateDevice(c *gin.Context) {
 	}
 	oplog.AddLog(
 		fmt.Sprintf("更新设备信息: device_id=%d, owner_id=%d, group_id=%d->%d, status=%d, priority=%d, disable_send=%t->%t, disable_recv=%t->%t",
-			id, device.OwnerID, oldGroupID, device.GroupID, device.Status, device.Priority,
+			id, device.OwnerID, oldGroupID, device.GroupIDValue(), device.Status, device.Priority,
 			oldDisableSend, device.DisableSend, oldDisableRecv, device.DisableRecv),
 		"device_update",
 		operatorID,
@@ -617,8 +617,8 @@ func DeleteDevice(c *gin.Context) {
 			// 使用 OwnerID 作为缓存键（不再查询呼号）
 			_ = deviceCache.InvalidateDevice(ctx, id, device.OwnerID, uint8(device.SSID))
 			_ = deviceCache.InvalidateDeviceList(ctx)
-			if device.GroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
+			if groupID := device.GroupIDValue(); groupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 			}
 		}
 
@@ -631,7 +631,7 @@ func DeleteDevice(c *gin.Context) {
 			operatorCallSign = currentUser.CallSign
 		}
 		oplog.AddLog(
-			fmt.Sprintf("删除设备: device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupID, device.SSID),
+			fmt.Sprintf("删除设备: device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupIDValue(), device.SSID),
 			"device_delete",
 			operatorID,
 			operatorName,
@@ -704,8 +704,8 @@ func DeleteDevice(c *gin.Context) {
 			// 使用 OwnerID 作为缓存键
 			_ = deviceCache.InvalidateDevice(ctx, device.ID, device.OwnerID, uint8(device.SSID))
 			_ = deviceCache.InvalidateDeviceList(ctx)
-			if device.GroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(ctx, device.GroupID)
+			if groupID := device.GroupIDValue(); groupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(ctx, groupID)
 			}
 		}
 
@@ -718,7 +718,7 @@ func DeleteDevice(c *gin.Context) {
 			operatorCallSign = currentUser.CallSign
 		}
 		oplog.AddLog(
-			fmt.Sprintf("删除设备(兼容接口): device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupID, device.SSID),
+			fmt.Sprintf("删除设备(兼容接口): device_id=%d, owner_id=%d, group_id=%d, ssid=%d", device.ID, device.OwnerID, device.GroupIDValue(), device.SSID),
 			"device_delete",
 			operatorID,
 			operatorName,
@@ -893,7 +893,7 @@ func ChangeDeviceGroup(c *gin.Context) {
 	}
 
 	// 更新设备的群组（数据库）
-	oldGroupID := device.GroupID
+	oldGroupID := device.GroupIDValue()
 	if err := repo.UpdateDeviceFields(req.DeviceID, map[string]interface{}{
 		"group_id": targetGroupID,
 	}); err != nil {

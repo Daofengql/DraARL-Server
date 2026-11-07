@@ -19,8 +19,8 @@ type DeviceModelOption = {
 
 const DEVICE_MODEL_DEFINITIONS: DeviceModelOption[] = [
   { value: 0, label: '未知设备', icon: Devices, selectable: false },
-  { value: 1, label: 'ESP32 链路盒子（1W 射频版）', icon: SettingsInputAntenna, selectable: true },
-  { value: 2, label: 'ESP32 链路盒子（无射频版）', icon: Devices, selectable: true },
+  { value: 1, label: 'Box32-RF', icon: SettingsInputAntenna, selectable: true },
+  { value: 2, label: 'Box32-EX', icon: Devices, selectable: true },
   { value: 100, label: '微信小程序', icon: ChatBubble, selectable: true },
   { value: 101, label: 'Android 客户端', icon: Android, selectable: true },
   { value: 102, label: 'iOS 客户端', icon: PhoneIphone, selectable: true },

@@ -96,7 +96,7 @@ type Device struct {
 	QTH                   string     `gorm:"type:varchar(255);column:qth" json:"qth"`                               // 位置信息 (原 gird 字段)
 	LastOnlineIP          string     `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`          // 设备最近一次上线时的客户端 IP
 	DevModel              int        `gorm:"type:int;column:dev_model" json:"dev_model"`
-	GroupID               int        `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // 性能优化：复合索引用于在线设备统计
+	GroupID               *int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // nil 表示未分组，满足设备群组外键约束
 	Status                int8       `gorm:"type:tinyint;default:1;column:status" json:"status"`
 	IsCerted              bool       `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
 	Priority              int        `gorm:"type:int;default:100;column:priority" json:"priority"`
@@ -124,6 +124,14 @@ func (d *Device) BeforeCreate(tx *gorm.DB) error {
 		d.OnlineTime = time.Now()
 	}
 	return nil
+}
+
+// GroupIDValue 返回运行时使用的群组 ID；数据库 NULL 映射为未分组哨兵值 0。
+func (d *Device) GroupIDValue() int {
+	if d == nil || d.GroupID == nil {
+		return 0
+	}
+	return *d.GroupID
 }
 
 // Group 群组模型

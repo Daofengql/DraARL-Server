@@ -220,6 +220,7 @@ func registerAuthenticatedDraARLDevice(packet *protocol.DraARLv1Packet, realAddr
 		if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
 			log.Printf("[ONLINE] 发送设备 %d 首次心跳响应失败: %v", dev.ID, err)
 		}
+		syncDeviceConfigAsync(dev)
 	}
 }
 
@@ -409,15 +410,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 			// 【配置同步】普通设备上线时同步配置（幽灵设备使用 WebSocket API）
 			// 【性能修复】配置同步含多次 DB 查询 + 逐包下发，异步化避免阻塞
 			// 数据面 worker 的心跳处理；dev 字段在注册后稳定，读取安全。
-			syncDev := dev
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[CONFIG] 异步配置同步 panic: %v", r)
-					}
-				}()
-				SyncDeviceConfig(syncDev)
-			}()
+			syncDeviceConfigAsync(dev)
 		}
 
 	}

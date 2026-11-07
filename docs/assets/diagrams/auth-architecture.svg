@@ -22,7 +22,7 @@
   <text x="190" y="140" text-anchor="middle" fill="#666" font-size="12">SSID: 1-99, 106-254</text>
   
   <rect x="70" y="155" width="240" height="40" fill="#e8f5e9" rx="6"/>
-  <text x="190" y="180" text-anchor="middle" fill="#2e7d32" font-size="13">ESP32 链路盒子</text>
+  <text x="190" y="180" text-anchor="middle" fill="#2e7d32" font-size="13">Box32-RF / Box32-EX</text>
   
   <rect x="70" y="205" width="240" height="40" fill="#e8f5e9" rx="6"/>
   <text x="190" y="230" text-anchor="middle" fill="#2e7d32" font-size="13">对讲桥接器 (南山/涛涛/HT)</text>

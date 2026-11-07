@@ -33,7 +33,7 @@ func canManageGroup(user *gormdb.User, group *gormdb.Group) bool {
 
 func canManageGroupDeviceCommControl(user *gormdb.User, group *gormdb.Group, device *gormdb.Device) bool {
 	return canManageGroup(user, group) && device != nil && !group.IsVirtual &&
-		isSupportedGroupType(group.Type) && device.GroupID == group.ID
+		isSupportedGroupType(group.Type) && device.GroupIDValue() == group.ID
 }
 
 // canAdminSwitchLogin 只允许管理员切换到启用的其他账号。

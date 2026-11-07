@@ -524,8 +524,8 @@ func DeleteUser(c *gin.Context) {
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 		for _, device := range cascadeResult.DeletedDevices {
 			_ = deviceCache.InvalidateDevice(c.Request.Context(), device.ID, device.OwnerID, uint8(device.SSID))
-			if device.GroupID > 0 {
-				_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), device.GroupID)
+			if groupID := device.GroupIDValue(); groupID > 0 {
+				_ = deviceCache.InvalidateDevicesByGroup(c.Request.Context(), groupID)
 			}
 		}
 		for _, device := range cascadeResult.MovedDevices {

@@ -9,8 +9,8 @@ import (
 // DeviceModel 设备型号
 const (
 	DevModelUnknown      byte = 0
-	DevModelESP32Radio   byte = 1
-	DevModelESP32NoRadio byte = 2
+	DevModelESP32Radio   byte = 1 // Box32-RF（内置 RF）
+	DevModelESP32NoRadio byte = 2 // Box32-EX（RF 系统外置）
 	DevModelWeChatMini   byte = 100
 	DevModelAndroid      byte = 101
 	DevModelIOS          byte = 102

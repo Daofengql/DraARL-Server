@@ -96,7 +96,7 @@ func GetGroupDevices(c *gin.Context) {
 			"owner_callsign": callsign,
 			"ssid":           d.SSID,
 			"dev_model":      d.DevModel,
-			"group_id":       d.GroupID,
+			"group_id":       d.GroupIDValue(),
 			"status":         d.Status,
 			"priority":       d.Priority,
 			"is_online":      d.ISOnline,
@@ -298,7 +298,7 @@ func KickDevice(c *gin.Context) {
 		return
 	}
 
-	if device.GroupID != groupID {
+	if device.GroupIDValue() != groupID {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "设备不属于该群组",

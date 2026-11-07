@@ -15,7 +15,7 @@ func (d *Device) ToModelDevice() *models.Device {
 		QTH:                   d.QTH,
 		LastOnlineIP:          d.LastOnlineIP,
 		DevModel:              byte(d.DevModel),
-		GroupID:               d.GroupID,
+		GroupID:               d.GroupIDValue(),
 		Status:                byte(d.Status),
 		IsCerted:              d.IsCerted,
 		Priority:              d.Priority,
@@ -64,7 +64,7 @@ func FromModelDevice(d *models.Device) *Device {
 		QTH:                   d.QTH,
 		LastOnlineIP:          d.LastOnlineIP,
 		DevModel:              int(d.DevModel),
-		GroupID:               d.GroupID,
+		GroupID:               nullableGroupID(d.GroupID),
 		Status:                int8(d.Status),
 		IsCerted:              d.IsCerted,
 		Priority:              d.Priority,
@@ -81,6 +81,13 @@ func FromModelDevice(d *models.Device) *Device {
 		LastEntryAt:           d.LastEntryAt,
 		EntryMode:             d.EntryMode,
 	}
+}
+
+func nullableGroupID(groupID int) *int {
+	if groupID <= 0 {
+		return nil
+	}
+	return &groupID
 }
 
 // FromModelGroup 从 models.Group 转换为 GORM Group

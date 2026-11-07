@@ -70,8 +70,8 @@ func WithSourceGroupID(data []byte, groupID int) ([]byte, bool) {
 // DraARLv1 设备型号常量
 const (
 	DraARLDevModelUnknown      byte = 0   // 未知/历史默认
-	DraARLDevModelESP32Radio   byte = 1   // ESP32 链路盒子（1W 射频版）
-	DraARLDevModelESP32NoRadio byte = 2   // ESP32 链路盒子（无射频版）
+	DraARLDevModelESP32Radio   byte = 1   // Box32-RF（内置 RF）
+	DraARLDevModelESP32NoRadio byte = 2   // Box32-EX（RF 系统外置）
 	DraARLDevModelWeChatMini   byte = 100 // 微信小程序
 	DraARLDevModelAndroid      byte = 101 // Android 客户端
 	DraARLDevModelIOS          byte = 102 // iOS 客户端
@@ -670,9 +670,9 @@ func GetDevModelName(devModel byte) string {
 	case DraARLDevModelUnknown:
 		return "Unknown"
 	case DraARLDevModelESP32Radio:
-		return "ESP32 Radio Box (1W)"
+		return "Box32-RF"
 	case DraARLDevModelESP32NoRadio:
-		return "ESP32 Link Box (No RF)"
+		return "Box32-EX"
 	case DraARLDevModelWeChatMini:
 		return "WeChat Mini"
 	case DraARLDevModelAndroid:

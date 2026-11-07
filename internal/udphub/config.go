@@ -703,9 +703,19 @@ func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error
 	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 }
 
-// SyncDeviceConfig 设备上线时同步配置
-// 如果数据库中有配置记录，则下发配置；否则发送查询请求
-// 无论哪种情况，最后都会发送时间同步包
+func syncDeviceConfigAsync(dev *models.Device) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[CONFIG] 异步配置同步 panic: %v", r)
+			}
+		}()
+		SyncDeviceConfig(dev)
+	}()
+}
+
+// SyncDeviceConfig 设备上线时同步配置。
+// 数据库中有配置则下发，否则查询设备；两种情况最后都会发送时间同步包。
 func SyncDeviceConfig(dev *models.Device) {
 	if dev == nil {
 		return

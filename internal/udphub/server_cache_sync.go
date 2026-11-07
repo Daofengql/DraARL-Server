@@ -211,9 +211,10 @@ func refreshDeviceCache() {
 
 		// 群组变化必须走统一的 detach/attach 流程，不能只修改 GroupID 字段，
 		// 否则旧连接池仍会继续向该设备转发。
-		if state.GroupID != dbDev.GroupID {
-			if _, err := changeDeviceGroup(memDev, dbDev.GroupID); err != nil {
-				log.Printf("[CACHE] 同步设备 %d 群组 %d -> %d 失败: %v", state.ID, state.GroupID, dbDev.GroupID, err)
+		dbGroupID := dbDev.GroupIDValue()
+		if state.GroupID != dbGroupID {
+			if _, err := changeDeviceGroup(memDev, dbGroupID); err != nil {
+				log.Printf("[CACHE] 同步设备 %d 群组 %d -> %d 失败: %v", state.ID, state.GroupID, dbGroupID, err)
 			} else {
 				receiverRoutingChanged = true
 				updatedCount++

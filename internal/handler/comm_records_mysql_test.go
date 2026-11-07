@@ -68,7 +68,7 @@ func TestCommRecordsAuthorizationHTTPE2E(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	device := &gormdb.Device{Name: "record-device-" + suffix, SSID: 1, OwnerID: owner.ID, GroupID: publicGroup.ID, Status: 1}
+	device := &gormdb.Device{Name: "record-device-" + suffix, SSID: 1, OwnerID: owner.ID, GroupID: &publicGroup.ID, Status: 1}
 	if err := db.Create(device).Error; err != nil {
 		t.Fatal(err)
 	}

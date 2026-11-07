@@ -389,7 +389,7 @@ func TestCanManageGroupDeviceCommControl(t *testing.T) {
 	admin := &gormdb.User{ID: 20, Roles: "admin"}
 	member := &gormdb.User{ID: 30, Roles: "user"}
 	group := &gormdb.Group{ID: 100, Type: groupTypePublic, OwerID: owner.ID}
-	device := &gormdb.Device{ID: 7, GroupID: group.ID, OwnerID: member.ID}
+	device := &gormdb.Device{ID: 7, GroupID: &group.ID, OwnerID: member.ID}
 
 	if !canManageGroupDeviceCommControl(owner, group, device) {
 		t.Fatal("group owner should manage communication control for a current group device")
@@ -402,7 +402,8 @@ func TestCanManageGroupDeviceCommControl(t *testing.T) {
 	}
 
 	moved := *device
-	moved.GroupID = 101
+	movedGroupID := 101
+	moved.GroupID = &movedGroupID
 	if canManageGroupDeviceCommControl(owner, group, &moved) {
 		t.Fatal("group owner must lose control after the device leaves the group")
 	}

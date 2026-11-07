@@ -34,7 +34,9 @@ func (m *processMeter) sample() (processSample, error) {
 	}
 	var cpuNanos int64
 	for _, task := range tasks {
-		schedData, readErr := os.ReadFile(filepath.Join(taskDir, task.Name(), "schedstat"))
+		// task.Name() comes directly from the kernel-owned /proc task directory;
+		// it is not user-controlled input.
+		schedData, readErr := os.ReadFile(filepath.Join(taskDir, task.Name(), "schedstat")) // #nosec G304 -- path is constrained to /proc/<pid>/task.
 		if readErr != nil {
 			// A thread can exit between ReadDir and ReadFile. The remaining live
 			// threads still provide a useful process sample.

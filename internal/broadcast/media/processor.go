@@ -436,7 +436,7 @@ func (p *Processor) transcode(ctx context.Context, inputPath, outputPath string)
 	command := exec.CommandContext(ctx, p.config.FFmpegPath,
 		"-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe",
 		"-i", inputPath, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", strconv.Itoa(OpusSampleRate),
-		"-af", filter, "-c:a", "libopus", "-application", "voip", "-frame_duration", strconv.Itoa(OpusFrameDurationMS),
+		"-af", filter, "-filter_complex_threads", "1", "-c:a", "libopus", "-application", "voip", "-frame_duration", strconv.Itoa(OpusFrameDurationMS),
 		"-b:a", "20k", "-vbr", "on", "-compression_level", "10", "-threads", "1", "-filter_threads", "1",
 		"-f", "opus", outputPath,
 	)

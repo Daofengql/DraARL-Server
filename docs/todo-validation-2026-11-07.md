@@ -6,7 +6,7 @@
 
 ## 完成范围
 
-[todo.md](../todo.md) 逐项记录状态。已完成或复核 56 项；保留两项待办：后端整体语句覆盖目标、
+[todo.md](https://github.com/Daofengql/DraARL-Server/blob/master/todo.md) 逐项记录状态。已完成或复核 56 项；保留两项待办：后端整体语句覆盖目标、
 无上游修复版本的 imaging 公告。AES 可逆密码存储与 `OwerID` 拼写按既有设计保留。
 
 未设置默认群组的设备可正常认证和持久化：SQL `devices.group_id` 使用 `NULL`，运行时与
@@ -70,7 +70,7 @@ Windows 工作区与 Ubuntu 虚拟机使用 Go 1.27.3；前端使用 Node.js 24.
 | 重复迁移 | 两次应用重启迁移记录稳定 |
 | OTLP collector | 解码 3325 spans：HTTP 727、DB 2590、UDP 2；1185 DB span 直接继承 HTTP，SQL 文本属性 0 |
 
-复现命令和集成开关见 [贡献指南](../CONTRIBUTING.md)。Git hook 实际执行暂存 Go 格式、vet 和前端
+复现命令和集成开关见 [贡献指南](https://github.com/Daofengql/DraARL-Server/blob/master/CONTRIBUTING.md)。Git hook 实际执行暂存 Go 格式、vet 和前端
 lint/类型/Vitest。GitHub workflow 已本地检查，尚未在 GitHub Actions 执行。
 
 机器可读场景、实际语句覆盖和前端覆盖见

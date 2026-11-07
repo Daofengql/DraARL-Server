@@ -2,12 +2,12 @@
 
 > 本文保留第一批实施时的历史状态；后续已在 `dev` 继续完成 PROXY v2 移除、依赖升级、
 > 容器扫描、真实服务与播报隔离回归。当前结论以 [最终验证记录](todo-validation-2026-11-07.md)
-> 和 [todo.md](../todo.md) 为准，下文“未实施”等说明不代表当前状态。
+> 和 [todo.md](https://github.com/Daofengql/DraARL-Server/blob/master/todo.md) 为准，下文“未实施”等说明不代表当前状态。
 
 - 日期：2026-11-07。
 - 分支：`optimization/p0-security-stability`；基线提交：`6a606fa`。
 - 本批为工作区修改，尚未提交、合并或部署到生产。
-- 清单入口：[todo.md](../todo.md)。本次完成或复核 15 项，其余按清单继续跟进。
+- 清单入口：[todo.md](https://github.com/Daofengql/DraARL-Server/blob/master/todo.md)。本次完成或复核 15 项，其余按清单继续跟进。
 
 ## 清单范围
 

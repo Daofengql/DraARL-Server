@@ -9,9 +9,15 @@ func readSystemDisk() systemDisk {
 	if err := syscall.Statfs("/", &stat); err != nil || stat.Blocks == 0 {
 		return systemDisk{}
 	}
-	total := stat.Blocks * uint64(stat.Bsize)
-	free := stat.Bfree * uint64(stat.Bsize)
-	available := stat.Bavail * uint64(stat.Bsize)
+	if stat.Bsize <= 0 {
+		return systemDisk{}
+	}
+	// Statfs reports a positive block size on every supported Unix ABI. Keep
+	// the checked conversion local so the signed platform field cannot wrap.
+	blockSize := uint64(stat.Bsize) // #nosec G115 -- checked positive Statfs block size.
+	total := stat.Blocks * blockSize
+	free := stat.Bfree * blockSize
+	available := stat.Bavail * blockSize
 	if available > total {
 		available = total
 	}

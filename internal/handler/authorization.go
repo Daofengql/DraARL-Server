@@ -67,7 +67,10 @@ func requireGroupViewAccess(c *gin.Context, group *gormdb.Group) (*gormdb.User, 
 
 	isVerifiedMember := false
 	if group != nil && group.Type == groupTypePrivate && !isAdminUser(user) && group.OwerID != user.ID {
-		isVerifiedMember = gormdb.NewGroupMemberRepository().IsVerifiedMember(group.ID, user.ID)
+		repo := gormdb.NewGroupMemberRepository()
+		isVerifiedMember = repo.IsVerifiedMember(group.ID, user.ID)
+		// Note: IsVerifiedMember database error returns false, which safely denies access
+		// TODO: Consider logging database errors for monitoring
 	}
 	if !canViewGroup(user, group, isVerifiedMember) {
 		c.JSON(http.StatusForbidden, gin.H{

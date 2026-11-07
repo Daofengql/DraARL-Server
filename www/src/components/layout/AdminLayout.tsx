@@ -1,28 +1,30 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Box, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Drawer, Typography, Collapse, Divider, Link } from '@mui/material'
-import Dashboard from '@mui/icons-material/Dashboard'
-import People from '@mui/icons-material/People'
-import TaskAlt from '@mui/icons-material/TaskAlt'
-import Verified from '@mui/icons-material/Verified'
-import Radio from '@mui/icons-material/Radio'
-import Settings from '@mui/icons-material/Settings'
 import ArrowBack from '@mui/icons-material/ArrowBack'
-import ExitToApp from '@mui/icons-material/ExitToApp'
-import Devices from '@mui/icons-material/Devices'
-import Group from '@mui/icons-material/Group'
-import Mic from '@mui/icons-material/Mic'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import ExpandLess from '@mui/icons-material/ExpandLess'
-import LinkIcon from '@mui/icons-material/Link'
-import SystemUpdate from '@mui/icons-material/SystemUpdate'
-import Folder from '@mui/icons-material/Folder'
-import Book from '@mui/icons-material/Book'
-import Hub from '@mui/icons-material/Hub'
 import { useState, useEffect } from 'react'
 import { authService } from '../../services'
 import { PublicHeader } from './PublicHeader'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { useConfig } from '../../contexts/ConfigContext'
+import { blueprintGridSx } from '../../theme/blueprint'
+import {
+  CheckIcon,
+  DashboardIcon,
+  DeviceIcon,
+  DocsIcon,
+  DownloadIcon,
+  FolderIcon,
+  GroupIcon,
+  HubIcon,
+  LinkIcon as BlueprintLinkIcon,
+  LogoutIcon,
+  RadioIcon,
+  RecordIcon,
+  SettingsIcon,
+  UsersIcon,
+} from '../icons/BlueprintIcons'
 
 const DRAWER_WIDTH = 240
 
@@ -35,57 +37,57 @@ interface MenuItem {
 
 // 管理员菜单项
 const adminMenuItems: MenuItem[] = [
-  { path: '/admin/dashboard', label: '系统数据', icon: <Dashboard /> },
+  { path: '/admin/dashboard', label: '系统数据', icon: <DashboardIcon /> },
   {
     path: '/admin/users',
     label: '用户管理',
-    icon: <People />,
+    icon: <UsersIcon />,
     children: [
-      { path: '/admin/users', label: '账号管理', icon: <People /> },
-      { path: '/admin/approvals', label: '用户审批', icon: <Verified /> },
-      { path: '/admin/certificate-approvals', label: '操作证审批', icon: <TaskAlt /> },
+      { path: '/admin/users', label: '账号管理', icon: <UsersIcon /> },
+      { path: '/admin/approvals', label: '用户审批', icon: <CheckIcon /> },
+      { path: '/admin/certificate-approvals', label: '操作证审批', icon: <CheckIcon /> },
     ]
   },
   {
     path: '/admin/devices',
     label: '设备管理',
-    icon: <Devices />,
+    icon: <DeviceIcon />,
     children: [
-      { path: '/admin/devices', label: '客户端', icon: <Devices /> },
-      { path: '/admin/radio-sessions', label: '移动端', icon: <Hub /> },
-      { path: '/admin/relays', label: '中继台', icon: <Radio /> },
+      { path: '/admin/devices', label: '客户端', icon: <DeviceIcon /> },
+      { path: '/admin/radio-sessions', label: '移动端', icon: <HubIcon /> },
+      { path: '/admin/relays', label: '中继台', icon: <RadioIcon /> },
     ]
   },
   {
     path: '/admin/client-resources',
     label: '资源分发',
-    icon: <SystemUpdate />,
+    icon: <DownloadIcon />,
     children: [
-      { path: '/admin/client-resources', label: '通用资源', icon: <SystemUpdate /> },
-      { path: '/admin/firmware', label: '设备固件', icon: <Devices /> },
-      { path: '/admin/assets', label: '公开资源', icon: <Folder /> },
+      { path: '/admin/client-resources', label: '通用资源', icon: <DownloadIcon /> },
+      { path: '/admin/firmware', label: '设备固件', icon: <DeviceIcon /> },
+      { path: '/admin/assets', label: '公开资源', icon: <FolderIcon /> },
     ]
   },
   {
     path: '/admin/groups',
     label: '群组管理',
-    icon: <Group />,
+    icon: <GroupIcon />,
     children: [
-      { path: '/admin/groups', label: '普通群组', icon: <Group /> },
-      { path: '/admin/group-links', label: '互联管理', icon: <LinkIcon /> },
-      { path: '/admin/inter-center-links', label: '中心互联', icon: <Hub /> },
+      { path: '/admin/groups', label: '普通群组', icon: <GroupIcon /> },
+      { path: '/admin/group-links', label: '互联管理', icon: <BlueprintLinkIcon /> },
+      { path: '/admin/inter-center-links', label: '中心互联', icon: <HubIcon /> },
     ]
   },
   {
     path: '/admin/comm-records',
     label: '通信记录',
-    icon: <Mic />,
+    icon: <RecordIcon />,
     children: [
-      { path: '/admin/comm-records/platform', label: '平台发信记录', icon: <Mic /> },
-      { path: '/admin/comm-records/logbook', label: '通联日志', icon: <Book /> },
+      { path: '/admin/comm-records/platform', label: '平台发信记录', icon: <RecordIcon /> },
+      { path: '/admin/comm-records/logbook', label: '通联日志', icon: <DocsIcon /> },
     ]
   },
-  { path: '/admin/settings', label: '站点配置', icon: <Settings /> },
+  { path: '/admin/settings', label: '站点配置', icon: <SettingsIcon /> },
 ]
 
 export function AdminLayout() {
@@ -204,11 +206,11 @@ export function AdminLayout() {
   const drawer = (
     <Box component="nav" aria-label="后台导航" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Typography component="div" variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
-          后台管理
+        <Typography variant="caption" color="secondary.main" sx={{ display: 'block', mb: 0.75 }}>
+          DraARL / ADMIN
         </Typography>
-        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-          管理员专用
+        <Typography component="div" variant="body2" sx={{ fontWeight: 600 }}>
+          后台管理
         </Typography>
       </Box>
       <List sx={{ flex: 1, py: 1 }}>
@@ -242,11 +244,11 @@ export function AdminLayout() {
               <ListItem component="div" disablePadding sx={{ mb: 0.5 }}>
                 <ListItemButton
                   selected={shouldHighlight(item)}
-                    aria-expanded={item.children ? showChildren : undefined}
+                  aria-expanded={item.children ? showChildren : undefined}
                   onClick={() => isExpandableMenu ? toggleMenu() : handleNavigate(item.path)}
                   sx={{
                     mx: 1,
-                    borderRadius: 2,
+                    borderRadius: 0,
                     '&.Mui-selected': {
                       bgcolor: 'action.selected',
                       '&:hover': { bgcolor: 'action.hover' },
@@ -272,9 +274,9 @@ export function AdminLayout() {
 
               {/* 子菜单 - 使用折叠动画 */}
               {item.children && (
-                <Collapse in={showChildren} timeout="auto" unmountOnExit>
+                <Collapse in={showChildren} timeout={0} unmountOnExit>
                   {/* 分隔线 */}
-                  <Divider sx={{ mb: 1, borderColor: 'grey.300' }} />
+                  <Divider sx={{ mb: 1, borderColor: 'divider' }} />
                   <List disablePadding sx={{ pl: 2, mb: 1 }}>
                     {item.children.map((child, index) => (
                       <ListItem
@@ -287,7 +289,7 @@ export function AdminLayout() {
                           onClick={() => handleNavigate(child.path)}
                           sx={{
                             mx: 1,
-                            borderRadius: 2,
+                            borderRadius: 0,
                             '&.Mui-selected': {
                               bgcolor: 'action.selected',
                               '&:hover': { bgcolor: 'action.hover' },
@@ -318,7 +320,7 @@ export function AdminLayout() {
       <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider' }}>
         <ListItemButton
           onClick={handleBackToMain}
-          sx={{ borderRadius: 2, mb: 1 }}
+          sx={{ borderRadius: 0, mb: 1 }}
         >
           <ListItemIcon sx={{ minWidth: 40 }}>
             <ArrowBack />
@@ -327,10 +329,10 @@ export function AdminLayout() {
         </ListItemButton>
         <ListItemButton
           onClick={handleLogout}
-          sx={{ borderRadius: 2, color: 'error.main' }}
+          sx={{ borderRadius: 0, color: 'error.main' }}
         >
           <ListItemIcon sx={{ minWidth: 40, color: 'error.main' }}>
-            <ExitToApp />
+            <LogoutIcon />
           </ListItemIcon>
           <ListItemText primary="退出登录" />
         </ListItemButton>
@@ -367,7 +369,7 @@ export function AdminLayout() {
   )
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
+    <Box sx={[blueprintGridSx, { display: 'flex', flexDirection: 'column', minHeight: '100dvh' }]}>
       {/* 顶部导航栏 - 复用公共 Header */}
       <PublicHeader onMenuClick={handleDrawerToggle} />
 
@@ -380,7 +382,7 @@ export function AdminLayout() {
           onClose={handleDrawerToggle}
           ModalProps={{ keepMounted: true }}
           sx={{
-            display: { xs: 'block', sm: 'none' },
+            display: { xs: 'block', md: 'none' },
             width: DRAWER_WIDTH,
             flexShrink: 0,
             '& .MuiDrawer-paper': {
@@ -398,12 +400,12 @@ export function AdminLayout() {
             width: DRAWER_WIDTH,
             flexShrink: 0,
             whiteSpace: 'nowrap',
-            display: { xs: 'none', sm: 'block' },
+            display: { xs: 'none', md: 'block' },
             '& .MuiDrawer-paper': {
               width: DRAWER_WIDTH,
               boxSizing: 'border-box',
               top: 64,
-              height: 'calc(100vh - 64px)',
+              height: 'calc(100dvh - 64px)',
               zIndex: (theme) => theme.zIndex.drawer - 1,
               borderRight: '1px solid',
               borderColor: 'divider',
@@ -417,15 +419,19 @@ export function AdminLayout() {
         {/* 主内容区域 */}
         <Box
           component="main"
+          id="main-content"
+          tabIndex={-1}
           sx={{
             display: 'flex',
             flexDirection: 'column',
             flexGrow: 1,
-            width: { sm: `calc(100% - ${DRAWER_WIDTH}px)` },
+            minWidth: 0,
+            scrollMarginTop: 80,
+            width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
             overflowX: 'hidden',
           }}
         >
-          <Box sx={{ p: { xs: 2, sm: 3 }, minHeight: '100vh', overflowX: 'hidden' }}>
+          <Box sx={{ p: { xs: 2, sm: 3, lg: 4 }, flex: 1, minWidth: 0, width: '100%', maxWidth: 1280, mx: 'auto' }}>
             <Outlet />
           </Box>
         </Box>

@@ -14,19 +14,21 @@ import {
   type DrawerProps,
 } from '@mui/material'
 import { useNavigate, useLocation } from 'react-router-dom'
-import Dashboard from '@mui/icons-material/Dashboard'
-import Devices from '@mui/icons-material/Devices'
-import Group from '@mui/icons-material/Group'
-import Person from '@mui/icons-material/Person'
-import AdminPanelSettings from '@mui/icons-material/AdminPanelSettings'
-import ExitToApp from '@mui/icons-material/ExitToApp'
-import Mic from '@mui/icons-material/Mic'
-import Radio from '@mui/icons-material/Radio'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import ExpandLess from '@mui/icons-material/ExpandLess'
-import Book from '@mui/icons-material/Book'
 import { authService } from '../../services'
 import { useConfig } from '../../contexts/ConfigContext'
+import {
+  AdminIcon,
+  DashboardIcon,
+  DeviceIcon,
+  GroupIcon,
+  LogIcon,
+  LogoutIcon,
+  ProfileIcon,
+  RadioIcon,
+  RecordIcon,
+} from '../icons/BlueprintIcons'
 
 const DRAWER_WIDTH = 240
 
@@ -45,19 +47,19 @@ interface MenuItem {
 // 普通用户菜单项
 // requireApproved: true 表示需要审核通过才显示
 const menuItems: MenuItem[] = [
-  { path: '/dashboard', label: '仪表盘', icon: <Dashboard /> },
-  { path: '/radio', label: '在线收发', icon: <Radio />, requireApproved: true },
-  { path: '/devices', label: '设备管理', icon: <Devices />, requireApproved: true },
-  { path: '/groups', label: '群组管理', icon: <Group />, requireApproved: true },
-  { path: '/profile', label: '个人中心', icon: <Person /> },
+  { path: '/dashboard', label: '仪表盘', icon: <DashboardIcon /> },
+  { path: '/radio', label: '在线收发', icon: <RadioIcon />, requireApproved: true },
+  { path: '/devices', label: '设备管理', icon: <DeviceIcon />, requireApproved: true },
+  { path: '/groups', label: '群组管理', icon: <GroupIcon />, requireApproved: true },
+  { path: '/profile', label: '个人中心', icon: <ProfileIcon /> },
   {
     path: '/comm-records',
     label: '通信记录',
-    icon: <Mic />,
+    icon: <RecordIcon />,
     requireApproved: true,
     children: [
-      { path: '/comm-records/platform', label: '平台发信记录', icon: <Mic /> },
-      { path: '/comm-records/logbook', label: '通联日志', icon: <Book /> },
+      { path: '/comm-records/platform', label: '平台发信记录', icon: <RecordIcon /> },
+      { path: '/comm-records/logbook', label: '通联日志', icon: <LogIcon /> },
     ]
   },
 ]
@@ -128,10 +130,9 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
 
   const drawerContent = (
     <Box component="nav" aria-label="主导航" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ p: 2 }}>
-        <Typography component="div" variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
-          DraARL
-        </Typography>
+      <Box sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>DraARL / CONSOLE</Typography>
+        <Typography component="div" variant="h6">我的工作台</Typography>
       </Box>
       <List sx={{ flex: 1, py: 1 }}>
         {menuItems
@@ -154,7 +155,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
                     onClick={() => isExpandableMenu ? toggleMenu() : handleNavigate(item.path)}
                     sx={{
                       mx: 1,
-                      borderRadius: 2,
+                      borderRadius: 0,
                       '&.Mui-selected': {
                         bgcolor: 'action.selected',
                         '&:hover': { bgcolor: 'action.hover' },
@@ -180,8 +181,8 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
 
                 {/* 子菜单 - 使用折叠动画 */}
                 {item.children && (
-                  <Collapse in={showChildren} timeout="auto" unmountOnExit>
-                    <Divider sx={{ mb: 1, mx: 2, borderColor: 'grey.300' }} />
+                  <Collapse in={showChildren} timeout={0} unmountOnExit>
+                    <Divider sx={{ mb: 1, mx: 2, borderColor: 'divider' }} />
                     <List disablePadding sx={{ pl: 2, mb: 1 }}>
                       {item.children.map((child, index) => (
                         <ListItem
@@ -194,7 +195,7 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
                             onClick={() => handleNavigate(child.path)}
                             sx={{
                               mx: 1,
-                              borderRadius: 2,
+                              borderRadius: 0,
                               '&.Mui-selected': {
                                 bgcolor: 'action.selected',
                                 '&:hover': { bgcolor: 'action.hover' },
@@ -226,20 +227,20 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
         {isAdmin && (
           <ListItemButton
             onClick={handleAdminPanel}
-            sx={{ borderRadius: 2, mb: 1, color: 'secondary.main' }}
+            sx={{ borderRadius: 0, mb: 1, color: 'secondary.main' }}
           >
             <ListItemIcon sx={{ minWidth: 40, color: 'secondary.main' }}>
-              <AdminPanelSettings />
+              <AdminIcon />
             </ListItemIcon>
             <ListItemText primary="后台管理" />
           </ListItemButton>
         )}
         <ListItemButton
           onClick={handleLogout}
-          sx={{ borderRadius: 2, color: 'error.main' }}
+          sx={{ borderRadius: 0, color: 'error.main' }}
         >
           <ListItemIcon sx={{ minWidth: 40, color: 'error.main' }}>
-            <ExitToApp />
+            <LogoutIcon />
           </ListItemIcon>
           <ListItemText primary="退出登录" />
         </ListItemButton>
@@ -313,8 +314,8 @@ export function Sidebar({ onClose, open, variant = 'permanent', sx, ...props }: 
           '& .MuiDrawer-paper': {
             width: DRAWER_WIDTH,
             boxSizing: 'border-box',
-            top: 0,
-            height: '100vh',
+            top: 64,
+            height: 'calc(100dvh - 64px)',
             zIndex: (theme) => theme.zIndex.drawer - 1,
             borderRight: '1px solid',
             borderColor: 'divider',

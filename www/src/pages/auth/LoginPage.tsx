@@ -15,11 +15,11 @@ import {
   Tabs,
   Tab,
 } from '@mui/material'
-import Radio from '@mui/icons-material/Radio'
 import { authService, ssoService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { PublicPageLayout } from '../../components/layout'
+import { AntennaIcon } from '../../components/icons/BlueprintIcons'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -245,9 +245,12 @@ export function LoginPage() {
 
   return (
     <PublicPageLayout>
-      <Card elevation={3}>
-        <CardContent sx={{ p: 4 }}>
-          <Box sx={{ textAlign: 'center', mb: 4 }}>
+      <Card sx={{ borderTop: '2px solid', borderTopColor: 'secondary.main' }}>
+        <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
+          <Box sx={{ textAlign: 'left', mb: 3 }}>
+            <Typography variant="caption" color="secondary.main" sx={{ display: 'block', mb: 2 }}>
+              {siteShorthand} / 账户接入
+            </Typography>
             {logoUrl ? (
               <Box
                 component="img"
@@ -265,13 +268,12 @@ export function LoginPage() {
                 }}
               />
             ) : (
-              <Radio
-                sx={{ fontSize: 64, color: 'primary.main', mb: 1, cursor: 'pointer' }}
-                onClick={() => navigate('/')}
+              <AntennaIcon
+                sx={{ fontSize: 36, color: 'secondary.main', mb: 1 }}
               />
             )}
-            <Typography variant="h6" component="h1" gutterBottom sx={{ fontWeight: 500 }}>
-              {siteShorthand}
+            <Typography variant="h2" component="h1" gutterBottom>
+              登录控制台
             </Typography>
             <Typography variant="body1" color="text.secondary">
               {siteName}
@@ -301,6 +303,7 @@ export function LoginPage() {
               <TextField
                 fullWidth
                 label="用户名/邮箱"
+                autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 margin="normal"
@@ -311,6 +314,7 @@ export function LoginPage() {
                 fullWidth
                 label="密码"
                 type="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 margin="normal"
@@ -325,21 +329,17 @@ export function LoginPage() {
                   required
                   sx={{ flex: 1, minWidth: 180 }}
                 />
-                <Box
-                  component="img"
-                  src={captchaImage}
-                  alt="验证码"
+                <Button
+                  type="button"
+                  variant="outlined"
+                  aria-label="刷新图片验证码"
                   onClick={getCaptcha}
-                  sx={{
-                    height: 64,
-                    width: { xs: '100%', sm: 180 },
-                    maxWidth: 180,
-                    cursor: 'pointer',
-                    borderRadius: 1,
-                    bgcolor: 'action.hover',
-                    objectFit: 'contain',
-                  }}
-                />
+                  sx={{ height: 64, width: { xs: '100%', sm: 180 }, maxWidth: 180, p: 0, flexShrink: 0, alignSelf: 'flex-start' }}
+                >
+                  {captchaImage ? (
+                    <Box component="img" src={captchaImage} alt="图片验证码" sx={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : '刷新图片验证码'}
+                </Button>
               </Box>
               <Button
                 fullWidth
@@ -360,6 +360,7 @@ export function LoginPage() {
               <TextField
                 fullWidth
                 label="邮箱地址"
+                autoComplete="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -376,25 +377,22 @@ export function LoginPage() {
                   required
                   sx={{ flex: 1, minWidth: 180 }}
                 />
-                <Box
-                  component="img"
-                  src={captchaImage}
-                  alt="验证码"
+                <Button
+                  type="button"
+                  variant="outlined"
+                  aria-label="刷新图片验证码"
                   onClick={getCaptcha}
-                  sx={{
-                    height: 64,
-                    width: { xs: '100%', sm: 180 },
-                    maxWidth: 180,
-                    cursor: 'pointer',
-                    borderRadius: 1,
-                    bgcolor: 'action.hover',
-                    objectFit: 'contain',
-                  }}
-                />
+                  sx={{ height: 64, width: { xs: '100%', sm: 180 }, maxWidth: 180, p: 0, flexShrink: 0, alignSelf: 'flex-start' }}
+                >
+                  {captchaImage ? (
+                    <Box component="img" src={captchaImage} alt="图片验证码" sx={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  ) : '刷新图片验证码'}
+                </Button>
               </Box>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 2 }}>
                 <TextField
                   label="邮箱验证码"
+                  autoComplete="one-time-code"
                   value={emailCode}
                   onChange={(e) => setEmailCode(e.target.value)}
                   required
@@ -450,15 +448,7 @@ export function LoginPage() {
                 size="large"
                 onClick={handleSSOLogin}
                 disabled={loading}
-                sx={{
-                  background: 'linear-gradient(45deg, #2196f3 30%, #21cbf3 90%)',
-                  color: 'white',
-                  borderColor: 'transparent',
-                  '&:hover': {
-                    background: 'linear-gradient(45deg, #1976d2 30%, #1e88e5 90%)',
-                    borderColor: 'transparent',
-                  },
-                }}
+                sx={{ color: 'text.primary', borderColor: 'secondary.main' }}
               >
                 使用 {config.sso_name || 'SSO'} 登录
               </Button>

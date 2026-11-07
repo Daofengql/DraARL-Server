@@ -10,20 +10,8 @@ import {
   Stack,
   Skeleton,
   useTheme,
-  alpha,
   useMediaQuery,
 } from '@mui/material'
-import Devices from '@mui/icons-material/Devices'
-import CheckCircle from '@mui/icons-material/CheckCircle'
-import Group from '@mui/icons-material/Group'
-import People from '@mui/icons-material/People'
-import Radio from '@mui/icons-material/Radio'
-import DashboardIcon from '@mui/icons-material/Dashboard'
-import RecordVoiceOver from '@mui/icons-material/RecordVoiceOver'
-import Storage from '@mui/icons-material/Storage'
-import Timer from '@mui/icons-material/Timer'
-import Memory from '@mui/icons-material/Memory'
-import Speed from '@mui/icons-material/Speed'
 import Refresh from '@mui/icons-material/Refresh'
 import {
   LineChart,
@@ -40,55 +28,22 @@ import { commStatsService } from '../../services/commStats'
 import { systemService } from '../../services/system'
 import type { SystemOverview } from '../../services/system'
 import type { DailyCommStats } from '../../types'
+import { BlueprintStatCard as StatCard } from '../../components/common/BlueprintStatCard'
 import { SITE_CONFIG } from '../../config/site'
 import { useConfig } from '../../contexts/ConfigContext'
-
-interface StatCardProps {
-  title: string
-  value: number | string
-  icon: React.ReactNode
-  color: 'primary' | 'success' | 'info' | 'warning'
-}
-
-function StatCard({ title, value, icon, color }: StatCardProps) {
-  const theme = useTheme()
-  const colorConfig = {
-    primary: { bg: alpha(theme.palette.primary.main, 0.12), color: 'primary.main' },
-    success: { bg: alpha(theme.palette.success.main, 0.12), color: 'success.main' },
-    info: { bg: alpha(theme.palette.info.main, 0.12), color: 'info.main' },
-    warning: { bg: alpha(theme.palette.warning.main, 0.12), color: 'warning.main' },
-  }
-
-  const config = colorConfig[color]
-
-  return (
-    <Card>
-      <CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Box>
-            <Typography variant="body2" color="text.secondary">
-              {title}
-            </Typography>
-            <Typography variant="h4" fontWeight={700} mt={1}>
-              {typeof value === 'number' ? value.toLocaleString() : value}
-            </Typography>
-          </Box>
-          <Box
-            sx={{
-              p: 2,
-              borderRadius: 2,
-              bgcolor: config.bg,
-              color: config.color,
-              display: 'flex',
-            }}
-          >
-            {icon}
-          </Box>
-        </Stack>
-      </CardContent>
-    </Card>
-  )
-}
+import {
+  CheckIcon,
+  DashboardIcon,
+  DeviceIcon,
+  GaugeIcon,
+  GroupIcon,
+  MemoryIcon,
+  RadioIcon,
+  RecordIcon,
+  StorageIcon,
+  TimerIcon,
+  UsersIcon,
+} from '../../components/icons/BlueprintIcons'
 
 // 格式化文件大小
 function formatFileSize(bytes: number): string {
@@ -150,12 +105,14 @@ function ResourceCard({
             <Box sx={{ color: `${color}.main`, display: 'flex' }}>{icon}</Box>
             <Typography variant="body2" color="text.secondary">{title}</Typography>
           </Stack>
-          <Typography variant="h6" fontWeight={700}>{value}</Typography>
+          <Typography component="p" variant="h6" fontWeight={700}>{value}</Typography>
         </Stack>
         <LinearProgress
-          variant={typeof percent === 'number' ? 'determinate' : 'indeterminate'}
+          aria-label={title}
+          color={color}
+          variant="determinate"
           value={percent || 0}
-          sx={{ mt: 2, height: 7, borderRadius: 4, '& .MuiLinearProgress-bar': { backgroundColor: barColor } }}
+          sx={{ mt: 2, height: 7, borderRadius: 0, '& .MuiLinearProgress-bar': { backgroundColor: barColor } }}
         />
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>{detail}</Typography>
       </CardContent>
@@ -263,29 +220,30 @@ export function AdminDashboardPage() {
       {/* 欢迎信息卡片 */}
       <Card
         sx={{
-          background: 'linear-gradient(135deg, #1565C0 0%, #0D47A1 100%)',
-          color: 'white',
-          border: 'none',
-          boxShadow: 3,
+          borderTop: '2px solid',
+          borderTopColor: 'secondary.main',
         }}
       >
         <CardContent>
+          <Typography variant="caption" color="secondary.main" sx={{ display: 'block', mb: 2 }}>
+            DraARL / 系统概览
+          </Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={2} justifyContent="space-between">
             <Stack direction="row" alignItems="center" spacing={2}>
-              <DashboardIcon sx={{ fontSize: 40 }} />
+              <DashboardIcon sx={{ fontSize: 28, color: 'secondary.main', display: { xs: 'none', sm: 'block' } }} />
               <Box>
-                <Typography variant="h5" fontWeight={600}>
-                  后台管理系统
+                <Typography component="h1" variant="h5" fontWeight={600}>
+                  系统数据
                 </Typography>
-                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)', mt: 0.5 }}>
-                  {siteName} - 系统数据
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  {siteName} · 主机资源与平台通信概览
                 </Typography>
               </Box>
             </Stack>
             <Button
               onClick={() => { void fetchSystemStats() }}
               startIcon={<Refresh />}
-              sx={{ color: 'inherit', borderColor: 'rgba(255,255,255,0.55)', whiteSpace: 'nowrap', alignSelf: { xs: 'stretch', sm: 'auto' }, '&:hover': { borderColor: 'white', bgcolor: 'rgba(255,255,255,0.12)' } }}
+              sx={{ color: 'text.primary', whiteSpace: 'nowrap', alignSelf: { xs: 'stretch', sm: 'auto' } }}
               variant="outlined"
             >
               刷新数据
@@ -312,9 +270,9 @@ export function AdminDashboardPage() {
           sx={{ px: 3, py: 2 }}
         >
           <Stack direction="row" spacing={1} alignItems="center">
-            <Speed color="primary" />
+            <GaugeIcon color="primary" />
             <Box>
-              <Typography variant="h6" fontWeight={600}>服务器概览</Typography>
+              <Typography component="h2" variant="h6" fontWeight={600}>服务器概览</Typography>
               <Typography variant="caption" color="text.secondary">主机资源与 DraARL 进程运行状态</Typography>
             </Box>
           </Stack>
@@ -332,7 +290,7 @@ export function AdminDashboardPage() {
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 2, px: 3, pb: 3 }}>
               <ResourceCard
                 title="CPU 使用率"
-                icon={<Speed />}
+                icon={<GaugeIcon />}
                 value={formatPercent(systemOverview.cpu_usage_percent)}
                 percent={systemOverview.cpu_usage_percent}
                 detail={`${systemOverview.cpu_cores} 核 · 负载 ${systemOverview.load_average?.[0]?.toFixed(2) || '暂不可用'}`}
@@ -340,7 +298,7 @@ export function AdminDashboardPage() {
               />
               <ResourceCard
                 title="内存使用率"
-                icon={<Memory />}
+                icon={<MemoryIcon />}
                 value={systemOverview.memory.available ? formatPercent(systemOverview.memory.used_percent) : '暂不可用'}
                 percent={systemOverview.memory.available ? systemOverview.memory.used_percent : undefined}
                 detail={systemOverview.memory.available ? `${formatFileSize(systemOverview.memory.used_bytes)} / ${formatFileSize(systemOverview.memory.total_bytes)}` : '当前平台未提供主机内存数据'}
@@ -348,7 +306,7 @@ export function AdminDashboardPage() {
               />
               <ResourceCard
                 title="磁盘使用率"
-                icon={<Storage />}
+                icon={<StorageIcon />}
                 value={systemOverview.disk.available ? formatPercent(systemOverview.disk.used_percent) : '暂不可用'}
                 percent={systemOverview.disk.available ? systemOverview.disk.used_percent : undefined}
                 detail={systemOverview.disk.available ? `${formatFileSize(systemOverview.disk.free_bytes)} 可用` : '当前平台未提供磁盘容量数据'}
@@ -387,25 +345,25 @@ export function AdminDashboardPage() {
         <StatCard
           title="总设备数"
           value={stats.total_devices}
-          icon={<Devices />}
+          icon={<DeviceIcon />}
           color="primary"
         />
         <StatCard
           title="在线设备"
           value={stats.online_devices}
-          icon={<CheckCircle />}
+          icon={<CheckIcon />}
           color="success"
         />
         <StatCard
           title="群组数量"
           value={stats.total_groups}
-          icon={<Group />}
+          icon={<GroupIcon />}
           color="info"
         />
         <StatCard
           title="用户数量"
           value={stats.total_users}
-          icon={<People />}
+          icon={<UsersIcon />}
           color="warning"
         />
       </Box>
@@ -421,20 +379,20 @@ export function AdminDashboardPage() {
         <StatCard
           title="通信记录数"
           value={commStats.total_count}
-          icon={<RecordVoiceOver />}
+          icon={<RecordIcon />}
           color="primary"
         />
         <StatCard
           title="通信总大小"
           value={formatFileSize(commStats.total_size)}
-          icon={<Storage />}
+          icon={<StorageIcon />}
           color="info"
         />
         <StatCard
           title="通信总时长"
           value={formatDuration(commStats.total_duration)}
-          icon={<Timer />}
-          color="success"
+          icon={<TimerIcon />}
+          color="info"
         />
       </Box>
 
@@ -442,8 +400,8 @@ export function AdminDashboardPage() {
       <Card>
         <CardContent>
           <Stack direction="row" alignItems="center" spacing={1} mb={2}>
-            <RecordVoiceOver color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <RecordIcon color="primary" />
+            <Typography component="h2" variant="h6" fontWeight={600}>
               近30天平台通信趋势
             </Typography>
           </Stack>
@@ -451,24 +409,25 @@ export function AdminDashboardPage() {
             {commTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={commTrend} margin={{ top: 5, right: isMobile ? 5 : 60, left: isMobile ? 0 : 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
                   <XAxis
                     dataKey="date"
-                    tick={{ fontSize: isMobile ? 10 : 12 }}
-                    interval={isMobile ? 'preserveStartEnd' : 0}
+                    tick={{ fontSize: isMobile ? 10 : 12, fill: theme.palette.text.secondary }}
+                    interval="preserveStartEnd"
+                    minTickGap={24}
                     tickFormatter={(value) => value ? value.slice(5) : ''}
                   />
                   <YAxis
                     yAxisId="left"
-                    tick={{ fontSize: isMobile ? 10 : 12 }}
+                    tick={{ fontSize: isMobile ? 10 : 12, fill: theme.palette.text.secondary }}
                     allowDecimals={false}
                     width={isMobile ? 35 : 60}
                   />
                   <YAxis
                     yAxisId="right"
                     orientation="right"
-                    tick={{ fontSize: isMobile ? 10 : 12 }}
-                    tickFormatter={(value) => `${Math.round(value / 60000)}分`}
+                    tick={{ fontSize: isMobile ? 10 : 12, fill: theme.palette.text.secondary }}
+                    tickFormatter={(value) => value < 60000 ? `${Number((value / 1000).toFixed(1))}秒` : `${Math.round(value / 60000)}分`}
                     width={isMobile ? 35 : 60}
                   />
                   <Tooltip
@@ -490,6 +449,7 @@ export function AdminDashboardPage() {
                     stroke={theme.palette.primary.main}
                     strokeWidth={2}
                     dot={false}
+                    isAnimationActive={false}
                     name="通信次数"
                   />
                   <Line
@@ -499,6 +459,7 @@ export function AdminDashboardPage() {
                     stroke={theme.palette.success.main}
                     strokeWidth={2}
                     dot={false}
+                    isAnimationActive={false}
                     name="通信时长"
                   />
                 </LineChart>
@@ -517,8 +478,8 @@ export function AdminDashboardPage() {
         {/* 系统状态 */}
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
-            <Radio color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <RadioIcon color="primary" />
+            <Typography component="h2" variant="h6" fontWeight={600}>
               系统状态
             </Typography>
           </Stack>
@@ -534,12 +495,12 @@ export function AdminDashboardPage() {
                     : '0%'}
                 </Typography>
               </Stack>
-              <LinearProgress
+              <LinearProgress aria-label="设备在线率"
                 variant="determinate"
                 value={stats.total_devices > 0 ? (stats.online_devices / stats.total_devices) * 100 : 0}
                 sx={{
                   height: 8,
-                  borderRadius: 4,
+                  borderRadius: 0,
                   bgcolor: 'action.disabledBackground',
                   '& .MuiLinearProgress-bar': {
                     bgcolor:
@@ -568,8 +529,8 @@ export function AdminDashboardPage() {
         {/* 系统信息 */}
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} mb={3}>
-            <Devices color="primary" />
-            <Typography variant="h6" fontWeight={600}>
+            <DeviceIcon color="primary" />
+            <Typography component="h2" variant="h6" fontWeight={600}>
               系统信息
             </Typography>
           </Stack>

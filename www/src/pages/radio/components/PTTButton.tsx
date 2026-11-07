@@ -9,10 +9,8 @@ import {
   Box,
   useTheme,
   useMediaQuery,
-  keyframes,
 } from '@mui/material'
-import MicIcon from '@mui/icons-material/Mic'
-import MicOffIcon from '@mui/icons-material/MicOff'
+import { MicIcon, MicOffIcon } from '../../../components/icons/BlueprintIcons'
 
 interface PTTButtonProps {
   isPressed: boolean
@@ -24,19 +22,6 @@ interface PTTButtonProps {
   disabled?: boolean
   fullWidth?: boolean
 }
-
-// 脉冲动画
-const pulse = keyframes`
-  0% {
-    box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.4);
-  }
-  70% {
-    box-shadow: 0 0 0 10px rgba(244, 67, 54, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(244, 67, 54, 0);
-  }
-`
 
 export const PTTButton: React.FC<PTTButtonProps> = ({
   isPressed,
@@ -102,17 +87,14 @@ export const PTTButton: React.FC<PTTButtonProps> = ({
         width: fullWidth ? '100%' : undefined,
         minWidth: fullWidth ? '100%' : (isMobile ? 100 : 140),
         minHeight: isMobile ? 48 : 56,
-        borderRadius: 3,
+        borderRadius: 0,
         bgcolor: isPressed ? 'error.main' : 'primary.main',
-        color: 'white',
-        transition: 'all 0.15s ease',
-        transform: isPressed ? 'scale(0.98)' : 'scale(1)',
-        animation: isPressed ? `${pulse} 1s infinite` : 'none',
+        color: 'primary.contrastText',
+        border: '2px solid',
+        borderColor: isPressed ? 'error.main' : 'transparent',
+        transition: 'background-color 150ms, border-color 150ms, color 150ms',
         '&:hover': {
           bgcolor: isPressed ? 'error.dark' : 'primary.dark',
-        },
-        '&:active': {
-          transform: 'scale(0.98)',
         },
         '&.Mui-disabled': {
           bgcolor: 'action.disabledBackground',

@@ -65,7 +65,7 @@ func aprsConfigKey() string {
 }
 
 func accessDiscoveryConfigKey() string {
-	return "config:system:access_discovery"
+	return "config:system:access_discovery:v2"
 }
 
 // allConfigsKey 所有配置缓存键

@@ -6,7 +6,7 @@ interface BackendResponse<T> {
   data?: T
 }
 
-export type GhostTransport = 'udp' | 'websocket' | 'edge'
+export type GhostTransport = 'udp' | 'websocket'
 
 export interface AdminRadioSession {
   session_id: string

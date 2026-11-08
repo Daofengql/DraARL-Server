@@ -29,7 +29,6 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 |------|------|
 | [文档站首页](docs/index.md) | 推荐阅读顺序、文档目录、本地预览与自动发布说明 |
 | [架构设计](docs/架构设计.md) | 系统模块、数据流、部署形态和核心链路 |
-| [Type 0 节点互联协议](docs/节点互联协议.md) | 中心/边缘拓扑、控制面、数据面与安全边界 |
 | [UDP 单机转发压力测试](docs/UDP单机转发压力测试.md) | 大规模设备 fan-out 实测、瓶颈分析和容量建议 |
 | [数据字典](docs/数据字典.md) | 数据库表、字段、索引和关系说明 |
 | [使用与说明文档](docs/usage/README.md) | 部署、账号、设备、群组、在线收发、后台、运维等功能说明 |
@@ -43,9 +42,9 @@ DraARL Server 使用 Go 提供 HTTP API、WebSocket 在线收发和 UDP DraARLv1
 
 - **实时语音与文本通信**：支持 UDP DraARLv1 设备、UDP/WebSocket 幽灵 Session、单发多收、来源频道、PTT 控制、Opus 语音、半双工群组通信和频道消息历史。
 - **设备接入与管理**：支持设备密码、JWT、动态码绑定、设备 SSID、设备型号上报、远程参数配置、设备禁发/禁收、AT 控制和 SA818 频率配置。
-- **群组与互联**：支持公开/私有群组、成员即时撤销、设备切组、虚拟互联组，以及 Type 0 中心/边缘节点的跨入口路由。
+- **群组与互联**：支持公开/私有群组、成员即时撤销、设备切组、虚拟互联组，以及独立站点间的 HTTP 邀请准入和 UDP 群组音频互联。
 - **账号与审核**：支持账号密码、邮箱验证码、Keycloak SSO、JWT/refresh token、注册审核、操作证上传与审核。
-- **管理后台**：提供用户、设备、群组、中继台、服务器、资源中心、固件发布、站点配置、SMTP、APRS、缓存指标和操作日志管理。
+- **管理后台**：提供用户、设备、群组、中继台、资源中心、固件发布、站点配置、SMTP、APRS、缓存指标和操作日志管理。
 - **通联与记录**：支持平台发信记录、个人通联日志、统计趋势、音频存储和管理员侧全局查询。
 - **资源与发布**：支持本地磁盘、MinIO、R2、COS、OSS 等 S3 兼容存储，提供客户端资源 manifest、设备固件 OTA、存储迁移/审计、前端资源嵌入和多平台 Release。
 
@@ -67,7 +66,7 @@ DraARL-Server/
 ├── cmd/draarl/              # 服务入口，启动 UDP、HTTP、APRS、缓存和日志等模块
 ├── internal/
 │   ├── aprs/                # APRS 连接、配置和日志
-│   ├── accesspoint/         # 中心/边缘公开接入点发现与短期凭证
+│   ├── accesspoint/         # 本站单一 UDP 入口发现与短期凭证
 │   ├── auth/                # refresh token 存储，release 要求 Redis，development/test 可内存降级
 │   ├── captcha/             # 图形验证码
 │   ├── config/              # YAML 配置、默认值、Origin 校验
@@ -75,10 +74,10 @@ DraARL-Server/
 │   ├── gormdb/              # GORM 模型、仓储和自动迁移
 │   ├── ghostsession/        # 幽灵安装实例、在线 Session 与多收路由
 │   ├── handler/             # HTTP API 处理器
-│   ├── interconnect/        # Type 0 中心/边缘控制面、数据面与恢复
+│   ├── interconnect/        # 本机会话仲裁、独立站间 HTTP 准入与 UDP 音频
 │   ├── middleware/          # 登录、审核、管理员、群组权限和限流中间件
 │   ├── protocol/            # DraARLv1 协议编解码和设备字段校验
-│   ├── routesync/           # 数据库变更到运行态/边缘投影同步
+│   ├── routesync/           # 数据库权限、群组变更到本机运行态同步
 │   ├── server/              # Gin 路由、WebSocket、前端静态资源服务
 │   └── udphub/              # UDP 设备运行态、语音转发、群组互联和通信记录
 ├── pkg/                     # JWT、缓存、存储、WebSocket、加密、GeoIP 等公共包
@@ -153,7 +152,7 @@ cp config.yaml.example config.yaml
 - `Storage`：选择 `local`、`minio`、`s3`、`r2`、`cos` 或 `oss`；可通过命名 profile 切换和迁移，并可启用 EdgeOne TypeA CDN 下载签名。
 - `GhostSessions`：设置每账号在线幽灵 Session 数与每 Session 接收频道数上限。
 - `MessageAPI`：设置频道消息分页、账号/IP 限流和数据库查询并发上限。
-- `Interconnect` / `Edge`：仅在启用 Type 0 中心/边缘部署时配置。
+- `Interconnect`：按需启用独立站间互联，设置本站中心 ID 和邀请有效期。设备入口在后台“站点配置 → 接入点”配置节点 ID、IP／域名和 UDP 端口。
 
 ### 4. 安装依赖并构建前端
 
@@ -287,7 +286,6 @@ git push origin "$VERSION"
 | 类型 | 默认/常用端口 | 说明 |
 |------|---------------|------|
 | UDP 设备接入 | `60050` | DraARLv1 设备接入和语音转发 |
-| Type 0 节点控制 | `60100/tcp` | 可选的中心/边缘 TLS 控制面；数据面仍复用 UDP `60050` |
 | HTTP API / Web | `9000` 或本地开发常用 `9002` | Gin API、WebSocket、前端静态资源 |
 | Vite 开发服务器 | `9001` | 前端开发预览，代理 `/api` 到后端 |
 | WebSocket | `/ws` | 浏览器在线收发连接入口 |
@@ -318,7 +316,7 @@ git push origin "$VERSION"
 - 使用 Redis 保存 refresh token，避免进程重启导致登录态丢失。
 - 根据部署规模选择 local 或私有 S3 兼容存储；生产环境使用预签名读写，不要开放 bucket 匿名访问。
 - 从更早版本升级到 `v2.0.0-alpha3` 前先执行备份，并在维护窗口显式运行 `-auto-migrate`；频道消息迁移会回填消息类型、发送者快照和投递群组快照。
-- UDP 统一按实际 socket 对端地址认证和限速。使用 UDP 转发时应保留各设备端点；中心与边缘互联使用项目自身的认证链路。旧 PROXY v2 配置选项会被忽略。HTTP 反向代理单独使用 `System.HTTPTrustedProxyCIDRs`。
+- UDP 统一按实际 socket 对端地址认证和限速。使用 UDP 转发时应保留各设备端点；独立站间互联使用 HTTP 邀请准入，并在主 UDP 端口交换认证音频。旧 PROXY v2 配置选项会被忽略。HTTP 反向代理单独使用 `System.HTTPTrustedProxyCIDRs`。
 - 首次上线后立即修改默认管理员密码，并检查注册审核、操作证审核和设备绑定策略。
 
 更多排障内容请阅读 [运维与排障](docs/usage/08-运维与排障.md)。

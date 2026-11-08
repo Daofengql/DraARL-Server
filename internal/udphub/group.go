@@ -93,20 +93,18 @@ func CreatePublicGroup(gp *models.Group) error {
 	gp.ID = gormGroup.ID
 
 	newGroup := &models.Group{
-		ID:           gp.ID,
-		Name:         gp.Name,
-		Type:         gp.Type,
-		Password:     gp.Password,
-		OwerID:       gp.OwerID,
-		DevList:      gp.DevList,
-		MasterServer: gp.MasterServer,
-		SlaveServer:  gp.SlaveServer,
-		Status:       1,
-		CreateTime:   time.Now().Format("2006-01-02 15:04:05"),
-		UpdateTime:   time.Now().Format("2006-01-02 15:04:05"),
-		Note:         gp.Note,
-		ConnPool:     newConnPool(),
-		DevMap:       make(map[int]*models.Device),
+		ID:         gp.ID,
+		Name:       gp.Name,
+		Type:       gp.Type,
+		Password:   gp.Password,
+		OwerID:     gp.OwerID,
+		DevList:    gp.DevList,
+		Status:     1,
+		CreateTime: time.Now().Format("2006-01-02 15:04:05"),
+		UpdateTime: time.Now().Format("2006-01-02 15:04:05"),
+		Note:       gp.Note,
+		ConnPool:   newConnPool(),
+		DevMap:     make(map[int]*models.Device),
 	}
 
 	publicGroupMu.Lock()

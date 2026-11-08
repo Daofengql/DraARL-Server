@@ -58,9 +58,6 @@ func (a *WSManagerAdapter) BroadcastToGroups(groupIDs []int, data []byte, messag
 			if !groupaccess.CanReceiveRoute(device.IsDisabledRecv(), rxGroupIDs, groupID) {
 				continue
 			}
-			if udphub.CenterIdentityOwnedByRemote(device.UserID, device.SSID) {
-				continue
-			}
 			if filter.ExcludeDeviceID != 0 && !device.IsGhost() && device.GetDeviceID() == filter.ExcludeDeviceID {
 				continue
 			}

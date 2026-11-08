@@ -43,8 +43,7 @@ func StartUDPServer(port int) error {
 
 // StartUDPServerWithReady reports the bind/pipeline initialization result
 // exactly once. The service continues running until StopUDPServer is called.
-// This lets the main process start the TLS node control plane only after the
-// shared UDP socket is ready for both device and Type 0 traffic.
+// Site media attaches only after the shared device UDP socket is bound.
 func StartUDPServerWithReady(port int, ready chan<- error) error {
 	return startDraARLServer(port, ready)
 }
@@ -119,17 +118,12 @@ func startDraARLServer(port int, ready chan<- error) (result error) {
 	initPublicGroups()
 	initDeviceMACStore(config.Get())
 
-	// 冷启动时先清理数据库残留的在线态。互联模式短时保留远端
-	// ownership，供仍在运行的边缘证明中心重启前的会话归属。
+	// Cold startup discards persisted online state; transports must authenticate again.
 	deviceRepo := gormdb.NewDeviceRepository()
-	preserveRemoteEntries := false
-	if cfg := config.TryGet(); cfg != nil {
-		preserveRemoteEntries = cfg.Interconnect.Enabled
-	}
-	if err := deviceRepo.PrepareDevicesForStartup(preserveRemoteEntries); err != nil {
+	if err := deviceRepo.MarkAllDevicesOffline(); err != nil {
 		log.Printf("[UDP] Reset persisted device online flags failed: %v", err)
 	} else {
-		log.Printf("[UDP] Reset persisted device online flags on startup (preserve_remote_entries=%t)", preserveRemoteEntries)
+		log.Printf("[UDP] Reset persisted device online flags on startup")
 	}
 
 	// ==========================================

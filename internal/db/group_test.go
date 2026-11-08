@@ -15,14 +15,3 @@ func TestRelayListQueryUsesStableColumnList(t *testing.T) {
 		t.Fatalf("relay list query must not use SELECT *: %s", relayListQuery)
 	}
 }
-
-func TestServerListQueryUsesOnlyStableProjection(t *testing.T) {
-	query := strings.Join(strings.Fields(serverListQuery), " ")
-	want := "SELECT id, name, dns_name, is_online, create_time, update_time FROM servers WHERE status = 1 ORDER BY id"
-	if query != want {
-		t.Fatalf("query=%q want=%q", query, want)
-	}
-	if strings.Contains(strings.ToUpper(serverListQuery), "SELECT *") {
-		t.Fatalf("server list query must not use SELECT *: %s", serverListQuery)
-	}
-}

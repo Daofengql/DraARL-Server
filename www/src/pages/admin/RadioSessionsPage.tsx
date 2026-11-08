@@ -35,7 +35,6 @@ type TransportFilter = 'all' | GhostTransport
 const transportNames: Record<GhostTransport, string> = {
   udp: 'UDP',
   websocket: 'WebSocket',
-  edge: '边缘节点',
 }
 
 function formatTime(value: string) {
@@ -164,7 +163,6 @@ export function RadioSessionsPage() {
               <MenuItem value="all">全部</MenuItem>
               <MenuItem value="udp">UDP</MenuItem>
               <MenuItem value="websocket">WebSocket</MenuItem>
-              <MenuItem value="edge">边缘节点</MenuItem>
             </Select>
           </FormControl>
         </Stack>

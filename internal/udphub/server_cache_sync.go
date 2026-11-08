@@ -157,7 +157,6 @@ func refreshGroupCache() {
 	publicGroupMap = newGroupCache
 	publicGroupMu.Unlock()
 	if receiverRoutingChanged {
-		resetDomainGroupReverseCache()
 		InvalidateDomainReceiverCache()
 	}
 

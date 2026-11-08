@@ -15,7 +15,6 @@ type Transport string
 const (
 	TransportUDP       Transport = "udp"
 	TransportWebSocket Transport = "websocket"
-	TransportEdge      Transport = "edge"
 )
 
 var (

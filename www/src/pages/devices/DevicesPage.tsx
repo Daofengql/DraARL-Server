@@ -346,9 +346,6 @@ export function DevicesPage() {
                         <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
                           最新 IP：{device.last_online_ip || '-'}{device.last_online_ip_location ? ` · ${device.last_online_ip_location}` : ''}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
-                          {device.is_online ? '当前入口' : '最近入口'}：{device.entry_node_name || '-'}
-                        </Typography>
                         <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
                           <Button size="small" variant="outlined" onClick={() => handleOpenSwitchDialog(device)}>
                             切换群组{group?.type === GROUP_TYPE_PRIVATE ? ' · 私有' : ''}
@@ -381,7 +378,6 @@ export function DevicesPage() {
               <TableCell align="center">设备类型</TableCell>
               <TableCell align="center">呼号-SSID</TableCell>
               <TableCell align="center">最新上线IP</TableCell>
-              <TableCell align="center">入口服务器</TableCell>
               <TableCell align="center">所在群组</TableCell>
               <TableCell align="center" sx={{ width: 150 }}>收发控制</TableCell>
               <TableCell align="center" sx={{ width: 120 }}>操作</TableCell>
@@ -427,14 +423,6 @@ export function DevicesPage() {
                       {device.last_online_ip_location && (
                         <Typography variant="caption" color="text.secondary">
                           {device.last_online_ip_location}
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell align="center">
-                      <Typography variant="body2">{device.entry_node_name || '-'}</Typography>
-                      {device.entry_node_name && (
-                        <Typography variant="caption" color="text.secondary">
-                          {device.is_online ? '当前入口' : '最近入口'}
                         </Typography>
                       )}
                     </TableCell>

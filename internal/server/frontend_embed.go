@@ -150,8 +150,6 @@ func frontendTitleSuffix(requestPath string) string {
 		return " - 移动端"
 	case "/admin/relays":
 		return " - 中继台"
-	case "/admin/servers":
-		return " - 服务器"
 	case "/admin/client-resources":
 		return " - 资源分发"
 	case "/admin/firmware":

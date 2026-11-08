@@ -37,7 +37,6 @@ markdown_extensions:
 nav:
   - 首页: index.md
   - 架构设计: 架构设计.md
-  - Type 0 节点互联协议: 节点互联协议.md
   - UDP 转发压力测试: UDP单机转发压力测试.md
   - 幽灵多收与消息查询性能验证: 幽灵多收与消息查询性能验证.md
   - 数据字典: 数据字典.md

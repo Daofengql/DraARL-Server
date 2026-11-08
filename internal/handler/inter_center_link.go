@@ -128,8 +128,6 @@ func peerLinkView(l *gormdb.InterCenterLink) gin.H {
 	if r := interconnect.ActiveCenterRuntime(); r != nil {
 		if r.HTTPPeers != nil {
 			status = r.HTTPPeers.Status(l.LinkID)
-		} else if r.Peers != nil {
-			status = r.Peers.Status(l.LinkID)
 		}
 	}
 	return gin.H{"link": summarizeInterCenterLink(l), "runtime": status}
@@ -246,8 +244,11 @@ func preparePeerContext(ctx context.Context, req interCenterLinkRequest, old *go
 	return l, pc, generated, nil
 }
 func applyPeer(pc interconnect.CenterPeerConfig) {
-	if r := interconnect.ActiveCenterRuntime(); r != nil && r.Peers != nil {
-		_ = r.Peers.SetConfig(pc)
+	if r := interconnect.ActiveCenterRuntime(); r != nil && r.HTTPPeers != nil {
+		// Existing admitted sessions receive policy changes below; no TCP peer connector exists.
+		if !pc.Link.Enabled || !pc.Link.Accepted {
+			r.HTTPPeers.DisableLink(pc.Link.LinkID)
+		}
 	}
 }
 func peerAudit(c *gin.Context, action, link string) {
@@ -394,9 +395,6 @@ func DeleteInterCenterLink(c *gin.Context) {
 		peerError(c, 500, "删除互联对象失败")
 		return
 	}
-	if r := interconnect.ActiveCenterRuntime(); r != nil && r.Peers != nil {
-		r.Peers.RemoveLink(l.LinkID)
-	}
 	if r := interconnect.ActiveCenterRuntime(); r != nil && r.HTTPPeers != nil {
 		r.HTTPPeers.RemoveLink(l.LinkID)
 	}
@@ -534,7 +532,7 @@ func CreateCenterPeerInvite(c *gin.Context) {
 	// locally by the importing centre to produce an HTTP admission proof.
 	token := inviteID + "." + secret
 	hash := gormdb.HashCenterPeerInviteToken(secret)
-	ttl := time.Duration(cfg.Interconnect.RegistrationTokenTTL) * time.Second
+	ttl := time.Duration(cfg.Interconnect.InviteTTLSeconds) * time.Second
 	invite := &gormdb.CenterPeerInvite{InviteID: inviteID, TokenHash: hash, CenterID: cfg.Interconnect.CenterID, LocalGroupID: req.LocalGroupID, SendAudio: req.SendAudio, ReceiveAudio: req.ReceiveAudio, VirtualDeviceName: name, Enabled: true, ExpiresAt: time.Now().Add(ttl)}
 	if err := gormdb.NewCenterPeerInviteRepository().WithContext(c.Request.Context()).Create(invite); err != nil {
 		peerError(c, 500, "保存邀请失败")

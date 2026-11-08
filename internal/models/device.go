@@ -61,11 +61,6 @@ type DeviceRuntimeSnapshot struct {
 	ReconnectCount           int
 	PreviousUDPAddr          string
 	IsReconnecting           bool
-	CurrentEntryNodeID       string
-	CurrentEntrySessionID    uint64
-	LastEntryNodeID          string
-	LastEntryAt              *time.Time
-	EntryMode                string
 	InterconnectSessionID    uint64
 	InterconnectSessionEpoch uint64
 }
@@ -130,17 +125,12 @@ type Device struct {
 	GhostCapabilities    []string `json:"ghost_capabilities,omitempty"`
 
 	// Connection state tracking
-	LastDisconnectTime       time.Time  `json:"last_disconnect_time"` // Last time device went offline
-	ReconnectCount           int        `json:"reconnect_count"`      // Number of reconnections
-	PreviousUDPAddr          string     `json:"previous_udp_addr"`    // Previous connection address
-	IsReconnecting           bool       `json:"is_reconnecting"`      // Currently in reconnection grace period
-	CurrentEntryNodeID       string     `json:"current_entry_node_id,omitempty"`
-	CurrentEntrySessionID    uint64     `json:"-"`
-	LastEntryNodeID          string     `json:"last_entry_node_id,omitempty"`
-	LastEntryAt              *time.Time `json:"last_entry_at,omitempty"`
-	EntryMode                string     `json:"entry_mode,omitempty"`
-	InterconnectSessionID    uint64     `json:"-"`
-	InterconnectSessionEpoch uint64     `json:"-"`
+	LastDisconnectTime       time.Time `json:"last_disconnect_time"` // Last time device went offline
+	ReconnectCount           int       `json:"reconnect_count"`      // Number of reconnections
+	PreviousUDPAddr          string    `json:"previous_udp_addr"`    // Previous connection address
+	IsReconnecting           bool      `json:"is_reconnecting"`      // Currently in reconnection grace period
+	InterconnectSessionID    uint64    `json:"-"`
+	InterconnectSessionEpoch uint64    `json:"-"`
 }
 
 // RuntimeSnapshot returns a copy safe to use after the caller releases the
@@ -175,9 +165,6 @@ func (d *Device) RuntimeSnapshot() DeviceRuntimeSnapshot {
 		GhostCapabilities:    append([]string(nil), d.GhostCapabilities...),
 		LastDisconnectTime:   d.LastDisconnectTime, ReconnectCount: d.ReconnectCount,
 		PreviousUDPAddr: d.PreviousUDPAddr, IsReconnecting: d.IsReconnecting,
-		CurrentEntryNodeID:    d.CurrentEntryNodeID,
-		CurrentEntrySessionID: d.CurrentEntrySessionID, LastEntryNodeID: d.LastEntryNodeID,
-		LastEntryAt: cloneTimePtr(d.LastEntryAt), EntryMode: d.EntryMode,
 		InterconnectSessionID:    d.InterconnectSessionID,
 		InterconnectSessionEpoch: d.InterconnectSessionEpoch,
 	}

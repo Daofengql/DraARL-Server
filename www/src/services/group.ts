@@ -21,8 +21,6 @@ interface BackendGroup {
   ower_id: number
   ower_callsign: string
   devlist: string
-  master_server: number
-  slave_server: number
   status: number
   create_time: string
   update_time: string
@@ -44,8 +42,6 @@ const normalizeGroup = (g: BackendGroup): Group => ({
   ower_id: g.ower_id,
   ower_callsign: g.ower_callsign,
   devlist: g.devlist,
-  master_server: g.master_server,
-  slave_server: g.slave_server,
   status: g.status,
   note: g.note,
   is_joined: g.is_joined,
@@ -128,8 +124,6 @@ export const groupService = {
       ower_id: data.ower_id,
       ower_callsign: data.ower_callsign,
       devlist: data.devlist,
-      master_server: data.master_server,
-      slave_server: data.slave_server,
       status: data.status,
       note: data.note,
       create_time: data.created_at ?? data.create_time ?? new Date().toISOString(),
@@ -149,8 +143,6 @@ export const groupService = {
       ower_id: data.ower_id,
       ower_callsign: data.ower_callsign,
       devlist: data.devlist,
-      master_server: data.master_server,
-      slave_server: data.slave_server,
       status: data.status,
       note: data.note,
       create_time: data.created_at ?? data.create_time,

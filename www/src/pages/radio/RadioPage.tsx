@@ -49,7 +49,7 @@ const useStyles = () => ({
     '@supports (height: 100dvh)': {
       height: 'calc(100dvh - 64px)',
     },
-    margin: { xs: -2, sm: -3, lg: -4 }, // 抵消父容器的 padding
+    margin: { xs: -2, sm: -3 }, // 抵消父容器的 padding
     display: 'flex',
     flexDirection: 'column',
     bgcolor: 'background.default',

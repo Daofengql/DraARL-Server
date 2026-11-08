@@ -6,7 +6,6 @@ import (
 	"log"
 	"math"
 	"net"
-	"time"
 
 	"draarl/internal/ghostsession"
 	"draarl/internal/gormdb"
@@ -441,13 +440,5 @@ func activateAndPersistCenterDeviceContext(ctx context.Context, dev *models.Devi
 		}
 		return ctx.Err()
 	}
-	now := time.Now()
-	if err := gormdb.NewDeviceRepository().UpdateDeviceEntryContext(ctx, dev.ID, "center", "center", 0, true, now); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	SyncRuntimeDeviceEntry(dev.ID, "center", "center", 0, true, now)
-	return nil
+	return ctx.Err()
 }

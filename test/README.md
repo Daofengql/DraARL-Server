@@ -1,6 +1,6 @@
 # 测试与模拟工具
 
-本目录保存独立于生产二进制的设备模拟器和 UDP fan-out/中断恢复压测工具。Go 单元、集成与竞态测试仍分布在对应包的 `*_test.go` 中。
+本目录保存独立于生产二进制的设备模拟器和 UDP fan-out 压测工具。Go 单元、集成与竞态测试仍分布在对应包的 `*_test.go` 中。
 
 ## Python 设备模拟器
 
@@ -25,8 +25,7 @@ python test/simulator/main.py
 
 ## UDP fan-out benchmark
 
-`bench/udp_fanout/` 是 Go 编写的真实 UDP socket 基准，可测试单中心、本地 fan-out、
-中心/多边缘分布、纯跨边缘转发和带切组/禁收发/配置下发/控制链重连的 churn soak。
+`bench/udp_fanout/` 是 Go 编写的真实 UDP socket 基准，可测试本机普通设备 fan-out、多群组同时发言和逐档提高包速。
 
 该工具会创建并删除数据库测试数据，运行前必须阅读
 [bench/udp_fanout/README.md](bench/udp_fanout/README.md) 的安全约束，并显式传入

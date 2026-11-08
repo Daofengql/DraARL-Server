@@ -25,18 +25,9 @@ export interface APRSConfig {
 }
 
 export interface AccessDiscoveryConfig {
-  token_ttl_seconds: number
-  cache_max_age_seconds: number
-  center: {
-    enabled: boolean
-    public_id: string
-    display_name: string
-    udp_host: string
-    udp_port: number
-    region: string
-    network: string
-    priority: number
-  }
+  node_id: string
+  udp_host: string
+  udp_port: number
 }
 
 export interface CommSettingsConfig {
@@ -91,18 +82,9 @@ export const DEFAULT_SITE_CONFIGS: SiteConfigs = {
     icp: '',
   },
   accessDiscovery: {
-    token_ttl_seconds: 300,
-    cache_max_age_seconds: 5,
-    center: {
-      enabled: false,
-      public_id: 'center',
-      display_name: '中心直连',
-      udp_host: '',
-      udp_port: 60050,
-      region: '',
-      network: '',
-      priority: 100,
-    },
+    node_id: 'center',
+    udp_host: '',
+    udp_port: 60050,
   },
   aprs: {
     aprs_server_host: '',

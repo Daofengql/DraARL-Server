@@ -81,10 +81,6 @@ export interface Device {
   owner_id?: number       // 设备所有者ID
   owner_name?: string     // 设备所有者名称
   owner_callsign?: string // 设备所有者呼号
-  entry_node_id?: string  // 入口节点内部 ID（仅管理员接口返回）
-  entry_node_name?: string // 当前在线入口或最近一次入口昵称
-  entry_mode?: string
-  entry_seen_at?: string
   create_time?: string
   created_at?: string // 前端兼容字段
   update_time?: string
@@ -110,8 +106,6 @@ export interface Group {
   ower_callsign?: string
   ower_name?: string     // 群组创建者名称
   devlist?: string
-  master_server?: number
-  slave_server?: number
   status?: number  // 0=禁用, 1=启用
   is_virtual?: boolean  // 是否为虚拟互联组
   note?: string
@@ -124,8 +118,6 @@ export interface Group {
   total_count?: number      // 总设备数
   require_password?: boolean // 是否需要密码（私有群组且未验证）
 
-  master_server_str?: string
-  slave_servers?: string[]
   create_time?: string
   created_at?: string // 前端兼容字段
   update_time?: string
@@ -208,18 +200,6 @@ export interface Relay {
 }
 
 // 服务器相关类型
-export interface Server {
-  id: number
-  name: string
-  type: number
-  ip: string
-  port: number
-  status?: number
-  location?: string
-  description?: string
-  created_at?: string
-  updated_at?: string
-}
 
 // 操作日志相关类型
 export interface OperatorLog {

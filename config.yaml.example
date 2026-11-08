@@ -44,25 +44,7 @@ Firmware:
 Interconnect:
     Enabled: false
     CenterID: "center-a"       # 每个独立站点使用不同的稳定 ID
-    RegistrationTokenTTL: 86400
-    CredentialRotationGraceSeconds: 600 # 在线轮换后旧凭据可重连的短时宽限，最大 3600 秒
-    SessionRecoveryWindowSeconds: 180   # 中心重启/节点重连时保留旧设备归属的恢复窗口，30-600 秒
-    Resources:
-        MaxNodes: 256
-        MaxPendingHandshakes: 64
-        AuthAttemptsPerMinutePerIP: 30
-        DataSoftPPSPerNode: 50000       # 软阈值只记录告警，不丢包
-        DataHardPPSPerNode: 100000
-        DataHardMbpsPerNode: 1000
-        DataQueuePerNode: 512
-        DataQueueGlobal: 4096
-        DataWorkers: 0                  # 0 按 CPU 自动选择（2-16）
-        DataMaxQueueAgeMS: 200
-        ControlSoftPPSPerNode: 1000
-        ControlHardPPSPerNode: 2000
-        ControlHardMbpsPerNode: 256
-        DeviceAuthPPSPerNode: 500
-        MaxDeviceSessionsPerNode: 25000
+    InviteTTLSeconds: 86400  # 站间互联邀请有效期
 
 # MySQL数据库配置
 Database:

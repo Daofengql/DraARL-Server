@@ -556,18 +556,18 @@ func checkDeviceOnline() {
 			finalizeCenterLocalOffline(dev)
 		}
 		setOnlineDevMap(onlineMap)
-		udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline := onlineTransportOnlineCounts()
+		udpGhostOnline, wsNormalOnline, wsGhostOnline := onlineTransportOnlineCounts()
 		physicalOnline := len(onlineMap)
-		totalOnline := totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline)
+		totalOnline := totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline)
 		setOnlineDevNumber(totalOnline)
 
-		log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 边缘幽灵=%d, 服务器总在线=%d",
-			physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline, totalOnline)
+		log.Printf("[ONLINE] 在线设备统计: 实体UDP=%d, UDP幽灵=%d, WS普通=%d, WS幽灵=%d, 服务器总在线=%d",
+			physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline, totalOnline)
 	}
 }
 
-func totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline int) int {
-	counts := []int{physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline}
+func totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline int) int {
+	counts := []int{physicalOnline, udpGhostOnline, wsNormalOnline, wsGhostOnline}
 	total := 0
 	for _, count := range counts {
 		if count > 0 {
@@ -577,19 +577,17 @@ func totalOnlineDeviceCount(physicalOnline, udpGhostOnline, wsNormalOnline, wsGh
 	return total
 }
 
-func onlineTransportOnlineCounts() (udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline int) {
+func onlineTransportOnlineCounts() (udpGhostOnline, wsNormalOnline, wsGhostOnline int) {
 	metrics := ghostsession.Global.Metrics()
 	udpGhostOnline = metrics.ByTransport[string(ghostsession.TransportUDP)]
 	wsGhostOnline = metrics.ByTransport[string(ghostsession.TransportWebSocket)]
-	edgeGhostOnline = metrics.ByTransport[string(ghostsession.TransportEdge)]
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		wsNormalOnline, _ = GlobalMessageRouter.wsManager.GetOnlineCount()
 	}
-	return udpGhostOnline, wsNormalOnline, wsGhostOnline, edgeGhostOnline
+	return udpGhostOnline, wsNormalOnline, wsGhostOnline
 }
 
-// GetOnlineGhostCount returns the live number of local UDP, WebSocket, and
-// center-managed edge ghost sessions. Multi-receive subscriptions never
+// GetOnlineGhostCount returns the live number of local UDP and WebSocket ghost sessions. Multi-receive subscriptions never
 // inflate this server-wide count.
 func GetOnlineGhostCount() int {
 	return ghostsession.Global.Metrics().OnlineSessions
@@ -610,16 +608,7 @@ func finalizeCenterLocalOffline(dev *models.Device) {
 		return
 	}
 	notifyDeviceOnlineChange(dev)
-	sessionID := dev.RuntimeSnapshot().InterconnectSessionID
 	RevokeCenterLocalDevice(dev)
-	cleared, err := gormdb.NewDeviceRepository().ClearDeviceEntryIfSession(dev.ID, "center", sessionID)
-	if err != nil {
-		log.Printf("[OFFLINE] clear centre entry failed: device=%d session=%d err=%v", dev.ID, sessionID, err)
-		return
-	}
-	if cleared {
-		ClearRuntimeDeviceEntryIfSession(dev.ID, "center", sessionID)
-	}
 }
 
 // processLogBuffer 处理日志缓冲

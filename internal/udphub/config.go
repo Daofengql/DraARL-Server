@@ -586,9 +586,6 @@ func sendDeviceConfigPacket(dev *models.Device, packet []byte) error {
 		return fmt.Errorf("device not ready")
 	}
 	state := dev.RuntimeSnapshot()
-	if handled, err := sendRemoteDeviceConfig(state.ID, packet, deviceConfigDeliveryTimeout); handled {
-		return err
-	}
 	if state.UDPAddr == nil || globalConn == nil {
 		return fmt.Errorf("device not ready")
 	}
@@ -651,67 +648,6 @@ func sendTimeSync(dev *models.Device) error {
 	state := dev.RuntimeSnapshot()
 	log.Printf("[CONFIG] 发送时间同步到设备 %s-%d", state.CallSign, state.SSID)
 	return nil
-}
-
-// BuildDeviceConfigSyncPackets builds the same initial query/set and time
-// synchronization packets used by a centre-direct device. The caller may
-// deliver them to an exact remote edge session without exposing database
-// access to the edge process.
-func BuildDeviceConfigSyncPackets(deviceID int) ([][]byte, error) {
-	dev := GetDeviceByID(deviceID)
-	if dev == nil || !protocol.IsValidNormalSSID(dev.RuntimeSnapshot().SSID) {
-		return nil, fmt.Errorf("device not found")
-	}
-	repo := gormdb.NewDeviceConfigRepository()
-	hasConfigs, err := repo.HasDeviceConfigs(dev.ID)
-	if err != nil {
-		return nil, err
-	}
-	packets := make([][]byte, 0, 2)
-	if hasConfigs {
-		configs, err := repo.GetDeviceConfigs(dev.ID)
-		if err != nil {
-			return nil, err
-		}
-		configs = filterConfigsForDevice(dev, buildConfigSnapshotForOverwrite(configs))
-		if len(configs) > 0 {
-			packet, err := encodeDeviceConfigPacket(dev, buildConfigSetPacket(configs))
-			if err != nil {
-				return nil, err
-			}
-			packets = append(packets, packet)
-		}
-	} else {
-		packet, err := encodeDeviceConfigPacket(dev, buildConfigQueryPacket())
-		if err != nil {
-			return nil, err
-		}
-		packets = append(packets, packet)
-	}
-	timePacket, err := encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
-	if err != nil {
-		return nil, err
-	}
-	return append(packets, timePacket), nil
-}
-
-// SaveDeviceConfigReportAndBuildAck persists one current-session Type 3
-// report and returns the ordinary time-sync acknowledgement packet.
-func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error) {
-	dev := GetDeviceByID(deviceID)
-	if dev == nil || !protocol.IsValidNormalSSID(dev.RuntimeSnapshot().SSID) {
-		return nil, fmt.Errorf("device not found")
-	}
-	if len(data) < 2 || data[0] != ConfigTypeSet {
-		return nil, fmt.Errorf("invalid device config report")
-	}
-	configs := buildConfigSnapshotForOverwrite(decodeTLV(data[2:]))
-	if err := gormdb.NewDeviceConfigRepository().SetDeviceConfigs(dev.ID, configs); err != nil {
-		return nil, err
-	}
-	state := dev.RuntimeSnapshot()
-	log.Printf("[CONFIG] 设备 %s-%d 上报配置，已覆盖写入 %d 项", state.CallSign, state.SSID, len(configs))
-	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 }
 
 func syncDeviceConfigAsync(dev *models.Device) {
@@ -835,4 +771,22 @@ func SaveDeviceConfigsToDB(deviceID int, configs map[string]string) error {
 	}
 
 	return nil
+}
+
+// SaveDeviceConfigReportAndBuildAck persists a native device report and returns its time-sync acknowledgement.
+func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil || !protocol.IsValidNormalSSID(dev.RuntimeSnapshot().SSID) {
+		return nil, fmt.Errorf("device not found")
+	}
+	if len(data) < 2 || data[0] != ConfigTypeSet {
+		return nil, fmt.Errorf("invalid device config report")
+	}
+	configs := buildConfigSnapshotForOverwrite(decodeTLV(data[2:]))
+	if err := gormdb.NewDeviceConfigRepository().SetDeviceConfigs(dev.ID, configs); err != nil {
+		return nil, err
+	}
+	state := dev.RuntimeSnapshot()
+	log.Printf("[CONFIG] 设备 %s-%d 上报配置，已覆盖写入 %d 项", state.CallSign, state.SSID, len(configs))
+	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 }

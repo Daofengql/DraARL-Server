@@ -17,16 +17,14 @@ func isSupportedGroupType(groupType int) bool {
 // GroupInfo 群组信息响应
 
 type GroupInfo struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`
-	Type         int    `json:"type"`
-	OwerID       int    `json:"ower_id"`
-	MasterServer int    `json:"master_server"`
-	SlaveServer  int    `json:"slave_server"`
-	Status       int    `json:"status"`
-	CreateTime   string `json:"create_time,omitempty"`
-	UpdateTime   string `json:"update_time,omitempty"`
-	Note         string `json:"note"`
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Type       int    `json:"type"`
+	OwerID     int    `json:"ower_id"`
+	Status     int    `json:"status"`
+	CreateTime string `json:"create_time,omitempty"`
+	UpdateTime string `json:"update_time,omitempty"`
+	Note       string `json:"note"`
 }
 
 type GroupMemberInfo struct {

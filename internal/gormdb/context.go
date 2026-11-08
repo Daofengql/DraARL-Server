@@ -24,10 +24,6 @@ func (r *GroupLinkRepository) WithContext(ctx context.Context) *GroupLinkReposit
 	return &GroupLinkRepository{db: r.db.WithContext(ctx)}
 }
 
-func (r *ServerRepository) WithContext(ctx context.Context) *ServerRepository {
-	return &ServerRepository{db: r.db.WithContext(ctx)}
-}
-
 func (r *AssetRepository) WithContext(ctx context.Context) *AssetRepository {
 	return &AssetRepository{db: r.db.WithContext(ctx)}
 }

@@ -113,16 +113,11 @@ func scheduledBroadcastHasReceiver(lease *ScheduledBroadcastLease) bool {
 				if len(rxGroupIDs) == 0 {
 					rxGroupIDs = []int{device.GetGroupID()}
 				}
-				if groupaccess.CanReceiveRoute(device.IsDisabledRecv(), rxGroupIDs, groupID) &&
-					!CenterIdentityOwnedByRemote(device.GetUserID(), device.GetSSID()) {
+				if groupaccess.CanReceiveRoute(device.IsDisabledRecv(), rxGroupIDs, groupID) {
 					return true
 				}
 			}
 		}
-	}
-	if lease.interconnect {
-		hooks := centerHooks()
-		return hooks.HasBroadcastReceiver != nil && hooks.HasBroadcastReceiver(lease.SourceGroupID, lease.domainID)
 	}
 	return false
 }

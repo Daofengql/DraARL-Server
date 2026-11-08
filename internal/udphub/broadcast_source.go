@@ -25,11 +25,10 @@ var (
 )
 
 type BroadcastFrameResult struct {
-	Packet      []byte
-	WSSent      int
-	WSDropped   int
-	UDPQueued   bool
-	EdgeRelayed bool
+	Packet    []byte
+	WSSent    int
+	WSDropped int
+	UDPQueued bool
 }
 
 type BroadcastSourceStats struct {
@@ -39,7 +38,6 @@ type BroadcastSourceStats struct {
 	UDPTargetsDropped int64
 	WSTargetsSent     int64
 	WSTargetsDropped  int64
-	EdgeRelayErrors   int64
 }
 
 // BroadcastSource is an internal voice producer. It has no network session,
@@ -58,7 +56,6 @@ type BroadcastSource struct {
 	udpTargetsDropped atomic.Int64
 	wsTargetsSent     atomic.Int64
 	wsTargetsDropped  atomic.Int64
-	edgeRelayErrors   atomic.Int64
 }
 
 func NewBroadcastSource(lease *ScheduledBroadcastLease) (*BroadcastSource, error) {
@@ -142,14 +139,6 @@ func (s *BroadcastSource) SendVoice(payload []byte, acceptedAt time.Time) (Broad
 		s.wsTargetsDropped.Add(int64(result.WSDropped))
 	}
 
-	hooks := centerHooks()
-	if hooks.RelayBroadcast != nil {
-		if err := hooks.RelayBroadcast(s.lease.RunID, s.lease.SourceGroupID, s.lease.domainID, packet); err != nil {
-			s.edgeRelayErrors.Add(1)
-		} else {
-			result.EdgeRelayed = true
-		}
-	}
 	s.sentPackets.Add(1)
 	return result, nil
 }
@@ -194,6 +183,5 @@ func (s *BroadcastSource) Stats() BroadcastSourceStats {
 		UDPTargetsDropped: s.udpTargetsDropped.Load(),
 		WSTargetsSent:     s.wsTargetsSent.Load(),
 		WSTargetsDropped:  s.wsTargetsDropped.Load(),
-		EdgeRelayErrors:   s.edgeRelayErrors.Load(),
 	}
 }

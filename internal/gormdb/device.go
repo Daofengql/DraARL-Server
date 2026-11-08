@@ -1,55 +1,12 @@
 package gormdb
 
 import (
-	"context"
 	"errors"
 	"maps"
-	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-func (r *DeviceRepository) UpdateDeviceEntry(deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
-	return r.UpdateDeviceEntryContext(r.db.Statement.Context, deviceID, nodeID, mode, sessionID, online, now)
-}
-
-// UpdateDeviceEntryContext allows shutdown-aware callers to cancel the row
-// lock and transaction instead of waiting on the driver's default timeout.
-func (r *DeviceRepository) UpdateDeviceEntryContext(ctx context.Context, deviceID int, nodeID, mode string, sessionID uint64, online bool, now time.Time) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	updates := map[string]interface{}{
-		"current_entry_node_id":    nodeID,
-		"current_entry_session_id": sessionID,
-		"last_entry_node_id":       nodeID,
-		"last_entry_at":            now,
-		"entry_mode":               mode,
-		"is_online":                online,
-	}
-	if online {
-		updates["online_time"] = now
-	}
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var device Device
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&device, deviceID).Error; err != nil {
-			return err
-		}
-		return tx.Model(&Device{}).Where("id = ?", deviceID).Updates(updates).Error
-	})
-}
-
-// ClearDeviceEntryIfSession prevents a delayed centre timeout from clearing a
-// newer edge assignment for the same persistent device.
-func (r *DeviceRepository) ClearDeviceEntryIfSession(deviceID int, nodeID string, sessionID uint64) (bool, error) {
-	result := r.db.Model(&Device{}).
-		Where("id = ? AND current_entry_node_id = ? AND current_entry_session_id = ?", deviceID, nodeID, sessionID).
-		Updates(map[string]interface{}{
-			"current_entry_node_id": "", "current_entry_session_id": 0, "is_online": false,
-		})
-	return result.RowsAffected > 0, result.Error
-}
 
 var ErrDeviceNotInGroup = errors.New("device is no longer in the expected group")
 
@@ -319,54 +276,15 @@ func (r *DeviceRepository) OnlineDeviceCount() (int64, error) {
 	return count, err
 }
 
-// PrepareDevicesForStartup marks every device offline. When interconnect is
-// enabled, remote ownership is retained briefly so a still-running edge can
-// prove its previous node/control-session assignment after a centre restart.
-func (r *DeviceRepository) PrepareDevicesForStartup(preserveRemoteEntries bool) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Device{}).Where("is_online = ?", true).Update("is_online", false).Error; err != nil {
-			return err
-		}
-		query := tx.Model(&Device{})
-		if preserveRemoteEntries {
-			query = query.Where("current_entry_node_id = ?", "center")
-		} else {
-			query = query.Where("current_entry_node_id <> ? OR current_entry_session_id <> ?", "", 0)
-		}
-		return query.Updates(map[string]interface{}{"current_entry_node_id": "", "current_entry_session_id": 0}).Error
-	})
-}
-
 // MarkAllDevicesOffline preserves the historical single-node behaviour.
 func (r *DeviceRepository) MarkAllDevicesOffline() error {
-	return r.PrepareDevicesForStartup(false)
-}
-
-type DeviceEntrySession struct {
-	NodeID    string `gorm:"column:current_entry_node_id"`
-	SessionID uint64 `gorm:"column:current_entry_session_id"`
-}
-
-// ListOfflineRemoteEntrySessions captures only ownership left by the previous
-// centre process. The control listener is started after this query, so later
-// disconnects cannot be swept by the startup recovery timer.
-func (r *DeviceRepository) ListOfflineRemoteEntrySessions() ([]DeviceEntrySession, error) {
-	var sessions []DeviceEntrySession
-	err := r.db.Model(&Device{}).
-		Select("DISTINCT current_entry_node_id, current_entry_session_id").
-		Where("is_online = ? AND current_entry_node_id <> ? AND current_entry_session_id <> ?", false, "", 0).
-		Find(&sessions).Error
-	return sessions, err
+	return r.db.Model(&Device{}).Where("is_online = ?", true).Update("is_online", false).Error
 }
 
 // UpdateDeviceOnlineStatus 更新设备在线状态（通过 owner_id）
 func (r *DeviceRepository) UpdateDeviceOnlineStatus(ownerID int, ssid uint8, isOnline bool, onlineTime, lastOnlineIP string) error {
 	updates := map[string]interface{}{
 		"is_online": isOnline,
-	}
-	if !isOnline {
-		updates["current_entry_node_id"] = ""
-		updates["current_entry_session_id"] = 0
 	}
 	if onlineTime != "" {
 		updates["online_time"] = onlineTime

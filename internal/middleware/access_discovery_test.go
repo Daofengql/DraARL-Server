@@ -15,7 +15,7 @@ func TestValidateDiscoveryAuthorizationAcceptsOnlyAccessOrDiscoveryTokens(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoveryToken, _, err := appjwt.GenerateEdgeDiscoveryToken(2, "device-user", 1, time.Minute)
+	discoveryToken, _, err := appjwt.GenerateDeviceDiscoveryToken(2, "device-user", 1, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestValidateDiscoveryAuthorizationAcceptsOnlyAccessOrDiscoveryTokens(t *tes
 		t.Fatalf("access token rejected: %#v, %q, %v", claims, tokenUse, err)
 	}
 	claims, tokenUse, err = validateDiscoveryAuthorization("bearer " + discoveryToken)
-	if err != nil || claims.Username != "device-user" || tokenUse != appjwt.TokenUseEdgeDiscovery {
+	if err != nil || claims.Username != "device-user" || tokenUse != appjwt.TokenUseDeviceDiscovery {
 		t.Fatalf("discovery token rejected: %#v, %q, %v", claims, tokenUse, err)
 	}
 	for _, header := range []string{"", "Basic abc", "Bearer invalid", "Bearer", "Bearer one two"} {

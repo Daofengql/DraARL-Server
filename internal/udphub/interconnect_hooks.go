@@ -49,15 +49,9 @@ type CenterInterconnectHooks struct {
 	AcquireBroadcast     func(runID uint, domainID uint64, now time.Time) bool
 	AcceptBroadcastFrame func(runID uint, domainID uint64, now time.Time) bool
 	ReleaseBroadcast     func(runID uint, domainID uint64)
-	HasBroadcastReceiver func(sourceGroupID int, domainID uint64) bool
-	RelayBroadcast       func(runID uint, sourceGroupID int, domainID uint64, data []byte) error
-	RemoteOwner          func(ownerID int, ssid byte) bool
-	Relay                func(CenterLocalSource, []byte) error
-	// RelayPeer sends only an explicitly configured centre-to-centre mapping.
-	// It is separate from Relay, which is the legacy centre-to-edge data plane.
-	RelayPeer  func(CenterLocalSource, []byte) error
-	SendConfig func(deviceID int, packet []byte, timeout time.Duration) (bool, error)
-	Revoke     func(CenterLocalSource)
+	// RelayPeer sends only an explicitly configured site-to-site mapping.
+	RelayPeer func(CenterLocalSource, []byte) error
+	Revoke    func(CenterLocalSource)
 }
 
 var centerInterconnectBridge struct {
@@ -135,39 +129,15 @@ func ActivateCenterLocalDeviceContext(ctx context.Context, dev *models.Device) e
 		return err
 	}
 	if err := ctx.Err(); err != nil {
+		if hooks.Revoke != nil {
+			hooks.Revoke(source)
+		}
 		return err
 	}
 	dev.UpdateRuntime(func(current *models.Device) {
 		current.InterconnectSessionID = source.SessionID
 		current.InterconnectSessionEpoch = source.SessionEpoch
 	})
-	return nil
-}
-
-func RelayCenterLocalDevice(dev *models.Device, data []byte) error {
-	hooks := centerHooks()
-	if hooks.Relay == nil && hooks.RelayPeer == nil {
-		return nil
-	}
-	if dev == nil || len(data) == 0 {
-		return errors.New("invalid centre-local relay")
-	}
-	if hooks.Relay != nil && dev.RuntimeSnapshot().InterconnectSessionID == 0 {
-		if err := ActivateCenterLocalDevice(dev); err != nil {
-			return err
-		}
-	}
-	source := centerSourceFromDevice(dev)
-	if hooks.Relay != nil {
-		if err := hooks.Relay(source, data); err != nil {
-			return err
-		}
-	}
-	if hooks.RelayPeer != nil {
-		if err := hooks.RelayPeer(source, data); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -266,36 +236,6 @@ func centerSourceFromWS(source interfaces.WSDeviceInterface, groupID int) Center
 
 // RelayCenterLocalWS is intentionally idempotent: a WS sender is activated on
 // demand, then the newly assigned owner/epoch is used for the same frame.
-func RelayCenterLocalWS(source interfaces.WSDeviceInterface, groupID int, data []byte) error {
-	hooks := centerHooks()
-	if hooks.Relay == nil && hooks.RelayPeer == nil {
-		return nil
-	}
-	local := centerSourceFromWS(source, groupID)
-	if local.OwnerID <= 0 || local.DomainID == 0 || len(data) == 0 {
-		return nil
-	}
-	if hooks.Relay != nil {
-		if hooks.Activate == nil {
-			return errors.New("centre activation hook is unavailable")
-		}
-		if err := hooks.Activate(&local); err != nil {
-			return err
-		}
-		source.SetInterconnectSession(local.SessionID, local.SessionEpoch)
-	}
-	if hooks.Relay != nil {
-		if err := hooks.Relay(local, data); err != nil {
-			return err
-		}
-	}
-	if hooks.RelayPeer != nil {
-		if err := hooks.RelayPeer(local, data); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func AuthorizeCenterLocalWS(source interfaces.WSDeviceInterface, groupID int) bool {
 	hooks := centerHooks()
@@ -337,24 +277,6 @@ func RevokeCenterLocalWS(source interfaces.WSDeviceInterface) {
 	}
 }
 
-func CenterIdentityOwnedByRemote(ownerID int, ssid byte) bool {
-	hooks := centerHooks()
-	return hooks.RemoteOwner != nil && hooks.RemoteOwner(ownerID, ssid)
-}
-
-func sendRemoteDeviceConfig(deviceID int, packet []byte, timeout time.Duration) (bool, error) {
-	hooks := centerHooks()
-	if hooks.SendConfig == nil {
-		return false, nil
-	}
-	return hooks.SendConfig(deviceID, packet, timeout)
-}
-
-var (
-	domainGroupReverseCache   sync.Map // domain ID -> representative active group ID
-	domainGroupReverseCacheMu sync.RWMutex
-)
-
 func GetActiveCommunicationDomainIDs(groupIDs []int) []uint64 {
 	set := make(map[uint64]struct{}, len(groupIDs))
 	for _, groupID := range groupIDs {
@@ -368,75 +290,6 @@ func GetActiveCommunicationDomainIDs(groupIDs []int) []uint64 {
 	}
 	slices.Sort(result)
 	return result
-}
-
-func resetDomainGroupReverseCache() {
-	domainGroupReverseCacheMu.Lock()
-	domainGroupReverseCache.Range(func(key, _ any) bool {
-		domainGroupReverseCache.Delete(key)
-		return true
-	})
-	domainGroupReverseCacheMu.Unlock()
-}
-
-// GetActiveGroupIDForCommunicationDomain resolves an edge frame's opaque
-// domain to one local group. A miss scans only on topology/cache changes; the
-// realtime path thereafter is a sync.Map lookup.
-func GetActiveGroupIDForCommunicationDomain(domainID uint64) int {
-	if domainID == 0 {
-		return 0
-	}
-	domainGroupReverseCacheMu.RLock()
-	value, ok := domainGroupReverseCache.Load(domainID)
-	domainGroupReverseCacheMu.RUnlock()
-	if ok {
-		return value.(int)
-	}
-	for _, group := range GetAllGroupsFromCache() {
-		if group == nil || group.Status != 1 || group.IsVirtual {
-			continue
-		}
-		if GetActiveCommunicationDomainID(group.ID) == domainID {
-			domainGroupReverseCacheMu.Lock()
-			domainGroupReverseCache.Store(domainID, group.ID)
-			domainGroupReverseCacheMu.Unlock()
-			return group.ID
-		}
-	}
-	return 0
-}
-
-// DeliverInterconnectPacket performs only centre-local UDP/WS fan-out. It
-// neither records the frame nor invokes the upstream hook, preventing loops
-// and duplicate recordings when an edge frame reaches the centre.
-func DeliverInterconnectPacket(domainID uint64, data []byte) bool {
-	if protocol.ValidateRelayInnerPacket(data) != nil {
-		return false
-	}
-	groupID := 0
-	if len(data) >= protocol.DraARLv1HeaderSize {
-		candidate := int(protocol.ReservedUint32(data[protocol.DraARLv1ReservedOffset:protocol.DraARLv1HeaderSize]))
-		if candidate > 0 && GetActiveCommunicationDomainID(candidate) == domainID {
-			groupID = candidate
-		}
-	}
-	if groupID == 0 {
-		groupID = GetActiveGroupIDForCommunicationDomain(domainID)
-	}
-	if groupID == 0 {
-		return false
-	}
-	physicalData := data
-	if cleared, ok := protocol.WithReservedUint32(data, 0); ok {
-		physicalData = cleared
-	}
-	writeUDPDomain(physicalData, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
-	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
-		GlobalMessageRouter.wsManager.BroadcastToGroups(
-			activeDomainGroupIDs(groupID), physicalData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
-		)
-	}
-	return true
 }
 
 // DeliverCenterPeerAudio injects media from another centre as a stable
@@ -465,4 +318,27 @@ func DeliverCenterPeerAudio(groupID int, data []byte, virtualDeviceName, remoteC
 	sender := CommSenderSnapshot{CallSign: identity, Nickname: identity, DevModel: int(protocol.DraARLDevModelInterconnect), SourceType: "intercenter", SourceCenterID: remoteCenterID, LinkID: linkID, VirtualDeviceID: "intercenter:" + remoteCenterID + ":" + linkID + ":" + direction}
 	RecordCommPacket(sender.VirtualDeviceID, 0, 255, &gid, nil, sender, data)
 	return true
+}
+
+func RelayCenterLocalDevice(dev *models.Device, data []byte) error {
+	hooks := centerHooks()
+	if hooks.RelayPeer == nil {
+		return nil
+	}
+	if dev == nil || len(data) == 0 {
+		return errors.New("invalid local relay")
+	}
+	return hooks.RelayPeer(centerSourceFromDevice(dev), data)
+}
+
+func RelayCenterLocalWS(source interfaces.WSDeviceInterface, groupID int, data []byte) error {
+	hooks := centerHooks()
+	if hooks.RelayPeer == nil {
+		return nil
+	}
+	local := centerSourceFromWS(source, groupID)
+	if local.OwnerID <= 0 || local.DomainID == 0 || len(data) == 0 {
+		return nil
+	}
+	return hooks.RelayPeer(local, data)
 }

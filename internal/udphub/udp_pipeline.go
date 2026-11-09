@@ -12,27 +12,27 @@ import (
 	"draarl/internal/config"
 )
 
-// Type0Handler handles authenticated DraARL node packets on the same UDP
+// PeerDatagramHandler handles authenticated site interconnection packets on the same UDP
 // socket as ordinary device traffic. Interconnect implements this interface;
 // udphub remains independent of the interconnect package.
-type Type0Handler interface {
+type PeerDatagramHandler interface {
 	Handle(data []byte, addr *net.UDPAddr) bool
 }
 
-type Type0Writer interface {
+type PeerDatagramWriter interface {
 	SetWriter(func(*net.UDPAddr, []byte) error)
 }
 
 var (
-	type0HandlerMu sync.RWMutex
-	type0Handler   Type0Handler
+	peerDatagramHandlerMu sync.RWMutex
+	peerDatagramHandler   PeerDatagramHandler
 )
 
-func SetType0Handler(handler Type0Handler) {
-	type0HandlerMu.Lock()
-	type0Handler = handler
-	type0HandlerMu.Unlock()
-	if writer, ok := handler.(Type0Writer); ok && globalConn != nil {
+func SetPeerDatagramHandler(handler PeerDatagramHandler) {
+	peerDatagramHandlerMu.Lock()
+	peerDatagramHandler = handler
+	peerDatagramHandlerMu.Unlock()
+	if writer, ok := handler.(PeerDatagramWriter); ok && globalConn != nil {
 		conn := globalConn
 		writer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
 			if addr == nil {
@@ -44,19 +44,11 @@ func SetType0Handler(handler Type0Handler) {
 	}
 }
 
-func getType0Handler() Type0Handler {
-	type0HandlerMu.RLock()
-	handler := type0Handler
-	type0HandlerMu.RUnlock()
+func getPeerDatagramHandler() PeerDatagramHandler {
+	peerDatagramHandlerMu.RLock()
+	handler := peerDatagramHandler
+	peerDatagramHandlerMu.RUnlock()
 	return handler
-}
-
-// AllowEdgeDevicePacket applies the same ordinary-device IP/IP:Port limiter
-// in the database-free edge endpoint. Authenticated Type 0 is checked before
-// callers invoke this function and therefore uses its separate NodeSession
-// resource accounting.
-func AllowEdgeDevicePacket(addr *net.UDPAddr) bool {
-	return addr != nil && checkRateLimit(addr)
 }
 
 const (
@@ -116,8 +108,8 @@ func startUDPPipeline(conn *net.UDPConn) {
 		udpWorkerWg.Add(1)
 		go udpWorkerLoop(conn, udpJobQueues[i])
 	}
-	if handler := getType0Handler(); handler != nil {
-		if writer, ok := handler.(Type0Writer); ok {
+	if handler := getPeerDatagramHandler(); handler != nil {
+		if writer, ok := handler.(PeerDatagramWriter); ok {
 			writer.SetWriter(func(addr *net.UDPAddr, data []byte) error {
 				if conn == nil || addr == nil {
 					return net.ErrClosed
@@ -166,10 +158,9 @@ func udpReaderLoop(conn *net.UDPConn) {
 
 		packetData := (*base)[:n]
 		realAddr := remoteAddr
-		// Authenticated Type 0 is verified before the ordinary device limiter.
-		// The exemption is bound to a live TLS-created NodeSession, never to an
-		// IP address. Forged packets return false and remain rate-limited.
-		if handler := getType0Handler(); handler != nil && handler.Handle(packetData, remoteAddr) {
+		// Authenticated site media uses its own bounded session queues and rates.
+		// Unknown datagrams still pass through the native device limiter.
+		if handler := getPeerDatagramHandler(); handler != nil && handler.Handle(packetData, remoteAddr) {
 			packetPool.Put(base)
 			continue
 		}

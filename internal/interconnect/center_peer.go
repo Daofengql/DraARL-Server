@@ -1,12 +1,9 @@
 package interconnect
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
-	"time"
 )
 
 const (
@@ -14,15 +11,12 @@ const (
 	CenterLinkDirectionReverse       = "one_way_reverse"
 	CenterLinkDirectionBidirectional = "bidirectional"
 	CenterLinkMediaAudio             = "audio"
-	CenterPeerMaxAge                 = time.Second
-	CenterPeerQueueSize              = 8
 )
 
 var peerIDPattern = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 var peerNamePattern = regexp.MustCompile("^Server-[A-Za-z0-9_.-]{1,25}$")
 
-// IDs are application identities, independent of the transport's 32-byte
-// NodeID and of ordinary device/user IDs.
+// CenterPeerLink describes an explicitly authorized mapping between independent sites.
 type CenterPeerLink struct {
 	LinkID            string
 	LocalCenterID     string
@@ -85,79 +79,6 @@ func (l CenterPeerLink) AllowsMedia(media string) bool {
 	return media == CenterLinkMediaAudio && l.ForwardAudio
 }
 
-// A link has its own transport identity, so two mappings to the same peer
-// cannot replace each other's TCP sessions.
-func CenterPeerTransportID(linkID string) string {
-	hash := sha256.Sum256([]byte(linkID))
-	return "cp-" + hex.EncodeToString(hash[:])[:29]
-}
 func CenterPeerVirtualDeviceID(remote, link, direction string) string {
 	return fmt.Sprintf("intercenter:%s:%s:%s", remote, link, direction)
-}
-
-// Payload contains Opus bytes only. No ordinary packet header, username,
-// callsign, device ID, password or JWT is sent to the peer.
-type CenterPeerFrame struct {
-	OriginCenterID  string `json:"origin_center_id"`
-	OriginLinkID    string `json:"origin_link_id"`
-	MessageID       string `json:"message_id"`
-	Sequence        uint64 `json:"sequence"`
-	HopCount        byte   `json:"hop_count"`
-	CreatedAt       int64  `json:"created_at_ms"`
-	MediaType       string `json:"media_type"`
-	OriginGroupID   int    `json:"origin_group_id"`
-	TargetGroupID   int    `json:"target_group_id"`
-	CredentialEpoch uint32 `json:"credential_epoch"`
-	Payload         []byte `json:"payload"`
-}
-
-func NewCenterPeerFrame(l CenterPeerLink, media string, payload []byte, sequence uint64, now time.Time) (CenterPeerFrame, error) {
-	if err := l.Validate(); err != nil {
-		return CenterPeerFrame{}, err
-	}
-	if !l.AllowsOrigin(l.LocalCenterID) || !l.AllowsMedia(media) {
-		return CenterPeerFrame{}, errors.New("outbound media not permitted")
-	}
-	f := CenterPeerFrame{OriginCenterID: l.LocalCenterID, OriginLinkID: l.LinkID, MessageID: fmt.Sprintf("%016x:%016x", randomUint64(), sequence), Sequence: sequence, CreatedAt: now.UnixMilli(), MediaType: media, OriginGroupID: l.LocalGroupID, TargetGroupID: l.RemoteGroupID, CredentialEpoch: l.CredentialEpoch, Payload: append([]byte(nil), payload...)}
-	return f, f.Validate(now, CenterPeerMaxAge)
-}
-
-func (f CenterPeerFrame) Validate(now time.Time, maxAge time.Duration) error {
-	if !peerIDPattern.MatchString(f.OriginCenterID) || !peerIDPattern.MatchString(f.OriginLinkID) || len(f.MessageID) != 33 || f.MessageID[16] != ':' {
-		return errors.New("invalid peer frame identity")
-	}
-	if _, err := hex.DecodeString(f.MessageID[:16] + f.MessageID[17:]); err != nil {
-		return errors.New("invalid peer message ID")
-	}
-	if f.Sequence == 0 || f.HopCount != 0 || f.OriginGroupID <= 0 || f.TargetGroupID <= 0 || f.CredentialEpoch == 0 || f.MediaType != CenterLinkMediaAudio || len(f.Payload) == 0 || len(f.Payload) > 710 {
-		return errors.New("invalid peer media or routing metadata")
-	}
-	if maxAge <= 0 {
-		maxAge = CenterPeerMaxAge
-	}
-	age := now.Sub(time.UnixMilli(f.CreatedAt))
-	if f.CreatedAt <= 0 || age > maxAge || age < -maxAge {
-		return errors.New("stale peer frame")
-	}
-	return nil
-}
-
-// A hello must match the receiver's local approval exactly. No group is
-// discovered or created from peer-supplied metadata.
-type CenterPeerHello struct {
-	LinkID            string `json:"link_id"`
-	CenterID          string `json:"center_id"`
-	RemoteCenterID    string `json:"remote_center_id"`
-	LocalGroupID      int    `json:"local_group_id"`
-	RemoteGroupID     int    `json:"remote_group_id"`
-	InitiatorCenterID string `json:"initiator_center_id"`
-	Direction         string `json:"direction"`
-	CredentialEpoch   uint32 `json:"credential_epoch"`
-}
-
-func (l CenterPeerLink) Hello() CenterPeerHello {
-	return CenterPeerHello{l.LinkID, l.LocalCenterID, l.RemoteCenterID, l.LocalGroupID, l.RemoteGroupID, l.InitiatorCenterID, l.Direction, l.CredentialEpoch}
-}
-func (l CenterPeerLink) MatchesHello(h CenterPeerHello) bool {
-	return h.LinkID == l.LinkID && h.CenterID == l.RemoteCenterID && h.RemoteCenterID == l.LocalCenterID && h.LocalGroupID == l.RemoteGroupID && h.RemoteGroupID == l.LocalGroupID && h.InitiatorCenterID == l.InitiatorCenterID && h.Direction == l.Direction && h.CredentialEpoch == l.CredentialEpoch
 }

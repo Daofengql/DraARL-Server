@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"math"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -49,15 +51,15 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 		rules: map[string]RateLimitRule{
 			"pre-check-ip": {
 				Key:         "ip",
-				Limit:       1,
+				Limit:       10,
 				Window:      time.Second,
-				Description: "同一 IP 每秒 1 次",
+				Description: "同一 IP 每秒 10 次",
 			},
 			"pre-check-mac": {
 				Key:         "mac",
-				Limit:       5,
+				Limit:       12,
 				Window:      time.Minute,
-				Description: "同一 MAC 每分钟 5 次",
+				Description: "同一 MAC 每分钟 12 次",
 			},
 			"request-code-ip": {
 				Key:         "ip",
@@ -71,12 +73,9 @@ func newDeviceRateLimiter() *DeviceRateLimiter {
 				Window:      time.Minute,
 				Description: "同一 MAC 每分钟 10 次",
 			},
-			"confirm-bind-mac": {
-				Key:         "mac",
-				Limit:       1,
-				Window:      5 * time.Second,
-				Description: "同一 MAC 每 5 秒 1 次",
-			},
+			"confirm-bind-mac":   {Key: "mac", Limit: 30, Window: time.Minute, Description: "同一 MAC 每分钟 30 次"},
+			"confirm-bind-burst": {Key: "mac", Limit: 3, Window: 5 * time.Second, Description: "同一 MAC 每 5 秒 3 次"},
+			"confirm-bind-ip":    {Key: "ip", Limit: 300, Window: time.Minute, Description: "同一 IP 每分钟 300 次"},
 			"bind-user": {
 				Key:         "user",
 				Limit:       20,
@@ -168,57 +167,69 @@ const maxDeviceRateLimitKeys = 100_000
 // 【MAC 伪造修复】rule.Key=="mac" 时把来源 IP 并入限速键，客户端伪造任意
 // MAC 也无法绕过"同一 IP"的约束。map 有上限：满表时先清理过期条目腾位，
 // 腾不出才拒绝，避免无界增长。
-func (r *DeviceRateLimiter) checkLimit(ruleName, value, sourceIP string) (allowed bool, retryAfter time.Duration) {
+func (r *DeviceRateLimiter) checkLimit(ruleName, value, sourceIP string) (bool, time.Duration) {
 	rule, exists := r.rules[ruleName]
 	if !exists {
 		return true, 0
 	}
-	if rule.Key == "mac" && sourceIP != "" {
-		value = value + "@" + sourceIP
-	}
-	if value == "" {
-		return true, 0
-	}
+	return r.checkLimits([]string{ruleName}, map[string]string{rule.Key: value}, sourceIP)
+}
 
-	key := ruleName + ":" + value
-
+// Reserve all applicable buckets together. Rejected retries do not consume
+// another bucket or extend its deadline, so the advertised wait is reliable.
+func (r *DeviceRateLimiter) checkLimits(ruleNames []string, values map[string]string, sourceIP string) (bool, time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureOrderIndexLocked()
-
 	now := time.Now()
-	entry, exists := r.limits[key]
-
-	if !exists {
-		if len(r.limits) >= maxDeviceRateLimitKeys {
-			r.pruneExpiredLocked(now, 64)
+	buckets := make(map[string]RateLimitRule)
+	var retryAfter time.Duration
+	newKeys := 0
+	for _, name := range ruleNames {
+		rule, exists := r.rules[name]
+		value := values[rule.Key]
+		if !exists || value == "" {
+			continue
 		}
-		if len(r.limits) >= maxDeviceRateLimitKeys {
-			return false, rule.Window
+		if rule.Key == "mac" && sourceIP != "" {
+			value += "@" + sourceIP
 		}
-		r.limits[key] = &RateLimitEntry{
-			Count:     1,
-			ExpiresAt: now.Add(rule.Window),
+		key := name + ":" + value
+		if _, seen := buckets[key]; seen {
+			continue
 		}
-		r.orderIndex[key] = len(r.order)
-		r.order = append(r.order, key)
-		return true, 0
+		buckets[key] = rule
+		entry := r.limits[key]
+		if entry == nil {
+			newKeys++
+			continue
+		}
+		if now.Before(entry.ExpiresAt) && entry.Count >= rule.Limit {
+			retryAfter = max(retryAfter, entry.ExpiresAt.Sub(now))
+		}
 	}
-
-	if now.After(entry.ExpiresAt) {
-		entry.Count = 1
-		entry.ExpiresAt = now.Add(rule.Window)
-		return true, 0
-	}
-
-	// 检查是否超限
-	if entry.Count >= rule.Limit {
-		retryAfter = entry.ExpiresAt.Sub(now)
+	if retryAfter > 0 {
 		return false, retryAfter
 	}
-
-	// 增加计数
-	entry.Count++
+	if len(r.limits)+newKeys > maxDeviceRateLimitKeys {
+		r.pruneExpiredLocked(now, 64)
+	}
+	if len(r.limits)+newKeys > maxDeviceRateLimitKeys {
+		return false, time.Second
+	}
+	for key, rule := range buckets {
+		entry := r.limits[key]
+		if entry == nil {
+			r.limits[key] = &RateLimitEntry{Count: 1, ExpiresAt: now.Add(rule.Window)}
+			r.orderIndex[key] = len(r.order)
+			r.order = append(r.order, key)
+		} else if !now.Before(entry.ExpiresAt) {
+			entry.Count = 1
+			entry.ExpiresAt = now.Add(rule.Window)
+		} else {
+			entry.Count++
+		}
+	}
 	return true, 0
 }
 
@@ -313,180 +324,29 @@ func (r *DeviceRateLimiter) stop() {
 // ruleNames: 限速规则名称列表（同时检查多个规则）
 // keyExtractor: 从请求中提取限速键值的函数
 func DeviceRateLimit(ruleNames []string, keyExtractor func(*gin.Context) map[string]string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if deviceRateLimiter == nil {
-			c.Next()
-			return
-		}
-
-		// 提取键值
-		keys := keyExtractor(c)
-
-		// 检查所有规则
-		for _, ruleName := range ruleNames {
-			rule, exists := deviceRateLimiter.rules[ruleName]
-			if !exists {
-				continue
-			}
-
-			value, hasKey := keys[rule.Key]
-			if !hasKey || value == "" {
-				continue
-			}
-
-			allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value, c.ClientIP())
-			if !allowed {
-				c.JSON(http.StatusTooManyRequests, gin.H{
-					"code":    429,
-					"message": "请求过于频繁，请稍后重试",
-					"data": gin.H{
-						"retry_after": int(retryAfter.Seconds()),
-					},
-				})
-				c.Abort()
-				return
-			}
-		}
-
-		c.Next()
-	}
+	return func(c *gin.Context) { applyRateLimitRules(c, ruleNames, keyExtractor(c)) }
 }
 
-// 请求结构体定义（用于限速中间件）
-type preCheckRequest struct {
-	MAC string `json:"mac"`
-}
-
-type requestCodeRequest struct {
-	MAC string `json:"mac"`
-}
-
-type confirmBindRequest struct {
-	MAC string `json:"mac"`
-}
-
-// PreCheckRateLimit pre-check 接口限速中间件
-func PreCheckRateLimit() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if deviceRateLimiter == nil {
-			c.Next()
-			return
+func deviceMACRateLimit(ruleNames ...string) gin.HandlerFunc {
+	return DeviceRateLimit(ruleNames, func(c *gin.Context) map[string]string {
+		var request struct {
+			MAC string `json:"mac"`
 		}
-
-		// 使用 ShouldBindBodyWith 缓存请求体，后续 handler 可以再次绑定
-		var req preCheckRequest
-		if err := c.ShouldBindBodyWith(&req, binding.JSON); err == nil {
-			// 检查 MAC 限速
-			if req.MAC != "" {
-				allowed, retryAfter := deviceRateLimiter.checkLimit("pre-check-mac", req.MAC, c.ClientIP())
-				if !allowed {
-					c.JSON(http.StatusTooManyRequests, gin.H{
-						"code":    429,
-						"message": "请求过于频繁，请稍后重试",
-						"data": gin.H{
-							"retry_after": int(retryAfter.Seconds()),
-						},
-					})
-					c.Abort()
-					return
-				}
-			}
+		_ = c.ShouldBindBodyWith(&request, binding.JSON)
+		mac := strings.ToUpper(strings.TrimSpace(request.MAC))
+		if parsed, err := net.ParseMAC(mac); err == nil {
+			mac = strings.ToUpper(parsed.String())
 		}
-
-		// 检查 IP 限速
-		allowed, retryAfter := deviceRateLimiter.checkLimit("pre-check-ip", c.ClientIP(), c.ClientIP())
-		if !allowed {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":    429,
-				"message": "请求过于频繁，请稍后重试",
-				"data": gin.H{
-					"retry_after": int(retryAfter.Seconds()),
-				},
-			})
-			c.Abort()
-			return
-		}
-
-		c.Next()
-	}
+		return map[string]string{"ip": c.ClientIP(), "mac": mac}
+	})
 }
 
-// RequestCodeRateLimit request-code 接口限速中间件
+func PreCheckRateLimit() gin.HandlerFunc { return deviceMACRateLimit("pre-check-ip", "pre-check-mac") }
 func RequestCodeRateLimit() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if deviceRateLimiter == nil {
-			c.Next()
-			return
-		}
-
-		// 使用 ShouldBindBodyWith 缓存请求体
-		var req requestCodeRequest
-		if err := c.ShouldBindBodyWith(&req, binding.JSON); err == nil {
-			// 检查 MAC 限速
-			if req.MAC != "" {
-				allowed, retryAfter := deviceRateLimiter.checkLimit("request-code-mac", req.MAC, c.ClientIP())
-				if !allowed {
-					c.JSON(http.StatusTooManyRequests, gin.H{
-						"code":    429,
-						"message": "请求过于频繁，请稍后重试",
-						"data": gin.H{
-							"retry_after": int(retryAfter.Seconds()),
-						},
-					})
-					c.Abort()
-					return
-				}
-			}
-		}
-
-		// 检查 IP 限速
-		allowed, retryAfter := deviceRateLimiter.checkLimit("request-code-ip", c.ClientIP(), c.ClientIP())
-		if !allowed {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":    429,
-				"message": "请求过于频繁，请稍后重试",
-				"data": gin.H{
-					"retry_after": int(retryAfter.Seconds()),
-				},
-			})
-			c.Abort()
-			return
-		}
-
-		c.Next()
-	}
+	return deviceMACRateLimit("request-code-ip", "request-code-mac")
 }
-
-// ConfirmBindRateLimit confirm-bind 接口限速中间件
 func ConfirmBindRateLimit() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if deviceRateLimiter == nil {
-			c.Next()
-			return
-		}
-
-		// 使用 ShouldBindBodyWith 缓存请求体
-		var req confirmBindRequest
-		if err := c.ShouldBindBodyWith(&req, binding.JSON); err == nil {
-			// 检查 MAC 限速
-			if req.MAC != "" {
-				allowed, retryAfter := deviceRateLimiter.checkLimit("confirm-bind-mac", req.MAC, c.ClientIP())
-				if !allowed {
-					c.JSON(http.StatusTooManyRequests, gin.H{
-						"code":    429,
-						"message": "请求过于频繁，请稍后重试",
-						"data": gin.H{
-							"retry_after": int(retryAfter.Seconds()),
-						},
-					})
-					c.Abort()
-					return
-				}
-			}
-		}
-
-		c.Next()
-	}
+	return deviceMACRateLimit("confirm-bind-ip", "confirm-bind-burst", "confirm-bind-mac")
 }
 
 // BindRateLimit bind 接口限速中间件（用户级）
@@ -503,14 +363,7 @@ func BindRateLimit() gin.HandlerFunc {
 		if userKey != "" {
 			allowed, retryAfter := deviceRateLimiter.checkLimit("bind-user", userKey, c.ClientIP())
 			if !allowed {
-				c.JSON(http.StatusTooManyRequests, gin.H{
-					"code":    429,
-					"message": "请求过于频繁，请稍后重试",
-					"data": gin.H{
-						"retry_after": int(retryAfter.Seconds()),
-					},
-				})
-				c.Abort()
+				writeDeviceRateLimit(c, retryAfter)
 				return
 			}
 		}
@@ -533,14 +386,7 @@ func SubmitConfigRateLimit() gin.HandlerFunc {
 		if userKey != "" {
 			allowed, retryAfter := deviceRateLimiter.checkLimit("submit-config-user", userKey, c.ClientIP())
 			if !allowed {
-				c.JSON(http.StatusTooManyRequests, gin.H{
-					"code":    429,
-					"message": "请求过于频繁，请稍后重试",
-					"data": gin.H{
-						"retry_after": int(retryAfter.Seconds()),
-					},
-				})
-				c.Abort()
+				writeDeviceRateLimit(c, retryAfter)
 				return
 			}
 		}
@@ -560,14 +406,7 @@ func PublicRelaySearchRateLimit() gin.HandlerFunc {
 		clientIP := c.ClientIP()
 		allowed, retryAfter := deviceRateLimiter.checkLimit("public-relay-search-ip", clientIP, clientIP)
 		if !allowed {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":    429,
-				"message": "请求过于频繁，请稍后重试",
-				"data": gin.H{
-					"retry_after": int(retryAfter.Seconds()),
-				},
-			})
-			c.Abort()
+			writeDeviceRateLimit(c, retryAfter)
 			return
 		}
 
@@ -703,24 +542,18 @@ func checkRateLimitRules(c *gin.Context, ruleNames []string, keys map[string]str
 	if deviceRateLimiter == nil {
 		return true
 	}
-	for _, ruleName := range ruleNames {
-		rule, exists := deviceRateLimiter.rules[ruleName]
-		if !exists {
-			continue
-		}
-		value := keys[rule.Key]
-		if value == "" {
-			continue
-		}
-		allowed, retryAfter := deviceRateLimiter.checkLimit(ruleName, value, c.ClientIP())
-		if !allowed {
-			c.Header("Retry-After", intToStr(maxInt(1, int(retryAfter.Seconds()))))
-			c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "请求过于频繁，请稍后重试", "data": gin.H{"retry_after": maxInt(1, int(retryAfter.Seconds()))}})
-			c.Abort()
-			return false
-		}
+	if allowed, retryAfter := deviceRateLimiter.checkLimits(ruleNames, keys, c.ClientIP()); !allowed {
+		writeDeviceRateLimit(c, retryAfter)
+		return false
 	}
 	return true
+}
+
+func writeDeviceRateLimit(c *gin.Context, retryAfter time.Duration) {
+	seconds := maxInt(1, int(math.Ceil(retryAfter.Seconds())))
+	c.Header("Retry-After", intToStr(seconds))
+	c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "请求过于频繁，请稍后重试", "data": gin.H{"retry_after": seconds}})
+	c.Abort()
 }
 
 func maxInt(a, b int) int {

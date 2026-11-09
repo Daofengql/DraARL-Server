@@ -12,6 +12,17 @@
 
 详细接口见 [API 文档总览](../api/README.md) 和 [完整路由索引](../api/09-完整路由索引.md)。
 
+## 设备查询本站入口
+
+管理员先在“站点配置 → 接入点”发布节点 ID、IP／域名和 UDP 端口。设备只需配置 HTTP API
+地址和设备用户名／密码：调用 `POST /api/device/access-points/token` 获取发现凭证，
+再用 Bearer 凭证请求 `GET /api/access-points`。`data.items` 包含一个本站接入点，
+设备读取 `udp_host` 和 `udp_port`，通过 DraARLv1 完成 UDP 认证。
+
+发布信息变化后，设备重新查询即可使用新入口。发现结果缓存 5 秒；连接持续失败时应退避并重查。
+未单独配置时默认使用查询 HTTP API 的主机名和本站 UDP 监听端口。旧发布开关会被忽略。本站入口查询与管理员配置的独立站间互联分别管理。
+请求和响应示例见[设备与配置 API](../api/03-设备与配置.md)。
+
 ## 2. Access Token
 
 受保护接口使用：

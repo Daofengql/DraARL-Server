@@ -19,31 +19,7 @@ import (
 // AdminGetDeviceConfig 获取任意设备配置
 // GET /api/admin/devices/:id/config
 func AdminGetDeviceConfig(c *gin.Context) {
-	// 获取设备 ID
-	deviceIDStr := c.Param("id")
-	deviceID, err := strconv.Atoi(deviceIDStr)
-	if err != nil {
-		writeErrorResponse(c, http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的设备 ID",
-		})
-		return
-	}
-
-	// 获取设备配置
-	configs, err := udphub.GetDeviceConfigsFromDB(deviceID)
-	if err != nil {
-		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "获取设备配置失败",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code": 200,
-		"data": configs,
-	})
+	GetDeviceConfig(c)
 }
 
 // AdminUpdateDeviceConfig 更新任意设备配置
@@ -105,18 +81,6 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 	if req.TxBandwidth != nil {
 		configs["tx_bandwidth"] = *req.TxBandwidth
 	}
-	if req.RFGuardEnabled != nil {
-		configs[udphub.ConfigKeyRFGuardEnabled] = *req.RFGuardEnabled
-	}
-	if req.RFGuardSingleTxLimitS != nil {
-		configs[udphub.ConfigKeyRFGuardSingleTxLimitS] = *req.RFGuardSingleTxLimitS
-	}
-	if req.RFGuardWindowS != nil {
-		configs[udphub.ConfigKeyRFGuardWindowS] = *req.RFGuardWindowS
-	}
-	if req.RFGuardMaxTxInWindowS != nil {
-		configs[udphub.ConfigKeyRFGuardMaxTxInWindowS] = *req.RFGuardMaxTxInWindowS
-	}
 	if req.ADCGainDB != nil {
 		configs[udphub.ConfigKeyADCGainDB] = *req.ADCGainDB
 	}
@@ -147,7 +111,15 @@ func AdminUpdateDeviceConfig(c *gin.Context) {
 		})
 		return
 	}
-
+	device, err := gormdb.NewDeviceRepository().WithContext(c.Request.Context()).GetDeviceByID(deviceID)
+	if err != nil || device == nil {
+		writeErrorResponse(c, http.StatusNotFound, gin.H{"code": 404, "message": "设备不存在"})
+		return
+	}
+	if unsupported := unsupportedDeviceConfigKeys(device.DevModel, configs); len(unsupported) > 0 {
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "设备能力已变化，请重新加载配置", "dev_model": device.DevModel, "unsupported_keys": unsupported})
+		return
+	}
 	// 保存配置到数据库（如果设备在线会自动下发）
 	if err := udphub.SaveDeviceConfigsToDB(deviceID, configs); err != nil {
 		writeErrorResponse(c, http.StatusInternalServerError, gin.H{

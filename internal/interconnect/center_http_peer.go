@@ -338,7 +338,7 @@ func parsePeerHeader(data []byte) (kind byte, id string, seq uint64, sent int64,
 	return
 }
 
-// Handle implements udphub.Type0Handler and is attached to the already bound
+// Handle implements udphub.PeerDatagramHandler and is attached to the already bound
 // main UDP socket. The authenticated CPUD envelope is disjoint from devices.
 func (m *CenterHTTPPeerManager) Handle(data []byte, addr *net.UDPAddr) bool {
 	kind, id, seq, sent, ciphertext, nonce, aad, err := parsePeerHeader(data)

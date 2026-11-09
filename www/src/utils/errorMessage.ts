@@ -1,12 +1,22 @@
 interface ResponseMessagePayload {
   response?: {
     status?: number
+    headers?: Record<string, unknown>
     data?: {
       message?: string
+      data?: { retry_after?: number }
     }
   }
   message?: string
   code?: string
+}
+
+export function getRetryAfterSeconds(error: unknown): number {
+  if (!error || typeof error !== 'object') return 0
+  const response = (error as ResponseMessagePayload).response
+  if (response?.status !== 429) return 0
+  const seconds = Number(response.headers?.['retry-after'] ?? response.data?.data?.retry_after ?? 5)
+  return Number.isFinite(seconds) ? Math.min(3600, Math.max(1, Math.ceil(seconds))) : 5
 }
 
 export function getErrorMessage(error: unknown, fallback: string): string {

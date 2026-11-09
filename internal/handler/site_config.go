@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -436,7 +437,7 @@ func (h *SiteConfigHandler) GetAccessDiscoveryConfig(c *gin.Context) {
 		return
 	}
 
-	settings, err := loadAccessDiscoveryConfig(c.Request.Context())
+	settings, err := accessDiscoveryForRequest(c)
 	if err != nil {
 		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "获取接入点配置失败"})
 		return
@@ -477,7 +478,7 @@ func (h *SiteConfigHandler) UpdateAccessDiscoveryConfig(c *gin.Context) {
 		return
 	}
 	oplog.AddLog(
-		fmt.Sprintf("更新接入点配置: 中心直连=%t, 中心入口=%s:%d", normalized.Center.Enabled, normalized.Center.UDPHost, normalized.Center.UDPPort),
+		fmt.Sprintf("更新接入点配置: 节点=%s, 设备入口=%s:%d", normalized.NodeID, normalized.UDPHost, normalized.UDPPort),
 		"config_update",
 		userModel.ID,
 		userModel.Name,
@@ -485,67 +486,6 @@ func (h *SiteConfigHandler) UpdateAccessDiscoveryConfig(c *gin.Context) {
 		c.ClientIP(),
 	)
 	c.JSON(http.StatusOK, Response{Code: 200, Message: "更新成功", Data: normalized})
-}
-
-func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*gormdb.AccessDiscoveryConfig, error) {
-	if settings == nil {
-		return nil, fmt.Errorf("接入点配置不存在")
-	}
-	result := *settings
-	if result.TokenTTLSeconds < 1 || result.TokenTTLSeconds > 300 {
-		return nil, fmt.Errorf("发现凭证有效期必须在 1-300 秒之间")
-	}
-	if result.CacheMaxAgeSeconds < 1 || result.CacheMaxAgeSeconds > 30 {
-		return nil, fmt.Errorf("客户端缓存时间必须在 1-30 秒之间")
-	}
-
-	if strings.TrimSpace(result.Center.PublicID) == "" {
-		result.Center.PublicID = "center"
-	}
-	publicID, err := accesspoint.NormalizePublicID(result.Center.PublicID)
-	if err != nil {
-		return nil, fmt.Errorf("中心公开 ID 无效: %w", err)
-	}
-	result.Center.PublicID = publicID
-
-	if strings.TrimSpace(result.Center.DisplayName) == "" {
-		result.Center.DisplayName = "中心直连"
-	}
-	displayName, err := accesspoint.NormalizeLabel(result.Center.DisplayName, 100)
-	if err != nil || displayName == "" {
-		return nil, fmt.Errorf("中心显示名称无效")
-	}
-	result.Center.DisplayName = displayName
-
-	host := strings.TrimSpace(result.Center.UDPHost)
-	if host != "" {
-		host, err = accesspoint.NormalizeUDPHost(host)
-		if err != nil {
-			return nil, fmt.Errorf("中心公网 UDP 地址无效: %w", err)
-		}
-	}
-	if result.Center.Enabled && host == "" {
-		return nil, fmt.Errorf("启用中心直连时必须填写公网 UDP 地址")
-	}
-	result.Center.UDPHost = host
-	if result.Center.UDPPort == 0 {
-		result.Center.UDPPort = 60050
-	}
-	if err := accesspoint.ValidateUDPPort(result.Center.UDPPort); err != nil {
-		return nil, fmt.Errorf("中心公网 UDP 端口无效: %w", err)
-	}
-
-	region, err := accesspoint.NormalizeLabel(result.Center.Region, 100)
-	if err != nil {
-		return nil, fmt.Errorf("中心地区无效: %w", err)
-	}
-	result.Center.Region = region
-	network, err := accesspoint.NormalizeLabel(result.Center.Network, 100)
-	if err != nil {
-		return nil, fmt.Errorf("中心网络标签无效: %w", err)
-	}
-	result.Center.Network = network
-	return &result, nil
 }
 
 // GetAPRSConfig 获取APRS配置（管理员）
@@ -902,4 +842,39 @@ func containsStars(s string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeAccessDiscoveryConfig(settings *gormdb.AccessDiscoveryConfig) (*gormdb.AccessDiscoveryConfig, error) {
+	if settings == nil {
+		return nil, fmt.Errorf("接入点配置不存在")
+	}
+	result := *settings
+	if strings.TrimSpace(result.NodeID) == "" {
+		result.NodeID = "center"
+	}
+	id, err := accesspoint.NormalizePublicID(result.NodeID)
+	if err != nil {
+		return nil, fmt.Errorf("节点 ID 无效: %w", err)
+	}
+	result.NodeID = id
+	host := strings.TrimSpace(result.UDPHost)
+	if host != "" {
+		host, err = accesspoint.NormalizeUDPHost(host)
+		if err != nil {
+			return nil, fmt.Errorf("节点 IP／域名无效: %w", err)
+		}
+	}
+	result.UDPHost = host
+	if result.UDPPort == 0 {
+		result.UDPPort = 60050
+		if cfg := config.TryGet(); cfg != nil {
+			if port, parseErr := strconv.Atoi(cfg.System.Port); parseErr == nil && accesspoint.ValidateUDPPort(port) == nil {
+				result.UDPPort = port
+			}
+		}
+	}
+	if err := accesspoint.ValidateUDPPort(result.UDPPort); err != nil {
+		return nil, fmt.Errorf("节点 UDP 端口无效: %w", err)
+	}
+	return &result, nil
 }

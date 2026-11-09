@@ -53,10 +53,6 @@ type DeviceInfo struct {
 	OnlineTime           string `json:"online_time,omitempty"`
 	CreateTime           string `json:"create_time,omitempty"`
 	UpdateTime           string `json:"update_time,omitempty"`
-	EntryNodeID          string `json:"entry_node_id,omitempty"`
-	EntryNodeName        string `json:"entry_node_name,omitempty"`
-	EntryMode            string `json:"entry_mode,omitempty"`
-	EntrySeenAt          string `json:"entry_seen_at,omitempty"`
 }
 
 func parseOptionalBoolQuery(c *gin.Context, name string) (*bool, error) {
@@ -182,22 +178,6 @@ func GetDevices(c *gin.Context) {
 		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": "查询设备所有者失败"})
 		return
 	}
-	nodeIDs := make([]string, 0, len(devices))
-	seenNodeIDs := make(map[string]struct{}, len(devices))
-	for _, d := range devices {
-		nodeID := d.LastEntryNodeID
-		if d.ISOnline && d.CurrentEntryNodeID != "" {
-			nodeID = d.CurrentEntryNodeID
-		}
-		if nodeID != "" && nodeID != "center" {
-			if _, exists := seenNodeIDs[nodeID]; !exists {
-				seenNodeIDs[nodeID] = struct{}{}
-				nodeIDs = append(nodeIDs, nodeID)
-			}
-		}
-	}
-	nodeNames, _ := gormdb.NewServerRepository().WithContext(c.Request.Context()).GetNodeNames(nodeIDs)
-
 	// 转换为响应格式
 	items := make([]*DeviceInfo, 0, len(devices))
 	for _, d := range devices {
@@ -219,18 +199,6 @@ func GetDevices(c *gin.Context) {
 			CreateTime:           common.FormatAPITime(d.CreateTime),
 			UpdateTime:           common.FormatAPITime(d.UpdateTime),
 		}
-		entryNodeID := d.LastEntryNodeID
-		if d.ISOnline && d.CurrentEntryNodeID != "" {
-			entryNodeID = d.CurrentEntryNodeID
-		}
-		if isAdmin {
-			info.EntryNodeID = entryNodeID
-		}
-		info.EntryMode = d.EntryMode
-		if d.LastEntryAt != nil {
-			info.EntrySeenAt = common.FormatAPITime(d.LastEntryAt)
-		}
-		info.EntryNodeName = resolveEntryNodeName(entryNodeID, nodeNames)
 
 		// The batch already contains every field needed here. Loading individual
 		// user-cache entries would issue one extra SQL query per cold owner.
@@ -257,23 +225,6 @@ func GetDevices(c *gin.Context) {
 			"page_size": limit,
 		},
 	})
-}
-
-func resolveEntryNodeName(nodeID string, names map[string]string) string {
-	switch nodeID {
-	case "":
-		return ""
-	case "center":
-		return "中心直连"
-	}
-	if name := strings.TrimSpace(names[nodeID]); name != "" {
-		return name
-	}
-	short := nodeID
-	if len(short) > 12 {
-		short = short[:12]
-	}
-	return "已删除节点（" + short + "）"
 }
 
 // GetDevice 获取单个设备
@@ -348,22 +299,6 @@ func GetDevice(c *gin.Context) {
 			callsign = owner.CallSign
 		}
 	}
-	entryNodeID := device.LastEntryNodeID
-	if device.ISOnline && device.CurrentEntryNodeID != "" {
-		entryNodeID = device.CurrentEntryNodeID
-	}
-	nodeNames := map[string]string{}
-	if entryNodeID != "" && entryNodeID != "center" {
-		nodeNames, _ = gormdb.NewServerRepository().WithContext(c.Request.Context()).GetNodeNames([]string{entryNodeID})
-	}
-	entrySeenAt := ""
-	if device.LastEntryAt != nil {
-		entrySeenAt = common.FormatAPITime(device.LastEntryAt)
-	}
-	entryNodeIDResponse := ""
-	if isAdminUser(currentUser) {
-		entryNodeIDResponse = entryNodeID
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
@@ -384,10 +319,6 @@ func GetDevice(c *gin.Context) {
 			"note":                    device.Note,
 			"create_time":             common.FormatAPITime(device.CreateTime),
 			"update_time":             common.FormatAPITime(device.UpdateTime),
-			"entry_node_id":           entryNodeIDResponse,
-			"entry_node_name":         resolveEntryNodeName(entryNodeID, nodeNames),
-			"entry_mode":              device.EntryMode,
-			"entry_seen_at":           entrySeenAt,
 		},
 	})
 }

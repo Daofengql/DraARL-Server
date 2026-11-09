@@ -658,7 +658,7 @@ func TestCenterLocalSourcesRelayOnceAcrossVirtualDomain(t *testing.T) {
 			AcquireVoice: func(source CenterLocalSource) bool {
 				return source.SessionID != 0 && source.SessionEpoch == 1
 			},
-			Relay: func(source CenterLocalSource, packet []byte) error {
+			RelayPeer: func(source CenterLocalSource, packet []byte) error {
 				relays <- struct {
 					source CenterLocalSource
 					packet []byte

@@ -97,10 +97,6 @@ class UDPDeviceClient(BaseClient):
             TLVType.RX_TONE_VALUE: "0",        # 接收亚音值
             TLVType.TX_TONE_MODE: "off",       # 发射亚音类型
             TLVType.TX_TONE_VALUE: "0",        # 发射亚音值
-            TLVType.RF_GUARD_ENABLED: "1",     # 发射保护开关
-            TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "30",
-            TLVType.RF_GUARD_WINDOW_S: "300",
-            TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "60",
             TLVType.ADC_GAIN_DB: "18",
             TLVType.ADC_VOLUME: "100",
             TLVType.DAC_VOLUME: "80",
@@ -512,10 +508,6 @@ class UDPDeviceClient(BaseClient):
                 TLVType.RX_TONE_VALUE: "rx_tone_value",
                 TLVType.TX_TONE_MODE: "tx_tone_mode",
                 TLVType.TX_TONE_VALUE: "tx_tone_value",
-                TLVType.RF_GUARD_ENABLED: "rf_guard_enabled",
-                TLVType.RF_GUARD_SINGLE_TX_LIMIT_S: "rf_guard_single_tx_limit_s",
-                TLVType.RF_GUARD_WINDOW_S: "rf_guard_window_s",
-                TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S: "rf_guard_max_tx_in_window_s",
                 TLVType.ADC_GAIN_DB: "adc_gain_db",
                 TLVType.ADC_VOLUME: "adc_volume",
                 TLVType.DAC_VOLUME: "dac_volume",
@@ -539,10 +531,6 @@ class UDPDeviceClient(BaseClient):
             "rx_tone_value": TLVType.RX_TONE_VALUE,
             "tx_tone_mode": TLVType.TX_TONE_MODE,
             "tx_tone_value": TLVType.TX_TONE_VALUE,
-            "rf_guard_enabled": TLVType.RF_GUARD_ENABLED,
-            "rf_guard_single_tx_limit_s": TLVType.RF_GUARD_SINGLE_TX_LIMIT_S,
-            "rf_guard_window_s": TLVType.RF_GUARD_WINDOW_S,
-            "rf_guard_max_tx_in_window_s": TLVType.RF_GUARD_MAX_TX_IN_WINDOW_S,
             "adc_gain_db": TLVType.ADC_GAIN_DB,
             "adc_volume": TLVType.ADC_VOLUME,
             "dac_volume": TLVType.DAC_VOLUME,

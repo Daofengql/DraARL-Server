@@ -149,8 +149,8 @@ const (
 	MaxGhostSubscriptionsPerSession     = 256
 )
 
-// SetDefaults applies and validates the bounds shared by centre and edge
-// processes. Zero means the compatibility default; negative or excessive
+// SetDefaults applies and validates the bounds shared by UDP and WebSocket
+// transports. Zero means the compatibility default; negative or excessive
 // values are configuration errors rather than silently weakened limits.
 func (c *GhostSessionConfig) SetDefaults() error {
 	if c.MaxSessionsPerOwner == 0 {
@@ -325,30 +325,9 @@ func (c *MessageAPIConfig) SetDefaults() error {
 // InterconnectConfig controls the centre-to-centre runtime. Admission is
 // handled by the existing HTTP service and media is carried over System.Port.
 type InterconnectConfig struct {
-	Enabled                        bool                       `yaml:"Enabled" json:"enabled"`
-	CenterID                       string                     `yaml:"CenterID" json:"center_id"`
-	RegistrationTokenTTL           int                        `yaml:"RegistrationTokenTTL" json:"registration_token_ttl"`
-	CredentialRotationGraceSeconds int                        `yaml:"CredentialRotationGraceSeconds" json:"credential_rotation_grace_seconds"`
-	SessionRecoveryWindowSeconds   int                        `yaml:"SessionRecoveryWindowSeconds" json:"session_recovery_window_seconds"`
-	Resources                      InterconnectResourceConfig `yaml:"Resources" json:"resources"`
-}
-
-type InterconnectResourceConfig struct {
-	MaxNodes                   int `yaml:"MaxNodes" json:"max_nodes"`
-	MaxPendingHandshakes       int `yaml:"MaxPendingHandshakes" json:"max_pending_handshakes"`
-	AuthAttemptsPerMinutePerIP int `yaml:"AuthAttemptsPerMinutePerIP" json:"auth_attempts_per_minute_per_ip"`
-	DataSoftPPSPerNode         int `yaml:"DataSoftPPSPerNode" json:"data_soft_pps_per_node"`
-	DataHardPPSPerNode         int `yaml:"DataHardPPSPerNode" json:"data_hard_pps_per_node"`
-	DataHardMbpsPerNode        int `yaml:"DataHardMbpsPerNode" json:"data_hard_mbps_per_node"`
-	DataQueuePerNode           int `yaml:"DataQueuePerNode" json:"data_queue_per_node"`
-	DataQueueGlobal            int `yaml:"DataQueueGlobal" json:"data_queue_global"`
-	DataWorkers                int `yaml:"DataWorkers" json:"data_workers"`
-	DataMaxQueueAgeMS          int `yaml:"DataMaxQueueAgeMS" json:"data_max_queue_age_ms"`
-	ControlSoftPPSPerNode      int `yaml:"ControlSoftPPSPerNode" json:"control_soft_pps_per_node"`
-	ControlHardPPSPerNode      int `yaml:"ControlHardPPSPerNode" json:"control_hard_pps_per_node"`
-	ControlHardMbpsPerNode     int `yaml:"ControlHardMbpsPerNode" json:"control_hard_mbps_per_node"`
-	DeviceAuthPPSPerNode       int `yaml:"DeviceAuthPPSPerNode" json:"device_auth_pps_per_node"`
-	MaxDeviceSessionsPerNode   int `yaml:"MaxDeviceSessionsPerNode" json:"max_device_sessions_per_node"`
+	Enabled          bool   `yaml:"Enabled" json:"enabled"`
+	CenterID         string `yaml:"CenterID" json:"center_id"`
+	InviteTTLSeconds int    `yaml:"InviteTTLSeconds" json:"invite_ttl_seconds"`
 }
 
 // SetReleaseBuild 设置是否为 release 构建产物。
@@ -593,66 +572,8 @@ func (c *Configuration) SetDefaults() error {
 	if !regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$").MatchString(c.Interconnect.CenterID) {
 		return fmt.Errorf("Interconnect.CenterID must be 1–64 ASCII letters, digits, dots, hyphens or underscores")
 	}
-	if c.Interconnect.RegistrationTokenTTL <= 0 {
-		c.Interconnect.RegistrationTokenTTL = 24 * 60 * 60
-	}
-	if c.Interconnect.CredentialRotationGraceSeconds <= 0 {
-		c.Interconnect.CredentialRotationGraceSeconds = 10 * 60
-	}
-	if c.Interconnect.CredentialRotationGraceSeconds > 60*60 {
-		c.Interconnect.CredentialRotationGraceSeconds = 60 * 60
-	}
-	if c.Interconnect.SessionRecoveryWindowSeconds <= 0 {
-		c.Interconnect.SessionRecoveryWindowSeconds = 3 * 60
-	}
-	if c.Interconnect.SessionRecoveryWindowSeconds < 30 {
-		c.Interconnect.SessionRecoveryWindowSeconds = 30
-	}
-	if c.Interconnect.SessionRecoveryWindowSeconds > 10*60 {
-		c.Interconnect.SessionRecoveryWindowSeconds = 10 * 60
-	}
-	resources := &c.Interconnect.Resources
-	if resources.MaxNodes == 0 {
-		resources.MaxNodes = 256
-	}
-	if resources.MaxPendingHandshakes == 0 {
-		resources.MaxPendingHandshakes = 64
-	}
-	if resources.AuthAttemptsPerMinutePerIP == 0 {
-		resources.AuthAttemptsPerMinutePerIP = 30
-	}
-	if resources.DataSoftPPSPerNode == 0 {
-		resources.DataSoftPPSPerNode = 50000
-	}
-	if resources.DataHardPPSPerNode == 0 {
-		resources.DataHardPPSPerNode = 100000
-	}
-	if resources.DataHardMbpsPerNode == 0 {
-		resources.DataHardMbpsPerNode = 1000
-	}
-	if resources.DataQueuePerNode == 0 {
-		resources.DataQueuePerNode = 512
-	}
-	if resources.DataQueueGlobal == 0 {
-		resources.DataQueueGlobal = 4096
-	}
-	if resources.DataMaxQueueAgeMS == 0 {
-		resources.DataMaxQueueAgeMS = 200
-	}
-	if resources.ControlSoftPPSPerNode == 0 {
-		resources.ControlSoftPPSPerNode = 1000
-	}
-	if resources.ControlHardPPSPerNode == 0 {
-		resources.ControlHardPPSPerNode = 2000
-	}
-	if resources.ControlHardMbpsPerNode == 0 {
-		resources.ControlHardMbpsPerNode = 256
-	}
-	if resources.DeviceAuthPPSPerNode == 0 {
-		resources.DeviceAuthPPSPerNode = 500
-	}
-	if resources.MaxDeviceSessionsPerNode == 0 {
-		resources.MaxDeviceSessionsPerNode = 25000
+	if c.Interconnect.InviteTTLSeconds <= 0 {
+		c.Interconnect.InviteTTLSeconds = 24 * 60 * 60
 	}
 	if c.Observability.LogFormat == "" {
 		c.Observability.LogFormat = "text"

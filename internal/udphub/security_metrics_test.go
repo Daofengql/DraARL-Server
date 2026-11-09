@@ -61,7 +61,7 @@ func TestProcessPacketBindsDeviceToSocketEndpoint(t *testing.T) {
 	realAddrB := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 11), Port: 41001}
 	device := &models.Device{
 		ID: 1, OwnerID: 1, Username: "alice", CallSign: "BG7S1", SSID: 1,
-		ISOnline: true, CurrentEntryNodeID: "center", UDPAddr: realAddrA, RealUDPAddr: realAddrA,
+		ISOnline: true, UDPAddr: realAddrA, RealUDPAddr: realAddrA,
 	}
 	runtimeIndexMu.Lock()
 	oldUsernameMap := devUsernameSSIDMap

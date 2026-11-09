@@ -1,105 +1,85 @@
 package handler
 
 import (
+	"draarl/internal/gormdb"
+	"encoding/json"
 	"testing"
 	"time"
-
-	"draarl/internal/gormdb"
 )
 
-func TestCenterAccessPointUsesValidatedSiteUDPAddress(t *testing.T) {
+func TestLocalAccessPointUsesValidatedNATEndpoint(t *testing.T) {
 	now := time.Now()
-	item, ok := centerAccessPoint(
-		"center",
-		"中心直连",
-		"radio.example.com",
-		60050,
-		"福建省 福州市",
-		"",
-		100,
-		now,
-	)
-	if !ok {
-		t.Fatal("valid site UDP endpoint was rejected")
+	item, ok := localAccessPoint("site-a", "测试站", "radio.example.com", 16050, now)
+	if !ok || item.ID != "site-a" || item.DisplayName != "测试站" || item.UDPHost != "radio.example.com" || item.UDPPort != 16050 || !item.HealthySampleAt.Equal(now) {
+		t.Fatalf("endpoint=%+v accepted=%v", item, ok)
 	}
-	if item.ID != "center" || item.DisplayName != "中心直连" || item.UDPHost != "radio.example.com" || item.UDPPort != 60050 || item.Region != "福建省 福州市" || !item.HealthySampleAt.Equal(now) {
-		t.Fatalf("unexpected center access point: %+v", item)
+	for _, host := range []string{"", "https://example.com", "example.com:60050"} {
+		if _, ok := localAccessPoint("site-a", "测试站", host, 60050, now); ok {
+			t.Fatalf("published invalid host %q", host)
+		}
 	}
-
-	tests := []struct {
-		name string
-		id   string
-		host string
-		port int
-	}{
-		{name: "invalid public id", id: "center/internal", host: "radio.example.com", port: 60050},
-		{name: "URL is not a UDP host", id: "center", host: "https://radio.example.com", port: 60050},
-		{name: "missing host", id: "center", host: "", port: 60050},
-		{name: "zero port", id: "center", host: "radio.example.com", port: 0},
-		{name: "port too large", id: "center", host: "radio.example.com", port: 65536},
+	if _, ok := localAccessPoint("internal/a", "测试站", "example.com", 60050, now); ok {
+		t.Fatal("published invalid ID")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, accepted := centerAccessPoint(tt.id, "中心直连", tt.host, tt.port, "", "", 100, now); accepted {
-				t.Fatal("invalid site UDP endpoint was published")
-			}
-		})
+	for _, port := range []int{0, -1, 65536} {
+		if _, ok := localAccessPoint("a", "测试站", "example.com", port, now); ok {
+			t.Fatalf("published invalid port %d", port)
+		}
 	}
 }
 
-func TestNormalizeAccessDiscoveryConfigForNATEndpoint(t *testing.T) {
-	settings := &gormdb.AccessDiscoveryConfig{
-		TokenTTLSeconds:    300,
-		CacheMaxAgeSeconds: 5,
-		Center: gormdb.AccessDiscoveryCenterConfig{
-			Enabled:     true,
-			PublicID:    " center ",
-			DisplayName: " 中心直连 ",
-			UDPHost:     " frp.example.com ",
-			UDPPort:     16050,
-			Region:      " 福建省 福州市 ",
-			Priority:    100,
-		},
+func TestNormalizeLocalAccessConfig(t *testing.T) {
+	got, err := normalizeAccessDiscoveryConfig(&gormdb.AccessDiscoveryConfig{NodeID: " site-a ", UDPHost: " radio.example.com ", UDPPort: 16050})
+	if err != nil || got.NodeID != "site-a" || got.UDPHost != "radio.example.com" || got.UDPPort != 16050 {
+		t.Fatalf("settings=%+v err=%v", got, err)
 	}
+	for _, c := range []gormdb.AccessDiscoveryConfig{{UDPPort: 65536}, {NodeID: "a/b"}, {UDPHost: "https://example.com"}} {
+		if _, err := normalizeAccessDiscoveryConfig(&c); err == nil {
+			t.Fatalf("invalid settings accepted: %+v", c)
+		}
+	}
+	if _, err := normalizeAccessDiscoveryConfig(&gormdb.AccessDiscoveryConfig{}); err != nil {
+		t.Fatal("default local endpoint must be allowed", err)
+	}
+}
 
-	got, err := normalizeAccessDiscoveryConfig(settings)
+func TestLocalAccessConfigIgnoresRemovedOptions(t *testing.T) {
+	var c gormdb.AccessDiscoveryConfig
+	err := json.Unmarshal([]byte(`{"enabled":false,"node_id":"a","udp_host":"example.com","udp_port":60050,"priority":-10,"token_ttl_seconds":999999,"center":{"enabled":false}}`), &c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Center.PublicID != "center" || got.Center.DisplayName != "中心直连" || got.Center.UDPHost != "frp.example.com" || got.Center.UDPPort != 16050 || got.Center.Region != "福建省 福州市" {
-		t.Fatalf("unexpected normalized settings: %+v", got)
+	if _, err := normalizeAccessDiscoveryConfig(&c); err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(c)
+	var fields map[string]any
+	_ = json.Unmarshal(encoded, &fields)
+	if len(fields) != 3 {
+		t.Fatalf("obsolete fields exposed: %s", encoded)
 	}
 }
 
-func TestNormalizeAccessDiscoveryConfigRejectsInvalidSettings(t *testing.T) {
-	valid := gormdb.AccessDiscoveryConfig{
-		TokenTTLSeconds:    300,
-		CacheMaxAgeSeconds: 5,
-		Center: gormdb.AccessDiscoveryCenterConfig{
-			Enabled:     true,
-			PublicID:    "center",
-			DisplayName: "中心直连",
-			UDPHost:     "radio.example.com",
-			UDPPort:     60050,
-		},
+func TestDefaultAccessDiscoveryHostUsesCurrentAPIWithoutMutatingCache(t *testing.T) {
+	settings := &gormdb.AccessDiscoveryConfig{NodeID: "center", UDPPort: 16050}
+	for apiHost, want := range map[string]string{
+		"api.example.com:9000": "api.example.com",
+		"other.example.com":    "other.example.com",
+		"192.0.2.10:9000":      "192.0.2.10",
+		"[2001:db8::1]:9000":   "2001:db8::1",
+	} {
+		got, err := defaultAccessDiscoveryHost(settings, apiHost)
+		if err != nil || got.UDPHost != want || got.UDPPort != 16050 || settings.UDPHost != "" {
+			t.Fatalf("API %q: settings=%+v err=%v", apiHost, got, err)
+		}
 	}
-
-	tests := []struct {
-		name   string
-		mutate func(*gormdb.AccessDiscoveryConfig)
-	}{
-		{name: "token ttl", mutate: func(c *gormdb.AccessDiscoveryConfig) { c.TokenTTLSeconds = 301 }},
-		{name: "cache age", mutate: func(c *gormdb.AccessDiscoveryConfig) { c.CacheMaxAgeSeconds = 31 }},
-		{name: "center host missing", mutate: func(c *gormdb.AccessDiscoveryConfig) { c.Center.UDPHost = "" }},
-		{name: "center port", mutate: func(c *gormdb.AccessDiscoveryConfig) { c.Center.UDPPort = 65536 }},
+	settings.UDPHost = "nat.example.com"
+	got, err := defaultAccessDiscoveryHost(settings, "api.example.com:9000")
+	if err != nil || got.UDPHost != "nat.example.com" {
+		t.Fatal("explicit NAT endpoint did not override API host", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			settings := valid
-			tt.mutate(&settings)
-			if _, err := normalizeAccessDiscoveryConfig(&settings); err == nil {
-				t.Fatal("invalid settings were accepted")
-			}
-		})
+	settings.UDPHost = ""
+	if _, err := defaultAccessDiscoveryHost(settings, "invalid/host"); err == nil {
+		t.Fatal("invalid default API host was accepted")
 	}
 }

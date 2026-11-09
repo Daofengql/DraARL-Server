@@ -270,8 +270,6 @@ func UpdateGroup(c *gin.Context) {
 			"type":          group.Type,
 			"ower_id":       group.OwerID,
 			"ower_callsign": ownerCallSign,
-			"master_server": group.MasterServer,
-			"slave_server":  group.SlaveServer,
 			"status":        group.Status,
 			"note":          group.Note,
 			"create_time":   common.FormatAPITime(group.CreateTime),

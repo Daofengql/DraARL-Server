@@ -224,9 +224,9 @@ func TestLegacyClientReleaseMigrationGuardMySQL(t *testing.T) {
 
 func openClientResourceMySQLTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv(nodeMySQLTestDSNEnv))
+	dsn := strings.TrimSpace(os.Getenv("DRAARL_TEST_MYSQL_DSN"))
 	if dsn == "" {
-		t.Skip("set " + nodeMySQLTestDSNEnv + " to run client resource MySQL tests")
+		t.Skip("set DRAARL_TEST_MYSQL_DSN to run client resource MySQL tests")
 	}
 	parsed, err := drivermysql.ParseDSN(dsn)
 	if err != nil {

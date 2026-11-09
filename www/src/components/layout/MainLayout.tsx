@@ -66,7 +66,7 @@ export function MainLayout({ children }: MainLayoutProps) {
             overflowX: 'hidden',
           }}
         >
-          <Box sx={{ p: { xs: 2, sm: 3, lg: 4 }, flex: 1, minWidth: 0, width: '100%', maxWidth: 1280, mx: 'auto' }}>
+          <Box sx={{ p: { xs: 2, sm: 3 }, flex: 1, minWidth: 0, width: '100%' }}>
             {children || <Outlet />}
           </Box>
         </Box>

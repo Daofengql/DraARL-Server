@@ -24,7 +24,7 @@ func GetOnlineEventMetrics() map[string]uint64 {
 }
 
 func GetWebSocketOnlineCount() int {
-	_, normal, ghost, _ := onlineTransportOnlineCounts()
+	_, normal, ghost := onlineTransportOnlineCounts()
 	return normal + ghost
 }
 

@@ -16,10 +16,10 @@ const SecretMinLength = 32
 const AccessTokenTTL = 3 * time.Hour
 
 const (
-	TokenUseAccess        = "access"
-	TokenUseEdgeDiscovery = "edge-discovery"
-	EdgeDiscoveryAudience = "draarl-edge-discovery"
-	EdgeDiscoveryTokenTTL = 5 * time.Minute
+	TokenUseAccess          = "access"
+	TokenUseDeviceDiscovery = "edge-discovery"
+	DeviceDiscoveryAudience = "draarl-edge-discovery"
+	DeviceDiscoveryTokenTTL = 5 * time.Minute
 )
 
 // jwtSecret 由 SetSecret 初始化（main.go 启动时调用）。
@@ -107,12 +107,12 @@ func generateToken(userID int, username string, roles []string, sessionVersion u
 	return token, err
 }
 
-func GenerateEdgeDiscoveryToken(userID int, username string, sessionVersion uint64, ttl time.Duration) (string, time.Time, error) {
+func GenerateDeviceDiscoveryToken(userID int, username string, sessionVersion uint64, ttl time.Duration) (string, time.Time, error) {
 	if username == "" || userID <= 0 || sessionVersion == 0 {
 		return "", time.Time{}, errors.New("discovery token user ID, username and session version are required")
 	}
-	if ttl <= 0 || ttl > EdgeDiscoveryTokenTTL {
-		ttl = EdgeDiscoveryTokenTTL
+	if ttl <= 0 || ttl > DeviceDiscoveryTokenTTL {
+		ttl = DeviceDiscoveryTokenTTL
 	}
 	now := time.Now()
 	expiresAt := now.Add(ttl)
@@ -120,9 +120,9 @@ func GenerateEdgeDiscoveryToken(userID int, username string, sessionVersion uint
 		Username:       username,
 		UserID:         userID,
 		SessionVersion: sessionVersion,
-		TokenUse:       TokenUseEdgeDiscovery,
+		TokenUse:       TokenUseDeviceDiscovery,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Audience:  jwt.ClaimStrings{EdgeDiscoveryAudience},
+			Audience:  jwt.ClaimStrings{DeviceDiscoveryAudience},
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    "draarl",
@@ -170,20 +170,20 @@ func ValidateAccessToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-func ValidateEdgeDiscoveryToken(tokenString string) (*Claims, error) {
+func ValidateDeviceDiscoveryToken(tokenString string) (*Claims, error) {
 	claims, err := ParseToken(tokenString)
-	if err != nil || claims.TokenUse != TokenUseEdgeDiscovery || !hasUserIdentity(claims) {
-		return nil, errors.New("invalid edge discovery token")
+	if err != nil || claims.TokenUse != TokenUseDeviceDiscovery || !hasUserIdentity(claims) {
+		return nil, errors.New("invalid device discovery token")
 	}
 	foundAudience := false
 	for _, audience := range claims.Audience {
-		if audience == EdgeDiscoveryAudience {
+		if audience == DeviceDiscoveryAudience {
 			foundAudience = true
 			break
 		}
 	}
 	if !foundAudience {
-		return nil, errors.New("invalid edge discovery audience")
+		return nil, errors.New("invalid device discovery audience")
 	}
 	return claims, nil
 }

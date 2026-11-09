@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultConfigFileName(t *testing.T) {
@@ -227,22 +229,53 @@ func TestExplicitLocalDriverDoesNotMigrateLegacyMinIO(t *testing.T) {
 	}
 }
 
-func TestInterconnectResourceDefaults(t *testing.T) {
+func TestCenterInviteDefaults(t *testing.T) {
 	cfg := &Configuration{}
 	cfg.DeviceAuth.AESKey = "01234567890123456789012345678901"
 	if err := cfg.SetDefaults(); err != nil {
 		t.Fatal(err)
 	}
-	r := cfg.Interconnect.Resources
-	if r.MaxNodes != 256 || r.MaxPendingHandshakes != 64 || r.DataHardPPSPerNode != 100000 ||
-		r.DataQueueGlobal != 4096 || r.ControlHardPPSPerNode != 2000 || r.MaxDeviceSessionsPerNode != 25000 {
-		t.Fatalf("unexpected interconnect resource defaults: %#v", r)
+	if cfg.Interconnect.InviteTTLSeconds != 86400 {
+		t.Fatalf("invite TTL=%d", cfg.Interconnect.InviteTTLSeconds)
 	}
-	if cfg.Interconnect.CredentialRotationGraceSeconds != 600 {
-		t.Fatalf("credential rotation grace=%d", cfg.Interconnect.CredentialRotationGraceSeconds)
+}
+
+func TestObsoleteEdgeConfigurationIsIgnored(t *testing.T) {
+	var cfg Configuration
+	if err := yaml.Unmarshal([]byte(`
+DeviceAuth:
+  AESKey: "01234567890123456789012345678901"
+Interconnect:
+  Enabled: true
+  CenterID: site-a
+  InviteTTLSeconds: 600
+  Role: edge
+  Listen: ":61000"
+  CenterAddress: "obsolete.example.com:61000"
+  NodeID: old-edge
+  Credential: obsolete
+  RegistrationTokenTTLSeconds: -1
+  CredentialRotationGraceSeconds: -1
+  SessionRecoveryWindowSeconds: -1
+  Resources:
+    MaxConnections: -1
+`), &cfg); err != nil {
+		t.Fatal(err)
 	}
-	if cfg.Interconnect.SessionRecoveryWindowSeconds != 180 {
-		t.Fatalf("session recovery window=%d", cfg.Interconnect.SessionRecoveryWindowSeconds)
+	if err := cfg.SetDefaults(); err != nil {
+		t.Fatalf("obsolete edge options affected configuration: %v", err)
+	}
+	if !cfg.Interconnect.Enabled || cfg.Interconnect.CenterID != "site-a" || cfg.Interconnect.InviteTTLSeconds != 600 {
+		t.Fatalf("site interconnect configuration was lost: %+v", cfg.Interconnect)
+	}
+	encoded, err := yaml.Marshal(cfg.Interconnect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, obsolete := range []string{"Role:", "Listen:", "CenterAddress:", "NodeID:", "Credential:", "RegistrationTokenTTLSeconds:", "CredentialRotationGraceSeconds:", "SessionRecoveryWindowSeconds:", "Resources:"} {
+		if strings.Contains(string(encoded), obsolete) {
+			t.Fatalf("obsolete option %q survived configuration roundtrip", obsolete)
+		}
 	}
 }
 

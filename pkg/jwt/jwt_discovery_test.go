@@ -8,15 +8,15 @@ import (
 )
 
 func TestDiscoveryTokenCannotBeUsedAsAccessTokenOrRefreshed(t *testing.T) {
-	token, expiresAt, err := GenerateEdgeDiscoveryToken(1, "radio-user", 1, time.Minute)
+	token, expiresAt, err := GenerateDeviceDiscoveryToken(1, "radio-user", 1, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims, err := ValidateEdgeDiscoveryToken(token)
+	claims, err := ValidateDeviceDiscoveryToken(token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.Username != "radio-user" || claims.TokenUse != TokenUseEdgeDiscovery {
+	if claims.Username != "radio-user" || claims.TokenUse != TokenUseDeviceDiscovery {
 		t.Fatalf("unexpected discovery claims: %#v", claims)
 	}
 	if time.Until(expiresAt) > time.Minute || time.Until(expiresAt) < 50*time.Second {
@@ -48,7 +48,7 @@ func TestAccessTokenCannotBeUsedAsDiscoveryToken(t *testing.T) {
 	if _, err := ValidateAccessToken(token); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ValidateEdgeDiscoveryToken(token); err == nil {
+	if _, err := ValidateDeviceDiscoveryToken(token); err == nil {
 		t.Fatal("access token was accepted as a discovery-only token")
 	}
 }

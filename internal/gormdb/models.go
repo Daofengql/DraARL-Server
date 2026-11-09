@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"draarl/internal/accesspoint"
 	broadcastmodel "draarl/internal/broadcast/model"
 	protocolmodels "draarl/internal/models"
 
@@ -83,30 +82,25 @@ func (u *User) GetRoles() []string {
 
 // Device 设备模型
 type Device struct {
-	CurrentEntryNodeID    string     `gorm:"type:varchar(64);index;column:current_entry_node_id" json:"current_entry_node_id"`
-	CurrentEntrySessionID uint64     `gorm:"type:bigint unsigned;index;column:current_entry_session_id" json:"-"`
-	LastEntryNodeID       string     `gorm:"type:varchar(64);index;column:last_entry_node_id" json:"last_entry_node_id"`
-	LastEntryAt           *time.Time `gorm:"type:datetime;column:last_entry_at" json:"last_entry_at,omitempty"`
-	EntryMode             string     `gorm:"type:varchar(16);column:entry_mode" json:"entry_mode"`
-	ID                    int        `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name                  string     `gorm:"type:varchar(255);column:name" json:"name"`
-	DMRID                 int64      `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
-	SSID                  uint8      `gorm:"type:tinyint unsigned;uniqueIndex:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
-	OwnerID               int        `gorm:"uniqueIndex:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
-	QTH                   string     `gorm:"type:varchar(255);column:qth" json:"qth"`                               // 位置信息 (原 gird 字段)
-	LastOnlineIP          string     `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`          // 设备最近一次上线时的客户端 IP
-	DevModel              int        `gorm:"type:int;column:dev_model" json:"dev_model"`
-	GroupID               *int       `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // nil 表示未分组，满足设备群组外键约束
-	Status                int8       `gorm:"type:tinyint;default:1;column:status" json:"status"`
-	IsCerted              bool       `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
-	Priority              int        `gorm:"type:int;default:100;column:priority" json:"priority"`
-	DisableSend           bool       `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
-	DisableRecv           bool       `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
-	ISOnline              bool       `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
-	OnlineTime            time.Time  `gorm:"type:datetime;column:online_time" json:"online_time"`
-	Note                  string     `gorm:"type:text;column:note" json:"note"`
-	CreateTime            time.Time  `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime            time.Time  `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	ID           int       `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Name         string    `gorm:"type:varchar(255);column:name" json:"name"`
+	DMRID        int64     `gorm:"type:bigint;index;column:dmrid" json:"dmrid"`
+	SSID         uint8     `gorm:"type:tinyint unsigned;uniqueIndex:idx_owner_ssid,priority:2;column:ssid" json:"ssid"`
+	OwnerID      int       `gorm:"uniqueIndex:idx_owner_ssid,priority:1;column:owner_id" json:"owner_id"` // 外键关联 users.id
+	QTH          string    `gorm:"type:varchar(255);column:qth" json:"qth"`                               // 位置信息 (原 gird 字段)
+	LastOnlineIP string    `gorm:"type:varchar(64);column:last_online_ip" json:"last_online_ip"`          // 设备最近一次上线时的客户端 IP
+	DevModel     int       `gorm:"type:int;column:dev_model" json:"dev_model"`
+	GroupID      *int      `gorm:"type:int;index;index:idx_group_online,priority:1;column:group_id" json:"group_id"` // nil 表示未分组，满足设备群组外键约束
+	Status       int8      `gorm:"type:tinyint;default:1;column:status" json:"status"`
+	IsCerted     bool      `gorm:"type:tinyint(1);default:0;column:is_certed" json:"is_certed"`
+	Priority     int       `gorm:"type:int;default:100;column:priority" json:"priority"`
+	DisableSend  bool      `gorm:"type:tinyint(1);default:0;column:disable_send" json:"disable_send"`                             // 设备级禁发
+	DisableRecv  bool      `gorm:"type:tinyint(1);default:0;column:disable_recv" json:"disable_recv"`                             // 设备级禁收
+	ISOnline     bool      `gorm:"type:tinyint(1);default:0;index:idx_group_online,priority:2;column:is_online" json:"is_online"` // 性能优化：复合索引
+	OnlineTime   time.Time `gorm:"type:datetime;column:online_time" json:"online_time"`
+	Note         string    `gorm:"type:text;column:note" json:"note"`
+	CreateTime   time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime   time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
 
 	// 关联定义：配置与 User 表的外键约束。
 	// 当引用的 User 被删除时，数据库引擎会自动连带删除该 OwnerID 下的所有 Device 记录。
@@ -136,18 +130,16 @@ func (d *Device) GroupIDValue() int {
 
 // Group 群组模型
 type Group struct {
-	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name         string    `gorm:"type:varchar(255);column:name" json:"name"`
-	Type         int       `gorm:"type:int;column:type" json:"type"`
-	Password     string    `gorm:"type:varchar(255);column:password" json:"-"`
-	OwerID       int       `gorm:"type:int;index:idx_ower_id;column:ower_id" json:"ower_id"` // 性能优化：添加索引，加速按所有者查询
-	MasterServer int       `gorm:"type:int;column:master_server" json:"master_server"`
-	SlaveServer  int       `gorm:"type:int;column:slave_server" json:"slave_server"`
-	Status       int       `gorm:"type:int;default:1;column:status" json:"status"`
-	IsVirtual    bool      `gorm:"type:tinyint(1);default:0;column:is_virtual" json:"is_virtual"` // 是否为虚拟互联组
-	CreateTime   time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
-	UpdateTime   time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
-	Note         string    `gorm:"type:text;column:note" json:"note"`
+	ID         int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name       string    `gorm:"type:varchar(255);column:name" json:"name"`
+	Type       int       `gorm:"type:int;column:type" json:"type"`
+	Password   string    `gorm:"type:varchar(255);column:password" json:"-"`
+	OwerID     int       `gorm:"type:int;index:idx_ower_id;column:ower_id" json:"ower_id"` // 性能优化：添加索引，加速按所有者查询
+	Status     int       `gorm:"type:int;default:1;column:status" json:"status"`
+	IsVirtual  bool      `gorm:"type:tinyint(1);default:0;column:is_virtual" json:"is_virtual"` // 是否为虚拟互联组
+	CreateTime time.Time `gorm:"autoCreateTime;column:create_time" json:"create_time"`
+	UpdateTime time.Time `gorm:"autoUpdateTime;column:update_time" json:"update_time"`
+	Note       string    `gorm:"type:text;column:note" json:"note"`
 
 	// 关联
 	Devices []*Device `gorm:"-" json:"devices,omitempty"`
@@ -245,91 +237,20 @@ func (InterCenterLink) TableName() string {
 	return "inter_center_links"
 }
 
-// Server 服务器模型
-type Server struct {
-	ID                         int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name                       string     `gorm:"type:varchar(255)" json:"name"`
-	ServerType                 int        `gorm:"type:int" json:"server_type"`
-	JoinKey                    string     `gorm:"type:varchar(255)" json:"-"` // 节点接入密钥，不外泄
-	CPUType                    string     `gorm:"type:varchar(255)" json:"cpu_type"`
-	MemSize                    string     `gorm:"type:varchar(255)" json:"mem_size"`
-	InputRate                  int        `gorm:"type:int" json:"input_rate"`
-	OutputRate                 int        `gorm:"type:int" json:"output_rate"`
-	Netcard                    string     `gorm:"type:varchar(255)" json:"netcard"`
-	IPType                     int        `gorm:"type:int" json:"ip_type"`
-	IPAddr                     string     `gorm:"type:varchar(255)" json:"ip_addr"`
-	DNSName                    string     `gorm:"type:varchar(255)" json:"dns_name"`
-	GroupList                  int        `gorm:"type:int" json:"group_list"`
-	OwerID                     string     `gorm:"type:varchar(255)" json:"ower_id"`
-	OwerCallSign               string     `gorm:"type:varchar(255)" json:"ower_callsign"`
-	IsOnline                   bool       `gorm:"type:tinyint(1)" json:"is_online"`
-	Status                     int        `gorm:"type:int" json:"status"`
-	CreateTime                 time.Time  `gorm:"autoCreateTime" json:"create_time"`
-	UpdateTime                 time.Time  `gorm:"autoUpdateTime" json:"update_time"`
-	Note                       string     `gorm:"type:text" json:"note"`
-	UDPPort                    int        `gorm:"type:int" json:"udp_port"`
-	NodeID                     *string    `gorm:"type:varchar(64);uniqueIndex;column:node_id" json:"node_id,omitempty"`
-	DisplayName                string     `gorm:"type:varchar(255);column:display_name" json:"display_name"`
-	PublicAccessID             *string    `gorm:"type:varchar(64);uniqueIndex;column:public_access_id" json:"public_access_id,omitempty"`
-	PublicAccessEnabled        bool       `gorm:"type:tinyint(1);default:0;index;column:public_access_enabled" json:"public_access_enabled"`
-	PublicUDPHost              string     `gorm:"type:varchar(255);column:public_udp_host" json:"public_udp_host,omitempty"`
-	PublicUDPPort              int        `gorm:"type:int;column:public_udp_port" json:"public_udp_port"`
-	PublicRegion               string     `gorm:"type:varchar(100);column:public_region" json:"public_region,omitempty"`
-	PublicNetwork              string     `gorm:"type:varchar(100);column:public_network" json:"public_network,omitempty"`
-	PublicPriority             int        `gorm:"type:int;default:100;column:public_priority" json:"public_priority"`
-	NodeTokenHash              string     `gorm:"type:char(64);column:node_token_hash" json:"-"`
-	NodePreviousTokenHash      string     `gorm:"type:char(64);column:node_previous_token_hash" json:"-"`
-	NodePreviousTokenExpiresAt *time.Time `gorm:"type:datetime;column:node_previous_token_expires_at" json:"-"`
-	NodeRegistrationTokenHash  string     `gorm:"type:char(64);column:node_registration_token_hash" json:"-"`
-	NodeRegistrationExpiresAt  *time.Time `gorm:"type:datetime;column:node_registration_expires_at" json:"node_registration_expires_at,omitempty"`
-	NodeRegisteredAt           *time.Time `gorm:"type:datetime;column:node_registered_at" json:"node_registered_at,omitempty"`
-	NodeCredentialEpoch        uint32     `gorm:"type:int unsigned;default:0;column:node_credential_epoch" json:"node_credential_epoch"`
-	NodeInstanceID             string     `gorm:"type:varchar(128);column:node_instance_id" json:"node_instance_id,omitempty"`
-	NodeRemoteAddr             string     `gorm:"type:varchar(255);column:node_remote_addr" json:"node_remote_addr,omitempty"`
-	NodeControlSessionID       uint64     `gorm:"type:bigint unsigned;column:node_control_session_id" json:"-"`
-	NodeProjectionVersion      uint64     `gorm:"type:bigint unsigned;column:node_projection_version" json:"node_projection_version"`
-	NodeAckedProjectionVersion uint64     `gorm:"type:bigint unsigned;column:node_acked_projection_version" json:"node_acked_projection_version"`
-	NodeLastSeenAt             *time.Time `gorm:"type:datetime;column:node_last_seen_at" json:"node_last_seen_at,omitempty"`
-	NodeConnectionCount        int        `gorm:"type:int;column:node_connection_count" json:"node_connection_count"`
-	NodeDeviceInPackets        uint64     `gorm:"type:bigint unsigned;column:node_device_in_packets" json:"node_device_in_packets"`
-	NodeDeviceInBytes          uint64     `gorm:"type:bigint unsigned;column:node_device_in_bytes" json:"node_device_in_bytes"`
-	NodeDeviceOutPackets       uint64     `gorm:"type:bigint unsigned;column:node_device_out_packets" json:"node_device_out_packets"`
-	NodeDeviceOutBytes         uint64     `gorm:"type:bigint unsigned;column:node_device_out_bytes" json:"node_device_out_bytes"`
-	NodeInterconnectInPackets  uint64     `gorm:"type:bigint unsigned;column:node_interconnect_in_packets" json:"node_interconnect_in_packets"`
-	NodeInterconnectInBytes    uint64     `gorm:"type:bigint unsigned;column:node_interconnect_in_bytes" json:"node_interconnect_in_bytes"`
-	NodeInterconnectOutPackets uint64     `gorm:"type:bigint unsigned;column:node_interconnect_out_packets" json:"node_interconnect_out_packets"`
-	NodeInterconnectOutBytes   uint64     `gorm:"type:bigint unsigned;column:node_interconnect_out_bytes" json:"node_interconnect_out_bytes"`
-	NodeMetricsSampledAt       *time.Time `gorm:"type:datetime;column:node_metrics_sampled_at" json:"node_metrics_sampled_at,omitempty"`
-}
-
-// TableName 指定表名
-func (Server) TableName() string {
-	return "servers"
-}
-
-// String 返回服务器的字符串表示
-func (s *Server) String() string {
-	return s.Name
-}
-
 // Relay 中继台模型
 type Relay struct {
-	ID                 int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name               string     `gorm:"type:varchar(255)" json:"name"`
-	UpFreq             string     `gorm:"type:varchar(255)" json:"up_freq"`
-	DownFreq           string     `gorm:"type:varchar(255)" json:"down_freq"`
-	SendCTSS           string     `gorm:"type:varchar(255)" json:"send_ctss"`
-	ReciveCTSS         string     `gorm:"type:varchar(255)" json:"recive_ctss"`
-	OwerCallSign       string     `gorm:"type:varchar(255)" json:"ower_callsign"`
-	Location           string     `gorm:"type:varchar(255)" json:"location"`
-	CreateTime         time.Time  `gorm:"autoCreateTime" json:"create_time"`
-	UpdateTime         time.Time  `gorm:"autoUpdateTime" json:"update_time"`
-	CurrentEntryNodeID string     `gorm:"type:varchar(64);index;column:current_entry_node_id" json:"current_entry_node_id"`
-	LastEntryNodeID    string     `gorm:"type:varchar(64);index;column:last_entry_node_id" json:"last_entry_node_id"`
-	LastEntryAt        *time.Time `gorm:"type:datetime;column:last_entry_at" json:"last_entry_at,omitempty"`
-	EntryMode          string     `gorm:"type:varchar(16);column:entry_mode" json:"entry_mode"`
-	Status             int        `gorm:"type:int;default:1" json:"status"`
-	Note               string     `gorm:"type:text" json:"note"`
+	ID           int       `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name         string    `gorm:"type:varchar(255)" json:"name"`
+	UpFreq       string    `gorm:"type:varchar(255)" json:"up_freq"`
+	DownFreq     string    `gorm:"type:varchar(255)" json:"down_freq"`
+	SendCTSS     string    `gorm:"type:varchar(255)" json:"send_ctss"`
+	ReciveCTSS   string    `gorm:"type:varchar(255)" json:"recive_ctss"`
+	OwerCallSign string    `gorm:"type:varchar(255)" json:"ower_callsign"`
+	Location     string    `gorm:"type:varchar(255)" json:"location"`
+	CreateTime   time.Time `gorm:"autoCreateTime" json:"create_time"`
+	UpdateTime   time.Time `gorm:"autoUpdateTime" json:"update_time"`
+	Status       int       `gorm:"type:int;default:1" json:"status"`
+	Note         string    `gorm:"type:text" json:"note"`
 }
 
 // TableName 指定表名
@@ -835,14 +756,22 @@ func autoMigrateLocked(db *gorm.DB) error {
 				return err
 			}
 		}
+		if version < 5 {
+			if err := startMigrationVersion(db, 5); err != nil {
+				return err
+			}
+			if err := migrateSingleNodeAccess(db); err != nil {
+				return err
+			}
+			if err := completeMigrationVersion(db, 5); err != nil {
+				return err
+			}
+		}
 		log.Println("[Migration Success] 数据库表结构及外键约束已全部迁移完成！")
 		return nil
 	}
 	// 已迁移：仅执行幂等 schema 同步与轻量归一化（GORM 只在结构差异时发 ALTER）
 	if err := dropEmptyLegacyClientReleaseTables(db); err != nil {
-		return err
-	}
-	if err := normalizeLegacyServerEmptyIDs(db); err != nil {
 		return err
 	}
 	log.Println("[Migration Info] 正在执行幂等 schema 同步...")
@@ -950,7 +879,7 @@ func migrateCoreSchema(db *gorm.DB) error {
 		value interface{}
 	}{
 		{"users", &User{}}, {"devices", &Device{}}, {"groups", &Group{}}, {"group_links", &GroupLink{}},
-		{"inter_center_links", &InterCenterLink{}}, {"center_peer_invites", &CenterPeerInvite{}}, {"servers", &Server{}}, {"relays", &Relay{}},
+		{"inter_center_links", &InterCenterLink{}}, {"center_peer_invites", &CenterPeerInvite{}}, {"relays", &Relay{}},
 		{"operator_logs", &OperatorLog{}}, {"operator_certs", &OperatorCert{}}, {"site_configs", &SiteConfig{}}, {"group_members", &GroupMember{}},
 		{"comm_records", &CommRecord{}}, {"comm_record_delivery_groups", &CommRecordDeliveryGroup{}}, {"assets", &Asset{}},
 		{"user_device_preferences", &UserDevicePreference{}}, {"ghost_client_preferences", &GhostClientPreference{}}, {"ghost_client_subscriptions", &GhostClientSubscription{}},
@@ -995,22 +924,6 @@ func ensureDefaultPublicGroup(db *gorm.DB) error {
 	}
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(group).Error; err != nil {
 		return fmt.Errorf("ensure default public group: %w", err)
-	}
-	return nil
-}
-
-// normalizeLegacyServerEmptyIDs 将 servers 表历史空串 node_id/public_access_id 归一化为 NULL，
-// 供唯一索引安全建立（幂等，仅影响仍为空的旧数据）。
-func normalizeLegacyServerEmptyIDs(db *gorm.DB) error {
-	if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "node_id") {
-		if err := db.Model(&Server{}).Where("node_id = ?", "").Update("node_id", nil).Error; err != nil {
-			return fmt.Errorf("normalize legacy empty server node IDs: %w", err)
-		}
-	}
-	if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "public_access_id") {
-		if err := db.Model(&Server{}).Where("public_access_id = ?", "").Update("public_access_id", nil).Error; err != nil {
-			return fmt.Errorf("normalize empty server public access IDs: %w", err)
-		}
 	}
 	return nil
 }
@@ -1082,19 +995,6 @@ func migrateSchemaV1(db *gorm.DB) error {
 			}
 		}
 
-		// Legacy server rows predate edge NodeID. Empty strings must become NULL
-		// before GORM creates the unique index; MySQL permits multiple NULL values
-		// but would reject multiple historical empty strings.
-		if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "node_id") {
-			if err := db.Model(&Server{}).Where("node_id = ?", "").Update("node_id", nil).Error; err != nil {
-				return fmt.Errorf("normalize legacy empty server node IDs: %w", err)
-			}
-		}
-		if db.Migrator().HasTable(Server{}.TableName()) && db.Migrator().HasColumn(&Server{}, "public_access_id") {
-			if err := db.Model(&Server{}).Where("public_access_id = ?", "").Update("public_access_id", nil).Error; err != nil {
-				return fmt.Errorf("normalize empty server public access IDs: %w", err)
-			}
-		}
 	}
 
 	// ==========================================
@@ -1109,7 +1009,7 @@ func migrateSchemaV1(db *gorm.DB) error {
 		name  string
 		value interface{}
 	}{
-		{"users", &User{}}, {"devices", &Device{}}, {"groups", &Group{}}, {"group_links", &GroupLink{}}, {"inter_center_links", &InterCenterLink{}}, {"center_peer_invites", &CenterPeerInvite{}}, {"servers", &Server{}}, {"relays", &Relay{}}, {"operator_logs", &OperatorLog{}}, {"operator_certs", &OperatorCert{}}, {"site_configs", &SiteConfig{}}, {"group_members", &GroupMember{}}, {"comm_records", &CommRecord{}}, {"comm_record_delivery_groups", &CommRecordDeliveryGroup{}}, {"assets", &Asset{}}, {"user_device_preferences", &UserDevicePreference{}}, {"ghost_client_preferences", &GhostClientPreference{}}, {"ghost_client_subscriptions", &GhostClientSubscription{}}, {"device_configs", &DeviceConfig{}}, {"logbooks", &Logbook{}}, {"user_radio_presets", &UserRadioPreset{}}, {"firmware_releases", &FirmwareRelease{}}, {"client_resources", &ClientResource{}}, {"client_resource_releases", &ClientResourceRelease{}}, {"client_resource_artifacts", &ClientResourceArtifact{}}, {"client_resource_artifact_targets", &ClientResourceArtifactTarget{}}, {"broadcast_audio", &broadcastmodel.BroadcastAudio{}}, {"broadcast_schedules", &broadcastmodel.BroadcastSchedule{}}, {"virtual_group_broadcast_policies", &broadcastmodel.VirtualGroupBroadcastPolicy{}}, {"broadcast_runs", &broadcastmodel.BroadcastRun{}},
+		{"users", &User{}}, {"devices", &Device{}}, {"groups", &Group{}}, {"group_links", &GroupLink{}}, {"inter_center_links", &InterCenterLink{}}, {"center_peer_invites", &CenterPeerInvite{}}, {"relays", &Relay{}}, {"operator_logs", &OperatorLog{}}, {"operator_certs", &OperatorCert{}}, {"site_configs", &SiteConfig{}}, {"group_members", &GroupMember{}}, {"comm_records", &CommRecord{}}, {"comm_record_delivery_groups", &CommRecordDeliveryGroup{}}, {"assets", &Asset{}}, {"user_device_preferences", &UserDevicePreference{}}, {"ghost_client_preferences", &GhostClientPreference{}}, {"ghost_client_subscriptions", &GhostClientSubscription{}}, {"device_configs", &DeviceConfig{}}, {"logbooks", &Logbook{}}, {"user_radio_presets", &UserRadioPreset{}}, {"firmware_releases", &FirmwareRelease{}}, {"client_resources", &ClientResource{}}, {"client_resource_releases", &ClientResourceRelease{}}, {"client_resource_artifacts", &ClientResourceArtifact{}}, {"client_resource_artifact_targets", &ClientResourceArtifactTarget{}}, {"broadcast_audio", &broadcastmodel.BroadcastAudio{}}, {"broadcast_schedules", &broadcastmodel.BroadcastSchedule{}}, {"virtual_group_broadcast_policies", &broadcastmodel.VirtualGroupBroadcastPolicy{}}, {"broadcast_runs", &broadcastmodel.BroadcastRun{}},
 	} {
 		if err = db.AutoMigrate(model.value); err != nil {
 			return fmt.Errorf("migrate %s: %w", model.name, err)
@@ -1122,9 +1022,6 @@ func migrateSchemaV1(db *gorm.DB) error {
 		return err
 	}
 	if err := BackfillCommRecordDeliveryGroups(db); err != nil {
-		return err
-	}
-	if err := backfillServerPublicAccessIDs(db); err != nil {
 		return err
 	}
 	if err := backfillVirtualGroupBroadcastPolicies(db); err != nil {
@@ -1254,24 +1151,6 @@ func IsSchemaEmpty() (bool, error) {
 
 func schemaIsEmpty(tables []string) bool {
 	return len(tables) == 0
-}
-
-func backfillServerPublicAccessIDs(db *gorm.DB) error {
-	var nodeIDs []int
-	if err := db.Model(&Server{}).Where("node_id IS NOT NULL AND (public_access_id IS NULL OR public_access_id = ?)", "").Pluck("id", &nodeIDs).Error; err != nil {
-		return fmt.Errorf("list edge nodes missing public access IDs: %w", err)
-	}
-	for _, id := range nodeIDs {
-		publicID, err := accesspoint.NewPublicID()
-		if err != nil {
-			return fmt.Errorf("generate public access ID for edge node %d: %w", id, err)
-		}
-		result := db.Model(&Server{}).Where("id = ? AND (public_access_id IS NULL OR public_access_id = ?)", id, "").Update("public_access_id", publicID)
-		if result.Error != nil {
-			return fmt.Errorf("backfill public access ID for edge node %d: %w", id, result.Error)
-		}
-	}
-	return nil
 }
 
 // dropLegacyGroupAllowCallSignSSIDColumn 删除已停用的设备准入白名单列。

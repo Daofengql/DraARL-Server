@@ -37,10 +37,10 @@ markdown_extensions:
 nav:
   - 首页: index.md
   - 架构设计: 架构设计.md
-  - Type 0 节点互联协议: 节点互联协议.md
   - UDP 转发压力测试: UDP单机转发压力测试.md
   - 幽灵多收与消息查询性能验证: 幽灵多收与消息查询性能验证.md
   - 数据字典: 数据字典.md
+  - v2.0.1-alpha7 更新说明: release-v2.0.1-alpha7.md
   - 使用与说明文档:
       - 总览: usage/README.md
       - 01. 部署与配置: usage/01-部署与配置.md

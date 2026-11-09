@@ -1,6 +1,4 @@
-// Package routesync is the single post-commit bridge from centre business
-// state to Type 0 edge route projections. Handlers publish intent here rather
-// than constructing protocol envelopes themselves.
+// Package routesync refreshes in-process sender state after committed device or group changes.
 package routesync
 
 import (
@@ -13,7 +11,7 @@ import (
 
 func PublishDevice(deviceID int) bool {
 	runtime := interconnect.ActiveCenterRuntime()
-	if runtime == nil || runtime.Gateway == nil || deviceID <= 0 {
+	if runtime == nil || runtime.Local == nil || deviceID <= 0 {
 		return false
 	}
 	device, err := gormdb.NewDeviceRepository().GetDeviceByID(deviceID)
@@ -25,7 +23,7 @@ func PublishDevice(deviceID int) bool {
 		return RevokeDevice(deviceID, "device_deleted")
 	}
 	groupID := device.GroupIDValue()
-	updated, err := runtime.Gateway.UpdateActiveDeviceRoute(device.ID, groupID, udphub.GetActiveCommunicationDomainID(groupID), device.DisableSend, device.DisableRecv)
+	updated, err := runtime.Local.UpdateActiveDeviceRoute(device.ID, groupID, udphub.GetActiveCommunicationDomainID(groupID), device.DisableSend, device.DisableRecv)
 	if err != nil {
 		log.Printf("[ROUTE_SYNC] publish device %d failed: %v", deviceID, err)
 	}
@@ -48,10 +46,10 @@ func PublishDevices(deviceIDs []int) {
 
 func RevokeDevice(deviceID int, reason string) bool {
 	runtime := interconnect.ActiveCenterRuntime()
-	if runtime == nil || runtime.Gateway == nil || deviceID <= 0 {
+	if runtime == nil || runtime.Local == nil || deviceID <= 0 {
 		return false
 	}
-	revoked, err := runtime.Gateway.RevokeActiveDevice(deviceID, reason)
+	revoked, err := runtime.Local.RevokeActiveDevice(deviceID, reason)
 	if err != nil {
 		log.Printf("[ROUTE_SYNC] revoke device %d failed: %v", deviceID, err)
 	}
@@ -60,10 +58,10 @@ func RevokeDevice(deviceID int, reason string) bool {
 
 func PublishIdentity(ownerID int, ssid byte, groupID int, disableSend, disableRecv bool) bool {
 	runtime := interconnect.ActiveCenterRuntime()
-	if runtime == nil || runtime.Gateway == nil {
+	if runtime == nil || runtime.Local == nil {
 		return false
 	}
-	updated, err := runtime.Gateway.UpdateActiveIdentityRoute(ownerID, ssid, groupID, udphub.GetActiveCommunicationDomainID(groupID), disableSend, disableRecv)
+	updated, err := runtime.Local.UpdateActiveIdentityRoute(ownerID, ssid, groupID, udphub.GetActiveCommunicationDomainID(groupID), disableSend, disableRecv)
 	if err != nil {
 		log.Printf("[ROUTE_SYNC] publish owner=%d ssid=%d failed: %v", ownerID, ssid, err)
 	}
@@ -72,10 +70,10 @@ func PublishIdentity(ownerID int, ssid byte, groupID int, disableSend, disableRe
 
 func RevokeOwner(ownerID int, reason string) int {
 	runtime := interconnect.ActiveCenterRuntime()
-	if runtime == nil || runtime.Gateway == nil {
+	if runtime == nil || runtime.Local == nil {
 		return 0
 	}
-	count, err := runtime.Gateway.RevokeActiveOwner(ownerID, reason)
+	count, err := runtime.Local.RevokeActiveOwner(ownerID, reason)
 	if err != nil {
 		log.Printf("[ROUTE_SYNC] revoke owner %d failed: %v", ownerID, err)
 	}
@@ -84,10 +82,10 @@ func RevokeOwner(ownerID int, reason string) int {
 
 func RefreshTopology() {
 	runtime := interconnect.ActiveCenterRuntime()
-	if runtime == nil || runtime.Gateway == nil {
+	if runtime == nil || runtime.Local == nil {
 		return
 	}
-	if err := runtime.Gateway.RefreshActiveDeviceDomains(udphub.GetActiveCommunicationDomainID); err != nil {
-		log.Printf("[ROUTE_SYNC] refresh active edge domains failed: %v", err)
+	if err := runtime.Local.RefreshActiveDeviceDomains(udphub.GetActiveCommunicationDomainID); err != nil {
+		log.Printf("[ROUTE_SYNC] refresh local communication domains failed: %v", err)
 	}
 }

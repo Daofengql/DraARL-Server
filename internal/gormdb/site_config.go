@@ -191,24 +191,15 @@ type APRSConfig struct {
 	Altitude       string  `json:"altitude"`
 }
 
-// AccessDiscoveryCenterConfig 中心直连接入点配置。
-type AccessDiscoveryCenterConfig struct {
-	Enabled     bool   `json:"enabled"`
-	PublicID    string `json:"public_id"`
-	DisplayName string `json:"display_name"`
-	UDPHost     string `json:"udp_host"`
-	UDPPort     int    `json:"udp_port"`
-	Region      string `json:"region"`
-	Network     string `json:"network"`
-	Priority    int    `json:"priority"`
+// AccessDiscoveryConfig publishes this site's single device endpoint.
+type AccessDiscoveryConfig struct {
+	NodeID  string `json:"node_id"`
+	UDPHost string `json:"udp_host"`
+	UDPPort int    `json:"udp_port"`
 }
 
-// AccessDiscoveryConfig 设备接入点发现配置。
-type AccessDiscoveryConfig struct {
-	TokenTTLSeconds    int                         `json:"token_ttl_seconds"`
-	CacheMaxAgeSeconds int                         `json:"cache_max_age_seconds"`
-	Center             AccessDiscoveryCenterConfig `json:"center"`
-}
+const AccessDiscoveryTokenTTLSeconds = 300
+const AccessDiscoveryCacheMaxAgeSeconds = 5
 
 // CommSettingsConfig 通信设置配置
 type CommSettingsConfig struct {
@@ -335,7 +326,12 @@ func (r *SiteConfigRepository) SetBatch(configs []SiteConfig) error {
 				return err
 			}
 			stored.Value = sealedValue
-			if err := tx.Where("config_key = ?", stored.Key).Assign(stored).FirstOrCreate(&stored).Error; err != nil {
+			// Upsert explicit columns so clearing a value persists an empty string.
+			// Assign(struct) omits zero fields when updating an existing row.
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "config_key"}},
+				DoUpdates: clause.AssignmentColumns([]string{"config_value", "category", "description", "update_time"}),
+			}).Create(&stored).Error; err != nil {
 				return err
 			}
 		}
@@ -475,80 +471,34 @@ func (r *SiteConfigRepository) SetAPRSConfig(config APRSConfig) error {
 	return r.SetBatch(configs)
 }
 
-// GetAccessDiscoveryConfig 获取设备接入点发现配置。
+// GetAccessDiscoveryConfig reads only the supported local endpoint settings.
 func (r *SiteConfigRepository) GetAccessDiscoveryConfig() (*AccessDiscoveryConfig, error) {
 	configs, err := r.GetByCategory(CategoryAccessDiscovery)
 	if err != nil {
 		return nil, err
 	}
-
-	result := &AccessDiscoveryConfig{
-		TokenTTLSeconds:    300,
-		CacheMaxAgeSeconds: 5,
-		Center: AccessDiscoveryCenterConfig{
-			PublicID:    "center",
-			DisplayName: "中心直连",
-			UDPPort:     60050,
-			Priority:    100,
-		},
-	}
-
+	result := &AccessDiscoveryConfig{NodeID: "center"}
 	for _, config := range configs {
 		switch config.Key {
-		case "access_discovery.token_ttl_seconds":
-			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
-				result.TokenTTLSeconds = value
-			}
-		case "access_discovery.cache_max_age_seconds":
-			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
-				result.CacheMaxAgeSeconds = value
-			}
-		case "access_discovery.center.enabled":
-			result.Center.Enabled = config.Value == "true"
-		case "access_discovery.center.public_id":
-			result.Center.PublicID = config.Value
-		case "access_discovery.center.display_name":
-			result.Center.DisplayName = config.Value
-		case "access_discovery.center.udp_host":
-			result.Center.UDPHost = config.Value
-		case "access_discovery.center.udp_port":
-			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
-				result.Center.UDPPort = value
-			}
-		case "access_discovery.center.region":
-			result.Center.Region = config.Value
-		case "access_discovery.center.network":
-			result.Center.Network = config.Value
-		case "access_discovery.center.priority":
-			if value, parseErr := strconv.Atoi(config.Value); parseErr == nil {
-				result.Center.Priority = value
+		case "access_discovery.node_id":
+			result.NodeID = config.Value
+		case "access_discovery.udp_host":
+			result.UDPHost = config.Value
+		case "access_discovery.udp_port":
+			if port, err := strconv.Atoi(config.Value); err == nil {
+				result.UDPPort = port
 			}
 		}
 	}
-
 	return result, nil
 }
 
-// SetAccessDiscoveryConfig 设置设备接入点发现配置。
 func (r *SiteConfigRepository) SetAccessDiscoveryConfig(config AccessDiscoveryConfig) error {
-	configs := []SiteConfig{
-		{Key: "access_discovery.token_ttl_seconds", Value: strconv.Itoa(config.TokenTTLSeconds), Category: CategoryAccessDiscovery, Description: "发现凭证有效期（秒）"},
-		{Key: "access_discovery.cache_max_age_seconds", Value: strconv.Itoa(config.CacheMaxAgeSeconds), Category: CategoryAccessDiscovery, Description: "发现列表客户端缓存时间（秒）"},
-		{Key: "access_discovery.center.enabled", Value: strconv.FormatBool(config.Center.Enabled), Category: CategoryAccessDiscovery, Description: "是否发布中心直连接入点"},
-		{Key: "access_discovery.center.public_id", Value: config.Center.PublicID, Category: CategoryAccessDiscovery, Description: "中心接入点公开 ID"},
-		{Key: "access_discovery.center.display_name", Value: config.Center.DisplayName, Category: CategoryAccessDiscovery, Description: "中心接入点名称"},
-		{Key: "access_discovery.center.udp_host", Value: config.Center.UDPHost, Category: CategoryAccessDiscovery, Description: "中心公网 UDP 地址"},
-		{Key: "access_discovery.center.udp_port", Value: strconv.Itoa(config.Center.UDPPort), Category: CategoryAccessDiscovery, Description: "中心公网 UDP 端口"},
-		{Key: "access_discovery.center.region", Value: config.Center.Region, Category: CategoryAccessDiscovery, Description: "中心接入点地区"},
-		{Key: "access_discovery.center.network", Value: config.Center.Network, Category: CategoryAccessDiscovery, Description: "中心接入点网络标签"},
-		{Key: "access_discovery.center.priority", Value: strconv.Itoa(config.Center.Priority), Category: CategoryAccessDiscovery, Description: "中心接入点优先级"},
-	}
-	if err := r.SetBatch(configs); err != nil {
-		return err
-	}
-	// The centre-only discovery list no longer uses the legacy edge health
-	// setting. Remove an old row when an administrator saves this section.
-	return r.Delete("access_discovery.edge_health_ttl_seconds")
+	return r.SetBatch([]SiteConfig{
+		{Key: "access_discovery.node_id", Value: config.NodeID, Category: CategoryAccessDiscovery, Description: "节点 ID"},
+		{Key: "access_discovery.udp_host", Value: config.UDPHost, Category: CategoryAccessDiscovery, Description: "对外 UDP 地址"},
+		{Key: "access_discovery.udp_port", Value: strconv.Itoa(config.UDPPort), Category: CategoryAccessDiscovery, Description: "对外 UDP 端口"},
+	})
 }
 
 // GetCommSettingsConfig 获取通信设置配置

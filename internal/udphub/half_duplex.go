@@ -125,7 +125,6 @@ func resetHalfDuplexDomainCache() {
 		return true
 	})
 	halfDuplexDomainCacheMu.Unlock()
-	resetDomainGroupReverseCache()
 
 	// 仅回收明显过期的占用状态，防止状态表长期增长。
 	expireBefore := time.Now().Add(-3 * halfDuplexVoiceHoldTimeout)
@@ -200,8 +199,7 @@ func GetHalfDuplexDomainGroupIDs(groupID int) []int {
 }
 
 // GetCommunicationDomainID returns a stable opaque ID for the current linked
-// group domain. It is shared with Type 0 grants so centre and edge make the
-// same local/remote routing decision without sharing database state.
+// group domain. Local devices, site peers and broadcasts share this arbiter.
 func GetCommunicationDomainID(groupID int) uint64 {
 	key := getHalfDuplexDomainKey(groupID)
 	if key == "" {
@@ -212,7 +210,7 @@ func GetCommunicationDomainID(groupID int) uint64 {
 
 // GetActiveCommunicationDomainID also applies the authoritative group enabled
 // state. Disabled, missing, ungrouped and virtual groups never form a live
-// forwarding domain on an edge.
+// communication domain.
 func GetActiveCommunicationDomainID(groupID int) uint64 {
 	if groupID <= 0 {
 		return 0

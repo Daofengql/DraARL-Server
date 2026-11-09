@@ -2,7 +2,6 @@ package models
 
 import (
 	"fmt"
-	"net"
 	"time"
 )
 
@@ -90,36 +89,6 @@ type QTH struct {
 	Name         string    `json:"name"`
 }
 
-// Server 服务器信息
-type Server struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`
-	ServerType   int    `json:"server_type"`
-	JoinKey      string `json:"join_key"`
-	CpuType      int    `json:"cpu_type"`
-	MemSize      int    `json:"mem_size"`
-	InputRate    int    `json:"input_rate"`
-	OutputRate   int    `json:"output_rate"`
-	Providers    string `json:"providers"`
-	NetCard      string `json:"netcard"`
-	IPType       int    `json:"ip_type"`
-	IPAddr       string `json:"ip_addr"`
-	UDPPort      string `json:"udp_port"`
-	DNSName      string `json:"dns_name"`
-	Status       int    `json:"status"`
-	OwerID       int    `json:"ower_id"`
-	OwerCallSign string `json:"ower_callsign"`
-	CreateTime   string `json:"create_time"`
-	UpdateTime   string `json:"update_time"`
-	Note         string `json:"note"`
-	// 运行时字段
-	Host    string       `json:"host"`
-	Port    int          `json:"port"`
-	Online  int          `json:"online"`
-	Total   int          `json:"total"`
-	UDPAddr *net.UDPAddr `json:"-"`
-}
-
 // Relay 中继台信息
 type Relay struct {
 	ID           int    `json:"id"`
@@ -141,6 +110,3 @@ func (r *Relay) String() string {
 }
 
 // String 返回服务器的字符串表示
-func (s *Server) String() string {
-	return fmt.Sprintf("服务器[%s] 类型:%d 地址:%s:%s", s.Name, s.ServerType, s.IPAddr, s.UDPPort)
-}

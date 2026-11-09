@@ -18,7 +18,6 @@ func TestRepositoryContextCancelsQueriesWithoutMutatingOriginal(t *testing.T) {
 		(&GroupRepository{db: db}).WithContext(ctx).db,
 		(&GroupMemberRepository{db: db}).WithContext(ctx).db,
 		(&GroupLinkRepository{db: db}).WithContext(ctx).db,
-		(&ServerRepository{db: db}).WithContext(ctx).db,
 	}
 	for _, session := range sessions {
 		if !errors.Is(session.Statement.Context.Err(), context.Canceled) {

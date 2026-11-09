@@ -29,101 +29,65 @@ const (
 
 // TLV 配置项 Type 定义
 const (
-	TLVTypeRxFreq                byte = 0x01 // 接收频率 (8 bytes, big-endian uint64 Hz)
-	TLVTypeTxFreq                byte = 0x02 // 发射频率 (8 bytes, big-endian uint64 Hz)
-	TLVTypeRxCtcss               byte = 0x03 // 接收亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
-	TLVTypeTxCtcss               byte = 0x04 // 发射亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
-	TLVTypeSqlLevel              byte = 0x05 // 静噪等级 (1 byte, uint8 0-8)
-	TLVTypePowerLevel            byte = 0x06 // 功率等级 (1 byte, uint8 1=低, 3=高；历史 2 兼容映射为高)
-	TLVTypeTxBandwidth           byte = 0x07 // 发射带宽 (1 byte, uint8 1=窄带, 2=宽带)
-	TLVTypeRxToneMode            byte = 0x08 // 接收亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
-	TLVTypeRxToneValue           byte = 0x09 // 接收亚音值 (8 bytes, ASCII, 如 88.5/023)
-	TLVTypeTxToneMode            byte = 0x0A // 发射亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
-	TLVTypeTxToneValue           byte = 0x0B // 发射亚音值 (8 bytes, ASCII, 如 88.5/023)
-	TLVTypeRFGuardEnabled        byte = 0x0C // 射频保护开关 (1 byte, uint8 0=关,1=开)
-	TLVTypeRFGuardSingleTxLimitS byte = 0x0D // 单次发射上限 (2 bytes, big-endian uint16 秒)
-	TLVTypeRFGuardWindowS        byte = 0x0E // 统计窗口 (2 bytes, big-endian uint16 秒)
-	TLVTypeRFGuardMaxTxInWindowS byte = 0x0F // 窗口内累计发射上限 (2 bytes, big-endian uint16 秒)
-	TLVTypeTimestamp             byte = 0x10 // 时间戳 (8 bytes, big-endian int64 Unix毫秒)
-	TLVTypeADCGainDB             byte = 0x11 // ADC 增益 (1 byte, uint8 0-24 dB)
-	TLVTypeADCVolume             byte = 0x12 // ADC 音量 (1 byte, uint8 0-100)
-	TLVTypeDACVolume             byte = 0x13 // DAC 音量 (1 byte, uint8 0-100)
-	TLVTypeSQLActiveHigh         byte = 0x14 // SQL 触发极性 (1 byte, uint8 0=低有效,1=高有效)
-	TLVTypePTTActiveHigh         byte = 0x15 // PTT 激活极性 (1 byte, uint8 0=低有效,1=高有效)
+	TLVTypeRxFreq        byte = 0x01 // 接收频率 (8 bytes, big-endian uint64 Hz)
+	TLVTypeTxFreq        byte = 0x02 // 发射频率 (8 bytes, big-endian uint64 Hz)
+	TLVTypeRxCtcss       byte = 0x03 // 接收亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
+	TLVTypeTxCtcss       byte = 0x04 // 发射亚音 (4 bytes, big-endian float32 Hz, 0=关闭)
+	TLVTypeSqlLevel      byte = 0x05 // 静噪等级 (1 byte, uint8 0-8)
+	TLVTypePowerLevel    byte = 0x06 // 功率等级 (1 byte, uint8 1=低, 3=高；历史 2 兼容映射为高)
+	TLVTypeTxBandwidth   byte = 0x07 // 发射带宽 (1 byte, uint8 1=窄带, 2=宽带)
+	TLVTypeRxToneMode    byte = 0x08 // 接收亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
+	TLVTypeRxToneValue   byte = 0x09 // 接收亚音值 (8 bytes, ASCII, 如 88.5/023)
+	TLVTypeTxToneMode    byte = 0x0A // 发射亚音类型 (1 byte, 0=OFF,1=CTCSS,2=CDCSS_N,3=CDCSS_I)
+	TLVTypeTxToneValue   byte = 0x0B // 发射亚音值 (8 bytes, ASCII, 如 88.5/023)
+	TLVTypeTimestamp     byte = 0x10 // 时间戳 (8 bytes, big-endian int64 Unix毫秒)
+	TLVTypeADCGainDB     byte = 0x11 // ADC 增益 (1 byte, uint8 0-24 dB)
+	TLVTypeADCVolume     byte = 0x12 // ADC 音量 (1 byte, uint8 0-100)
+	TLVTypeDACVolume     byte = 0x13 // DAC 音量 (1 byte, uint8 0-100)
+	TLVTypeSQLActiveHigh byte = 0x14 // SQL 触发极性 (1 byte, uint8 0=低有效,1=高有效)
+	TLVTypePTTActiveHigh byte = 0x15 // PTT 激活极性 (1 byte, uint8 0=低有效,1=高有效)
 )
 
 // 配置键名映射 (TLV Type -> 数据库 Key)
 var tlvTypeToKeyMap = map[byte]string{
-	TLVTypeRxFreq:                "rx_freq",
-	TLVTypeTxFreq:                "tx_freq",
-	TLVTypeRxCtcss:               "rx_ctcss",
-	TLVTypeTxCtcss:               "tx_ctcss",
-	TLVTypeSqlLevel:              "sql_level",
-	TLVTypePowerLevel:            "power_level",
-	TLVTypeTxBandwidth:           "tx_bandwidth",
-	TLVTypeRxToneMode:            ConfigKeyRxToneMode,
-	TLVTypeRxToneValue:           ConfigKeyRxToneValue,
-	TLVTypeTxToneMode:            ConfigKeyTxToneMode,
-	TLVTypeTxToneValue:           ConfigKeyTxToneValue,
-	TLVTypeRFGuardEnabled:        ConfigKeyRFGuardEnabled,
-	TLVTypeRFGuardSingleTxLimitS: ConfigKeyRFGuardSingleTxLimitS,
-	TLVTypeRFGuardWindowS:        ConfigKeyRFGuardWindowS,
-	TLVTypeRFGuardMaxTxInWindowS: ConfigKeyRFGuardMaxTxInWindowS,
-	TLVTypeTimestamp:             "timestamp",
-	TLVTypeADCGainDB:             ConfigKeyADCGainDB,
-	TLVTypeADCVolume:             ConfigKeyADCVolume,
-	TLVTypeDACVolume:             ConfigKeyDACVolume,
-	TLVTypeSQLActiveHigh:         ConfigKeySQLActiveHigh,
-	TLVTypePTTActiveHigh:         ConfigKeyPTTActiveHigh,
+	TLVTypeRxFreq:        "rx_freq",
+	TLVTypeTxFreq:        "tx_freq",
+	TLVTypeRxCtcss:       "rx_ctcss",
+	TLVTypeTxCtcss:       "tx_ctcss",
+	TLVTypeSqlLevel:      "sql_level",
+	TLVTypePowerLevel:    "power_level",
+	TLVTypeTxBandwidth:   "tx_bandwidth",
+	TLVTypeRxToneMode:    ConfigKeyRxToneMode,
+	TLVTypeRxToneValue:   ConfigKeyRxToneValue,
+	TLVTypeTxToneMode:    ConfigKeyTxToneMode,
+	TLVTypeTxToneValue:   ConfigKeyTxToneValue,
+	TLVTypeTimestamp:     "timestamp",
+	TLVTypeADCGainDB:     ConfigKeyADCGainDB,
+	TLVTypeADCVolume:     ConfigKeyADCVolume,
+	TLVTypeDACVolume:     ConfigKeyDACVolume,
+	TLVTypeSQLActiveHigh: ConfigKeySQLActiveHigh,
+	TLVTypePTTActiveHigh: ConfigKeyPTTActiveHigh,
 }
 
 // 配置键名反向映射 (数据库 Key -> TLV Type)
 var keyToTlvTypeMap = map[string]byte{
-	"rx_freq":                      TLVTypeRxFreq,
-	"tx_freq":                      TLVTypeTxFreq,
-	"rx_ctcss":                     TLVTypeRxCtcss,
-	"tx_ctcss":                     TLVTypeTxCtcss,
-	"sql_level":                    TLVTypeSqlLevel,
-	"power_level":                  TLVTypePowerLevel,
-	"tx_bandwidth":                 TLVTypeTxBandwidth,
-	ConfigKeyRxToneMode:            TLVTypeRxToneMode,
-	ConfigKeyRxToneValue:           TLVTypeRxToneValue,
-	ConfigKeyTxToneMode:            TLVTypeTxToneMode,
-	ConfigKeyTxToneValue:           TLVTypeTxToneValue,
-	ConfigKeyRFGuardEnabled:        TLVTypeRFGuardEnabled,
-	ConfigKeyRFGuardSingleTxLimitS: TLVTypeRFGuardSingleTxLimitS,
-	ConfigKeyRFGuardWindowS:        TLVTypeRFGuardWindowS,
-	ConfigKeyRFGuardMaxTxInWindowS: TLVTypeRFGuardMaxTxInWindowS,
-	"timestamp":                    TLVTypeTimestamp,
-	ConfigKeyADCGainDB:             TLVTypeADCGainDB,
-	ConfigKeyADCVolume:             TLVTypeADCVolume,
-	ConfigKeyDACVolume:             TLVTypeDACVolume,
-	ConfigKeySQLActiveHigh:         TLVTypeSQLActiveHigh,
-	ConfigKeyPTTActiveHigh:         TLVTypePTTActiveHigh,
-}
-
-var managedConfigKeys = []string{
-	"rx_freq",
-	"tx_freq",
-	"rx_ctcss",
-	"tx_ctcss",
-	"sql_level",
-	"power_level",
-	"tx_bandwidth",
-	ConfigKeyRxToneMode,
-	ConfigKeyRxToneValue,
-	ConfigKeyTxToneMode,
-	ConfigKeyTxToneValue,
-	ConfigKeyRFGuardEnabled,
-	ConfigKeyRFGuardSingleTxLimitS,
-	ConfigKeyRFGuardWindowS,
-	ConfigKeyRFGuardMaxTxInWindowS,
-	ConfigKeyADCGainDB,
-	ConfigKeyADCVolume,
-	ConfigKeyDACVolume,
-	ConfigKeySQLActiveHigh,
-	ConfigKeyPTTActiveHigh,
-	"timestamp",
+	"rx_freq":              TLVTypeRxFreq,
+	"tx_freq":              TLVTypeTxFreq,
+	"rx_ctcss":             TLVTypeRxCtcss,
+	"tx_ctcss":             TLVTypeTxCtcss,
+	"sql_level":            TLVTypeSqlLevel,
+	"power_level":          TLVTypePowerLevel,
+	"tx_bandwidth":         TLVTypeTxBandwidth,
+	ConfigKeyRxToneMode:    TLVTypeRxToneMode,
+	ConfigKeyRxToneValue:   TLVTypeRxToneValue,
+	ConfigKeyTxToneMode:    TLVTypeTxToneMode,
+	ConfigKeyTxToneValue:   TLVTypeTxToneValue,
+	"timestamp":            TLVTypeTimestamp,
+	ConfigKeyADCGainDB:     TLVTypeADCGainDB,
+	ConfigKeyADCVolume:     TLVTypeADCVolume,
+	ConfigKeyDACVolume:     TLVTypeDACVolume,
+	ConfigKeySQLActiveHigh: TLVTypeSQLActiveHigh,
+	ConfigKeyPTTActiveHigh: TLVTypePTTActiveHigh,
 }
 
 const (
@@ -133,24 +97,20 @@ const (
 
 var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
 	deviceConfigProfileSA818: {
-		"rx_freq":                      {},
-		"tx_freq":                      {},
-		"rx_ctcss":                     {},
-		"tx_ctcss":                     {},
-		ConfigKeyRxToneMode:            {},
-		ConfigKeyRxToneValue:           {},
-		ConfigKeyTxToneMode:            {},
-		ConfigKeyTxToneValue:           {},
-		"sql_level":                    {},
-		"power_level":                  {},
-		"tx_bandwidth":                 {},
-		ConfigKeyRFGuardEnabled:        {},
-		ConfigKeyRFGuardSingleTxLimitS: {},
-		ConfigKeyRFGuardWindowS:        {},
-		ConfigKeyRFGuardMaxTxInWindowS: {},
-		ConfigKeyADCGainDB:             {},
-		ConfigKeyADCVolume:             {},
-		ConfigKeyDACVolume:             {},
+		"rx_freq":            {},
+		"tx_freq":            {},
+		"rx_ctcss":           {},
+		"tx_ctcss":           {},
+		ConfigKeyRxToneMode:  {},
+		ConfigKeyRxToneValue: {},
+		ConfigKeyTxToneMode:  {},
+		ConfigKeyTxToneValue: {},
+		"sql_level":          {},
+		"power_level":        {},
+		"tx_bandwidth":       {},
+		ConfigKeyADCGainDB:   {},
+		ConfigKeyADCVolume:   {},
+		ConfigKeyDACVolume:   {},
 	},
 	deviceConfigProfileESP32NoRadioAudio: {
 		ConfigKeyADCGainDB:     {},
@@ -165,14 +125,40 @@ func resolveDeviceConfigProfile(dev *models.Device) string {
 	if dev == nil {
 		return ""
 	}
-	switch dev.RuntimeSnapshot().DevModel {
-	case protocol.DraARLDevModelESP32Radio:
+	return DeviceConfigProfile(int(dev.RuntimeSnapshot().DevModel))
+}
+
+// DeviceConfigProfile describes the capabilities currently reported by hardware.
+func DeviceConfigProfile(devModel int) string {
+	switch devModel {
+	case int(protocol.DraARLDevModelESP32Radio):
 		return deviceConfigProfileSA818
-	case protocol.DraARLDevModelESP32NoRadio:
+	case int(protocol.DraARLDevModelESP32NoRadio):
 		return deviceConfigProfileESP32NoRadioAudio
 	default:
 		return ""
 	}
+}
+
+func DeviceConfigKeys(devModel int) []string {
+	keys := make([]string, 0)
+	for key := range deviceConfigProfileAllowedKeys[DeviceConfigProfile(devModel)] {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// FilterDeviceConfigs omits inactive capabilities without deleting their stored values.
+func FilterDeviceConfigs(devModel int, configs map[string]string) map[string]string {
+	filtered := make(map[string]string)
+	allowed := deviceConfigProfileAllowedKeys[DeviceConfigProfile(devModel)]
+	for key, value := range buildConfigSnapshot(configs) {
+		if _, ok := allowed[key]; ok {
+			filtered[key] = value
+		}
+	}
+	return filtered
 }
 
 func filterConfigsForDevice(dev *models.Device, configs map[string]string) map[string]string {
@@ -199,47 +185,39 @@ func filterConfigsForDevice(dev *models.Device, configs map[string]string) map[s
 
 // TLV 长度定义
 var tlvLengthMap = map[byte]int{
-	TLVTypeRxFreq:                8,
-	TLVTypeTxFreq:                8,
-	TLVTypeRxCtcss:               4,
-	TLVTypeTxCtcss:               4,
-	TLVTypeSqlLevel:              1,
-	TLVTypePowerLevel:            1,
-	TLVTypeTxBandwidth:           1,
-	TLVTypeRxToneMode:            1,
-	TLVTypeRxToneValue:           8,
-	TLVTypeTxToneMode:            1,
-	TLVTypeTxToneValue:           8,
-	TLVTypeRFGuardEnabled:        1,
-	TLVTypeRFGuardSingleTxLimitS: 2,
-	TLVTypeRFGuardWindowS:        2,
-	TLVTypeRFGuardMaxTxInWindowS: 2,
-	TLVTypeTimestamp:             8,
-	TLVTypeADCGainDB:             1,
-	TLVTypeADCVolume:             1,
-	TLVTypeDACVolume:             1,
-	TLVTypeSQLActiveHigh:         1,
-	TLVTypePTTActiveHigh:         1,
+	TLVTypeRxFreq:        8,
+	TLVTypeTxFreq:        8,
+	TLVTypeRxCtcss:       4,
+	TLVTypeTxCtcss:       4,
+	TLVTypeSqlLevel:      1,
+	TLVTypePowerLevel:    1,
+	TLVTypeTxBandwidth:   1,
+	TLVTypeRxToneMode:    1,
+	TLVTypeRxToneValue:   8,
+	TLVTypeTxToneMode:    1,
+	TLVTypeTxToneValue:   8,
+	TLVTypeTimestamp:     8,
+	TLVTypeADCGainDB:     1,
+	TLVTypeADCVolume:     1,
+	TLVTypeDACVolume:     1,
+	TLVTypeSQLActiveHigh: 1,
+	TLVTypePTTActiveHigh: 1,
 }
 
 // DeviceConfig 设备配置结构体（用于内存表示）
 type DeviceConfig struct {
-	RxFreq                uint64  // 接收频率 (Hz)
-	TxFreq                uint64  // 发射频率 (Hz)
-	RxCtcss               float32 // 接收亚音 (Hz, 0=关闭)
-	TxCtcss               float32 // 发射亚音 (Hz, 0=关闭)
-	SqlLevel              uint8   // 静噪等级 (0-8)
-	PowerLevel            uint8   // 功率等级 (1=低, 3=高；历史 2 兼容映射为高)
-	TxBandwidth           uint8   // 发射带宽 (1=窄带, 2=宽带)
-	RFGuardEnabled        uint8   // 射频保护开关 (0=关,1=开)
-	RFGuardSingleTxLimitS uint16  // 单次发射上限 (秒)
-	RFGuardWindowS        uint16  // 统计窗口 (秒)
-	RFGuardMaxTxInWindowS uint16  // 窗口内累计发射上限 (秒)
-	ADCGainDB             uint8   // ADC 增益 (0-24 dB，3 dB 步进)
-	ADCVolume             uint8   // ADC 音量 (0-100)
-	DACVolume             uint8   // DAC 音量 (0-100)
-	SQLActiveHigh         uint8   // SQL 触发极性 (0=低有效,1=高有效)
-	PTTActiveHigh         uint8   // PTT 激活极性 (0=低有效,1=高有效)
+	RxFreq        uint64  // 接收频率 (Hz)
+	TxFreq        uint64  // 发射频率 (Hz)
+	RxCtcss       float32 // 接收亚音 (Hz, 0=关闭)
+	TxCtcss       float32 // 发射亚音 (Hz, 0=关闭)
+	SqlLevel      uint8   // 静噪等级 (0-8)
+	PowerLevel    uint8   // 功率等级 (1=低, 3=高；历史 2 兼容映射为高)
+	TxBandwidth   uint8   // 发射带宽 (1=窄带, 2=宽带)
+	ADCGainDB     uint8   // ADC 增益 (0-24 dB，3 dB 步进)
+	ADCVolume     uint8   // ADC 音量 (0-100)
+	DACVolume     uint8   // DAC 音量 (0-100)
+	SQLActiveHigh uint8   // SQL 触发极性 (0=低有效,1=高有效)
+	PTTActiveHigh uint8   // PTT 激活极性 (0=低有效,1=高有效)
 }
 
 // ==========================================
@@ -323,7 +301,7 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 		binary.BigEndian.PutUint32(buf, math.Float32bits(float32(ctcss)))
 		return buf, true
 
-	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled,
+	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth,
 		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume,
 		TLVTypeSQLActiveHigh, TLVTypePTTActiveHigh:
 		// 1 byte, uint8
@@ -332,15 +310,6 @@ func encodeTLVValue(tlvType byte, value string) ([]byte, bool) {
 			return nil, false
 		}
 		return []byte{val}, true
-
-	case TLVTypeRFGuardSingleTxLimitS, TLVTypeRFGuardWindowS, TLVTypeRFGuardMaxTxInWindowS:
-		var val uint16
-		if _, err := fmt.Sscanf(value, "%d", &val); err != nil {
-			return nil, false
-		}
-		buf := make([]byte, 2)
-		binary.BigEndian.PutUint16(buf, val)
-		return buf, true
 
 	case TLVTypeRxToneMode, TLVTypeTxToneMode:
 		mode := normalizeToneMode(value)
@@ -442,7 +411,7 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 		}
 		return fmt.Sprintf("%.1f", ctcss), true
 
-	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth, TLVTypeRFGuardEnabled,
+	case TLVTypeSqlLevel, TLVTypePowerLevel, TLVTypeTxBandwidth,
 		TLVTypeADCGainDB, TLVTypeADCVolume, TLVTypeDACVolume,
 		TLVTypeSQLActiveHigh, TLVTypePTTActiveHigh:
 		// 1 byte, uint8
@@ -450,12 +419,6 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 			return "", false
 		}
 		return fmt.Sprintf("%d", data[0]), true
-
-	case TLVTypeRFGuardSingleTxLimitS, TLVTypeRFGuardWindowS, TLVTypeRFGuardMaxTxInWindowS:
-		if len(data) != 2 {
-			return "", false
-		}
-		return fmt.Sprintf("%d", binary.BigEndian.Uint16(data)), true
 
 	case TLVTypeRxToneMode, TLVTypeTxToneMode:
 		if len(data) != 1 {
@@ -482,21 +445,15 @@ func decodeTLVValue(tlvType byte, data []byte) (string, bool) {
 	}
 }
 
-func buildConfigSnapshotForOverwrite(configs map[string]string) map[string]string {
-	normalized := NormalizeDeviceConfigs(configs)
-	snapshot := make(map[string]string, len(managedConfigKeys))
-
-	for _, key := range managedConfigKeys {
-		snapshot[key] = ""
-	}
-
-	for key, value := range normalized {
-		if _, ok := keyToTlvTypeMap[key]; !ok {
-			continue
+// buildConfigSnapshot keeps only actual reported values. Missing fields must
+// never become defaults that overwrite settings when hardware capabilities change.
+func buildConfigSnapshot(configs map[string]string) map[string]string {
+	snapshot := make(map[string]string, len(configs))
+	for key, value := range configs {
+		if _, ok := keyToTlvTypeMap[key]; ok && strings.TrimSpace(value) != "" {
+			snapshot[key] = value
 		}
-		snapshot[key] = strings.TrimSpace(value)
 	}
-
 	return NormalizeDeviceConfigs(snapshot)
 }
 
@@ -586,9 +543,6 @@ func sendDeviceConfigPacket(dev *models.Device, packet []byte) error {
 		return fmt.Errorf("device not ready")
 	}
 	state := dev.RuntimeSnapshot()
-	if handled, err := sendRemoteDeviceConfig(state.ID, packet, deviceConfigDeliveryTimeout); handled {
-		return err
-	}
 	if state.UDPAddr == nil || globalConn == nil {
 		return fmt.Errorf("device not ready")
 	}
@@ -653,67 +607,6 @@ func sendTimeSync(dev *models.Device) error {
 	return nil
 }
 
-// BuildDeviceConfigSyncPackets builds the same initial query/set and time
-// synchronization packets used by a centre-direct device. The caller may
-// deliver them to an exact remote edge session without exposing database
-// access to the edge process.
-func BuildDeviceConfigSyncPackets(deviceID int) ([][]byte, error) {
-	dev := GetDeviceByID(deviceID)
-	if dev == nil || !protocol.IsValidNormalSSID(dev.RuntimeSnapshot().SSID) {
-		return nil, fmt.Errorf("device not found")
-	}
-	repo := gormdb.NewDeviceConfigRepository()
-	hasConfigs, err := repo.HasDeviceConfigs(dev.ID)
-	if err != nil {
-		return nil, err
-	}
-	packets := make([][]byte, 0, 2)
-	if hasConfigs {
-		configs, err := repo.GetDeviceConfigs(dev.ID)
-		if err != nil {
-			return nil, err
-		}
-		configs = filterConfigsForDevice(dev, buildConfigSnapshotForOverwrite(configs))
-		if len(configs) > 0 {
-			packet, err := encodeDeviceConfigPacket(dev, buildConfigSetPacket(configs))
-			if err != nil {
-				return nil, err
-			}
-			packets = append(packets, packet)
-		}
-	} else {
-		packet, err := encodeDeviceConfigPacket(dev, buildConfigQueryPacket())
-		if err != nil {
-			return nil, err
-		}
-		packets = append(packets, packet)
-	}
-	timePacket, err := encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
-	if err != nil {
-		return nil, err
-	}
-	return append(packets, timePacket), nil
-}
-
-// SaveDeviceConfigReportAndBuildAck persists one current-session Type 3
-// report and returns the ordinary time-sync acknowledgement packet.
-func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error) {
-	dev := GetDeviceByID(deviceID)
-	if dev == nil || !protocol.IsValidNormalSSID(dev.RuntimeSnapshot().SSID) {
-		return nil, fmt.Errorf("device not found")
-	}
-	if len(data) < 2 || data[0] != ConfigTypeSet {
-		return nil, fmt.Errorf("invalid device config report")
-	}
-	configs := buildConfigSnapshotForOverwrite(decodeTLV(data[2:]))
-	if err := gormdb.NewDeviceConfigRepository().SetDeviceConfigs(dev.ID, configs); err != nil {
-		return nil, err
-	}
-	state := dev.RuntimeSnapshot()
-	log.Printf("[CONFIG] 设备 %s-%d 上报配置，已覆盖写入 %d 项", state.CallSign, state.SSID, len(configs))
-	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
-}
-
 func syncDeviceConfigAsync(dev *models.Device) {
 	go func() {
 		defer func() {
@@ -746,7 +639,7 @@ func SyncDeviceConfig(dev *models.Device) {
 			log.Printf("[CONFIG] 获取设备配置失败: %v", err)
 			return
 		}
-		configs = buildConfigSnapshotForOverwrite(configs)
+		configs = buildConfigSnapshot(configs)
 
 		// 按设备能力过滤，只下发当前设备支持的参数
 		paramConfigs := filterConfigsForDevice(dev, configs)
@@ -754,6 +647,11 @@ func SyncDeviceConfig(dev *models.Device) {
 		if len(paramConfigs) > 0 {
 			if err := sendConfigToDevice(dev, paramConfigs); err != nil {
 				log.Printf("[CONFIG] 下发配置失败: %v", err)
+			}
+		}
+		if len(paramConfigs) < len(deviceConfigProfileAllowedKeys[resolveDeviceConfigProfile(dev)]) {
+			if err := queryDeviceConfig(dev); err != nil {
+				log.Printf("[CONFIG] 查询新增设备能力失败: %v", err)
 			}
 		}
 	} else {
@@ -803,6 +701,10 @@ func SendConfigToDeviceByID(deviceID int, configs map[string]string) error {
 
 // GetDeviceConfigsFromDB 从数据库获取设备配置（供 API 调用）
 func GetDeviceConfigsFromDB(deviceID int) (map[string]string, error) {
+	device, err := gormdb.NewDeviceRepository().GetDeviceByID(deviceID)
+	if err != nil {
+		return nil, err
+	}
 	repo := gormdb.NewDeviceConfigRepository()
 	configs, err := repo.GetDeviceConfigs(deviceID)
 	if err != nil {
@@ -811,7 +713,7 @@ func GetDeviceConfigsFromDB(deviceID int) (map[string]string, error) {
 	if len(configs) == 0 {
 		return map[string]string{}, nil
 	}
-	return buildConfigSnapshotForOverwrite(configs), nil
+	return FilterDeviceConfigs(device.DevModel, configs), nil
 }
 
 // SaveDeviceConfigsToDB 保存设备配置到数据库（供 API 调用）
@@ -835,4 +737,22 @@ func SaveDeviceConfigsToDB(deviceID int, configs map[string]string) error {
 	}
 
 	return nil
+}
+
+// SaveDeviceConfigReportAndBuildAck persists a native device report and returns its time-sync acknowledgement.
+func SaveDeviceConfigReportAndBuildAck(deviceID int, data []byte) ([]byte, error) {
+	dev := GetDeviceByID(deviceID)
+	if dev == nil || !protocol.IsValidNormalSSID(dev.RuntimeSnapshot().SSID) {
+		return nil, fmt.Errorf("device not found")
+	}
+	if len(data) < 2 || data[0] != ConfigTypeSet {
+		return nil, fmt.Errorf("invalid device config report")
+	}
+	configs := filterConfigsForDevice(dev, buildConfigSnapshot(decodeTLV(data[2:])))
+	if err := gormdb.NewDeviceConfigRepository().SetDeviceConfigs(dev.ID, configs); err != nil {
+		return nil, err
+	}
+	state := dev.RuntimeSnapshot()
+	log.Printf("[CONFIG] 设备 %s-%d 上报配置，已更新 %d 项", state.CallSign, state.SSID, len(configs))
+	return encodeDeviceConfigPacket(dev, buildTimeSyncPacket())
 }

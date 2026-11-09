@@ -342,18 +342,6 @@ func (s *Server) setupRoutes() {
 			admin.POST("/relay/create", handler.CreateRelay)
 			admin.POST("/relay/update", handler.UpdateRelay)
 			admin.POST("/relay/delete", handler.DeleteRelay)
-			admin.GET("/servers", handler.GetServers)
-			admin.GET("/server/list", handler.GetServers) // 兼容旧接口
-			admin.POST("/server/create", handler.CreateServer)
-			admin.POST("/server/update", handler.UpdateServer)
-			admin.POST("/server/delete", handler.DeleteServer)
-			admin.GET("/edge-nodes", handler.ListEdgeNodes)
-			admin.POST("/edge-nodes", handler.CreateEdgeNode)
-			admin.PUT("/edge-nodes/:id", handler.UpdateEdgeNode)
-			admin.DELETE("/edge-nodes/:id", handler.DeleteEdgeNode)
-			admin.POST("/edge-nodes/:id/rotate-credential", handler.RotateEdgeNodeCredential)
-			admin.POST("/edge-nodes/:id/revoke-credential", handler.RevokeEdgeNodeCredential)
-			admin.POST("/edge-nodes/:id/disconnect", handler.DisconnectEdgeNode)
 			// 中心到中心群组互联：只保存显式群组映射，不同步用户和设备。
 			admin.GET("/inter-center-links", handler.ListInterCenterLinks)
 			admin.POST("/inter-center-links", handler.CreateInterCenterLink)

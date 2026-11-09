@@ -55,9 +55,9 @@ func validateDiscoveryAuthorization(header string) (*appjwt.Claims, string, erro
 	if claims, err := appjwt.ValidateAccessToken(parts[1]); err == nil {
 		return claims, appjwt.TokenUseAccess, nil
 	}
-	claims, err := appjwt.ValidateEdgeDiscoveryToken(parts[1])
+	claims, err := appjwt.ValidateDeviceDiscoveryToken(parts[1])
 	if err != nil {
 		return nil, "", err
 	}
-	return claims, appjwt.TokenUseEdgeDiscovery, nil
+	return claims, appjwt.TokenUseDeviceDiscovery, nil
 }

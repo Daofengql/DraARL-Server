@@ -114,7 +114,7 @@ func TestDeviceListBatchOwnersAndRequestCancellationMySQL(t *testing.T) {
 		},
 		"user update": func() error { return userRepo.UpdateUserDevicePassword(ownerIDs[0], "canceled-update") },
 		"device transaction": func() error {
-			return deviceRepo.UpdateDeviceEntry(payload.Data.Items[0].ID, "center", "udp", 1, true, time.Now())
+			return deviceRepo.UpdateDeviceOnlineStatus(ownerIDs[0], payload.Data.Items[0].SSID, true, "", "")
 		},
 	} {
 		if err := operation(); !errors.Is(err, context.Canceled) {

@@ -20,12 +20,11 @@ func NewGroupRepository() *GroupRepository {
 // AddPublicGroup 添加公共群组
 func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 	query := `INSERT INTO public_groups (name, type, password,
-		ower_id, dev_list, master_server, slave_server, status, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+		ower_id, dev_list, status, create_time, update_time)
+		VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 	result, err := r.db.Exec(query, group.Name, group.Type, group.Password,
-		group.OwerID, group.DevList, group.MasterServer,
-		group.SlaveServer, group.Status)
+		group.OwerID, group.DevList, group.Status)
 	if err != nil {
 		return err
 	}
@@ -42,7 +41,7 @@ func (r *GroupRepository) AddPublicGroup(group *models.Group) error {
 // GetPublicGroup 获取公共群组
 func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
 	query := `SELECT id, name, type, password,
-		ower_id, dev_list, master_server, slave_server, status,
+		ower_id, dev_list, status,
 		create_time, update_time, note FROM public_groups WHERE id = ?`
 	return r.scanGroup(r.db.QueryRow(query, id))
 }
@@ -50,7 +49,7 @@ func (r *GroupRepository) GetPublicGroup(id int) (*models.Group, error) {
 // ListPublicGroups 列出所有公共群组
 func (r *GroupRepository) ListPublicGroups() ([]*models.Group, error) {
 	query := `SELECT id, name, type, password,
-		ower_id, dev_list, master_server, slave_server, status,
+		ower_id, dev_list, status,
 		create_time, update_time, note FROM public_groups ORDER BY id`
 	rows, err := r.db.Query(query)
 	if err != nil {
@@ -95,7 +94,7 @@ func (r *GroupRepository) scanGroup(row *sql.Row) (*models.Group, error) {
 	var nullPassword, nullNote, nullDevList sql.NullString
 
 	err := row.Scan(&group.ID, &group.Name, &group.Type, &nullPassword,
-		&group.OwerID, &nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
+		&group.OwerID, &nullDevList, &group.Status,
 		&group.CreateTime, &group.UpdateTime, &nullNote)
 
 	if err == sql.ErrNoRows {
@@ -128,7 +127,7 @@ func (r *GroupRepository) scanGroupFromRows(rows *sql.Rows) (*models.Group, erro
 	var nullPassword, nullNote, nullDevList sql.NullString
 
 	err := rows.Scan(&group.ID, &group.Name, &group.Type, &nullPassword,
-		&group.OwerID, &nullDevList, &group.MasterServer, &group.SlaveServer, &group.Status,
+		&group.OwerID, &nullDevList, &group.Status,
 		&group.CreateTime, &group.UpdateTime, &nullNote)
 
 	if err != nil {
@@ -241,116 +240,4 @@ func (r *RelayRepository) GetRelay(id int) (*models.Relay, error) {
 	}
 
 	return relay, nil
-}
-
-// ServerRepository 服务器数据访问层
-type ServerRepository struct {
-	db *sql.DB
-}
-
-const serverListQuery = `SELECT id, name, dns_name, is_online, create_time, update_time
-	FROM servers WHERE status = 1 ORDER BY id`
-
-// NewServerRepository 创建服务器仓库
-func NewServerRepository() *ServerRepository {
-	return &ServerRepository{db: Get()}
-}
-
-// ListServers 列出所有服务器
-func (r *ServerRepository) ListServers() ([]*models.Server, error) {
-	query := serverListQuery
-	rows, err := r.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	servers := []*models.Server{}
-	for rows.Next() {
-		server := &models.Server{}
-		var dnsName sql.NullString
-		var online sql.NullBool
-		err := rows.Scan(&server.ID, &server.Name, &dnsName, &online,
-			&server.CreateTime, &server.UpdateTime)
-		if err != nil {
-			return nil, err
-		}
-		if dnsName.Valid {
-			server.Host = dnsName.String
-		}
-		if online.Valid && online.Bool {
-			server.Online = 1
-		}
-		servers = append(servers, server)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return servers, nil
-}
-
-// AddServer 添加服务器
-func (r *ServerRepository) AddServer(server *models.Server) error {
-	query := `INSERT INTO servers (name, join_key, cpu_type, mem_size, input_rate, output_rate, netcard,
-		ip_type, ip_addr, udp_port, dns_name, server_type, ower_id, ower_callsign, status, note, create_time, update_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
-
-	_, err := r.db.Exec(query, server.Name, server.JoinKey, server.CpuType, server.MemSize,
-		server.InputRate, server.OutputRate, server.NetCard, server.IPType, server.IPAddr,
-		server.UDPPort, server.DNSName, server.ServerType, server.OwerID, server.OwerCallSign,
-		server.Status, server.Note)
-	if err != nil {
-		log.Println("add server failed, ", err)
-		return err
-	}
-
-	return nil
-}
-
-// UpdateServer 更新服务器
-func (r *ServerRepository) UpdateServer(server *models.Server) error {
-	_, err := r.db.Exec(`UPDATE servers SET name=?, cpu_type=?, mem_size=?, input_rate=?, output_rate=?, netcard=?,
-		ip_type=?, ip_addr=?, udp_port=?, dns_name=?, server_type=?, ower_id=?, ower_callsign=?, status=?, note=?, join_key=?, update_time=NOW()
-		WHERE id=?`,
-		server.Name, server.CpuType, server.MemSize, server.InputRate, server.OutputRate,
-		server.NetCard, server.IPType, server.IPAddr, server.UDPPort, server.DNSName,
-		server.ServerType, server.OwerID, server.OwerCallSign, server.Status, server.Note,
-		server.JoinKey, server.ID)
-	if err != nil {
-		log.Println("update server failed, ", err)
-		return err
-	}
-
-	return nil
-}
-
-// DeleteServer 删除服务器
-func (r *ServerRepository) DeleteServer(id int) error {
-	_, err := r.db.Exec(`DELETE FROM servers WHERE id=?`, id)
-	if err != nil {
-		log.Println("delete server failed, ", err)
-		return err
-	}
-
-	return nil
-}
-
-// GetServer 获取单个服务器
-func (r *ServerRepository) GetServer(id int) (*models.Server, error) {
-	query := `SELECT id, name, join_key, cpu_type, mem_size, input_rate, output_rate, netcard,
-		ip_type, ip_addr, udp_port, dns_name, server_type, ower_id, ower_callsign, status, note,
-		create_time, update_time FROM servers WHERE id=?`
-	row := r.db.QueryRow(query, id)
-
-	server := &models.Server{}
-	err := row.Scan(&server.ID, &server.Name, &server.JoinKey, &server.CpuType, &server.MemSize,
-		&server.InputRate, &server.OutputRate, &server.NetCard, &server.IPType, &server.IPAddr,
-		&server.UDPPort, &server.DNSName, &server.ServerType, &server.OwerID, &server.OwerCallSign,
-		&server.Status, &server.Note, &server.CreateTime, &server.UpdateTime)
-	if err != nil {
-		return nil, err
-	}
-
-	return server, nil
 }

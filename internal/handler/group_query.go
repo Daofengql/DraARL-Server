@@ -75,8 +75,6 @@ func getGroups(c *gin.Context, adminView bool) {
 		Type          int       `gorm:"column:type"`
 		OwerID        int       `gorm:"column:ower_id"`
 		OwnerCallSign string    `gorm:"column:owner_callsign"`
-		MasterServer  int       `gorm:"column:master_server"`
-		SlaveServer   int       `gorm:"column:slave_server"`
 		Status        int       `gorm:"column:status"`
 		Note          string    `gorm:"column:note"`
 		CreateTime    time.Time `gorm:"column:create_time"`
@@ -89,7 +87,7 @@ func getGroups(c *gin.Context, adminView bool) {
 	rows := make([]groupListRow, 0, pageSize)
 	dataQuery := gormdb.Get().WithContext(c.Request.Context()).Table("public_groups g").
 		Select(`
-			g.id, g.name, g.type, g.ower_id, g.master_server, g.slave_server, g.status, g.note, g.create_time, g.update_time,
+			g.id, g.name, g.type, g.ower_id, g.status, g.note, g.create_time, g.update_time,
 			COALESCE(u.callsign, '') AS owner_callsign,
 			CASE
 				WHEN g.type = 1 THEN true
@@ -178,8 +176,6 @@ func getGroups(c *gin.Context, adminView bool) {
 			"type":          row.Type,
 			"ower_id":       row.OwerID,
 			"ower_callsign": row.OwnerCallSign,
-			"master_server": row.MasterServer,
-			"slave_server":  row.SlaveServer,
 			"status":        row.Status,
 			"note":          row.Note,
 			"is_joined":     row.IsJoined,
@@ -258,8 +254,6 @@ func GetGroup(c *gin.Context) {
 			"type":          group.Type,
 			"ower_id":       group.OwerID,
 			"ower_callsign": ownerCallSign,
-			"master_server": group.MasterServer,
-			"slave_server":  group.SlaveServer,
 			"status":        group.Status,
 			"note":          group.Note,
 			"is_owner":      isOwner,
@@ -303,26 +297,6 @@ func GetRelays(c *gin.Context) {
 }
 
 // GetServers 获取服务器列表
-
-func GetServers(c *gin.Context) {
-	repo := gormdb.NewServerRepository().WithContext(c.Request.Context())
-	servers, err := repo.ListServers()
-	if err != nil {
-		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
-			"code":    500,
-			"message": "查询服务器列表失败",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "成功",
-		"data": gin.H{
-			"items": servers,
-		},
-	})
-}
 
 // SearchGroupsRequest 搜索群组请求
 
@@ -413,8 +387,6 @@ func SearchGroups(c *gin.Context) {
 			"type":             g.Type,
 			"ower_id":          g.OwerID,
 			"ower_callsign":    ownerCallSign,
-			"master_server":    g.MasterServer,
-			"slave_server":     g.SlaveServer,
 			"status":           g.Status,
 			"note":             g.Note,
 			"require_password": false,

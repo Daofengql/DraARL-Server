@@ -16,7 +16,7 @@ export function NetworkBlueprint() {
         <Typography variant="caption" color="secondary.main">DraARLv1</Typography>
       </Box>
       <Box component="svg" role="img" aria-labelledby={titleId} viewBox="0 0 600 460" sx={{ display: 'block', width: '100%', height: 'auto', overflow: 'visible' }}>
-        <title id={titleId}>设备和浏览器接入 DraARL 中心，通过群组路由和边缘节点进行通信的结构示意。</title>
+        <title id={titleId}>设备通过 HTTP API 查询本站 UDP 入口，浏览器通过 WebSocket 接入；独立站点之间交换群组音频。</title>
         <g fill="none" stroke={line} strokeWidth="1.2">
           <path d="M10 28V10h18 M572 10h18v18 M590 432v18h-18 M28 450H10v-18" />
           <path d="M192 38h218 M192 33v10 M410 33v10 M564 142v180 M559 142h10 M559 322h10" stroke={muted} opacity=".55" />
@@ -39,18 +39,18 @@ export function NetworkBlueprint() {
           <path d="M28 308h112 M72 368v12 M96 368v12 M56 380h56 M35 300h2 M43 300h2 M51 300h2" />
           <path d="m68 327-9 9 9 9 M96 327l9 9-9 9 M87 323l-10 26" />
           <rect x="438" y="58" width="112" height="62" fill={paper} />
-          <path d="M458 80h72 M458 100h72 M480 80v20 M508 80v20" />
+          <path d="M450 80h88 M450 100h88" /><path d="m460 85-5 5 5 5 M526 85l5 5-5 5" />
           <rect x="438" y="348" width="112" height="62" fill={paper} />
           <path d="M450 361h88 M450 376h88 M450 391h88" opacity=".6" />
           <path d="M454 360h4 M454 375h4 M454 390h4" strokeWidth="2" />
           <path d="M32 228h100 M34 224v8 M130 224v8 M154 96h22l24 32 M424 319l21 12h95" stroke={muted} opacity=".5" />
         </g>
         <g fill={muted} fontSize="13" letterSpacing="1">
-          <text x="302" y="29" textAnchor="middle">VOICE · DATA · CONTROL</text>
+          <text x="302" y="29" textAnchor="middle">DISCOVER · CONNECT · TALK</text>
           <text x="36" y="52">01 / 设备接入</text>
           <text x="28" y="277">02 / 浏览器</text>
-          <text x="438" y="42">03 / 群组</text>
-          <text x="438" y="438">04 / 边缘节点</text>
+          <text x="438" y="42">03 / 接入点 API</text>
+          <text x="438" y="438">04 / 站间互联</text>
           <text x="157" y="183">UDP</text>
           <text x="34" y="402">WebSocket</text>
           <text x="304" y="383" textAnchor="middle">认证 · 会话 · 路由</text>
@@ -64,7 +64,7 @@ export function NetworkBlueprint() {
         </g>
       </Box>
       <Typography component="figcaption" variant="caption" color="text.secondary" sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 1, display: 'block' }}>
-        设备、浏览器与边缘节点的连接示意，非实时状态。
+        设备查询入口后接入本站；独立站点可通过群组映射互联。示意图非实时状态。
       </Typography>
     </Box>
   )

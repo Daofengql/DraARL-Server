@@ -262,26 +262,13 @@ func main() {
 		defer centerRuntime.Close()
 		interconnect.SetActiveCenterRuntime(centerRuntime)
 		defer interconnect.SetActiveCenterRuntime(nil)
-		centerRuntime.Cluster.SetLocalDelivery(func(frame interconnect.RelayFrame) {
-			udphub.DeliverInterconnectPacket(frame.DomainID, frame.InnerPacket)
-		})
-		centerRuntime.Gateway.SetLocalRevocationHandler(func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64) {
+		centerRuntime.Local.SetLocalRevocationHandler(func(deviceID, ownerID int, ssid byte, sessionID, sessionEpoch uint64) {
 			udphub.RevokeCenterLocalSession(deviceID, ownerID, ssid, sessionID, sessionEpoch)
-		})
-		centerRuntime.Gateway.SetDeviceRevocationHandler(func(nodeID string, controlSessionID uint64, deviceID int, reason string) {
-			cleared, clearErr := gormdb.NewDeviceRepository().ClearDeviceEntryIfSession(deviceID, nodeID, controlSessionID)
-			if clearErr != nil {
-				stdlog.Printf("clear revoked device entry failed: device=%d node=%s reason=%s err=%v", deviceID, nodeID, reason, clearErr)
-				return
-			}
-			if cleared {
-				udphub.ClearRuntimeDeviceEntryIfSession(deviceID, nodeID, controlSessionID)
-			}
 		})
 		udphub.SetCenterInterconnectHooks(udphub.CenterInterconnectHooks{
 			Activate: func(source *udphub.CenterLocalSource) error {
 				grant := localSourceGrant(source)
-				if err := centerRuntime.Gateway.ActivateLocalDevice(&grant); err != nil {
+				if err := centerRuntime.Local.ActivateLocalDevice(&grant); err != nil {
 					return err
 				}
 				source.SessionID, source.SessionEpoch = grant.SessionID, grant.SessionEpoch
@@ -292,46 +279,40 @@ func main() {
 					return err
 				}
 				grant := localSourceGrant(source)
-				if err := centerRuntime.Gateway.ActivateLocalDevice(&grant); err != nil {
+				if err := centerRuntime.Local.ActivateLocalDevice(&grant); err != nil {
 					return err
 				}
 				if err := ctx.Err(); err != nil {
+					centerRuntime.Local.RevokeLocalDevice(grant.SessionID, grant.SessionEpoch)
 					return err
 				}
 				source.SessionID, source.SessionEpoch = grant.SessionID, grant.SessionEpoch
 				return nil
 			},
 			Authorize: func(source udphub.CenterLocalSource) bool {
-				return centerRuntime.Gateway.AuthorizeLocalDevice(localSourceGrant(&source))
+				return centerRuntime.Local.AuthorizeLocalDevice(localSourceGrant(&source))
 			},
 			AcquireVoice: func(source udphub.CenterLocalSource) bool {
-				return centerRuntime.Gateway.AcquireLocalVoice(localSourceGrant(&source))
+				return centerRuntime.Local.AcquireLocalVoice(localSourceGrant(&source))
 			},
-			AcquireBroadcast:     centerRuntime.Gateway.AcquireScheduledBroadcast,
-			AcceptBroadcastFrame: centerRuntime.Gateway.AcceptScheduledBroadcastFrame,
-			ReleaseBroadcast:     centerRuntime.Gateway.ReleaseScheduledBroadcast,
-			HasBroadcastReceiver: centerRuntime.Gateway.HasScheduledBroadcastReceiver,
-			RelayBroadcast:       centerRuntime.Gateway.RelayScheduledBroadcast,
-			RemoteOwner:          centerRuntime.Gateway.IdentityOwnedByRemote,
-			Relay: func(source udphub.CenterLocalSource, data []byte) error {
-				return centerRuntime.Gateway.RelayLocalDevice(localSourceGrant(&source), data)
-			},
+			AcquireBroadcast:     centerRuntime.Local.AcquireScheduledBroadcast,
+			AcceptBroadcastFrame: centerRuntime.Local.AcceptScheduledBroadcastFrame,
+			ReleaseBroadcast:     centerRuntime.Local.ReleaseScheduledBroadcast,
 			RelayPeer: func(source udphub.CenterLocalSource, data []byte) error {
 				if centerRuntime.HTTPPeers == nil {
 					return nil
 				}
 				return centerRuntime.HTTPPeers.RelayGroup(source.GroupID, data)
 			},
-			SendConfig: centerRuntime.Gateway.SendDeviceConfig,
 			Revoke: func(source udphub.CenterLocalSource) {
-				centerRuntime.Gateway.RevokeLocalDevice(source.SessionID, source.SessionEpoch)
+				centerRuntime.Local.RevokeLocalDevice(source.SessionID, source.SessionEpoch)
 			},
 		})
 		defer udphub.SetCenterInterconnectHooks(udphub.CenterInterconnectHooks{})
 		// Centre peer UDP sessions use a dedicated authenticated AES-GCM envelope
-		// on the main socket. No legacy Type 0/TLS node handler is exposed on dev.
-		udphub.SetType0Handler(centerRuntime.HTTPPeers)
-		defer udphub.SetType0Handler(nil)
+		// on the main socket.
+		udphub.SetPeerDatagramHandler(centerRuntime.HTTPPeers)
+		defer udphub.SetPeerDatagramHandler(nil)
 		stdlog.Printf("中心互联已启动: HTTP准入 + shared_udp=%s", cfg.System.Port)
 	}
 

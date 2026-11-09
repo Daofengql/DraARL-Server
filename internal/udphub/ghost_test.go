@@ -129,7 +129,6 @@ func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) 
 	}
 	firstSession := register("11111111-1111-4111-8111-111111111111", ghostsession.TransportUDP, 1001, []int{1001, 1002, 1003})
 	secondSession := register("22222222-2222-4222-8222-222222222222", ghostsession.TransportUDP, 1002, []int{1002, 1003})
-	register("33333333-3333-4333-8333-333333333333", ghostsession.TransportEdge, 1002, []int{1002, 1003})
 
 	first := modernUDPGhost(firstSession.SessionID, firstSession.SessionTag, 31101, 1001, []int{1001, 1002, 1003})
 	second := modernUDPGhost(secondSession.SessionID, secondSession.SessionTag, 31102, 1002, []int{1002, 1003})
@@ -146,29 +145,29 @@ func TestOnlineGhostCountHelpersUseSessionsInsteadOfSubscriptions(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if got := GetOnlineGhostCount(); got != 3 {
-		t.Fatalf("server ghost online count=%d, want 3 sessions", got)
+	if got := GetOnlineGhostCount(); got != 2 {
+		t.Fatalf("server ghost online count=%d, want 2 sessions", got)
 	}
-	if got := GetOnlineGhostCountByGroup(1002); got != 3 {
-		t.Fatalf("group ghost online count=%d, want 3 sessions", got)
+	if got := GetOnlineGhostCountByGroup(1002); got != 2 {
+		t.Fatalf("group ghost online count=%d, want 2 sessions", got)
 	}
-	udpGhost, wsNormal, wsGhost, edgeGhost := onlineTransportOnlineCounts()
-	if udpGhost != 2 || wsNormal != 0 || wsGhost != 0 || edgeGhost != 1 {
-		t.Fatalf("transport counts udp=%d ws_normal=%d ws_ghost=%d edge=%d", udpGhost, wsNormal, wsGhost, edgeGhost)
+	udpGhost, wsNormal, wsGhost := onlineTransportOnlineCounts()
+	if udpGhost != 2 || wsNormal != 0 || wsGhost != 0 {
+		t.Fatalf("transport counts udp=%d ws_normal=%d ws_ghost=%d", udpGhost, wsNormal, wsGhost)
 	}
 	register("55555555-5555-4555-8555-555555555555", ghostsession.TransportWebSocket, 1002, []int{1002})
-	if got := GetOnlineGhostCount(); got != 4 {
-		t.Fatalf("server ghost online count after websocket registration=%d, want 4 sessions", got)
+	if got := GetOnlineGhostCount(); got != 3 {
+		t.Fatalf("server ghost online count after websocket registration=%d, want 3 sessions", got)
 	}
-	if got := GetOnlineGhostCountByGroup(1002); got != 4 {
-		t.Fatalf("group ghost online count after websocket registration=%d, want 4 sessions", got)
+	if got := GetOnlineGhostCountByGroup(1002); got != 3 {
+		t.Fatalf("group ghost online count after websocket registration=%d, want 3 sessions", got)
 	}
-	udpGhost, wsNormal, wsGhost, edgeGhost = onlineTransportOnlineCounts()
-	if udpGhost != 2 || wsNormal != 0 || wsGhost != 1 || edgeGhost != 1 {
-		t.Fatalf("transport counts after websocket registration udp=%d ws_normal=%d ws_ghost=%d edge=%d", udpGhost, wsNormal, wsGhost, edgeGhost)
+	udpGhost, wsNormal, wsGhost = onlineTransportOnlineCounts()
+	if udpGhost != 2 || wsNormal != 0 || wsGhost != 1 {
+		t.Fatalf("transport counts after websocket registration udp=%d ws_normal=%d ws_ghost=%d", udpGhost, wsNormal, wsGhost)
 	}
-	if got := totalOnlineDeviceCount(4, 2, 1, 3, 2); got != 12 {
-		t.Fatalf("combined online count=%d, want 12", got)
+	if got := totalOnlineDeviceCount(4, 2, 1, 3); got != 10 {
+		t.Fatalf("combined online count=%d, want 10", got)
 	}
 }
 

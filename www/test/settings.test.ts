@@ -9,7 +9,7 @@ import { buildOperatorLogParams } from '../src/pages/settings/operatorLogQuery.t
 test('normalizes missing config responses to stable defaults', () => {
   const configs = normalizeSiteConfigs({})
   assert.equal(configs.systemInfo.language, 'zh')
-  assert.equal(configs.accessDiscovery.center.udp_port, 60050)
+  assert.equal(configs.accessDiscovery.udp_port, 60050)
   assert.equal(configs.commSettings.retention_days, 30)
   assert.equal(configs.smtp.port, 465)
 })

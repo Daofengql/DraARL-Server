@@ -74,14 +74,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 		return
 	}
 
-	// A runtime object may remain available for management while its current
-	// authoritative entry is an edge. It cannot be reused by an old centre UDP
-	// address until a heartbeat/JWT authentication takes ownership back.
 	devState := dev.RuntimeSnapshot()
-	remoteOwner := devState.CurrentEntryNodeID != "" && devState.CurrentEntryNodeID != "center"
-	if remoteOwner && packet.Type != protocol.DraARLTypeHeartbeat {
-		return
-	}
 
 	// 【S1 安全修复】普通设备语音/文本/配置报文必须来自设备已绑定源地址，
 	// 防止群内成员仅凭报文头 username+ssid 冒名注入（与幽灵设备 sameUDPAddr 校验一致）。
@@ -111,7 +104,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 			// 普通设备心跳：可能需要重新鉴权
 			// 只有当设备原本处于离线状态，或者 IP 地址发生变化时才触发鉴权，节省性能
 			localSessionMissing := CenterInterconnectActive() && !CenterLocalDeviceAuthoritative(dev)
-			needsCenterActivation := remoteOwner || localSessionMissing || !devState.ISOnline || devState.CurrentEntryNodeID != "center"
+			needsCenterActivation := localSessionMissing || !devState.ISOnline
 			boundRealAddr := devState.RealUDPAddr
 			if boundRealAddr == nil {
 				boundRealAddr = devState.UDPAddr
@@ -120,7 +113,7 @@ func processDraARLPacket(data []byte, remoteAddr, realAddr *net.UDPAddr, conn *n
 			if currentRealAddr == nil {
 				currentRealAddr = packet.UDPAddr
 			}
-			if remoteOwner || localSessionMissing || !devState.ISOnline || boundRealAddr == nil || !sameUDPAddr(boundRealAddr, currentRealAddr) || devState.UDPAddr == nil || devState.UDPAddr.String() != currentAddr {
+			if localSessionMissing || !devState.ISOnline || boundRealAddr == nil || !sameUDPAddr(boundRealAddr, currentRealAddr) || devState.UDPAddr == nil || devState.UDPAddr.String() != currentAddr {
 				admission := queueDeviceAuthentication(packet, data, dev, conn, realAddr, incomingMAC, needsCenterActivation)
 				if admission == deviceAuthRejected {
 					// 认证队列已满：说明认证风暴超过容量，直接拒绝且不消耗 CPU

@@ -26,6 +26,10 @@ import (
 type suite struct{ name, pkg, pattern, gate string }
 
 var suites = []suite{
+	{"single-node-upgrade", "./internal/gormdb", "TestSingleNodeAccessUpgradeMySQL", ""},
+	{"device-capability-switch", "./internal/udphub", "TestDeviceCapabilitySwitchPreservesConfigurationMySQL", "DRAARL_DEVICE_CONFIG_E2E"},
+	{"device-config-api", "./internal/handler", "TestDeviceConfigCapabilitiesAndStaleSaveMySQL", "DRAARL_DEVICE_CONFIG_E2E"},
+	{"device-binding-retry", "./internal/handler", "TestDynamicBindingRetriesMySQL", "DRAARL_DEVICE_CONFIG_E2E"},
 	{"handler-redis", "./internal/handler", "", ""},
 	{"auth-redis", "./internal/auth", "", ""},
 	{"device-list", "./internal/handler", "TestDeviceListBatchOwnersAndRequestCancellationMySQL", "DRAARL_TODO_E2E"},
@@ -39,7 +43,7 @@ var suites = []suite{
 	{"client-resources", "./internal/handler", "TestClientResourceHTTPE2E", "DRAARL_CLIENT_RESOURCE_E2E"},
 	{"broadcast-api", "./internal/handler", "TestBroadcastManagementHTTPE2E", "DRAARL_BROADCAST_API_E2E"},
 	{"broadcast-policy", "./internal/handler", "TestVirtualGroupBroadcastPolicyHTTPE2E", "DRAARL_BROADCAST_API_E2E"},
-	{"node-storage", "./internal/gormdb", "Test(NodeCredentialLifecycle|DeleteEdgeNode|ClientResourceLifecycle|LegacyClientReleaseMigrationGuard)MySQL", ""},
+	{"resource-storage", "./internal/gormdb", "Test(ClientResourceLifecycle|LegacyClientReleaseMigrationGuard)MySQL", ""},
 	{"db-online-filter", "./internal/gormdb", "TestDeviceListOnlineFilterMySQL", "DRAARL_DEVICE_LIST_E2E"},
 	{"message-migration", "./internal/gormdb", "TestCommRecordMessageMigrationMySQL", "DRAARL_MESSAGE_MIGRATION_E2E"},
 	{"migration-recovery", "./internal/gormdb", "Test(RecordMigrationVersionRecovery|AppliedMigrationVersionIgnoresRunningState)MySQL", "DRAARL_MIGRATION_RECORD_E2E"},
@@ -48,7 +52,6 @@ var suites = []suite{
 	{"site-secrets", "./internal/gormdb", "TestSiteConfigLegacyPlaintextLazyEncryptionMySQL", "DRAARL_SITECONFIG_CRYPTO_E2E"},
 	{"database-tracing", "./internal/gormdb", "TestDatabaseSpansFollowRequestAndRestoreContextMySQL", "DRAARL_OBSERVABILITY_E2E"},
 	{"online-events", "./internal/udphub", "TestOnlineEventsPersistLatestSessionMySQL", "DRAARL_ONLINE_EVENTS_E2E"},
-	{"edge-ghost", "./internal/udphub", "TestProxiedModernGhostAuthenticationMySQL", "DRAARL_EDGE_GHOST_E2E"},
 	{"device-cache", "./pkg/cache", "TestFilteredDeviceCacheMySQL", "DRAARL_CACHE_E2E"},
 	{"websocket-routing", "./pkg/websocket", "Test.*MySQL", "DRAARL_RADIO_SESSIONS_E2E"},
 	{"broadcast-schema", "./internal/broadcast/model", "TestBroadcastSchemaMigrationMySQL", "DRAARL_BROADCAST_SCHEMA_E2E"},

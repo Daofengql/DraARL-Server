@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +57,48 @@ func TestCaptchaRateLimitRejectsFrequentRequests(t *testing.T) {
 
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected third request to be rate limited, got %d", recorder.Code)
+	}
+}
+
+func TestBindPollingAllowsJitterAndReturnsRecoverableWait(t *testing.T) {
+	old := deviceRateLimiter
+	deviceRateLimiter = newDeviceRateLimiter()
+	defer func() { deviceRateLimiter = old }()
+	engine := gin.New()
+	engine.POST("/confirm", ConfirmBindRateLimit(), func(c *gin.Context) { c.Status(200) })
+	request := func(mac string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/confirm", strings.NewReader(`{"mac":"`+mac+`"}`)))
+		return recorder
+	}
+	for _, mac := range []string{"AA:BB:CC:DD:EE:FF", "aa:bb:cc:dd:ee:ff", "AA-BB-CC-DD-EE-FF"} {
+		if got := request(mac); got.Code != 200 {
+			t.Fatalf("normal repeated poll rejected: %d", got.Code)
+		}
+	}
+	blocked := request("aa:bb:cc:dd:ee:ff")
+	var payload struct {
+		Data struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(blocked.Body.Bytes(), &payload)
+	header, _ := strconv.Atoi(blocked.Header().Get("Retry-After"))
+	if blocked.Code != 429 || header != 5 || payload.Data.RetryAfter != header {
+		t.Fatalf("unusable retry metadata: %d %s", blocked.Code, blocked.Body.String())
+	}
+	deviceRateLimiter.mu.Lock()
+	for key, entry := range deviceRateLimiter.limits {
+		if strings.HasPrefix(key, "confirm-bind-ip:") && entry.Count != 3 {
+			t.Fatal("rejected request consumed NAT bucket")
+		}
+		if strings.HasPrefix(key, "confirm-bind-burst:") {
+			entry.ExpiresAt = time.Now().Add(-time.Second)
+		}
+	}
+	deviceRateLimiter.mu.Unlock()
+	if got := request("AA:BB:CC:DD:EE:FF"); got.Code != 200 {
+		t.Fatal("poll did not recover after wait")
 	}
 }
 

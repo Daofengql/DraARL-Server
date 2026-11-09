@@ -194,6 +194,10 @@ func RequestCode(c *gin.Context) {
 		})
 		return
 	}
+	if device.Bound {
+		c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"status": "waiting", "bound": true, "poll_after": 5}})
+		return
+	}
 
 	// 【安全修复】动态码不再明文打日志，防止日志泄露后被离线利用
 	log.Printf("[DEVICE] 生成动态码: MAC=%s, 有效期=%s", mac, time.Until(device.CodeExpires).Round(time.Second))
@@ -206,6 +210,8 @@ func RequestCode(c *gin.Context) {
 		"data": gin.H{
 			"dynamic_code": device.Code,
 			"expires_in":   expiresIn,
+			"bound":        false,
+			"poll_after":   5,
 		},
 	})
 }
@@ -276,8 +282,10 @@ func ConfirmBind(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{
-			"status":  "waiting",
-			"message": "等待用户完成绑定",
+			"status":     "waiting",
+			"message":    "等待用户完成绑定",
+			"bound":      device.Bound,
+			"poll_after": 5,
 		},
 	})
 }
@@ -644,6 +652,11 @@ func SubmitDeviceConfig(c *gin.Context) {
 		return
 	}
 
+	pending, exists := manager.GetByMAC(mac)
+	if !exists || !pending.Bound || pending.BoundUserID != uint(user.ID) {
+		writeErrorResponse(c, http.StatusForbidden, gin.H{"code": 403, "message": "设备未绑定到当前用户，请先输入动态码"})
+		return
+	}
 	selectedSSID, reusedDevice, err := resolveDynamicBindSelectedSSIDContext(c.Request.Context(), user, manager, mac, req)
 	if err != nil {
 		writeErrorResponse(c, http.StatusBadRequest, gin.H{
@@ -703,7 +716,7 @@ func SubmitDeviceConfig(c *gin.Context) {
 		DMRID:          user.DMRID,
 	}
 
-	if err := manager.SetDeviceConfig(mac, config); err != nil {
+	if err := manager.SetDeviceConfig(mac, uint(user.ID), config); err != nil {
 		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": err.Error(),

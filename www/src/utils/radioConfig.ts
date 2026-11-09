@@ -3,15 +3,6 @@ export type PowerOption = 'low' | 'high'
 export type BandwidthOption = 'wide' | 'narrow'
 export type FrequencyCardId = 'sa818-radio-v1'
 
-export const RF_GUARD_SINGLE_TX_LIMIT_MIN_S = 1
-export const RF_GUARD_SINGLE_TX_LIMIT_MAX_S = 1800
-export const RF_GUARD_WINDOW_MIN_S = 5
-export const RF_GUARD_WINDOW_MAX_S = 3600
-export const RF_GUARD_MAX_TX_IN_WINDOW_MIN_S = 1
-export const RF_GUARD_ENABLED_DEFAULT = true
-export const RF_GUARD_SINGLE_TX_LIMIT_DEFAULT_S = 30
-export const RF_GUARD_WINDOW_DEFAULT_S = 300
-export const RF_GUARD_MAX_TX_IN_WINDOW_DEFAULT_S = 60
 export const ADC_GAIN_MIN_DB = 0
 export const ADC_GAIN_MAX_DB = 24
 export const ADC_GAIN_STEP_DB = 3
@@ -37,10 +28,6 @@ export interface RadioConfigForm {
   sameFreq: boolean
   power: PowerOption
   bandwidth: BandwidthOption
-  rfGuardEnabled: boolean
-  rfGuardSingleTxLimitS: number
-  rfGuardWindowS: number
-  rfGuardMaxTxInWindowS: number
   adcGainDb: number
   adcVolume: number
   dacVolume: number
@@ -117,10 +104,6 @@ const SA818_PROFILE: FrequencyCardProfile = {
       'sql_level',
       'power_level',
       'tx_bandwidth',
-      'rf_guard_enabled',
-      'rf_guard_single_tx_limit_s',
-      'rf_guard_window_s',
-      'rf_guard_max_tx_in_window_s',
     ],
   },
 }
@@ -135,10 +118,6 @@ export function getDefaultRadioConfig(): RadioConfigForm {
     sameFreq: true,
     power: 'high',
     bandwidth: 'wide',
-    rfGuardEnabled: RF_GUARD_ENABLED_DEFAULT,
-    rfGuardSingleTxLimitS: RF_GUARD_SINGLE_TX_LIMIT_DEFAULT_S,
-    rfGuardWindowS: RF_GUARD_WINDOW_DEFAULT_S,
-    rfGuardMaxTxInWindowS: RF_GUARD_MAX_TX_IN_WINDOW_DEFAULT_S,
     adcGainDb: ADC_GAIN_DEFAULT_DB,
     adcVolume: ADC_VOLUME_DEFAULT,
     dacVolume: DAC_VOLUME_DEFAULT,
@@ -315,57 +294,6 @@ export function normalizeActiveHigh(value?: string | boolean): boolean {
     default:
       return false
   }
-}
-
-export function normalizeRfGuardEnabled(value?: string | boolean): boolean {
-  if (typeof value === 'boolean') {
-    return value
-  }
-  switch (String(value ?? '').trim().toLowerCase()) {
-    case '0':
-    case 'false':
-    case 'off':
-    case 'disabled':
-      return false
-    case '1':
-    case 'true':
-    case 'on':
-    case 'enabled':
-      return true
-    default:
-      return RF_GUARD_ENABLED_DEFAULT
-  }
-}
-
-export function normalizeRfGuardSingleTxLimit(level: number): number {
-  if (!Number.isFinite(level)) {
-    return RF_GUARD_SINGLE_TX_LIMIT_DEFAULT_S
-  }
-  return Math.max(
-    RF_GUARD_SINGLE_TX_LIMIT_MIN_S,
-    Math.min(RF_GUARD_SINGLE_TX_LIMIT_MAX_S, Math.round(level)),
-  )
-}
-
-export function normalizeRfGuardWindow(level: number): number {
-  if (!Number.isFinite(level)) {
-    return RF_GUARD_WINDOW_DEFAULT_S
-  }
-  return Math.max(
-    RF_GUARD_WINDOW_MIN_S,
-    Math.min(RF_GUARD_WINDOW_MAX_S, Math.round(level)),
-  )
-}
-
-export function normalizeRfGuardMaxTxInWindow(level: number, windowS?: number): number {
-  const normalizedWindow = normalizeRfGuardWindow(windowS ?? RF_GUARD_WINDOW_DEFAULT_S)
-  if (!Number.isFinite(level)) {
-    return Math.min(RF_GUARD_MAX_TX_IN_WINDOW_DEFAULT_S, normalizedWindow)
-  }
-  return Math.max(
-    RF_GUARD_MAX_TX_IN_WINDOW_MIN_S,
-    Math.min(normalizedWindow, Math.round(level)),
-  )
 }
 
 export function powerToLevel(power: PowerOption): '1' | '3' {

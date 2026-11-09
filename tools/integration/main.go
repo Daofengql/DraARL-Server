@@ -27,6 +27,9 @@ type suite struct{ name, pkg, pattern, gate string }
 
 var suites = []suite{
 	{"single-node-upgrade", "./internal/gormdb", "TestSingleNodeAccessUpgradeMySQL", ""},
+	{"device-capability-switch", "./internal/udphub", "TestDeviceCapabilitySwitchPreservesConfigurationMySQL", "DRAARL_DEVICE_CONFIG_E2E"},
+	{"device-config-api", "./internal/handler", "TestDeviceConfigCapabilitiesAndStaleSaveMySQL", "DRAARL_DEVICE_CONFIG_E2E"},
+	{"device-binding-retry", "./internal/handler", "TestDynamicBindingRetriesMySQL", "DRAARL_DEVICE_CONFIG_E2E"},
 	{"handler-redis", "./internal/handler", "", ""},
 	{"auth-redis", "./internal/auth", "", ""},
 	{"device-list", "./internal/handler", "TestDeviceListBatchOwnersAndRequestCancellationMySQL", "DRAARL_TODO_E2E"},

@@ -246,10 +246,7 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x09 | rx_tone_value | 8 | ASCII | 接收亚音值（如 `88.5`、`023`） |
 | 0x0A | tx_tone_mode | 1 | uint8 | 发射亚音类型 (0=OFF, 1=CTCSS, 2=CDCSS_N, 3=CDCSS_I) |
 | 0x0B | tx_tone_value | 8 | ASCII | 发射亚音值（如 `88.5`、`023`） |
-| 0x0C | rf_guard_enabled | 1 | uint8 | 射频保护开关 (0=关, 1=开) |
-| 0x0D | rf_guard_single_tx_limit_s | 2 | big-endian uint16 | 单次发射上限 (秒, 1-1800) |
-| 0x0E | rf_guard_window_s | 2 | big-endian uint16 | 统计窗口 (秒, 5-3600) |
-| 0x0F | rf_guard_max_tx_in_window_s | 2 | big-endian uint16 | 窗口内累计发射上限 (秒, 1-window_s) |
+| 0x0C–0x0F | 已停用，保留编号 | — | — | 旧射频保护字段，忽略且不再下发 |
 | 0x10 | timestamp | 8 | big-endian int64 | Unix 时间戳 (毫秒) |
 | 0x11 | adc_gain_db | 1 | uint8 | ADC 增益 (0-24 dB，按最近的 3 dB 档位应用) |
 | 0x12 | adc_volume | 1 | uint8 | ADC 音量 (0-100) |
@@ -297,7 +294,7 @@ DATA = [0x02, 0x0F, TLV1, TLV2, TLV3, TLV4, TLV5, TLV6, TLV7, TLV8, TLV9, TLV10,
 
 ```
 DATA = [
-  0x02, 0x0F,
+  0x02, 0x0B,
   0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x32, 0x3C, 0xE0,                    // rx_freq = 439500000
   0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x19, 0xB8, 0x2A, 0xE0,                    // tx_freq = 431500000
   0x03, 0x04, 0x00, 0x00, 0x00, 0x00,                                              // rx_ctcss = 0
@@ -309,10 +306,6 @@ DATA = [
   0x09, 0x08, 0x30, 0x32, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00,                      // rx_tone_value = "023"
   0x0A, 0x01, 0x03,                                                                  // tx_tone_mode = CDCSS_I
   0x0B, 0x08, 0x34, 0x33, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00,                      // tx_tone_value = "431"
-  0x0C, 0x01, 0x01,                                                                  // rf_guard_enabled = 1
-  0x0D, 0x02, 0x00, 0x1E,                                                            // rf_guard_single_tx_limit_s = 30
-  0x0E, 0x02, 0x01, 0x2C,                                                            // rf_guard_window_s = 300
-  0x0F, 0x02, 0x00, 0x3C                                                             // rf_guard_max_tx_in_window_s = 60
 ]
 ```
 
@@ -618,6 +611,7 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 - 服务器生成 6 位数字动态码
 - 动态码有效期 5 分钟
 - 设备在屏幕/LED 上显示动态码
+- 有效期内重复请求返回原码和剩余秒数；按 `expires_in` 续码，已确认绑定后继续等待配置
 
 **步骤 3：用户绑定 (bind)**
 
@@ -638,13 +632,15 @@ DATA = [24字节GPS][ASCII "AA:BB:CC:DD:EE:FF"]
 
 设备轮询此接口获取配置：
 
-- 状态 `waiting`：等待用户完成绑定
+- 状态 `waiting`：等待用户完成绑定；`bound: true` 时等待提交配置，不再刷新动态码
 - 状态 `ready`：绑定完成，返回认证信息
+- 建议按 `poll_after: 5` 轮询；`429` 按 `Retry-After` / `data.retry_after` 等待，`404` 重新请求动态码
 
 #### 安全机制
 
-- **动态码单次使用**：绑定成功后动态码立即失效
+- **动态码归属固定**：首次绑定后仅同一用户可在会话有效期内重试，其他用户无法认领
 - **有效期限制**：动态码 5 分钟过期，绑定状态 10 分钟过期
+- **丢包重试**：已就绪配置保留到绑定会话过期，避免设备尚未收到就被清理
 - **限速保护**：各接口均有独立的限速策略
 - **账号状态校验**：用户必须已审核通过才能绑定设备
 
@@ -708,3 +704,5 @@ UDP 服务端实施以下安全策略，超出限制的数据包将被静默丢�
 | v1.9 | 2026-04 | 重构 DevModel 分段与动态绑定 SSID 规则；新增 `rx_tone_* / tx_tone_*` 数字亚音表达；SQL 收敛为 0-8；功率统一为高/低两档并兼容历史中档 |
 | v1.10 | 2026-04 | Config 包新增 `rf_guard_*` 四项射频保护配置，支持单次发射上限、统计窗口与窗口内累计发射上限 |
 | v1.11 | 2026-08 | 新增版本化幽灵认证、客户端实例与 Session、UDP session tag、多收单发及下行来源频道；标准实体设备保持原单端语义 |
+
+当前版本已移除射频保护功能与设置；旧字段与旧 TLV 会被忽略。设备型号变化后按当前能力过滤配置，保留另一模式的历史参数。

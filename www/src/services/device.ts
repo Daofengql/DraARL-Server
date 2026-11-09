@@ -204,6 +204,11 @@ export const deviceService = {
     return res.data || {}
   },
 
+  async getConfigSnapshot(deviceId: number): Promise<{ configs: Record<string, string>; devModel?: number }> {
+    const res = await apiClient.get<BackendResponse<Record<string, string>> & { dev_model?: number }>(`/api/devices/${deviceId}/config`)
+    return { configs: res.data || {}, devModel: res.dev_model }
+  },
+
   // 更新设备配置
   async updateConfig(deviceId: number, config: Partial<DeviceConfig>): Promise<Record<string, string>> {
     const res = await apiClient.put<BackendResponse<Record<string, string>>>(`/api/devices/${deviceId}/config`, config)
@@ -230,10 +235,6 @@ export interface DeviceConfig {
   sql_level?: string     // 静噪等级 (0-8)
   power_level?: string   // 功率等级 (1=低, 3=高)
   tx_bandwidth?: string  // 发射带宽 (1=窄带, 2=宽带)
-  rf_guard_enabled?: string           // 射频保护开关 (0=关, 1=开)
-  rf_guard_single_tx_limit_s?: string // 单次发射上限 (秒)
-  rf_guard_window_s?: string          // 统计窗口 (秒)
-  rf_guard_max_tx_in_window_s?: string // 窗口内累计发射上限 (秒)
   adc_gain_db?: string                 // ADC 增益 (0-24 dB)
   adc_volume?: string                  // ADC 音量 (0-100)
   dac_volume?: string                  // DAC 音量 (0-100)

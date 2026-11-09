@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -58,7 +59,7 @@ func GetDeviceConfig(c *gin.Context) {
 	}
 
 	// 获取设备配置
-	configs, err := udphub.GetDeviceConfigsFromDB(deviceID)
+	configs, err := gormdb.NewDeviceConfigRepository().GetDeviceConfigs(deviceID)
 	if err != nil {
 		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -68,33 +69,32 @@ func GetDeviceConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 200,
-		"data": configs,
+		"code":           200,
+		"data":           udphub.FilterDeviceConfigs(device.DevModel, configs),
+		"dev_model":      device.DevModel,
+		"config_profile": udphub.DeviceConfigProfile(device.DevModel),
+		"supported_keys": udphub.DeviceConfigKeys(device.DevModel),
 	})
 }
 
 // UpdateDeviceConfigRequest 更新设备配置请求
 type UpdateDeviceConfigRequest struct {
-	RxFreq                *string `json:"rx_freq"`                     // 接收频率 (Hz)
-	TxFreq                *string `json:"tx_freq"`                     // 发射频率 (Hz)
-	RxCtcss               *string `json:"rx_ctcss"`                    // 接收亚音旧字段 (Hz, 0=关闭)
-	TxCtcss               *string `json:"tx_ctcss"`                    // 发射亚音旧字段 (Hz, 0=关闭)
-	RxToneMode            *string `json:"rx_tone_mode"`                // 接收亚音类型 (off/ctcss/cdcss_n/cdcss_i)
-	RxToneValue           *string `json:"rx_tone_value"`               // 接收亚音值 (88.5/023)
-	TxToneMode            *string `json:"tx_tone_mode"`                // 发射亚音类型 (off/ctcss/cdcss_n/cdcss_i)
-	TxToneValue           *string `json:"tx_tone_value"`               // 发射亚音值 (88.5/023)
-	SqlLevel              *string `json:"sql_level"`                   // 静噪等级 (0-8)
-	PowerLevel            *string `json:"power_level"`                 // 功率等级 (1=低, 3=高)
-	TxBandwidth           *string `json:"tx_bandwidth"`                // 发射带宽 (1=窄带, 2=宽带)
-	RFGuardEnabled        *string `json:"rf_guard_enabled"`            // 射频保护开关 (0=关, 1=开)
-	RFGuardSingleTxLimitS *string `json:"rf_guard_single_tx_limit_s"`  // 单次发射上限 (秒)
-	RFGuardWindowS        *string `json:"rf_guard_window_s"`           // 统计窗口 (秒)
-	RFGuardMaxTxInWindowS *string `json:"rf_guard_max_tx_in_window_s"` // 窗口内累计发射上限 (秒)
-	ADCGainDB             *string `json:"adc_gain_db"`                 // ADC 增益 (0-24 dB)
-	ADCVolume             *string `json:"adc_volume"`                  // ADC 音量 (0-100)
-	DACVolume             *string `json:"dac_volume"`                  // DAC 音量 (0-100)
-	SQLActiveHigh         *string `json:"sql_active_high"`             // SQL 触发极性 (0=低有效, 1=高有效)
-	PTTActiveHigh         *string `json:"ptt_active_high"`             // PTT 激活极性 (0=低有效, 1=高有效)
+	RxFreq        *string `json:"rx_freq"`         // 接收频率 (Hz)
+	TxFreq        *string `json:"tx_freq"`         // 发射频率 (Hz)
+	RxCtcss       *string `json:"rx_ctcss"`        // 接收亚音旧字段 (Hz, 0=关闭)
+	TxCtcss       *string `json:"tx_ctcss"`        // 发射亚音旧字段 (Hz, 0=关闭)
+	RxToneMode    *string `json:"rx_tone_mode"`    // 接收亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+	RxToneValue   *string `json:"rx_tone_value"`   // 接收亚音值 (88.5/023)
+	TxToneMode    *string `json:"tx_tone_mode"`    // 发射亚音类型 (off/ctcss/cdcss_n/cdcss_i)
+	TxToneValue   *string `json:"tx_tone_value"`   // 发射亚音值 (88.5/023)
+	SqlLevel      *string `json:"sql_level"`       // 静噪等级 (0-8)
+	PowerLevel    *string `json:"power_level"`     // 功率等级 (1=低, 3=高)
+	TxBandwidth   *string `json:"tx_bandwidth"`    // 发射带宽 (1=窄带, 2=宽带)
+	ADCGainDB     *string `json:"adc_gain_db"`     // ADC 增益 (0-24 dB)
+	ADCVolume     *string `json:"adc_volume"`      // ADC 音量 (0-100)
+	DACVolume     *string `json:"dac_volume"`      // DAC 音量 (0-100)
+	SQLActiveHigh *string `json:"sql_active_high"` // SQL 触发极性 (0=低有效, 1=高有效)
+	PTTActiveHigh *string `json:"ptt_active_high"` // PTT 激活极性 (0=低有效, 1=高有效)
 }
 
 // UpdateDeviceConfig 更新设备配置
@@ -182,18 +182,6 @@ func UpdateDeviceConfig(c *gin.Context) {
 	if req.TxBandwidth != nil {
 		configs["tx_bandwidth"] = *req.TxBandwidth
 	}
-	if req.RFGuardEnabled != nil {
-		configs[udphub.ConfigKeyRFGuardEnabled] = *req.RFGuardEnabled
-	}
-	if req.RFGuardSingleTxLimitS != nil {
-		configs[udphub.ConfigKeyRFGuardSingleTxLimitS] = *req.RFGuardSingleTxLimitS
-	}
-	if req.RFGuardWindowS != nil {
-		configs[udphub.ConfigKeyRFGuardWindowS] = *req.RFGuardWindowS
-	}
-	if req.RFGuardMaxTxInWindowS != nil {
-		configs[udphub.ConfigKeyRFGuardMaxTxInWindowS] = *req.RFGuardMaxTxInWindowS
-	}
 	if req.ADCGainDB != nil {
 		configs[udphub.ConfigKeyADCGainDB] = *req.ADCGainDB
 	}
@@ -215,6 +203,10 @@ func UpdateDeviceConfig(c *gin.Context) {
 			"code":    400,
 			"message": "未提供任何配置项",
 		})
+		return
+	}
+	if unsupported := unsupportedDeviceConfigKeys(device.DevModel, configs); len(unsupported) > 0 {
+		writeErrorResponse(c, http.StatusConflict, gin.H{"code": 409, "message": "设备能力已变化，请重新加载配置", "dev_model": device.DevModel, "unsupported_keys": unsupported})
 		return
 	}
 
@@ -256,6 +248,21 @@ func UpdateDeviceConfig(c *gin.Context) {
 		"message": "配置已保存",
 		"data":    configs,
 	})
+}
+
+func unsupportedDeviceConfigKeys(devModel int, configs map[string]string) []string {
+	allowed := make(map[string]bool)
+	for _, key := range udphub.DeviceConfigKeys(devModel) {
+		allowed[key] = true
+	}
+	unsupported := make([]string, 0)
+	for key := range configs {
+		if !allowed[key] {
+			unsupported = append(unsupported, key)
+		}
+	}
+	sort.Strings(unsupported)
+	return unsupported
 }
 
 // SyncDeviceConfig 立即同步配置到设备
@@ -406,13 +413,9 @@ func validateDeviceConfigValues(configs map[string]string) error {
 			if _, ok := parseUintInRange(value, 0, 3); !ok {
 				return fmt.Errorf("%s 必须是 0-3 之间的整数", key)
 			}
-		case udphub.ConfigKeyRFGuardEnabled, udphub.ConfigKeySQLActiveHigh, udphub.ConfigKeyPTTActiveHigh:
+		case udphub.ConfigKeySQLActiveHigh, udphub.ConfigKeyPTTActiveHigh:
 			if _, ok := parseUintInRange(value, 0, 1); !ok {
 				return fmt.Errorf("%s 必须是 0 或 1", key)
-			}
-		case udphub.ConfigKeyRFGuardSingleTxLimitS, udphub.ConfigKeyRFGuardWindowS, udphub.ConfigKeyRFGuardMaxTxInWindowS:
-			if _, ok := parseUintInRange(value, 1, 3600); !ok {
-				return fmt.Errorf("%s 必须是 1-3600 之间的整数秒", key)
 			}
 		case udphub.ConfigKeyADCGainDB:
 			if _, ok := parseUintInRange(value, 0, 24); !ok {

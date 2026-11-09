@@ -797,46 +797,6 @@
               }
             ]
           },
-          "rf_guard_enabled": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "rf_guard_max_tx_in_window_s": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "rf_guard_single_tx_limit_s": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "rf_guard_window_s": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "rx_ctcss": {
             "anyOf": [
               {

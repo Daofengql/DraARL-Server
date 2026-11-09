@@ -317,6 +317,7 @@ func processDeviceAuthJob(job *deviceAuthJob) {
 	state := job.dev.RuntimeSnapshot()
 	log.Printf("[AUTH] device re-authenticated: %s-%d (%s) from %v",
 		protocol.GetUsernameSSID(packet.Username, packet.SSID), state.SSID, state.CallSign, packet.UDPAddr)
+	applyClientReportedDevModel(ctx, job.dev, packet.DevModel)
 	if job.needsCenterActivation {
 		if err := activateAndPersistCenterDeviceContext(ctx, job.dev); err != nil {
 			log.Printf("[INTERCONNECT] activate centre device %d failed: %v", job.dev.ID, err)

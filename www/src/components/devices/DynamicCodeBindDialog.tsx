@@ -25,7 +25,7 @@ import VisibilityOff from '@mui/icons-material/VisibilityOff'
 import CheckCircle from '@mui/icons-material/CheckCircle'
 import { deviceBindService } from '../../services'
 import { DYNAMIC_BIND_SSID_HINT, isValidDynamicBindSSID } from '../../utils/ssid'
-import { getErrorMessage } from '../../utils/errorMessage'
+import { getErrorMessage, getRetryAfterSeconds } from '../../utils/errorMessage'
 
 interface DynamicCodeBindDialogProps {
   open: boolean
@@ -37,20 +37,22 @@ const steps = ['输入动态码', '配置设备参数', '完成']
 export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogProps) {
   const requestSeqRef = useRef(0)
   const [activeStep, setActiveStep] = useState(0)
-  const [dynamicCode, setDynamicCode] = useState(['', '', '', '', '', ''])
+  const [dynamicCode, setDynamicCode] = useState('')
+  const [retrySeconds, setRetrySeconds] = useState(0)
+  const inFlightRef = useRef(false)
   const [ssid, setSsid] = useState('')
   const [selectionMode, setSelectionMode] = useState<'new' | 'replace'>('new')
   const [replaceDeviceId, setReplaceDeviceId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // 六个输入框的 ref
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   const handleReset = useCallback(() => {
     requestSeqRef.current += 1
     setActiveStep(0)
-    setDynamicCode(['', '', '', '', '', ''])
+    setDynamicCode('')
+    inFlightRef.current = false
     setSsid('')
     setSelectionMode('new')
     setReplaceDeviceId('')
@@ -61,56 +63,19 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     setShowPassword(false)
   }, [])
 
-  // 当 dialog 打开时，聚焦第一个输入框
   useEffect(() => {
-    if (open && inputRefs.current[0]) {
-      setTimeout(() => inputRefs.current[0]?.focus(), 100)
-    }
+    if (open) inputRef.current?.focus()
   }, [open])
 
+  useEffect(() => { handleReset() }, [open, handleReset])
+
   useEffect(() => {
-    handleReset()
-  }, [open, handleReset])
+    if (retrySeconds <= 0) return
+    const timer = window.setTimeout(() => setRetrySeconds(value => Math.max(0, value - 1)), 1000)
+    return () => window.clearTimeout(timer)
+  }, [retrySeconds])
 
-  // 处理单个输入框的变化
-  const handleCodeChange = (index: number, value: string) => {
-    // 只允许数字
-    const digit = value.replace(/\D/g, '').slice(-1)
-
-    const newCode = [...dynamicCode]
-    newCode[index] = digit
-    setDynamicCode(newCode)
-    setError('')
-
-    // 如果输入了数字，自动跳到下一个输入框
-    if (digit && index < 5) {
-      inputRefs.current[index + 1]?.focus()
-    }
-  }
-
-  // 处理退格键
-  const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !dynamicCode[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus()
-    }
-  }
-
-  // 处理粘贴
-  const handlePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault()
-    const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
-    if (text) {
-      const newCode = text.split('').concat(['', '', '', '', '', '']).slice(0, 6)
-      setDynamicCode(newCode)
-      // 聚焦到下一个空输入框或最后一个
-      const nextIndex = Math.min(text.length, 5)
-      inputRefs.current[nextIndex]?.focus()
-    }
-  }
-
-  // 获取完整的动态码
-  const getFullCode = () => dynamicCode.join('')
-  const isCodeComplete = dynamicCode.every((digit) => digit !== '')
+  const isCodeComplete = /^\d{6}$/.test(dynamicCode)
 
   // 绑定结果
   const [bindResult, setBindResult] = useState<{
@@ -147,12 +112,14 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
   // 步骤1：绑定设备
   const handleBindDevice = async () => {
-    const code = getFullCode()
+    if (inFlightRef.current || retrySeconds > 0) return
+    const code = dynamicCode
     if (code.length !== 6) {
       setError('请输入6位动态码')
       return
     }
 
+    inFlightRef.current = true
     setLoading(true)
     setError('')
     const requestSeq = requestSeqRef.current
@@ -189,9 +156,11 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
       if (requestSeq !== requestSeqRef.current) {
         return
       }
+      setRetrySeconds(getRetryAfterSeconds(error))
       setError(getErrorMessage(error, '绑定失败，请检查动态码是否正确'))
     } finally {
       if (requestSeq === requestSeqRef.current) {
+        inFlightRef.current = false
         setLoading(false)
       }
     }
@@ -199,6 +168,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
 
   // 步骤2：提交配置
   const handleSubmitConfig = async () => {
+    if (inFlightRef.current || retrySeconds > 0) return
     if (!bindResult) {
       setError('设备信息丢失，请重新绑定')
       return
@@ -229,6 +199,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
       payload.ssid = ssidNum
     }
 
+    inFlightRef.current = true
     setLoading(true)
     setError('')
     const requestSeq = requestSeqRef.current
@@ -244,9 +215,11 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
       if (requestSeq !== requestSeqRef.current) {
         return
       }
+      setRetrySeconds(getRetryAfterSeconds(error))
       setError(getErrorMessage(error, '配置提交失败'))
     } finally {
       if (requestSeq === requestSeqRef.current) {
+        inFlightRef.current = false
         setLoading(false)
       }
     }
@@ -268,40 +241,24 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
             <Alert severity="info" sx={{ mb: 2 }}>
               请在设备上获取6位动态码，然后输入以下输入框完成绑定
             </Alert>
-            <Box
-              sx={{
-                display: 'flex',
-                gap: 1,
-                justifyContent: 'center',
-                mb: 2,
+            <TextField
+              inputRef={inputRef}
+              label="设备绑定码"
+              value={dynamicCode}
+              onChange={event => {
+                setDynamicCode(event.target.value.replace(/\D/g, '').slice(0, 6))
+                setError('')
               }}
-            >
-              {dynamicCode.map((digit, index) => (
-                <TextField
-                  key={index}
-                  inputRef={(el) => (inputRefs.current[index] = el)}
-                  value={digit}
-                  onChange={(e) => handleCodeChange(index, e.target.value)}
-                  onKeyDown={(e) => handleKeyDown(index, e)}
-                  onPaste={index === 0 ? handlePaste : undefined}
-                  disabled={loading}
-                  inputProps={{
-                    maxLength: 1,
-                    style: {
-                      fontSize: '1.5rem',
-                      textAlign: 'center',
-                      width: '3rem',
-                      padding: '0.75rem 0.5rem',
-                    },
-                  }}
-                  sx={{
-                    '& .MuiOutlinedInput-root': {
-                      justifyContent: 'center',
-                    },
-                  }}
-                />
-              ))}
-            </Box>
+              onKeyDown={event => { if (event.key === 'Enter' && isCodeComplete) void handleBindDevice() }}
+              disabled={loading}
+              fullWidth
+              autoFocus
+              slotProps={{ htmlInput: {
+                inputMode: 'numeric', autoComplete: 'one-time-code', maxLength: 6,
+                style: { fontSize: '1.6rem', textAlign: 'center', letterSpacing: '0.4em' },
+              } }}
+              sx={{ mb: 2 }}
+            />
             {error && activeStep === 0 && (
               <Typography color="error" variant="body2" align="center">
                 {error}
@@ -320,7 +277,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
           <Box>
             <Alert severity="success" sx={{ mb: 2 }}>
               <Typography variant="body2">
-                设备 <strong>{bindResult?.device_mac}</strong> 即将完成登录
+                设备 <strong>{bindResult?.device_mac}</strong> 已确认，请选择 SSID 完成配置
               </Typography>
               <Typography variant="body2">
                 呼叫：<strong>{bindResult?.call_sign}</strong>
@@ -476,7 +433,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth disableRestoreFocus>
       <DialogTitle>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          动态码登录
+          动态码绑定
         </Box>
       </DialogTitle>
       <DialogContent>
@@ -488,6 +445,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
           ))}
         </Stepper>
         {renderStepContent()}
+        {retrySeconds > 0 && <Alert severity="info" sx={{ mt: 2 }}>请等待 {retrySeconds} 秒后重试，当前填写内容已保留。</Alert>}
       </DialogContent>
       <DialogActions>
         {activeStep === 0 && (
@@ -496,7 +454,7 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
             <Button
               variant="contained"
               onClick={handleBindDevice}
-              disabled={loading || !isCodeComplete}
+              disabled={loading || retrySeconds > 0 || !isCodeComplete}
             >
               {loading ? <CircularProgress size={24} /> : '绑定设备'}
             </Button>
@@ -504,11 +462,11 @@ export function DynamicCodeBindDialog({ open, onClose }: DynamicCodeBindDialogPr
         )}
         {activeStep === 1 && (
           <>
-            <Button onClick={handleReset}>重新绑定</Button>
+            <Button onClick={handleReset} disabled={loading}>返回输入码</Button>
             <Button
               variant="contained"
               onClick={handleSubmitConfig}
-              disabled={loading || (!(bindResult?.available_ssids?.length) && !(bindResult?.replaceable_devices?.length))}
+              disabled={loading || retrySeconds > 0 || (!(bindResult?.available_ssids?.length) && !(bindResult?.replaceable_devices?.length))}
             >
               {loading ? <CircularProgress size={24} /> : '提交配置'}
             </Button>

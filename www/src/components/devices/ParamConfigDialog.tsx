@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isAxiosError } from 'axios'
 import {
   Alert,
   Box,
@@ -38,10 +39,6 @@ import {
   normalizeAdcGainDb,
   normalizeAudioVolume,
   normalizeActiveHigh,
-  normalizeRfGuardEnabled,
-  normalizeRfGuardMaxTxInWindow,
-  normalizeRfGuardSingleTxLimit,
-  normalizeRfGuardWindow,
   powerToLevel,
   toneSelectionToLegacyValue,
   toneSelectionToToneValue,
@@ -65,7 +62,7 @@ export function ParamConfigDialog({
   open,
   deviceId,
   deviceName,
-  deviceModel,
+  deviceModel: reportedDeviceModel,
   isOnline,
   onClose,
   onDeviceUpdated,
@@ -75,7 +72,9 @@ export function ParamConfigDialog({
   const defaultRadioConfig = useRef(getDefaultRadioConfig())
   const loadRequestRef = useRef(0)
   const [tabValue, setTabValue] = useState(0)
+  const [deviceModel, setDeviceModel] = useState(reportedDeviceModel)
   const [loading, setLoading] = useState(false)
+  const [configLoaded, setConfigLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({
     open: false,
@@ -98,11 +97,14 @@ export function ParamConfigDialog({
 
   const loadConfig = useCallback(async (currentDeviceId: number, requestId: number) => {
     setLoading(true)
+    setConfigLoaded(false)
     try {
-      const config = await deviceService.getConfig(currentDeviceId)
+      const snapshot = await deviceService.getConfigSnapshot(currentDeviceId)
       if (loadRequestRef.current !== requestId) {
         return
       }
+      if (snapshot.devModel !== undefined) setDeviceModel(snapshot.devModel)
+      const config = snapshot.configs
       const rxFreqMHz = hzToMHz(config.rx_freq)
       const txFreqMHz = hzToMHz(config.tx_freq)
       setRadioConfig({
@@ -120,19 +122,13 @@ export function ParamConfigDialog({
         sameFreq: !rxFreqMHz || !txFreqMHz || rxFreqMHz === txFreqMHz,
         power: levelToPower(config.power_level),
         bandwidth: levelToBandwidth(config.tx_bandwidth),
-        rfGuardEnabled: normalizeRfGuardEnabled(config.rf_guard_enabled),
-        rfGuardSingleTxLimitS: normalizeRfGuardSingleTxLimit(Number(config.rf_guard_single_tx_limit_s)),
-        rfGuardWindowS: normalizeRfGuardWindow(Number(config.rf_guard_window_s)),
-        rfGuardMaxTxInWindowS: normalizeRfGuardMaxTxInWindow(
-          Number(config.rf_guard_max_tx_in_window_s),
-          Number(config.rf_guard_window_s),
-        ),
         adcGainDb: normalizeAdcGainDb(Number(config.adc_gain_db)),
         adcVolume: normalizeAudioVolume(Number(config.adc_volume), ADC_VOLUME_DEFAULT),
         dacVolume: normalizeAudioVolume(Number(config.dac_volume), DAC_VOLUME_DEFAULT),
         sqlActiveHigh: normalizeActiveHigh(config.sql_active_high),
         pttActiveHigh: normalizeActiveHigh(config.ptt_active_high),
       })
+      setConfigLoaded(true)
     } catch (error) {
       if (loadRequestRef.current !== requestId) {
         return
@@ -163,6 +159,7 @@ export function ParamConfigDialog({
     setPlatformFormData({
       name: deviceName,
     })
+    setDeviceModel(reportedDeviceModel)
     setRadioConfig(defaultRadioConfig.current)
 
     if (deviceId) {
@@ -172,10 +169,10 @@ export function ParamConfigDialog({
     } else {
       setLoading(false)
     }
-  }, [open, deviceId, deviceName, deviceModel, loadConfig])
+  }, [open, deviceId, deviceName, reportedDeviceModel, loadConfig])
 
   const saveAndSyncConfig = async (config: Partial<DeviceConfig>) => {
-    if (!deviceId) return
+    if (!deviceId || !configLoaded || loading) return
     setSaving(true)
     try {
       await deviceService.updateConfig(deviceId, config)
@@ -191,6 +188,11 @@ export function ParamConfigDialog({
     } catch (error) {
       console.error('保存配置失败:', error)
       setSnackbar({ open: true, message: getErrorMessage(error, '保存配置失败'), severity: 'error' })
+      if (isAxiosError(error) && error.response?.status === 409) {
+        const requestId = ++loadRequestRef.current
+        setTabValue(0)
+        await loadConfig(deviceId, requestId)
+      }
     } finally {
       setSaving(false)
     }
@@ -209,12 +211,6 @@ export function ParamConfigDialog({
       sql_level: String(normalizeSquelchLevel(radioConfig.squelch)),
       power_level: powerToLevel(radioConfig.power),
       tx_bandwidth: bandwidthToLevel(radioConfig.bandwidth),
-      rf_guard_enabled: radioConfig.rfGuardEnabled ? '1' : '0',
-      rf_guard_single_tx_limit_s: String(normalizeRfGuardSingleTxLimit(radioConfig.rfGuardSingleTxLimitS)),
-      rf_guard_window_s: String(normalizeRfGuardWindow(radioConfig.rfGuardWindowS)),
-      rf_guard_max_tx_in_window_s: String(
-        normalizeRfGuardMaxTxInWindow(radioConfig.rfGuardMaxTxInWindowS, radioConfig.rfGuardWindowS),
-      ),
     })
   }
 
@@ -286,6 +282,13 @@ export function ParamConfigDialog({
 
       <DialogContent>
         <Box sx={{ py: 2 }}>
+          {!loading && !configLoaded && currentTab !== 'platform' && (
+            <Alert severity="error" sx={{ mb: 2 }} action={
+              <Button color="inherit" onClick={() => {
+                if (deviceId) void loadConfig(deviceId, ++loadRequestRef.current)
+              }}>重新加载</Button>
+            }>未能读取设备配置，请重新加载后保存。</Alert>
+          )}
           {!isOnline && (
             <Alert severity="info" sx={{ mb: 2 }}>
               设备当前离线，配置将保存到服务器，设备上线后自动同步。
@@ -355,7 +358,7 @@ export function ParamConfigDialog({
           <Button
             variant="contained"
             onClick={handleSaveFrequencyAndSync}
-            disabled={saving || loading}
+            disabled={saving || loading || !configLoaded}
             startIcon={saving ? <CircularProgress size={20} /> : null}
           >
             {saving ? '保存中...' : (isOnline ? '保存并同步' : '保存配置')}
@@ -365,7 +368,7 @@ export function ParamConfigDialog({
           <Button
             variant="contained"
             onClick={handleSaveAudioAndSync}
-            disabled={saving || loading}
+            disabled={saving || loading || !configLoaded}
             startIcon={saving ? <CircularProgress size={20} /> : null}
           >
             {saving ? '保存中...' : (isOnline ? '保存并同步' : '保存配置')}

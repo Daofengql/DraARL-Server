@@ -21,17 +21,9 @@ import { RegionCascader } from '../../common/RegionCascader'
 import { ToneSelector } from './ToneSelector'
 import {
   POWER_OPTIONS,
-  RF_GUARD_MAX_TX_IN_WINDOW_MIN_S,
-  RF_GUARD_SINGLE_TX_LIMIT_MAX_S,
-  RF_GUARD_SINGLE_TX_LIMIT_MIN_S,
-  RF_GUARD_WINDOW_MAX_S,
-  RF_GUARD_WINDOW_MIN_S,
   SQL_LEVEL_OPTIONS,
   buildToneSelection,
   formatToneDisplay,
-  normalizeRfGuardMaxTxInWindow,
-  normalizeRfGuardSingleTxLimit,
-  normalizeRfGuardWindow,
   normalizeSquelchLevel,
   type RadioConfigForm,
 } from '../../../utils/radioConfig'
@@ -120,42 +112,6 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
     }
   }
 
-  const updateRfGuardNumber = (
-    field: 'rfGuardSingleTxLimitS' | 'rfGuardWindowS' | 'rfGuardMaxTxInWindowS',
-    rawValue: string,
-  ) => {
-    if (rawValue.trim() === '') {
-      return
-    }
-
-    const parsed = Number(rawValue)
-    if (!Number.isFinite(parsed)) {
-      return
-    }
-
-    if (field === 'rfGuardSingleTxLimitS') {
-      onChange({
-        ...value,
-        rfGuardSingleTxLimitS: normalizeRfGuardSingleTxLimit(parsed),
-      })
-      return
-    }
-
-    if (field === 'rfGuardWindowS') {
-      const nextWindow = normalizeRfGuardWindow(parsed)
-      onChange({
-        ...value,
-        rfGuardWindowS: nextWindow,
-        rfGuardMaxTxInWindowS: normalizeRfGuardMaxTxInWindow(value.rfGuardMaxTxInWindowS, nextWindow),
-      })
-      return
-    }
-
-    onChange({
-      ...value,
-      rfGuardMaxTxInWindowS: normalizeRfGuardMaxTxInWindow(parsed, value.rfGuardWindowS),
-    })
-  }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -343,53 +299,7 @@ export function SA818FrequencyCard({ value, onChange }: SA818FrequencyCardProps)
 
       <Divider />
 
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-          发射保护
-        </Typography>
-        <FormControlLabel
-          control={(
-            <Switch
-              checked={value.rfGuardEnabled}
-              onChange={(event) => onChange({ ...value, rfGuardEnabled: event.target.checked })}
-            />
-          )}
-          label="启用发射保护"
-        />
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-          用于限制单次连续发射和一段时间内的累计发射时长，降低设备长时间满占空比工作的风险。
-        </Typography>
 
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
-          <TextField
-            fullWidth
-            type="number"
-            label="单次发射上限 (秒)"
-            value={value.rfGuardSingleTxLimitS}
-            onChange={(event) => updateRfGuardNumber('rfGuardSingleTxLimitS', event.target.value)}
-            slotProps={{ htmlInput: { min: RF_GUARD_SINGLE_TX_LIMIT_MIN_S, max: RF_GUARD_SINGLE_TX_LIMIT_MAX_S, step: 1 } }}
-            helperText={`${RF_GUARD_SINGLE_TX_LIMIT_MIN_S}-${RF_GUARD_SINGLE_TX_LIMIT_MAX_S} 秒`}
-          />
-          <TextField
-            fullWidth
-            type="number"
-            label="统计窗口 (秒)"
-            value={value.rfGuardWindowS}
-            onChange={(event) => updateRfGuardNumber('rfGuardWindowS', event.target.value)}
-            slotProps={{ htmlInput: { min: RF_GUARD_WINDOW_MIN_S, max: RF_GUARD_WINDOW_MAX_S, step: 1 } }}
-            helperText={`${RF_GUARD_WINDOW_MIN_S}-${RF_GUARD_WINDOW_MAX_S} 秒`}
-          />
-          <TextField
-            fullWidth
-            type="number"
-            label="窗口内累计上限 (秒)"
-            value={value.rfGuardMaxTxInWindowS}
-            onChange={(event) => updateRfGuardNumber('rfGuardMaxTxInWindowS', event.target.value)}
-            slotProps={{ htmlInput: { min: RF_GUARD_MAX_TX_IN_WINDOW_MIN_S, max: value.rfGuardWindowS || RF_GUARD_WINDOW_MAX_S, step: 1 } }}
-            helperText={`${RF_GUARD_MAX_TX_IN_WINDOW_MIN_S}-${Math.max(RF_GUARD_MAX_TX_IN_WINDOW_MIN_S, value.rfGuardWindowS)} 秒`}
-          />
-        </Box>
-      </Paper>
     </Box>
   )
 }

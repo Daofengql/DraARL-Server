@@ -98,7 +98,6 @@ jobs:
           mkdir -p package
           cp ${{ matrix.filename }} package/
           cp config.yaml.example package/config.yaml
-          cp docs/interconnect-edge-config.yaml.example package/edge-config.yaml.example
 
           # 根据平台差异，将文件打包为 zip 或 tar.gz
           if [ "${{ matrix.goos }}" = "windows" ]; then

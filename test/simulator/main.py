@@ -461,12 +461,6 @@ class ClientPanel(ttk.LabelFrame):
                 "cdcss_i": "CDCSS_I",
             }.get(normalize_tone_mode(value), "OFF")
 
-        def format_rf_guard_enabled(value: str) -> str:
-            return "开启" if str(value).strip() in ("1", "true", "True", "on") else "关闭"
-
-        def format_seconds(value: str) -> str:
-            return f"{value} 秒" if str(value).strip() else "-"
-
         # 配置项显示
         self.config_labels = {}
         display_items = [
@@ -481,10 +475,6 @@ class ClientPanel(ttk.LabelFrame):
             ("sql_level", "静噪等级", lambda v: f"{v}"),
             ("power_level", "功率等级", lambda v: {"1": "低", "3": "高"}.get(v, v)),
             ("tx_bandwidth", "发射带宽", lambda v: "窄带" if v == "1" else "宽带"),
-            ("rf_guard_enabled", "发射保护", format_rf_guard_enabled),
-            ("rf_guard_single_tx_limit_s", "单次发射上限", format_seconds),
-            ("rf_guard_window_s", "统计窗口", format_seconds),
-            ("rf_guard_max_tx_in_window_s", "窗口累计上限", format_seconds),
         ]
 
         for key, label, formatter in display_items:
@@ -585,41 +575,6 @@ class ClientPanel(ttk.LabelFrame):
         bw_combo.pack(side=tk.LEFT, padx=5)
         ttk.Label(bw_row, text="(1=窄带, 2=宽带)", foreground="gray").pack(side=tk.LEFT)
 
-        # 发射保护
-        rf_guard_row = ttk.Frame(edit_frame)
-        rf_guard_row.pack(fill=tk.X, pady=2)
-        ttk.Label(rf_guard_row, text="发射保护:", width=14, anchor=tk.W).pack(side=tk.LEFT)
-        self.config_vars['rf_guard_enabled'] = tk.BooleanVar(
-            value=str(config.get('rf_guard_enabled', '1')).strip() in ("1", "true", "True", "on")
-        )
-        ttk.Checkbutton(
-            rf_guard_row,
-            text="启用",
-            variable=self.config_vars['rf_guard_enabled']
-        ).pack(side=tk.LEFT, padx=5)
-
-        rf_guard_limit_row = ttk.Frame(edit_frame)
-        rf_guard_limit_row.pack(fill=tk.X, pady=2)
-        ttk.Label(rf_guard_limit_row, text="单次发射上限:", width=14, anchor=tk.W).pack(side=tk.LEFT)
-        self.config_vars['rf_guard_single_tx_limit_s'] = tk.StringVar(
-            value=config.get('rf_guard_single_tx_limit_s', '30')
-        )
-        ttk.Entry(rf_guard_limit_row, textvariable=self.config_vars['rf_guard_single_tx_limit_s'], width=8).pack(side=tk.LEFT, padx=5)
-        ttk.Label(rf_guard_limit_row, text="秒", foreground="gray").pack(side=tk.LEFT)
-
-        rf_guard_window_row = ttk.Frame(edit_frame)
-        rf_guard_window_row.pack(fill=tk.X, pady=2)
-        ttk.Label(rf_guard_window_row, text="统计窗口:", width=14, anchor=tk.W).pack(side=tk.LEFT)
-        self.config_vars['rf_guard_window_s'] = tk.StringVar(value=config.get('rf_guard_window_s', '300'))
-        ttk.Entry(rf_guard_window_row, textvariable=self.config_vars['rf_guard_window_s'], width=8).pack(side=tk.LEFT, padx=5)
-        ttk.Label(rf_guard_window_row, text="秒", foreground="gray").pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(rf_guard_window_row, text="累计上限:").pack(side=tk.LEFT)
-        self.config_vars['rf_guard_max_tx_in_window_s'] = tk.StringVar(
-            value=config.get('rf_guard_max_tx_in_window_s', '60')
-        )
-        ttk.Entry(rf_guard_window_row, textvariable=self.config_vars['rf_guard_max_tx_in_window_s'], width=8).pack(side=tk.LEFT, padx=5)
-        ttk.Label(rf_guard_window_row, text="秒", foreground="gray").pack(side=tk.LEFT)
-
         # === 按钮区 ===
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X)
@@ -640,10 +595,6 @@ class ClientPanel(ttk.LabelFrame):
                     "sql_level": lambda v: f"{v}",
                     "power_level": lambda v: {"1": "低", "3": "高"}.get(v, v),
                     "tx_bandwidth": lambda v: "窄带" if v == "1" else "宽带",
-                    "rf_guard_enabled": format_rf_guard_enabled,
-                    "rf_guard_single_tx_limit_s": format_seconds,
-                    "rf_guard_window_s": format_seconds,
-                    "rf_guard_max_tx_in_window_s": format_seconds,
                 }
                 for key, label in self.config_labels.items():
                     if key in c:
@@ -669,10 +620,6 @@ class ClientPanel(ttk.LabelFrame):
                     self.client._get_tlv_type('sql_level'): str(int(float(sql_scale.get()))),
                     self.client._get_tlv_type('power_level'): self.config_vars['power_level'].get(),
                     self.client._get_tlv_type('tx_bandwidth'): self.config_vars['tx_bandwidth'].get(),
-                    self.client._get_tlv_type('rf_guard_enabled'): "1" if self.config_vars['rf_guard_enabled'].get() else "0",
-                    self.client._get_tlv_type('rf_guard_single_tx_limit_s'): self.config_vars['rf_guard_single_tx_limit_s'].get(),
-                    self.client._get_tlv_type('rf_guard_window_s'): self.config_vars['rf_guard_window_s'].get(),
-                    self.client._get_tlv_type('rf_guard_max_tx_in_window_s'): self.config_vars['rf_guard_max_tx_in_window_s'].get(),
                 }
                 self.log("[Config] 本地配置已更新")
                 refresh_display()

@@ -72,9 +72,9 @@ func getDeviceForPacket(packet *protocol.DraARLv1Packet, udpAddr *net.UDPAddr) (
 // 1) 校验协议范围；
 // 2) 仅在发生变化时更新内存；
 // 3) 对已落库设备同步写回 devices.dev_model。
-func applyClientReportedDevModel(ctx context.Context, dev *models.Device, reportedDevModel byte) {
+func applyClientReportedDevModel(ctx context.Context, dev *models.Device, reportedDevModel byte) bool {
 	if dev == nil {
-		return
+		return false
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -83,18 +83,16 @@ func applyClientReportedDevModel(ctx context.Context, dev *models.Device, report
 	if !protocol.IsValidClientReportedDevModel(reportedDevModel) {
 		log.Printf("[DEV_MODEL] 忽略非法设备型号上报: device_id=%d username=%s ssid=%d reported=%d",
 			state.ID, state.Username, state.SSID, reportedDevModel)
-		return
+		return false
 	}
 	if state.DevModel == reportedDevModel {
-		return
+		return false
 	}
 
 	oldModel := state.DevModel
-	dev.UpdateRuntime(func(current *models.Device) {
-		current.DevModel = reportedDevModel
-	})
 	if state.ID <= 0 {
-		return
+		dev.UpdateRuntime(func(current *models.Device) { current.DevModel = reportedDevModel })
+		return true
 	}
 
 	repo := gormdb.NewDeviceRepository().WithContext(ctx)
@@ -103,8 +101,9 @@ func applyClientReportedDevModel(ctx context.Context, dev *models.Device, report
 	}); err != nil {
 		log.Printf("[DEV_MODEL] 持久化设备型号失败: device_id=%d old=%d new=%d err=%v",
 			state.ID, oldModel, reportedDevModel, err)
-		return
+		return false
 	}
+	dev.UpdateRuntime(func(current *models.Device) { current.DevModel = reportedDevModel })
 
 	if deviceCache := cache.GetDeviceCache(); deviceCache != nil {
 		_ = deviceCache.InvalidateDevice(ctx, state.ID, state.OwnerID, uint8(state.SSID))
@@ -116,6 +115,7 @@ func applyClientReportedDevModel(ctx context.Context, dev *models.Device, report
 
 	log.Printf("[DEV_MODEL] 设备型号已更新: device_id=%d old=%d new=%d",
 		state.ID, oldModel, reportedDevModel)
+	return true
 }
 
 // registerAuthenticatedDraARLDevice creates or restores a normal UDP device
@@ -336,7 +336,7 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 			current.LastOnlineIP = realIP
 		}
 	})
-	applyClientReportedDevModel(context.Background(), dev, packet.DevModel)
+	modelChanged := applyClientReportedDevModel(context.Background(), dev, packet.DevModel)
 
 	// 检测重连
 	if addrChanged && wasOnline {
@@ -380,6 +380,9 @@ func handleDraARLHeartbeat(packet *protocol.DraARLv1Packet, data []byte, dev *mo
 	response := protocol.EncodeHeartbeatResponse(packet, state.CallSign)
 	if _, err := conn.WriteToUDP(response, packet.UDPAddr); err != nil {
 		log.Printf("[HEARTBEAT] response send failed: device=%d addr=%v err=%v", state.ID, packet.UDPAddr, err)
+	}
+	if wasOnline && modelChanged && !isGhost {
+		syncDeviceConfigAsync(dev)
 	}
 
 	if !wasOnline {

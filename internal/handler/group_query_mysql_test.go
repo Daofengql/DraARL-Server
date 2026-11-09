@@ -97,6 +97,89 @@ func TestGroupQueryPaginationAndDeviceStatsMySQL(t *testing.T) {
 		t.Fatalf("active=%v disabled=%v body=%s", foundActive, foundDisabled, response.Body.String())
 	}
 
+	t.Run("disabled owned groups remain visible only in management lists", func(t *testing.T) {
+		joinedPrivate := &gormdb.Group{Name: "group-query-joined-" + suffix, Type: groupTypePrivate, OwerID: owner.ID, Status: 1}
+		disabledPrivate := &gormdb.Group{Name: "group-query-disabled-private-" + suffix, Type: groupTypePrivate, OwerID: owner.ID, Status: 0}
+		hiddenPrivate := &gormdb.Group{Name: "group-query-hidden-" + suffix, Type: groupTypePrivate, OwerID: owner.ID, Status: 1}
+		virtual := &gormdb.Group{Name: "group-query-virtual-" + suffix, Type: groupTypePublic, OwerID: owner.ID, Status: 0, IsVirtual: true}
+		groups := []*gormdb.Group{joinedPrivate, disabledPrivate, hiddenPrivate, virtual}
+		if err := db.Create(groups).Error; err != nil {
+			t.Fatal(err)
+		}
+		groupIDs := []int{joinedPrivate.ID, disabledPrivate.ID, hiddenPrivate.ID, virtual.ID}
+		t.Cleanup(func() {
+			_ = db.Where("group_id IN ?", groupIDs).Delete(&gormdb.GroupMember{}).Error
+			_ = db.Delete(&gormdb.Group{}, groupIDs).Error
+		})
+		if err := db.Model(&gormdb.Group{}).Where("id IN ?", []int{disabledPrivate.ID, virtual.ID}).Update("status", 0).Error; err != nil {
+			t.Fatal(err)
+		}
+		members := []*gormdb.GroupMember{
+			{GroupID: joinedPrivate.ID, UserID: viewer.ID, IsVerified: true},
+			{GroupID: disabledPrivate.ID, UserID: viewer.ID, IsVerified: true},
+		}
+		if err := db.Create(members).Error; err != nil {
+			t.Fatal(err)
+		}
+
+		type listItem struct {
+			ID      int  `json:"id"`
+			Status  int  `json:"status"`
+			IsOwner bool `json:"is_owner"`
+		}
+		for _, test := range []struct {
+			name  string
+			user  *gormdb.User
+			query string
+			want  []int // Expected order is newest first.
+		}{
+			{"owner management", owner, "&include_disabled=true", []int{hiddenPrivate.ID, disabledPrivate.ID, joinedPrivate.ID, disabled.ID, active.ID}},
+			{"owner default selector", owner, "", []int{hiddenPrivate.ID, joinedPrivate.ID, active.ID}},
+			{"owner explicitly active selector", owner, "&include_disabled=false", []int{hiddenPrivate.ID, joinedPrivate.ID, active.ID}},
+			{"member management", viewer, "&include_disabled=true", []int{joinedPrivate.ID, active.ID}},
+			{"member default selector", viewer, "", []int{joinedPrivate.ID, active.ID}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				for page := 1; page <= len(test.want)+1; page++ {
+					path := "/groups?keyword=" + suffix + "&page_size=1&page=" + strconv.Itoa(page) + test.query
+					response := performGroupQueryRequest(t, GetGroups, http.MethodGet, path, nil, test.user)
+					if response.Code != http.StatusOK {
+						t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+					}
+					var result struct {
+						Data struct {
+							Items []listItem `json:"items"`
+							Total int        `json:"total"`
+						} `json:"data"`
+					}
+					if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+						t.Fatal(err)
+					}
+					if result.Data.Total != len(test.want) {
+						t.Fatalf("total=%d want=%d body=%s", result.Data.Total, len(test.want), response.Body.String())
+					}
+					if page > len(test.want) {
+						if len(result.Data.Items) != 0 {
+							t.Fatalf("page after last item returned %v", result.Data.Items)
+						}
+						continue
+					}
+					if len(result.Data.Items) != 1 || result.Data.Items[0].ID != test.want[page-1] {
+						t.Fatalf("page=%d items=%v want ID=%d", page, result.Data.Items, test.want[page-1])
+					}
+					item := result.Data.Items[0]
+					wantStatus := 1
+					if item.ID == disabled.ID || item.ID == disabledPrivate.ID {
+						wantStatus = 0
+					}
+					if item.Status != wantStatus || item.IsOwner != (test.user.ID == owner.ID) {
+						t.Fatalf("incorrect management state: %+v", item)
+					}
+				}
+			})
+		}
+	})
+
 	searchBody := []byte(`{"keyword":"group-query-active-"}`)
 	search := performGroupQueryRequest(t, SearchGroups, http.MethodPost, "/groups/search", searchBody, viewer)
 	if search.Code != http.StatusOK || !bytes.Contains(search.Body.Bytes(), []byte(strconv.Itoa(active.ID))) {

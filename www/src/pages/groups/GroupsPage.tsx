@@ -99,7 +99,7 @@ export function GroupsPage() {
   const loadGroups = async () => {
     setLoading(true)
     try {
-      const data = await groupService.list()
+      const data = await groupService.listAll({ includeDisabled: true })
       setGroups(data)
     } catch (err) {
       console.error('Failed to load groups:', err)

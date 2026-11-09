@@ -47,13 +47,16 @@ func getGroups(c *gin.Context, adminView bool) {
 
 	uid := currentUser.ID
 	likeKeyword := "%" + keyword + "%"
+	// Management lists can retain disabled groups owned by the caller. Other
+	// consumers, including device and radio selectors, still see enabled groups.
+	includeDisabled := c.Query("include_disabled") == "true"
 
 	countQuery := gormdb.Get().WithContext(c.Request.Context()).Table("public_groups g").
 		Joins("LEFT JOIN group_members gm ON gm.group_id = g.id AND gm.user_id = ? AND gm.is_verified = ?", uid, true).
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
 		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
 	if !adminView {
-		countQuery = countQuery.Where("g.status = ?", 1).
+		countQuery = countQuery.Where("(g.status = ? OR (? AND g.ower_id = ?))", 1, includeDisabled, uid).
 			Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
 	}
 	if keyword != "" {
@@ -101,7 +104,7 @@ func getGroups(c *gin.Context, adminView bool) {
 		Where("(g.is_virtual = ? OR g.is_virtual IS NULL)", false).
 		Where("g.type IN ?", []int{groupTypePublic, groupTypePrivate})
 	if !adminView {
-		dataQuery = dataQuery.Where("g.status = ?", 1).
+		dataQuery = dataQuery.Where("(g.status = ? OR (? AND g.ower_id = ?))", 1, includeDisabled, uid).
 			Where("(g.type = ? OR g.ower_id = ? OR gm.user_id IS NOT NULL)", groupTypePublic, uid)
 	}
 	if keyword != "" {

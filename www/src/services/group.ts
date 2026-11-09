@@ -61,6 +61,7 @@ export const groupService = {
     page?: number
     page_size?: number
     keyword?: string
+    include_disabled?: boolean
   }): Promise<ListResponse<Group>> {
     const res = await apiClient.get<BackendResponse<{ items: BackendGroup[]; total?: number }>>('/api/groups', { params })
     const items = (res.data?.items || []).map(normalizeGroup)
@@ -79,7 +80,7 @@ export const groupService = {
   },
 
   // 自动翻页拉取完整群组集合，供下拉框和后台引用数据使用。
-  async listAll(options?: { admin?: boolean; keyword?: string }): Promise<Group[]> {
+  async listAll(options?: { admin?: boolean; keyword?: string; includeDisabled?: boolean }): Promise<Group[]> {
     const pageSize = 100
     const result: Group[] = []
     let page = 1
@@ -88,7 +89,7 @@ export const groupService = {
     while (result.length < total) {
       const current = options?.admin
         ? await this.getAdminList({ page, page_size: pageSize, keyword: options.keyword })
-        : await this.getList({ page, page_size: pageSize, keyword: options?.keyword })
+        : await this.getList({ page, page_size: pageSize, keyword: options?.keyword, include_disabled: options?.includeDisabled })
       result.push(...current.items)
       total = current.total
       if (current.items.length === 0 || current.items.length < pageSize) break

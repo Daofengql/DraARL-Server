@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -55,7 +56,7 @@ func main() {
 }
 
 func generate(root string) ([]byte, error) {
-	version, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	version, err := fs.ReadFile(os.DirFS(root), "VERSION")
 	if err != nil {
 		return nil, err
 	}

@@ -301,6 +301,7 @@ func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked
 	globalGroupLinkCache.targetToLinks = make(map[int][]int)
 	globalGroupLinkCache.linkToTargets = make(map[int][]int)
 	globalGroupLinkCache.targetToPeers = make(map[int][]int)
+	globalGroupLinkCache.independentBroadcast = make(map[int]bool)
 	if linked {
 		globalGroupLinkCache.targetToLinks[env.groupA] = []int{env.virtual}
 		globalGroupLinkCache.targetToLinks[env.groupB] = []int{env.virtual}
@@ -364,6 +365,7 @@ func setupRouteTestNetwork(t *testing.T, network string, baseGroupID int, linked
 		globalGroupLinkCache.targetToLinks = make(map[int][]int)
 		globalGroupLinkCache.linkToTargets = make(map[int][]int)
 		globalGroupLinkCache.targetToPeers = make(map[int][]int)
+		globalGroupLinkCache.independentBroadcast = make(map[int]bool)
 		globalGroupLinkCache.Unlock()
 	})
 	return env
@@ -632,6 +634,55 @@ func TestRouteWSVoiceToUDPAcrossVirtualGroupEndToEnd(t *testing.T) {
 	assertNoRouteTestPacket(t, env.udpC.conn)
 	assertRouteTestFanoutSent(t, 3)
 	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-a", "ws-b"}, want, payload, []int{env.groupA, env.groupB})
+}
+
+func TestIndependentBroadcastDropsLinkedVoiceOnlyAtActiveGroup(t *testing.T) {
+	env := setupRouteTest(t, 54200, true)
+	oldHooks := centerHooks()
+	SetCenterInterconnectHooks(CenterInterconnectHooks{})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+	globalGroupLinkCache.Lock()
+	globalGroupLinkCache.independentBroadcast[env.groupA] = true
+	globalGroupLinkCache.independentBroadcast[env.groupB] = true
+	globalGroupLinkCache.Unlock()
+
+	now := time.Now()
+	ResetAcceptedVoiceActivity(now.Add(-10 * time.Second))
+	leaseA, _, result := TryAcquireScheduledBroadcast(env.groupA, 40, now, 5*time.Second, true)
+	if leaseA == nil || result != ScheduledBroadcastAcquired {
+		t.Fatalf("group A broadcast acquire: lease=%v result=%s", leaseA, result)
+	}
+	defer ReleaseScheduledBroadcast(leaseA)
+	wsSourceB := &routeTestWSDevice{
+		identifier: "ws-source-b", groupID: env.groupB, userID: env.groupB + 205,
+		deviceID: -(env.groupB + 205), username: "ws-source-b", callsign: "BG7WSB2",
+		ssid: protocol.SSIDGhostWeb, devModel: protocol.DraARLDevModelBrowser, ghost: true,
+	}
+	env.wsManager.devices = append(env.wsManager.devices, wsSourceB)
+
+	payload := []byte{0x41, 0x42, 0x43}
+	env.router.RouteVoiceToUDP(wsSourceB, payload, env.groupB)
+	want := protocol.EncodeDraARLv1(
+		wsSourceB.username, "", wsSourceB.ssid, protocol.DraARLTypeOpus16K,
+		wsSourceB.devModel, 0, wsSourceB.callsign, payload,
+	)
+	assertRouteTestPacket(t, readRouteTestPacket(t, env.udpB.conn), want, payload)
+	assertNoRouteTestPacket(t, env.udpA2.conn)
+	assertRouteTestFanoutSent(t, 1)
+	assertRouteTestWSDeliveries(t, env.wsManager, []string{"ws-b"}, want, payload, []int{env.groupB})
+	if !LastAcceptedVoiceAt([]int{env.groupA}).IsZero() || LastAcceptedVoiceAt([]int{env.groupB}).IsZero() {
+		t.Fatalf("group B voice leaked into group A activity: A=%v B=%v", LastAcceptedVoiceAt([]int{env.groupA}), LastAcceptedVoiceAt([]int{env.groupB}))
+	}
+	if !AcceptScheduledBroadcastFrame(leaseA, time.Now()) {
+		t.Fatal("group B voice interrupted the active group A broadcast")
+	}
+	sourceGroupID := uint(env.groupB)
+	if got := snapshotDeliveryGroupIDs(&sourceGroupID, true); !reflect.DeepEqual(got, []uint{uint(env.groupB)}) {
+		t.Fatalf("voice recording included a blocked destination: %v", got)
+	}
+	if got := SnapshotDeliveryGroupIDs(&sourceGroupID); len(got) != 2 {
+		t.Fatalf("broadcast blocked text history permissions: %v", got)
+	}
 }
 
 func TestCenterLocalSourcesRelayOnceAcrossVirtualDomain(t *testing.T) {

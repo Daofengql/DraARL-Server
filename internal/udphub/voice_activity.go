@@ -22,6 +22,9 @@ func ResetAcceptedVoiceActivity(startedAt time.Time) {
 	acceptedVoiceActivity.startedAt = startedAt
 	acceptedVoiceActivity.byGroup = make(map[int]time.Time)
 	acceptedVoiceActivity.Unlock()
+	independentBroadcastActivity.Lock()
+	independentBroadcastActivity.byGroup = make(map[int]independentBroadcastState)
+	independentBroadcastActivity.Unlock()
 }
 
 // GetActiveCommunicationGroupIDs returns a copy of the entity groups that a
@@ -35,6 +38,9 @@ func GetActiveCommunicationGroupIDs(sourceGroupID int) []int {
 // timestamp so a later topology change cannot erase recent communication.
 func MarkAcceptedVoice(sourceGroupID int, acceptedAt time.Time) []int {
 	groupIDs := GetActiveCommunicationGroupIDs(sourceGroupID)
+	if IsIndependentBroadcastGroup(sourceGroupID) {
+		groupIDs = []int{sourceGroupID}
+	}
 	MarkAcceptedVoiceGroups(groupIDs, acceptedAt)
 	return groupIDs
 }

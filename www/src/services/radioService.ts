@@ -722,9 +722,13 @@ export class RadioService {
       .filter(groupId => Number.isInteger(groupId) && groupId > 0)
     const previousRx = new Set(this.routing.rxGroupIds)
     const nextRx = new Set(rxGroupIds)
+    if ([...previousRx].some(groupId => !nextRx.has(groupId))) {
+      // Linked sources can differ from subscribed channels. Discard their
+      // buffered audio too when the server changes our receive routes.
+      this.clearIncomingVoiceStreams()
+    }
     for (const groupId of previousRx) {
       if (!nextRx.has(groupId)) {
-        this.removeIncomingGroup(groupId)
         this.audioMixer?.removeChannel(groupId)
       }
     }
@@ -776,7 +780,9 @@ export class RadioService {
   private handleVoicePacket(packet: DraARLPacket, _rawData: ArrayBuffer): void {
     if (!packet.data?.length) return
     const groupId = packet.sourceGroupId
-    if (!Number.isInteger(groupId) || groupId <= 0 || !this.routing.rxGroupIds.includes(groupId)) {
+    // The server authorizes delivery against receive routes. A linked source
+    // group need not itself be one of the subscribed channels.
+    if (!Number.isInteger(groupId) || groupId <= 0) {
       return
     }
     const streamKey = `${groupId}:${packet.username || packet.callsign}:${packet.ssid}`
@@ -819,7 +825,7 @@ export class RadioService {
     const message = new TextDecoder().decode(packet.data)
 
     const groupId = packet.sourceGroupId
-    if (!Number.isInteger(groupId) || groupId <= 0 || !this.routing.rxGroupIds.includes(groupId)) {
+    if (!Number.isInteger(groupId) || groupId <= 0) {
       return
     }
     const radioMessage: RadioMessage = {
@@ -830,6 +836,7 @@ export class RadioService {
       senderId: packet.username || packet.callsign,
       senderCallsign: packet.callsign,
       senderSSID: packet.ssid,
+      senderUsername: packet.username || undefined,
       content: message,
       timestamp: Date.now(),
       isSelf: this.isCurrentClient(packet.username, packet.callsign, packet.ssid),
@@ -905,18 +912,6 @@ export class RadioService {
 
   private emitSpeakersChange(): void {
     this.emit('speakersChange', this.getActiveSpeakers())
-  }
-
-  private removeIncomingGroup(groupId: number): void {
-    for (const [streamKey, stream] of this.incomingVoiceStreams) {
-      if (stream.groupId !== groupId) continue
-      if (stream.uiTimer) clearTimeout(stream.uiTimer)
-      if (stream.commitTimer) clearTimeout(stream.commitTimer)
-      this.incomingVoiceStreams.delete(streamKey)
-      this.activeSpeakers.delete(streamKey)
-      this.audioMixer?.resetStream(streamKey)
-    }
-    this.emitSpeakersChange()
   }
 
   private clearIncomingVoiceStreams(): void {

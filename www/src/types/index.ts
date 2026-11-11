@@ -145,7 +145,7 @@ export interface VirtualGroup extends Group {
   broadcast_members?: VirtualGroupBroadcastMember[]
 }
 
-export type VirtualGroupBroadcastPolicyMode = 'suspend_all' | 'allow_single_source'
+export type VirtualGroupBroadcastPolicyMode = 'suspend_all' | 'allow_single_source' | 'independent'
 
 export interface VirtualGroupBroadcastPolicy {
   virtual_group_id?: number

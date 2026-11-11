@@ -460,6 +460,11 @@ const MessageItem = memo(function MessageItem({
                     ({nickname})
                   </Typography>
                 )}
+                {message.senderUsername && (
+                  <Typography variant="caption" title={`来源用户 ${message.senderUsername}`} sx={{ fontSize: '0.7rem', opacity: 0.7, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    用户 {message.senderUsername}
+                  </Typography>
+                )}
                 <Typography variant="caption" sx={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>
                   {message.senderCallsign}-{message.senderSSID}
                 </Typography>
@@ -469,6 +474,11 @@ const MessageItem = memo(function MessageItem({
                 <Typography variant="caption" sx={{ fontSize: '0.75rem', fontWeight: 'bold', opacity: 0.9 }}>
                   {message.senderCallsign}-{message.senderSSID}
                 </Typography>
+                {message.senderUsername && (
+                  <Typography variant="caption" title={`来源用户 ${message.senderUsername}`} sx={{ fontSize: '0.7rem', opacity: 0.7, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    用户 {message.senderUsername}
+                  </Typography>
+                )}
                 {nickname && (
                   <Typography variant="caption" sx={{ fontSize: '0.7rem', opacity: 0.7 }}>
                     ({nickname})
@@ -617,7 +627,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
     useEffect(() => {
       messages.forEach(msg => {
         if (!msg.senderAvatar && Number(msg.senderSSID)!==255) {
-          const usernameToFetch = (msg as any).senderUsername || msg.senderNickname || msg.senderId
+          const usernameToFetch = msg.senderUsername || msg.senderNickname || msg.senderId
           if (usernameToFetch) {
             const key = String(usernameToFetch).trim()
             if (!userInfoCache.has(key) && !userInfoCache.isLoading(key)) {
@@ -723,7 +733,7 @@ export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(
         const isMatchSSID = String(message.senderSSID) === String(currentSSID)
         const isSelf = (isMatchCallsign && isMatchSSID) || message.isSelf === true
 
-        const usernameForCache = String((message as any).senderUsername || message.senderNickname || message.senderId).trim()
+        const usernameForCache = String(message.senderUsername || message.senderNickname || message.senderId).trim()
         const cachedInfo = userInfoCache.get(usernameForCache)
 
         const selfAvatar = currentUser?.avatar_thumb || currentUser?.avatar

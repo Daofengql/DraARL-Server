@@ -25,6 +25,7 @@ const (
 
 	PolicySuspendAll        = "suspend_all"
 	PolicyAllowSingleSource = "allow_single_source"
+	PolicyIndependent       = "independent"
 
 	RunStatusClaimed                      = "claimed"
 	RunStatusPlaying                      = "playing"
@@ -181,5 +182,9 @@ func IsScheduleType(value string) bool {
 }
 
 func IsPolicyMode(value string) bool {
-	return value == PolicySuspendAll || value == PolicyAllowSingleSource
+	return value == PolicySuspendAll || value == PolicyAllowSingleSource || value == PolicyIndependent
+}
+
+func PolicyAllowsSource(mode string, allowedSourceGroupID *int, groupID int) bool {
+	return mode == PolicyIndependent || (mode == PolicyAllowSingleSource && allowedSourceGroupID != nil && *allowedSourceGroupID == groupID)
 }

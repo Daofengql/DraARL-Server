@@ -98,7 +98,7 @@ type CreateVirtualGroupRequest struct {
 }
 
 type VirtualGroupBroadcastPolicyRequest struct {
-	Mode                 string `json:"mode"`
+	Mode                 string `json:"mode" enums:"suspend_all,allow_single_source,independent"`
 	AllowedSourceGroupID *int   `json:"allowed_source_group_id"`
 }
 
@@ -163,6 +163,9 @@ func CreateVirtualGroup(c *gin.Context) {
 		writeVirtualGroupRepositoryError(c, err)
 		return
 	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
@@ -171,11 +174,6 @@ func CreateVirtualGroup(c *gin.Context) {
 	if groupCache := cache.GetGroupCache(); groupCache != nil {
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
-
-	// 通知 udphub 刷新群组缓存
-	udphub.RefreshGroupCache()
-	udphub.RefreshGroupLinkCache()
-	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -460,6 +458,9 @@ func UpdateVirtualGroup(c *gin.Context) {
 	if fields.Status != nil {
 		group.Status = *fields.Status
 	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
@@ -469,11 +470,6 @@ func UpdateVirtualGroup(c *gin.Context) {
 		_ = groupCache.InvalidateGroup(c.Request.Context(), id)
 		_ = groupCache.InvalidateGroupList(c.Request.Context())
 	}
-
-	// 通知 udphub 刷新群组缓存和互联路由缓存
-	udphub.RefreshGroupCache()
-	udphub.RefreshGroupLinkCache() // 状态变更后立即刷新互联路由，确保转发立刻生效
-	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -550,6 +546,9 @@ func DeleteVirtualGroup(c *gin.Context) {
 		writeVirtualGroupRepositoryError(c, err)
 		return
 	}
+	udphub.RefreshGroupCache()
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
@@ -765,13 +764,11 @@ func AddGroupLinkTarget(c *gin.Context) {
 		writeVirtualGroupRepositoryError(c, err)
 		return
 	}
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
-
-	// 通知 udphub 刷新互联缓存
-	udphub.RefreshGroupLinkCache()
-	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -871,13 +868,11 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 		writeVirtualGroupRepositoryError(c, err)
 		return
 	}
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}
-
-	// 通知 udphub 刷新互联缓存
-	udphub.RefreshGroupLinkCache()
-	routesync.RefreshTopology()
 
 	// 记录审计日志
 	oplog.AddLog(
@@ -899,6 +894,9 @@ func RemoveGroupLinkTarget(c *gin.Context) {
 func removedMemberPolicyLogSuffix(policy *model.VirtualGroupBroadcastPolicy) string {
 	if policy == nil {
 		return ""
+	}
+	if policy.Mode == model.PolicyIndependent {
+		return ", 同步切换信标策略为各自独立"
 	}
 	if policy.Mode == model.PolicyAllowSingleSource && policy.AllowedSourceGroupID != nil {
 		return fmt.Sprintf(", 同步切换信标来源为实体组 ID %d", *policy.AllowedSourceGroupID)
@@ -935,6 +933,8 @@ func UpdateVirtualGroupBroadcastPolicy(c *gin.Context) {
 		writeVirtualGroupRepositoryError(c, err)
 		return
 	}
+	udphub.RefreshGroupLinkCache()
+	routesync.RefreshTopology()
 	if !waitForBroadcastTopologyMutation(c, mutation) {
 		return
 	}

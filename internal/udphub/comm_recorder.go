@@ -277,6 +277,10 @@ func InterconnectCommRecordSourceKey(sessionID uint64) string {
 // send time. The snapshot is later persisted with the communication record so
 // history does not depend on the current interconnect topology.
 func SnapshotDeliveryGroupIDs(groupID *uint) []uint {
+	return snapshotDeliveryGroupIDs(groupID, false)
+}
+
+func snapshotDeliveryGroupIDs(groupID *uint, voice bool) []uint {
 	if groupID == nil || *groupID == 0 {
 		return nil
 	}
@@ -284,7 +288,7 @@ func SnapshotDeliveryGroupIDs(groupID *uint) []uint {
 	result := make([]uint, 0, len(activeGroups))
 	seen := make(map[uint]struct{}, len(activeGroups))
 	for _, activeGroupID := range activeGroups {
-		if activeGroupID <= 0 {
+		if activeGroupID <= 0 || (voice && IndependentBroadcastBlocksGroup(activeGroupID, int(*groupID))) {
 			continue
 		}
 		normalized := uint(activeGroupID)
@@ -347,7 +351,7 @@ func snapshotDeliveryGroupIDsCached(sourceKey string, groupID *uint) []uint {
 	}
 	deliverySnapMu.Unlock()
 
-	groups := SnapshotDeliveryGroupIDs(groupID)
+	groups := snapshotDeliveryGroupIDs(groupID, true)
 
 	deliverySnapMu.Lock()
 	// 有界防御：条目过多时重建，避免长期运行内存增长

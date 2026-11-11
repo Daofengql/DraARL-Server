@@ -22,6 +22,7 @@ type fanoutFrameJob struct {
 	sourceUser      string
 	sourceSSID      byte
 	sourceSessionID string
+	sourceGroupID   int
 	enqueuedAt      time.Time
 	snapshotGen     uint64
 	validateGen     bool
@@ -452,6 +453,21 @@ func partitionHasTarget(targets []domainReceiverEntry, sourceID int, sourceUser 
 	return false
 }
 
+func independentBroadcastAllowsTarget(target *domainReceiverEntry, sourceGroupID int) bool {
+	if sourceGroupID <= 0 {
+		return true
+	}
+	if target == nil {
+		return false
+	}
+	for _, groupID := range target.groupIDs {
+		if !IndependentBroadcastBlocksGroup(groupID, sourceGroupID) {
+			return true
+		}
+	}
+	return len(target.groupIDs) == 0
+}
+
 func isSourceTarget(target *domainReceiverEntry, sourceID int, sourceUser string, sourceSSID byte, sourceSessionID string) bool {
 	if target == nil {
 		return true
@@ -475,9 +491,13 @@ func (s *FanoutSender) worker(writer *fanoutWriter) {
 
 	for job := range writer.queue {
 		result := fanoutWriteResult{}
+		voiceSourceGroupID := 0
+		if len(job.frame.data) > 48 && job.frame.data[48] == protocol.DraARLTypeOpus16K {
+			voiceSourceGroupID = job.frame.sourceGroupID
+		}
 		for i := range job.targets {
 			target := &job.targets[i]
-			if isSourceTarget(target, job.frame.sourceID, job.frame.sourceUser, job.frame.sourceSSID, job.frame.sourceSessionID) {
+			if isSourceTarget(target, job.frame.sourceID, job.frame.sourceUser, job.frame.sourceSSID, job.frame.sourceSessionID) || !independentBroadcastAllowsTarget(target, voiceSourceGroupID) {
 				continue
 			}
 			result.attempted++
@@ -586,6 +606,7 @@ func (s *FanoutSender) enqueueDomainFrame(data []byte, snap *domainReceiverSnap,
 		sourceUser:      sourceUser,
 		sourceSSID:      sourceSSID,
 		sourceSessionID: sourceSessionID,
+		sourceGroupID:   sourceGroupID,
 		enqueuedAt:      time.Now(),
 		snapshotGen:     snap.gen,
 		validateGen:     true,
@@ -615,6 +636,7 @@ func (s *FanoutSender) enqueueFixedDomainFrame(
 		partitions:      snap.partitions,
 		enqueuedAt:      time.Now(),
 		snapshotGen:     generation.Load(),
+		sourceGroupID:   sourceGroupID,
 		validateGen:     false,
 		generation:      generation,
 		onComplete:      onComplete,
@@ -633,9 +655,16 @@ func writeUDPDomain(data []byte, snap *domainReceiverSnap, sourceID int, sourceU
 		return
 	}
 	var sourceGroupData []byte
+	voiceSourceGroupID := 0
+	if len(data) > 48 && data[48] == protocol.DraARLTypeOpus16K {
+		voiceSourceGroupID = sourceGroupID
+	}
 	for i := range snap.entries {
 		target := &snap.entries[i]
 		if isSourceTarget(target, sourceID, sourceUser, sourceSSID, sourceSessionID) {
+			continue
+		}
+		if !independentBroadcastAllowsTarget(target, voiceSourceGroupID) {
 			continue
 		}
 		payload := data

@@ -55,6 +55,10 @@ func main() {
 }
 
 func generate(root string) ([]byte, error) {
+	version, err := os.ReadFile(filepath.Join(root, "VERSION"))
+	if err != nil {
+		return nil, err
+	}
 	g := &generator{functions: map[string]*ast.FuncDecl{}, types: map[string]ast.Expr{}, paths: map[string]object{}, schemas: map[string]any{}}
 	var routes *ast.File
 	for _, directory := range []string{"internal/handler", "internal/server"} {
@@ -101,7 +105,7 @@ func generate(root string) ([]byte, error) {
 		return nil, fmt.Errorf("route extraction incomplete: %d paths", len(g.paths))
 	}
 	g.schemas["APIError"] = object{"type": "object", "required": []string{"code", "message", "error_code"}, "properties": object{"code": object{"type": "integer", "description": "HTTP status; existing clients retain this contract"}, "message": object{"type": "string"}, "error_code": object{"type": "string", "description": "Stable category or existing domain error code"}}}
-	document := object{"openapi": "3.1.0", "info": object{"title": "DraARL HTTP API", "version": "2.0.1-alpha4", "description": "Generated from Gin registrations and request struct tags. Response payloads and protocol-specific authentication are documented in the usage manual; absent response schemas are intentional, not inferred guarantees."}, "paths": g.paths, "components": object{"securitySchemes": object{"bearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}, "schemas": g.schemas}}
+	document := object{"openapi": "3.1.0", "info": object{"title": "DraARL HTTP API", "version": strings.TrimPrefix(strings.TrimSpace(string(version)), "v"), "description": "Generated from Gin registrations and request struct tags. Response payloads and protocol-specific authentication are documented in the usage manual; absent response schemas are intentional, not inferred guarantees."}, "paths": g.paths, "components": object{"securitySchemes": object{"bearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}, "schemas": g.schemas}}
 	data, err := json.MarshalIndent(document, "", "  ")
 	return append(data, '\n'), err
 }
@@ -347,7 +351,11 @@ func (g *generator) schema(expr ast.Expr, depth int) object {
 			if name == "" {
 				name = field.Names[0].Name
 			}
-			properties[name] = g.schema(field.Type, depth+1)
+			property := g.schema(field.Type, depth+1)
+			if values := reflect.StructTag(tag).Get("enums"); values != "" {
+				property["enum"] = strings.Split(values, ",")
+			}
+			properties[name] = property
 			if strings.Contains(","+reflect.StructTag(tag).Get("binding")+",", ",required,") {
 				required = append(required, name)
 			}

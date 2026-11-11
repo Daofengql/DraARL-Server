@@ -313,6 +313,7 @@ func (e *Engine) executeRun(ctx context.Context, run model.BroadcastRun) {
 
 	request := BroadcastRequest{
 		RunID: run.ID, SourceGroupID: run.SourceGroupID,
+		Independent:      execution.Independent,
 		QuietWindow:      time.Duration(e.config.QuietWindowSeconds) * time.Second,
 		ValidateInterval: RunValidationInterval,
 		Container:        container,

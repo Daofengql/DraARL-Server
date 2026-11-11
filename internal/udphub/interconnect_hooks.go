@@ -310,7 +310,7 @@ func DeliverCenterPeerAudio(groupID int, data []byte, virtualDeviceName, remoteC
 	writeUDPDomain(physicalData, getDomainReceiverSnap(groupID), 0, "", 0, "", groupID)
 	if GlobalMessageRouter != nil && GlobalMessageRouter.wsManager != nil {
 		GlobalMessageRouter.wsManager.BroadcastToGroups(
-			activeDomainGroupIDs(groupID), physicalData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
+			voiceDeliveryGroupIDs(groupID), physicalData, 2, interfaces.WSBroadcastFilter{SourceGroupID: groupID},
 		)
 	}
 	MarkAcceptedVoice(groupID, time.Now())

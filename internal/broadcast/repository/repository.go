@@ -537,7 +537,7 @@ func (r *Repository) ClaimManualRun(ctx context.Context, groupID int, scheduleID
 		if err != nil {
 			return err
 		}
-		if policy != nil && (policy.Mode != model.PolicyAllowSingleSource || policy.AllowedSourceGroupID == nil || *policy.AllowedSourceGroupID != groupID) {
+		if policy != nil && !model.PolicyAllowsSource(policy.Mode, policy.AllowedSourceGroupID, groupID) {
 			code = "virtual_group_broadcast_suspended"
 			return nil
 		}
@@ -681,9 +681,10 @@ func (r *Repository) validateExecutionEligibility(tx *gorm.DB, execution *schedu
 	if err != nil {
 		return "", err
 	}
-	if policy != nil && (policy.Mode != model.PolicyAllowSingleSource || policy.AllowedSourceGroupID == nil || *policy.AllowedSourceGroupID != execution.Run.SourceGroupID) {
+	if policy != nil && !model.PolicyAllowsSource(policy.Mode, policy.AllowedSourceGroupID, execution.Run.SourceGroupID) {
 		return "virtual_group_broadcast_suspended", nil
 	}
+	execution.Independent = policy != nil && policy.Mode == model.PolicyIndependent
 	return "", nil
 }
 
@@ -1044,7 +1045,7 @@ func applyScheduleRuntimeState(tx *gorm.DB, schedule *model.BroadcastSchedule, n
 	if err != nil {
 		return err
 	}
-	if policy != nil && (policy.Mode != model.PolicyAllowSingleSource || policy.AllowedSourceGroupID == nil || *policy.AllowedSourceGroupID != schedule.GroupID) {
+	if policy != nil && !model.PolicyAllowsSource(policy.Mode, policy.AllowedSourceGroupID, schedule.GroupID) {
 		schedule.NextRunAt = nil
 		schedule.SuspendedReason = model.SuspendReasonActiveVirtualGroup
 		schedule.SuspendedByVirtualGroupID = &policy.VirtualGroupID

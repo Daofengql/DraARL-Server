@@ -434,7 +434,9 @@ export function BroadcastManagementDialog({ open, group, onClose }: BroadcastMan
                 : !broadcastContext.interconnect_enabled
                   ? `互联“${broadcastContext.virtual_group_name}”当前关闭，自动播报正常运行。`
                   : broadcastContext.source_allowed
-                    ? `互联“${broadcastContext.virtual_group_name}”当前开启，本组是允许的唯一信标来源。`
+                    ? broadcastContext.policy_mode === 'independent'
+                      ? `互联“${broadcastContext.virtual_group_name}”当前开启，自动播报只作用于本组。`
+                      : `互联“${broadcastContext.virtual_group_name}”当前开启，本组是允许的唯一信标来源。`
                     : `互联“${broadcastContext.virtual_group_name}”当前开启，本组自动播报已按信标策略挂起。`}
             </Alert>
           )}

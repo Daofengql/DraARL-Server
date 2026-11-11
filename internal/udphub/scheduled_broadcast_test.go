@@ -168,6 +168,49 @@ func TestScheduledBroadcastDoesNotCountLinkedGroupReceivers(t *testing.T) {
 	}
 }
 
+func TestIndependentScheduledBroadcastsAcquirePerGroupAndRejectStalePolicy(t *testing.T) {
+	env := setupRouteTest(t, 62170, true)
+	oldHooks := centerHooks()
+	SetCenterInterconnectHooks(CenterInterconnectHooks{})
+	t.Cleanup(func() { SetCenterInterconnectHooks(oldHooks) })
+	globalGroupLinkCache.Lock()
+	globalGroupLinkCache.independentBroadcast[env.groupA] = true
+	globalGroupLinkCache.independentBroadcast[env.groupB] = true
+	globalGroupLinkCache.Unlock()
+	ResetAcceptedVoiceActivity(time.Now().Add(-10 * time.Second))
+
+	now := time.Now()
+	leaseA, _, resultA := TryAcquireScheduledBroadcast(env.groupA, 27, now, 5*time.Second, true)
+	if leaseA == nil || resultA != ScheduledBroadcastAcquired {
+		t.Fatalf("group A acquire: lease=%v result=%s", leaseA, resultA)
+	}
+	defer ReleaseScheduledBroadcast(leaseA)
+	leaseB, _, resultB := TryAcquireScheduledBroadcast(env.groupB, 28, now, 5*time.Second, true)
+	if leaseB == nil || resultB != ScheduledBroadcastAcquired {
+		t.Fatalf("group B acquire while A is active: lease=%v result=%s", leaseB, resultB)
+	}
+	defer ReleaseScheduledBroadcast(leaseB)
+	if len(leaseA.DomainGroupIDs) != 1 || leaseA.DomainGroupIDs[0] != env.groupA || len(leaseB.DomainGroupIDs) != 1 || leaseB.DomainGroupIDs[0] != env.groupB {
+		t.Fatalf("independent arbitration groups: A=%v B=%v", leaseA.DomainGroupIDs, leaseB.DomainGroupIDs)
+	}
+	replacementA, _, replacementResult := TryAcquireScheduledBroadcast(env.groupA, 30, now.Add(halfDuplexVoiceHoldTimeout+time.Nanosecond), 0, true)
+	if replacementA == nil || replacementResult != ScheduledBroadcastAcquired {
+		t.Fatalf("replacement A acquire: lease=%v result=%s", replacementA, replacementResult)
+	}
+	defer ReleaseScheduledBroadcast(replacementA)
+	ReleaseScheduledBroadcast(leaseA)
+	if !IndependentBroadcastBlocksGroup(env.groupA, env.groupB) {
+		t.Fatal("releasing an expired lease removed the newer broadcast's isolation")
+	}
+
+	globalGroupLinkCache.Lock()
+	delete(globalGroupLinkCache.independentBroadcast, env.groupA)
+	globalGroupLinkCache.Unlock()
+	if lease, _, result := TryAcquireScheduledBroadcast(env.groupA, 29, now, 5*time.Second, true); lease != nil || result != ScheduledBroadcastInvalid {
+		t.Fatalf("stale independent policy was accepted: lease=%v result=%s", lease, result)
+	}
+}
+
 func TestBroadcastSourceRoutesFixedSnapshotAndRetainsNormalTailHold(t *testing.T) {
 	env := setupRouteTest(t, 62200, true)
 	ghostConn := listenRouteTestUDP(t)

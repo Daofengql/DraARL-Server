@@ -370,7 +370,7 @@ func normalizeAndValidatePolicy(tx *gorm.DB, policy *model.VirtualGroupBroadcast
 	if policy == nil || !model.IsPolicyMode(policy.Mode) {
 		return ErrInvalidPolicy
 	}
-	if policy.Mode == model.PolicySuspendAll {
+	if policy.Mode != model.PolicyAllowSingleSource {
 		policy.AllowedSourceGroupID = nil
 		return nil
 	}
@@ -397,7 +397,7 @@ func applyActiveVirtualGroupPolicy(tx *gorm.DB, virtualGroupID int, memberIDs []
 		if !schedule.Enabled {
 			continue
 		}
-		allowed := policy.Mode == model.PolicyAllowSingleSource && policy.AllowedSourceGroupID != nil && *policy.AllowedSourceGroupID == schedule.GroupID
+		allowed := model.PolicyAllowsSource(policy.Mode, policy.AllowedSourceGroupID, schedule.GroupID)
 		if !allowed {
 			schedule.NextRunAt = nil
 			schedule.SuspendedReason = model.SuspendReasonActiveVirtualGroup

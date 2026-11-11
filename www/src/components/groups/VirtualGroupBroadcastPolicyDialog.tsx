@@ -28,6 +28,9 @@ interface VirtualGroupBroadcastPolicyDialogProps {
 }
 
 export function broadcastPolicySummary(group: VirtualGroup): string {
+  if (group.broadcast_policy?.mode === 'independent') {
+    return '各自独立'
+  }
   if (group.broadcast_policy?.mode === 'allow_single_source') {
     return `仅保留 ${group.allowed_source_name || `实体组 #${group.broadcast_policy.allowed_source_group_id}`}`
   }
@@ -51,7 +54,7 @@ export function VirtualGroupBroadcastPolicyDialog({ open, group, onClose, onSave
         setDetail(result)
         const source = result.broadcast_policy?.mode === 'allow_single_source'
           ? String(result.broadcast_policy.allowed_source_group_id || '')
-          : 'suspend_all'
+          : result.broadcast_policy?.mode === 'independent' ? 'independent' : 'suspend_all'
         setSelection(source || 'suspend_all')
       })
       .catch(err => setError(getErrorMessage(err, '读取虚拟组信标策略失败')))
@@ -63,9 +66,11 @@ export function VirtualGroupBroadcastPolicyDialog({ open, group, onClose, onSave
     setSaving(true)
     setError('')
     try {
-      await groupLinkService.updateBroadcastPolicy(detail.id, selection === 'suspend_all'
-        ? { mode: 'suspend_all' }
-        : { mode: 'allow_single_source', allowed_source_group_id: Number(selection) })
+      await groupLinkService.updateBroadcastPolicy(detail.id, selection === 'independent'
+        ? { mode: 'independent' }
+        : selection === 'suspend_all'
+          ? { mode: 'suspend_all' }
+          : { mode: 'allow_single_source', allowed_source_group_id: Number(selection) })
       const refreshed = await groupLinkService.getVirtualGroup(detail.id)
       setDetail(refreshed)
       onSaved(refreshed)
@@ -103,9 +108,15 @@ export function VirtualGroupBroadcastPolicyDialog({ open, group, onClose, onSave
                 label={<Box><Typography>全部暂停</Typography><Typography variant="caption" color="text.secondary">互联开启期间不运行任何成员组信标</Typography></Box>}
                 sx={{ alignItems: 'flex-start', mb: 1 }}
               />
+              <FormControlLabel
+                value="independent"
+                control={<Radio />}
+                label={<Box><Typography>各自独立</Typography><Typography variant="caption" color="text.secondary">每个成员组只播报本组内容；播放期间忽略其他组互联传入的语音</Typography></Box>}
+                sx={{ alignItems: 'flex-start', mb: 1 }}
+              />
               {(detail?.broadcast_members || []).map(member => {
                 const selected = selection === String(member.group_id)
-                const allowed = detail?.status === 1 && detail.broadcast_policy?.mode === 'allow_single_source' && detail.broadcast_policy.allowed_source_group_id === member.group_id
+                const allowed = detail?.status === 1 && (detail.broadcast_policy?.mode === 'independent' || (detail.broadcast_policy?.mode === 'allow_single_source' && detail.broadcast_policy.allowed_source_group_id === member.group_id))
                 return (
                   <FormControlLabel
                     key={member.group_id}
@@ -126,9 +137,14 @@ export function VirtualGroupBroadcastPolicyDialog({ open, group, onClose, onSave
                 )
               })}
             </RadioGroup>
-            {selection !== 'suspend_all' && (
+            {selection !== 'suspend_all' && selection !== 'independent' && (
               <Alert severity="warning">
                 只保留一个信标源，不会产生多信标冲突；播放期间仍会占用整个互联话权，且真人语音不能抢占。
+              </Alert>
+            )}
+            {selection === 'independent' && (
+              <Alert severity="info">
+                每组只播放本组自动播报并独立占用话权；其他组的互联语音在本组播报期间会被忽略。
               </Alert>
             )}
           </Stack>

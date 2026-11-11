@@ -1176,6 +1176,11 @@
             ]
           },
           "mode": {
+            "enum": [
+              "suspend_all",
+              "allow_single_source",
+              "independent"
+            ],
             "type": "string"
           }
         },
@@ -1766,7 +1771,7 @@
   "info": {
     "description": "Generated from Gin registrations and request struct tags. Response payloads and protocol-specific authentication are documented in the usage manual; absent response schemas are intentional, not inferred guarantees.",
     "title": "DraARL HTTP API",
-    "version": "2.0.1-alpha4"
+    "version": "2.0.1-alpha9"
   },
   "openapi": "3.1.0",
   "paths": {

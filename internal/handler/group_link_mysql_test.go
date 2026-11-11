@@ -16,6 +16,8 @@ import (
 	"draarl/internal/broadcast/model"
 	"draarl/internal/broadcast/repository"
 	"draarl/internal/gormdb"
+	"draarl/internal/interconnect"
+	"draarl/internal/udphub"
 
 	"github.com/gin-gonic/gin"
 	drivermysql "github.com/go-sql-driver/mysql"
@@ -145,11 +147,59 @@ func TestVirtualGroupBroadcastPolicyHTTPE2E(t *testing.T) {
 	requireBroadcastStatus(t, added, http.StatusOK)
 	assertHTTPBroadcastSchedule(t, repo, scheduleC.ID, model.SuspendReasonActiveVirtualGroup, false)
 
+	previousRuntime := interconnect.ActiveCenterRuntime()
+	localSessions := interconnect.NewLocalSessions()
+	interconnect.SetActiveCenterRuntime(&interconnect.CenterRuntime{Local: localSessions})
+	t.Cleanup(func() { interconnect.SetActiveCenterRuntime(previousRuntime) })
+	deviceA := interconnect.LocalDevice{OwnerID: admin.ID, SSID: 1, GroupID: groupA.ID, DomainID: udphub.GetActiveCommunicationDomainID(groupA.ID)}
+	deviceB := interconnect.LocalDevice{OwnerID: admin.ID, SSID: 2, GroupID: groupB.ID, DomainID: udphub.GetActiveCommunicationDomainID(groupB.ID)}
+	for _, device := range []*interconnect.LocalDevice{&deviceA, &deviceB} {
+		if err := localSessions.ActivateLocalDevice(device); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if deviceA.DomainID != deviceB.DomainID || !localSessions.AcquireLocalVoice(deviceA) || localSessions.AcquireLocalVoice(deviceB) {
+		t.Fatal("linked sessions did not share voice arbitration before policy change")
+	}
+
 	policyPath := fmt.Sprintf("/group-links/%d/broadcast-policy", virtualGroupID)
+	independent := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id/broadcast-policy", policyPath, []byte(`{"mode":"independent"}`), UpdateVirtualGroupBroadcastPolicy)
+	requireBroadcastStatus(t, independent, http.StatusOK)
+	for _, schedule := range []*model.BroadcastSchedule{scheduleA, scheduleB, scheduleC} {
+		assertHTTPBroadcastSchedule(t, repo, schedule.ID, "", true)
+		if !udphub.IsIndependentBroadcastGroup(schedule.GroupID) {
+			t.Fatalf("independent policy did not refresh group %d routing", schedule.GroupID)
+		}
+	}
+	deviceA.DomainID = udphub.GetActiveCommunicationDomainID(groupA.ID)
+	deviceB.DomainID = udphub.GetActiveCommunicationDomainID(groupB.ID)
+	if deviceA.DomainID == deviceB.DomainID || !localSessions.AcquireLocalVoice(deviceA) || !localSessions.AcquireLocalVoice(deviceB) {
+		t.Fatal("existing sessions could not speak independently after policy change")
+	}
+	independentContext := performVirtualGroupHandlerRequest(t, admin, http.MethodGet, "/groups/:id/broadcast-context", fmt.Sprintf("/groups/%d/broadcast-context", groupA.ID), nil, GetBroadcastContext)
+	requireBroadcastStatus(t, independentContext, http.StatusOK)
+	if !bytes.Contains(independentContext.Body, []byte(`"policy_mode":"independent"`)) || !bytes.Contains(independentContext.Body, []byte(`"source_allowed":true`)) {
+		t.Fatalf("independent context was incorrect: %s", independentContext.Body)
+	}
+	closedIndependent := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id", statusPath, []byte(`{"status":0}`), UpdateVirtualGroup)
+	requireBroadcastStatus(t, closedIndependent, http.StatusOK)
+	if udphub.IsIndependentBroadcastGroup(groupA.ID) {
+		t.Fatal("disabled virtual group retained independent arbitration")
+	}
+	openedIndependent := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id", statusPath, []byte(`{"status":1}`), UpdateVirtualGroup)
+	requireBroadcastStatus(t, openedIndependent, http.StatusOK)
+	if !udphub.IsIndependentBroadcastGroup(groupA.ID) {
+		t.Fatal("re-enabled virtual group lost independent arbitration")
+	}
 	allowA := performVirtualGroupHandlerRequest(t, admin, http.MethodPut, "/group-links/:id/broadcast-policy", policyPath, []byte(fmt.Sprintf(`{"mode":"allow_single_source","allowed_source_group_id":%d}`, groupA.ID)), UpdateVirtualGroupBroadcastPolicy)
 	requireBroadcastStatus(t, allowA, http.StatusOK)
 	assertHTTPBroadcastSchedule(t, repo, scheduleA.ID, "", true)
 	assertHTTPBroadcastSchedule(t, repo, scheduleB.ID, model.SuspendReasonActiveVirtualGroup, false)
+	deviceA.DomainID = udphub.GetActiveCommunicationDomainID(groupA.ID)
+	deviceB.DomainID = udphub.GetActiveCommunicationDomainID(groupB.ID)
+	if deviceA.DomainID != deviceB.DomainID || !localSessions.AcquireLocalVoice(deviceA) || localSessions.AcquireLocalVoice(deviceB) {
+		t.Fatal("existing sessions did not restore shared arbitration after policy change")
+	}
 
 	removeAPath := fmt.Sprintf("/group-links/%d/targets/%d", virtualGroupID, groupA.ID)
 	removeSelected := performVirtualGroupHandlerRequest(t, admin, http.MethodDelete, "/group-links/:id/targets/:targetId", removeAPath, nil, RemoveGroupLinkTarget)

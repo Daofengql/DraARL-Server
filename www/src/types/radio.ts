@@ -67,7 +67,7 @@ export interface RadioMessage {
   senderId: number | string
   senderCallsign: string
   senderSSID: number
-  senderUsername?: string  // 登录用户名（用于查询头像）
+  senderUsername?: string  // 来源用户名（用于展示和查询头像）
   senderNickname?: string
   senderAvatar?: string
 

@@ -101,6 +101,30 @@ func TestRepositorySchedulePolicyMySQL(t *testing.T) {
 	if err != nil || contextState == nil || contextState.VirtualGroupID != groups.virtual.ID || contextState.VirtualGroupStatus != 1 || contextState.PolicyMode != model.PolicyAllowSingleSource || contextState.AllowedSourceName == "" {
 		t.Fatalf("unexpected entity group broadcast context: context=%#v err=%v", contextState, err)
 	}
+
+	if _, err := repo.UpdateVirtualGroupPolicy(ctx, &model.VirtualGroupBroadcastPolicy{
+		VirtualGroupID: groups.virtual.ID, Mode: model.PolicyIndependent, AllowedSourceGroupID: &groups.b.ID, UpdatedBy: owner.ID,
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	independentPolicy, err := repo.GetPolicy(ctx, groups.virtual.ID)
+	if err != nil || independentPolicy.Mode != model.PolicyIndependent || independentPolicy.AllowedSourceGroupID != nil {
+		t.Fatalf("independent policy was not normalized: policy=%#v err=%v", independentPolicy, err)
+	}
+	for _, schedule := range []*model.BroadcastSchedule{scheduleA, scheduleB} {
+		stored, err := repo.GetSchedule(ctx, schedule.GroupID, schedule.ID)
+		if err != nil || stored.NextRunAt == nil || stored.SuspendedReason != "" {
+			t.Fatalf("independent member schedule is suspended: schedule=%#v err=%v", stored, err)
+		}
+		run, code, err := repo.ClaimManualRun(ctx, schedule.GroupID, schedule.ID, now, "independent-worker", 5*time.Second)
+		if err != nil || code != "" || run == nil {
+			t.Fatalf("independent manual run: run=%#v code=%q err=%v", run, code, err)
+		}
+		execution, code, err := repo.LoadClaimedExecution(ctx, run.ID, "independent-worker", now)
+		if err != nil || code != "" || execution == nil || !execution.Independent {
+			t.Fatalf("independent execution: execution=%#v code=%q err=%v", execution, code, err)
+		}
+	}
 }
 
 func TestRepositoryOperationalSwitchBlocksRunsAndSkipsMissedSchedulesMySQL(t *testing.T) {

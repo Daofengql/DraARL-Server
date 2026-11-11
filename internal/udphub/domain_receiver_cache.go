@@ -20,6 +20,7 @@ type domainReceiverEntry struct {
 	ssid          byte
 	sessionID     string
 	sourceGroupV1 bool
+	groupIDs      []int
 }
 
 type domainReceiverSnap struct {
@@ -175,7 +176,7 @@ func buildDomainReceiverSnap(sourceGroupID int, gen uint64, workers int) *domain
 func buildGroupReceiverSnap(groupIDs []int, gen uint64, workers int) *domainReceiverSnap {
 	started := time.Now()
 	entries := make([]domainReceiverEntry, 0, 64)
-	seen := make(map[netip.AddrPort]struct{}, 64)
+	seen := make(map[netip.AddrPort]int, 64)
 	candidates := int64(0)
 	deduplicated := int64(0)
 
@@ -198,15 +199,17 @@ func buildGroupReceiverSnap(groupIDs []int, gen uint64, workers int) *domainRece
 			return
 		}
 		candidates++
-		if _, ok := seen[addr]; ok {
+		if index, ok := seen[addr]; ok {
 			deduplicated++
+			entries[index].groupIDs = append(entries[index].groupIDs, expectedGroupID)
 			return
 		}
-		seen[addr] = struct{}{}
+		seen[addr] = len(entries)
 		entries = append(entries, domainReceiverEntry{
 			addr: addr, deviceID: state.ID, username: state.Username, ssid: state.SSID,
 			sessionID:     state.GhostSessionID,
 			sourceGroupV1: state.GhostSessionID != "",
+			groupIDs:      []int{expectedGroupID},
 		})
 	}
 

@@ -40,6 +40,7 @@ type LeaseSnapshot struct {
 type BroadcastRequest struct {
 	RunID            uint
 	SourceGroupID    int
+	Independent      bool
 	QuietWindow      time.Duration
 	ValidateInterval time.Duration
 	Container        *media.Container

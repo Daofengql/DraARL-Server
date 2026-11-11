@@ -23,13 +23,16 @@ type GroupLinkCache struct {
 	linkToTargets map[int][]int
 	// targetGroupID -> []peerTargetGroupID (已去重，且过滤掉停用互联组)
 	targetToPeers map[int][]int
+	// targetGroupID -> automatic announcements use isolated arbitration
+	independentBroadcast map[int]bool
 }
 
 // 全局群组互联缓存
 var globalGroupLinkCache = &GroupLinkCache{
-	targetToLinks: make(map[int][]int),
-	linkToTargets: make(map[int][]int),
-	targetToPeers: make(map[int][]int),
+	targetToLinks:        make(map[int][]int),
+	linkToTargets:        make(map[int][]int),
+	targetToPeers:        make(map[int][]int),
+	independentBroadcast: make(map[int]bool),
 }
 
 // RefreshGroupCache 刷新群组缓存（导出函数，供外部调用）
@@ -54,10 +57,28 @@ func refreshGroupLinkCache() {
 		log.Printf("[CACHE] 从数据库加载群组互联关系失败: %v", err)
 		return
 	}
+	type broadcastPolicy struct {
+		VirtualGroupID int
+		Mode           string
+	}
+	var policies []broadcastPolicy
+	if err := gormdb.Get().WithContext(ctx).Table("virtual_group_broadcast_policies").
+		Select("virtual_group_id, mode").Where("mode = ?", "independent").Scan(&policies).Error; err != nil {
+		log.Printf("[CACHE] 从数据库加载独立信标策略失败: %v", err)
+		return
+	}
 
 	// 构建新的缓存
 	newTargetToLinks := make(map[int][]int)
 	newLinkToTargets := make(map[int][]int)
+	independentVirtualGroups := make(map[int]bool, len(policies))
+	for _, policy := range policies {
+		group, exists := GetGroupFromCache(policy.VirtualGroupID)
+		if exists && group != nil && group.IsVirtual && group.Status == 1 {
+			independentVirtualGroups[policy.VirtualGroupID] = true
+		}
+	}
+	newIndependentBroadcast := make(map[int]bool)
 
 	for _, link := range links {
 		// target -> links 映射
@@ -71,6 +92,9 @@ func refreshGroupLinkCache() {
 			newLinkToTargets[link.LinkGroupID] = []int{}
 		}
 		newLinkToTargets[link.LinkGroupID] = append(newLinkToTargets[link.LinkGroupID], link.TargetGroupID)
+		if independentVirtualGroups[link.LinkGroupID] {
+			newIndependentBroadcast[link.TargetGroupID] = true
+		}
 	}
 
 	// 预计算：每个源群组可以直达的目标群组（去重，过滤停用互联组）
@@ -105,6 +129,7 @@ func refreshGroupLinkCache() {
 	globalGroupLinkCache.targetToLinks = newTargetToLinks
 	globalGroupLinkCache.linkToTargets = newLinkToTargets
 	globalGroupLinkCache.targetToPeers = newTargetToPeers
+	globalGroupLinkCache.independentBroadcast = newIndependentBroadcast
 	globalGroupLinkCache.Unlock()
 
 	// 群组互联拓扑更新后，重置半双工域缓存，确保仲裁范围与最新转发关系一致。
@@ -112,6 +137,13 @@ func refreshGroupLinkCache() {
 	InvalidateDomainReceiverCache()
 
 	log.Printf("[CACHE] 群组互联关系同步完成，共 %d 个关联", len(links))
+}
+
+func IsIndependentBroadcastGroup(groupID int) bool {
+	globalGroupLinkCache.RLock()
+	independent := globalGroupLinkCache.independentBroadcast[groupID]
+	globalGroupLinkCache.RUnlock()
+	return independent
 }
 
 // GetLinkGroupsForTarget 获取目标群组所属的所有互联组ID

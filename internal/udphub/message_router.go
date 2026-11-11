@@ -46,6 +46,17 @@ func activeDomainGroupIDs(sourceGroupID int) []int {
 	return active
 }
 
+func voiceDeliveryGroupIDs(sourceGroupID int) []int {
+	groupIDs := activeDomainGroupIDs(sourceGroupID)
+	filtered := groupIDs[:0]
+	for _, groupID := range groupIDs {
+		if !IndependentBroadcastBlocksGroup(groupID, sourceGroupID) {
+			filtered = append(filtered, groupID)
+		}
+	}
+	return filtered
+}
+
 func buildWSSpeaker(source interfaces.WSDeviceInterface) halfDuplexSpeaker {
 	if source == nil {
 		return halfDuplexSpeaker{}
@@ -247,7 +258,7 @@ func BroadcastVoiceFromUDPDomain(source *models.Device, data []byte, sourceGroup
 	}
 	state := source.RuntimeSnapshot()
 	GlobalMessageRouter.wsManager.BroadcastToGroups(
-		activeDomainGroupIDs(sourceGroupID), data, 2,
+		voiceDeliveryGroupIDs(sourceGroupID), data, 2,
 		interfaces.WSBroadcastFilter{ExcludeDeviceID: state.ID, SourceGroupID: sourceGroupID},
 	)
 }
@@ -270,7 +281,7 @@ func (r *MessageRouter) RouteVoiceToWSClients(source interfaces.WSDeviceInterfac
 		return
 	}
 	r.wsManager.BroadcastToGroups(
-		activeDomainGroupIDs(sourceGroupID), data, 2,
+		voiceDeliveryGroupIDs(sourceGroupID), data, 2,
 		interfaces.WSBroadcastFilter{ExcludeSessionID: source.GetSessionID(), SourceGroupID: sourceGroupID},
 	)
 }

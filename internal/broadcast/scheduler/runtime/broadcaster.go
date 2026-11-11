@@ -23,10 +23,10 @@ func (DefaultBroadcaster) Broadcast(ctx context.Context, request BroadcastReques
 	}
 	outcome.Snapshot = LeaseSnapshot{
 		DomainKey:      udphub.GetActiveCommunicationDomainKey(request.SourceGroupID),
-		DomainGroupIDs: udphub.GetActiveCommunicationGroupIDs(request.SourceGroupID),
+		DomainGroupIDs: udphub.GetActiveCommunicationArbitrationGroupIDs(request.SourceGroupID),
 	}
 	lease, lastVoiceAt, acquireResult := udphub.TryAcquireScheduledBroadcast(
-		request.SourceGroupID, request.RunID, time.Now(), request.QuietWindow,
+		request.SourceGroupID, request.RunID, time.Now(), request.QuietWindow, request.Independent,
 	)
 	outcome.AcquireResult = acquireResult
 	outcome.LastVoiceAt = lastVoiceAt

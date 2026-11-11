@@ -145,9 +145,11 @@ export function GroupLinkPage() {
         note: formData.note,
         status: formData.status,
         target_group_ids: createTargetIds,
-        broadcast_policy: createPolicySource === 'suspend_all'
-          ? { mode: 'suspend_all' }
-          : { mode: 'allow_single_source', allowed_source_group_id: Number(createPolicySource) },
+        broadcast_policy: createPolicySource === 'independent'
+          ? { mode: 'independent' }
+          : createPolicySource === 'suspend_all'
+            ? { mode: 'suspend_all' }
+            : { mode: 'allow_single_source', allowed_source_group_id: Number(createPolicySource) },
       })
       setCreateDialogOpen(false)
       setFormData({ name: '', note: '', status: 0 })
@@ -281,9 +283,11 @@ export function GroupLinkPage() {
       await groupLinkService.removeGroupLinkTarget(
         selectedVirtualGroup.id,
         removingPolicySourceId,
-        replacementPolicySource === 'suspend_all'
-          ? { mode: 'suspend_all' }
-          : { mode: 'allow_single_source', allowed_source_group_id: Number(replacementPolicySource) },
+        replacementPolicySource === 'independent'
+          ? { mode: 'independent' }
+          : replacementPolicySource === 'suspend_all'
+            ? { mode: 'suspend_all' }
+            : { mode: 'allow_single_source', allowed_source_group_id: Number(replacementPolicySource) },
       )
       const refreshed = await groupLinkService.getVirtualGroup(selectedVirtualGroup.id)
       setSelectedVirtualGroup(refreshed)
@@ -564,7 +568,7 @@ export function GroupLinkPage() {
                 onChange={event => {
                   const ids = (event.target.value as number[])
                   setCreateTargetIds(ids)
-                  if (createPolicySource !== 'suspend_all' && !ids.includes(Number(createPolicySource))) setCreatePolicySource('suspend_all')
+                  if (createPolicySource !== 'suspend_all' && createPolicySource !== 'independent' && !ids.includes(Number(createPolicySource))) setCreatePolicySource('suspend_all')
                 }}
                 renderValue={ids => ids.map(id => availableGroups.find(group => group.id === id)?.name || `#${id}`).join('、')}
               >
@@ -580,6 +584,7 @@ export function GroupLinkPage() {
               <Typography variant="subtitle2" sx={{ mb: 0.5 }}>信标策略</Typography>
               <RadioGroup value={createPolicySource} onChange={event => setCreatePolicySource(event.target.value)}>
                 <FormControlLabel value="suspend_all" control={<Radio />} label="全部暂停" />
+                <FormControlLabel value="independent" control={<Radio />} label="各自独立" />
                 {availableGroups.filter(group => createTargetIds.includes(group.id)).map(group => (
                   <FormControlLabel
                     key={group.id}
@@ -589,9 +594,14 @@ export function GroupLinkPage() {
                   />
                 ))}
               </RadioGroup>
-              {createPolicySource !== 'suspend_all' && (
+              {createPolicySource !== 'suspend_all' && createPolicySource !== 'independent' && (
                 <Alert severity="warning" sx={{ mt: 1 }}>
                   只保留一个信标源；播放期间仍会占用整个互联话权，真人语音不能抢占。
+                </Alert>
+              )}
+              {createPolicySource === 'independent' && (
+                <Alert severity="info" sx={{ mt: 1 }}>
+                  每个实体组只播报本组内容；播放期间忽略其他组互联传入的语音。
                 </Alert>
               )}
             </Box>
@@ -866,6 +876,7 @@ export function GroupLinkPage() {
             </Alert>
             <RadioGroup value={replacementPolicySource} onChange={event => setReplacementPolicySource(event.target.value)}>
               <FormControlLabel value="suspend_all" control={<Radio />} label="全部暂停" />
+              <FormControlLabel value="independent" control={<Radio />} label="各自独立" />
               {(selectedVirtualGroup?.broadcast_members || [])
                 .filter(member => member.group_id !== removingPolicySourceId)
                 .map(member => (
@@ -877,7 +888,7 @@ export function GroupLinkPage() {
                   />
                 ))}
             </RadioGroup>
-            {replacementPolicySource !== 'suspend_all' && (
+            {replacementPolicySource !== 'suspend_all' && replacementPolicySource !== 'independent' && (
               <Alert severity="warning">
                 只保留一个信标源；播放期间仍会占用整个互联话权，真人语音不能抢占。
               </Alert>

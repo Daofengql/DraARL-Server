@@ -100,7 +100,7 @@ export interface BroadcastContext {
   interconnect_enabled: boolean
   virtual_group_id?: number
   virtual_group_name?: string
-  policy_mode?: 'suspend_all' | 'allow_single_source'
+  policy_mode?: 'suspend_all' | 'allow_single_source' | 'independent'
   allowed_source_group_id?: number
   allowed_source_name?: string
   source_allowed: boolean

@@ -72,7 +72,7 @@ func tryAcquireHalfDuplex(groupID int, speaker halfDuplexSpeaker, ts time.Time) 
 		ts = time.Now()
 	}
 
-	domainKey := getHalfDuplexDomainKey(groupID)
+	domainKey := getHalfDuplexArbitrationKey(groupID)
 	shard := &halfDuplexShards[halfDuplexShardIndex(domainKey)]
 
 	shard.mu.Lock()
@@ -108,6 +108,13 @@ func tryAcquireHalfDuplex(groupID int, speaker halfDuplexSpeaker, ts time.Time) 
 		state.lastBlockLogAt = ts
 	}
 	return false
+}
+
+func getHalfDuplexArbitrationKey(groupID int) string {
+	if IsIndependentBroadcastGroup(groupID) {
+		return strconv.Itoa(groupID)
+	}
+	return getHalfDuplexDomainKey(groupID)
 }
 
 // resetHalfDuplexDomainCache 刷新群组互联关系后清理域缓存。
@@ -218,6 +225,9 @@ func GetActiveCommunicationDomainID(groupID int) uint64 {
 	group, ok := GetGroupFromCache(groupID)
 	if !ok || group == nil || group.Status != 1 || group.IsVirtual {
 		return 0
+	}
+	if IsIndependentBroadcastGroup(groupID) {
+		return uint64(fnv32String(strconv.Itoa(groupID)))
 	}
 	return GetCommunicationDomainID(groupID)
 }

@@ -539,6 +539,7 @@ export const RadioPage: React.FC = () => {
             <Typography variant="body2">
               {groups.find(group => group.id === speaker.groupId)?.name || `#${speaker.groupId}`}
               {' · '}{speaker.callsign}-{speaker.ssid}
+              {speaker.username && ` · ${speaker.username}`}
             </Typography>
           </Box>
         ))}

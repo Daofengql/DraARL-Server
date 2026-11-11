@@ -104,8 +104,7 @@ func GetBroadcastContext(c *gin.Context) {
 		result.AllowedSourceGroupID = contextState.AllowedSourceGroupID
 		result.AllowedSourceName = contextState.AllowedSourceName
 		if result.InterconnectEnabled {
-			result.SourceAllowed = contextState.PolicyMode == model.PolicyAllowSingleSource &&
-				contextState.AllowedSourceGroupID != nil && *contextState.AllowedSourceGroupID == groupID
+			result.SourceAllowed = model.PolicyAllowsSource(contextState.PolicyMode, contextState.AllowedSourceGroupID, groupID)
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "成功", "data": result})

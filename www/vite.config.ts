@@ -75,6 +75,9 @@ export default defineConfig({
   server: {
     port: 9001, // 避免与 Windows NAT 保留端口冲突
     proxy: {
+      '/logo.png': 'http://localhost:9002',
+      '/logo-dark.png': 'http://localhost:9002',
+      '/favicon.ico': 'http://localhost:9002',
       '/api': {
         target: 'http://localhost:9002',
         changeOrigin: true,

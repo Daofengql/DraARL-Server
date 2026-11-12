@@ -14,7 +14,6 @@ import (
 	"draarl/internal/gormdb"
 	oplog "draarl/internal/log"
 	"draarl/pkg/cache"
-	"draarl/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -134,8 +133,9 @@ func resolveSystemInfoURLs(cfg *gormdb.SystemInfoConfig) *gormdb.SystemInfoConfi
 		return nil
 	}
 	out := *cfg
-	out.LogoURL = storage.ResolveAssetURL(cfg.LogoURL)
-	out.FaviconURL = storage.ResolveAssetURL(cfg.FaviconURL)
+	out.LogoURL = SiteLogoURL(cfg.LogoURL, false)
+	out.LogoDarkURL = SiteLogoURL(cfg.LogoDarkURL, true)
+	out.FaviconURL = SiteFaviconURL(cfg.FaviconURL)
 	return &out
 }
 
@@ -336,6 +336,7 @@ func (h *SiteConfigHandler) UpdateSystemInfoConfig(c *gin.Context) {
 	// 使系统信息配置缓存失效
 	if configCache := cache.GetConfigCache(); configCache != nil {
 		_ = configCache.InvalidateSystemInfoConfig(c.Request.Context())
+		_ = configCache.InvalidateCategory(c.Request.Context(), gormdb.CategorySystem)
 	}
 
 	go func() {
@@ -673,8 +674,12 @@ func (h *SiteConfigHandler) DeleteLogo(c *gin.Context) {
 		return
 	}
 
-	// 清空 Logo URL 配置（将值设置为空字符串）
-	if err := h.repo.WithContext(c.Request.Context()).Set("system.logo_url", "", "system", "站点Logo URL"); err != nil {
+	key, _, err := logoSetting(c.Query("theme"))
+	if err != nil {
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	if err := h.repo.WithContext(c.Request.Context()).Set(key, "", "system", "站点Logo URL"); err != nil {
 		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "删除Logo配置失败"})
 		return
 	}

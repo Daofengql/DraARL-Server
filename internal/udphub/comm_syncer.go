@@ -134,7 +134,7 @@ func (cs *CommSyncer) SyncToDatabase() {
 			status = 3 // 上传失败
 		}
 
-		// 录音时长按实际 Opus 帧数估算，避免大包/弱网场景下被墙钟时间严重低估。
+		// 与录制阈值使用同一份 Opus 实际音频时长，不计入网络等待。
 		durationMs := estimateSessionDurationMs(item.Session)
 		endTime := item.Session.StartTime.Add(time.Duration(durationMs) * time.Millisecond)
 

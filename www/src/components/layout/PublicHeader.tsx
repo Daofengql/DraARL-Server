@@ -5,6 +5,7 @@ import LightMode from '@mui/icons-material/LightMode'
 import MenuIcon from '@mui/icons-material/Menu'
 import { useNavigate, useLocation, Link as RouterLink } from 'react-router-dom'
 import { useConfig } from '../../contexts/ConfigContext'
+import { useSiteLogo } from '../../hooks/useSiteLogo'
 import { SITE_CONFIG } from '../../config/site'
 import { authService } from '../../services'
 import { useColorMode } from '../../contexts/ThemeContext'
@@ -46,7 +47,7 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
     }
   }, [])
 
-  const logoUrl = config?.systemInfo?.logo_url || ''
+  const logoUrl = useSiteLogo()
   const systemName = config?.systemInfo?.name || SITE_CONFIG.NAME
   const displayName = user?.nickname || user?.username || ''
 

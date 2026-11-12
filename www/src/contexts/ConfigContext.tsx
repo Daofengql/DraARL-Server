@@ -8,6 +8,8 @@ export interface PublicConfig {
     name: string
     nameshorthand: string
     logo_url: string
+    logo_dark_url?: string
+    favicon_url?: string
     language: string
   }
   registration: {
@@ -23,6 +25,8 @@ const DEFAULT_CONFIG: PublicConfig = {
     name: SITE_CONFIG.NAME,
     nameshorthand: SITE_CONFIG.SHORT_NAME,
     logo_url: '',
+    logo_dark_url: '',
+    favicon_url: '',
     language: 'zh',
   },
   registration: {
@@ -109,6 +113,18 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('config-updated', handleConfigUpdate)
     }
   }, [refresh])
+
+  useEffect(() => {
+    if (loading) return
+    let favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (!favicon) {
+      favicon = document.createElement('link')
+      favicon.rel = 'icon'
+      document.head.appendChild(favicon)
+    }
+    favicon.removeAttribute('type')
+    favicon.href = config.systemInfo.favicon_url || '/vite.svg'
+  }, [config.systemInfo.favicon_url, loading])
 
   return (
     <ConfigContext.Provider value={{ config, loading, refresh }}>

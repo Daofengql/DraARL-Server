@@ -45,13 +45,12 @@ type AudioSession struct {
 	LastPacketTime   time.Time     // 最后一个包的时间（用于判断会话结束）
 	Buffer           *bytes.Buffer // PCM 音频数据缓冲
 	PacketCount      int           // 收到的包数量
+	AudioSamples     int           // 实际 Opus 时长，以 48kHz 采样数累计（包括 2.5ms 帧）
 	TotalBytes       int           // 总字节数
 	mu               sync.Mutex
 }
 
 const (
-	// 当前链路已切到 60ms Opus 帧，这里统一用帧数来推导录音时长。
-	opusFrameDurationMs = 60
 	// 与主语音链路的 PTT 结束判定保持一致，避免录音会话被过早切碎。
 	commSessionGapThreshold = 600 * time.Millisecond
 )
@@ -116,13 +115,12 @@ func parseMergedFrames(data []byte) [][]byte {
 		frameLength := int(data[offset])<<8 | int(data[offset+1])
 
 		// 安全检查：帧长度必须合理
-		// Opus 帧通常不超过 1000 字节
-		if frameLength == 0 || frameLength > 1000 || offset+2+frameLength > len(data) {
+		if frameLength == 0 || frameLength > 1275 || offset+2+frameLength > len(data) {
 			// 不是合并帧格式，当作单帧处理
 			if offset == 0 {
 				return [][]byte{data}
 			}
-			break
+			return [][]byte{data}
 		}
 
 		// 提取帧数据
@@ -131,7 +129,7 @@ func parseMergedFrames(data []byte) [][]byte {
 	}
 
 	// 如果没有解析出任何帧，返回原始数据作为单帧
-	if len(frames) == 0 {
+	if len(frames) == 0 || offset != len(data) {
 		return [][]byte{data}
 	}
 
@@ -160,6 +158,16 @@ func (cb *CommBuffer) AppendPacket(
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	if cb.config == nil || !cb.config.Enabled {
+		return
+	}
+	subFrames := parseMergedFrames(pcmData)
+	validFrames := subFrames[:0]
+	for _, frame := range subFrames {
+		if opusPacketSamples(frame) > 0 {
+			validFrames = append(validFrames, frame)
+		}
+	}
+	if len(validFrames) == 0 {
 		return
 	}
 
@@ -191,12 +199,9 @@ func (cb *CommBuffer) AppendPacket(
 		cb.sessions[sessionKey] = session
 	}
 
-	// 解析合并帧格式，提取所有子帧
-	subFrames := parseMergedFrames(pcmData)
-
 	// 逐个写入子帧（带帧长度前缀：2字节 little-endian + Opus 数据）
 	session.mu.Lock()
-	for _, frame := range subFrames {
+	for _, frame := range validFrames {
 		if len(frame) > 65535 {
 			continue
 		}
@@ -208,6 +213,7 @@ func (cb *CommBuffer) AppendPacket(
 		// 写入 Opus 帧数据
 		session.Buffer.Write(frame)
 		session.PacketCount++
+		session.AudioSamples += opusPacketSamples(frame)
 		session.TotalBytes += len(frame) + 2 // 包含长度前缀
 	}
 	session.LastPacketTime = now
@@ -215,7 +221,7 @@ func (cb *CommBuffer) AppendPacket(
 
 	// 检查最大时长限制
 	if cb.config.MaxDurationSec > 0 {
-		elapsed := now.Sub(session.StartTime).Seconds()
+		elapsed := float64(session.AudioSamples) / 48000
 		if elapsed >= float64(cb.config.MaxDurationSec) {
 			cb.finalizeSession(session)
 			delete(cb.sessions, sessionKey)
@@ -231,7 +237,7 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 	durationMs := estimateSessionDurationMs(session)
 
 	// 检查最小时长阈值
-	if durationMs < cb.config.MinDurationMs {
+	if session.PacketCount == 0 || durationMs < cb.config.MinDurationMs {
 		return // 太短，丢弃
 	}
 
@@ -251,6 +257,7 @@ func (cb *CommBuffer) finalizeSession(session *AudioSession) {
 			LastPacketTime:   session.LastPacketTime,
 			Buffer:           bytes.NewBuffer(session.Buffer.Bytes()),
 			PacketCount:      session.PacketCount,
+			AudioSamples:     session.AudioSamples,
 			TotalBytes:       session.TotalBytes,
 		}
 		go cb.onSessionEnd(sessionCopy)
@@ -314,10 +321,14 @@ func (cb *CommBuffer) UpdateConfig(config *CommSettingsConfig) {
 		defer cb.mu.Unlock()
 		if config == nil {
 			cb.config = &CommSettingsConfig{}
+			clear(cb.sessions)
 			return
 		}
 		configCopy := *config
 		cb.config = &configCopy
+		if !config.Enabled {
+			clear(cb.sessions)
+		}
 	}
 }
 
@@ -325,11 +336,41 @@ func estimateSessionDurationMs(session *AudioSession) int {
 	if session == nil {
 		return 0
 	}
-	if session.PacketCount > 0 {
-		return session.PacketCount * opusFrameDurationMs
+	return session.AudioSamples / 48
+}
+
+// opusPacketSamples follows RFC 6716 section 3.1. Opus packet durations can
+// range from 2.5 to 120ms; device and browser encoders need not use 60ms.
+func opusPacketSamples(packet []byte) int {
+	if len(packet) == 0 {
+		return 0
 	}
-	if session.LastPacketTime.After(session.StartTime) {
-		return int(session.LastPacketTime.Sub(session.StartTime).Milliseconds())
+	toc := packet[0]
+	var samplesPerFrame int
+	switch {
+	case toc&0x80 != 0:
+		samplesPerFrame = 120 << ((toc >> 3) & 3)
+	case toc&0x60 == 0x60:
+		samplesPerFrame = 480 << ((toc >> 3) & 1)
+	default:
+		samplesPerFrame = 480 << ((toc >> 3) & 3)
+		if samplesPerFrame == 3840 {
+			samplesPerFrame = 2880
+		}
 	}
-	return 0
+	count := 1
+	switch toc & 3 {
+	case 1, 2:
+		count = 2
+	case 3:
+		if len(packet) < 2 {
+			return 0
+		}
+		count = int(packet[1] & 0x3f)
+	}
+	samples := samplesPerFrame * count
+	if count == 0 || samples > 5760 {
+		return 0
+	}
+	return samples
 }

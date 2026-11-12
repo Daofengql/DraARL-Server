@@ -1771,7 +1771,7 @@
   "info": {
     "description": "Generated from Gin registrations and request struct tags. Response payloads and protocol-specific authentication are documented in the usage manual; absent response schemas are intentional, not inferred guarantees.",
     "title": "DraARL HTTP API",
-    "version": "2.0.1-alpha9"
+    "version": "2.0.1-alpha10"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5003,6 +5003,16 @@
       "delete": {
         "description": "DeleteLogo 删除站点Logo（管理员）",
         "operationId": "delete_api_config_logo",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "theme",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "2XX": {
             "description": "Successful response; see handler-specific usage documentation"
@@ -10271,6 +10281,16 @@
       "post": {
         "description": "UploadLogo 上传站点配置 logo（权限由 RequireAdmin 中间件检查）",
         "operationId": "post_api_upload_logo",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "theme",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "2XX": {
             "description": "Successful response; see handler-specific usage documentation"
@@ -11055,6 +11075,54 @@
         "x-required-role": "admin"
       }
     },
+    "/favicon.ico": {
+      "get": {
+        "operationId": "get_favicon_ico",
+        "responses": {
+          "2XX": {
+            "description": "Successful response; see handler-specific usage documentation"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            },
+            "description": "Invalid input, authentication, permission or missing resource"
+          },
+          "5XX": {
+            "description": "Dependency failure or internal error"
+          }
+        },
+        "summary": "siteConfigHandler.ServeLogo",
+        "x-handler": "siteConfigHandler.ServeLogo"
+      },
+      "head": {
+        "operationId": "head_favicon_ico",
+        "responses": {
+          "2XX": {
+            "description": "Successful response; see handler-specific usage documentation"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            },
+            "description": "Invalid input, authentication, permission or missing resource"
+          },
+          "5XX": {
+            "description": "Dependency failure or internal error"
+          }
+        },
+        "summary": "siteConfigHandler.ServeLogo",
+        "x-handler": "siteConfigHandler.ServeLogo"
+      }
+    },
     "/files/{key}": {
       "get": {
         "description": "ServeLocalFile 提供 local 存储文件访问。\nGET /files/*key",
@@ -11114,6 +11182,102 @@
         },
         "summary": "",
         "x-handler": ""
+      }
+    },
+    "/logo-dark.png": {
+      "get": {
+        "operationId": "get_logo_dark_png",
+        "responses": {
+          "2XX": {
+            "description": "Successful response; see handler-specific usage documentation"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            },
+            "description": "Invalid input, authentication, permission or missing resource"
+          },
+          "5XX": {
+            "description": "Dependency failure or internal error"
+          }
+        },
+        "summary": "siteConfigHandler.ServeLogo",
+        "x-handler": "siteConfigHandler.ServeLogo"
+      },
+      "head": {
+        "operationId": "head_logo_dark_png",
+        "responses": {
+          "2XX": {
+            "description": "Successful response; see handler-specific usage documentation"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            },
+            "description": "Invalid input, authentication, permission or missing resource"
+          },
+          "5XX": {
+            "description": "Dependency failure or internal error"
+          }
+        },
+        "summary": "siteConfigHandler.ServeLogo",
+        "x-handler": "siteConfigHandler.ServeLogo"
+      }
+    },
+    "/logo.png": {
+      "get": {
+        "operationId": "get_logo_png",
+        "responses": {
+          "2XX": {
+            "description": "Successful response; see handler-specific usage documentation"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            },
+            "description": "Invalid input, authentication, permission or missing resource"
+          },
+          "5XX": {
+            "description": "Dependency failure or internal error"
+          }
+        },
+        "summary": "siteConfigHandler.ServeLogo",
+        "x-handler": "siteConfigHandler.ServeLogo"
+      },
+      "head": {
+        "operationId": "head_logo_png",
+        "responses": {
+          "2XX": {
+            "description": "Successful response; see handler-specific usage documentation"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            },
+            "description": "Invalid input, authentication, permission or missing resource"
+          },
+          "5XX": {
+            "description": "Dependency failure or internal error"
+          }
+        },
+        "summary": "siteConfigHandler.ServeLogo",
+        "x-handler": "siteConfigHandler.ServeLogo"
       }
     },
     "/metrics": {

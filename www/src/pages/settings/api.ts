@@ -64,17 +64,19 @@ export async function getAPRSLogs(): Promise<APRSLogEntry[]> {
   return response.code === 200 && response.data ? response.data : []
 }
 
-export async function uploadBrandResource(kind: BrandResourceKind, file: File): Promise<boolean> {
+export async function uploadBrandResource(kind: BrandResourceKind, file: File, theme: 'light' | 'dark' = 'light'): Promise<boolean> {
   const formData = new FormData()
   formData.append('file', file)
-  const response = await apiClient.post<BackendResponse<{ file_url: string }>>(`/api/upload/${kind}`, formData, {
+  const query = kind === 'logo' ? `?theme=${theme}` : ''
+  const response = await apiClient.post<BackendResponse<{ file_url: string }>>(`/api/upload/${kind}${query}`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
   return response.code === 200 && Boolean(response.data?.file_url)
 }
 
-export function deleteBrandResource(kind: BrandResourceKind) {
-  return apiClient.delete(`/api/config/${kind}`)
+export function deleteBrandResource(kind: BrandResourceKind, theme: 'light' | 'dark' = 'light') {
+  const query = kind === 'logo' ? `?theme=${theme}` : ''
+  return apiClient.delete(`/api/config/${kind}${query}`)
 }
 
 export async function getOperatorLogs(query: OperatorLogQuery): Promise<{ items: OperatorLog[]; total: number }> {

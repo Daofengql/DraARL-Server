@@ -7,6 +7,7 @@ export interface SystemInfoConfig {
   name: string
   nameshorthand: string
   logo_url: string
+  logo_dark_url: string
   favicon_url: string
   language: string
   icp: string
@@ -77,6 +78,7 @@ export const DEFAULT_SITE_CONFIGS: SiteConfigs = {
     name: '',
     nameshorthand: '',
     logo_url: '',
+    logo_dark_url: '',
     favicon_url: '',
     language: 'zh',
     icp: '',

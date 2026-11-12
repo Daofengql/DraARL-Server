@@ -20,6 +20,7 @@ import CheckCircle from '@mui/icons-material/CheckCircle'
 import ContentCopy from '@mui/icons-material/ContentCopy'
 import { authService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
+import { useSiteLogo } from '../../hooks/useSiteLogo'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { PublicPageLayout } from '../../components/layout'
 
@@ -77,7 +78,7 @@ export function RegisterPage() {
   const [countdown, setCountdown] = useState(0)
   const [emailVerified, setEmailVerified] = useState(false)
 
-  const logoUrl = config.systemInfo.logo_url
+  const logoUrl = useSiteLogo()
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
   const requireEmailVerification = config.registration?.require_email_verification !== false

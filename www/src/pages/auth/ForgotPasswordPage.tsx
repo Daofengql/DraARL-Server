@@ -18,6 +18,7 @@ import Visibility from '@mui/icons-material/Visibility'
 import VisibilityOff from '@mui/icons-material/VisibilityOff'
 import { captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
+import { useSiteLogo } from '../../hooks/useSiteLogo'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { PublicPageLayout } from '../../components/layout'
 
@@ -145,7 +146,7 @@ export function ForgotPasswordPage() {
     }
   }
 
-  const logoUrl = config.systemInfo.logo_url
+  const logoUrl = useSiteLogo()
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
 

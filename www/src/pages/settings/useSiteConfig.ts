@@ -10,7 +10,7 @@ import {
 } from './api'
 import { createDefaultSiteConfigs } from './types'
 import type { SiteMessage } from './types'
-import { validateAccessDiscovery, validateAPRS } from './validation'
+import { validateAccessDiscovery, validateAPRS, validateCommSettings } from './validation'
 
 export function useSiteConfig() {
   const defaults = createDefaultSiteConfigs()
@@ -93,9 +93,11 @@ export function useSiteConfig() {
     await runSave(() => saveAPRS(aprs), 'APRS配置保存成功', '保存APRS配置失败')
   }
 
-  const handleSaveCommSettings = () => runSave(
-    () => saveCommSettings(commSettings), '通信设置保存成功', '保存通信设置失败',
-  )
+  const handleSaveCommSettings = () => {
+    const error = validateCommSettings(commSettings)
+    if (error) return showMessage('error', error)
+    return runSave(() => saveCommSettings(commSettings), '通信设置保存成功', '保存通信设置失败')
+  }
   const handleSaveRegistration = () => runSave(
     () => saveRegistration(registration),
     '注册设置保存成功',

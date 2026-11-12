@@ -41,12 +41,13 @@ export function SystemInfoTab({
                 placeholder="例如：DraARL-Fujian"
               />
               <BrandResourceControl
-                kind="logo" value={config.logo_url} onChanged={reload} showMessage={showMessage}
-                onPreviewError={() => setConfig({ ...config, logo_url: '' })}
+                kind="logo" theme="light" value={config.logo_url} onChanged={reload} showMessage={showMessage}
+              />
+              <BrandResourceControl
+                kind="logo" theme="dark" value={config.logo_dark_url} onChanged={reload} showMessage={showMessage}
               />
               <BrandResourceControl
                 kind="favicon" value={config.favicon_url} onChanged={reload} showMessage={showMessage}
-                onPreviewError={() => setConfig({ ...config, favicon_url: '' })}
               />
               <TextField
                 label="语言" fullWidth value={config.language}

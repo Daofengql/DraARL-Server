@@ -83,7 +83,7 @@ func serveSiteLogo(c *gin.Context, ctx context.Context, reference string, open f
 		c.Status(http.StatusBadGateway)
 		return
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	const maxLogoBytes = 10 * 1024 * 1024
 	data, err := io.ReadAll(io.LimitReader(reader, maxLogoBytes+1))
 	if err != nil || len(data) > maxLogoBytes {
@@ -131,7 +131,7 @@ func openSiteLogo(ctx context.Context, reference string) (io.ReadCloser, error) 
 			return nil, err
 		}
 		if response.StatusCode != http.StatusOK {
-			response.Body.Close()
+			_ = response.Body.Close()
 			return nil, fmt.Errorf("logo origin returned HTTP %d", response.StatusCode)
 		}
 		return response.Body, nil

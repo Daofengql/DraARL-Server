@@ -91,6 +91,13 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/metrics", middleware.AuthMiddleware(), middleware.LoadUserInfo(), middleware.RequireAdmin(), prometheusMetrics)
 	// 本地存储文件服务
 	s.engine.GET("/files/*key", handler.ServeLocalFile)
+	siteConfigHandler := handler.NewSiteConfigHandler()
+	s.engine.GET("/logo.png", siteConfigHandler.ServeLogo)
+	s.engine.HEAD("/logo.png", siteConfigHandler.ServeLogo)
+	s.engine.GET("/logo-dark.png", siteConfigHandler.ServeLogo)
+	s.engine.HEAD("/logo-dark.png", siteConfigHandler.ServeLogo)
+	s.engine.GET("/favicon.ico", siteConfigHandler.ServeLogo)
+	s.engine.HEAD("/favicon.ico", siteConfigHandler.ServeLogo)
 
 	// API 路由
 	api := s.engine.Group("/api")

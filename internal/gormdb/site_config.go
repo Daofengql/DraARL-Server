@@ -174,6 +174,7 @@ type SystemInfoConfig struct {
 	Name          string `json:"name"`
 	NameShorthand string `json:"nameshorthand"`
 	LogoURL       string `json:"logo_url"`
+	LogoDarkURL   string `json:"logo_dark_url"`
 	FaviconURL    string `json:"favicon_url"`
 	Language      string `json:"language"`
 }
@@ -382,6 +383,8 @@ func (r *SiteConfigRepository) GetSystemInfoConfig() (*SystemInfoConfig, error) 
 			result.NameShorthand = config.Value
 		case "system.logo_url":
 			result.LogoURL = config.Value
+		case "system.logo_dark_url":
+			result.LogoDarkURL = config.Value
 		case "system.favicon_url":
 			result.FaviconURL = config.Value
 		case "system.language":
@@ -398,6 +401,7 @@ func (r *SiteConfigRepository) SetSystemInfoConfig(config SystemInfoConfig) erro
 		{Key: "system.name", Value: config.Name, Category: CategorySystem, Description: "站点名称"},
 		{Key: "system.nameshorthand", Value: config.NameShorthand, Category: CategorySystem, Description: "站点简称"},
 		{Key: "system.logo_url", Value: config.LogoURL, Category: CategorySystem, Description: "站点Logo URL"},
+		{Key: "system.logo_dark_url", Value: config.LogoDarkURL, Category: CategorySystem, Description: "暗色主题Logo"},
 		{Key: "system.favicon_url", Value: config.FaviconURL, Category: CategorySystem, Description: "站点Favicon URL"},
 		{Key: "system.language", Value: config.Language, Category: CategorySystem, Description: "站点语言"},
 	}

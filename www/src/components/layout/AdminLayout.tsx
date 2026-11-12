@@ -354,12 +354,6 @@ export function AdminLayout() {
                 '&:hover': { color: 'text.primary' },
               }}
             >
-              <Box
-                component="img"
-                src="//oss-fz.silverdragon.cn/loongapisources/picbed/penglong/2023/07/24/202307240118075832.png"
-                alt="备案图标"
-                sx={{ height: 21, width: 21 }}
-              />
               {icp}
             </Link>
           </>

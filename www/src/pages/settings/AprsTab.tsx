@@ -98,7 +98,7 @@ export function AprsTab({ value, config, setConfig, loading, onSave, showMessage
     <TabPanel value={value} index={2}>
       <Box sx={{ px: 2 }}>
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, alignItems: { xs: 'stretch', md: 'flex-start' } }}>
-          <Box sx={{ flex: { xs: '1 1 auto', md: '0 1 50%' } }}>
+          <Box sx={{ flex: { xs: '1 1 auto', md: '1 1 0' }, minWidth: 0 }}>
             <Card ref={configCardRef}>
               <CardContent>
                 <Typography component="h2" variant="h6" gutterBottom>APRS配置</Typography>
@@ -150,31 +150,29 @@ export function AprsTab({ value, config, setConfig, loading, onSave, showMessage
                     />
                   )} />
 
-                  <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 2, alignItems: 'start' }}>
                     <TextField
-                      label="经度" sx={{ width: { xs: '100%', sm: '150px' } }} type="number"
+                      label="经度" fullWidth type="number"
                       inputProps={{ step: 0.000001, min: -180, max: 180 }} value={config.longitude || ''}
                       onChange={(event) => setConfig({ ...config, longitude: parseFloat(event.target.value) || 0 })}
                       placeholder="0.000000" helperText="-180 到 180"
                       error={config.longitude < -180 || config.longitude > 180}
                     />
-                    <Separator>,</Separator>
                     <TextField
-                      label="纬度" sx={{ width: { xs: '100%', sm: '150px' } }} type="number"
+                      label="纬度" fullWidth type="number"
                       inputProps={{ step: 0.000001, min: -90, max: 90 }} value={config.latitude || ''}
                       onChange={(event) => setConfig({ ...config, latitude: parseFloat(event.target.value) || 0 })}
                       placeholder="0.000000" helperText="-90 到 90"
                       error={config.latitude < -90 || config.latitude > 90}
                     />
-                    <Separator>,</Separator>
                     <TextField
-                      label="海拔(m)" sx={{ width: { xs: '100%', sm: '120px' } }} value={config.altitude}
+                      label="海拔(m)" fullWidth value={config.altitude}
                       onChange={(event) => setConfig({ ...config, altitude: event.target.value })}
                       placeholder="000000" helperText=" "
                     />
                     <Button
                       variant="outlined" startIcon={<MyLocation />} onClick={handleGetLocation} disabled={locating}
-                      sx={{ minWidth: 'auto', whiteSpace: 'nowrap', mt: '6px' }}
+                      sx={{ minHeight: 40, whiteSpace: 'nowrap', justifySelf: 'start' }}
                     >
                       {locating ? '定位中...' : '获取位置'}
                     </Button>
@@ -189,7 +187,7 @@ export function AprsTab({ value, config, setConfig, loading, onSave, showMessage
             </Card>
           </Box>
 
-          <Box sx={{ flex: { xs: '1 1 auto', md: '0 1 50%' }, display: 'flex', minHeight: 0 }}>
+          <Box sx={{ flex: { xs: '1 1 auto', md: '1 1 0' }, display: 'flex', minHeight: 0, minWidth: 0 }}>
             <Card sx={{ width: '100%', display: 'flex', flexDirection: 'column', height: configCardHeight || 'auto', minHeight: 0 }}>
               <CardContent sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -201,7 +199,7 @@ export function AprsTab({ value, config, setConfig, loading, onSave, showMessage
                 </Box>
                 <Box sx={{
                   flexGrow: 1, bgcolor: '#1e1e1e', borderRadius: 1, p: 2, overflow: 'auto',
-                  fontFamily: 'monospace', fontSize: '0.875rem', minHeight: 0,
+                  fontFamily: 'monospace', fontSize: '0.875rem', minHeight: 0, overflowWrap: 'anywhere',
                 }}>
                   {logs.length === 0 ? (
                     <Typography variant="body2" sx={{ color: '#888' }}>暂无日志</Typography>
@@ -243,7 +241,7 @@ function Separator({ children }: { children: React.ReactNode }) {
 
 function AddressRow({ separator, left, right }: { separator: string; left: React.ReactNode; right: React.ReactNode }) {
   return (
-    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1 }}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) 20px 100px' }, alignItems: 'center', gap: 1 }}>
       {left}<Separator>{separator}</Separator>{right}
     </Box>
   )

@@ -17,6 +17,7 @@ import {
 } from '@mui/material'
 import { authService, ssoService, captchaService, emailAuthService } from '../../services'
 import { usePublicConfig } from '../../hooks/usePublicConfig'
+import { useSiteLogo } from '../../hooks/useSiteLogo'
 import { usePageTitle } from '../../hooks/usePageTitle'
 import { PublicPageLayout } from '../../components/layout'
 import { AntennaIcon } from '../../components/icons/BlueprintIcons'
@@ -239,7 +240,7 @@ export function LoginPage() {
     }
   }
 
-  const logoUrl = config.systemInfo.logo_url
+  const logoUrl = useSiteLogo()
   const siteName = config.systemInfo.name || 'DraARL'
   const siteShorthand = config.systemInfo.nameshorthand || 'DraARL'
 

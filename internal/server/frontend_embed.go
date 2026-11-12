@@ -13,7 +13,7 @@ import (
 	"draarl/internal/common"
 	"draarl/internal/config"
 	"draarl/internal/gormdb"
-	"draarl/pkg/storage"
+	"draarl/internal/handler"
 
 	"github.com/gin-gonic/gin"
 )
@@ -78,7 +78,7 @@ func setupFrontend(engine *gin.Engine, _ *config.Configuration) {
 					siteName = systemConfig.Name
 				}
 				if systemConfig.FaviconURL != "" {
-					faviconURL = storage.ResolveAssetURL(systemConfig.FaviconURL)
+					faviconURL = handler.SiteFaviconURL(systemConfig.FaviconURL)
 				}
 			}
 		}

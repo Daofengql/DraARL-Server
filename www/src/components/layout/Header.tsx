@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import { authService } from '../../services'
 import { SITE_CONFIG } from '../../config/site'
 import { useConfig } from '../../contexts/ConfigContext'
+import { useSiteLogo } from '../../hooks/useSiteLogo'
 
 interface HeaderProps {
   onMenuClick: () => void
@@ -21,7 +22,7 @@ export function Header({ onMenuClick }: HeaderProps) {
   const navigate = useNavigate()
   const [user, setUser] = useState(authService.getStoredUser())
   const { config: systemConfig } = useConfig()
-  const [logoError, setLogoError] = useState(false)
+  const [failedLogo, setFailedLogo] = useState('')
 
   // 监听用户信息变化
   useEffect(() => {
@@ -40,9 +41,9 @@ export function Header({ onMenuClick }: HeaderProps) {
   // 1. 如果logo_url存在且不为空，显示Logo
   // 2. 否则，如果system.name存在且不为空，显示系统名称
   // 3. 否则，显示默认标题
-  const logoUrl = systemConfig?.systemInfo?.logo_url || ''
+  const logoUrl = useSiteLogo()
   const systemName = systemConfig?.systemInfo?.name || ''
-  const displayTitle = logoUrl ? '' : (systemName || SITE_CONFIG.NAME)
+  const displayTitle = systemName || SITE_CONFIG.NAME
 
   return (
     <AppBar
@@ -73,7 +74,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             gap: 1.5,
           }}
         >
-          {logoUrl && !logoError ? (
+          {logoUrl && failedLogo !== logoUrl ? (
             <Box
               component="img"
               src={logoUrl}
@@ -85,7 +86,7 @@ export function Header({ onMenuClick }: HeaderProps) {
                 objectFit: 'contain',
                 cursor: 'pointer',
               }}
-              onError={() => setLogoError(true)}
+              onError={() => setFailedLogo(logoUrl)}
             />
           ) : (
             <Typography

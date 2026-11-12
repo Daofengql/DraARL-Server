@@ -596,6 +596,11 @@ func GetOperatorCertificate(c *gin.Context) {
 
 // UploadLogo 上传站点配置 logo（权限由 RequireAdmin 中间件检查）
 func UploadLogo(c *gin.Context) {
+	key, dark, err := logoSetting(c.Query("theme"))
+	if err != nil {
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
 	if !parseLimitedUploadForm(c, 10*1024*1024) {
 		return
 	}
@@ -672,15 +677,15 @@ func UploadLogo(c *gin.Context) {
 		return
 	}
 
-	// 生成访问URL（配置中存 object key，读时再解析）
-	fileURL := minio.GetFileURL(objectName)
-
 	// 更新站点配置中的 logo（存 object key，兼容旧绝对 URL）
 	siteConfigRepo := gormdb.GetSiteConfigRepo()
-	if err := siteConfigRepo.Set("system.logo_url", objectName, "system", "站点Logo URL"); err != nil {
+	if err := siteConfigRepo.WithContext(c.Request.Context()).Set(key, objectName, "system", "站点Logo URL"); err != nil {
 		log.Printf("更新Logo配置失败: %v", err)
-		// 配置更新失败不影响文件上传
+		_ = deleteStoredObjectWithIndependentContext(objectName, storage.Delete)
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "保存Logo配置失败"})
+		return
 	}
+	fileURL := SiteLogoURL(objectName, dark)
 
 	// 使系统信息配置缓存和分类缓存失效
 	if configCache := cache.GetConfigCache(); configCache != nil {
@@ -770,13 +775,15 @@ func UploadFavicon(c *gin.Context) {
 	}
 
 	// 生成访问URL（配置中存 object key，读时再解析）
-	fileURL := minio.GetFileURL(objectName)
+	fileURL := SiteFaviconURL(objectName)
 
 	// 更新站点配置中的 favicon（存 object key，兼容旧绝对 URL）
 	siteConfigRepo := gormdb.GetSiteConfigRepo()
-	if err := siteConfigRepo.Set("system.favicon_url", objectName, "system", "站点Favicon URL"); err != nil {
+	if err := siteConfigRepo.WithContext(c.Request.Context()).Set("system.favicon_url", objectName, "system", "站点Favicon URL"); err != nil {
 		log.Printf("更新Favicon配置失败: %v", err)
-		// 配置更新失败不影响文件上传
+		_ = deleteStoredObjectWithIndependentContext(objectName, storage.Delete)
+		writeErrorResponse(c, http.StatusInternalServerError, gin.H{"code": 500, "message": "保存Favicon配置失败"})
+		return
 	}
 
 	// 使系统信息配置缓存和分类缓存失效

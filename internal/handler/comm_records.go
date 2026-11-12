@@ -579,6 +579,10 @@ func UpdateCommSettings(c *gin.Context) {
 		})
 		return
 	}
+	if req.MaxDurationSec > 0 && req.MinDurationMs > 0 && (req.MinDurationMs-1)/1000+1 > req.MaxDurationSec {
+		writeErrorResponse(c, http.StatusBadRequest, gin.H{"code": 400, "message": "最小录制阈值不能超过最大录制时长"})
+		return
+	}
 	if req.BatchUploadSec < 1 || req.BatchUploadSec > 300 {
 		writeErrorResponse(c, http.StatusBadRequest, gin.H{
 			"code":    400,
@@ -597,7 +601,7 @@ func UpdateCommSettings(c *gin.Context) {
 		BatchUploadSec: req.BatchUploadSec,
 	}
 
-	if err := repo.SetCommSettingsConfig(settings); err != nil {
+	if err := repo.WithContext(c.Request.Context()).SetCommSettingsConfig(settings); err != nil {
 		writeErrorResponse(c, http.StatusInternalServerError, gin.H{
 			"code":    500,
 			"message": "保存失败",
@@ -607,7 +611,7 @@ func UpdateCommSettings(c *gin.Context) {
 
 	// 使通信设置配置缓存失效
 	if configCache := cache.GetConfigCache(); configCache != nil {
-		_ = configCache.InvalidateCategory(c.Request.Context(), "comm")
+		_ = configCache.InvalidateCategory(c.Request.Context(), gormdb.CategoryCommConfig)
 	}
 
 	// 重新加载录制器配置

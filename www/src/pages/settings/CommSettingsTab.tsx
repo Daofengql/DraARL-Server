@@ -28,7 +28,7 @@ export function CommSettingsTab({ value, config, setConfig, loading, onSave }: C
                 <PhoneInTalk color="primary" fontSize="small" />音频记录
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                开启后将自动记录每次通信的音频数据到MinIO
+                开启后将自动记录每次通信的音频数据到配置的存储服务
               </Typography>
               <FormControlLabel
                 control={<Switch
@@ -40,29 +40,28 @@ export function CommSettingsTab({ value, config, setConfig, loading, onSave }: C
               />
             </Box>
             <Divider />
-            <Divider />
             <TextField
               label="数据保留天数" type="number" fullWidth value={config.retention_days}
-              onChange={(event) => setConfig({ ...config, retention_days: parseInt(event.target.value) || 0 })}
+              onChange={(event) => setConfig({ ...config, retention_days: Number(event.target.value) })}
               helperText="超过此天数的记录将被自动删除" inputProps={{ min: 1, max: 365 }}
               disabled={!config.enabled}
             />
             <TextField
               label="最小录制阈值（毫秒）" type="number" fullWidth value={config.min_duration_ms}
-              onChange={(event) => setConfig({ ...config, min_duration_ms: parseInt(event.target.value) || 0 })}
-              helperText="少于此时长的音频不会上传到MinIO" inputProps={{ min: 0, step: 100 }}
+              onChange={(event) => setConfig({ ...config, min_duration_ms: Number(event.target.value) })}
+              helperText="按实际音频时长判断，少于此值不保存，等于此值会保存；0 表示不过滤" inputProps={{ min: 0, step: 1 }}
               disabled={!config.enabled}
             />
             <TextField
               label="最大录制时长（秒）" type="number" fullWidth value={config.max_duration_sec}
-              onChange={(event) => setConfig({ ...config, max_duration_sec: parseInt(event.target.value) || 0 })}
-              helperText="0表示不限制，通信超过此时长将自动断开" inputProps={{ min: 0 }}
+              onChange={(event) => setConfig({ ...config, max_duration_sec: Number(event.target.value) })}
+              helperText="0 表示不限制，达到此音频时长后分段保存，通话继续" inputProps={{ min: 0 }}
               disabled={!config.enabled}
             />
             <TextField
               label="批量上传间隔（秒）" type="number" fullWidth value={config.batch_upload_sec}
-              onChange={(event) => setConfig({ ...config, batch_upload_sec: parseInt(event.target.value) || 10 })}
-              helperText="音频数据批量上传到MinIO的间隔时间" inputProps={{ min: 1, max: 300 }}
+              onChange={(event) => setConfig({ ...config, batch_upload_sec: Number(event.target.value) })}
+              helperText="音频数据批量上传到存储服务的间隔时间" inputProps={{ min: 1, max: 300 }}
               disabled={!config.enabled}
             />
           </Box>

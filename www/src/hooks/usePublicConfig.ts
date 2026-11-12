@@ -6,6 +6,8 @@ export interface PublicConfig {
     name: string
     nameshorthand: string
     logo_url: string
+    logo_dark_url?: string
+    favicon_url?: string
     language: string
   }
   registration: {

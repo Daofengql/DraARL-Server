@@ -140,6 +140,7 @@ func (d *WSDevice) SetInterconnectSession(sessionID, sessionEpoch uint64) {
 type writeRequest struct {
 	messageType int
 	payload     *sharedWritePayload
+	enqueuedAt  time.Time
 }
 
 type sharedWritePayload struct {
@@ -296,6 +297,18 @@ func isVoiceWriteRequest(req *writeRequest) bool {
 		req.payload.data[48] == protocol.DraARLTypeOpus16K
 }
 
+// dropStaleVoice discards a voice frame that waited longer than the age limit
+// and releases its payload. Control frames and freshly queued voice are kept.
+func dropStaleVoice(req *writeRequest) bool {
+	if !isVoiceWriteRequest(req) || req.enqueuedAt.IsZero() || time.Since(req.enqueuedAt) <= wsMaxVoiceFrameAge {
+		return false
+	}
+	req.payload.release()
+	wsWritesStale.Add(1)
+	wsWritesDrained.Add(1)
+	return true
+}
+
 var (
 	wsFramesCopied       atomic.Int64
 	wsBytesCopied        atomic.Int64
@@ -303,6 +316,7 @@ var (
 	wsWritesDropped      atomic.Int64
 	wsWritesDrained      atomic.Int64
 	wsWritesEvicted      atomic.Int64
+	wsWritesStale        atomic.Int64
 	wsFanoutCandidates   atomic.Int64
 	wsFanoutDeduplicated atomic.Int64
 	wsFanoutSent         atomic.Int64
@@ -330,6 +344,11 @@ func (p *sharedWritePayload) release() {
 }
 
 const writeChSize = 64 // 写通道缓冲大小，约 4 秒的音频帧 (63ms * 64 ≈ 4s)
+
+// wsMaxVoiceFrameAge bounds how long a voice frame may sit in the write queue
+// before the writer discards it. It matches the UDP fanout age limit so a slow
+// browser plays silence instead of several seconds of stale audio.
+const wsMaxVoiceFrameAge = 500 * time.Millisecond
 
 const (
 	wsVoiceRatePerSecond = 150.0
@@ -559,6 +578,11 @@ func (d *WSDevice) writerLoop(writeCh *writeQueue, closeCh <-chan struct{}) {
 		if req == nil || req.payload == nil {
 			continue
 		}
+		// 语音帧排队超过年龄上限直接丢弃，与 UDP 转发的 500ms 限制对齐；
+		// 控制帧没有年龄限制，慢客户端也不能因此丢掉鉴权与路由更新。
+		if dropStaleVoice(req) {
+			continue
+		}
 		// 【写超时】慢/死对端写缓冲打满时不再无限阻塞 writer
 		if err := d.Conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
 			req.payload.release()
@@ -630,7 +654,7 @@ func (d *WSDevice) AsyncWriteBlocking(messageType int, data []byte, timeout time
 		return false
 	}
 	payload.retain()
-	if queue.pushWait(&writeRequest{messageType: messageType, payload: payload}, timeout, stop) {
+	if queue.pushWait(&writeRequest{messageType: messageType, payload: payload, enqueuedAt: time.Now()}, timeout, stop) {
 		wsWritesQueued.Add(1)
 		return true
 	}
@@ -648,7 +672,7 @@ func (d *WSDevice) asyncWriteShared(messageType int, payload *sharedWritePayload
 		return false
 	}
 	payload.retain()
-	request := &writeRequest{messageType: messageType, payload: payload}
+	request := &writeRequest{messageType: messageType, payload: payload, enqueuedAt: time.Now()}
 	accepted, evicted := queue.tryPush(request, isVoiceWriteRequest(request))
 	if accepted {
 		wsWritesQueued.Add(1)
@@ -673,6 +697,7 @@ func getWSDeliveryStats() map[string]int64 {
 		"writes_queued":       queued,
 		"writes_dropped":      wsWritesDropped.Load(),
 		"writes_evicted":      wsWritesEvicted.Load(),
+		"writes_stale":        wsWritesStale.Load(),
 		"writes_drained":      drained,
 		"writes_pending":      queued - drained,
 		"fanout_candidates":   wsFanoutCandidates.Load(),

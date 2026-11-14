@@ -47,6 +47,47 @@ func TestVoiceQueueEvictsOldestVoiceAndKeepsControls(t *testing.T) {
 	}
 }
 
+func TestVoiceQueueDropsStaleVoiceAndKeepsStaleControl(t *testing.T) {
+	wsWritesStale.Store(0)
+	wsWritesDrained.Store(0)
+	device := &WSDevice{writeCh: newWriteQueue(4)}
+	stale := time.Now().Add(-wsMaxVoiceFrameAge - time.Second)
+	fresh := time.Now()
+	for _, request := range []*writeRequest{
+		{messageType: websocket.BinaryMessage, payload: newSharedWritePayload(testVoiceFrame(1)), enqueuedAt: stale},
+		{messageType: websocket.TextMessage, payload: newSharedWritePayload([]byte("control")), enqueuedAt: stale},
+		{messageType: websocket.BinaryMessage, payload: newSharedWritePayload(testVoiceFrame(2)), enqueuedAt: fresh},
+	} {
+		if accepted, _ := device.writeCh.tryPush(request, false); !accepted {
+			t.Fatal("failed to queue test request")
+		}
+	}
+
+	dropped, ok := device.writeCh.pop()
+	if !ok || !isVoiceWriteRequest(dropped) {
+		t.Fatal("expected the stale voice frame first")
+	}
+	if !dropStaleVoice(dropped) {
+		t.Fatal("stale voice frame was not discarded")
+	}
+	control, ok := device.writeCh.pop()
+	if !ok || dropStaleVoice(control) || string(control.payload.data) != "control" {
+		t.Fatal("stale control frame must be kept")
+	}
+	control.payload.release()
+	latest, ok := device.writeCh.pop()
+	if !ok || dropStaleVoice(latest) || latest.payload.data[len(latest.payload.data)-1] != 2 {
+		t.Fatal("fresh voice frame must be kept")
+	}
+	latest.payload.release()
+	if wsWritesStale.Load() != 1 {
+		t.Fatalf("writes_stale=%d, want 1", wsWritesStale.Load())
+	}
+	if dropped.payload.refs.Load() != 0 || dropped.payload.data != nil {
+		t.Fatal("stale payload was not released")
+	}
+}
+
 func TestVoiceQueueDoesNotEvictControlFrames(t *testing.T) {
 	device := &WSDevice{writeCh: newWriteQueue(2)}
 	if !device.AsyncWrite(2, []byte("control-1")) || !device.AsyncWrite(2, []byte("control-2")) {

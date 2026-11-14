@@ -30,11 +30,16 @@ npm run audit
 `VITE_APP_VERSION` 可在发布构建时注入；根目录 `build.sh`、`build.bat` 和 Release
 workflow 会设置它并用 `embed` build tag 将产物嵌入 Go 二进制。
 
+顶部“文档”导航直接打开 GitHub Pages，`/docs` 作为旧入口兼容跳转。正式正文发布在 GitHub Pages。默认地址为
+`https://daofengql.github.io/DraARL-Server/`，私有部署可在构建时通过
+`VITE_DOCS_URL` 覆盖；应用内仍保留当前实例的下载中心，避免把完整 Markdown 文档
+重复打进前端和服务端二进制。
+
 ## 页面结构
 
 | 区域 | 主要路径 | 说明 |
 |---|---|---|
-| 公共页面 | `/`、`/docs`、`/forum`、`/relays`、`/tools`、`/about` | 无需登录 |
+| 公共页面 | `/`、`/docs`、`/downloads`、`/forum`、`/relays`、`/tools`、`/about` | 无需登录；`/docs` 会跳转到正式在线文档 |
 | 认证 | `/login`、`/register`、`/forgot-password`、`/sso/callback` | 密码、邮箱验证码和 SSO |
 | 用户控制台 | `/dashboard`、`/profile`、`/devices`、`/groups` | 登录后使用，设备/群组要求审核通过 |
 | 实时通信 | `/radio` | WebSocket 幽灵 Session、单发多收、PTT、文本与频道历史 |

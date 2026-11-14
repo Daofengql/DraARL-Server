@@ -1,133 +1,105 @@
-﻿# DraARL 文档站
+# DraARL Server 文档
 
-当前文档随 DraARL Server 源码发布。版本事实以仓库根目录
-`VERSION` 为准；API 路由以 `internal/server/server.go` 为准，配置默认值以
-`config.yaml.example` 和 `internal/config/config.go` 为准。
+<div class="docs-hero">
+  <div>
+    <p class="docs-kicker">DRAARL SERVER / DOCUMENTATION</p>
+    <h1>从部署到设备接入，所有资料集中在这里。</h1>
+    <p class="docs-lead">这套文档面向部署人员、平台管理员、普通用户、设备开发者和客户端开发者。内容随 DraARL Server 源码发布，行为事实以当前代码、配置模板和根目录 <code>VERSION</code> 为准。</p>
+    <div class="docs-actions">
+      <a class="md-button md-button--primary" href="usage/01-部署与配置/">开始部署</a>
+      <a class="md-button" href="api/">查看 API</a>
+    </div>
+  </div>
+  <div class="docs-hero-meta">
+    <span class="docs-meta-label">DOCUMENT STATUS</span>
+    <strong>持续维护</strong>
+    <span>GitHub Pages · MkDocs Material</span>
+    <span>支持全文搜索、章节导航、代码复制和移动端阅读</span>
+  </div>
+</div>
 
-这是 DraARL Server 的文档入口，包含：
+## 按场景进入
 
-- 架构设计与数据字典
-- 使用与说明文档（按功能拆分）
-- DraARLv1 协议文档
-- API 对接文档（按模块拆分）
+<div class="docs-card-grid">
+  <a class="docs-card" href="usage/01-部署与配置/">
+    <span class="docs-card-index">01</span>
+    <strong>新部署或升级</strong>
+    <span>环境要求、配置、Docker Compose、手动部署和升级检查。</span>
+    <small>部署与配置 →</small>
+  </a>
+  <a class="docs-card" href="usage/06-管理员后台/">
+    <span class="docs-card-index">02</span>
+    <strong>平台管理员</strong>
+    <span>用户审核、设备、群组、站点配置、资源和运维入口。</span>
+    <small>管理与运维 →</small>
+  </a>
+  <a class="docs-card" href="usage/04-设备与群组/">
+    <span class="docs-card-index">03</span>
+    <strong>普通用户</strong>
+    <span>账号、用户控制台、设备绑定、群组和在线收发。</span>
+    <small>使用说明 →</small>
+  </a>
+  <a class="docs-card" href="usage/07-设备接入与API快速对接/">
+    <span class="docs-card-index">04</span>
+    <strong>设备或客户端开发者</strong>
+    <span>接入流程、认证、配置同步、API 示例和兼容边界。</span>
+    <small>设备接入 →</small>
+  </a>
+  <a class="docs-card" href="Protocol/">
+    <span class="docs-card-index">05</span>
+    <strong>协议实现者</strong>
+    <span>DraARLv1 UDP 报文、字段定义、设备型号和状态码。</span>
+    <small>协议文档 →</small>
+  </a>
+  <a class="docs-card" href="架构设计/">
+    <span class="docs-card-index">06</span>
+    <strong>架构与性能</strong>
+    <span>系统模块、数据流、容量测试、数据库和前端工程约定。</span>
+    <small>架构与性能 →</small>
+  </a>
+</div>
 
 ## 推荐阅读顺序
 
 ### 新部署或运维人员
 
-1. 先读 [架构设计](架构设计.md) 了解系统整体架构
-2. 再读 [部署与配置](usage/01-部署与配置.md) 进行部署
-3. 参考 [运维与排障](usage/08-运维与排障.md) 解决常见问题
+1. [架构设计](架构设计.md) 了解模块、数据流和部署形态。
+2. [部署与配置](usage/01-部署与配置.md) 完成服务启动和配置检查。
+3. [运维与排障](usage/08-运维与排障.md) 处理常见故障和运行检查。
+4. [数据库迁移](database-migrations.md) 执行版本升级和回退。
 
 ### 平台管理员
 
-1. 阅读 [管理员后台](usage/06-管理员后台.md) 了解管理功能
-2. 参考 [数据字典](数据字典.md) 了解数据库结构
-3. 阅读 [运维与排障](usage/08-运维与排障.md) 处理运维问题
-
-### 普通用户
-
-1. 阅读 [账号、登录与权限](usage/02-账号登录与权限.md) 了解账号系统
-2. 阅读 [用户控制台](usage/03-用户控制台.md) 了解个人功能
-3. 阅读 [设备与群组](usage/04-设备与群组.md) 管理设备和群组
-4. 阅读 [在线收发与通信记录](usage/05-在线收发与通信记录.md) 使用实时通信
+1. [管理员后台](usage/06-管理员后台.md) 了解管理功能和权限边界。
+2. [数据字典](数据字典.md) 查询数据库表、字段和索引。
+3. [资源上传与站点配置](api/07-资源上传与站点配置.md) 配置公开资源、SMTP、APRS 和存储。
 
 ### 设备或客户端开发者
 
-1. 阅读 [设备接入与 API 快速对接](usage/07-设备接入与API快速对接.md) 了解接入方式
-2. 查阅 [DraARLv1 协议文档](Protocol.md) 了解协议细节
-3. 参考 [WebSocket协议详解](api/10-WebSocket协议详解.md) 了解浏览器接入
-4. 查阅 [API 文档](api/README.md) 了解接口细节
-5. 参考 [错误码与状态码](api/11-错误码与状态码.md) 处理错误情况
+1. [设备接入与 API 快速对接](usage/07-设备接入与API快速对接.md) 了解接入流程。
+2. [DraARLv1 协议](Protocol.md) 实现 UDP 报文和设备认证。
+3. [API 文档总览](api/README.md) 查阅 HTTP API、权限和错误处理。
+4. [WebSocket 协议](api/10-WebSocket协议详解.md) 接入浏览器幽灵设备和实时通信。
 
-### 固件开发者
+## 文档约定
 
-1. 阅读 [固件与OTA升级](usage/09-固件与OTA升级.md) 了解固件管理
-2. 查阅 [DraARLv1 协议文档](Protocol.md) 了解协议细节
-3. 参考 [APRS与位置服务](usage/10-APRS与位置服务.md) 了解位置上报
+- 版本事实以仓库根目录 `VERSION` 为准。
+- 配置默认值以 `config.yaml.example` 和 `internal/config/config.go` 为准。
+- API 路由以 `internal/server/server.go` 和对应 handler 为准。
+- `JWT` 表示需要 `Authorization: Bearer <access_token>`；`Admin` 表示管理员权限。
+- 历史升级资料会明确标记；运行行为以当前代码和配置模板为准。
 
-## 文档目录
-
-### 架构与设计
-
-| 文档 | 说明 |
-|------|------|
-| [架构设计](架构设计.md) | 系统整体架构、模块划分、数据流 |
-| [数据字典](数据字典.md) | 完整数据库表结构、字段定义、索引信息 |
-| [协议文档](Protocol.md) | DraARLv1 协议规范、报文格式、认证流程 |
-| [UDP 转发压力测试](UDP单机转发压力测试.md) | 单机 UDP fan-out 实测、瓶颈分析和容量建议 |
-| [幽灵多收与消息查询性能验证](幽灵多收与消息查询性能验证.md) | 多收路由、接收放大模型与百万行消息索引对比 |
-
-### 使用与说明文档
-
-| 文档 | 说明 |
-|------|------|
-| [总览](usage/README.md) | 文档总览和系统定位 |
-| [部署与配置](usage/01-部署与配置.md) | 环境要求、配置文件、部署方式 |
-| [账号、登录与权限](usage/02-账号登录与权限.md) | 注册、登录、Token、SSO |
-| [用户控制台](usage/03-用户控制台.md) | 仪表盘、个人中心、设备密码 |
-| [设备与群组](usage/04-设备与群组.md) | 设备绑定、配置同步、群组管理 |
-| [在线收发与通信记录](usage/05-在线收发与通信记录.md) | WebSocket通信、通信录制、通联日志 |
-| [管理员后台](usage/06-管理员后台.md) | 用户管理、设备管理、站点配置 |
-| [设备接入与API快速对接](usage/07-设备接入与API快速对接.md) | 设备接入指南、API示例 |
-| [运维与排障](usage/08-运维与排障.md) | 常见问题、检查清单、运维建议 |
-| [固件与OTA升级](usage/09-固件与OTA升级.md) | 固件管理、OTA流程、版本规范 |
-| [APRS与位置服务](usage/10-APRS与位置服务.md) | APRS配置、位置上报、地图展示 |
-| [v1.1.5-alpha1升级说明](usage/11-v1.1.5-alpha1升级说明.md) | 历史版本迁移资料与当前中心互联升级边界 |
-| [v2.0.0-alpha3 幽灵多端与频道消息升级说明](usage/12-幽灵多端与频道消息升级说明.md) | 历史升级资料：数据库迁移、客户端门槛、验收与回滚 |
-
-### API 文档
-
-| 文档 | 说明 |
-|------|------|
-| [总览](api/README.md) | API 文档总览 |
-| [约定与鉴权](api/00-约定与鉴权.md) | 通用约定、认证方式、限流策略 |
-| [认证与SSO](api/01-认证与SSO.md) | 登录、注册、Token刷新、SSO |
-| [用户与资料](api/02-用户与资料.md) | 用户信息、密码管理、头像上传 |
-| [设备与配置](api/03-设备与配置.md) | 设备绑定、配置同步、固件管理 |
-| [群组与互联](api/04-群组与互联.md) | 群组CRUD、虚拟互联组 |
-| [无线电与实时通信](api/05-无线电与实时通信.md) | WebSocket、在线收发 |
-| [通联记录与日志](api/06-通联记录与日志.md) | 通信记录、通联日志、电台预设 |
-| [资源上传与站点配置](api/07-资源上传与站点配置.md) | 文件上传、操作证、站点配置 |
-| [运维与管理接口](api/08-运维与管理接口.md) | 审批、中继台、操作日志、缓存 |
-| [完整路由索引](api/09-完整路由索引.md) | 所有API路径汇总表 |
-| [WebSocket协议详解](api/10-WebSocket协议详解.md) | WebSocket认证、消息格式、语音通信 |
-| [错误码与状态码](api/11-错误码与状态码.md) | HTTP状态码、业务错误码、协议状态码 |
-
-## 本地预览
+## 本地预览与发布
 
 ```bash
 pip install -r docs/requirements.txt
 mkdocs serve
 ```
 
-启动后访问：`http://127.0.0.1:8000`
-
-## 构建静态站点
+构建静态站点：
 
 ```bash
-mkdocs build
+mkdocs build --strict
 ```
 
-构建输出目录：`site/`
-
-## 自动发布
-
-- GitHub Actions 工作流：`.github/workflows/docs-pages.yml`
-- 触发条件：`master` 分支文档变更、手动触发，或 `Release` 工作流成功完成后自动触发
-- 结果：自动构建并发布到 GitHub Pages
-- 线上地址：[https://daofengql.github.io/DraARL-Server/](https://daofengql.github.io/DraARL-Server/)
-
-GitHub Pages 使用 GitHub Actions 作为发布源，不再需要 EdgeOne 的 token 或项目变量。
-
-## 快速链接
-
-| 场景 | 入口文档 |
-|------|----------|
-| 快速部署 | [部署与配置](usage/01-部署与配置.md) |
-| 了解协议 | [协议文档](Protocol.md) |
-| 设备接入 | [设备接入与API快速对接](usage/07-设备接入与API快速对接.md) |
-| API对接 | [API总览](api/README.md) |
-| 问题排查 | [运维与排障](usage/08-运维与排障.md) |
-| 数据库设计 | [数据字典](数据字典.md) |
-| 系统架构 | [架构设计](架构设计.md) |
+GitHub Actions 工作流位于 `.github/workflows/docs-pages.yml`，会在 `master` 分支文档变更、手动触发或 Release 工作流成功后构建并发布到 [GitHub Pages](https://daofengql.github.io/DraARL-Server/)。

@@ -198,4 +198,19 @@ func TestAudioConfigsAreSupportedByESP32Profiles(t *testing.T) {
 	if _, ok := noRadioConfigs["rx_freq"]; ok {
 		t.Fatalf("expected RF config to remain filtered for no-radio ESP32 profile, got %#v", noRadioConfigs)
 	}
+
+	for _, model := range []byte{protocol.DraARLDevModelBox32ANA, protocol.DraARLDevModelBox32MIX} {
+		filtered := filterConfigsForDevice(&models.Device{DevModel: model}, configs)
+		if len(filtered) != 5 || filtered[ConfigKeyADCGainDB] != "21" ||
+			filtered[ConfigKeySQLActiveHigh] != "1" || filtered[ConfigKeyPTTActiveHigh] != "1" {
+			t.Fatalf("expected Box32 analog audio and polarity configs for model %d, got %#v", model, filtered)
+		}
+		if _, ok := filtered["rx_freq"]; ok {
+			t.Fatalf("model %d received BoxV1 SA818 parameters", model)
+		}
+	}
+	box32DigConfigs := filterConfigsForDevice(&models.Device{DevModel: protocol.DraARLDevModelBox32DIG}, configs)
+	if len(box32DigConfigs) != 0 {
+		t.Fatalf("Box32-DIG parameters must wait for MMDVM support, got %#v", box32DigConfigs)
+	}
 }

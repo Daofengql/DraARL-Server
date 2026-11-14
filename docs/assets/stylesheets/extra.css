@@ -1,22 +1,217 @@
-/* 把右侧目录挪到左侧 */
-.md-sidebar--primary {
-  display: none !important;
+:root {
+  --docs-line: #d6e1e8;
+  --docs-ink: #173047;
+  --docs-muted: #536b7d;
+  --docs-accent: #006b82;
+  --docs-orange: #a34b00;
+  --docs-panel: #ffffff;
 }
 
-.md-sidebar--secondary {
-  order: -1 !important;
-  margin-left: 0 !important;
-  margin-right: auto !important;
+[data-md-color-scheme="slate"] {
+  --docs-line: #334b5d;
+  --docs-ink: #eef4f7;
+  --docs-muted: #a8bac6;
+  --docs-accent: #72c8df;
+  --docs-orange: #ffb260;
+  --docs-panel: #101f2e;
 }
 
-.md-sidebar--secondary .md-sidebar__scrollwrap {
-  border-right: 1px solid rgba(0,0,0,0.05);
-  border-left: none;
+.md-grid {
+  max-width: 1440px;
 }
 
-/* 移动端隐藏 */
-@media screen and (max-width: 61.9375em) {
-  .md-sidebar--secondary {
-    display: none !important;
+.md-main__inner {
+  margin-top: 1.25rem;
+}
+
+.md-content {
+  min-width: 0;
+}
+
+.md-content__inner {
+  max-width: 1020px;
+  margin: 0 auto;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  color: var(--docs-ink);
+  letter-spacing: -0.025em;
+}
+
+.md-typeset h1 {
+  font-weight: 700;
+}
+
+.md-typeset a {
+  text-underline-offset: 0.18em;
+}
+
+.md-typeset code {
+  border: 1px solid var(--docs-line);
+}
+
+.md-typeset table:not([class]) {
+  display: table;
+  width: 100%;
+  border: 1px solid var(--docs-line);
+  overflow: hidden;
+}
+
+.md-typeset table:not([class]) th {
+  background: color-mix(in srgb, var(--docs-accent) 7%, transparent);
+}
+
+.md-typeset table:not([class]) td,
+.md-typeset table:not([class]) th {
+  border-color: var(--docs-line);
+}
+
+.docs-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(250px, 0.7fr);
+  gap: 3rem;
+  align-items: stretch;
+  margin: 0 0 3.5rem;
+  padding: 2rem 0 3rem;
+  border-bottom: 1px solid var(--docs-line);
+}
+
+.docs-kicker {
+  margin: 0 0 1rem;
+  color: var(--docs-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.docs-hero h1 {
+  max-width: 15ch;
+  margin: 0 0 1.25rem;
+  font-size: clamp(2.1rem, 5vw, 3.8rem);
+  line-height: 1.12;
+}
+
+.docs-lead {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--docs-muted);
+  font-size: 1rem;
+  line-height: 1.9;
+}
+
+.docs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.docs-hero-meta {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 190px;
+  padding: 1.5rem;
+  border: 1px solid var(--docs-line);
+  background: var(--docs-panel);
+  color: var(--docs-muted);
+}
+
+.docs-hero-meta strong {
+  color: var(--docs-ink);
+  font-size: 1.5rem;
+}
+
+.docs-meta-label {
+  color: var(--docs-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.docs-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0 3.5rem;
+}
+
+.docs-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 190px;
+  gap: 0.7rem;
+  padding: 1.25rem;
+  border: 1px solid var(--docs-line);
+  color: inherit !important;
+  text-decoration: none !important;
+  transition: border-color 150ms, background-color 150ms, transform 150ms;
+}
+
+.docs-card:hover,
+.docs-card:focus-visible {
+  border-color: var(--docs-accent);
+  background: color-mix(in srgb, var(--docs-accent) 6%, transparent);
+  transform: translateY(-2px);
+}
+
+.docs-card-index {
+  color: var(--docs-accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.docs-card strong {
+  color: var(--docs-ink);
+  font-size: 1.05rem;
+}
+
+.docs-card span:not(.docs-card-index) {
+  color: var(--docs-muted);
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.docs-card small {
+  margin-top: auto;
+  color: var(--docs-accent);
+  font-size: 0.78rem;
+}
+
+@media screen and (max-width: 76.1875em) {
+  .docs-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media screen and (max-width: 60em) {
+  .docs-hero {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+}
+
+@media screen and (max-width: 44em) {
+  .md-content__inner {
+    padding: 0 0.75rem;
+  }
+
+  .docs-hero {
+    margin-bottom: 2.5rem;
+    padding-top: 0.5rem;
+  }
+
+  .docs-card-grid {
+    grid-template-columns: 1fr;
+    margin-bottom: 2.5rem;
+  }
+
+  .docs-actions .md-button {
+    flex: 1 1 100%;
+    text-align: center;
   }
 }

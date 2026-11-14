@@ -8,8 +8,11 @@ import (
 // DeviceModel 设备型号
 const (
 	DevModelUnknown      byte = 0
-	DevModelESP32Radio   byte = 1 // Box32-RF（内置 RF）
-	DevModelESP32NoRadio byte = 2 // Box32-EX（RF 系统外置）
+	DevModelBoxV1RF      byte = 1 // BoxV1-RF（内置 RF）
+	DevModelBoxV1EX      byte = 2 // BoxV1-EX（RF 系统外置）
+	DevModelBox32ANA     byte = 3 // Box32-ANA（模拟音频）
+	DevModelBox32DIG     byte = 4 // Box32-DIG（MMDVM 数字）
+	DevModelBox32MIX     byte = 5 // Box32-MIX（模拟音频与 MMDVM）
 	DevModelWeChatMini   byte = 100
 	DevModelAndroid      byte = 101
 	DevModelIOS          byte = 102
@@ -27,8 +30,11 @@ const (
 )
 
 const (
-	DevModelRescue = DevModelLegacyBridge
-	DevModelESP32  = DevModelLegacyESP32
+	// Legacy names retain the existing wire values for downstream callers.
+	DevModelESP32Radio   = DevModelBoxV1RF
+	DevModelESP32NoRadio = DevModelBoxV1EX
+	DevModelRescue       = DevModelLegacyBridge
+	DevModelESP32        = DevModelLegacyESP32
 )
 
 // SSIDRange SSID 范围定义

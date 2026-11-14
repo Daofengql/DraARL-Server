@@ -153,8 +153,11 @@ DATA = [0x03, 系统消息UTF-8字节...]
 | 值 | 常量名 | 说明 | 认证方式 |
 |----|--------|------|----------|
 | 0 | DevModelUnknown | 未知设备 | - |
-| 1 | DevModelESP32Radio | Box32-RF（内置 RF） | 设备密码 |
-| 2 | DevModelESP32NoRadio | Box32-EX（RF 系统外置） | 设备密码 |
+| 1 | DevModelBoxV1RF | BoxV1-RF（内置 RF） | 设备密码 |
+| 2 | DevModelBoxV1EX | BoxV1-EX（RF 系统外置） | 设备密码 |
+| 3 | DevModelBox32ANA | Box32-ANA（模拟音频） | 设备密码 |
+| 4 | DevModelBox32DIG | Box32-DIG（MMDVM 数字） | 设备密码 |
+| 5 | DevModelBox32MIX | Box32-MIX（模拟音频与 MMDVM） | 设备密码 |
 | 100 | DevModelWeChatMini | 微信小程序 | - |
 | 101 | DevModelAndroid | Android 客户端 | JWT Token |
 | 102 | DevModelIOS | iOS 客户端 | JWT Token |
@@ -172,7 +175,7 @@ DATA = [0x03, 系统消息UTF-8字节...]
 
 | 范围 | 含义 | 说明 |
 |------|------|------|
-| 0-99 | 互联产品段 | 当前启用：`1`=Box32-RF，`2`=Box32-EX |
+| 0-99 | 互联产品段 | 当前启用：`1`=BoxV1-RF，`2`=BoxV1-EX，`3`=Box32-ANA，`4`=Box32-DIG，`5`=Box32-MIX |
 | 100-105 | 幽灵/保留段 | 与 SSID 保留段一致，供 JWT 客户端使用 |
 | 106-107 | 历史兼容段 | 仅保留读取/显示，不再作为正式新型号 |
 | 108-150 | 当前无效保留段 | 不再兼容 `110-113` |
@@ -254,7 +257,7 @@ DATA[2:10] = Unix 时间戳 (8字节，big-endian int64，毫秒)
 | 0x14 | sql_active_high | 1 | uint8 | SQL 触发极性 (0=低电平触发, 1=高电平触发，仅 DevModel 2) |
 | 0x15 | ptt_active_high | 1 | uint8 | PTT 激活极性 (0=低电平发送, 1=高电平发送，仅 DevModel 2) |
 
-> `adc_gain_db / adc_volume / dac_volume` 是 ESP32 通用音频配置，适用于 Box32-RF (`DevModel=1`) 和 Box32-EX (`DevModel=2`)，不依赖 SA818 模块。
+> `adc_gain_db / adc_volume / dac_volume` 是 ESP32 通用音频配置，适用于 BoxV1-RF (`DevModel=1`)、BoxV1-EX (`DevModel=2`) 及 Box32 系列 (`DevModel=3/4/5`)，不依赖 SA818 模块。
 
 ### 频率配置约定
 

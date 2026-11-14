@@ -279,7 +279,7 @@ export function PreConfigToolCard({ open, onClose }: PreConfigToolCardProps) {
               </Grid>
               <Grid size={{ xs: 12, md: 8 }}>
                 <Alert severity="info">
-                  {selectedProfile?.description || '当前先开放 Box32-RF。'}
+                  {selectedProfile?.description || '当前先开放 BoxV1-RF。'}
                 </Alert>
               </Grid>
             </Grid>

@@ -51,16 +51,6 @@ export default defineConfig({
           if (id.includes('node_modules/recharts/')) {
             return 'vendor-recharts'
           }
-          // Markdown 渲染库
-          if (id.includes('node_modules/react-markdown/') ||
-              id.includes('node_modules/remark-gfm/') ||
-              id.includes('node_modules/unified/') ||
-              id.includes('node_modules/remark-') ||
-              id.includes('node_modules/mdast-') ||
-              id.includes('node_modules/micromark/') ||
-              id.includes('node_modules/unist-')) {
-            return 'vendor-markdown'
-          }
           // 其他第三方库
           if (id.includes('node_modules/axios/') ||
               id.includes('node_modules/opus-decoder/') ||

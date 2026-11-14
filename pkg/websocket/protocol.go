@@ -203,6 +203,9 @@ func GetDeviceModelName(devModel byte) string {
 	switch devModel {
 	case protocol.DraARLDevModelUnknown:
 		return "Unknown"
+	case protocol.DraARLDevModelBoxV1RF, protocol.DraARLDevModelBoxV1EX,
+		protocol.DraARLDevModelBox32ANA, protocol.DraARLDevModelBox32DIG, protocol.DraARLDevModelBox32MIX:
+		return protocol.GetDevModelName(devModel)
 	case protocol.DraARLDevModelWeChatMini:
 		return "WeChatMini"
 	case protocol.DraARLDevModelAndroid:

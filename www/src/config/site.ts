@@ -1,6 +1,10 @@
 const APP_VERSION =
   (typeof import.meta.env.VITE_APP_VERSION === 'string' ? import.meta.env.VITE_APP_VERSION.trim() : '') || 'dev'
 
+const DOCS_URL =
+  (typeof import.meta.env.VITE_DOCS_URL === 'string' ? import.meta.env.VITE_DOCS_URL.trim() : '') ||
+  'https://daofengql.github.io/DraARL-Server/'
+
 /**
  * 站点默认配置常量
  * 构建时统一的默认值，运行时可被数据库配置覆盖
@@ -14,6 +18,8 @@ export const SITE_CONFIG = {
   VERSION: APP_VERSION,
   /** 协议版本 */
   PROTOCOL_VERSION: 'DraARLv1',
+  /** 正式文档站地址；私有部署可通过 VITE_DOCS_URL 覆盖 */
+  DOCS_URL,
 } as const
 
 /** 缓存键：站点配置 */

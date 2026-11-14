@@ -19,8 +19,11 @@ type DeviceModelOption = {
 
 const DEVICE_MODEL_DEFINITIONS: DeviceModelOption[] = [
   { value: 0, label: '未知设备', icon: Devices, selectable: false },
-  { value: 1, label: 'Box32-RF', icon: SettingsInputAntenna, selectable: true },
-  { value: 2, label: 'Box32-EX', icon: Devices, selectable: true },
+  { value: 1, label: 'BoxV1-RF', icon: SettingsInputAntenna, selectable: true },
+  { value: 2, label: 'BoxV1-EX', icon: Devices, selectable: true },
+  { value: 3, label: 'Box32-ANA', icon: SettingsInputAntenna, selectable: true },
+  { value: 4, label: 'Box32-DIG', icon: Devices, selectable: true },
+  { value: 5, label: 'Box32-MIX', icon: SettingsInputAntenna, selectable: true },
   { value: 100, label: '微信小程序', icon: ChatBubble, selectable: true },
   { value: 101, label: 'Android 客户端', icon: Android, selectable: true },
   { value: 102, label: 'iOS 客户端', icon: PhoneIphone, selectable: true },
@@ -88,11 +91,11 @@ export function supportsFrequencyConfig(devModel: number): boolean {
 }
 
 export function supportsAudioConfig(devModel: number): boolean {
-  return devModel === 1 || devModel === 2
+  return devModel === 1 || devModel === 2 || devModel === 3 || devModel === 5
 }
 
 export function supportsBoardIOPolarityConfig(devModel: number): boolean {
-  return devModel === 2
+  return devModel === 2 || devModel === 3 || devModel === 5
 }
 
 export function supportsSystemConfig(devModel: number): boolean {
@@ -104,7 +107,7 @@ export function getDeviceConfigTabs(devModel: number): Array<{ key: DeviceConfig
     return [{ key: 'platform', label: '平台设置' }]
   }
 
-  if (devModel === 2) {
+  if (devModel >= 2 && devModel <= 5) {
     return [
       { key: 'system', label: '系统设置' },
       { key: 'platform', label: '平台设置' },

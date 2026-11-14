@@ -91,8 +91,11 @@ var keyToTlvTypeMap = map[string]byte{
 }
 
 const (
-	deviceConfigProfileSA818             = "sa818-radio-v1"
-	deviceConfigProfileESP32NoRadioAudio = "esp32-no-radio-audio-v1"
+	deviceConfigProfileSA818         = "sa818-radio-v1"
+	deviceConfigProfileBoxV1EXAudio  = "esp32-no-radio-audio-v1"
+	deviceConfigProfileBox32ANAAudio = "box32-ana-audio-v1"
+	deviceConfigProfileBox32DIG      = "box32-dig-v1"
+	deviceConfigProfileBox32MIXAudio = "box32-mix-audio-v1"
 )
 
 var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
@@ -112,7 +115,23 @@ var deviceConfigProfileAllowedKeys = map[string]map[string]struct{}{
 		ConfigKeyADCVolume:   {},
 		ConfigKeyDACVolume:   {},
 	},
-	deviceConfigProfileESP32NoRadioAudio: {
+	deviceConfigProfileBoxV1EXAudio: {
+		ConfigKeyADCGainDB:     {},
+		ConfigKeyADCVolume:     {},
+		ConfigKeyDACVolume:     {},
+		ConfigKeySQLActiveHigh: {},
+		ConfigKeyPTTActiveHigh: {},
+	},
+	deviceConfigProfileBox32ANAAudio: {
+		ConfigKeyADCGainDB:     {},
+		ConfigKeyADCVolume:     {},
+		ConfigKeyDACVolume:     {},
+		ConfigKeySQLActiveHigh: {},
+		ConfigKeyPTTActiveHigh: {},
+	},
+	// Digital parameters are reserved until the MMDVM implementation exists.
+	deviceConfigProfileBox32DIG: {},
+	deviceConfigProfileBox32MIXAudio: {
 		ConfigKeyADCGainDB:     {},
 		ConfigKeyADCVolume:     {},
 		ConfigKeyDACVolume:     {},
@@ -131,10 +150,16 @@ func resolveDeviceConfigProfile(dev *models.Device) string {
 // DeviceConfigProfile describes the capabilities currently reported by hardware.
 func DeviceConfigProfile(devModel int) string {
 	switch devModel {
-	case int(protocol.DraARLDevModelESP32Radio):
+	case int(protocol.DraARLDevModelBoxV1RF):
 		return deviceConfigProfileSA818
-	case int(protocol.DraARLDevModelESP32NoRadio):
-		return deviceConfigProfileESP32NoRadioAudio
+	case int(protocol.DraARLDevModelBoxV1EX):
+		return deviceConfigProfileBoxV1EXAudio
+	case int(protocol.DraARLDevModelBox32ANA):
+		return deviceConfigProfileBox32ANAAudio
+	case int(protocol.DraARLDevModelBox32DIG):
+		return deviceConfigProfileBox32DIG
+	case int(protocol.DraARLDevModelBox32MIX):
+		return deviceConfigProfileBox32MIXAudio
 	default:
 		return ""
 	}

@@ -24,7 +24,8 @@ const SiteConfigPage = lazy(() => import('./pages/settings/SiteConfigPage').then
 const CommRecordsPage = lazy(() => import('./pages/comm-records/CommRecordsPage').then(m => ({ default: m.CommRecordsPage })))
 const LogbookPage = lazy(() => import('./pages/logbook/LogbookPage').then(m => ({ default: m.LogbookPage })))
 const NotFoundPage = lazy(() => import('./pages/not-found/NotFoundPage').then(m => ({ default: m.NotFoundPage })))
-const PublicDocsPage = lazy(() => import('./pages/docs/PublicDocsPage').then(m => ({ default: m.PublicDocsPage })))
+const DocsRedirectPage = lazy(() => import('./pages/docs/DocsRedirectPage').then(m => ({ default: m.DocsRedirectPage })))
+const PublicDownloadPage = lazy(() => import('./pages/download/PublicDownloadPage').then(m => ({ default: m.PublicDownloadPage })))
 const ForumPage = lazy(() => import('./pages/forum/ForumPage').then(m => ({ default: m.ForumPage })))
 const AboutPage = lazy(() => import('./pages/about/AboutPage').then(m => ({ default: m.AboutPage })))
 const RadioPage = lazy(() => import('./pages/radio/RadioPage').then(m => ({ default: m.RadioPage })))
@@ -57,7 +58,10 @@ function App() {
         <Route path="/" element={<PageSuspense><HomePage /></PageSuspense>} />
 
         {/* 公开路由 - 文档 */}
-        <Route path="/docs" element={<PageSuspense><PublicDocsPage /></PageSuspense>} />
+        <Route path="/docs" element={<PageSuspense><DocsRedirectPage /></PageSuspense>} />
+
+        {/* 公开路由 - 下载中心 */}
+        <Route path="/downloads" element={<PageSuspense><PublicDownloadPage /></PageSuspense>} />
 
         {/* 公开路由 - 论坛 */}
         <Route path="/forum" element={<PageSuspense><ForumPage /></PageSuspense>} />

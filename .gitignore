@@ -75,6 +75,7 @@ temp/
 bin/
 build/
 dist/
+/site/
 
 # Environment files
 .env

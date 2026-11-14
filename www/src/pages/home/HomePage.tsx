@@ -57,8 +57,8 @@ export function HomePage() {
               <Button component={RouterLink} to={authenticated ? '/dashboard' : '/login'} variant="contained" size="large" endIcon={<ArrowForward />}>
                 {authenticated ? '进入控制台' : '登录控制台'}
               </Button>
-              <Button component={RouterLink} to={authenticated ? '/docs' : '/register'} variant="outlined" size="large" sx={{ color: 'text.primary' }}>
-                {authenticated ? '查看文档' : '注册账号'}
+              <Button component="a" href={SITE_CONFIG.DOCS_URL} target="_blank" rel="noopener noreferrer" variant="outlined" size="large" sx={{ color: 'text.primary' }}>
+                查看文档 <NorthEast sx={{ ml: 0.5, fontSize: 18 }} />
               </Button>
             </Stack>
             <Stack direction="row" spacing={2} sx={{ mt: 4, flexWrap: 'wrap', rowGap: 1 }}>
@@ -86,7 +86,7 @@ export function HomePage() {
             <Typography variant="body2" color="text.secondary" sx={{ maxWidth: '28ch', mb: 3 }}>
               设备、群组与记录各归其位，让每次操作都有明确入口。
             </Typography>
-            <Link component={RouterLink} to="/docs" color="secondary.main" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, fontSize: '0.875rem' }}>
+            <Link href={SITE_CONFIG.DOCS_URL} target="_blank" rel="noopener noreferrer" color="secondary.main" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, fontSize: '0.875rem' }}>
               阅读使用文档 <NorthEast sx={{ fontSize: 16 }} />
             </Link>
           </Box>

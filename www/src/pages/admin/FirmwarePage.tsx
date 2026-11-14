@@ -17,7 +17,7 @@ import { getDevModelName } from '../../utils/deviceModel'
 import { ConfirmDialog } from '../../components/common/ConfirmDialog'
 
 // 固件白名单型号（与后端 protocol.FirmwareSupportedDevModels 一致）
-const FIRMWARE_MODELS = DEVICE_MODELS.filter(m => [1, 2].includes(m.value))
+const FIRMWARE_MODELS = DEVICE_MODELS.filter(m => m.value >= 1 && m.value <= 5)
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\w.]+)?$/
 

@@ -31,6 +31,11 @@ export const PacketType = {
 // 设备型号
 export const DeviceModel = {
   UNKNOWN: 0,
+  BOXV1_RF: 1,
+  BOXV1_EX: 2,
+  BOX32_ANA: 3,
+  BOX32_DIG: 4,
+  BOX32_MIX: 5,
   WECHAT_MINI: 100,
   ANDROID: 101,
   IOS: 102,

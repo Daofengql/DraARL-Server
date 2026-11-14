@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Box, Typography, Button, AppBar, Toolbar, Avatar, IconButton, Menu, MenuItem, Tooltip } from '@mui/material'
 import DarkMode from '@mui/icons-material/DarkMode'
+import Download from '@mui/icons-material/Download'
 import LightMode from '@mui/icons-material/LightMode'
 import MenuIcon from '@mui/icons-material/Menu'
 import { useNavigate, useLocation, Link as RouterLink } from 'react-router-dom'
@@ -61,17 +62,18 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
                        location.pathname.startsWith('/admin')
 
   // 导航项
-  const navItems = [
+  const navItems: Array<{ label: string; path?: string; href?: string; external?: boolean; icon: React.ReactNode }> = [
     { label: '首页', path: '/', icon: <HomeIcon /> },
     { label: '中继查询', path: '/relays', icon: <AntennaIcon /> },
     { label: '工具', path: '/tools', icon: <ToolsIcon /> },
     { label: '技术交流', path: '/forum', icon: <ForumIcon /> },
-    { label: '文档', path: '/docs', icon: <DocsIcon /> },
+    { label: '文档', href: SITE_CONFIG.DOCS_URL, external: true, icon: <DocsIcon /> },
+    { label: '下载中心', path: '/downloads', icon: <Download /> },
     { label: '关于', path: '/about', icon: <InfoIcon /> },
   ]
 
-  const isActive = (path: string) => {
-    return location.pathname === path
+  const isActive = (path?: string) => {
+    return Boolean(path) && location.pathname === path
   }
 
   const handleNavMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
@@ -82,8 +84,8 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
     setNavMenuAnchor(null)
   }
 
-  const handleNavClick = (path: string) => {
-    navigate(path)
+  const handleNavClick = (path?: string) => {
+    if (path) navigate(path)
     handleNavMenuClose()
   }
 
@@ -171,26 +173,49 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
         {/* 导航链接 - 仅桌面端显示 */}
         <Box component="nav" aria-label="站点导航" sx={{ display: { xs: 'none', lg: 'flex' }, gap: 0.5, ml: 2 }}>
           {navItems.map((item) => (
-            <Button
-              key={item.path}
-              startIcon={item.icon}
-              component={RouterLink}
-              to={item.path}
-              aria-current={isActive(item.path) ? 'page' : undefined}
-              sx={{
-                textTransform: 'none',
-                color: isActive(item.path) ? 'primary.main' : 'text.secondary',
-                borderBottom: '2px solid',
-                borderColor: isActive(item.path) ? 'primary.main' : 'transparent',
-                bgcolor: 'transparent',
-                '&:hover': {
-                  bgcolor: 'action.hover',
-                  color: 'primary.main',
-                },
-              }}
-            >
-              {item.label}
-            </Button>
+            item.external ? (
+              <Button
+                key={item.href}
+                startIcon={item.icon}
+                component="a"
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{
+                  textTransform: 'none',
+                  color: 'text.secondary',
+                  borderBottom: '2px solid transparent',
+                  bgcolor: 'transparent',
+                  '&:hover': {
+                    bgcolor: 'action.hover',
+                    color: 'primary.main',
+                  },
+                }}
+              >
+                {item.label}
+              </Button>
+            ) : (
+              <Button
+                key={item.path}
+                startIcon={item.icon}
+                component={RouterLink}
+                to={item.path || '/'}
+                aria-current={isActive(item.path) ? 'page' : undefined}
+                sx={{
+                  textTransform: 'none',
+                  color: isActive(item.path) ? 'primary.main' : 'text.secondary',
+                  borderBottom: '2px solid',
+                  borderColor: isActive(item.path) ? 'primary.main' : 'transparent',
+                  bgcolor: 'transparent',
+                  '&:hover': {
+                    bgcolor: 'action.hover',
+                    color: 'primary.main',
+                  },
+                }}
+              >
+                {item.label}
+              </Button>
+            )
           ))}
         </Box>
 
@@ -323,15 +348,30 @@ export function PublicHeader({ onMenuClick }: PublicHeaderProps) {
         sx={{ display: { xs: 'block', lg: 'none' } }}
       >
         {navItems.map((item) => (
-          <MenuItem
-            key={item.path}
-            onClick={() => handleNavClick(item.path)}
-            selected={isActive(item.path)}
-            sx={{ gap: 1.5 }}
-          >
-            {item.icon}
-            {item.label}
-          </MenuItem>
+          item.external ? (
+            <MenuItem
+              key={item.href}
+              component="a"
+              href={item.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={handleNavMenuClose}
+              sx={{ gap: 1.5 }}
+            >
+              {item.icon}
+              {item.label}
+            </MenuItem>
+          ) : (
+            <MenuItem
+              key={item.path}
+              onClick={() => handleNavClick(item.path)}
+              selected={isActive(item.path)}
+              sx={{ gap: 1.5 }}
+            >
+              {item.icon}
+              {item.label}
+            </MenuItem>
+          )
         ))}
       </Menu>
     </AppBar>

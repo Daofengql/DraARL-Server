@@ -71,8 +71,11 @@ func WithSourceGroupID(data []byte, groupID int) ([]byte, bool) {
 // DraARLv1 设备型号常量
 const (
 	DraARLDevModelUnknown      byte = 0   // 未知/历史默认
-	DraARLDevModelESP32Radio   byte = 1   // Box32-RF（内置 RF）
-	DraARLDevModelESP32NoRadio byte = 2   // Box32-EX（RF 系统外置）
+	DraARLDevModelBoxV1RF      byte = 1   // BoxV1-RF（内置 RF）
+	DraARLDevModelBoxV1EX      byte = 2   // BoxV1-EX（RF 系统外置）
+	DraARLDevModelBox32ANA     byte = 3   // Box32-ANA（模拟音频）
+	DraARLDevModelBox32DIG     byte = 4   // Box32-DIG（MMDVM 数字）
+	DraARLDevModelBox32MIX     byte = 5   // Box32-MIX（模拟音频与 MMDVM）
 	DraARLDevModelWeChatMini   byte = 100 // 微信小程序
 	DraARLDevModelAndroid      byte = 101 // Android 客户端
 	DraARLDevModelIOS          byte = 102 // iOS 客户端
@@ -88,6 +91,10 @@ const (
 )
 
 const (
+	// Legacy names remain aliases so older integrations keep compiling while
+	// the wire values retain their existing meaning.
+	DraARLDevModelESP32Radio   = DraARLDevModelBoxV1RF
+	DraARLDevModelESP32NoRadio = DraARLDevModelBoxV1EX
 	DraARLDevModelInterconnect = DraARLDevModelLegacyBridge
 	DraARLDevModelESP32        = DraARLDevModelLegacyESP32
 )
@@ -646,13 +653,16 @@ func IsValidClientReportedDevModel(devModel byte) bool {
 
 // IsSelectableHardwareDevModel 判断是否为当前前台允许新选的硬件型号
 func IsSelectableHardwareDevModel(devModel byte) bool {
-	return devModel == DraARLDevModelESP32Radio || devModel == DraARLDevModelESP32NoRadio
+	return devModel >= DraARLDevModelBoxV1RF && devModel <= DraARLDevModelBox32MIX
 }
 
 // FirmwareSupportedDevModels 支持固件升级的设备型号白名单
 var FirmwareSupportedDevModels = []byte{
-	DraARLDevModelESP32Radio,
-	DraARLDevModelESP32NoRadio,
+	DraARLDevModelBoxV1RF,
+	DraARLDevModelBoxV1EX,
+	DraARLDevModelBox32ANA,
+	DraARLDevModelBox32DIG,
+	DraARLDevModelBox32MIX,
 }
 
 // IsFirmwareSupportedDevModel 判断设备型号是否支持固件升级
@@ -670,10 +680,16 @@ func GetDevModelName(devModel byte) string {
 	switch devModel {
 	case DraARLDevModelUnknown:
 		return "Unknown"
-	case DraARLDevModelESP32Radio:
-		return "Box32-RF"
-	case DraARLDevModelESP32NoRadio:
-		return "Box32-EX"
+	case DraARLDevModelBoxV1RF:
+		return "BoxV1-RF"
+	case DraARLDevModelBoxV1EX:
+		return "BoxV1-EX"
+	case DraARLDevModelBox32ANA:
+		return "Box32-ANA"
+	case DraARLDevModelBox32DIG:
+		return "Box32-DIG"
+	case DraARLDevModelBox32MIX:
+		return "Box32-MIX"
 	case DraARLDevModelWeChatMini:
 		return "WeChat Mini"
 	case DraARLDevModelAndroid:

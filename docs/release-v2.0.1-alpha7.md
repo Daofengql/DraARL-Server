@@ -10,4 +10,4 @@
 
 数据库升级自动迁移旧节点配置，保留业务数据与站间互联会话。部署前按常规备份数据库和配置；使用旧节点设置的设备客户端需适配 HTTP API 返回的本站入口。
 
-服务端提供 Linux AMD64／ARM64、Windows AMD64、macOS Intel／Apple Silicon 构建及对应 SHA-256 校验文件。Android 和 RFBox 的配套变更不包含在本服务端二进制中。
+服务端提供 Linux AMD64／ARM64、Windows AMD64、macOS Intel／Apple Silicon 构建及对应 SHA-256 校验文件。Android 和 BoxV1 的配套变更不包含在本服务端二进制中。

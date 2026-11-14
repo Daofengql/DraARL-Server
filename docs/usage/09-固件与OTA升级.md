@@ -7,15 +7,19 @@
 - 使用独立 `firmware_releases` 表、管理 API 和 `/api/public/firmware/latest` 设备查询接口。
 - 按 `dev_model` 和固件版本选择，不创建 `ClientResource`、artifact 或通用平台 target，也不出现在客户端资源 manifest。
 - 与通用客户端资源共享私有 S3、预签名 PUT/GET、用户隔离 staging、不可变 final 提升和流式 SHA-256。
-- 每条发布记录可选择 `presigned` 或 `proxy` 下载模式；`proxy` 为旧版 RFBox 提供固定短地址，服务端隐藏 S3 签名并流式转发。
+- 每条发布记录可选择 `presigned` 或 `proxy` 下载模式；`proxy` 为旧版 BoxV1 提供固定短地址，服务端隐藏 S3 签名并流式转发。
 
 当前支持的设备型号由服务端白名单决定：
 
 | DevModel | 名称 |
 |---|---|
-| 1 | Box32-RF（内置 RF） |
-| 2 | Box32-EX（RF 系统外置） |
-| 107 | ESP32 链路台/手咪（历史型号） |
+| 1 | BoxV1-RF（内置 RF） |
+| 2 | BoxV1-EX（RF 系统外置） |
+| 3 | Box32-ANA（模拟音频） |
+| 4 | Box32-DIG（MMDVM 数字） |
+| 5 | Box32-MIX（模拟音频与 MMDVM） |
+
+型号 `1/2` 的编号和 BoxV1 自动识别规则保持不变；`3/4/5` 分别供 Box32 模拟、MMDVM 数字、混合版本使用。当前 Box32 固件上报 `3`，数字收发尚未实现。固件上传需使用各自型号，Box32 固件不能继续发布在型号 `2` 下。
 
 ## 2. 管理端上传
 

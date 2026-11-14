@@ -11,6 +11,7 @@ import (
 func GetUDPMetrics(c *gin.Context) {
 	stats := udphub.GetUDPPerformanceStats()
 	stats["message_api"] = GetMessageAPIMetrics()
+	stats["device_drops"] = gin.H{"items": udphub.GetDeviceDropMetrics()}
 	c.Header("Cache-Control", "no-store, max-age=0")
 	c.JSON(http.StatusOK, gin.H{
 		"code":    http.StatusOK,

@@ -18,6 +18,7 @@ import VolumeOffIcon from '@mui/icons-material/VolumeOff'
 import SendIcon from '@mui/icons-material/Send'
 import KeyboardIcon from '@mui/icons-material/Keyboard'
 import RecordIcon from '@mui/icons-material/FiberManualRecord'
+import SettingsIcon from '@mui/icons-material/Settings'
 
 import { useAuth } from '../../hooks/useAuth'
 import {
@@ -40,6 +41,7 @@ import { MessageList } from './components/MessageList'
 import { PTTButton } from './components/PTTButton'
 import { GroupSelector } from './components/GroupSelector'
 import { DeviceList } from './components/DeviceList'
+import { RadioSettings } from './components/RadioSettings'
 
 // 样式
 const useStyles = () => ({
@@ -192,6 +194,7 @@ export const RadioPage: React.FC = () => {
 
   // 配置
   const [config, setConfig] = useState<RadioUserConfig>(radioService.getConfig())
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Refs
   const messageListRef = useRef<HTMLDivElement>(null)
@@ -553,7 +556,10 @@ export const RadioPage: React.FC = () => {
       <Box sx={styles.header}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, minWidth: 0 }}>
           <Typography component="h1" variant="h6">在线收发</Typography>
-          {renderConnectionStatus()}
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            {renderConnectionStatus()}
+            <IconButton aria-label="收发设置" onClick={() => setSettingsOpen(true)}><SettingsIcon /></IconButton>
+          </Box>
         </Box>
         <GroupSelector
           groups={groups}
@@ -691,6 +697,16 @@ export const RadioPage: React.FC = () => {
       </Box>
 
       {/* 设备列表抽屉 */}
+      <Drawer anchor="right" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+        <Box sx={styles.settingsDrawer}>
+          <RadioSettings config={config} onClose={() => setSettingsOpen(false)}
+            playbackStats={radioService.getPlaybackStats()}
+            onConfigChange={next => {
+              radioService.setPlaybackBuffer(next.playbackBufferMs)
+              setConfig(radioService.getConfig())
+            }} />
+        </Box>
+      </Drawer>
       <Drawer
         anchor="right"
         open={deviceListOpen}

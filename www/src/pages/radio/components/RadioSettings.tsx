@@ -14,6 +14,8 @@ import {
   ListItemIcon,
   ListItemText,
   ListItemSecondaryAction,
+  TextField,
+  MenuItem,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import BadgeIcon from '@mui/icons-material/Badge'
@@ -26,9 +28,13 @@ interface RadioSettingsProps {
   onClose: () => void
   // 清除缓存的回调函数（由父组件提供，负责同时清理数据库和内存）
   onRequestClearCache?: () => Promise<void>
+  playbackStats?: { late: number; droppedBacklog: number }
 }
 
 export const RadioSettings: React.FC<RadioSettingsProps> = ({
+  config,
+  onConfigChange,
+  playbackStats,
   onClose,
   onRequestClearCache,
 }) => {
@@ -63,6 +69,16 @@ export const RadioSettings: React.FC<RadioSettingsProps> = ({
 
       {/* 内容 */}
       <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+        <TextField select fullWidth label="播放缓冲" value={config.playbackBufferMs}
+          helperText="缓冲越大，播放越平稳，接收延迟也越高。"
+          onChange={event => onConfigChange({ ...config, playbackBufferMs: Number(event.target.value) as 80 | 160 | 240 })}>
+          {[80, 160, 240].map(value => <MenuItem key={value} value={value}>{value} ms</MenuItem>)}
+        </TextField>
+        {playbackStats && <Box component="details" sx={{ my: 2 }}>
+          <summary>播放诊断</summary>
+          <Typography variant="body2">迟到：{playbackStats.late}，积压丢弃：{playbackStats.droppedBacklog}</Typography>
+        </Box>}
+        <Divider sx={{ my: 2 }} />
         {/* 数据管理 */}
         <Typography variant="subtitle2" color="primary" gutterBottom>
           数据管理

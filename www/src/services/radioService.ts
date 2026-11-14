@@ -322,6 +322,7 @@ export class RadioService {
     this.audioCapture = getAudioCapture()
     this.audioMixer = getAudioMixer()
     this.audioMixer.setVolume(this.config.volume)
+    this.audioMixer.setPlaybackBuffer(this.config.playbackBufferMs)
     if (this.config.muted) this.audioMixer.mute()
     for (const [groupId, volume] of Object.entries(this.config.channelVolumes)) {
       this.audioMixer.setChannelVolume(Number(groupId), volume)
@@ -636,6 +637,16 @@ export class RadioService {
     this.saveConfig()
   }
 
+  setPlaybackBuffer(milliseconds: 80 | 160 | 240): void {
+    this.config.playbackBufferMs = milliseconds
+    this.audioMixer?.setPlaybackBuffer(milliseconds)
+    this.saveConfig()
+  }
+
+  getPlaybackStats(): { late: number; droppedBacklog: number } {
+    return this.audioMixer?.getPlaybackStats() ?? { late: 0, droppedBacklog: 0 }
+  }
+
   /**
    * 设置静音
    */
@@ -800,6 +811,8 @@ export class RadioService {
         commitTimer: null,
       }
       this.incomingVoiceStreams.set(streamKey, stream)
+    }
+    if (!this.activeSpeakers.has(streamKey)) {
       this.activeSpeakers.set(streamKey, {
         key: streamKey,
         groupId,

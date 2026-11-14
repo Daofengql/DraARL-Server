@@ -880,10 +880,13 @@ interface MixerStream {
   nextStartTime: number
   chain: Promise<void>
   sources: Set<AudioBufferSourceNode>
+  pending: Uint8Array[]
+  stopped: boolean
+  processing: boolean
   lastActiveAt: number
 }
 
-export function resolveMixerStartTime(nextStartTime: number, now: number, startupBuffer = 0.08): number {
+export function resolveMixerStartTime(nextStartTime: number, now: number, startupBuffer = 0.16): number {
   return nextStartTime > now ? nextStartTime : now + startupBuffer
 }
 
@@ -900,6 +903,16 @@ export class MultiChannelAudioMixer {
   private channelVolumes = new Map<number, number>()
   private volume = 0.8
   private muted = false
+  private startupBuffer = 0.16
+  private playbackStats = { late: 0, droppedBacklog: 0 }
+
+  setPlaybackBuffer(milliseconds: 80 | 160 | 240): void {
+    this.startupBuffer = milliseconds / 1000
+  }
+
+  getPlaybackStats(): { late: number; droppedBacklog: number } {
+    return { ...this.playbackStats }
+  }
 
   async init(): Promise<void> {
     if (!this.audioContext) {
@@ -924,10 +937,23 @@ export class MultiChannelAudioMixer {
     if (!this.audioContext || this.audioContext.state === 'suspended') return
 
     const stream = this.getOrCreateStream(streamKey, groupId)
-    const frameCopy = new Uint8Array(opusData)
-    stream.chain = stream.chain
-      .then(() => this.decodeAndSchedule(stream, frameCopy))
-      .catch(error => console.error(`[AudioMixer] Stream ${streamKey} failed:`, error))
+    if (stream.pending.length >= 5) {
+      stream.pending.shift()
+      this.playbackStats.droppedBacklog++
+    }
+    stream.pending.push(new Uint8Array(opusData))
+    if (!stream.processing) {
+      stream.processing = true
+      stream.chain = (async () => {
+        try {
+          while (stream.pending.length > 0 && !stream.stopped) {
+            await this.decodeAndSchedule(stream, stream.pending.shift()!)
+          }
+        } finally {
+          stream.processing = false
+        }
+      })().catch(error => console.error(`[AudioMixer] Stream ${streamKey} failed:`, error))
+    }
     await stream.chain
   }
 
@@ -942,6 +968,9 @@ export class MultiChannelAudioMixer {
       nextStartTime: 0,
       chain: Promise.resolve(),
       sources: new Set(),
+      pending: [],
+      stopped: false,
+      processing: false,
       lastActiveAt: Date.now(),
     }
     this.streams.set(streamKey, stream)
@@ -963,6 +992,7 @@ export class MultiChannelAudioMixer {
   private async decodeAndSchedule(stream: MixerStream, opusData: Uint8Array): Promise<void> {
     if (!this.audioContext) return
     const decoder = await this.ensureDecoder(stream)
+    if (stream.stopped || !this.audioContext) return
     const decodedFrames: Float32Array[] = []
     let totalSamples = 0
 
@@ -985,10 +1015,18 @@ export class MultiChannelAudioMixer {
 
     const context = this.audioContext
     const now = context.currentTime
-    if (stream.nextStartTime - now > 1.2) {
-      console.warn('[AudioMixer] Dropping delayed frame to keep playback realtime')
-      return
+    if (stream.nextStartTime - now > 0.6) {
+      // Web Audio sources cannot be rescheduled after start(). Cancel the
+      // stale schedule, then keep the newest packet on a fresh timeline.
+      for (const source of stream.sources) {
+        source.stop()
+        source.disconnect()
+        this.playbackStats.droppedBacklog++
+      }
+      stream.sources.clear()
+      stream.nextStartTime = 0
     }
+    if (stream.nextStartTime > 0 && stream.nextStartTime <= now) this.playbackStats.late++
 
     const audioBuffer = context.createBuffer(OPUS_CHANNELS, combined.length, OPUS_SAMPLE_RATE)
     audioBuffer.copyToChannel(combined, 0)
@@ -996,7 +1034,7 @@ export class MultiChannelAudioMixer {
     source.buffer = audioBuffer
     source.connect(this.getChannelGain(stream.groupId))
 
-    const startTime = resolveMixerStartTime(stream.nextStartTime, now)
+    const startTime = resolveMixerStartTime(stream.nextStartTime, now, this.startupBuffer)
     stream.nextStartTime = startTime + audioBuffer.duration
     stream.lastActiveAt = Date.now()
     stream.sources.add(source)
@@ -1062,6 +1100,8 @@ export class MultiChannelAudioMixer {
   resetStream(streamKey: string): void {
     const stream = this.streams.get(streamKey)
     if (!stream) return
+    stream.stopped = true
+    stream.pending.length = 0
     for (const source of stream.sources) {
       try {
         source.stop()

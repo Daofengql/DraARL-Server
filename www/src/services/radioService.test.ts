@@ -68,6 +68,28 @@ it('retains the source username for linked text and drops a packet without a sou
   expect(service.getActiveSpeakers()).toHaveLength(0)
 })
 
+it('restores the speaker when audio resumes before the stream is committed', async () => {
+  const { service, input, packet } = linkedSource()
+  const onSpeakers = vi.fn()
+  const onState = vi.fn()
+  const onMessage = vi.fn()
+  service.on('speakersChange', onSpeakers)
+  service.on('voiceStateChange', onState)
+  service.on('message', onMessage)
+  input.handlePacket(packet, new ArrayBuffer(0))
+  await vi.advanceTimersByTimeAsync(800)
+  expect(service.getActiveSpeakers()).toHaveLength(0)
+  input.handlePacket(packet, new ArrayBuffer(0))
+  expect(service.getActiveSpeakers()).toEqual([
+    expect.objectContaining({ callsign: 'BG7ABC', ssid: 105, groupId: 1002 }),
+  ])
+  expect(onSpeakers).toHaveBeenCalledTimes(3)
+  expect(onState).toHaveBeenLastCalledWith('receiving', 'BG7ABC')
+  expect(onMessage).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1500)
+  expect(onMessage).toHaveBeenCalledTimes(1)
+})
+
 it('clears buffered linked audio when unsubscribing from the delivery channel', async () => {
   const { service, input, packet } = linkedSource()
   const onMessage = vi.fn()

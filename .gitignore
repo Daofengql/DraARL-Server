@@ -49,6 +49,7 @@ vendor/
 
 # Frontend unit-test artifacts
 /www/coverage/
+/www/output/
 
 # Database files
 *.sqlite3

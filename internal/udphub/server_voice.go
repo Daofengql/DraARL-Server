@@ -72,16 +72,22 @@ func canSendFromDevice(dev *models.Device, groupID int) bool {
 // handleDraARLVoice 处理 DraARLv1 语音消息
 func handleDraARLVoice(packet *protocol.DraARLv1Packet, data []byte, dev *models.Device, conn *net.UDPConn, gp *models.Group) {
 	// 检查设备是否被禁发
-	if gp == nil || len(packet.DATA) == 0 || !canSendFromDevice(dev, gp.ID) {
+	if gp == nil || len(packet.DATA) == 0 {
+		return
+	}
+	if !canSendFromDevice(dev, gp.ID) {
+		recordDeviceDrop(dev.RuntimeSnapshot(), "disabled", true, "", "", packet.Type)
 		return
 	}
 	state := dev.RuntimeSnapshot()
 
 	if CenterInterconnectActive() {
 		if !AcquireCenterLocalDeviceVoice(dev) {
+			recordDeviceDrop(state, "half_duplex", true, "", "", packet.Type)
 			return
 		}
 	} else if !tryAcquireHalfDuplex(gp.ID, buildUDPSpeaker(dev, packet), packet.TimeStamp) {
+		recordDeviceDrop(state, "half_duplex", true, "", "", packet.Type)
 		return
 	}
 	MarkAcceptedVoice(gp.ID, packet.TimeStamp)

@@ -2,7 +2,7 @@
  * 设备列表组件
  */
 
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Box,
   Typography,
@@ -19,7 +19,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close'
 import HeadsetIcon from '@mui/icons-material/Headset'
 import ComputerIcon from '@mui/icons-material/Computer'
-import { apiClient } from '../../../services'
+import { loadRadioDevices } from '../../../services/radio/deviceList'
 import type { OnlineDevice } from '../../../types/radio'
 import { getDevModelIcon, getDevModelName } from '../../../utils/deviceModel'
 import { getErrorMessage } from '../../../utils/errorMessage'
@@ -27,10 +27,6 @@ import { getErrorMessage } from '../../../utils/errorMessage'
 interface DeviceListProps {
   groupId: number
   onClose: () => void
-}
-
-interface GroupDevicesResponse {
-  data?: OnlineDevice[]
 }
 
 // 头像颜色
@@ -57,30 +53,40 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // 加载设备列表
-  const loadDevices = useCallback(async () => {
-    try {
+  useEffect(() => {
+    let pending: AbortController | undefined
+    setDevices([])
+    setError(null)
+    const loadDevices = async () => {
+      if (document.hidden) return
+      pending?.abort()
+      const request = new AbortController()
+      pending = request
       setLoading(true)
-      const response = await apiClient.get<GroupDevicesResponse>(`/api/groups/${groupId}/devices`)
-      const data = response.data || []
-      setDevices(data)
-      setError(null)
-    } catch (err) {
-      console.error('Failed to load devices:', err)
-      setError(getErrorMessage(err, '加载设备列表失败'))
-    } finally {
-      setLoading(false)
+      try {
+        const data = await loadRadioDevices(groupId, request.signal)
+        if (request.signal.aborted) return
+        setDevices(data)
+        setError(null)
+      } catch (err) {
+        if (!request.signal.aborted) setError(getErrorMessage(err, '加载设备列表失败'))
+      } finally {
+        if (!request.signal.aborted) setLoading(false)
+      }
+    }
+    const onVisibilityChange = () => {
+      if (document.hidden) pending?.abort()
+      else void loadDevices()
+    }
+    void loadDevices()
+    const interval = setInterval(loadDevices, 10000)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      pending?.abort()
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [groupId])
-
-  useEffect(() => {
-    loadDevices()
-
-    // 定时刷新
-    const interval = setInterval(loadDevices, 10000)
-
-    return () => clearInterval(interval)
-  }, [loadDevices])
 
   // 分组设备：普通设备 vs 幽灵设备
   const normalDevices = devices.filter(d => !d.isGhost)
@@ -132,13 +138,14 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
                 </Typography>
                 <List disablePadding>
                   {normalDevices.map((device) => (
-                    <ListItem key={device.id} disableGutters sx={{ mb: 1 }}>
+                    <ListItem key={device.key} disableGutters sx={{ mb: 1 }}>
                       <ListItemAvatar>
                         <Avatar sx={{ bgcolor: getAvatarColor(device.callsign) }}>
                           {getDevModelIcon(device.devModel) || <HeadsetIcon />}
                         </Avatar>
                       </ListItemAvatar>
                       <ListItemText
+                        slotProps={{ secondary: { component: 'div' } }}
                         primary={
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                             <Typography variant="body1">
@@ -180,7 +187,7 @@ export const DeviceList: React.FC<DeviceListProps> = ({ groupId, onClose }) => {
                 </Typography>
                 <List disablePadding>
                   {ghostDevices.map((device) => (
-                    <ListItem key={device.id} disableGutters sx={{ mb: 1 }}>
+                    <ListItem key={device.key} disableGutters sx={{ mb: 1 }}>
                       <ListItemAvatar>
                         <Avatar sx={{ bgcolor: getAvatarColor(device.callsign) }}>
                           {getDevModelIcon(device.devModel) || <ComputerIcon />}

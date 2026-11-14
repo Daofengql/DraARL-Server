@@ -67,6 +67,15 @@ export class RadioWebSocket {
   private voiceEndTimer: ReturnType<typeof setTimeout> | null = null
   private isConnecting = false // 防止 StrictMode 双重连接
   private explicitlyDisconnected = false
+  private retryBlocked = false
+  private connectionGeneration = 0
+  private readonly retryOnWake = () => {
+    if (document.hidden || this.explicitlyDisconnected || this.retryBlocked || this.isConnecting) return
+    if (this.state === 'disconnected' || this.state === 'reconnecting') {
+      this.clearReconnectTimer()
+      void this.connect().catch(() => this.scheduleReconnect())
+    }
+  }
 
   // 回调函数
   private onStateChange: ((state: WSConnectionState) => void) | null = null
@@ -146,6 +155,11 @@ export class RadioWebSocket {
 
     this.isConnecting = true
     this.explicitlyDisconnected = false
+    this.retryBlocked = false
+    const generation = ++this.connectionGeneration
+    this.clearReconnectTimer()
+    window.addEventListener('online', this.retryOnWake)
+    document.addEventListener('visibilitychange', this.retryOnWake)
     this.setState('connecting')
     this.connectionStartTime = Date.now()
     this.pendingReconnect = false
@@ -154,19 +168,24 @@ export class RadioWebSocket {
       try {
         await this.syncWSTokenCookie()
       } catch (error) {
+        if (generation !== this.connectionGeneration) return
         this.isConnecting = false
         this.setState('disconnected')
         const errorMsg = 'WS 认证信息同步失败'
         if (this.onError) this.onError(errorMsg)
+        this.retryBlocked = (error as { response?: { status?: number } })?.response?.status === 401
+        this.scheduleReconnect()
         throw error instanceof Error ? error : new Error(errorMsg)
       }
     }
+    if (generation !== this.connectionGeneration) return
 
     return new Promise((resolve, reject) => {
       let settled = false
+      let socket: WebSocket | null = null
       const authenticationTimeout = setTimeout(() => {
         rejectOnce(new Error('WebSocket 认证超时'))
-        this.ws?.close(1000, 'authentication_timeout')
+        socket?.close(1000, 'authentication_timeout')
       }, 10_000)
       const resolveOnce = () => {
         if (settled) return
@@ -187,17 +206,19 @@ export class RadioWebSocket {
         url.searchParams.set('protocol_version', String(PROTOCOL_VERSION))
         url.searchParams.set('capabilities', CAPABILITIES.join(','))
 
-        this.ws = new WebSocket(url.toString())
-        this.ws.binaryType = 'arraybuffer'
+        const ws = new WebSocket(url.toString())
+        socket = ws
+        this.ws = ws
+        ws.binaryType = 'arraybuffer'
 
-        this.ws.onopen = () => {
+        ws.onopen = () => {
+          if (this.ws !== ws) return
           debugLog('[WS] Connected')
-          this.isConnecting = false
-          this.reconnectAttempts = 0
           this.setState('authenticating')
         }
 
-        this.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
+          if (this.ws !== ws) return
           if (event.data instanceof ArrayBuffer) {
             this.handleBinaryMessage(event.data)
           } else if (typeof event.data === 'string') {
@@ -206,7 +227,8 @@ export class RadioWebSocket {
           }
         }
 
-        this.ws.onerror = (error) => {
+        ws.onerror = (error) => {
+          if (this.ws !== ws) return
           console.error('[WS] Error:', error)
           this.isConnecting = false
           const errorMsg = 'WebSocket 连接错误'
@@ -214,32 +236,33 @@ export class RadioWebSocket {
           rejectOnce(new Error(errorMsg))
         }
 
-        this.ws.onclose = (event) => {
+        ws.onclose = (event) => {
+          rejectOnce(new Error(event.reason || 'WebSocket 连接关闭'))
+          if (this.ws !== ws) return
+          this.ws = null
           debugLog('[WS] Closed:', event.code, event.reason)
           this.isConnecting = false
           this.stopHeartbeat()
           this.setState('disconnected')
 
-          if (!settled) {
-            rejectOnce(new Error(event.reason || 'WebSocket 认证失败'))
-          }
-
           // 策略拒绝通常表示认证、会话上限或能力协商失败，自动重试没有意义。
           if (event.code === 1008 || event.code === 1013) {
+            this.retryBlocked = true
             if (this.onError) this.onError(event.reason || '连接被服务器拒绝')
             return
           }
 
           // 如果不是正常关闭，尝试重连
-          if (!this.explicitlyDisconnected && event.code !== 1000 && event.code !== 1001) {
-            this.scheduleReconnect()
-          }
+          this.scheduleReconnect()
         }
 
       } catch (error) {
+        this.isConnecting = false
+        this.setState('disconnected')
         const errorMsg = error instanceof Error ? error.message : '连接失败'
         if (this.onError) this.onError(errorMsg)
         rejectOnce(new Error(errorMsg))
+        this.scheduleReconnect()
       }
     })
   }
@@ -247,13 +270,20 @@ export class RadioWebSocket {
   // 断开连接
   disconnect() {
     this.explicitlyDisconnected = true
+    this.connectionGeneration++
+    this.isConnecting = false
+    this.isReceiving = false
+    this.isSending = false
+    window.removeEventListener('online', this.retryOnWake)
+    document.removeEventListener('visibilitychange', this.retryOnWake)
     this.stopHeartbeat()
     this.clearReconnectTimer()
     this.clearVoiceEndTimer()
 
     if (this.ws) {
-      this.ws.close(1000, 'User disconnect')
+      const ws = this.ws
       this.ws = null
+      ws.close(1000, 'User disconnect')
     }
 
     this.setState('disconnected')
@@ -353,6 +383,9 @@ export class RadioWebSocket {
       this.onRoutingChange?.(this.getRouting()!)
 
       if (event.type === 'auth_success') {
+        this.isConnecting = false
+        this.reconnectAttempts = 0
+        this.clearReconnectTimer()
         this.setState('online')
         this.startHeartbeat()
         return true
@@ -616,24 +649,19 @@ export class RadioWebSocket {
 
   // 安排重连
   private scheduleReconnect() {
-    if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
-      debugLog('[WS] Max reconnect attempts reached')
-      if (this.onError) this.onError('连接失败，请刷新页面重试')
-      return
-    }
+    if (this.explicitlyDisconnected || this.retryBlocked || this.reconnectTimer) return
 
-    this.clearReconnectTimer()
-
-    const delay = this.config.reconnectInterval * Math.pow(1.5, this.reconnectAttempts)
+    const delay = this.reconnectAttempts >= this.config.maxReconnectAttempts
+      ? 30_000
+      : Math.min(30_000, this.config.reconnectInterval * Math.pow(1.5, this.reconnectAttempts))
     debugLog(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1})`)
 
     this.setState('reconnecting')
 
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
       this.reconnectAttempts++
-      this.connect().catch(() => {
-        // 错误已在 onerror 中处理
-      })
+      void this.connect().catch(() => this.scheduleReconnect())
     }, delay)
   }
 
@@ -641,9 +669,7 @@ export class RadioWebSocket {
   private doReconnect() {
     this.pendingReconnect = false
     this.disconnect()
-    this.connect().catch(() => {
-      // 错误已处理
-    })
+    void this.connect().catch(() => this.scheduleReconnect())
   }
 
   // 清除重连定时器

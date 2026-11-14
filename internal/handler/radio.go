@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"draarl/internal/gormdb"
+	"draarl/internal/models"
 	"draarl/internal/protocol"
 	"draarl/internal/udphub"
 	ws "draarl/pkg/websocket"
@@ -36,6 +37,7 @@ type RadioStatusResponse struct {
 
 // RadioDeviceResponse 在线设备响应
 type RadioDeviceResponse struct {
+	Key          string `json:"key"`
 	ID           int    `json:"id"`
 	UserID       int    `json:"user_id,omitempty"`
 	Username     string `json:"username"`
@@ -161,11 +163,17 @@ func GetRadioGroupDevices(c *gin.Context) {
 		return
 	}
 
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": radioGroupDevices(udphub.GetOnlineDevicesByGroup(groupID), udphub.GlobalUDPGhostManager.GetByGroup(groupID), ws.GlobalManager.GetDevicesByGroup(groupID)),
+	})
+}
+
+func radioGroupDevices(udpDevices, udpGhostDevices []*models.Device, wsDevices []*ws.WSDevice) []RadioDeviceResponse {
 	devices := make([]RadioDeviceResponse, 0)
 	seenDevices := make(map[string]bool) // 用于去重
 
 	// 1. 获取 UDP 设备
-	udpDevices := udphub.GetOnlineDevicesByGroup(groupID)
 	for _, dev := range udpDevices {
 		if dev == nil {
 			continue
@@ -178,6 +186,7 @@ func GetRadioGroupDevices(c *gin.Context) {
 		seenDevices[key] = true
 
 		devices = append(devices, RadioDeviceResponse{
+			Key:          key,
 			ID:           state.ID,
 			UserID:       state.OwnerID,
 			Username:     state.Username,
@@ -198,7 +207,7 @@ func GetRadioGroupDevices(c *gin.Context) {
 	// 2. 获取 UDP 幽灵设备。幽灵会话不落在 devices 表或普通 UDP
 	// 连接池中，必须从 Session 接收索引读取，否则多端设备不会出现在
 	// 群组在线列表里。
-	for _, dev := range udphub.GlobalUDPGhostManager.GetByGroup(groupID) {
+	for _, dev := range udpGhostDevices {
 		if dev == nil {
 			continue
 		}
@@ -212,6 +221,7 @@ func GetRadioGroupDevices(c *gin.Context) {
 		}
 		seenDevices[key] = true
 		devices = append(devices, RadioDeviceResponse{
+			Key:          key,
 			ID:           0,
 			Username:     state.Username,
 			CallSign:     state.CallSign,
@@ -231,7 +241,6 @@ func GetRadioGroupDevices(c *gin.Context) {
 	}
 
 	// 3. 获取 WebSocket 设备（包括幽灵设备）
-	wsDevices := ws.GlobalManager.GetDevicesByGroup(groupID)
 	for _, device := range wsDevices {
 		key := "ws-" + device.GetIdentifier()
 		if seenDevices[key] {
@@ -240,6 +249,7 @@ func GetRadioGroupDevices(c *gin.Context) {
 		seenDevices[key] = true
 
 		dev := RadioDeviceResponse{
+			Key:          key,
 			ID:           device.GetDeviceID(),
 			Username:     device.GetUsername(),
 			CallSign:     device.GetCallSign(),
@@ -259,10 +269,7 @@ func GetRadioGroupDevices(c *gin.Context) {
 		devices = append(devices, dev)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code": 200,
-		"data": devices,
-	})
+	return devices
 }
 
 // GetRadioGroupStats 获取用户有权限访问的群组实时统计信息

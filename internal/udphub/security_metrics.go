@@ -47,6 +47,7 @@ func enforceNormalDeviceEndpointBinding(dev *models.Device, packet *protocol.Dra
 		return true
 	}
 	devicePacketEndpointRejects.Add(1)
+	recordDeviceDrop(state, "endpoint_mismatch", packet.Type == protocol.DraARLTypeOpus16K, boundAddr.String(), packetAddr.String(), packet.Type)
 	return false
 }
 

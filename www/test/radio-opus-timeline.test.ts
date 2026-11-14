@@ -8,6 +8,7 @@ test('keeps the existing mixer timeline while buffered audio remains', () => {
 })
 
 test('adds startup buffering only after the mixer timeline underruns', () => {
-  assert.equal(resolveMixerStartTime(0, 1), 1.08)
-  assert.ok(Math.abs(resolveMixerStartTime(1.2, 1.205) - 1.285) < Number.EPSILON * 2)
+  assert.equal(resolveMixerStartTime(0, 1), 1.16)
+  assert.ok(Math.abs(resolveMixerStartTime(1.2, 1.205) - 1.365) < Number.EPSILON * 2)
+  assert.equal(resolveMixerStartTime(0, 1, 0.24), 1.24)
 })

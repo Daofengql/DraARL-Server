@@ -17,6 +17,8 @@ import (
 	"strconv"
 )
 
+// GetGroupDevices lists persisted devices for management. For live UDP/WS
+// sessions, use GetRadioGroupDevices instead.
 func GetGroupDevices(c *gin.Context) {
 	groupIDStr := c.Param("id")
 	groupID, err := strconv.Atoi(groupIDStr)

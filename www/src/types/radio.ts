@@ -41,6 +41,7 @@ export const DeviceModel = {
 
 // 在线设备信息
 export interface OnlineDevice {
+  key: string
   id: number | string
   username: string
   callsign: string
@@ -53,6 +54,7 @@ export interface OnlineDevice {
   disableSend: boolean
   disableRecv: boolean
   lastPacketTime?: string
+  sessionId?: string
 }
 
 // 消息
@@ -210,6 +212,7 @@ export interface RadioUserConfig {
   inputDeviceId?: string
   outputDeviceId?: string
   volume: number // 0-1
+  playbackBufferMs: 80 | 160 | 240
   muted: boolean
   channelVolumes: Record<string, number>
 }
@@ -219,6 +222,7 @@ export const defaultRadioUserConfig: RadioUserConfig = {
   defaultGroupId: 999, // 公共群组
   receiveGroupIds: [999],
   volume: 0.8,
+  playbackBufferMs: 160,
   muted: false,
   channelVolumes: {},
 }

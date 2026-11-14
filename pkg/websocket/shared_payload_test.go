@@ -6,7 +6,77 @@ import (
 	"time"
 
 	"draarl/internal/interfaces"
+	"draarl/internal/protocol"
+	"github.com/gorilla/websocket"
 )
+
+func testVoiceFrame(marker byte) []byte {
+	return protocol.EncodeDraARLv1("voice", "", protocol.SSIDGhostWeb, protocol.DraARLTypeOpus16K,
+		protocol.DraARLDevModelBrowser, 0, "CALL", []byte{marker})
+}
+
+func TestVoiceQueueEvictsOldestVoiceAndKeepsControls(t *testing.T) {
+	device := &WSDevice{writeCh: newWriteQueue(3)}
+	if !device.AsyncWrite(2, []byte("control-1")) || !device.AsyncWrite(2, testVoiceFrame(1)) ||
+		!device.AsyncWrite(2, []byte("control-2")) {
+		t.Fatal("failed to fill test queue")
+	}
+	if !device.AsyncWrite(2, testVoiceFrame(2)) {
+		t.Fatal("latest voice frame was rejected from a full queue")
+	}
+	if got := device.writeCh.length(); got != 3 {
+		t.Fatalf("queue length=%d, want 3", got)
+	}
+	first, ok := device.writeCh.pop()
+	if !ok || string(first.payload.data) != "control-1" {
+		t.Fatal("first control frame was not preserved")
+	}
+	second, ok := device.writeCh.pop()
+	if !ok || string(second.payload.data) != "control-2" {
+		t.Fatal("second control frame was not preserved")
+	}
+	third, ok := device.writeCh.pop()
+	if !ok || len(third.payload.data) <= 48 || third.payload.data[48] != protocol.DraARLTypeOpus16K || third.payload.data[len(third.payload.data)-1] != 2 {
+		t.Fatal("latest voice frame was not retained")
+	}
+	for _, request := range []*writeRequest{first, second, third} {
+		request.payload.release()
+	}
+	if wsWritesEvicted.Load() < 1 {
+		t.Fatal("voice eviction was not recorded")
+	}
+}
+
+func TestVoiceQueueDoesNotEvictControlFrames(t *testing.T) {
+	device := &WSDevice{writeCh: newWriteQueue(2)}
+	if !device.AsyncWrite(2, []byte("control-1")) || !device.AsyncWrite(2, []byte("control-2")) {
+		t.Fatal("failed to fill control queue")
+	}
+	if device.AsyncWrite(2, testVoiceFrame(3)) {
+		t.Fatal("voice frame unexpectedly displaced a full control queue")
+	}
+	if got := device.writeCh.length(); got != 2 {
+		t.Fatalf("queue length=%d, want 2", got)
+	}
+	drainWriteRequests(device.writeCh)
+}
+
+func TestVoiceQueueDoesNotTreatTextPayloadAsVoice(t *testing.T) {
+	device := &WSDevice{writeCh: newWriteQueue(2)}
+	textPayload := make([]byte, protocol.DraARLv1HeaderSize)
+	textPayload[48] = protocol.DraARLTypeOpus16K
+	if !device.AsyncWrite(websocket.TextMessage, textPayload) ||
+		!device.AsyncWrite(websocket.BinaryMessage, []byte("control")) {
+		t.Fatal("failed to fill queue with control frames")
+	}
+	if device.AsyncWrite(websocket.BinaryMessage, testVoiceFrame(4)) {
+		t.Fatal("voice frame displaced a text control payload")
+	}
+	if got := device.writeCh.length(); got != 2 {
+		t.Fatalf("queue length=%d, want 2", got)
+	}
+	drainWriteRequests(device.writeCh)
+}
 
 func TestBroadcastSharesSinglePayloadAcrossDevices(t *testing.T) {
 	wsFramesCopied.Store(0)
@@ -14,10 +84,11 @@ func TestBroadcastSharesSinglePayloadAcrossDevices(t *testing.T) {
 	wsWritesQueued.Store(0)
 	wsWritesDropped.Store(0)
 	wsWritesDrained.Store(0)
+	wsWritesEvicted.Store(0)
 
 	manager := NewWSConnectionManager()
-	first := &WSDevice{UserID: 1, SSID: 105, GroupID: 9001, DeviceType: DeviceTypeGhost, IsOnline: true, writeCh: make(chan *writeRequest, 1)}
-	second := &WSDevice{UserID: 2, SSID: 105, GroupID: 9001, DeviceType: DeviceTypeGhost, IsOnline: true, writeCh: make(chan *writeRequest, 1)}
+	first := &WSDevice{UserID: 1, SSID: 105, GroupID: 9001, DeviceType: DeviceTypeGhost, IsOnline: true, writeCh: newWriteQueue(1)}
+	second := &WSDevice{UserID: 2, SSID: 105, GroupID: 9001, DeviceType: DeviceTypeGhost, IsOnline: true, writeCh: newWriteQueue(1)}
 	manager.addToGlobalGroupIndex(9001, "first", first)
 	manager.addToGlobalGroupIndex(9001, "second", second)
 	adapter := &WSManagerAdapter{manager: manager}
@@ -26,8 +97,11 @@ func TestBroadcastSharesSinglePayloadAcrossDevices(t *testing.T) {
 	if sent != 2 || dropped != 0 {
 		t.Fatalf("sent=%d dropped=%d", sent, dropped)
 	}
-	firstReq := <-first.writeCh
-	secondReq := <-second.writeCh
+	firstReq, firstOK := first.writeCh.pop()
+	secondReq, secondOK := second.writeCh.pop()
+	if !firstOK || !secondOK {
+		t.Fatal("expected shared payload requests")
+	}
 	if firstReq.payload != secondReq.payload {
 		t.Fatal("devices did not share the same immutable payload")
 	}
@@ -48,6 +122,7 @@ func TestBroadcastToManySlowClientsStaysBoundedAndNonBlocking(t *testing.T) {
 	wsWritesQueued.Store(0)
 	wsWritesDropped.Store(0)
 	wsWritesDrained.Store(0)
+	wsWritesEvicted.Store(0)
 
 	const groupID = 9101
 	const deviceCount = 2000
@@ -57,7 +132,7 @@ func TestBroadcastToManySlowClientsStaysBoundedAndNonBlocking(t *testing.T) {
 	for i := range devices {
 		device := &WSDevice{
 			UserID: i + 1, SSID: 105, GroupID: groupID, DeviceType: DeviceTypeGhost,
-			IsOnline: true, writeCh: make(chan *writeRequest, writeChSize),
+			IsOnline: true, writeCh: newWriteQueue(writeChSize),
 		}
 		devices[i] = device
 		manager.addToGlobalGroupIndex(groupID, fmt.Sprintf("slow-%d", i), device)
@@ -84,11 +159,16 @@ func TestBroadcastToManySlowClientsStaysBoundedAndNonBlocking(t *testing.T) {
 	if wsFramesCopied.Load() != frameCount || wsBytesCopied.Load() != frameCount*int64(len(payload)) {
 		t.Fatalf("frames_copied=%d bytes_copied=%d", wsFramesCopied.Load(), wsBytesCopied.Load())
 	}
-	sampleRequest := <-devices[0].writeCh
-	devices[0].writeCh <- sampleRequest
+	sampleRequest, ok := devices[0].writeCh.pop()
+	if !ok {
+		t.Fatal("expected a sample request")
+	}
+	if accepted, _ := devices[0].writeCh.tryPush(sampleRequest, false); !accepted {
+		t.Fatal("failed to restore sample request")
+	}
 
 	for _, device := range devices {
-		if got := len(device.writeCh); got != writeChSize {
+		if got := device.writeCh.length(); got != writeChSize {
 			t.Fatalf("slow client queue = %d, want %d", got, writeChSize)
 		}
 		drainWriteRequests(device.writeCh)

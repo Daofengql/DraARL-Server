@@ -118,11 +118,11 @@ type WSDevice struct {
 	// 异步写入优化：带缓冲的写通道
 	// 解决跨组转发时同步阻塞导致的延迟累积问题
 	// ==========================================
-	writeCh              chan *writeRequest // 异步写缓冲通道
-	closeCh              chan struct{}      // 关闭信号
-	writeMu              sync.Mutex         // 保护 writeCh 的访问
-	writeOnce            sync.Once          // 确保 writer 只启动一次
-	closeOnce            sync.Once          // 确保 writer 关闭信号只发送一次
+	writeCh              *writeQueue   // 有界异步写队列
+	closeCh              chan struct{} // 关闭信号
+	writeMu              sync.Mutex    // 保护 writeCh 的访问
+	writeOnce            sync.Once     // 确保 writer 只启动一次
+	closeOnce            sync.Once     // 确保 writer 关闭信号只发送一次
 	unregistered         atomic.Bool
 	connectionRegistered bool
 }
@@ -147,12 +147,162 @@ type sharedWritePayload struct {
 	refs atomic.Int32
 }
 
+type writeQueue struct {
+	mu       sync.Mutex
+	items    []*writeRequest
+	capacity int
+	notify   chan struct{}
+	closed   bool
+}
+
+func newWriteQueue(capacity int) *writeQueue {
+	return &writeQueue{capacity: capacity, notify: make(chan struct{}, 1)}
+}
+
+func (q *writeQueue) signal() {
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (q *writeQueue) tryPush(req *writeRequest, replaceVoice bool) (bool, *writeRequest) {
+	if q == nil || req == nil {
+		return false, nil
+	}
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return false, nil
+	}
+	if len(q.items) < q.capacity {
+		q.items = append(q.items, req)
+		q.mu.Unlock()
+		q.signal()
+		return true, nil
+	}
+	if !replaceVoice {
+		q.mu.Unlock()
+		return false, nil
+	}
+	index := -1
+	for i, queued := range q.items {
+		if isVoiceWriteRequest(queued) {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		q.mu.Unlock()
+		return false, nil
+	}
+	evicted := q.items[index]
+	copy(q.items[index:], q.items[index+1:])
+	q.items[len(q.items)-1] = nil
+	q.items = append(q.items[:len(q.items)-1], req)
+	q.mu.Unlock()
+	q.signal()
+	return true, evicted
+}
+
+func (q *writeQueue) pushWait(req *writeRequest, timeout time.Duration, stop <-chan struct{}) bool {
+	if q == nil || req == nil {
+		return false
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		q.mu.Lock()
+		if q.closed {
+			q.mu.Unlock()
+			return false
+		}
+		if len(q.items) < q.capacity {
+			q.items = append(q.items, req)
+			q.mu.Unlock()
+			q.signal()
+			return true
+		}
+		q.mu.Unlock()
+		select {
+		case <-q.notify:
+		case <-stop:
+			return false
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func (q *writeQueue) pop() (*writeRequest, bool) {
+	if q == nil {
+		return nil, false
+	}
+	q.mu.Lock()
+	if len(q.items) == 0 {
+		q.mu.Unlock()
+		return nil, false
+	}
+	req := q.items[0]
+	q.items[0] = nil
+	q.items = q.items[1:]
+	q.mu.Unlock()
+	q.signal()
+	return req, true
+}
+
+func (q *writeQueue) popWait(stop <-chan struct{}) (*writeRequest, bool) {
+	for {
+		if req, ok := q.pop(); ok {
+			return req, true
+		}
+		q.mu.Lock()
+		closed := q.closed
+		q.mu.Unlock()
+		if closed {
+			return nil, false
+		}
+		select {
+		case <-q.notify:
+		case <-stop:
+			return nil, false
+		}
+	}
+}
+
+func (q *writeQueue) close() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	q.signal()
+}
+
+func (q *writeQueue) length() int {
+	if q == nil {
+		return 0
+	}
+	q.mu.Lock()
+	length := len(q.items)
+	q.mu.Unlock()
+	return length
+}
+
+func isVoiceWriteRequest(req *writeRequest) bool {
+	return req != nil && req.messageType == websocket.BinaryMessage && req.payload != nil &&
+		len(req.payload.data) >= protocol.DraARLv1HeaderSize &&
+		req.payload.data[48] == protocol.DraARLTypeOpus16K
+}
+
 var (
 	wsFramesCopied       atomic.Int64
 	wsBytesCopied        atomic.Int64
 	wsWritesQueued       atomic.Int64
 	wsWritesDropped      atomic.Int64
 	wsWritesDrained      atomic.Int64
+	wsWritesEvicted      atomic.Int64
 	wsFanoutCandidates   atomic.Int64
 	wsFanoutDeduplicated atomic.Int64
 	wsFanoutSent         atomic.Int64
@@ -370,9 +520,13 @@ func (d *WSDevice) isOnlineState(state ConnectionState) bool {
 // 使用 sync.Once 确保只启动一次
 func (d *WSDevice) StartWriter() {
 	d.writeOnce.Do(func() {
-		d.writeCh = make(chan *writeRequest, writeChSize)
-		d.closeCh = make(chan struct{})
-		go d.writerLoop(d.writeCh, d.closeCh)
+		queue := newWriteQueue(writeChSize)
+		stop := make(chan struct{})
+		d.writeMu.Lock()
+		d.writeCh = queue
+		d.closeCh = stop
+		d.writeMu.Unlock()
+		go d.writerLoop(queue, stop)
 	})
 }
 
@@ -395,61 +549,57 @@ func (d *WSDevice) signalWriterStop(stop chan struct{}) {
 
 // writerLoop writer goroutine 主循环
 // 所有写操作都通过此 goroutine 串行执行，避免写锁竞争
-func (d *WSDevice) writerLoop(writeCh chan *writeRequest, closeCh <-chan struct{}) {
+func (d *WSDevice) writerLoop(writeCh *writeQueue, closeCh <-chan struct{}) {
 	defer d.finishWriter(writeCh)
 	for {
-		select {
-		case req, ok := <-writeCh:
-			if !ok {
-				return
-			}
-			if req == nil || req.payload == nil {
-				continue
-			}
-			// 【写超时】慢/死对端写缓冲打满时不再无限阻塞 writer
-			if err := d.Conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
-				return
-			}
-			err := d.Conn.WriteMessage(req.messageType, req.payload.data)
+		req, ok := writeCh.popWait(closeCh)
+		if !ok {
+			return
+		}
+		if req == nil || req.payload == nil {
+			continue
+		}
+		// 【写超时】慢/死对端写缓冲打满时不再无限阻塞 writer
+		if err := d.Conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
 			req.payload.release()
 			wsWritesDrained.Add(1)
-			if err != nil {
-				slog.Warn("websocket asynchronous write failed", "device_id", d.GetIdentifier(), "error", err)
-				return
-			}
-		case <-closeCh:
+			return
+		}
+		err := d.Conn.WriteMessage(req.messageType, req.payload.data)
+		req.payload.release()
+		wsWritesDrained.Add(1)
+		if err != nil {
+			slog.Warn("websocket asynchronous write failed", "device_id", d.GetIdentifier(), "error", err)
 			return
 		}
 	}
 }
 
-func (d *WSDevice) finishWriter(writeCh chan *writeRequest) {
+func (d *WSDevice) finishWriter(writeCh *writeQueue) {
 	d.writeMu.Lock()
 	stop := d.closeCh
-	d.writeMu.Unlock()
-	d.signalWriterStop(stop)
-	d.writeMu.Lock()
 	if d.writeCh == writeCh {
-		close(writeCh)
 		d.writeCh = nil
+		d.closeCh = nil
 	}
 	d.writeMu.Unlock()
+	d.signalWriterStop(stop)
+	writeCh.close()
 	drainWriteRequests(writeCh)
 }
 
-func drainWriteRequests(writeCh <-chan *writeRequest) {
+func drainWriteRequests(writeCh *writeQueue) {
+	if writeCh == nil {
+		return
+	}
 	for {
-		select {
-		case req, ok := <-writeCh:
-			if !ok {
-				return
-			}
-			if req != nil && req.payload != nil {
-				req.payload.release()
-				wsWritesDrained.Add(1)
-			}
-		default:
+		req, ok := writeCh.pop()
+		if !ok {
 			return
+		}
+		if req != nil && req.payload != nil {
+			req.payload.release()
+			wsWritesDrained.Add(1)
 		}
 	}
 }
@@ -473,42 +623,45 @@ func (d *WSDevice) AsyncWriteBlocking(messageType int, data []byte, timeout time
 	payload := newSharedWritePayload(data)
 	defer payload.release()
 	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
-	if d.writeCh == nil || payload == nil {
+	queue := d.writeCh
+	stop := d.closeCh
+	d.writeMu.Unlock()
+	if queue == nil || payload == nil {
 		return false
 	}
 	payload.retain()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case d.writeCh <- &writeRequest{messageType: messageType, payload: payload}:
+	if queue.pushWait(&writeRequest{messageType: messageType, payload: payload}, timeout, stop) {
 		wsWritesQueued.Add(1)
 		return true
-	case <-timer.C:
-		payload.release()
-		wsWritesDropped.Add(1)
-		return false
 	}
+	payload.release()
+	wsWritesDropped.Add(1)
+	return false
 }
 
 func (d *WSDevice) asyncWriteShared(messageType int, payload *sharedWritePayload) bool {
 	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
-
-	if d.writeCh == nil || payload == nil {
+	queue := d.writeCh
+	d.writeMu.Unlock()
+	if queue == nil || payload == nil {
 		wsWritesDropped.Add(1)
 		return false
 	}
 	payload.retain()
-	select {
-	case d.writeCh <- &writeRequest{messageType: messageType, payload: payload}:
+	request := &writeRequest{messageType: messageType, payload: payload}
+	accepted, evicted := queue.tryPush(request, isVoiceWriteRequest(request))
+	if accepted {
 		wsWritesQueued.Add(1)
+		if evicted != nil && evicted.payload != nil {
+			evicted.payload.release()
+			wsWritesEvicted.Add(1)
+			wsWritesDrained.Add(1)
+		}
 		return true
-	default:
-		payload.release()
-		wsWritesDropped.Add(1)
-		return false
 	}
+	payload.release()
+	wsWritesDropped.Add(1)
+	return false
 }
 
 func getWSDeliveryStats() map[string]int64 {
@@ -519,6 +672,7 @@ func getWSDeliveryStats() map[string]int64 {
 		"bytes_copied":        wsBytesCopied.Load(),
 		"writes_queued":       queued,
 		"writes_dropped":      wsWritesDropped.Load(),
+		"writes_evicted":      wsWritesEvicted.Load(),
 		"writes_drained":      drained,
 		"writes_pending":      queued - drained,
 		"fanout_candidates":   wsFanoutCandidates.Load(),
@@ -531,19 +685,21 @@ func getWSDeliveryStats() map[string]int64 {
 // StopWriter 停止 writer goroutine
 func (d *WSDevice) StopWriter() {
 	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
+	stop := d.closeCh
+	queue := d.writeCh
+	d.closeCh = nil
+	d.writeCh = nil
+	d.writeMu.Unlock()
 
-	if d.closeCh != nil {
-		d.signalWriterStop(d.closeCh)
-		d.closeCh = nil
+	if stop != nil {
+		d.signalWriterStop(stop)
 	}
-	if d.writeCh != nil {
+	if queue != nil {
 		// 【引用滞留修复】先同步排空已排队请求并释放共享 payload，
 		// 避免 writer 阻塞在死连接写操作时 64 个 writeRequest 的 payload
 		// 引用长期滞留内存。
-		drainWriteRequests(d.writeCh)
-		close(d.writeCh)
-		d.writeCh = nil
+		queue.close()
+		drainWriteRequests(queue)
 	}
 }
 

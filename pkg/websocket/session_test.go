@@ -21,22 +21,20 @@ func newTestGhostSession(sessionID string, ownerID, txGroupID int, rxGroupIDs []
 		DeviceType: DeviceTypeGhost, IsOnline: true, ConnState: StateOnline,
 		ConnectTime: time.Now(), LastPacketTime: time.Now(),
 		GroupID: txGroupID, RxGroupIDs: append([]int(nil), rxGroupIDs...),
-		Capabilities: append([]string(nil), capabilities...), writeCh: make(chan *writeRequest, 8),
+		Capabilities: append([]string(nil), capabilities...), writeCh: newWriteQueue(8),
 	}
 }
 
 func dequeueWriteRequest(t *testing.T, device *WSDevice) *writeRequest {
 	t.Helper()
-	select {
-	case request := <-device.writeCh:
-		if request == nil || request.payload == nil {
-			t.Fatal("queued request has no payload")
-		}
-		return request
-	default:
+	request, ok := device.writeCh.pop()
+	if !ok {
 		t.Fatal("expected a queued WebSocket write")
-		return nil
 	}
+	if request == nil || request.payload == nil {
+		t.Fatal("queued request has no payload")
+	}
+	return request
 }
 
 func TestConnectionManagerKeepsMultipleOwnerSessionsAndExactCleanup(t *testing.T) {
@@ -98,11 +96,11 @@ func TestBroadcastDeduplicatesSubscriptionsExcludesExactSessionAndAddsSourceGrou
 		afterMetrics["fanout_dropped"]-beforeMetrics["fanout_dropped"] != 0 {
 		t.Fatalf("unexpected fanout metrics before=%v after=%v", beforeMetrics, afterMetrics)
 	}
-	if len(source.writeCh) != 0 {
+	if source.writeCh.length() != 0 {
 		t.Fatal("source session received its own packet")
 	}
-	if len(sibling.writeCh) != 1 || len(target.writeCh) != 1 {
-		t.Fatalf("multi-subscription delivery duplicated: sibling=%d target=%d", len(sibling.writeCh), len(target.writeCh))
+	if sibling.writeCh.length() != 1 || target.writeCh.length() != 1 {
+		t.Fatalf("multi-subscription delivery duplicated: sibling=%d target=%d", sibling.writeCh.length(), target.writeCh.length())
 	}
 	siblingRequest := dequeueWriteRequest(t, sibling)
 	targetRequest := dequeueWriteRequest(t, target)
@@ -195,7 +193,7 @@ func TestAuthenticationSuccessAdvertisesSessionRouting(t *testing.T) {
 func TestConcurrentRoutingBroadcastAndDisconnect(t *testing.T) {
 	manager := NewWSConnectionManager()
 	device := newTestGhostSession("concurrent-session", 41, 1001, []int{1001, 1002}, nil)
-	device.writeCh = make(chan *writeRequest, 4096)
+	device.writeCh = newWriteQueue(4096)
 	if err := manager.RegisterGhostDevice(device, device.UserID, device.Username, device.CallSign, "", device.SSID); err != nil {
 		t.Fatal(err)
 	}

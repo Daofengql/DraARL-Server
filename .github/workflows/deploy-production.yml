@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Published Release tag to deploy, for example v2.0.1-alpha12'
+        description: 'Published Release tag to deploy, for example v2.0.1-alpha13'
         type: string
         required: true
 
@@ -22,13 +22,13 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Test deployment and rollback
+      - name: Test deployment and migration recovery
         run: python3 deploy/supervisor/test_deploy.py
 
   deploy:
     needs: test-deployment
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment: production
     concurrency:
       group: draarl-production
@@ -40,6 +40,7 @@ jobs:
       DEPLOY_USER: ${{ vars.DRAARL_DEPLOY_USER }}
       DEPLOY_PRIVATE_KEY: ${{ secrets.DRAARL_DEPLOY_PRIVATE_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ secrets.DRAARL_DEPLOY_KNOWN_HOSTS }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Deploy published binary through restricted SSH
         shell: bash
@@ -47,12 +48,17 @@ jobs:
           set -euo pipefail
           [[ $DEPLOY_VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
           : "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PRIVATE_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}"
+          package_dir=$(mktemp -d "$RUNNER_TEMP/draarl-release.XXXXXX")
           key_dir=$(mktemp -d "$RUNNER_TEMP/draarl-ssh.XXXXXX")
-          trap 'rm -rf -- "$key_dir"' EXIT
+          trap 'rm -rf -- "$key_dir" "$package_dir"' EXIT
+          gh release download "$DEPLOY_VERSION" --repo "$GITHUB_REPOSITORY" --dir "$package_dir" \
+            --pattern DraARL-linux-amd64.tar.gz --pattern DraARL-linux-amd64.tar.gz.sha256
+          (cd "$package_dir" && sha256sum --check DraARL-linux-amd64.tar.gz.sha256)
           chmod 700 "$key_dir"
           printf '%s\n' "$DEPLOY_PRIVATE_KEY" > "$key_dir/id_ed25519"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$key_dir/known_hosts"
           chmod 600 "$key_dir/id_ed25519" "$key_dir/known_hosts"
+          { cat "$package_dir/DraARL-linux-amd64.tar.gz.sha256"; cat "$package_dir/DraARL-linux-amd64.tar.gz"; } | \
           ssh -T -i "$key_dir/id_ed25519" -p "${DEPLOY_PORT:-22}" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$key_dir/known_hosts" -o ConnectTimeout=15 \

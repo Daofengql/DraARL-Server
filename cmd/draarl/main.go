@@ -53,6 +53,7 @@ func main() {
 	// 解析命令行参数
 	configPath := flag.String("c", "", "配置文件路径")
 	showVersion := flag.Bool("v", false, "显示版本信息")
+	migrateOnly := flag.Bool("migrate-only", false, "执行数据库迁移后退出，不启动网络服务")
 	printConfig := flag.String("p", "", "打印配置信息")
 	resetAdminPass := flag.String("reset-admin-pass", "", "重置管理员密码（需要提供新密码）")
 	migrateStorage := flag.String("migrate-storage", "", "迁移存储驱动或 profile，格式 from:to（如 minio:local 或 minio-prod:r2-prod），不启动主服务")
@@ -82,6 +83,13 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		stdlog.Fatalf("加载配置文件失败: %v", err)
+	}
+	if *migrateOnly {
+		if err := migrateDatabaseOnly(cfg); err != nil {
+			stdlog.Fatalf("数据库迁移失败: %v", err)
+		}
+		stdlog.Println("数据库迁移完成，未启动网络服务")
+		return
 	}
 	shutdownTelemetry, err := observability.Init(context.Background(), cfg.Observability)
 	if err != nil {

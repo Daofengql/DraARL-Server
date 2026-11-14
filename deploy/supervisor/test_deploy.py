@@ -16,12 +16,26 @@ import unittest
 
 SCRIPT = Path(__file__).with_name("deploy.sh")
 OLD = "v2.0.1-alpha11"
-NEW = "v2.0.1-alpha12"
+NEW = "v2.0.1-alpha13"
 ARCHIVE = "DraARL-linux-amd64.tar.gz"
 
 
 def binary(version):
-    return f'#!/bin/sh\nprintf "DraARL version {version} (build time: test)\\n"\n'.encode()
+    return f'''#!/bin/sh
+case "$*" in
+  -h) echo '-migrate-only'; exit 0 ;;
+  *-migrate-only*)
+    test "$(cat "$DEPLOY_TEST_ROOT/running")" = STOPPED || exit 8
+    echo invoked > "$DEPLOY_TEST_ROOT/migration-ran"
+    if test -e "$DEPLOY_TEST_ROOT/migration-fails"; then
+      echo partial-migration > "$DEPLOY_TEST_ROOT/database"
+      exit 9
+    fi
+    echo migrated-database > "$DEPLOY_TEST_ROOT/database"
+    exit 0 ;;
+esac
+printf "DraARL version {version} (build time: test)\\n"
+'''.encode()
 
 
 class DeploymentTest(unittest.TestCase):
@@ -36,6 +50,7 @@ class DeploymentTest(unittest.TestCase):
         self.config = self.app / "config.yaml"
         self.config.write_text("existing production configuration\n")
         (self.root / "running").write_text(OLD)
+        (self.root / "database").write_text("original-database\n")
         self.failed_version = None
         self.release_binary = binary(NEW)
         self.bad_checksum = False
@@ -45,18 +60,11 @@ class DeploymentTest(unittest.TestCase):
             def do_GET(self):
                 running = (fixture.root / "running").read_text()
                 if self.path == "/readyz":
-                    self.send_response(503 if running == fixture.failed_version else 200)
+                    self.send_response(503 if running in (fixture.failed_version, "STOPPED") else 200)
                     body = b'{"status":"ok"}'
                 elif self.path == "/api/platform/info":
                     self.send_response(200)
                     body = json.dumps({"data": {"version": running}}, separators=(",", ":")).encode()
-                elif self.path == f"/releases/{NEW}/{ARCHIVE}":
-                    self.send_response(200)
-                    body = fixture.package()
-                elif self.path == f"/releases/{NEW}/{ARCHIVE}.sha256":
-                    self.send_response(200)
-                    digest = "0" * 64 if fixture.bad_checksum else hashlib.sha256(fixture.package()).hexdigest()
-                    body = f"{digest}  {ARCHIVE}\n".encode()
                 else:
                     self.send_response(404)
                     body = b"not found"
@@ -75,20 +83,35 @@ from pathlib import Path
 import subprocess
 import sys
 root = Path(__file__).parent
-assert sys.argv[1:] == ["-c", str(root / "supervisor.ini"), "restart", "DraARL:DraARL_00"]
+assert sys.argv[1:3] == ["-c", str(root / "supervisor.ini")]
+action = sys.argv[3]
+assert action in ("stop", "start") and sys.argv[4] == "DraARL:DraARL_00"
 version = subprocess.check_output([str(root / "app/server"), "-v"], text=True).split()[2]
-(root / "running").write_text(version)
+(root / "running").write_text(version if action == "start" else "STOPPED")
 with (root / "restarts").open("a") as log:
-    log.write(version + "\\n")
+    log.write(action + " " + version + "\\n")
 ''')
         supervisor.chmod(0o755)
+        dump = self.root / "mysqldump"
+        dump.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import sys
+root = Path(__file__).parent
+assert (root / "running").read_text() == "STOPPED"
+if (root / "backup-fails").exists():
+    sys.exit(2)
+print((root / "database").read_text(), end="")
+''')
+        dump.chmod(0o755)
         url = f"http://127.0.0.1:{self.http.server_port}"
         settings = {
             "APP_DIR": str(self.app), "STATE_DIR": str(self.root / "state"),
             "SUPERVISORCTL": str(supervisor), "SUPERVISOR_CONFIG": str(self.root / "supervisor.ini"),
-            "SUPERVISOR_PROGRAM": "DraARL:DraARL_00", "RELEASE_BASE_URL": url + "/releases",
+            "SUPERVISOR_PROGRAM": "DraARL:DraARL_00",
             "HEALTH_URL": url + "/readyz", "VERSION_URL": url + "/api/platform/info",
             "HEALTH_ATTEMPTS": "3", "HEALTH_INTERVAL": "0.01",
+            "APP_CONFIG": str(self.config), "MYSQLDUMP": str(dump),
+            "MYSQL_DEFAULTS_FILE": str(self.root / "mysql.cnf"), "DATABASE_NAME": "fixture",
         }
         self.deploy_config = self.root / "deploy.conf"
         self.deploy_config.write_text("".join(f"{key}={shlex.quote(value)}\n" for key, value in settings.items()))
@@ -114,9 +137,12 @@ with (root / "restarts").open("a") as log:
     def deploy(self, version=NEW):
         result = subprocess.run(
             ["bash", str(SCRIPT), version],
-            env={**os.environ, "DRAARL_DEPLOY_CONFIG": str(self.deploy_config)},
-            capture_output=True, text=True, timeout=20,
+            env={**os.environ, "DRAARL_DEPLOY_CONFIG": str(self.deploy_config), "DEPLOY_TEST_ROOT": str(self.root)},
+            input=(f'{"0" * 64 if self.bad_checksum else hashlib.sha256(self.package()).hexdigest()}  {ARCHIVE}\n'.encode() + self.package()),
+            capture_output=True, timeout=20,
         )
+        result.stdout = result.stdout.decode()
+        result.stderr = result.stderr.decode()
         self.assertEqual(self.config.read_text(), "existing production configuration\n")
         self.assertEqual(list(self.app.glob(".draarl-deploy.*")), [])
         return result
@@ -130,17 +156,44 @@ with (root / "restarts").open("a") as log:
         self.assertEqual((self.root / "state/current-version").read_text().strip(), NEW)
         result = self.deploy()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((self.root / "restarts").read_text().splitlines(), [NEW])
+        self.assertEqual((self.root / "restarts").read_text().splitlines(), ["stop " + OLD, "start " + NEW])
         self.assertEqual((self.root / "state/server.previous").read_bytes(), binary(OLD))
+        backups = list((self.root / "state/backups").glob("*.sql.gz"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(gzip.decompress(backups[0].read_bytes()), b"original-database\n")
+        self.assertEqual((self.root / "database").read_text(), "migrated-database\n")
 
-    def test_failed_readiness_restores_previous_running_binary(self):
+    def test_failed_readiness_after_migration_stays_stopped_for_recovery(self):
         self.failed_version = NEW
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Restored " + OLD, result.stderr)
+        self.assertIn("Service remains stopped", result.stderr)
+        self.assertEqual(self.server.read_bytes(), binary(NEW))
+        self.assertEqual((self.root / "running").read_text(), "STOPPED")
+        self.assertTrue((self.root / "state/deployment-failed").exists())
+        self.assertNotIn("start " + OLD, (self.root / "restarts").read_text())
+        self.assertNotEqual(self.deploy().returncode, 0)
+
+    def test_backup_failure_restarts_old_service_without_running_migration(self):
+        (self.root / "backup-fails").touch()
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.server.read_bytes(), binary(OLD))
         self.assertEqual((self.root / "running").read_text(), OLD)
-        self.assertEqual((self.root / "restarts").read_text().splitlines(), [NEW, OLD])
+        self.assertFalse((self.root / "migration-ran").exists())
+        self.assertFalse((self.root / "state/deployment-failed").exists())
+
+    def test_partial_migration_preserves_backup_and_does_not_start_old_program(self):
+        (self.root / "migration-fails").touch()
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.server.read_bytes(), binary(OLD))
+        self.assertEqual((self.root / "database").read_text(), "partial-migration\n")
+        self.assertEqual((self.root / "running").read_text(), "STOPPED")
+        self.assertTrue((self.root / "state/deployment-failed").exists())
+        backup = next((self.root / "state/backups").glob("*.sql.gz"))
+        self.assertEqual(gzip.decompress(backup.read_bytes()), b"original-database\n")
+        self.assertNotIn("start " + OLD, (self.root / "restarts").read_text())
 
     def test_bad_checksum_does_not_replace_or_restart(self):
         self.bad_checksum = True
@@ -153,6 +206,13 @@ with (root / "restarts").open("a") as log:
         self.assertNotEqual(self.deploy().returncode, 0)
         self.assertEqual(self.server.read_bytes(), binary(OLD))
         self.assertFalse((self.root / "restarts").exists())
+
+    def test_binary_without_migration_mode_does_not_stop_service(self):
+        self.release_binary = binary(NEW).replace(b"-h) echo '-migrate-only'", b"-h) echo 'old options'")
+        self.assertNotEqual(self.deploy().returncode, 0)
+        self.assertEqual((self.root / "running").read_text(), OLD)
+        self.assertFalse((self.root / "restarts").exists())
+        self.assertFalse((self.root / "migration-ran").exists())
 
     def test_ssh_command_is_a_version_not_a_shell_command(self):
         self.assertEqual(self.deploy("v2.0.1; id").returncode, 2)

@@ -69,17 +69,24 @@
 }
 
 .docs-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(250px, 0.7fr);
-  gap: 3rem;
-  align-items: stretch;
-  margin: 0 0 3.5rem;
-  padding: 2rem 0 3rem;
+  clear: both;
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: flex-start;
+  margin: 0 0 2.5rem;
+  padding: 1.25rem 0 2rem;
   border-bottom: 1px solid var(--docs-line);
 }
 
-.docs-kicker {
-  margin: 0 0 1rem;
+.docs-hero > :first-child {
+  flex: 2 1 18rem;
+  min-width: 0;
+}
+
+.md-typeset .docs-kicker {
+  margin: 0 0 0.75rem;
   color: var(--docs-accent);
   font-size: 0.75rem;
   font-weight: 700;
@@ -87,34 +94,36 @@
 }
 
 .docs-hero h1 {
-  max-width: 15ch;
-  margin: 0 0 1.25rem;
-  font-size: clamp(2.1rem, 5vw, 3.8rem);
-  line-height: 1.12;
+  margin: 0 0 1rem;
+  font-size: 2rem;
+  font-size: clamp(1.5rem, 5cqi, 2rem);
+  line-height: 1.35;
+  text-wrap: balance;
 }
 
-.docs-lead {
+.md-typeset .docs-lead {
   max-width: 62ch;
   margin: 0;
   color: var(--docs-muted);
-  font-size: 1rem;
-  line-height: 1.9;
+  font-size: 0.9rem;
+  line-height: 1.8;
 }
 
 .docs-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-top: 1.75rem;
+  margin-top: 1.25rem;
 }
 
 .docs-hero-meta {
+  flex: 1 1 12rem;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 0.75rem;
-  min-height: 190px;
-  padding: 1.5rem;
+  padding: 1rem;
   border: 1px solid var(--docs-line);
   background: var(--docs-panel);
   color: var(--docs-muted);
@@ -122,7 +131,7 @@
 
 .docs-hero-meta strong {
   color: var(--docs-ink);
-  font-size: 1.5rem;
+  font-size: 1.25rem;
 }
 
 .docs-meta-label {
@@ -134,7 +143,7 @@
 
 .docs-card-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
   gap: 1rem;
   margin: 1.5rem 0 3.5rem;
 }
@@ -180,19 +189,6 @@
   margin-top: auto;
   color: var(--docs-accent);
   font-size: 0.78rem;
-}
-
-@media screen and (max-width: 76.1875em) {
-  .docs-card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media screen and (max-width: 60em) {
-  .docs-hero {
-    grid-template-columns: 1fr;
-    gap: 2rem;
-  }
 }
 
 @media screen and (max-width: 44em) {

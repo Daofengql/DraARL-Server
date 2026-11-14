@@ -1,4 +1,6 @@
-# DraARL Server 文档
+---
+title: DraARL Server 文档
+---
 
 <div class="docs-hero">
   <div>

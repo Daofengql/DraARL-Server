@@ -189,5 +189,6 @@ jobs:
   deploy-production:
     needs: release
     uses: ./.github/workflows/deploy-production.yml
+    secrets: inherit
     with:
       version: ${{ github.ref_name }}

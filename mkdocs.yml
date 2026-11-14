@@ -96,6 +96,7 @@ nav:
       - 前端组件规范: frontend-components.md
       - 数据库迁移: database-migrations.md
   - 版本记录:
+      - v2.0.1-alpha14: release-v2.0.1-alpha14.md
       - v2.0.1-alpha13: release-v2.0.1-alpha13.md
       - v2.0.1-alpha12: release-v2.0.1-alpha12.md
       - v2.0.1-alpha11: release-v2.0.1-alpha11.md

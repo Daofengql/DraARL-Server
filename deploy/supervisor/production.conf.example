@@ -1,0 +1,7 @@
+APP_DIR=/www/wwwroot/ptt.4l2.cn
+SUPERVISORCTL=/www/server/panel/pyenv/bin/supervisorctl
+SUPERVISOR_CONFIG=/etc/supervisor/supervisord.conf
+SUPERVISOR_PROGRAM=DraARL:DraARL_00
+HEALTH_URL=http://127.0.0.1:8087/readyz
+VERSION_URL=http://127.0.0.1:8087/api/platform/info
+STATE_DIR=/var/lib/draarl-deploy

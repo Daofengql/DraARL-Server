@@ -185,3 +185,9 @@ jobs:
             - 可选：Keycloak（用于 SSO 单点登录）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy-production:
+    needs: release
+    uses: ./.github/workflows/deploy-production.yml
+    with:
+      version: ${{ github.ref_name }}

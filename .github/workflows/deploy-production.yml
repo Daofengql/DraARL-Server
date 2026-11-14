@@ -1,0 +1,60 @@
+name: Deploy production
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published Release tag to deploy, for example v2.0.1-alpha12'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test deployment and rollback
+        run: python3 deploy/supervisor/test_deploy.py
+
+  deploy:
+    needs: test-deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: draarl-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_VERSION: ${{ inputs.version }}
+      DEPLOY_HOST: ${{ vars.DRAARL_DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DRAARL_DEPLOY_PORT }}
+      DEPLOY_USER: ${{ vars.DRAARL_DEPLOY_USER }}
+      DEPLOY_PRIVATE_KEY: ${{ secrets.DRAARL_DEPLOY_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DRAARL_DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - name: Deploy published binary through restricted SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $DEPLOY_VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          : "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PRIVATE_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}"
+          key_dir=$(mktemp -d "$RUNNER_TEMP/draarl-ssh.XXXXXX")
+          trap 'rm -rf -- "$key_dir"' EXIT
+          chmod 700 "$key_dir"
+          printf '%s\n' "$DEPLOY_PRIVATE_KEY" > "$key_dir/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$key_dir/known_hosts"
+          chmod 600 "$key_dir/id_ed25519" "$key_dir/known_hosts"
+          ssh -T -i "$key_dir/id_ed25519" -p "${DEPLOY_PORT:-22}" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$key_dir/known_hosts" -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$DEPLOY_VERSION"

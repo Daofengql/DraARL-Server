@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Published Release tag to deploy, for example v2.0.1-alpha13'
+        description: 'Published Release tag to deploy, for example v2.0.1-alpha14'
         type: string
         required: true
 
@@ -35,9 +35,9 @@ jobs:
       cancel-in-progress: false
     env:
       DEPLOY_VERSION: ${{ inputs.version }}
-      DEPLOY_HOST: ${{ vars.DRAARL_DEPLOY_HOST }}
-      DEPLOY_PORT: ${{ vars.DRAARL_DEPLOY_PORT }}
-      DEPLOY_USER: ${{ vars.DRAARL_DEPLOY_USER }}
+      DEPLOY_HOST: ${{ secrets.DRAARL_DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ secrets.DRAARL_DEPLOY_PORT }}
+      DEPLOY_USER: ${{ secrets.DRAARL_DEPLOY_USER }}
       DEPLOY_PRIVATE_KEY: ${{ secrets.DRAARL_DEPLOY_PRIVATE_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ secrets.DRAARL_DEPLOY_KNOWN_HOSTS }}
       GH_TOKEN: ${{ github.token }}
@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ $DEPLOY_VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          : "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PRIVATE_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}"
+          : "${DEPLOY_HOST:?}" "${DEPLOY_PORT:?}" "${DEPLOY_USER:?}" "${DEPLOY_PRIVATE_KEY:?}" "${DEPLOY_KNOWN_HOSTS:?}"
           package_dir=$(mktemp -d "$RUNNER_TEMP/draarl-release.XXXXXX")
           key_dir=$(mktemp -d "$RUNNER_TEMP/draarl-ssh.XXXXXX")
           trap 'rm -rf -- "$key_dir" "$package_dir"' EXIT
@@ -59,7 +59,7 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$key_dir/known_hosts"
           chmod 600 "$key_dir/id_ed25519" "$key_dir/known_hosts"
           { cat "$package_dir/DraARL-linux-amd64.tar.gz.sha256"; cat "$package_dir/DraARL-linux-amd64.tar.gz"; } | \
-          ssh -T -i "$key_dir/id_ed25519" -p "${DEPLOY_PORT:-22}" \
+          ssh -T -i "$key_dir/id_ed25519" -p "$DEPLOY_PORT" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$key_dir/known_hosts" -o ConnectTimeout=15 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \

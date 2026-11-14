@@ -1,11 +1,8 @@
-APP_DIR=/www/wwwroot/ptt.4l2.cn
-SUPERVISORCTL=/www/server/panel/pyenv/bin/supervisorctl
+APP_DIR=/srv/draarl
+SUPERVISORCTL=/usr/bin/supervisorctl
 SUPERVISOR_CONFIG=/etc/supervisor/supervisord.conf
-SUPERVISOR_PROGRAM=DraARL:DraARL_00
-HEALTH_URL=http://127.0.0.1:8087/readyz
-VERSION_URL=http://127.0.0.1:8087/api/platform/info
+SUPERVISOR_PROGRAM=draarl
+HEALTH_URL=http://127.0.0.1:9000/readyz
+VERSION_URL=http://127.0.0.1:9000/api/platform/info
 STATE_DIR=/var/lib/draarl-deploy
-APP_CONFIG=/www/wwwroot/ptt.4l2.cn/config.yaml
-MYSQLDUMP=/www/server/mysql/bin/mysqldump
-MYSQL_DEFAULTS_FILE=/etc/draarl-deploy-mysql.cnf
-DATABASE_NAME=draarl
+APP_CONFIG=/srv/draarl/config.yaml

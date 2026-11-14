@@ -1,6 +1,6 @@
 """Exercise the actual deployment script with local HTTP and Supervisor boundaries."""
-import gzip
 import hashlib
+import gzip
 import http.server
 import io
 import json
@@ -86,23 +86,14 @@ root = Path(__file__).parent
 assert sys.argv[1:3] == ["-c", str(root / "supervisor.ini")]
 action = sys.argv[3]
 assert action in ("stop", "start") and sys.argv[4] == "DraARL:DraARL_00"
+if action == "stop" and (root / "stop-fails").exists():
+    sys.exit(2)
 version = subprocess.check_output([str(root / "app/server"), "-v"], text=True).split()[2]
 (root / "running").write_text(version if action == "start" else "STOPPED")
 with (root / "restarts").open("a") as log:
     log.write(action + " " + version + "\\n")
 ''')
         supervisor.chmod(0o755)
-        dump = self.root / "mysqldump"
-        dump.write_text('''#!/usr/bin/env python3
-from pathlib import Path
-import sys
-root = Path(__file__).parent
-assert (root / "running").read_text() == "STOPPED"
-if (root / "backup-fails").exists():
-    sys.exit(2)
-print((root / "database").read_text(), end="")
-''')
-        dump.chmod(0o755)
         url = f"http://127.0.0.1:{self.http.server_port}"
         settings = {
             "APP_DIR": str(self.app), "STATE_DIR": str(self.root / "state"),
@@ -110,8 +101,7 @@ print((root / "database").read_text(), end="")
             "SUPERVISOR_PROGRAM": "DraARL:DraARL_00",
             "HEALTH_URL": url + "/readyz", "VERSION_URL": url + "/api/platform/info",
             "HEALTH_ATTEMPTS": "3", "HEALTH_INTERVAL": "0.01",
-            "APP_CONFIG": str(self.config), "MYSQLDUMP": str(dump),
-            "MYSQL_DEFAULTS_FILE": str(self.root / "mysql.cnf"), "DATABASE_NAME": "fixture",
+            "APP_CONFIG": str(self.config),
         }
         self.deploy_config = self.root / "deploy.conf"
         self.deploy_config.write_text("".join(f"{key}={shlex.quote(value)}\n" for key, value in settings.items()))
@@ -145,9 +135,10 @@ print((root / "database").read_text(), end="")
         result.stderr = result.stderr.decode()
         self.assertEqual(self.config.read_text(), "existing production configuration\n")
         self.assertEqual(list(self.app.glob(".draarl-deploy.*")), [])
+        self.assertFalse((self.root / "state/backups").exists())
         return result
 
-    def test_success_and_repeat_preserve_backup_and_configuration(self):
+    def test_success_and_repeat_preserve_previous_program_and_configuration(self):
         result = self.deploy()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.server.read_bytes(), binary(NEW))
@@ -158,9 +149,6 @@ print((root / "database").read_text(), end="")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / "restarts").read_text().splitlines(), ["stop " + OLD, "start " + NEW])
         self.assertEqual((self.root / "state/server.previous").read_bytes(), binary(OLD))
-        backups = list((self.root / "state/backups").glob("*.sql.gz"))
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(gzip.decompress(backups[0].read_bytes()), b"original-database\n")
         self.assertEqual((self.root / "database").read_text(), "migrated-database\n")
 
     def test_failed_readiness_after_migration_stays_stopped_for_recovery(self):
@@ -174,8 +162,8 @@ print((root / "database").read_text(), end="")
         self.assertNotIn("start " + OLD, (self.root / "restarts").read_text())
         self.assertNotEqual(self.deploy().returncode, 0)
 
-    def test_backup_failure_restarts_old_service_without_running_migration(self):
-        (self.root / "backup-fails").touch()
+    def test_stop_failure_keeps_old_service_without_running_migration(self):
+        (self.root / "stop-fails").touch()
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.server.read_bytes(), binary(OLD))
@@ -183,7 +171,7 @@ print((root / "database").read_text(), end="")
         self.assertFalse((self.root / "migration-ran").exists())
         self.assertFalse((self.root / "state/deployment-failed").exists())
 
-    def test_partial_migration_preserves_backup_and_does_not_start_old_program(self):
+    def test_partial_migration_preserves_previous_program_and_does_not_restart(self):
         (self.root / "migration-fails").touch()
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
@@ -191,8 +179,6 @@ print((root / "database").read_text(), end="")
         self.assertEqual((self.root / "database").read_text(), "partial-migration\n")
         self.assertEqual((self.root / "running").read_text(), "STOPPED")
         self.assertTrue((self.root / "state/deployment-failed").exists())
-        backup = next((self.root / "state/backups").glob("*.sql.gz"))
-        self.assertEqual(gzip.decompress(backup.read_bytes()), b"original-database\n")
         self.assertNotIn("start " + OLD, (self.root / "restarts").read_text())
 
     def test_bad_checksum_does_not_replace_or_restart(self):

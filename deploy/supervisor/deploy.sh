@@ -11,7 +11,7 @@ source "${DRAARL_DEPLOY_CONFIG:-/etc/draarl-deploy.conf}"
 
 archive=DraARL-linux-amd64.tar.gz
 state_dir=${STATE_DIR:-/var/lib/draarl-deploy}
-install -d -m 0700 "$state_dir" "$state_dir/backups"
+install -d -m 0700 "$state_dir"
 exec 9>"$state_dir/deploy.lock"
 flock -w 300 9
 if [[ -e $state_dir/deployment-failed ]]; then
@@ -42,15 +42,14 @@ wait_ready() {
 stage=$(mktemp -d "$APP_DIR/.draarl-deploy.XXXXXX")
 stopped=0
 migration_started=0
-backup_partial=''
 finish() {
   local result=$?
   trap - EXIT HUP INT TERM
   if ((stopped)); then
     if ((migration_started)); then
       supervisor stop || true
-      printf 'version=%s\nbackup=%s\nlog=%s\n' "$version" "$backup" "$migration_log" > "$state_dir/deployment-failed"
-      echo "Deployment stopped after database migration began. Backup: $backup; log: $migration_log" >&2
+      printf 'version=%s\nlog=%s\n' "$version" "$migration_log" > "$state_dir/deployment-failed"
+      echo "Deployment stopped after database migration began. Log: $migration_log" >&2
       echo 'Service remains stopped for recovery; database and older program versions must be reviewed together' >&2
     elif supervisor start && wait_ready "$previous_version"; then
       echo "Restored service $previous_version; database migration was not started" >&2
@@ -58,7 +57,6 @@ finish() {
       echo 'Restoring the previous service needs operator attention' >&2
     fi
   fi
-  if [[ -n $backup_partial ]]; then rm -f -- "$backup_partial"; fi
   rm -rf -- "$stage"
   exit "$result"
 }
@@ -89,19 +87,9 @@ previous_version=$("$APP_DIR/server" -v | sed -n 's/^DraARL version \([^ ]*\) .*
 [[ -n $previous_version ]]
 cp -p "$APP_DIR/server" "$state_dir/server.previous.next"
 mv -f "$state_dir/server.previous.next" "$state_dir/server.previous"
-backup="$state_dir/backups/$(date -u +%Y%m%dT%H%M%SZ)-$version.sql.gz"
-backup_partial="$backup.partial"
 migration_log="$state_dir/migration-$version.log"
 stopped=1
 supervisor stop
-echo 'Backing up the stopped application database'
-timeout "${BACKUP_TIMEOUT:-300}" "$MYSQLDUMP" --defaults-extra-file="$MYSQL_DEFAULTS_FILE" \
-  --single-transaction --no-tablespaces --routines --events --triggers --hex-blob \
-  --databases "$DATABASE_NAME" | gzip > "$backup_partial"
-gzip -t "$backup_partial"
-mv -f "$backup_partial" "$backup"
-backup_partial=''
-echo "Database backup saved: $backup"
 migration_started=1
 if ! timeout "${MIGRATION_TIMEOUT:-300}" "$stage/server.next" -c "$APP_CONFIG" -migrate-only > "$migration_log" 2>&1; then
   echo "Database migration failed; see $migration_log" >&2
@@ -115,7 +103,4 @@ if ! wait_ready "$version"; then
 fi
 printf '%s\n' "$version" > "$state_dir/current-version"
 stopped=0
-# Keep the three most recent successful upgrade snapshots.
-mapfile -t backups < <(printf '%s\n' "$state_dir"/backups/*.sql.gz | sort -r)
-if ((${#backups[@]} > 3)); then rm -f -- "${backups[@]:3}"; fi
 echo "Deployed $version; database migration, readiness and running version verified"
